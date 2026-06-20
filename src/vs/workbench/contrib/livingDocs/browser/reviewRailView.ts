@@ -72,7 +72,7 @@ export class ReviewRailView extends ViewPane {
 
 		if (!pending.length) {
 			const empty = append(body, $('div.ldr-empty'));
-			empty.textContent = 'No changes waiting. Open Weekly Summary.ldoc and click "Refresh from sources".';
+			empty.textContent = 'No changes waiting. Open a Living Document and click "Refresh from sources".';
 		}
 
 		for (const change of pending) {
