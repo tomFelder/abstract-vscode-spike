@@ -6,9 +6,18 @@
 // Living Documents — research spike data model.
 // A document is a flat list of blocks; "bound" blocks declare which source cells feed them.
 
+// Where a bound block draws its data from.
+//   file -> a sibling file in the workspace (e.g. metrics.csv)
+//   api  -> a live HTTP JSON endpoint (e.g. a CRM or product metrics API)
+//   mcp  -> a tool exposed over MCP / the language-model tools service
+export type SourceKind = 'file' | 'api' | 'mcp';
+
 export interface ILivingDocBinding {
-	readonly source: string;        // sibling source file, e.g. "metrics.csv"
-	readonly cells: readonly string[]; // column names the block depends on
+	readonly source: string;            // sibling source file, e.g. "metrics.csv" (file kind)
+	readonly cells: readonly string[];  // column / JSON keys the block depends on
+	readonly sourceKind: SourceKind;    // file | api | mcp
+	readonly url?: string;              // api kind: the HTTP endpoint to fetch
+	readonly tool?: string;             // mcp kind: the tool to invoke
 }
 
 export type LivingDocBlockType = 'heading' | 'paragraph' | 'kpiTable';
@@ -19,6 +28,9 @@ export interface ILivingDocBlock {
 	text?: string;                  // mutated in-place when a change is applied
 	readonly binding?: ILivingDocBinding;
 	readonly kind?: 'figure' | 'narrative';
+	// For api/mcp figure blocks: the authored text with {cell} placeholders. The live values
+	// are substituted into `text` on refresh; the template is what round-trips to disk.
+	template?: string;
 }
 
 export interface ILivingDoc {
@@ -60,7 +72,7 @@ export interface IAuditEntry {
 	readonly action: 'auto-applied' | 'approved' | 'rejected';
 	readonly oldText: string;
 	readonly newText: string;
-	readonly via: 'model' | 'heuristic';
+	readonly via: 'model' | 'heuristic' | 'api';
 }
 
 export interface IKpiRow {

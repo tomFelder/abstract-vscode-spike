@@ -14,6 +14,7 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { asJson, IRequestService } from '../../../../platform/request/common/request.js';
 import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
@@ -73,6 +74,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IConfigurationService private readonly _config: IConfigurationService,
 		@INotificationService private readonly _notify: INotificationService,
 		@ILogService private readonly _log: ILogService,
+		@IRequestService private readonly _request: IRequestService,
 	) {
 		super();
 	}
@@ -243,12 +245,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	private async _deriveDoc(state: IDocState): Promise<void> {
 		const doc = state.doc;
-		if (state.rows.length < 2) { return; }
 		state.recent = new Set<string>();
+
+		// 0) Live API/MCP figure blocks -> fetch and substitute, independent of the CSV source.
+		await this._deriveLiveBlocks(state);
+
+		if (state.rows.length < 2) {
+			if (state.recent.size) { await this._persist(state); }
+			return;
+		}
 
 		const latest = state.rows.reduce((a, b) => (b.week > a.week ? b : a));
 		const prev = state.rows.find(r => r.week === latest.week - 1);
-		if (!prev) { return; }
+		if (!prev) {
+			if (state.recent.size) { await this._persist(state); }
+			return;
+		}
 		const deltaPct = Math.round(((latest.mrr - prev.mrr) / prev.mrr) * 100);
 
 		// 1) The KPI table and synced week are pure figures -> auto-apply.
@@ -303,6 +315,57 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (state.recent.size) {
 			await this._persist(state);
 		}
+	}
+
+	// Fetch live API (and, when wired, MCP) sources and substitute their values into the
+	// {cell} placeholders of the bound block. These are figures -> auto-apply.
+	private async _deriveLiveBlocks(state: IDocState): Promise<void> {
+		const doc = state.doc;
+		for (const block of doc.blocks) {
+			const binding = block.binding;
+			if (block.type !== 'paragraph' || !binding) { continue; }
+			const template = block.template ?? block.text ?? '';
+			let data: Record<string, unknown> | undefined;
+			if (binding.sourceKind === 'api' && binding.url) {
+				data = await this._resolveApi(binding.url);
+			} else if (binding.sourceKind === 'mcp') {
+				// MCP tool sources resolve through the language-model tools service once an MCP
+				// server is connected; until then the authored template is left in place.
+				this._log.info('[livingDocs] mcp source not yet wired; leaving template', binding.tool ?? '');
+				continue;
+			} else {
+				continue;
+			}
+			if (!data) { continue; }
+			const next = this._fillTemplate(template, data, binding.cells);
+			if (next !== block.text) {
+				this._audit.push(this._entry(doc.title, block.id, 'auto-applied', block.text ?? '', next, 'api'));
+				block.text = next;
+				state.recent.add(block.id);
+			}
+		}
+	}
+
+	private async _resolveApi(url: string): Promise<Record<string, unknown> | undefined> {
+		try {
+			const context = await this._request.request({ type: 'GET', url, callSite: 'livingDocs.apiSource' }, CancellationToken.None);
+			const json = await asJson<Record<string, unknown>>(context);
+			return json ?? undefined;
+		} catch (e) {
+			this._log.warn('[livingDocs] api source failed', e instanceof Error ? e.message : String(e));
+			return undefined;
+		}
+	}
+
+	private _fillTemplate(template: string, data: Record<string, unknown>, cells: readonly string[]): string {
+		let out = template;
+		for (const cell of cells) {
+			if (!Object.prototype.hasOwnProperty.call(data, cell)) { continue; }
+			const value = data[cell];
+			const text = typeof value === 'number' ? value.toLocaleString('en-US') : String(value);
+			out = out.split(`{${cell}}`).join(text);
+		}
+		return out;
 	}
 
 	private async _proposeCommentary(deltaPct: number, mrrPrev: number, mrrNow: number, current: string): Promise<{ newText: string; kind: ChangeKind; confidence: number; rationale: string; via: 'model' | 'heuristic'; model?: string }> {
@@ -436,7 +499,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return [...found.values()];
 	}
 
-	private _entry(docTitle: string, blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: 'model' | 'heuristic'): IAuditEntry {
+	private _entry(docTitle: string, blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: IAuditEntry['via']): IAuditEntry {
 		return { time: new Date().toISOString(), docTitle, blockId, action, oldText, newText, via };
 	}
 

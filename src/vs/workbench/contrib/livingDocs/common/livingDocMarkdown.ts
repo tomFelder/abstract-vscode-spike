@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ILivingDoc, ILivingDocBlock } from './livingDocsModel.js';
+import { ILivingDocBinding, ILivingDoc, ILivingDocBlock, SourceKind } from './livingDocsModel.js';
 
 // A Living Document is a portable Markdown file:
 //   - YAML-ish frontmatter holds doc-level scalars (title, subtitle, source, syncedWeek)
@@ -16,6 +16,9 @@ interface IAttrs {
 	id?: string;
 	kind?: 'figure' | 'narrative';
 	cells: string[];
+	src?: SourceKind;
+	url?: string;
+	tool?: string;
 }
 
 function parseAttrs(s: string): IAttrs {
@@ -28,8 +31,22 @@ function parseAttrs(s: string): IAttrs {
 		if (key === 'cells') { out.cells = value ? value.split(',') : []; }
 		else if (key === 'id') { out.id = value; }
 		else if (key === 'kind') { out.kind = value === 'narrative' ? 'narrative' : 'figure'; }
+		else if (key === 'src') { out.src = value === 'api' ? 'api' : value === 'mcp' ? 'mcp' : 'file'; }
+		else if (key === 'url') { out.url = value; }
+		else if (key === 'tool') { out.tool = value; }
 	}
 	return out;
+}
+
+function bindingFor(a: IAttrs, fileSource: string): ILivingDocBinding {
+	const sourceKind: SourceKind = a.src ?? 'file';
+	return {
+		source: sourceKind === 'file' ? fileSource : (a.url ?? a.tool ?? fileSource),
+		cells: a.cells,
+		sourceKind,
+		url: a.url,
+		tool: a.tool,
+	};
 }
 
 function slug(s: string): string {
@@ -73,7 +90,7 @@ export function parseLivingDoc(text: string): ILivingDoc {
 		m = /^<!--\s*table\s+(.*?)\s*-->$/.exec(line);
 		if (m) {
 			const a = parseAttrs(m[1]);
-			blocks.push({ id: a.id ?? 'kpi-table', type: 'kpiTable', binding: { source, cells: a.cells } });
+			blocks.push({ id: a.id ?? 'kpi-table', type: 'kpiTable', binding: bindingFor(a, source) });
 			continue;
 		}
 
@@ -85,7 +102,9 @@ export function parseLivingDoc(text: string): ILivingDoc {
 		if (line.startsWith('#')) { continue; } // title is taken from frontmatter
 
 		if (pending) {
-			blocks.push({ id: pending.id ?? 'p-' + (++auto), type: 'paragraph', kind: pending.kind, binding: { source, cells: pending.cells }, text: line });
+			// api/mcp blocks author their text as a {cell}-placeholder template.
+			const isTemplate = (pending.src === 'api' || pending.src === 'mcp') && line.includes('{');
+			blocks.push({ id: pending.id ?? 'p-' + (++auto), type: 'paragraph', kind: pending.kind, binding: bindingFor(pending, source), text: line, template: isTemplate ? line : undefined });
 			pending = undefined;
 		} else {
 			blocks.push({ id: 'p-' + (++auto), type: 'paragraph', text: line });
@@ -103,6 +122,14 @@ export function parseLivingDoc(text: string): ILivingDoc {
 	return { title, subtitle, source, syncedWeek, blocks, isLiving, body };
 }
 
+function sourceAttrs(binding: ILivingDocBinding | undefined): string {
+	if (!binding || binding.sourceKind === 'file') { return ''; }
+	const parts = [` src=${binding.sourceKind}`];
+	if (binding.url) { parts.push(`url=${binding.url}`); }
+	if (binding.tool) { parts.push(`tool=${binding.tool}`); }
+	return parts.join(' ');
+}
+
 export function serializeLivingDoc(doc: ILivingDoc): string {
 	const lines: string[] = [
 		'---',
@@ -118,13 +145,14 @@ export function serializeLivingDoc(doc: ILivingDoc): string {
 		if (b.type === 'heading') {
 			lines.push(`## ${b.text ?? ''}`, '');
 		} else if (b.type === 'kpiTable') {
-			lines.push(`<!-- table id=${b.id} cells=${b.binding?.cells.join(',') ?? ''} -->`, '');
+			lines.push(`<!-- table id=${b.id}${sourceAttrs(b.binding)} cells=${b.binding?.cells.join(',') ?? ''} -->`, '');
 		} else {
 			if (b.binding) {
 				const kind = b.kind ? ` kind=${b.kind}` : '';
-				lines.push(`<!-- bind id=${b.id}${kind} cells=${b.binding.cells.join(',')} -->`);
+				lines.push(`<!-- bind id=${b.id}${kind}${sourceAttrs(b.binding)} cells=${b.binding.cells.join(',')} -->`);
 			}
-			lines.push(b.text ?? '', '');
+			// Keep the placeholder template on disk so live values re-derive on the next refresh.
+			lines.push(b.template ?? b.text ?? '', '');
 		}
 	}
 	return lines.join('\n').replace(/\n+$/, '\n');

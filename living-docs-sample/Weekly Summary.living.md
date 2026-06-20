@@ -21,3 +21,8 @@ Growth remained steady this week, continuing the gradual climb seen since early 
 ## What to watch
 
 Activation rate on the new onboarding flow, and whether the signup spike sustains into next week.
+
+## Ecosystem signal
+
+<!-- bind id=p-ecosystem kind=figure src=api url=https://api.github.com/repos/microsoft/vscode cells=stargazers_count,open_issues_count -->
+The VS Code repository shows {stargazers_count} stars and {open_issues_count} open issues today.

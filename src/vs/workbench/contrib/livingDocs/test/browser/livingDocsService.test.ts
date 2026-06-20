@@ -4,12 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { bufferToStream, VSBuffer } from '../../../../../base/common/buffer.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
+import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
@@ -78,21 +79,39 @@ const PLAIN_MD = [
 	'- second item',
 ].join('\n');
 
+const API_MD = [
+	'---',
+	'livingDoc: true',
+	'title: Ecosystem Signal',
+	'source: metrics.csv',
+	'syncedWeek: 24',
+	'---',
+	'',
+	'## Ecosystem',
+	'',
+	'<!-- bind id=p-eco kind=figure src=api url=https://api.example.com/repo cells=stargazers_count,open_issues_count -->',
+	'The repository has {stargazers_count} stars and {open_issues_count} open issues.',
+].join('\n');
+
+const API_PAYLOAD = { stargazers_count: 12345, open_issues_count: 678, full_name: 'microsoft/vscode' };
+
 const WEEKLY = URI.file('/ws/Weekly Summary.living.md');
 const BOARD = URI.file('/ws/Board Note.living.md');
 const README = URI.file('/ws/README.md');
+const API = URI.file('/ws/Ecosystem.living.md');
 
 suite('LivingDocsService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
 		files.set(WEEKLY.toString(), WEEKLY_MD);
 		files.set(README.toString(), PLAIN_MD);
 		if (opts.boardNote) { files.set(BOARD.toString(), BOARD_MD); }
+		if (opts.api) { files.set(API.toString(), API_MD); }
 
 		const fileService = {
 			readFile: async (resource: URI) => {
@@ -118,8 +137,14 @@ suite('LivingDocsService', () => {
 		const languageModelsService = { selectLanguageModels: async () => [] } as unknown as ILanguageModelsService;
 		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
+		const requestService = {
+			request: async () => ({
+				res: { statusCode: 200, headers: {} },
+				stream: bufferToStream(VSBuffer.fromString(JSON.stringify(API_PAYLOAD))),
+			}),
+		} as unknown as IRequestService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, languageModelsService, configurationService, notificationService, new NullLogService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, languageModelsService, configurationService, notificationService, new NullLogService(), requestService);
 		store.add(service);
 		return service;
 	}
@@ -238,6 +263,33 @@ suite('LivingDocsService', () => {
 
 		assert.strictEqual(service.getRawText(README), edited, 'raw text updated');
 		assert.strictEqual(service.getDoc(README)?.title, 'Renamed Readme', 'reparsed after save');
+	});
+
+	test('an api-bound block fetches live values and substitutes them into its template', async () => {
+		const service = createService([], { api: true });
+		await service.loadDocument(API);
+
+		await service.refreshFromSources();
+
+		const eco = service.getDoc(API)!.blocks.find(b => b.id === 'p-eco')!;
+		assert.ok(eco.text!.includes('12,345 stars'), `live stars substituted: ${eco.text}`);
+		assert.ok(eco.text!.includes('678 open issues'), `live issues substituted: ${eco.text}`);
+		assert.strictEqual(eco.binding!.sourceKind, 'api', 'binding records the api source kind');
+		assert.strictEqual(eco.template, 'The repository has {stargazers_count} stars and {open_issues_count} open issues.', 'template preserved for re-derivation');
+		assert.ok(service.getAudit().some(e => e.blockId === 'p-eco' && e.via === 'api'), 'audited as an api source');
+		// The on-disk Markdown keeps the placeholder template, not the filled values.
+		assert.ok(service.getRawText(API).includes('{stargazers_count}'), 'serialized form keeps the template');
+	});
+
+	test('api/mcp source kinds round-trip through the Markdown', () => {
+		const doc = parseLivingDoc(API_MD);
+		const eco = doc.blocks.find(b => b.id === 'p-eco')!;
+		assert.strictEqual(eco.binding!.sourceKind, 'api');
+		assert.strictEqual(eco.binding!.url, 'https://api.example.com/repo');
+		const again = parseLivingDoc(serializeLivingDoc(doc));
+		const eco2 = again.blocks.find(b => b.id === 'p-eco')!;
+		assert.strictEqual(eco2.binding!.sourceKind, 'api');
+		assert.strictEqual(eco2.binding!.url, 'https://api.example.com/repo');
 	});
 
 	test('editBlock edits non-bound prose and persists it, but ignores bound blocks', async () => {
