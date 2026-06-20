@@ -19,7 +19,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { ILivingDocsService, ILivingDocSummary, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { parseLivingDoc, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ChangeKind, IAuditEntry, IKpiRow, ILivingDoc, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
@@ -76,6 +76,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidChange = this._register(new Emitter<void>());
 	readonly onDidChange: Event<void> = this._onDidChange.event;
 
+	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
+	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
+
 	private readonly _docs = new Map<string, IDocState>();
 	private _pending: IProposedChange[] = [];
 	private _audit: IAuditEntry[] = [];
@@ -125,6 +128,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getAllPending(): readonly IProposedChange[] { return this._pending; }
 	getAudit(): readonly IAuditEntry[] { return this._audit; }
+
+	focusPanel(tab: LivingDocsPanelTab): void {
+		this._onDidRequestPanel.fire(tab);
+		// Reveal the right panel; take focus only for Chat so the user can type straight away.
+		this._views.openView(REVIEW_RAIL_VIEW_ID, tab === 'chat').catch(e => this._log.warn('[livingDocs] focusPanel failed', e));
+	}
 
 	// --- the "Documents" home ---
 
@@ -342,6 +351,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._log.warn('[livingDocs] markdown export failed', e);
 			return undefined;
 		}
+	}
+
+	shareDocument(resource: URI): void {
+		// Live shareable links aren't built yet; point the user at the portable export for now.
+		this._notify.info('A live shareable link is coming soon. Use Download to send a Markdown copy in the meantime.');
 	}
 
 	async editBlock(resource: URI, blockId: string, text: string): Promise<void> {

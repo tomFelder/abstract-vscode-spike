@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Codicon } from '../../../../base/common/codicons.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { IConfigurationRegistry, Extensions as ConfigurationExtensions } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
@@ -172,10 +172,15 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		@IEditorService editorService: IEditorService,
 	) {
 		super();
-		// The Getting Started editor can be opened late by the startup-page logic, so close any that
-		// exist now and any that appear afterwards -- the Studio shell never shows the IDE welcome.
+		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
+		// startup-page logic, so close any that exist now, then watch exactly ONE more editor-change
+		// to catch the late open -- and then stop, so a user who later opens Welcome themselves keeps it.
 		this._closeWelcomeEditors();
-		this._register(editorService.onDidActiveEditorChange(() => this._closeWelcomeEditors()));
+		const once = this._register(new DisposableStore());
+		once.add(editorService.onDidActiveEditorChange(() => {
+			this._closeWelcomeEditors();
+			once.dispose();
+		}));
 		// Reveal the Studio right panel (Chat / Review / History) without stealing focus.
 		void viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
 	}

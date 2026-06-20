@@ -52,6 +52,7 @@ export class ReviewRailView extends ViewPane {
 		this._root.style.height = '100%';
 		this._injectStyles(container);
 		this._register(this._livingDocs.onDidChange(() => this._render()));
+		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
 		this._render();
 	}
 
