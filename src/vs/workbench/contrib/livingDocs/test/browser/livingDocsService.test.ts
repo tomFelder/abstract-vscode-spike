@@ -105,8 +105,11 @@ suite('LivingDocsService', () => {
 
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
 
+	let lastFiles: Map<string, string> | undefined;
+
 	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
+		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
 		files.set(WEEKLY.toString(), WEEKLY_MD);
 		files.set(README.toString(), PLAIN_MD);
@@ -290,6 +293,23 @@ suite('LivingDocsService', () => {
 		const eco2 = again.blocks.find(b => b.id === 'p-eco')!;
 		assert.strictEqual(eco2.binding!.sourceKind, 'api');
 		assert.strictEqual(eco2.binding!.url, 'https://api.example.com/repo');
+	});
+
+	test('exportDocument writes a self-contained HTML page with the resolved content', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
+
+		const target = await service.exportDocument(WEEKLY);
+		assert.ok(target, 'export returned a target uri');
+		assert.ok(target!.path.endsWith('Weekly Summary.export.html'), `target name: ${target!.path}`);
+		assert.ok(opened.some(o => o.resource?.path.endsWith('.export.html')), 'opened the exported page');
+
+		const html = lastFiles!.get(target!.toString()) ?? '';
+		assert.ok(html.includes('<!DOCTYPE html>') && html.includes('Weekly Operating Summary'), 'standalone HTML with the title');
+		assert.ok(html.includes('$48.6k'), 'KPI values exported');
+		assert.ok(!html.includes('contenteditable') && !html.includes('data-refresh'), 'no editor chrome in the export');
 	});
 
 	test('editBlock edits non-bound prose and persists it, but ignores bound blocks', async () => {

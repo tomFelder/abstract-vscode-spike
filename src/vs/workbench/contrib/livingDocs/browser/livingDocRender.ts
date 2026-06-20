@@ -104,6 +104,8 @@ for (const b of document.querySelectorAll('[data-refresh]')) { b.addEventListene
 for (const d of document.querySelectorAll('[data-cells]')) { d.addEventListener('click', () => vscode.postMessage({ type: 'reveal', cells: d.getAttribute('data-cells').split(',') })); }
 const toRaw = document.querySelector('[data-to-raw]');
 if (toRaw) { toRaw.addEventListener('click', () => vscode.postMessage({ type: 'setMode', mode: 'raw' })); }
+const exportBtn = document.querySelector('[data-export]');
+if (exportBtn) { exportBtn.addEventListener('click', () => vscode.postMessage({ type: 'export' })); }
 const toRendered = document.querySelector('[data-to-rendered]');
 const rawArea = document.querySelector('textarea.raw');
 if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }
@@ -133,9 +135,13 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const refresh = isLiving && mode === 'rendered'
 		? `<button class="btn" data-refresh>&#8635; Refresh from sources</button>`
 		: '';
+	// Export the document to a self-contained HTML page.
+	const exportBtn = (doc && mode === 'rendered')
+		? `<button class="toggle" data-export>&#8682; Export</button>`
+		: '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${toggle}${refresh}</div></div>`;
+		+ `<div class="right">${livingControls}${toggle}${exportBtn}${refresh}</div></div>`;
 
 	let body: string;
 	if (mode === 'raw') {
@@ -201,4 +207,50 @@ function renderKpi(rows: readonly IKpiRow[], isRecent: boolean): string {
 	const head = `<tr><th>METRIC</th><th>Prev</th><th>Current</th><th>&Delta;</th></tr>`;
 	const body = rows.map(r => `<tr><td>${esc(r.metric)}</td><td style="color:#86868f">${esc(r.prev)}</td><td${isRecent ? ' class="applied"' : ''}>${esc(r.curr)}</td><td class="${r.positive ? 'up' : 'down'}">${esc(r.delta)}</td></tr>`).join('');
 	return `<table class="kpi">${head}${body}</table>`;
+}
+
+// Clean, self-contained export: no IDE chrome, no provenance dots, no diff UI -- just the
+// document's current state as a print-ready HTML page that opens anywhere.
+const EXPORT_STYLE = `*{box-sizing:border-box}
+html,body{margin:0;background:#fff;color:#1a1c20;font-family:Georgia,'Times New Roman',serif}
+.page{max-width:720px;margin:0 auto;padding:56px 48px 80px}
+h1{font:600 30px/1.25 system-ui,sans-serif;letter-spacing:-.01em;color:#15151a;margin:0 0 4px}
+.subtitle{font:400 13px/1.4 system-ui,sans-serif;color:#8a8a93;margin:0 0 32px}
+h2{font:600 17px/1.3 system-ui,sans-serif;color:#26262d;margin:30px 0 10px}
+p{font-size:16px;line-height:1.7;margin:0 0 14px}
+ul,ol{font-size:16px;line-height:1.7}
+table{border-collapse:collapse;width:100%;margin:6px 0 16px;font:400 13px/1.4 system-ui,sans-serif}
+th{background:#f7f7f9;color:#86868f;text-align:right;padding:9px 12px;border-bottom:1px solid #e6e6ea;font-weight:600}
+th:first-child,td:first-child{text-align:left}
+td{padding:9px 12px;border-bottom:1px solid #f0f0f3;text-align:right}
+.up{color:#1f7a44}.down{color:#b4332f}
+code{font-family:ui-monospace,monospace;background:#f3f3f5;border-radius:4px;padding:1px 5px}
+pre{background:#f7f7f9;border:1px solid #ececf0;border-radius:8px;padding:14px 16px;overflow:auto}
+blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid #e1e2e8;color:#6a6a73}
+footer{margin-top:48px;padding-top:14px;border-top:1px solid #eee;font:400 11px/1.5 system-ui,sans-serif;color:#a3a8b2}`;
+
+function exportKpi(rows: readonly IKpiRow[]): string {
+	if (!rows.length) { return ''; }
+	const head = `<tr><th>Metric</th><th>Prev</th><th>Current</th><th>Change</th></tr>`;
+	const body = rows.map(r => `<tr><td>${esc(r.metric)}</td><td>${esc(r.prev)}</td><td>${esc(r.curr)}</td><td class="${r.positive ? 'up' : 'down'}">${esc(r.delta)}</td></tr>`).join('');
+	return `<table>${head}${body}</table>`;
+}
+
+/** Build a standalone, shareable HTML page from a document's current (resolved) state. */
+export function renderExportHtml(doc: ILivingDoc, kpiRows: readonly IKpiRow[]): string {
+	let body: string;
+	if (doc.isLiving) {
+		const parts: string[] = [`<h1>${esc(doc.title)}</h1>`];
+		if (doc.subtitle) { parts.push(`<div class="subtitle">${esc(doc.subtitle)}</div>`); }
+		for (const block of doc.blocks) {
+			if (block.type === 'heading') { parts.push(`<h2>${esc(block.text ?? '')}</h2>`); }
+			else if (block.type === 'kpiTable') { parts.push(exportKpi(kpiRows)); }
+			else { parts.push(`<p>${esc(block.text ?? '')}</p>`); }
+		}
+		body = parts.join('\n');
+	} else {
+		body = renderGenericMarkdown(doc.body);
+	}
+	const footer = `<footer>Exported from Opportunity OS &middot; Living Document</footer>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(doc.title)}</title><style>${EXPORT_STYLE}</style></head><body><main class="page">${body}${footer}</main></body></html>`;
 }

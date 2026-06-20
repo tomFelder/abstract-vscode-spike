@@ -59,6 +59,9 @@ export interface ILivingDocsService {
 	/** Re-derive bound blocks across every bound document from the latest source values. */
 	refreshFromSources(): Promise<void>;
 
+	/** Export a document's current state to a self-contained HTML page and open it. */
+	exportDocument(resource: URI): Promise<URI | undefined>;
+
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;
 
