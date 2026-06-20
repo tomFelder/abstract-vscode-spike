@@ -21,6 +21,7 @@ import { ScreenId } from './screenRender.js';
 // Maps each activity-bar launcher view id to the screen it opens. Selecting the icon reveals this
 // slim launcher and opens the full-width screen in the editor area (the comp's icon-nav behaviour).
 const VIEW_TO_SCREEN: Record<string, { screen: ScreenId; title: string; blurb: string }> = {
+	'workbench.view.livingDocs.home': { screen: 'home', title: 'Home', blurb: 'Your projects, quick-start actions, and what changed since your last visit.' },
 	'workbench.view.livingDocs.templates': { screen: 'templates', title: 'Templates', blurb: 'Run a template, fill it from your sources, and review the diff before it lands.' },
 	'workbench.view.livingDocs.knowledge': { screen: 'knowledge', title: 'Knowledge', blurb: 'The decision stack - mission, strategy and OKRs that agents and documents align to.' },
 	'workbench.view.livingDocs.agents': { screen: 'agents', title: 'Agents', blurb: 'Background agents that keep documents in sync with their sources. Open one to see its flow.' },

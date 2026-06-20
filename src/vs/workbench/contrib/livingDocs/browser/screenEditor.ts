@@ -6,6 +6,7 @@
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -38,6 +39,7 @@ export class ScreenEditor extends EditorPane {
 		@IStorageService storageService: IStorageService,
 		@IWebviewService private readonly _webviewService: IWebviewService,
 		@IEditorService private readonly _editors: IEditorService,
+		@IInstantiationService private readonly _instantiation: IInstantiationService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 	) {
 		super(ScreenEditor.ID, group, telemetryService, themeService, storageService);
@@ -98,8 +100,12 @@ export class ScreenEditor extends EditorPane {
 			case 'goReview':
 				this._livingDocs.focusPanel('review');
 				break;
+			case 'goEditor':
 			case 'present':
 				void this._openFirstDocument();
+				break;
+			case 'goTemplates':
+				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'templates'), { pinned: true });
 				break;
 		}
 	}

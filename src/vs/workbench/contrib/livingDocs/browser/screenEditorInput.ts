@@ -11,6 +11,7 @@ import { ScreenId } from './screenRender.js';
 export const SCREEN_EDITOR_ID = 'workbench.editor.livingDocs.screen';
 
 const TITLES: Record<ScreenId, string> = {
+	home: 'Home',
 	templates: 'Templates',
 	knowledge: 'Knowledge',
 	agents: 'Agents',

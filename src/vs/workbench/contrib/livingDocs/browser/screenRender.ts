@@ -9,7 +9,7 @@
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
-export type ScreenId = 'templates' | 'knowledge' | 'agents';
+export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents';
 
 export interface IScreenState {
 	/** Knowledge: which scope tab is selected. */
@@ -55,10 +55,46 @@ function page(body: string): string {
 
 export function renderScreenHtml(screen: ScreenId, state: IScreenState): string {
 	switch (screen) {
+		case 'home': return page(renderHome());
 		case 'templates': return page(renderTemplates());
 		case 'knowledge': return page(renderKnowledge(state));
 		case 'agents': return page(renderAgents(state));
 	}
+}
+
+// ---- Home: the landing dashboard -- greeting, quick start, and the projects grid. ----
+function renderHome(): string {
+	const quick = (msg: string, iconBg: string, iconFg: string, icon: string, title: string, sub: string, primary: boolean) => `<button ${msg ? `data-msg="${msg}" ` : ''}style="flex:1;min-width:200px;text-align:left;border:1px solid ${primary ? '#e0e6ff' : '#e9eaee'};background:${primary ? '#f7f9ff' : '#fff'};border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:${iconBg};color:${iconFg};font-size:16px;display:flex;align-items:center;justify-content:center">${icon}</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">${title}</span><span style="font:400 12px/1.3 system-ui;color:#868b95">${sub}</span></span></button>`;
+	const since = (dot: string, html: string) => `<div style="display:flex;gap:9px;margin-bottom:9px"><span style="width:7px;height:7px;border-radius:50%;background:${dot};margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#3a3f49">${html}</span></div>`;
+	const project = (mono: string, monoBg: string, name: string, badge: string, stats: string, since1: string, since2: string, actions: string) => `<div style="background:#fff;border:1px solid #e9eaee;border-radius:13px;overflow:hidden;display:flex;flex-direction:column">
+		<div style="padding:16px 17px 14px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:3px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:${monoBg};color:#fff;font:600 12px/1 system-ui;display:flex;align-items:center;justify-content:center">${mono}</span><span style="font:600 15px/1.2 system-ui;color:#15171c">${name}</span>${badge}</div><div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;padding-left:36px">${stats}</div></div>
+		<div style="margin:0 17px;border-top:1px solid #f1f2f5;padding:13px 0 4px"><div style="font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#bcc0c8;margin-bottom:9px">SINCE YOUR LAST VISIT</div>${since1}${since2}</div>
+		<div style="margin-top:auto;display:flex;gap:8px;padding:14px 17px;border-top:1px solid #f1f2f5">${actions}</div></div>`;
+	const toApprove = `<span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 9px">1 TO APPROVE</span>`;
+	const healthy = `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font:600 10px/1 system-ui;color:#1f7a44"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Healthy</span>`;
+	const reviewBtn = `<button data-msg="goReview" style="border:none;border-radius:8px;padding:9px 14px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Review change</button>`;
+	const openBtn = `<button data-msg="present" style="border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer">Open project</button>`;
+	const grey = '#cfd3da', amber = 'oklch(0.66 0.16 45)', green = 'oklch(0.6 0.13 150)';
+
+	return `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">
+		<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
+			<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:8px"><h1 style="margin:0;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="font:400 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">Saturday, Jun 20</div></div>
+			<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#696e78">Across <strong style="font-weight:600;color:#3a3f49">4 projects</strong> &mdash; <strong style="font-weight:600;color:#9a6b16">2 changes need your approval</strong>, and 3 agents ran since you were last here.</p>
+			<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">QUICK START</div>
+			<div style="display:flex;gap:12px;margin-bottom:34px;flex-wrap:wrap">
+				${quick('', ACCENT, '#fff', '&#65291;', 'New project', 'Bind sources, set agents', true)}
+				${quick('goTemplates', '#eef1f6', '#52575f', '&#9636;', 'New doc from template', 'Weekly report, Quote, SOP&hellip;', false)}
+				${quick('goEditor', '#eef1f6', '#52575f', '&#9998;', 'Blank document', 'Start writing, link later', false)}
+			</div>
+			<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2">YOUR PROJECTS</div><div style="display:flex;gap:5px"><span style="font:500 11.5px/1 system-ui;color:#15181f;background:#fff;border:1px solid #e6e8ed;border-radius:7px;padding:6px 10px">All &middot; 4</span><span style="font:500 11.5px/1 system-ui;color:#9a6b16;padding:6px 10px">Needs approval &middot; 2</span></div></div>
+			<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+				${project('OS', ACCENT, 'Opportunity OS', toApprove, '6 docs &middot; 4 sources &middot; 3 agents', since(amber, '<strong style="font-weight:600">Weekly refresh</strong> ran 2m ago &mdash; 3 figures applied to Weekly Summary, <strong style="font-weight:600;color:#9a6b16">1 narrative change awaiting approval</strong>.'), since(grey, 'Board Note auto-updated from kpi.webhook &middot; no review needed.'), reviewBtn + openBtn)}
+				${project('AC', '#0e7c66', 'Acme Co &mdash; Client', healthy, '3 docs &middot; 1 source &middot; 1 agent', since(green, '<strong style="font-weight:600">Quote &rarr; tracker</strong> extracted 2 new line items from <em>Acme SOW.pdf</em> into the pipeline.'), since(grey, 'Client Update draft regenerated &middot; ready to send.'), openBtn)}
+				${project('F3', '#5a3ea8', 'Fund III &mdash; LP Reporting', toApprove, '4 docs &middot; 2 sources &middot; 2 agents', since(amber, 'Portfolio markdown detected &mdash; <strong style="font-weight:600;color:#9a6b16">a TVPI figure dropped</strong>, so the LP letter&#39;s tone change needs sign-off.'), since(grey, 'Capital-account tables refreshed for all 12 LPs.'), reviewBtn + openBtn)}
+				${project('JS', '#b5642a', 'Job Search 2026', healthy, '2 docs &middot; 1 source &middot; 1 agent', since(grey, '<strong style="font-weight:600;color:#3a3f49">Weekly tracker</strong> compiled 4 new applications from the inbox &middot; status synced.'), '', openBtn)}
+			</div>
+		</div>
+	</div></div>`;
 }
 
 // ---- Templates: run a template -> fill from sources -> review the diff. ----

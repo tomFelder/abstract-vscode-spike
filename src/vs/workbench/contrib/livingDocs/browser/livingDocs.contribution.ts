@@ -34,9 +34,16 @@ import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenLauncherView } from './screenLauncherView.js';
 import { ScreenId } from './screenRender.js';
 
-// The built-in File Explorer is the single biggest "this is an IDE" signal. The Documents home
-// (below) replaces it as the default primary-sidebar container.
-const EXPLORER_VIEW_CONTAINER_ID = 'workbench.view.explorer';
+// The built-in IDE view containers (Explorer, Search, Source Control, Run and Debug, Extensions)
+// are the icon-nav "this is an IDE" tells. The comp's icon nav carries only our document surfaces,
+// so these are deregistered, leaving Documents / Templates / Knowledge / Agents.
+const IDE_VIEW_CONTAINER_IDS = [
+	'workbench.view.explorer',
+	'workbench.view.search',
+	'workbench.view.scm',
+	'workbench.view.debug',
+	'workbench.view.extensions',
+];
 
 // --- service ---
 registerSingleton(ILivingDocsService, LivingDocsService, InstantiationType.Delayed);
@@ -130,21 +137,24 @@ const documentsViewDescriptor: IViewDescriptor = {
 };
 Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([documentsViewDescriptor], documentsContainer);
 
-// Hide the built-in File Explorer additively: deregister its view container once registries are
-// populated, rather than patching the explorer contribution. ADDITIVE-CONTRIBUTION (merge-tax ledger).
-class HideExplorerContribution extends Disposable implements IWorkbenchContribution {
-	static readonly ID = 'workbench.contrib.livingDocs.hideExplorer';
+// Hide the built-in IDE view containers additively: deregister them once registries are populated,
+// rather than patching each contribution. ADDITIVE-CONTRIBUTION (merge-tax ledger). NOTE: this leans
+// on internal container ids and fails unsafely if an id changes upstream -- re-pin on rebase.
+class HideIdeContainersContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.hideIdeContainers';
 
 	constructor() {
 		super();
 		const registry = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry);
-		const explorer = registry.get(EXPLORER_VIEW_CONTAINER_ID);
-		if (explorer) {
-			registry.deregisterViewContainer(explorer);
+		for (const id of IDE_VIEW_CONTAINER_IDS) {
+			const container = registry.get(id);
+			if (container) {
+				registry.deregisterViewContainer(container);
+			}
 		}
 	}
 }
-registerWorkbenchContribution2(HideExplorerContribution.ID, HideExplorerContribution, WorkbenchPhase.BlockRestore);
+registerWorkbenchContribution2(HideIdeContainersContribution.ID, HideIdeContainersContribution, WorkbenchPhase.BlockRestore);
 
 // --- Studio right panel (Chat / Review / History) in the auxiliary bar ---
 const reviewIcon = registerIcon('living-docs-review', Codicon.checklist, localize('livingDocs.reviewIcon', "Living Documents review rail"));
@@ -182,6 +192,7 @@ interface IScreenNavEntry {
 }
 
 const SCREEN_NAV: readonly IScreenNavEntry[] = [
+	{ screen: 'home', containerId: 'workbench.viewContainer.livingDocs.home', viewId: 'workbench.view.livingDocs.home', title: 'Home', icon: Codicon.home, order: 1 },
 	{ screen: 'templates', containerId: 'workbench.viewContainer.livingDocs.templates', viewId: 'workbench.view.livingDocs.templates', title: 'Templates', icon: Codicon.layout, order: 2 },
 	{ screen: 'knowledge', containerId: 'workbench.viewContainer.livingDocs.knowledge', viewId: 'workbench.view.livingDocs.knowledge', title: 'Knowledge', icon: Codicon.library, order: 3 },
 	{ screen: 'agents', containerId: 'workbench.viewContainer.livingDocs.agents', viewId: 'workbench.view.livingDocs.agents', title: 'Agents', icon: Codicon.sync, order: 4 },
@@ -237,7 +248,8 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 	constructor(
 		@IViewsService viewsService: IViewsService,
 		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
-		@IEditorService editorService: IEditorService,
+		@IEditorService private readonly _editorService: IEditorService,
+		@IInstantiationService private readonly _instantiation: IInstantiationService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -245,11 +257,16 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		// to catch the late open -- and then stop, so a user who later opens Welcome themselves keeps it.
 		this._closeWelcomeEditors();
 		const once = this._register(new DisposableStore());
-		once.add(editorService.onDidActiveEditorChange(() => {
+		once.add(this._editorService.onDidActiveEditorChange(() => {
 			this._closeWelcomeEditors();
 			once.dispose();
 		}));
-		// Reveal the Studio right panel (Chat / Review / History) without stealing focus.
+		// Land on the Home dashboard (the comp's default screen) when nothing else is open, so launch
+		// reads as a document app rather than an empty editor.
+		if (this._editorService.editors.length === 0) {
+			void this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'home'), { pinned: true });
+		}
+		// Reveal the Studio right panel (Chat / Review / History / Skills) without stealing focus.
 		void viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
 	}
 
