@@ -8,6 +8,15 @@ import { IKpiRow, ILivingDoc, IProposedChange } from '../common/livingDocsModel.
 
 export type LivingDocViewMode = 'rendered' | 'raw';
 
+export type PresentChoice = 'gdoc' | 'gsheet' | 'docx' | 'xlsx' | 'site';
+export type ShareScope = 'internal' | 'link' | 'public';
+
+export interface IPresentState {
+	readonly open: boolean;
+	readonly choice: PresentChoice;
+	readonly scope: ShareScope;
+}
+
 export interface ILivingDocRenderInput {
 	readonly doc: ILivingDoc | undefined;
 	readonly pending: readonly IProposedChange[];
@@ -16,6 +25,7 @@ export interface ILivingDocRenderInput {
 	readonly recent: ReadonlySet<string>;
 	readonly mode: LivingDocViewMode;
 	readonly rawText: string;
+	readonly present: IPresentState;
 }
 
 function esc(s: string): string {
@@ -34,6 +44,7 @@ function renderGenericMarkdown(body: string): string {
 }
 
 const ACCENT = 'oklch(0.55 0.13 255)';
+const ACCENT_DK = 'oklch(0.45 0.13 255)';
 
 // Style and script are single left-aligned template literals so source indentation stays tab-only.
 const STYLE = `*{box-sizing:border-box}
@@ -134,7 +145,17 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .prose img{max-width:100%}
 .rawwrap{max-width:860px;margin:0 auto;padding:20px 40px 60px}
 textarea.raw{width:100%;min-height:70vh;box-sizing:border-box;border:1px solid #e1e2e8;border-radius:10px;padding:18px 20px;resize:vertical;background:#fbfbfc;color:#23242a;font:400 13px/1.7 'JetBrains Mono',ui-monospace,monospace;tab-size:2}
-textarea.raw:focus{outline:none;border-color:${ACCENT}}`;
+textarea.raw:focus{outline:none;border-color:${ACCENT}}
+/* Present & export modal. */
+.pm-overlay{position:fixed;inset:0;z-index:60;background:rgba(20,26,40,.34);display:flex;align-items:center;justify-content:center;padding:32px}
+.pm-card{width:740px;max-width:100%;max-height:100%;background:#fff;border-radius:16px;box-shadow:0 24px 70px rgba(15,22,40,.32);overflow:hidden;display:flex;flex-direction:column}
+.pm-head{flex:none;display:flex;align-items:center;gap:11px;padding:18px 22px;border-bottom:1px solid #eef0f3}
+.pm-title{margin:0 0 3px;font:600 16px/1.2 system-ui;color:#15171c}
+.pm-sub{font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2}
+.pm-x{margin-left:auto;border:none;background:none;color:#9aa0aa;font-size:18px;cursor:pointer;padding:4px 8px}
+.pm-body{flex:1;display:flex;min-height:0}
+.pm-list{width:300px;flex:none;border-right:1px solid #eef0f3;background:#fbfbfc;overflow-y:auto;padding:14px}
+.pm-detail{flex:1;min-width:0;overflow-y:auto;padding:22px}`;
 
 const SCRIPT = `const vscode = acquireVsCodeApi();
 for (const b of document.querySelectorAll('[data-refresh]')) { b.addEventListener('click', () => vscode.postMessage({ type: 'refresh' })); }
@@ -149,8 +170,15 @@ for (const b of document.querySelectorAll('[data-approve]')) { b.addEventListene
 for (const b of document.querySelectorAll('[data-reject]')) { b.addEventListener('click', e => { e.stopPropagation(); vscode.postMessage({ type: 'reject', id: b.getAttribute('data-reject') }); }); }
 const askAi = document.querySelector('[data-ask-ai]');
 if (askAi) { askAi.addEventListener('click', () => vscode.postMessage({ type: 'askAi' })); }
-const shareBtn = document.querySelector('[data-share]');
-if (shareBtn) { shareBtn.addEventListener('click', () => vscode.postMessage({ type: 'share' })); }
+const presentOpen = document.querySelector('[data-present-open]');
+if (presentOpen) { presentOpen.addEventListener('click', () => vscode.postMessage({ type: 'presentOpen' })); }
+for (const c of document.querySelectorAll('[data-present-close]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'presentClose' })); }
+const presentStop = document.querySelector('[data-present-stop]');
+if (presentStop) { presentStop.addEventListener('click', e => e.stopPropagation()); }
+for (const c of document.querySelectorAll('[data-present-choice]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'presentChoice', choice: c.getAttribute('data-present-choice') })); }
+for (const s of document.querySelectorAll('[data-present-scope]')) { s.addEventListener('click', () => vscode.postMessage({ type: 'presentScope', scope: s.getAttribute('data-present-scope') })); }
+const presentCta = document.querySelector('[data-present-cta]');
+if (presentCta) { presentCta.addEventListener('click', () => vscode.postMessage({ type: 'presentCta' })); }
 for (const f of document.querySelectorAll('[data-fmt]')) { f.addEventListener('mousedown', e => { e.preventDefault(); document.execCommand(f.getAttribute('data-fmt'), false); }); }
 const toRendered = document.querySelector('[data-to-rendered]');
 const rawArea = document.querySelector('textarea.raw');
@@ -180,14 +208,16 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const rawToggleTop = mode === 'raw'
 		? `<button class="toggle" data-to-rendered>&#10003; Done editing source</button>`
 		: '';
-	const shareBtn = (doc && isRendered) ? `<button class="toggle" data-share>&#8599; Share</button>` : '';
+	const presentBtn = (doc && isRendered) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
 	const downloadBtn = (doc && isRendered) ? `<button class="toggle" data-export-md>&#8675; Download</button>` : '';
 	const refresh = isLiving && isRendered
 		? `<button class="btn" data-refresh>&#8635; Refresh from sources</button>`
 		: '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${rawToggleTop}${shareBtn}${downloadBtn}${refresh}</div></div>`;
+		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}${downloadBtn}${refresh}</div></div>`;
+
+	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 
 	// The editor toolbar (formatting + Ask AI), shown when reading/editing a Living Document.
 	const etoolbar = (isLiving && isRendered)
@@ -221,7 +251,56 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		? `<div class="hint">Bound text is dotted-underlined &mdash; click a provenance dot to trace it back to the source. `
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar).</div>`
 		: '';
-	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}<script>${SCRIPT}</script></body></html>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}${modal}<script>${SCRIPT}</script></body></html>`;
+}
+
+// The Present & export modal: a destination list (Google Docs / Sheets / Word / Excel / hosted page)
+// and a detail pane with the live-behaviour blurb, a document preview and the export CTA. Ported from
+// the comp; share scope appears only for the hosted-page destination.
+interface IPresentDef { label: string; accent: string; cta: string; live: string; icon: string; tint: string }
+const PRESENT_DEFS: Record<PresentChoice, IPresentDef> = {
+	gdoc: { label: 'Google Docs', accent: '#2a6fdb', cta: 'Export to Google Docs', live: 'Editable copy &middot; text &amp; tables formatted natively', icon: 'G', tint: '#eaf1fd' },
+	gsheet: { label: 'Google Sheets', accent: '#1f8a5b', cta: 'Export to Google Sheets', live: 'Tables become live sheets &middot; links to source kept as a snapshot', icon: 'G', tint: '#e7f5ee' },
+	docx: { label: 'Microsoft Word', accent: '#2b579a', cta: 'Download .docx', live: 'Offline file &middot; styles preserved, data values frozen at export', icon: 'W', tint: '#eaf0fa' },
+	xlsx: { label: 'Microsoft Excel', accent: '#217346', cta: 'Download .xlsx', live: 'Tables only &middot; one sheet per linked table', icon: 'X', tint: '#e7f3ec' },
+	site: { label: 'Hosted web page', accent: ACCENT, cta: 'Publish web page', live: 'Live page that re-renders when the source updates', icon: '&#9673;', tint: '#eef1ff' },
+};
+const PRESENT_ORDER: readonly PresentChoice[] = ['gdoc', 'gsheet', 'docx', 'xlsx', 'site'];
+
+function renderPresentModal(present: IPresentState, title: string): string {
+	const pc = PRESENT_DEFS[present.choice];
+	const rows = PRESENT_ORDER.map(k => {
+		const d = PRESENT_DEFS[k];
+		const sel = k === present.choice;
+		const rowStyle = sel ? 'border:1.5px solid ' + ACCENT + ';background:#f7f9ff' : 'border:1px solid #e9eaee;background:#fff';
+		return `<button class="pm-row" data-present-choice="${k}" style="text-align:left;border-radius:10px;padding:11px 12px;cursor:pointer;display:flex;align-items:center;gap:11px;${rowStyle}">`
+			+ `<span style="width:30px;height:30px;flex:none;border-radius:7px;background:${d.tint};color:${d.accent};font:700 13px/1 system-ui;display:flex;align-items:center;justify-content:center">${d.icon}</span>`
+			+ `<span style="min-width:0"><span style="display:block;font:600 13px/1.2 system-ui;color:#1a1c20">${d.label}</span></span></button>`;
+	}).join('');
+
+	const scopeStyle = (on: boolean) => on
+		? 'border:1.5px solid ' + ACCENT + ';background:#f4f6ff;color:' + ACCENT_DK
+		: 'border:1px solid #e0e2e8;background:#fff;color:#696e78';
+	const scopeBtn = (scope: ShareScope, label: string) => `<button class="pm-scope" data-present-scope="${scope}" style="border-radius:8px;padding:9px 12px;font:500 12px/1 system-ui;cursor:pointer;${scopeStyle(present.scope === scope)}">${label}</button>`;
+	const siteScope = present.choice === 'site'
+		? `<div style="margin-bottom:18px"><div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">WHO CAN ACCESS</div>`
+		+ `<div style="display:flex;gap:7px;margin-bottom:12px">${scopeBtn('internal', '&#128274; Workspace only')}${scopeBtn('link', '&#128279; Anyone with link')}${scopeBtn('public', '&#127760; Public')}</div>`
+		+ `<div style="display:flex;align-items:center;gap:8px;border:1px solid #e6e8ed;border-radius:8px;padding:9px 11px;background:#fcfcfd"><span style="font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">opportunity-os.live/weekly-summary</span><button class="pm-copy" style="border:1px solid #e0e2e8;background:#fff;border-radius:6px;padding:6px 10px;font:500 11px/1 system-ui;color:#52575f;cursor:pointer">Copy</button></div></div>`
+		: '';
+
+	return `<div class="pm-overlay" data-present-close>`
+		+ `<div class="pm-card" data-present-stop>`
+		+ `<div class="pm-head"><div><h2 class="pm-title">Present &amp; export</h2><div class="pm-sub">${esc(title)} &middot; 4 linked blocks</div></div><button class="pm-x" data-present-close>&#10005;</button></div>`
+		+ `<div class="pm-body">`
+		+ `<div class="pm-list"><div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:9px">SEND A COPY TO</div><div style="display:flex;flex-direction:column;gap:7px">${rows}</div></div>`
+		+ `<div class="pm-detail">`
+		+ `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><h3 style="margin:0;font:600 17px/1.2 system-ui;color:#15171c">${pc.label}</h3></div>`
+		+ `<p style="margin:0 0 18px;font:400 13.5px/1.55 system-ui;color:#696e78">${pc.live}</p>`
+		+ `<div style="border:1px solid #eceef2;border-radius:10px;overflow:hidden;margin-bottom:18px"><div style="padding:13px 15px;border-bottom:1px solid #f4f5f7"><div style="font:600 13px/1.3 system-ui;color:#23262c;margin-bottom:5px">${esc(title)}</div><div style="font:400 11px/1.5 system-ui;color:#969ba4">Highlights &middot; KPI table &middot; Commentary &middot; What to watch</div></div><div style="display:flex;align-items:center;gap:8px;padding:10px 15px;background:#fafbfc;font:400 11.5px/1.4 system-ui;color:#52575f"><span style="width:7px;height:7px;border-radius:50%;background:${ACCENT}"></span>4 source-linked blocks included</div></div>`
+		+ siteScope
+		+ `<button class="pm-cta" data-present-cta style="width:100%;border:none;border-radius:9px;padding:12px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;cursor:pointer">${pc.cta}</button>`
+		+ `<div style="margin-top:11px;font:400 11px/1.5 system-ui;color:#bcc0c8;text-align:center">Provenance &amp; approval history are retained on export.</div>`
+		+ `</div></div></div></div>`;
 }
 
 // A line's gutter cell holds only its provenance marker (no line numbers -- those read as a code
