@@ -24,12 +24,19 @@ what is likely to become problematic, the open decisions, and the design intent.
 | [08-living-documents-format-spec.md](08-living-documents-format-spec.md) | The raw-Markdown format + dependency model design spec (clean file + lock file); resolves Q1, with full decision log. Companion visual: [option-10-living-docs-format.html](option-10-living-docs-format.html) |
 | [plans/](plans/) | The handoff prompts that drove (and will drive) the work |
 
-## Status at a glance (2026-06-20)
+## Status at a glance (2026-06-21)
 
-- **Built:** items 0-5 on branch `living-docs-spike`; PR #1 -> `main`. 13 unit tests passing.
-- **Proven:** the engine — agent loop, figure-auto-apply / meaning-change-approve, provenance,
-  multi-document fan-out, multiple live source kinds (incl. a real HTTP API), export.
-- **Not solved:** the shell still feels like an IDE. Next phase = the "Studio" de-IDE pass
-  (see [plans/02-studio-de-ide-handoff.md](plans/02-studio-de-ide-handoff.md)).
-- **The open strategic question:** keep forking VS Code, or build greenfield? Leaning toward
-  "the engine is great, the shell fights us" — see [05-open-questions.md](05-open-questions.md).
+- **Built:** items 0-5 (`living-docs-spike`, PR #1 -> `main`); the Studio de-IDE pass
+  (`living-docs-studio`, PR #2 -> `main`); and a design-match + build-out round
+  (`living-docs-design-match`) that implemented the rest of the Workbench comp — Home dashboard,
+  Templates / Knowledge / Agents (with workflow canvas), the Present & export modal, the
+  Chat / Review / History / Skills panel, and a clean icon nav. 15 unit tests passing.
+- **Proven:** the engine (agent loop, figure-auto-apply / meaning-change-approve, provenance,
+  multi-doc fan-out, live source kinds incl. a real HTTP API, export) **and** that the full hi-fi
+  shell is reachable with **0 added core patches** (see [plans/03-merge-tax-ledger.md](plans/03-merge-tax-ledger.md)).
+- **Decided:** the document format (Q1) — clean `<doc>.md` + generated `<doc>.lock.json` with a
+  dependency graph; see [08-living-documents-format-spec.md](08-living-documents-format-spec.md).
+- **Next phase (foundational):** implement that format + dependency graph — handoff
+  [plans/06-format-implementation-handoff.md](plans/06-format-implementation-handoff.md).
+- **Still open:** editor depth (Q2) and **fork vs greenfield** (Q3) — see
+  [05-open-questions.md](05-open-questions.md). The chosen format is built to survive either.
