@@ -49,7 +49,9 @@ const WEEKLY_MD = [
 suite('LivingDocsService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function createService(): LivingDocsService {
+	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
+
+	function createService(opened: IOpenedEditor[] = []): LivingDocsService {
 		const files = new Map<string, string>();
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
 		files.set(URI.file('/ws/Weekly Summary.living.md').toString(), WEEKLY_MD);
@@ -65,7 +67,7 @@ suite('LivingDocsService', () => {
 			},
 		} as unknown as IFileService;
 
-		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; } } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		const languageModelsService = { selectLanguageModels: async () => [] } as unknown as ILanguageModelsService;
 		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
@@ -124,6 +126,20 @@ suite('LivingDocsService', () => {
 		assert.ok(commentary.text!.includes('steady'), 'commentary left unchanged on reject');
 		assert.strictEqual(service.getPending().length, 0);
 		assert.ok(service.getAudit().some(e => e.action === 'rejected' && e.blockId === 'p-commentary'), 'rejection audited');
+	});
+
+	test('revealSource opens the bound source and selects the synced-week row', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+		await service.loadDocument(URI.file('/ws/Weekly Summary.living.md'));
+		opened.length = 0; // ignore anything opened during load
+
+		await service.revealSource(['mrr']);
+
+		assert.strictEqual(opened.length, 1, 'opened the source once');
+		assert.ok(opened[0].resource!.path.endsWith('metrics.csv'), 'opened metrics.csv');
+		// header is line 1; week 23 is the 2nd data row (weeks 22,23,24) -> line 3
+		assert.strictEqual(opened[0].options?.selection?.startLineNumber, 3, 'selected the week-23 row');
 	});
 
 	test('markdown parses bindings from comments and round-trips through serialize', () => {

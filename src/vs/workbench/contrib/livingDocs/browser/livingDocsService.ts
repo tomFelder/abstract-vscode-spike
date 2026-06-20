@@ -271,12 +271,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	async revealSource(cells: readonly string[]): Promise<void> {
-		if (!this._csvUri) { return; }
+		if (!this._csvUri || !this._doc) { return; }
+		// Header is line 1; data rows follow in file order, so the synced-week row is at its index + 2.
+		const idx = this._rows.findIndex(r => r.week === this._doc!.syncedWeek);
+		const line = idx >= 0 ? idx + 2 : 1;
 		try {
-			await this._editors.openEditor({ resource: this._csvUri, options: { pinned: true } }, SIDE_GROUP);
-			this._notify.info(`Provenance: this text is bound to ${cells.join(', ')} in metrics.csv (week ${this._doc?.syncedWeek}).`);
-		} catch {
-			// ignore
+			await this._editors.openEditor({
+				resource: this._csvUri,
+				options: {
+					pinned: true,
+					selection: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+				},
+			}, SIDE_GROUP);
+			const what = cells.length ? cells.join(', ') : 'the source';
+			this._notify.info(`Provenance: this text is bound to ${what} in ${this._doc.source} (week ${this._doc.syncedWeek}).`);
+		} catch (e) {
+			this._log.warn('[livingDocs] reveal source failed', e);
 		}
 	}
 
