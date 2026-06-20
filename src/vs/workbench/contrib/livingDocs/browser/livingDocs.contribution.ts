@@ -5,11 +5,13 @@
 
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize, localize2 } from '../../../../nls.js';
+import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { IConfigurationRegistry, Extensions as ConfigurationExtensions } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
-import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
@@ -27,6 +29,10 @@ import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
 import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
+import { ScreenEditor } from './screenEditor.js';
+import { ScreenEditorInput } from './screenEditorInput.js';
+import { ScreenLauncherView } from './screenLauncherView.js';
+import { ScreenId } from './screenRender.js';
 
 // The built-in File Explorer is the single biggest "this is an IDE" signal. The Documents home
 // (below) replaces it as the default primary-sidebar container.
@@ -59,6 +65,12 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
 	EditorPaneDescriptor.create(LivingDocEditor, LivingDocEditor.ID, localize('livingDocEditor', "Living Document")),
 	[new SyncDescriptor(LivingDocEditorInput)]
+);
+
+// The main-area Opportunity OS screens (Templates / Knowledge / Agents) share one webview editor.
+Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+	EditorPaneDescriptor.create(ScreenEditor, ScreenEditor.ID, localize('livingDocsScreen', "Opportunity OS")),
+	[new SyncDescriptor(ScreenEditorInput)]
 );
 
 // --- editor resolver: open Markdown in the Living Document editor by default ---
@@ -156,6 +168,62 @@ const reviewViewDescriptor: IViewDescriptor = {
 	canMoveView: true,
 };
 Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([reviewViewDescriptor], reviewContainer);
+
+// --- icon-nav screens (Templates / Knowledge / Agents) in the activity bar ---
+// Each is an activity-bar container whose slim launcher view opens the full-width screen in the
+// editor area, mirroring the comp's icon nav. ADDITIVE-CONTRIBUTION (merge-tax ledger).
+interface IScreenNavEntry {
+	readonly screen: ScreenId;
+	readonly containerId: string;
+	readonly viewId: string;
+	readonly title: string;
+	readonly icon: ThemeIcon;
+	readonly order: number;
+}
+
+const SCREEN_NAV: readonly IScreenNavEntry[] = [
+	{ screen: 'templates', containerId: 'workbench.viewContainer.livingDocs.templates', viewId: 'workbench.view.livingDocs.templates', title: 'Templates', icon: Codicon.layout, order: 2 },
+	{ screen: 'knowledge', containerId: 'workbench.viewContainer.livingDocs.knowledge', viewId: 'workbench.view.livingDocs.knowledge', title: 'Knowledge', icon: Codicon.library, order: 3 },
+	{ screen: 'agents', containerId: 'workbench.viewContainer.livingDocs.agents', viewId: 'workbench.view.livingDocs.agents', title: 'Agents', icon: Codicon.sync, order: 4 },
+];
+
+for (const entry of SCREEN_NAV) {
+	const icon = registerIcon(`living-docs-${entry.screen}`, entry.icon, localize('livingDocs.screenIcon', "Opportunity OS {0}", entry.title));
+	const container = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+		id: entry.containerId,
+		title: { value: entry.title, original: entry.title },
+		icon,
+		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [entry.containerId, { mergeViewWithContainerWhenSingleView: true }]),
+		storageId: entry.containerId,
+		hideIfEmpty: false,
+		order: entry.order,
+	}, ViewContainerLocation.Sidebar);
+
+	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([{
+		id: entry.viewId,
+		name: { value: entry.title, original: entry.title },
+		containerIcon: icon,
+		ctorDescriptor: new SyncDescriptor(ScreenLauncherView),
+		canToggleVisibility: false,
+		canMoveView: false,
+	}], container);
+
+	registerAction2(class extends Action2 {
+		constructor() {
+			super({
+				id: `livingDocs.open.${entry.screen}`,
+				title: localize2('livingDocs.openScreen', "Open {0}", entry.title),
+				category: localize2('livingDocs.category', "Opportunity OS"),
+				f1: true,
+			});
+		}
+		override async run(accessor: ServicesAccessor): Promise<void> {
+			const editorService = accessor.get(IEditorService);
+			const instantiationService = accessor.get(IInstantiationService);
+			await editorService.openEditor(instantiationService.createInstance(ScreenEditorInput, entry.screen), { pinned: true });
+		}
+	});
+}
 
 // --- first-run flow: launch reads as a document app, not an IDE ---
 // The Welcome / Getting Started editor is the last IDE tell on launch. Close it so the workspace
