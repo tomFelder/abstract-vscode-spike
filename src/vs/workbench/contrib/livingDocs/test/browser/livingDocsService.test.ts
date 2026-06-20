@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
@@ -67,9 +68,10 @@ suite('LivingDocsService', () => {
 		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		const languageModelsService = { selectLanguageModels: async () => [] } as unknown as ILanguageModelsService;
+		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, languageModelsService, notificationService, new NullLogService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, languageModelsService, configurationService, notificationService, new NullLogService());
 		store.add(service);
 		return service;
 	}

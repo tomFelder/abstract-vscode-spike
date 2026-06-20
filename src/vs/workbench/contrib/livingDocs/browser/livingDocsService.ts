@@ -7,6 +7,7 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
@@ -53,6 +54,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IEditorService private readonly _editors: IEditorService,
 		@IViewsService private readonly _views: IViewsService,
 		@ILanguageModelsService private readonly _lm: ILanguageModelsService,
+		@IConfigurationService private readonly _config: IConfigurationService,
 		@INotificationService private readonly _notify: INotificationService,
 		@ILogService private readonly _log: ILogService,
 	) {
@@ -155,7 +157,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (com && com.text) {
 			const proposal = await this._proposeCommentary(deltaPct, prev.mrr, latest.mrr, com.text);
 			this._status = proposal.via === 'model'
-				? 'Synced - commentary rewritten by model'
+				? `Synced - commentary rewritten by ${proposal.model ?? 'model'}`
 				: 'Synced - commentary by built-in heuristic (no model available)';
 			if (proposal.newText !== com.text) {
 				const change: IProposedChange = {
@@ -193,9 +195,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	private async _proposeCommentary(deltaPct: number, mrrPrev: number, mrrNow: number, current: string): Promise<{ newText: string; kind: ChangeKind; confidence: number; rationale: string; via: 'model' | 'heuristic' }> {
+	private async _proposeCommentary(deltaPct: number, mrrPrev: number, mrrNow: number, current: string): Promise<{ newText: string; kind: ChangeKind; confidence: number; rationale: string; via: 'model' | 'heuristic'; model?: string }> {
 		try {
-			const models = await this._lm.selectLanguageModels({});
+			if (this._config.getValue<boolean>('livingDocs.useModel') === false) {
+				throw new Error('model disabled by setting');
+			}
+			const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
+			const models = await this._lm.selectLanguageModels(preferred ? { id: preferred } : {});
 			if (!models.length) { throw new Error('no language models available'); }
 			const system = 'You revise one sentence of business commentary inside a living report. '
 				+ 'Reply with ONLY a JSON object, no prose, of the form '
@@ -225,6 +231,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				confidence: typeof json.confidence === 'number' ? json.confidence : 0.85,
 				rationale: String(json.rationale ?? ''),
 				via: 'model',
+				model: models[0],
 			};
 		} catch (e) {
 			this._log.info('[livingDocs] model unavailable, using heuristic', e instanceof Error ? e.message : String(e));

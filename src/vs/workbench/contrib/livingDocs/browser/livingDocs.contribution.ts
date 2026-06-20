@@ -6,6 +6,7 @@
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { localize, localize2 } from '../../../../nls.js';
+import { IConfigurationRegistry, Extensions as ConfigurationExtensions } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
@@ -25,6 +26,26 @@ import { ReviewRailView } from './reviewRailView.js';
 
 // --- service ---
 registerSingleton(ILivingDocsService, LivingDocsService, InstantiationType.Delayed);
+
+// --- configuration ---
+Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
+	id: 'livingDocs',
+	order: 100,
+	title: localize('livingDocs.config.title', "Living Documents"),
+	type: 'object',
+	properties: {
+		'livingDocs.useModel': {
+			type: 'boolean',
+			default: true,
+			description: localize('livingDocs.useModel', "Use a language model to rewrite narrative commentary when a source changes. When off, or when no model is available, a deterministic built-in heuristic is used instead."),
+		},
+		'livingDocs.commentaryModel': {
+			type: 'string',
+			default: '',
+			description: localize('livingDocs.commentaryModel', "Preferred language model id for narrative rewrites. Leave empty to use the first available model."),
+		},
+	},
+});
 
 // --- editor pane ---
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
