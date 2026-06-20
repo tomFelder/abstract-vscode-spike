@@ -116,6 +116,8 @@ const toRaw = document.querySelector('[data-to-raw]');
 if (toRaw) { toRaw.addEventListener('click', () => vscode.postMessage({ type: 'setMode', mode: 'raw' })); }
 const exportBtn = document.querySelector('[data-export]');
 if (exportBtn) { exportBtn.addEventListener('click', () => vscode.postMessage({ type: 'export' })); }
+const exportMdBtn = document.querySelector('[data-export-md]');
+if (exportMdBtn) { exportMdBtn.addEventListener('click', () => vscode.postMessage({ type: 'exportMd' })); }
 const toRendered = document.querySelector('[data-to-rendered]');
 const rawArea = document.querySelector('textarea.raw');
 if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }
@@ -145,13 +147,16 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const refresh = isLiving && mode === 'rendered'
 		? `<button class="btn" data-refresh>&#8635; Refresh from sources</button>`
 		: '';
-	// Export the document to a self-contained HTML page.
+	// Export the document to a self-contained HTML page, or a clean static Markdown file.
 	const exportBtn = (doc && mode === 'rendered')
-		? `<button class="toggle" data-export>&#8682; Export</button>`
+		? `<button class="toggle" data-export>&#8682; Export HTML</button>`
+		: '';
+	const exportMdBtn = (doc && mode === 'rendered')
+		? `<button class="toggle" data-export-md>&#8675; Download .md</button>`
 		: '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${toggle}${exportBtn}${refresh}</div></div>`;
+		+ `<div class="right">${livingControls}${toggle}${exportBtn}${exportMdBtn}${refresh}</div></div>`;
 
 	let body: string;
 	if (mode === 'raw') {
@@ -276,4 +281,36 @@ export function renderExportHtml(doc: ILivingDoc, kpiRows: readonly IKpiRow[]): 
 	}
 	const footer = `<footer>Exported from Opportunity OS &middot; Living Document</footer>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(doc.title)}</title><style>${EXPORT_STYLE}</style></head><body><main class="page">${body}${footer}</main></body></html>`;
+}
+
+function exportKpiMarkdown(rows: readonly IKpiRow[]): string {
+	if (!rows.length) { return ''; }
+	const header = `| Metric | Prev | Current | Change |\n| --- | --- | --- | --- |`;
+	const body = rows.map(r => `| ${r.metric} | ${r.prev} | ${r.curr} | ${r.delta} |`).join('\n');
+	return `${header}\n${body}`;
+}
+
+/**
+ * Build a clean, static Markdown document from a document's current (resolved) state: live values
+ * are already inlined into each block's text, so there are no bindings, no HTML-comment metadata and
+ * no {cell} placeholders -- just portable Markdown that opens anywhere (Obsidian, GitHub, a share).
+ */
+export function renderExportMarkdown(doc: ILivingDoc, kpiRows: readonly IKpiRow[]): string {
+	if (!doc.isLiving) {
+		// Plain Markdown already is its own clean export.
+		return doc.body.trim() + '\n';
+	}
+	const parts: string[] = [`# ${doc.title}`];
+	if (doc.subtitle) { parts.push(`_${doc.subtitle}_`); }
+	for (const block of doc.blocks) {
+		if (block.type === 'heading') {
+			parts.push(`## ${block.text ?? ''}`);
+		} else if (block.type === 'kpiTable') {
+			const table = exportKpiMarkdown(kpiRows);
+			if (table) { parts.push(table); }
+		} else {
+			parts.push(block.text ?? '');
+		}
+	}
+	return parts.join('\n\n') + '\n';
 }

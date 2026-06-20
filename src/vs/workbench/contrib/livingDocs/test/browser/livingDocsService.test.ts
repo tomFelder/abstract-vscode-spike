@@ -314,6 +314,24 @@ suite('LivingDocsService', () => {
 		assert.ok(!html.includes('contenteditable') && !html.includes('data-refresh'), 'no editor chrome in the export');
 	});
 
+	test('exportMarkdown writes a clean static .md with resolved values and no binding metadata', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
+
+		const target = await service.exportMarkdown(WEEKLY);
+		assert.ok(target, 'export returned a target uri');
+		assert.ok(target!.path.endsWith('Weekly Summary.export.md'), `target name: ${target!.path}`);
+		assert.ok(opened.some(o => o.resource?.path.endsWith('.export.md')), 'opened the exported markdown');
+
+		const md = lastFiles!.get(target!.toString()) ?? '';
+		assert.ok(md.startsWith('# Weekly Operating Summary'), 'starts with the H1 title');
+		assert.ok(md.includes('$48.6k'), 'resolved KPI values inlined');
+		assert.ok(md.includes('| Metric | Prev | Current | Change |'), 'KPI table flattened to a markdown table');
+		assert.ok(!md.includes('<!-- bind') && !md.includes('<!-- table') && !md.includes('{'), 'no binding metadata or {cell} placeholders');
+	});
+
 	test('editBlock edits non-bound prose and persists it, but ignores bound blocks', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);

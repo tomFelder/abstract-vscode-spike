@@ -21,7 +21,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { ILivingDocsService, ILivingDocSummary, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { parseLivingDoc, serializeLivingDoc } from '../common/livingDocMarkdown.js';
-import { renderExportHtml } from './livingDocRender.js';
+import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ChangeKind, IAuditEntry, IKpiRow, ILivingDoc, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 interface ICsvRow {
@@ -323,6 +323,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return target;
 		} catch (e) {
 			this._log.warn('[livingDocs] export failed', e);
+			return undefined;
+		}
+	}
+
+	async exportMarkdown(resource: URI): Promise<URI | undefined> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return undefined; }
+		const markdown = renderExportMarkdown(state.doc, this.getKpiRows(resource));
+		const stem = basename(resource).replace(/\.living\.md$/, '').replace(/\.md$/, '');
+		const target = joinPath(dirname(resource), `${stem}.export.md`);
+		try {
+			await this._files.writeFile(target, VSBuffer.fromString(markdown));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
+			this._notify.info(`Exported "${state.doc.title}" to ${basename(target)}.`);
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] markdown export failed', e);
 			return undefined;
 		}
 	}

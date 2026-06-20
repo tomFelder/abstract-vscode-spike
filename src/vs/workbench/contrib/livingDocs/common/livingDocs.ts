@@ -87,6 +87,12 @@ export interface ILivingDocsService {
 	/** Export a document's current state to a self-contained HTML page and open it. */
 	exportDocument(resource: URI): Promise<URI | undefined>;
 
+	/**
+	 * Export a document's *resolved* state to a clean, static Markdown file (no bindings, no
+	 * {cell} placeholders, live values inlined) and open it. The portable share/Obsidian artefact.
+	 */
+	exportMarkdown(resource: URI): Promise<URI | undefined>;
+
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;
 
