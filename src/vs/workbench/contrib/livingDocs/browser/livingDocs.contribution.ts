@@ -18,6 +18,9 @@ import { registerWorkbenchContribution2, WorkbenchPhase, IWorkbenchContribution 
 import { EditorExtensions } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
+import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { DocumentsView } from './documentsView.js';
 import { LivingDocEditor } from './livingDocEditor.js';
@@ -153,3 +156,38 @@ const reviewViewDescriptor: IViewDescriptor = {
 	canMoveView: true,
 };
 Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([reviewViewDescriptor], reviewContainer);
+
+// --- first-run flow: launch reads as a document app, not an IDE ---
+// The Welcome / Getting Started editor is the last IDE tell on launch. Close it so the workspace
+// lands on the Documents home (sidebar) with a clean editor area, and reveal the Studio right panel
+// so Review is one glance away. ADDITIVE-CONTRIBUTION (merge-tax ledger).
+const WELCOME_INPUT_TYPE_ID = 'workbench.editors.gettingStartedInput';
+
+class StudioStartupContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.studioStartup';
+
+	constructor(
+		@IViewsService viewsService: IViewsService,
+		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+		@IEditorService editorService: IEditorService,
+	) {
+		super();
+		// The Getting Started editor can be opened late by the startup-page logic, so close any that
+		// exist now and any that appear afterwards -- the Studio shell never shows the IDE welcome.
+		this._closeWelcomeEditors();
+		this._register(editorService.onDidActiveEditorChange(() => this._closeWelcomeEditors()));
+		// Reveal the Studio right panel (Chat / Review / History) without stealing focus.
+		void viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
+	}
+
+	private _closeWelcomeEditors(): void {
+		for (const group of this._editorGroups.groups) {
+			for (const editor of [...group.editors]) {
+				if (editor.typeId === WELCOME_INPUT_TYPE_ID) {
+					void group.closeEditor(editor);
+				}
+			}
+		}
+	}
+}
+registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContribution, WorkbenchPhase.AfterRestored);
