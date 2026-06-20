@@ -38,9 +38,10 @@ const ACCENT = 'oklch(0.55 0.13 255)';
 // Style and script are single left-aligned template literals so source indentation stays tab-only.
 const STYLE = `*{box-sizing:border-box}
 html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
-.topbar{position:sticky;top:0;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc;z-index:5}
+.topbar{position:sticky;top:0;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc;z-index:5}
 .brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
 .logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
+.sep{color:#c8cbd2}
 .crumb{color:#868b95;font-weight:400}
 .right{display:flex;align-items:center;gap:10px}
 .pill{display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px}
@@ -120,7 +121,7 @@ for (const el of document.querySelectorAll('[data-block]')) {
 export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const { doc, pending, kpiRows, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
-	const crumb = isLiving ? '/ Living Document' : '/ Markdown';
+	const crumb = isLiving ? 'Living Document' : 'Markdown';
 
 	// Toggle between the rendered view and an editable raw-Markdown view.
 	const toggle = mode === 'raw'
@@ -140,7 +141,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		? `<button class="toggle" data-export>&#8682; Export</button>`
 		: '';
 
-	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="crumb">${crumb}</span></div>`
+	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
 		+ `<div class="right">${livingControls}${toggle}${exportBtn}${refresh}</div></div>`;
 
 	let body: string;

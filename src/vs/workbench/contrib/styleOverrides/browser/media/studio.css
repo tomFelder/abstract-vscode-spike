@@ -1,0 +1,35 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * Style-override module: "Studio".
+ *
+ * Removes the residual IDE chrome that the Living Documents "Studio" shell does not want, so the
+ * workspace reads as a calm word processor rather than an editor:
+ *   - the empty-editor watermark ("Editor Group N (empty)" + the keybinding letterpress),
+ *   - the editor group title bar and its close affordance (the document webview carries its own
+ *     top bar; with tabs hidden the group title is pure leftover chrome), and
+ *   - the auxiliary-bar composite title (the right "Review" panel renders its own tab strip).
+ *
+ * All rules are gated behind the `.style-override-studio` class, which the StyleOverridesContribution
+ * toggles onto the workbench container(s) when `workbench.experimental.modernUI` is enabled.
+ */
+
+/* The empty-editor watermark / "Editor Group N (empty)" hint. */
+.style-override-studio .editor-group-watermark {
+	display: none !important;
+}
+
+/* The editor group title bar (close affordance, leftover actions). Tabs are already hidden, and
+ * the Living Document webview provides its own brand row, so this strip is pure residual chrome. */
+.style-override-studio .editor-group-container > .title {
+	display: none !important;
+}
+
+/* The native auxiliary-bar composite title ("Review" + maximize). The Studio right panel renders
+ * its own Chat / Review / History tab strip instead. */
+.style-override-studio .part.auxiliarybar > .composite.title {
+	display: none !important;
+}

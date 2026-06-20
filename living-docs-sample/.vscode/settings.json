@@ -13,6 +13,9 @@
 	"editor.minimap.enabled": false,
 	"workbench.tips.enabled": false,
 	"workbench.startupEditor": "none",
+	// Brand the window/title via the setting only. Do NOT rebrand through product.json
+	// applicationName/dataFolderName -- that moves the user-data directory (documented footgun).
+	"window.title": "Opportunity OS",
 	// The registered "Opportunity OS" theme carries the full hi-fi palette (paper, indigo accent,
 	// calm grays) so the whole shell matches the design -- not just a handful of accent keys.
 	"workbench.colorTheme": "Opportunity OS"

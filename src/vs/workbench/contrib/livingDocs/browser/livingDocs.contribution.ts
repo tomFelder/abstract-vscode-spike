@@ -131,7 +131,7 @@ class HideExplorerContribution extends Disposable implements IWorkbenchContribut
 }
 registerWorkbenchContribution2(HideExplorerContribution.ID, HideExplorerContribution, WorkbenchPhase.BlockRestore);
 
-// --- review rail in the auxiliary bar ---
+// --- Studio right panel (Chat / Review / History) in the auxiliary bar ---
 const reviewIcon = registerIcon('living-docs-review', Codicon.checklist, localize('livingDocs.reviewIcon', "Living Documents review rail"));
 
 const reviewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
@@ -141,8 +141,8 @@ const reviewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(View
 	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [REVIEW_RAIL_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
 	storageId: REVIEW_RAIL_CONTAINER_ID,
 	hideIfEmpty: false,
-	order: 5,
-}, ViewContainerLocation.AuxiliaryBar, { isDefault: false });
+	order: 0,
+}, ViewContainerLocation.AuxiliaryBar, { isDefault: true });
 
 const reviewViewDescriptor: IViewDescriptor = {
 	id: REVIEW_RAIL_VIEW_ID,
