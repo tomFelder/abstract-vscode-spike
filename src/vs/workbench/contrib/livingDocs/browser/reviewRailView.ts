@@ -17,9 +17,6 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
 
-export const REVIEW_RAIL_VIEW_ID = 'workbench.view.livingDocs.review';
-export const REVIEW_RAIL_CONTAINER_ID = 'workbench.viewContainer.livingDocs';
-
 export class ReviewRailView extends ViewPane {
 
 	private _body: HTMLElement | undefined;

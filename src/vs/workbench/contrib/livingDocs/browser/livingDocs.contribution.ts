@@ -17,11 +17,11 @@ import { registerWorkbenchContribution2, WorkbenchPhase, IWorkbenchContribution 
 import { EditorExtensions } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
-import { ILivingDocsService } from '../common/livingDocs.js';
+import { ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
 import { LivingDocsService } from './livingDocsService.js';
-import { REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID, ReviewRailView } from './reviewRailView.js';
+import { ReviewRailView } from './reviewRailView.js';
 
 // --- service ---
 registerSingleton(ILivingDocsService, LivingDocsService, InstantiationType.Delayed);

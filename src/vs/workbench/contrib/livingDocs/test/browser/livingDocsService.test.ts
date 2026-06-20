@@ -12,6 +12,7 @@ import { IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
+import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { parseLivingDoc, serializeLivingDoc } from '../../common/livingDocMarkdown.js';
 
@@ -64,10 +65,11 @@ suite('LivingDocsService', () => {
 		} as unknown as IFileService;
 
 		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		const languageModelsService = { selectLanguageModels: async () => [] } as unknown as ILanguageModelsService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
 
-		const service = new LivingDocsService(fileService, editorService, languageModelsService, notificationService, new NullLogService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, languageModelsService, notificationService, new NullLogService());
 		store.add(service);
 		return service;
 	}

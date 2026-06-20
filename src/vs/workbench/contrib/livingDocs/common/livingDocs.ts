@@ -10,6 +10,9 @@ import { IAuditEntry, IKpiRow, ILivingDoc, IProposedChange } from './livingDocsM
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
+export const REVIEW_RAIL_VIEW_ID = 'workbench.view.livingDocs.review';
+export const REVIEW_RAIL_CONTAINER_ID = 'workbench.viewContainer.livingDocs';
+
 /**
  * Holds the active Living Document and drives the core loop:
  *   source change -> agent proposes edits -> figures auto-apply, meaning-changes queue ->

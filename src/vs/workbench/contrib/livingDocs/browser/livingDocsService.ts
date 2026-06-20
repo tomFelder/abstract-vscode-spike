@@ -15,7 +15,8 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
-import { ILivingDocsService } from '../common/livingDocs.js';
+import { IViewsService } from '../../../services/views/common/viewsService.js';
+import { ILivingDocsService, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { parseLivingDoc, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { ChangeKind, IAuditEntry, IKpiRow, ILivingDoc, IProposedChange } from '../common/livingDocsModel.js';
 
@@ -50,6 +51,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	constructor(
 		@IFileService private readonly _files: IFileService,
 		@IEditorService private readonly _editors: IEditorService,
+		@IViewsService private readonly _views: IViewsService,
 		@ILanguageModelsService private readonly _lm: ILanguageModelsService,
 		@INotificationService private readonly _notify: INotificationService,
 		@ILogService private readonly _log: ILogService,
@@ -96,12 +98,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._csvUri = joinPath(dirname(resource), this._doc.source);
 		await this._loadCsv();
 		this._status = 'All sources synced';
-		// Open the bound source beside the document (the "source pane").
-		try {
-			await this._editors.openEditor({ resource: this._csvUri, options: { pinned: true, preserveFocus: true } }, SIDE_GROUP);
-		} catch (e) {
-			this._log.warn('[livingDocs] could not open source pane', e);
-		}
+		// The document opens full-width; the source pane is summoned on demand via a provenance dot.
 		this._onDidChange.fire();
 	}
 
@@ -177,7 +174,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					this._recent.add(com.id);
 					this._audit.push(this._entry(com.id, 'auto-applied', change.oldText, change.newText, proposal.via));
 				} else {
-					// Meaning change — queue for one-click approval.
+					// Meaning change - queue for one-click approval.
 					this._via.set(change.id, proposal.via);
 					this._pending = [change, ...this._pending.filter(c => c.blockId !== com.id)];
 				}
@@ -185,6 +182,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 
 		this._onDidChange.fire();
+
+		// Surface the review rail automatically when something needs approval.
+		if (this._pending.length) {
+			try {
+				await this._views.openView(REVIEW_RAIL_VIEW_ID, false);
+			} catch (e) {
+				this._log.warn('[livingDocs] could not reveal review rail', e);
+			}
+		}
 	}
 
 	private async _proposeCommentary(deltaPct: number, mrrPrev: number, mrrNow: number, current: string): Promise<{ newText: string; kind: ChangeKind; confidence: number; rationale: string; via: 'model' | 'heuristic' }> {
