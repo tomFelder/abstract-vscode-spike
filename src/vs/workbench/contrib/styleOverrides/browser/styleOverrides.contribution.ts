@@ -22,6 +22,7 @@ import './media/paneHeaders.css';
 import './media/roundedCorners.css';
 import './media/scrollShadows.css';
 import './media/statusBar.css';
+import './media/studio.css';
 import './media/tabs.css';
 
 interface IStyleOverrideModule {
@@ -50,6 +51,7 @@ const STYLE_OVERRIDE_MODULES: readonly IStyleOverrideModule[] = [
 	{ id: 'roundedCorners' },
 	{ id: 'scrollShadows' },
 	{ id: 'statusBar' },
+	{ id: 'studio' },
 	{ id: 'tabs' }
 ];
 

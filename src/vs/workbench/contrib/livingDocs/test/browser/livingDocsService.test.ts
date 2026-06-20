@@ -12,6 +12,7 @@ import { IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
@@ -146,8 +147,9 @@ suite('LivingDocsService', () => {
 				stream: bufferToStream(VSBuffer.fromString(JSON.stringify(API_PAYLOAD))),
 			}),
 		} as unknown as IRequestService;
+		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: URI.file('/ws') }] }) } as unknown as IWorkspaceContextService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, languageModelsService, configurationService, notificationService, new NullLogService(), requestService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, languageModelsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService);
 		store.add(service);
 		return service;
 	}
@@ -312,6 +314,24 @@ suite('LivingDocsService', () => {
 		assert.ok(!html.includes('contenteditable') && !html.includes('data-refresh'), 'no editor chrome in the export');
 	});
 
+	test('exportMarkdown writes a clean static .md with resolved values and no binding metadata', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
+
+		const target = await service.exportMarkdown(WEEKLY);
+		assert.ok(target, 'export returned a target uri');
+		assert.ok(target!.path.endsWith('Weekly Summary.export.md'), `target name: ${target!.path}`);
+		assert.ok(opened.some(o => o.resource?.path.endsWith('.export.md')), 'opened the exported markdown');
+
+		const md = lastFiles!.get(target!.toString()) ?? '';
+		assert.ok(md.startsWith('# Weekly Operating Summary'), 'starts with the H1 title');
+		assert.ok(md.includes('$48.6k'), 'resolved KPI values inlined');
+		assert.ok(md.includes('| Metric | Prev | Current | Change |'), 'KPI table flattened to a markdown table');
+		assert.ok(!md.includes('<!-- bind') && !md.includes('<!-- table') && !md.includes('{'), 'no binding metadata or {cell} placeholders');
+	});
+
 	test('editBlock edits non-bound prose and persists it, but ignores bound blocks', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);
@@ -326,6 +346,23 @@ suite('LivingDocsService', () => {
 		const before = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!.text;
 		await service.editBlock(WEEKLY, 'p-commentary', 'Should be ignored.');
 		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!.text, before, 'bound block left unchanged');
+	});
+
+	test('listDocuments discovers Living Documents in the workspace, excludes plain Markdown, and counts pending', async () => {
+		const service = createService([], { boardNote: true, api: true });
+
+		// Before any refresh, every document discovers with zero pending changes.
+		const before = await service.listDocuments();
+		assert.deepStrictEqual(before.map(d => d.title), ['Board Note', 'Ecosystem Signal', 'Weekly Operating Summary'], 'living docs listed (README.md excluded), sorted by title');
+		assert.ok(before.every(d => d.isLiving), 'all discovered documents are living');
+		assert.deepStrictEqual(before.find(d => d.title === 'Ecosystem Signal')!.sourceKinds, ['api'], 'api source kind surfaced for the chip');
+		assert.strictEqual(before.reduce((n, d) => n + d.pendingCount, 0), 0, 'nothing pending before a refresh');
+
+		// After a refresh fans out, the home reflects the queued meaning-changes per document.
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
+		const after = await service.listDocuments();
+		assert.strictEqual(after.find(d => d.title === 'Weekly Operating Summary')!.pendingCount, 1, 'pending count mirrors the review rail');
 	});
 
 	test('markdown parses bindings from comments and round-trips through serialize', () => {

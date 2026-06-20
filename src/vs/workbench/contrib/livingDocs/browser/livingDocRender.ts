@@ -38,9 +38,10 @@ const ACCENT = 'oklch(0.55 0.13 255)';
 // Style and script are single left-aligned template literals so source indentation stays tab-only.
 const STYLE = `*{box-sizing:border-box}
 html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
-.topbar{position:sticky;top:0;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc;z-index:5}
+.topbar{position:sticky;top:0;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc;z-index:5}
 .brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
 .logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
+.sep{color:#c8cbd2}
 .crumb{color:#868b95;font-weight:400}
 .right{display:flex;align-items:center;gap:10px}
 .pill{display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px}
@@ -48,15 +49,24 @@ html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-
 .pill.warn{color:#9a6b16;background:#fdf2dc;border-color:#f0e2c0}
 .pill.warn .dot{background:oklch(0.66 0.16 45)}
 .btn{border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
-.doc{max-width:720px;margin:0 auto;padding:40px 40px 80px}
-h1.title{margin:0 0 4px;font:600 27px/1.2 system-ui;letter-spacing:-.01em;color:#15151a}
-.subtitle{font:400 13px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a9aa3;margin-bottom:30px}
-h2.section{margin:26px 0 10px;font:600 15px/1.2 system-ui;color:#34343c}
-.row{display:flex}
-.gutter{width:30px;flex:none;display:flex;justify-content:center;padding-top:7px}
+.docwrap{max-width:792px;margin:0 auto;padding:48px 24px 80px;display:grid;grid-template-columns:44px 1fr;column-gap:10px;align-items:start}
+.docfull{grid-column:1 / -1}
+h1.title{margin:0 0 6px;font:600 30px/1.2 system-ui;letter-spacing:-.015em;color:#15171c}
+.subtitle{font:400 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:34px}
+h2.section{margin:26px 0 12px;font:600 19px/1.3 system-ui;color:#23262c}
+/* True left gutter: a fixed column holding the line number + provenance marker, detached from the
+ * prose column so markers never indent the text. One grid row per document line; a line that wraps
+ * is just a taller prose cell, so the number stays at its top and the wrapped rows read as a blank gap. */
+.gutter2{grid-column:1;display:flex;flex-direction:column;align-items:flex-end;gap:6px;padding-top:7px;-webkit-user-select:none;user-select:none}
+.gutter2.span{align-self:stretch}
+.lineno{font:400 11px/1.7 'JetBrains Mono',ui-monospace,monospace;color:#c8cbd2}
+.pcell{grid-column:2;min-width:0}
 .pdot{width:8px;height:8px;border-radius:50%;background:${ACCENT};cursor:pointer}
 .pdot.warn{background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(220,150,60,.14)}
-p.block{flex:1;margin:0 0 4px;font:400 15px/1.7 system-ui;color:#2a2a31}
+/* A multi-line edit blends its marker into a vertical bar spanning the changed rows. */
+.gbar{width:3px;flex:1;min-height:16px;border-radius:2px;background:${ACCENT};cursor:pointer}
+.gbar.warn{background:oklch(0.66 0.16 45)}
+p.block{margin:0 0 22px;font:400 16px/1.78 system-ui;color:#2c2f36}
 .bound{border-bottom:1.5px dotted #c2c9f0}
 .editable{border-radius:4px;transition:background .1s,box-shadow .1s;cursor:text}
 .editable:hover{background:rgba(80,90,160,.06)}
@@ -64,16 +74,16 @@ p.block{flex:1;margin:0 0 4px;font:400 15px/1.7 system-ui;color:#2a2a31}
 h2.section.editable{margin-left:-6px;padding-left:6px}
 .applied{background:rgba(31,122,68,.09);border-radius:4px;padding:1px 4px;animation:flash 1.6s ease}
 @keyframes flash{0%{background:rgba(31,122,68,.34)}100%{background:rgba(31,122,68,.09)}}
-table.kpi{flex:1;border:1px solid #ececf0;border-radius:8px;border-collapse:separate;border-spacing:0;overflow:hidden;font:400 13px/1 system-ui;margin-bottom:6px}
-table.kpi th{background:#f7f7f9;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#86868f;text-align:right;padding:9px 12px}
+table.kpi{flex:1;border:1px solid #ececf0;border-radius:8px;border-collapse:separate;border-spacing:0;overflow:hidden;font:400 13.5px/1 system-ui;margin-bottom:22px}
+table.kpi th{background:#f8f9fb;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;letter-spacing:.04em;text-align:right;padding:10px 14px}
 table.kpi th:first-child{text-align:left}
-table.kpi td{border-top:1px solid #f0f0f3;padding:9px 12px;text-align:right}
-table.kpi td:first-child{text-align:left}
+table.kpi td{border-top:1px solid #f1f2f5;padding:10px 14px;text-align:right}
+table.kpi td:first-child{text-align:left;font-weight:500}
 .up{color:#1f7a44}.down{color:#b4332f}
 .diff{flex:1;border:1px solid #ececf0;border-radius:8px;overflow:hidden;margin-bottom:6px}
-.diff .o{background:#fdecec;color:#7a3a38;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.4);padding:9px 12px;font:400 15px/1.6 system-ui}
-.diff .n{background:#e7f6ec;color:#1f5a36;padding:9px 12px;font:400 15px/1.6 system-ui}
-.await{display:inline-flex;align-items:center;gap:6px;margin:8px 0 0 30px;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 10px}
+.diff .o{background:#fdecec;color:#b4332f;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.5);padding:10px 14px;font:400 16px/1.6 system-ui}
+.diff .n{background:#e7f6ec;color:#1f7a44;padding:10px 14px;font:400 16px/1.6 system-ui}
+.await{display:inline-flex;align-items:center;gap:6px;margin:8px 0 0;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 10px}
 .empty{padding:60px;color:#9a9aa3;text-align:center}
 .hint{max-width:720px;margin:0 auto;padding:0 40px 30px;font:400 12px/1.6 system-ui;color:#a3a8b2}
 .toggle{border:1px solid #d9dae0;border-radius:8px;padding:7px 12px;background:#fff;color:#4a4c54;font:600 12px/1 system-ui;cursor:pointer}
@@ -106,6 +116,8 @@ const toRaw = document.querySelector('[data-to-raw]');
 if (toRaw) { toRaw.addEventListener('click', () => vscode.postMessage({ type: 'setMode', mode: 'raw' })); }
 const exportBtn = document.querySelector('[data-export]');
 if (exportBtn) { exportBtn.addEventListener('click', () => vscode.postMessage({ type: 'export' })); }
+const exportMdBtn = document.querySelector('[data-export-md]');
+if (exportMdBtn) { exportMdBtn.addEventListener('click', () => vscode.postMessage({ type: 'exportMd' })); }
 const toRendered = document.querySelector('[data-to-rendered]');
 const rawArea = document.querySelector('textarea.raw');
 if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }
@@ -120,7 +132,7 @@ for (const el of document.querySelectorAll('[data-block]')) {
 export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const { doc, pending, kpiRows, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
-	const crumb = isLiving ? '/ Living Document' : '/ Markdown';
+	const crumb = isLiving ? 'Living Document' : 'Markdown';
 
 	// Toggle between the rendered view and an editable raw-Markdown view.
 	const toggle = mode === 'raw'
@@ -135,13 +147,16 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const refresh = isLiving && mode === 'rendered'
 		? `<button class="btn" data-refresh>&#8635; Refresh from sources</button>`
 		: '';
-	// Export the document to a self-contained HTML page.
+	// Export the document to a self-contained HTML page, or a clean static Markdown file.
 	const exportBtn = (doc && mode === 'rendered')
-		? `<button class="toggle" data-export>&#8682; Export</button>`
+		? `<button class="toggle" data-export>&#8682; Export HTML</button>`
+		: '';
+	const exportMdBtn = (doc && mode === 'rendered')
+		? `<button class="toggle" data-export-md>&#8675; Download .md</button>`
 		: '';
 
-	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${toggle}${exportBtn}${refresh}</div></div>`;
+	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
+		+ `<div class="right">${livingControls}${toggle}${exportBtn}${exportMdBtn}${refresh}</div></div>`;
 
 	let body: string;
 	if (mode === 'raw') {
@@ -161,30 +176,42 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}<script>${SCRIPT}</script></body></html>`;
 }
 
-function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], kpiRows: readonly IKpiRow[], recent: ReadonlySet<string>): string {
-	const parts: string[] = [`<div class="doc">`,
-		`<h1 class="title">${esc(doc.title)}</h1>`,
-		`<div class="subtitle">${esc(doc.subtitle)}</div>`];
+// A line's gutter cell: the line number plus its provenance marker. Bound lines get a dot; a
+// multi-line edit (the diff card) gets a vertical bar spanning the changed rows. Plain prose and
+// headings get a number only. The marker carries the source cells so hovering/clicking reveals
+// provenance, exactly as before -- it has just moved out of the prose into the gutter.
+function gutterCell(lineNo: number, marker: string, span: boolean): string {
+	return `<div class="gutter2${span ? ' span' : ''}"><span class="lineno">${lineNo}</span>${marker}</div>`;
+}
 
+function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], kpiRows: readonly IKpiRow[], recent: ReadonlySet<string>): string {
+	const parts: string[] = [`<div class="docwrap">`,
+		`<div class="docfull"><h1 class="title">${esc(doc.title)}</h1><div class="subtitle">${esc(doc.subtitle)}</div></div>`];
+
+	let lineNo = 0;
 	for (const block of doc.blocks) {
+		lineNo++;
 		const change = pending.find(c => c.blockId === block.id);
 		const cells = block.binding?.cells.join(',') ?? '';
 		const isRecent = recent.has(block.id);
 
 		if (block.type === 'heading') {
-			parts.push(`<h2 class="section editable" contenteditable="true" data-block="${esc(block.id)}" data-orig="${esc(block.text ?? '')}">${esc(block.text ?? '')}</h2>`);
+			parts.push(gutterCell(lineNo, '', false),
+				`<div class="pcell"><h2 class="section editable" contenteditable="true" data-block="${esc(block.id)}" data-orig="${esc(block.text ?? '')}">${esc(block.text ?? '')}</h2></div>`);
 			continue;
 		}
 
 		if (block.type === 'kpiTable') {
-			parts.push(`<div class="row"><div class="gutter"><span class="pdot" data-cells="${cells}" title="Bound to source"></span></div>${renderKpi(kpiRows, isRecent)}</div>`);
+			parts.push(gutterCell(lineNo, `<span class="pdot" data-cells="${cells}" title="Bound to source"></span>`, false),
+				`<div class="pcell">${renderKpi(kpiRows, isRecent)}</div>`);
 			continue;
 		}
 
 		if (change) {
-			parts.push(`<div class="row"><div class="gutter"><span class="pdot warn" data-cells="${cells}" title="Pending change"></span></div>`
-				+ `<div class="diff"><div class="o">${esc(change.oldText)}</div><div class="n">${esc(change.newText)}</div></div></div>`
-				+ `<div class="await">&#9679; awaiting approval in Review rail &middot; ${Math.round(change.confidence * 100)}% confidence</div>`);
+			// A pending change is a multi-line edit -> the gutter marker is a spanning bar.
+			parts.push(gutterCell(lineNo, `<span class="gbar warn" data-cells="${cells}" title="Pending change"></span>`, true),
+				`<div class="pcell"><div class="diff"><div class="o">${esc(change.oldText)}</div><div class="n">${esc(change.newText)}</div></div>`
+				+ `<div class="await">&#9679; awaiting approval in Review rail &middot; ${Math.round(change.confidence * 100)}% confidence</div></div>`);
 			continue;
 		}
 
@@ -193,7 +220,8 @@ function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], kpiRows
 		// Non-bound prose is hand-editable in place; bound prose stays driven by its source.
 		const textClass = `block${block.binding ? ' bound' : ' editable'}${isRecent ? ' applied' : ''}`;
 		const editAttrs = block.binding ? '' : ` contenteditable="true" data-block="${esc(block.id)}" data-orig="${text}"`;
-		parts.push(`<div class="row"><div class="gutter">${dot}</div><p class="${textClass}"${editAttrs}>${text}</p></div>`);
+		parts.push(gutterCell(lineNo, dot, false),
+			`<div class="pcell"><p class="${textClass}"${editAttrs}>${text}</p></div>`);
 	}
 
 	parts.push(`</div>`);
@@ -253,4 +281,36 @@ export function renderExportHtml(doc: ILivingDoc, kpiRows: readonly IKpiRow[]): 
 	}
 	const footer = `<footer>Exported from Opportunity OS &middot; Living Document</footer>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(doc.title)}</title><style>${EXPORT_STYLE}</style></head><body><main class="page">${body}${footer}</main></body></html>`;
+}
+
+function exportKpiMarkdown(rows: readonly IKpiRow[]): string {
+	if (!rows.length) { return ''; }
+	const header = `| Metric | Prev | Current | Change |\n| --- | --- | --- | --- |`;
+	const body = rows.map(r => `| ${r.metric} | ${r.prev} | ${r.curr} | ${r.delta} |`).join('\n');
+	return `${header}\n${body}`;
+}
+
+/**
+ * Build a clean, static Markdown document from a document's current (resolved) state: live values
+ * are already inlined into each block's text, so there are no bindings, no HTML-comment metadata and
+ * no {cell} placeholders -- just portable Markdown that opens anywhere (Obsidian, GitHub, a share).
+ */
+export function renderExportMarkdown(doc: ILivingDoc, kpiRows: readonly IKpiRow[]): string {
+	if (!doc.isLiving) {
+		// Plain Markdown already is its own clean export.
+		return doc.body.trim() + '\n';
+	}
+	const parts: string[] = [`# ${doc.title}`];
+	if (doc.subtitle) { parts.push(`_${doc.subtitle}_`); }
+	for (const block of doc.blocks) {
+		if (block.type === 'heading') {
+			parts.push(`## ${block.text ?? ''}`);
+		} else if (block.type === 'kpiTable') {
+			const table = exportKpiMarkdown(kpiRows);
+			if (table) { parts.push(table); }
+		} else {
+			parts.push(block.text ?? '');
+		}
+	}
+	return parts.join('\n\n') + '\n';
 }

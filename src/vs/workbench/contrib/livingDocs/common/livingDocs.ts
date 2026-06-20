@@ -6,12 +6,31 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAuditEntry, IKpiRow, ILivingDoc, IProposedChange } from './livingDocsModel.js';
+import { IAuditEntry, IKpiRow, ILivingDoc, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
 export const REVIEW_RAIL_VIEW_ID = 'workbench.view.livingDocs.review';
 export const REVIEW_RAIL_CONTAINER_ID = 'workbench.viewContainer.livingDocs';
+
+export const DOCUMENTS_VIEW_ID = 'workbench.view.livingDocs.documents';
+export const DOCUMENTS_CONTAINER_ID = 'workbench.viewContainer.livingDocs.documents';
+
+/**
+ * A lightweight summary of one document for the "Documents" home list. Built by parsing each
+ * discovered file without loading its source, so the home can render before any document is opened.
+ */
+export interface ILivingDocSummary {
+	readonly resource: URI;
+	readonly title: string;
+	readonly isLiving: boolean;
+	/** The distinct source kinds (file | api | mcp) the document binds to, for the row chips. */
+	readonly sourceKinds: readonly SourceKind[];
+	/** Human label for when the document was last synced, e.g. "Week 24" (empty for plain Markdown). */
+	readonly lastSynced: string;
+	/** Pending meaning-changes for this document (mirrors the Review rail count). */
+	readonly pendingCount: number;
+}
 
 /**
  * Holds every loaded Living Document and drives the core loop:
@@ -44,6 +63,12 @@ export interface ILivingDocsService {
 	getAllPending(): readonly IProposedChange[];
 	getAudit(): readonly IAuditEntry[];
 
+	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
+	listDocuments(): Promise<readonly ILivingDocSummary[]>;
+
+	/** Create a new blank Living Document from a template in the workspace and return its resource. */
+	createDocument(): Promise<URI | undefined>;
+
 	/** Load a document; for a Living Document its bound source is read alongside. */
 	loadDocument(resource: URI): Promise<void>;
 
@@ -61,6 +86,12 @@ export interface ILivingDocsService {
 
 	/** Export a document's current state to a self-contained HTML page and open it. */
 	exportDocument(resource: URI): Promise<URI | undefined>;
+
+	/**
+	 * Export a document's *resolved* state to a clean, static Markdown file (no bindings, no
+	 * {cell} placeholders, live values inlined) and open it. The portable share/Obsidian artefact.
+	 */
+	exportMarkdown(resource: URI): Promise<URI | undefined>;
 
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;

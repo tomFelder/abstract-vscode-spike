@@ -80,6 +80,9 @@ export class LivingDocEditor extends EditorPane {
 			case 'export':
 				if (this._resource) { void this._livingDocs.exportDocument(this._resource); }
 				break;
+			case 'exportMd':
+				if (this._resource) { void this._livingDocs.exportMarkdown(this._resource); }
+				break;
 			case 'reveal':
 				if (this._resource && Array.isArray(message.cells)) { void this._livingDocs.revealSource(this._resource, message.cells); }
 				break;
