@@ -617,22 +617,43 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async revealSource(resource: URI, cells: readonly string[]): Promise<void> {
 		const state = this._docs.get(resource.toString());
 		if (!state || !state.csvUri) { return; }
-		// Header is line 1; data rows follow in file order, so the synced-week row is at its index + 2.
-		const idx = state.rows.findIndex(r => r.week === state.doc.syncedWeek);
-		const line = idx >= 0 ? idx + 2 : 1;
+		// Open a clean, styled source view side-by-side instead of dumping the raw CSV into a text editor:
+		// the synced row is emphasized, the bound columns are called out, and the documents that reference
+		// this source are listed (an interim toward the full hi-fi source pane).
+		const md = this._renderSourceMarkdown(state, cells);
+		const stem = basename(state.csvUri).replace(/\.csv$/, '');
+		const target = joinPath(dirname(state.csvUri), `${stem}.source.md`);
 		try {
-			await this._editors.openEditor({
-				resource: state.csvUri,
-				options: {
-					pinned: true,
-					selection: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
-				},
-			}, SIDE_GROUP);
-			const what = cells.length ? cells.join(', ') : 'the source';
-			this._notify.info(`Provenance: this text is bound to ${what} in ${state.doc.source} (week ${state.doc.syncedWeek}).`);
+			await this._files.writeFile(target, VSBuffer.fromString(md));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
 		} catch (e) {
 			this._log.warn('[livingDocs] reveal source failed', e);
 		}
+	}
+
+	private _renderSourceMarkdown(state: IDocState, cells: readonly string[]): string {
+		const cols = ['week', 'date', 'mrr', 'signups', 'churn', 'active'];
+		const head = `| ${cols.join(' | ')} |`;
+		const sep = `| ${cols.map(() => '---').join(' | ')} |`;
+		const body = state.rows.map(r => {
+			const vals = [String(r.week), r.date, `${r.mrr}`, `${r.signups}`, `${r.churn}`, `${r.active}`];
+			// Emphasize the synced-week row -- this is the row the document's live figures are read from.
+			const out = r.week === state.doc.syncedWeek ? vals.map(v => `**${v}**`) : vals;
+			return `| ${out.join(' | ')} |`;
+		}).join('\n');
+		const referencedBy = [...this._docs.values()]
+			.filter(s => s.doc.isLiving && s.doc.source === state.doc.source)
+			.map(s => s.doc.title);
+		const bound = cells.length ? `Bound columns for the selected text: **${cells.join('**, **')}**.` : '';
+		const refs = referencedBy.length ? `## Referenced by\n\n${referencedBy.map(t => `- ${t}`).join('\n')}` : '';
+		return [
+			`# ${state.doc.source}`,
+			`Live source &middot; synced to week ${state.doc.syncedWeek}. ${bound}`.trim(),
+			'',
+			`${head}\n${sep}\n${body}`,
+			'',
+			refs,
+		].join('\n').replace(/\n+$/, '\n');
 	}
 
 	// --- discovery + persistence ---
