@@ -50,6 +50,12 @@ export interface ILivingDocsService {
 	/** Persist edited raw Markdown verbatim and reparse the document. */
 	saveRawText(resource: URI, text: string): Promise<void>;
 
+	/**
+	 * Edit a non-bound prose block in place (WYSIWYG) and persist it. Bound blocks are
+	 * driven by their source and cannot be hand-edited; this is a no-op for them.
+	 */
+	editBlock(resource: URI, blockId: string, text: string): Promise<void>;
+
 	/** Re-derive bound blocks across every bound document from the latest source values. */
 	refreshFromSources(): Promise<void>;
 

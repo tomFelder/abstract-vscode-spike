@@ -72,13 +72,18 @@ export class LivingDocEditor extends EditorPane {
 		this._register(this._webview.onMessage(e => this._onMessage(e.message)));
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string }): void {
 		switch (message?.type) {
 			case 'refresh':
 				void this._livingDocs.refreshFromSources();
 				break;
 			case 'reveal':
 				if (this._resource && Array.isArray(message.cells)) { void this._livingDocs.revealSource(this._resource, message.cells); }
+				break;
+			case 'edit':
+				if (this._resource && typeof message.blockId === 'string' && typeof message.text === 'string') {
+					void this._livingDocs.editBlock(this._resource, message.blockId, message.text);
+				}
 				break;
 			case 'setMode':
 				if (message.mode === 'raw' || message.mode === 'rendered') {

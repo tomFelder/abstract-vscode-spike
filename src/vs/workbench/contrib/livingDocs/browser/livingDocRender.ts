@@ -58,6 +58,10 @@ h2.section{margin:26px 0 10px;font:600 15px/1.2 system-ui;color:#34343c}
 .pdot.warn{background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(220,150,60,.14)}
 p.block{flex:1;margin:0 0 4px;font:400 15px/1.7 system-ui;color:#2a2a31}
 .bound{border-bottom:1.5px dotted #c2c9f0}
+.editable{border-radius:4px;transition:background .1s,box-shadow .1s;cursor:text}
+.editable:hover{background:rgba(80,90,160,.06)}
+.editable:focus{outline:none;background:rgba(80,90,160,.08);box-shadow:0 0 0 1px #c2c9f0}
+h2.section.editable{margin-left:-6px;padding-left:6px}
 .applied{background:rgba(31,122,68,.09);border-radius:4px;padding:1px 4px;animation:flash 1.6s ease}
 @keyframes flash{0%{background:rgba(31,122,68,.34)}100%{background:rgba(31,122,68,.09)}}
 table.kpi{flex:1;border:1px solid #ececf0;border-radius:8px;border-collapse:separate;border-spacing:0;overflow:hidden;font:400 13px/1 system-ui;margin-bottom:6px}
@@ -102,7 +106,14 @@ const toRaw = document.querySelector('[data-to-raw]');
 if (toRaw) { toRaw.addEventListener('click', () => vscode.postMessage({ type: 'setMode', mode: 'raw' })); }
 const toRendered = document.querySelector('[data-to-rendered]');
 const rawArea = document.querySelector('textarea.raw');
-if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }`;
+if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }
+for (const el of document.querySelectorAll('[data-block]')) {
+	el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } });
+	el.addEventListener('blur', () => {
+		const text = el.innerText.replace(/\\s+/g, ' ').trim();
+		if (text !== el.getAttribute('data-orig')) { vscode.postMessage({ type: 'edit', blockId: el.getAttribute('data-block'), text: text }); }
+	});
+}`;
 
 export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const { doc, pending, kpiRows, status, recent, mode, rawText } = input;
@@ -155,7 +166,7 @@ function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], kpiRows
 		const isRecent = recent.has(block.id);
 
 		if (block.type === 'heading') {
-			parts.push(`<h2 class="section">${esc(block.text ?? '')}</h2>`);
+			parts.push(`<h2 class="section editable" contenteditable="true" data-block="${esc(block.id)}" data-orig="${esc(block.text ?? '')}">${esc(block.text ?? '')}</h2>`);
 			continue;
 		}
 
@@ -172,8 +183,11 @@ function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], kpiRows
 		}
 
 		const dot = block.binding ? `<span class="pdot" data-cells="${cells}" title="Bound to source"></span>` : '';
-		const textClass = `block${block.binding ? ' bound' : ''}${isRecent ? ' applied' : ''}`;
-		parts.push(`<div class="row"><div class="gutter">${dot}</div><p class="${textClass}">${esc(block.text ?? '')}</p></div>`);
+		const text = esc(block.text ?? '');
+		// Non-bound prose is hand-editable in place; bound prose stays driven by its source.
+		const textClass = `block${block.binding ? ' bound' : ' editable'}${isRecent ? ' applied' : ''}`;
+		const editAttrs = block.binding ? '' : ` contenteditable="true" data-block="${esc(block.id)}" data-orig="${text}"`;
+		parts.push(`<div class="row"><div class="gutter">${dot}</div><p class="${textClass}"${editAttrs}>${text}</p></div>`);
 	}
 
 	parts.push(`</div>`);

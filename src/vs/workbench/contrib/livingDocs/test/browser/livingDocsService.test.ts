@@ -44,6 +44,10 @@ const WEEKLY_MD = [
 	'',
 	'<!-- bind id=p-commentary kind=narrative cells=mrr -->',
 	'Growth remained steady this week, continuing the gradual climb seen since early Q2.',
+	'',
+	'## What to watch',
+	'',
+	'Activation rate on the new onboarding flow.',
 ].join('\n');
 
 const BOARD_MD = [
@@ -234,6 +238,22 @@ suite('LivingDocsService', () => {
 
 		assert.strictEqual(service.getRawText(README), edited, 'raw text updated');
 		assert.strictEqual(service.getDoc(README)?.title, 'Renamed Readme', 'reparsed after save');
+	});
+
+	test('editBlock edits non-bound prose and persists it, but ignores bound blocks', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		// "What to watch" is a non-bound paragraph -> editable.
+		const watch = service.getDoc(WEEKLY)!.blocks.find(b => b.type === 'paragraph' && !b.binding)!;
+		await service.editBlock(WEEKLY, watch.id, 'Edited watch item.');
+		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.find(b => b.id === watch.id)!.text, 'Edited watch item.', 'non-bound prose updated');
+		assert.ok(service.getRawText(WEEKLY).includes('Edited watch item.'), 'edit persisted to the Markdown source');
+
+		// A bound block (the commentary) is driven by its source and must not be hand-edited.
+		const before = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!.text;
+		await service.editBlock(WEEKLY, 'p-commentary', 'Should be ignored.');
+		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!.text, before, 'bound block left unchanged');
 	});
 
 	test('markdown parses bindings from comments and round-trips through serialize', () => {

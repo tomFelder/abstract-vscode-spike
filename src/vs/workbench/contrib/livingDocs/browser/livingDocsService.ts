@@ -192,6 +192,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	async editBlock(resource: URI, blockId: string, text: string): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const block = state.doc.blocks.find(b => b.id === blockId);
+		// Only non-bound prose is hand-editable; bound blocks stay driven by their source.
+		if (!block || block.binding || block.type === 'kpiTable') { return; }
+		const next = text.trim();
+		if ((block.text ?? '') === next) { return; }
+		block.text = next;
+		await this._persist(state);
+		this._onDidChange.fire();
+	}
+
 	// --- the fan-out refresh ---
 
 	async refreshFromSources(): Promise<void> {
