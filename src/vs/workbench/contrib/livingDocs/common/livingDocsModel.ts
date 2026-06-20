@@ -41,7 +41,10 @@ export type ChangeKind = 'figure' | 'meaning';
 
 export interface IProposedChange {
 	readonly id: string;
+	readonly docId: string;         // URI string of the document this change belongs to
+	readonly docTitle: string;      // human label for grouping in the review rail
 	readonly blockId: string;
+	readonly blockLabel: string;    // human label for the block, e.g. "Commentary"
 	readonly oldText: string;
 	readonly newText: string;
 	readonly kind: ChangeKind;
@@ -52,6 +55,7 @@ export interface IProposedChange {
 
 export interface IAuditEntry {
 	readonly time: string;
+	readonly docTitle: string;
 	readonly blockId: string;
 	readonly action: 'auto-applied' | 'approved' | 'rejected';
 	readonly oldText: string;

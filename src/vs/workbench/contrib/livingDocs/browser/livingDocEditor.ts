@@ -6,6 +6,7 @@
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { URI } from '../../../../base/common/uri.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
@@ -25,6 +26,7 @@ export class LivingDocEditor extends EditorPane {
 	private _container: HTMLElement | undefined;
 	private _webview: IWebviewElement | undefined;
 	private _mode: LivingDocViewMode = 'rendered';
+	private _resource: URI | undefined;
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -49,6 +51,7 @@ export class LivingDocEditor extends EditorPane {
 		await super.setInput(input, options, context, token);
 		this._ensureWebview();
 		this._mode = 'rendered';
+		this._resource = input.resource;
 		this._inputDisposables.clear();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		await this._livingDocs.loadDocument(input.resource);
@@ -75,7 +78,7 @@ export class LivingDocEditor extends EditorPane {
 				void this._livingDocs.refreshFromSources();
 				break;
 			case 'reveal':
-				if (Array.isArray(message.cells)) { void this._livingDocs.revealSource(message.cells); }
+				if (this._resource && Array.isArray(message.cells)) { void this._livingDocs.revealSource(this._resource, message.cells); }
 				break;
 			case 'setMode':
 				if (message.mode === 'raw' || message.mode === 'rendered') {
@@ -90,21 +93,24 @@ export class LivingDocEditor extends EditorPane {
 	}
 
 	private async _applyRaw(text: string): Promise<void> {
+		if (!this._resource) { return; }
 		this._mode = 'rendered';
-		await this._livingDocs.saveRawText(text);
+		await this._livingDocs.saveRawText(this._resource, text);
 		// saveRawText fires onDidChange, but render again in case nothing changed.
 		this._render();
 	}
 
 	private _render(): void {
+		const resource = this._resource;
+		if (!resource) { return; }
 		this._webview?.setHtml(renderLivingDocHtml({
-			doc: this._livingDocs.getDoc(),
-			pending: this._livingDocs.getPending(),
-			kpiRows: this._livingDocs.getKpiRows(),
-			status: this._livingDocs.getStatus(),
-			recent: this._livingDocs.getRecentlyApplied(),
+			doc: this._livingDocs.getDoc(resource),
+			pending: this._livingDocs.getPendingForDoc(resource),
+			kpiRows: this._livingDocs.getKpiRows(resource),
+			status: this._livingDocs.getStatus(resource),
+			recent: this._livingDocs.getRecentlyApplied(resource),
 			mode: this._mode,
-			rawText: this._livingDocs.getRawText(),
+			rawText: this._livingDocs.getRawText(resource),
 		}));
 	}
 

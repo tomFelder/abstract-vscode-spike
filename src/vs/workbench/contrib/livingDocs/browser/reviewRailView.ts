@@ -57,66 +57,79 @@ export class ReviewRailView extends ViewPane {
 		this._renderDisposables.clear();
 		clearNode(body);
 
-		const pending = this._livingDocs.getPending();
+		const pending = this._livingDocs.getAllPending();
 		const audit = this._livingDocs.getAudit();
+
+		// Group pending changes by the document they belong to.
+		const groups = new Map<string, typeof pending[number][]>();
+		for (const change of pending) {
+			const list = groups.get(change.docTitle) ?? [];
+			list.push(change);
+			groups.set(change.docTitle, list);
+		}
 
 		const header = append(body, $('div.ldr-header'));
 		header.textContent = pending.length ? `${pending.length} change${pending.length > 1 ? 's' : ''} need approval` : 'Review';
 		if (pending.length) {
 			const badge = append(header, $('span.ldr-badge'));
-			badge.textContent = `${pending.length} pending`;
+			badge.textContent = `${groups.size} doc${groups.size > 1 ? 's' : ''}`;
 		}
 
 		const status = append(body, $('div.ldr-status'));
-		status.textContent = this._livingDocs.getStatus();
+		status.textContent = pending.length
+			? `Across ${groups.size} document${groups.size > 1 ? 's' : ''} bound to live sources.`
+			: 'No changes waiting. Open a Living Document and click "Refresh from sources".';
 
-		if (!pending.length) {
-			const empty = append(body, $('div.ldr-empty'));
-			empty.textContent = 'No changes waiting. Open a Living Document and click "Refresh from sources".';
-		}
+		for (const [docTitle, changes] of groups) {
+			const group = append(body, $('div.ldr-group'));
+			const groupHeader = append(group, $('div.ldr-group-head'));
+			groupHeader.textContent = docTitle;
+			const count = append(groupHeader, $('span.ldr-group-count'));
+			count.textContent = `${changes.length}`;
 
-		for (const change of pending) {
-			const card = append(body, $('div.ldr-card'));
+			for (const change of changes) {
+				const card = append(group, $('div.ldr-card'));
 
-			const top = append(card, $('div.ldr-card-top'));
-			const name = append(top, $('span.ldr-card-name'));
-			name.textContent = change.blockId === 'p-commentary' ? 'Weekly Summary · Commentary' : change.blockId;
-			const tag = append(top, $('span.ldr-tag'));
-			tag.textContent = 'MEANING CHANGE';
+				const top = append(card, $('div.ldr-card-top'));
+				const name = append(top, $('span.ldr-card-name'));
+				name.textContent = change.blockLabel;
+				const tag = append(top, $('span.ldr-tag'));
+				tag.textContent = 'MEANING CHANGE';
 
-			const diff = append(card, $('div.ldr-diff'));
-			const o = append(diff, $('div.ldr-o'));
-			o.textContent = change.oldText;
-			const n = append(diff, $('div.ldr-n'));
-			n.textContent = change.newText;
+				const diff = append(card, $('div.ldr-diff'));
+				const o = append(diff, $('div.ldr-o'));
+				o.textContent = change.oldText;
+				const n = append(diff, $('div.ldr-n'));
+				n.textContent = change.newText;
 
-			const why = append(card, $('div.ldr-why'));
-			why.textContent = `Why: ${change.rationale}`;
+				const why = append(card, $('div.ldr-why'));
+				why.textContent = `Why: ${change.rationale}`;
 
-			const meta = append(card, $('div.ldr-meta'));
-			const conf = append(meta, $('span'));
-			conf.innerText = `Confidence: ${Math.round(change.confidence * 100)}%`;
-			const risk = append(meta, $('span'));
-			risk.innerText = 'Risk: narrative';
-			const src = append(meta, $('span'));
-			src.innerText = `Source: ${change.sourceCells.join(', ') || 'metrics.csv'}`;
+				const meta = append(card, $('div.ldr-meta'));
+				const conf = append(meta, $('span'));
+				conf.innerText = `Confidence: ${Math.round(change.confidence * 100)}%`;
+				const risk = append(meta, $('span'));
+				risk.innerText = 'Risk: narrative';
+				const src = append(meta, $('span'));
+				src.innerText = `Source: ${change.sourceCells.join(', ') || 'metrics.csv'}`;
 
-			const actions = append(card, $('div.ldr-actions'));
-			const approve = append(actions, $('button.ldr-approve')) as HTMLButtonElement;
-			approve.textContent = 'Approve & apply';
-			this._renderDisposables.add(addDisposableListener(approve, 'click', () => this._livingDocs.approve(change.id)));
-			const reject = append(actions, $('button.ldr-reject')) as HTMLButtonElement;
-			reject.textContent = 'Reject';
-			this._renderDisposables.add(addDisposableListener(reject, 'click', () => this._livingDocs.reject(change.id)));
+				const actions = append(card, $('div.ldr-actions'));
+				const approve = append(actions, $('button.ldr-approve')) as HTMLButtonElement;
+				approve.textContent = 'Approve & apply';
+				this._renderDisposables.add(addDisposableListener(approve, 'click', () => this._livingDocs.approve(change.id)));
+				const reject = append(actions, $('button.ldr-reject')) as HTMLButtonElement;
+				reject.textContent = 'Reject';
+				this._renderDisposables.add(addDisposableListener(reject, 'click', () => this._livingDocs.reject(change.id)));
+			}
 		}
 
 		if (audit.length) {
 			const auditTitle = append(body, $('div.ldr-audit-title'));
-			auditTitle.textContent = `AUDIT TRAIL · ${audit.length}`;
+			auditTitle.textContent = `AUDIT TRAIL - ${audit.length}`;
 			for (const e of audit.slice().reverse()) {
 				const row = append(body, $('div.ldr-audit'));
 				const verb = e.action === 'rejected' ? 'rejected' : e.action === 'approved' ? 'approved' : 'auto-applied';
-				row.textContent = `${verb} - ${e.blockId} - via ${e.via} - ${e.time.slice(11, 19)}`;
+				row.textContent = `${verb} - ${e.docTitle} / ${e.blockId} - via ${e.via} - ${e.time.slice(11, 19)}`;
 			}
 		}
 	}
@@ -130,6 +143,9 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-review .ldr-badge{font:600 10px/1 monospace;color:#fff;background:oklch(0.65 0.16 45);border-radius:999px;padding:3px 7px}
 		.living-docs-review .ldr-status{font:400 11.5px/1.4 system-ui;color:var(--vscode-descriptionForeground);margin-bottom:14px}
 		.living-docs-review .ldr-empty{font:400 12px/1.5 system-ui;color:var(--vscode-descriptionForeground);padding:8px 2px}
+		.living-docs-review .ldr-group{margin-bottom:16px}
+		.living-docs-review .ldr-group-head{display:flex;align-items:center;gap:8px;font:600 11px/1 system-ui;letter-spacing:.02em;color:var(--vscode-foreground);text-transform:uppercase;margin:6px 0 8px}
+		.living-docs-review .ldr-group-count{font:600 10px/1 monospace;color:var(--vscode-descriptionForeground);background:var(--vscode-badge-background,#0002);border-radius:999px;padding:2px 7px}
 		.living-docs-review .ldr-card{border:1px solid var(--vscode-widget-border,#3334);border-radius:10px;padding:13px;margin-bottom:12px;background:var(--vscode-editorWidget-background)}
 		.living-docs-review .ldr-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
 		.living-docs-review .ldr-card-name{font:600 12.5px/1 system-ui;color:var(--vscode-foreground)}

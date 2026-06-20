@@ -14,42 +14,48 @@ export const REVIEW_RAIL_VIEW_ID = 'workbench.view.livingDocs.review';
 export const REVIEW_RAIL_CONTAINER_ID = 'workbench.viewContainer.livingDocs';
 
 /**
- * Holds the active Living Document and drives the core loop:
+ * Holds every loaded Living Document and drives the core loop:
  *   source change -> agent proposes edits -> figures auto-apply, meaning-changes queue ->
  *   approve/reject -> audit trail.
  *
- * Shared between the document editor (renders the doc + pending diffs) and the review rail
- * (renders pending changes + approve/reject).
+ * Documents are addressed by their resource so several can be open at once. A single source
+ * change fans out across all bound documents in the workspace. Shared between the document
+ * editor (renders one document + its pending diffs) and the review rail (aggregates pending
+ * changes across every document).
  */
 export interface ILivingDocsService {
 	readonly _serviceBrand: undefined;
 
-	/** Fires whenever the doc, pending changes, audit, or status change. */
+	/** Fires whenever any document, the pending set, the audit, or a status changes. */
 	readonly onDidChange: Event<void>;
 
-	getDoc(): ILivingDoc | undefined;
-	getPending(): readonly IProposedChange[];
-	getAudit(): readonly IAuditEntry[];
-	getKpiRows(): readonly IKpiRow[];
-	getStatus(): string;
+	// --- per-document views (the editor renders one document by its resource) ---
+	getDoc(resource: URI): ILivingDoc | undefined;
+	/** The verbatim Markdown source of a document (for the Raw Markdown view). */
+	getRawText(resource: URI): string;
+	getKpiRows(resource: URI): readonly IKpiRow[];
+	getStatus(resource: URI): string;
 	/** Block ids that were auto-applied in the last refresh (for the green "just updated" highlight). */
-	getRecentlyApplied(): ReadonlySet<string>;
+	getRecentlyApplied(resource: URI): ReadonlySet<string>;
+	/** Pending changes that belong to one document (rendered inline in its editor). */
+	getPendingForDoc(resource: URI): readonly IProposedChange[];
 
-	/** The verbatim Markdown source of the active document (for the Raw Markdown view). */
-	getRawText(): string;
+	// --- workspace-wide views (the review rail aggregates across documents) ---
+	getAllPending(): readonly IProposedChange[];
+	getAudit(): readonly IAuditEntry[];
 
 	/** Load a document; for a Living Document its bound source is read alongside. */
 	loadDocument(resource: URI): Promise<void>;
 
-	/** Persist edited raw Markdown verbatim and reparse the active document. */
-	saveRawText(text: string): Promise<void>;
+	/** Persist edited raw Markdown verbatim and reparse the document. */
+	saveRawText(resource: URI, text: string): Promise<void>;
 
-	/** Re-derive bound blocks from the latest source values. */
+	/** Re-derive bound blocks across every bound document from the latest source values. */
 	refreshFromSources(): Promise<void>;
 
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;
 
-	/** Reveal the source cells behind a block (provenance). */
-	revealSource(cells: readonly string[]): Promise<void>;
+	/** Reveal the source cells behind a block (provenance) for a given document. */
+	revealSource(resource: URI, cells: readonly string[]): Promise<void>;
 }

@@ -46,6 +46,25 @@ const WEEKLY_MD = [
 	'Growth remained steady this week, continuing the gradual climb seen since early Q2.',
 ].join('\n');
 
+const BOARD_MD = [
+	'---',
+	'livingDoc: true',
+	'title: Board Note',
+	'subtitle: Week 23 as authored',
+	'source: metrics.csv',
+	'syncedWeek: 23',
+	'---',
+	'',
+	'## Numbers',
+	'',
+	'<!-- table id=kpi-table cells=mrr,signups,churn,active -->',
+	'',
+	'## Note to the board',
+	'',
+	'<!-- bind id=p-commentary kind=narrative cells=mrr -->',
+	'Momentum is steady; we continue to track plan with no surprises this week.',
+].join('\n');
+
 const PLAIN_MD = [
 	'# Project Readme',
 	'',
@@ -55,16 +74,21 @@ const PLAIN_MD = [
 	'- second item',
 ].join('\n');
 
+const WEEKLY = URI.file('/ws/Weekly Summary.living.md');
+const BOARD = URI.file('/ws/Board Note.living.md');
+const README = URI.file('/ws/README.md');
+
 suite('LivingDocsService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
 
-	function createService(opened: IOpenedEditor[] = []): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
-		files.set(URI.file('/ws/Weekly Summary.living.md').toString(), WEEKLY_MD);
-		files.set(URI.file('/ws/README.md').toString(), PLAIN_MD);
+		files.set(WEEKLY.toString(), WEEKLY_MD);
+		files.set(README.toString(), PLAIN_MD);
+		if (opts.boardNote) { files.set(BOARD.toString(), BOARD_MD); }
 
 		const fileService = {
 			readFile: async (resource: URI) => {
@@ -74,6 +98,14 @@ suite('LivingDocsService', () => {
 			},
 			writeFile: async (resource: URI, buffer: VSBuffer) => {
 				files.set(resource.toString(), buffer.toString());
+			},
+			// List the direct children of a directory, so document discovery can fan out.
+			resolve: async (resource: URI) => {
+				const prefix = resource.toString().replace(/\/+$/, '') + '/';
+				const children = [...files.keys()]
+					.filter(key => key.startsWith(prefix) && !key.slice(prefix.length).includes('/'))
+					.map(key => ({ resource: URI.parse(key), isDirectory: false }));
+				return { children };
 			},
 		} as unknown as IFileService;
 
@@ -91,26 +123,26 @@ suite('LivingDocsService', () => {
 	test('refresh auto-applies figures and queues the meaning-change; approve applies it with an audit trail', async () => {
 		const service = createService();
 
-		await service.loadDocument(URI.file('/ws/Weekly Summary.living.md'));
-		assert.strictEqual(service.getDoc()?.syncedWeek, 23, 'loads at authored week');
-		assert.strictEqual(service.getPending().length, 0, 'nothing pending before refresh');
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getDoc(WEEKLY)?.syncedWeek, 23, 'loads at authored week');
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'nothing pending before refresh');
 
 		await service.refreshFromSources();
 
 		// Figure paragraph auto-applied with the real week-24 numbers (delta 41.2k -> 48.6k = +18%).
-		const fig = service.getDoc()!.blocks.find(b => b.id === 'p-highlights')!;
+		const fig = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-highlights')!;
 		assert.ok(fig.text!.includes('18%'), `figure recomputed delta: ${fig.text}`);
 		assert.ok(fig.text!.includes('$48.6k') && fig.text!.includes('427'), `figure has new values: ${fig.text}`);
-		assert.strictEqual(service.getDoc()!.syncedWeek, 24, 'KPI table advanced to latest week');
-		assert.ok(service.getRecentlyApplied().has('p-highlights'), 'figure flagged as auto-applied');
+		assert.strictEqual(service.getDoc(WEEKLY)!.syncedWeek, 24, 'KPI table advanced to latest week');
+		assert.ok(service.getRecentlyApplied(WEEKLY).has('p-highlights'), 'figure flagged as auto-applied');
 
 		// Meaning-change queued, NOT auto-applied.
-		const pending = service.getPending();
+		const pending = service.getPendingForDoc(WEEKLY);
 		assert.strictEqual(pending.length, 1, 'exactly one change needs approval');
 		assert.strictEqual(pending[0].blockId, 'p-commentary');
 		assert.strictEqual(pending[0].kind, 'meaning');
 		assert.ok(pending[0].newText.toLowerCase().includes('accelerated'), `commentary rewrite: ${pending[0].newText}`);
-		const commentaryBefore = service.getDoc()!.blocks.find(b => b.id === 'p-commentary')!;
+		const commentaryBefore = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!;
 		assert.ok(commentaryBefore.text!.includes('steady'), 'commentary unchanged until approved');
 
 		// Audit records the auto-applied figures.
@@ -118,33 +150,54 @@ suite('LivingDocsService', () => {
 
 		// Approve the meaning-change.
 		await service.approve(pending[0].id);
-		const commentaryAfter = service.getDoc()!.blocks.find(b => b.id === 'p-commentary')!;
+		const commentaryAfter = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!;
 		assert.ok(commentaryAfter.text!.toLowerCase().includes('accelerated'), 'commentary applied after approval');
-		assert.strictEqual(service.getPending().length, 0, 'no pending after approval');
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'no pending after approval');
 		assert.ok(service.getAudit().some(e => e.action === 'approved' && e.blockId === 'p-commentary'), 'approval audited');
+	});
+
+	test('a source change fans out to every bound document; approving one leaves the others', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+
+		await service.refreshFromSources();
+
+		const docsWithChanges = new Set(service.getAllPending().map(c => c.docTitle));
+		assert.deepStrictEqual([...docsWithChanges].sort(), ['Board Note', 'Weekly Operating Summary'], 'both bound docs surfaced changes');
+
+		const weeklyChange = service.getAllPending().find(c => c.docTitle === 'Weekly Operating Summary')!;
+		const boardChange = service.getAllPending().find(c => c.docTitle === 'Board Note')!;
+
+		await service.approve(weeklyChange.id);
+
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'approved document is cleared');
+		assert.strictEqual(service.getAllPending().length, 1, 'the other document is still pending');
+		assert.strictEqual(service.getAllPending()[0].id, boardChange.id, 'the untouched change is the board note');
+		assert.ok(service.getDoc(BOARD)!.blocks.find(b => b.id === 'p-commentary')!.text!.includes('steady'), 'board note left unchanged');
+		assert.ok(service.getAudit().some(e => e.docTitle === 'Weekly Operating Summary' && e.action === 'approved'), 'audit spans documents');
 	});
 
 	test('reject leaves the document unchanged but records the decision', async () => {
 		const service = createService();
-		await service.loadDocument(URI.file('/ws/Weekly Summary.living.md'));
+		await service.loadDocument(WEEKLY);
 		await service.refreshFromSources();
 
-		const change = service.getPending()[0];
+		const change = service.getPendingForDoc(WEEKLY)[0];
 		service.reject(change.id);
 
-		const commentary = service.getDoc()!.blocks.find(b => b.id === 'p-commentary')!;
+		const commentary = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!;
 		assert.ok(commentary.text!.includes('steady'), 'commentary left unchanged on reject');
-		assert.strictEqual(service.getPending().length, 0);
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0);
 		assert.ok(service.getAudit().some(e => e.action === 'rejected' && e.blockId === 'p-commentary'), 'rejection audited');
 	});
 
 	test('revealSource opens the bound source and selects the synced-week row', async () => {
 		const opened: IOpenedEditor[] = [];
 		const service = createService(opened);
-		await service.loadDocument(URI.file('/ws/Weekly Summary.living.md'));
+		await service.loadDocument(WEEKLY);
 		opened.length = 0; // ignore anything opened during load
 
-		await service.revealSource(['mrr']);
+		await service.revealSource(WEEKLY, ['mrr']);
 
 		assert.strictEqual(opened.length, 1, 'opened the source once');
 		assert.ok(opened[0].resource!.path.endsWith('metrics.csv'), 'opened metrics.csv');
@@ -166,21 +219,21 @@ suite('LivingDocsService', () => {
 
 	test('loading plain Markdown reads no source and reports a Markdown status', async () => {
 		const service = createService();
-		await service.loadDocument(URI.file('/ws/README.md'));
-		assert.strictEqual(service.getDoc()?.isLiving, false);
-		assert.strictEqual(service.getStatus(), 'Markdown');
-		assert.strictEqual(service.getKpiRows().length, 0, 'no KPI rows for plain Markdown');
+		await service.loadDocument(README);
+		assert.strictEqual(service.getDoc(README)?.isLiving, false);
+		assert.strictEqual(service.getStatus(README), 'Markdown');
+		assert.strictEqual(service.getKpiRows(README).length, 0, 'no KPI rows for plain Markdown');
 	});
 
 	test('saveRawText persists verbatim and reparses the document', async () => {
 		const service = createService();
-		await service.loadDocument(URI.file('/ws/README.md'));
+		await service.loadDocument(README);
 
 		const edited = PLAIN_MD.replace('Project Readme', 'Renamed Readme');
-		await service.saveRawText(edited);
+		await service.saveRawText(README, edited);
 
-		assert.strictEqual(service.getRawText(), edited, 'raw text updated');
-		assert.strictEqual(service.getDoc()?.title, 'Renamed Readme', 'reparsed after save');
+		assert.strictEqual(service.getRawText(README), edited, 'raw text updated');
+		assert.strictEqual(service.getDoc(README)?.title, 'Renamed Readme', 'reparsed after save');
 	});
 
 	test('markdown parses bindings from comments and round-trips through serialize', () => {
