@@ -15,13 +15,14 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { asJson, IRequestService } from '../../../../platform/request/common/request.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { ILivingDocsService, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { ILivingDocsService, ILivingDocSummary, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { parseLivingDoc, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml } from './livingDocRender.js';
-import { ChangeKind, IAuditEntry, IKpiRow, ILivingDoc, IProposedChange } from '../common/livingDocsModel.js';
+import { ChangeKind, IAuditEntry, IKpiRow, ILivingDoc, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 interface ICsvRow {
 	week: number;
@@ -45,6 +46,19 @@ interface IDocState {
 
 const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
 const pct = (a: number, b: number) => `${b >= a ? '+' : ''}${Math.round(((b - a) / a) * 100)}%`;
+
+// The "New document" starting point: a minimal Living Document with one heading and editable prose.
+// Authored as a single left-aligned template literal so source indentation stays tab-only.
+const NEW_DOCUMENT_TEMPLATE = `---
+livingDoc: true
+title: Untitled document
+subtitle: New document
+---
+
+## Overview
+
+Write your document here. Connect a source to start binding live figures.
+`;
 
 function blockLabel(doc: ILivingDoc, blockId: string): string {
 	// The nearest preceding heading is the human-friendly section name for a block.
@@ -76,6 +90,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@INotificationService private readonly _notify: INotificationService,
 		@ILogService private readonly _log: ILogService,
 		@IRequestService private readonly _request: IRequestService,
+		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
 	) {
 		super();
 	}
@@ -110,6 +125,106 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getAllPending(): readonly IProposedChange[] { return this._pending; }
 	getAudit(): readonly IAuditEntry[] { return this._audit; }
+
+	// --- the "Documents" home ---
+
+	async listDocuments(): Promise<readonly ILivingDocSummary[]> {
+		const found = new Map<string, URI>();
+		// Always include documents already loaded (e.g. the open editor), even if discovery misses them.
+		for (const state of this._docs.values()) {
+			if (state.uri.path.endsWith('.living.md')) { found.set(state.uri.toString(), state.uri); }
+		}
+		// Scan each workspace folder for Living Documents so the home renders before anything is opened.
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectLivingDocs(folder.uri, found, 0);
+		}
+		const summaries: ILivingDocSummary[] = [];
+		for (const uri of found.values()) {
+			const summary = await this._summarize(uri);
+			if (summary) { summaries.push(summary); }
+		}
+		summaries.sort((a, b) => a.title.localeCompare(b.title));
+		return summaries;
+	}
+
+	async createDocument(): Promise<URI | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) {
+			this._notify.info('Open a folder to create a document.');
+			return undefined;
+		}
+		const target = await this._uniqueDocUri(folder.uri);
+		try {
+			await this._files.writeFile(target, VSBuffer.fromString(NEW_DOCUMENT_TEMPLATE));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } });
+			this._onDidChange.fire();
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] create document failed', e);
+			return undefined;
+		}
+	}
+
+	// Recursively collect *.living.md under a folder, skipping hidden and dependency directories.
+	// Bounded in depth so a large workspace can never make the home hang.
+	private async _collectLivingDocs(dir: URI, found: Map<string, URI>, depth: number): Promise<void> {
+		if (depth > 4) { return; }
+		let children;
+		try {
+			children = (await this._files.resolve(dir)).children ?? [];
+		} catch (e) {
+			this._log.trace('[livingDocs] documents scan skipped', e instanceof Error ? e.message : String(e));
+			return;
+		}
+		for (const child of children) {
+			const name = basename(child.resource);
+			if (child.isDirectory) {
+				if (name.startsWith('.') || name === 'node_modules' || name === 'out') { continue; }
+				await this._collectLivingDocs(child.resource, found, depth + 1);
+			} else if (child.resource.path.endsWith('.living.md')) {
+				found.set(child.resource.toString(), child.resource);
+			}
+		}
+	}
+
+	private async _summarize(uri: URI): Promise<ILivingDocSummary | undefined> {
+		try {
+			const raw = (await this._files.readFile(uri)).value.toString();
+			const doc = parseLivingDoc(raw);
+			const kinds = new Set<SourceKind>();
+			for (const block of doc.blocks) {
+				if (block.binding) { kinds.add(block.binding.sourceKind); }
+			}
+			const id = uri.toString();
+			return {
+				resource: uri,
+				title: doc.title,
+				isLiving: doc.isLiving,
+				sourceKinds: [...kinds],
+				lastSynced: doc.isLiving && doc.syncedWeek ? `Week ${doc.syncedWeek}` : '',
+				pendingCount: this._pending.filter(c => c.docId === id).length,
+			};
+		} catch (e) {
+			this._log.trace('[livingDocs] summarize skipped', e instanceof Error ? e.message : String(e));
+			return undefined;
+		}
+	}
+
+	private async _uniqueDocUri(folder: URI): Promise<URI> {
+		const existing = new Set<string>();
+		try {
+			for (const child of (await this._files.resolve(folder)).children ?? []) {
+				existing.add(basename(child.resource));
+			}
+		} catch {
+			// An unreadable folder just means no collisions to avoid.
+		}
+		let name = 'Untitled.living.md';
+		for (let n = 2; existing.has(name); n++) {
+			name = `Untitled ${n}.living.md`;
+		}
+		return joinPath(folder, name);
+	}
 
 	// --- loading ---
 

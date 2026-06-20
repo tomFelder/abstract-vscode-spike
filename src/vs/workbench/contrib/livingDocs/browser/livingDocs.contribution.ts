@@ -18,11 +18,16 @@ import { registerWorkbenchContribution2, WorkbenchPhase, IWorkbenchContribution 
 import { EditorExtensions } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
-import { ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { DocumentsView } from './documentsView.js';
 import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
 import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
+
+// The built-in File Explorer is the single biggest "this is an IDE" signal. The Documents home
+// (below) replaces it as the default primary-sidebar container.
+const EXPLORER_VIEW_CONTAINER_ID = 'workbench.view.explorer';
 
 // --- service ---
 registerSingleton(ILivingDocsService, LivingDocsService, InstantiationType.Delayed);
@@ -86,6 +91,45 @@ class LivingDocsEditorResolverContribution extends Disposable implements IWorkbe
 	}
 }
 registerWorkbenchContribution2(LivingDocsEditorResolverContribution.ID, LivingDocsEditorResolverContribution, WorkbenchPhase.BlockRestore);
+
+// --- "Documents" home in the primary sidebar (replaces the file Explorer) ---
+const documentsIcon = registerIcon('living-docs-documents', Codicon.book, localize('livingDocs.documentsIcon', "Living Documents home"));
+
+const documentsContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+	id: DOCUMENTS_CONTAINER_ID,
+	title: localize2('livingDocs.documents', "Documents"),
+	icon: documentsIcon,
+	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [DOCUMENTS_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
+	storageId: DOCUMENTS_CONTAINER_ID,
+	hideIfEmpty: false,
+	order: 0,
+}, ViewContainerLocation.Sidebar, { isDefault: true });
+
+const documentsViewDescriptor: IViewDescriptor = {
+	id: DOCUMENTS_VIEW_ID,
+	name: localize2('livingDocs.documentsView', "Documents"),
+	containerIcon: documentsIcon,
+	ctorDescriptor: new SyncDescriptor(DocumentsView),
+	canToggleVisibility: false,
+	canMoveView: false,
+};
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([documentsViewDescriptor], documentsContainer);
+
+// Hide the built-in File Explorer additively: deregister its view container once registries are
+// populated, rather than patching the explorer contribution. ADDITIVE-CONTRIBUTION (merge-tax ledger).
+class HideExplorerContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.hideExplorer';
+
+	constructor() {
+		super();
+		const registry = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry);
+		const explorer = registry.get(EXPLORER_VIEW_CONTAINER_ID);
+		if (explorer) {
+			registry.deregisterViewContainer(explorer);
+		}
+	}
+}
+registerWorkbenchContribution2(HideExplorerContribution.ID, HideExplorerContribution, WorkbenchPhase.BlockRestore);
 
 // --- review rail in the auxiliary bar ---
 const reviewIcon = registerIcon('living-docs-review', Codicon.checklist, localize('livingDocs.reviewIcon', "Living Documents review rail"));
