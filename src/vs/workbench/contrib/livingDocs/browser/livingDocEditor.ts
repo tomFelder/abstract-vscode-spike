@@ -72,16 +72,28 @@ export class LivingDocEditor extends EditorPane {
 		this._register(this._webview.onMessage(e => this._onMessage(e.message)));
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string }): void {
 		switch (message?.type) {
 			case 'refresh':
 				void this._livingDocs.refreshFromSources();
+				break;
+			case 'approve':
+				if (typeof message.id === 'string') { void this._livingDocs.approve(message.id); }
+				break;
+			case 'reject':
+				if (typeof message.id === 'string') { this._livingDocs.reject(message.id); }
+				break;
+			case 'askAi':
+				this._livingDocs.focusPanel('chat');
 				break;
 			case 'export':
 				if (this._resource) { void this._livingDocs.exportDocument(this._resource); }
 				break;
 			case 'exportMd':
 				if (this._resource) { void this._livingDocs.exportMarkdown(this._resource); }
+				break;
+			case 'share':
+				if (this._resource) { this._livingDocs.shareDocument(this._resource); }
 				break;
 			case 'reveal':
 				if (this._resource && Array.isArray(message.cells)) { void this._livingDocs.revealSource(this._resource, message.cells); }

@@ -16,6 +16,9 @@ export const REVIEW_RAIL_CONTAINER_ID = 'workbench.viewContainer.livingDocs';
 export const DOCUMENTS_VIEW_ID = 'workbench.view.livingDocs.documents';
 export const DOCUMENTS_CONTAINER_ID = 'workbench.viewContainer.livingDocs.documents';
 
+/** The tabs of the Studio right panel. */
+export type LivingDocsPanelTab = 'chat' | 'review' | 'history';
+
 /**
  * A lightweight summary of one document for the "Documents" home list. Built by parsing each
  * discovered file without loading its source, so the home can render before any document is opened.
@@ -47,6 +50,12 @@ export interface ILivingDocsService {
 
 	/** Fires whenever any document, the pending set, the audit, or a status changes. */
 	readonly onDidChange: Event<void>;
+
+	/** Fires when something asks the right panel to focus a tab (e.g. "Ask AI" -> Chat). */
+	readonly onDidRequestPanel: Event<LivingDocsPanelTab>;
+
+	/** Reveal the right panel and switch it to the given tab. */
+	focusPanel(tab: LivingDocsPanelTab): void;
 
 	// --- per-document views (the editor renders one document by its resource) ---
 	getDoc(resource: URI): ILivingDoc | undefined;
@@ -92,6 +101,9 @@ export interface ILivingDocsService {
 	 * {cell} placeholders, live values inlined) and open it. The portable share/Obsidian artefact.
 	 */
 	exportMarkdown(resource: URI): Promise<URI | undefined>;
+
+	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
+	shareDocument(resource: URI): void;
 
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;

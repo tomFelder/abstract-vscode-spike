@@ -225,7 +225,7 @@ suite('LivingDocsService', () => {
 		assert.ok(service.getAudit().some(e => e.action === 'rejected' && e.blockId === 'p-commentary'), 'rejection audited');
 	});
 
-	test('revealSource opens the bound source and selects the synced-week row', async () => {
+	test('revealSource opens a styled source view (not the raw CSV) with the synced row and referencing docs', async () => {
 		const opened: IOpenedEditor[] = [];
 		const service = createService(opened);
 		await service.loadDocument(WEEKLY);
@@ -233,10 +233,13 @@ suite('LivingDocsService', () => {
 
 		await service.revealSource(WEEKLY, ['mrr']);
 
-		assert.strictEqual(opened.length, 1, 'opened the source once');
-		assert.ok(opened[0].resource!.path.endsWith('metrics.csv'), 'opened metrics.csv');
-		// header is line 1; week 23 is the 2nd data row (weeks 22,23,24) -> line 3
-		assert.strictEqual(opened[0].options?.selection?.startLineNumber, 3, 'selected the week-23 row');
+		assert.strictEqual(opened.length, 1, 'opened the source view once');
+		assert.ok(opened[0].resource!.path.endsWith('metrics.source.md'), `opened a styled source view: ${opened[0].resource!.path}`);
+		const md = lastFiles!.get(opened[0].resource!.toString()) ?? '';
+		assert.ok(md.startsWith('# metrics.csv'), 'titled with the source file');
+		assert.ok(md.includes('Bound columns'), 'calls out the bound columns');
+		assert.ok(md.includes('| **23**'), 'emphasizes the synced-week (23) row');
+		assert.ok(md.includes('Weekly Operating Summary'), 'lists the referencing document');
 	});
 
 	test('plain Markdown is not treated as a Living Document and takes its title from the first H1', () => {

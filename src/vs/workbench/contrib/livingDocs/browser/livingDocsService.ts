@@ -19,7 +19,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { ILivingDocsService, ILivingDocSummary, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { parseLivingDoc, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ChangeKind, IAuditEntry, IKpiRow, ILivingDoc, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
@@ -76,6 +76,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidChange = this._register(new Emitter<void>());
 	readonly onDidChange: Event<void> = this._onDidChange.event;
 
+	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
+	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
+
 	private readonly _docs = new Map<string, IDocState>();
 	private _pending: IProposedChange[] = [];
 	private _audit: IAuditEntry[] = [];
@@ -125,6 +128,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getAllPending(): readonly IProposedChange[] { return this._pending; }
 	getAudit(): readonly IAuditEntry[] { return this._audit; }
+
+	focusPanel(tab: LivingDocsPanelTab): void {
+		this._onDidRequestPanel.fire(tab);
+		// Reveal the right panel; take focus only for Chat so the user can type straight away.
+		this._views.openView(REVIEW_RAIL_VIEW_ID, tab === 'chat').catch(e => this._log.warn('[livingDocs] focusPanel failed', e));
+	}
 
 	// --- the "Documents" home ---
 
@@ -342,6 +351,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._log.warn('[livingDocs] markdown export failed', e);
 			return undefined;
 		}
+	}
+
+	shareDocument(resource: URI): void {
+		// Live shareable links aren't built yet; point the user at the portable export for now.
+		this._notify.info('A live shareable link is coming soon. Use Download to send a Markdown copy in the meantime.');
 	}
 
 	async editBlock(resource: URI, blockId: string, text: string): Promise<void> {
@@ -603,22 +617,43 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async revealSource(resource: URI, cells: readonly string[]): Promise<void> {
 		const state = this._docs.get(resource.toString());
 		if (!state || !state.csvUri) { return; }
-		// Header is line 1; data rows follow in file order, so the synced-week row is at its index + 2.
-		const idx = state.rows.findIndex(r => r.week === state.doc.syncedWeek);
-		const line = idx >= 0 ? idx + 2 : 1;
+		// Open a clean, styled source view side-by-side instead of dumping the raw CSV into a text editor:
+		// the synced row is emphasized, the bound columns are called out, and the documents that reference
+		// this source are listed (an interim toward the full hi-fi source pane).
+		const md = this._renderSourceMarkdown(state, cells);
+		const stem = basename(state.csvUri).replace(/\.csv$/, '');
+		const target = joinPath(dirname(state.csvUri), `${stem}.source.md`);
 		try {
-			await this._editors.openEditor({
-				resource: state.csvUri,
-				options: {
-					pinned: true,
-					selection: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
-				},
-			}, SIDE_GROUP);
-			const what = cells.length ? cells.join(', ') : 'the source';
-			this._notify.info(`Provenance: this text is bound to ${what} in ${state.doc.source} (week ${state.doc.syncedWeek}).`);
+			await this._files.writeFile(target, VSBuffer.fromString(md));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
 		} catch (e) {
 			this._log.warn('[livingDocs] reveal source failed', e);
 		}
+	}
+
+	private _renderSourceMarkdown(state: IDocState, cells: readonly string[]): string {
+		const cols = ['week', 'date', 'mrr', 'signups', 'churn', 'active'];
+		const head = `| ${cols.join(' | ')} |`;
+		const sep = `| ${cols.map(() => '---').join(' | ')} |`;
+		const body = state.rows.map(r => {
+			const vals = [String(r.week), r.date, `${r.mrr}`, `${r.signups}`, `${r.churn}`, `${r.active}`];
+			// Emphasize the synced-week row -- this is the row the document's live figures are read from.
+			const out = r.week === state.doc.syncedWeek ? vals.map(v => `**${v}**`) : vals;
+			return `| ${out.join(' | ')} |`;
+		}).join('\n');
+		const referencedBy = [...this._docs.values()]
+			.filter(s => s.doc.isLiving && s.doc.source === state.doc.source)
+			.map(s => s.doc.title);
+		const bound = cells.length ? `Bound columns for the selected text: **${cells.join('**, **')}**.` : '';
+		const refs = referencedBy.length ? `## Referenced by\n\n${referencedBy.map(t => `- ${t}`).join('\n')}` : '';
+		return [
+			`# ${state.doc.source}`,
+			`Live source &middot; synced to week ${state.doc.syncedWeek}. ${bound}`.trim(),
+			'',
+			`${head}\n${sep}\n${body}`,
+			'',
+			refs,
+		].join('\n').replace(/\n+$/, '\n');
 	}
 
 	// --- discovery + persistence ---
