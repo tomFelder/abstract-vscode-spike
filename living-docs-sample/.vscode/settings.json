@@ -1,0 +1,29 @@
+{
+	// "Studio" skin: strip the IDE chrome so the workspace reads as a calm word processor.
+	// Workspace-scoped on purpose so the experiment is reversible and does not touch global state.
+	"workbench.experimental.modernUI": true,
+	"workbench.activityBar.location": "hidden",
+	"workbench.editor.showTabs": "none",
+	"workbench.editor.editorActionsLocation": "hidden",
+	"workbench.layoutControl.enabled": false,
+	"workbench.statusBar.visible": false,
+	"window.menuBarVisibility": "hidden",
+	"window.commandCenter": false,
+	"breadcrumbs.enabled": false,
+	"editor.minimap.enabled": false,
+	"workbench.tips.enabled": false,
+	"workbench.startupEditor": "none",
+	"workbench.colorTheme": "Default Light Modern",
+	// Indigo accent (~ oklch(0.55 0.13 255)) to match the document chrome.
+	"workbench.colorCustomizations": {
+		"focusBorder": "#5b5bd6",
+		"button.background": "#5b5bd6",
+		"button.hoverBackground": "#4f4fcc",
+		"progressBar.background": "#5b5bd6",
+		"activityBarBadge.background": "#5b5bd6",
+		"tab.activeBorderTop": "#5b5bd6",
+		"textLink.foreground": "#5b5bd6",
+		"textLink.activeForeground": "#4f4fcc",
+		"list.highlightForeground": "#5b5bd6"
+	}
+}
