@@ -127,7 +127,7 @@ export class DocumentsView extends ViewPane {
 		.living-docs-home .ldh-row:focus{outline:none;border-color:oklch(0.55 0.13 255);box-shadow:0 0 0 1px oklch(0.55 0.13 255)}
 		.living-docs-home .ldh-row-title{font:600 13px/1.3 system-ui;color:var(--vscode-foreground);margin-bottom:7px}
 		.living-docs-home .ldh-row-meta{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
-		.living-docs-home .ldh-chip{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;text-transform:uppercase;letter-spacing:.04em;border-radius:999px;padding:3px 7px;color:#52575f;background:var(--vscode-badge-background,#eef0f3)}
+		.living-docs-home .ldh-chip{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;text-transform:uppercase;letter-spacing:.04em;border-radius:999px;padding:3px 7px;color:#52575f;background:#eef0f3}
 		.living-docs-home .ldh-chip-api{color:#1f5a36;background:#e7f6ec}
 		.living-docs-home .ldh-chip-mcp{color:#5b4ba8;background:#eef1ff}
 		.living-docs-home .ldh-synced{font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
