@@ -53,7 +53,10 @@ Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane
 	[new SyncDescriptor(LivingDocEditorInput)]
 );
 
-// --- editor resolver: open *.ldoc in the Living Document editor ---
+// --- editor resolver: open Markdown in the Living Document editor by default ---
+// The product is a word processor, so we claim every *.md as the default editor (rendered view
+// with an in-editor Raw Markdown toggle). The built-in text editor stays one click away via
+// "Reopen Editor With... > Text Editor", so README-style raw editing is never blocked.
 class LivingDocsEditorResolverContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.editorResolver';
 
@@ -63,7 +66,7 @@ class LivingDocsEditorResolverContribution extends Disposable implements IWorkbe
 	) {
 		super();
 		this._register(editorResolverService.registerEditor(
-			'**/*.living.md',
+			'**/*.md',
 			{
 				id: LIVING_DOC_EDITOR_ID,
 				label: localize('livingDoc.label', "Living Document"),
@@ -71,7 +74,7 @@ class LivingDocsEditorResolverContribution extends Disposable implements IWorkbe
 			},
 			{
 				singlePerResource: true,
-				canSupportResource: uri => uri.path.endsWith('.living.md'),
+				canSupportResource: uri => uri.path.endsWith('.md'),
 			},
 			{
 				createEditorInput: ({ resource, options }) => ({

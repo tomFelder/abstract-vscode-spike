@@ -16,7 +16,7 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
-import { renderLivingDocHtml } from './livingDocRender.js';
+import { LivingDocViewMode, renderLivingDocHtml } from './livingDocRender.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -24,6 +24,7 @@ export class LivingDocEditor extends EditorPane {
 
 	private _container: HTMLElement | undefined;
 	private _webview: IWebviewElement | undefined;
+	private _mode: LivingDocViewMode = 'rendered';
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -47,6 +48,7 @@ export class LivingDocEditor extends EditorPane {
 	override async setInput(input: LivingDocEditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
 		this._ensureWebview();
+		this._mode = 'rendered';
 		this._inputDisposables.clear();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		await this._livingDocs.loadDocument(input.resource);
@@ -67,22 +69,43 @@ export class LivingDocEditor extends EditorPane {
 		this._register(this._webview.onMessage(e => this._onMessage(e.message)));
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[] }): void {
-		if (message?.type === 'refresh') {
-			void this._livingDocs.refreshFromSources();
-		} else if (message?.type === 'reveal' && Array.isArray(message.cells)) {
-			void this._livingDocs.revealSource(message.cells);
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string }): void {
+		switch (message?.type) {
+			case 'refresh':
+				void this._livingDocs.refreshFromSources();
+				break;
+			case 'reveal':
+				if (Array.isArray(message.cells)) { void this._livingDocs.revealSource(message.cells); }
+				break;
+			case 'setMode':
+				if (message.mode === 'raw' || message.mode === 'rendered') {
+					this._mode = message.mode;
+					this._render();
+				}
+				break;
+			case 'applyRaw':
+				void this._applyRaw(typeof message.text === 'string' ? message.text : '');
+				break;
 		}
 	}
 
+	private async _applyRaw(text: string): Promise<void> {
+		this._mode = 'rendered';
+		await this._livingDocs.saveRawText(text);
+		// saveRawText fires onDidChange, but render again in case nothing changed.
+		this._render();
+	}
+
 	private _render(): void {
-		this._webview?.setHtml(renderLivingDocHtml(
-			this._livingDocs.getDoc(),
-			this._livingDocs.getPending(),
-			this._livingDocs.getKpiRows(),
-			this._livingDocs.getStatus(),
-			this._livingDocs.getRecentlyApplied(),
-		));
+		this._webview?.setHtml(renderLivingDocHtml({
+			doc: this._livingDocs.getDoc(),
+			pending: this._livingDocs.getPending(),
+			kpiRows: this._livingDocs.getKpiRows(),
+			status: this._livingDocs.getStatus(),
+			recent: this._livingDocs.getRecentlyApplied(),
+			mode: this._mode,
+			rawText: this._livingDocs.getRawText(),
+		}));
 	}
 
 	layout(dimension: Dimension): void {

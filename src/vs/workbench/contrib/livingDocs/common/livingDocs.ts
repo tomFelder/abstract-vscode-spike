@@ -35,8 +35,14 @@ export interface ILivingDocsService {
 	/** Block ids that were auto-applied in the last refresh (for the green "just updated" highlight). */
 	getRecentlyApplied(): ReadonlySet<string>;
 
-	/** Load a .ldoc and open its bound source beside it. */
+	/** The verbatim Markdown source of the active document (for the Raw Markdown view). */
+	getRawText(): string;
+
+	/** Load a document; for a Living Document its bound source is read alongside. */
 	loadDocument(resource: URI): Promise<void>;
+
+	/** Persist edited raw Markdown verbatim and reparse the active document. */
+	saveRawText(text: string): Promise<void>;
 
 	/** Re-derive bound blocks from the latest source values. */
 	refreshFromSources(): Promise<void>;

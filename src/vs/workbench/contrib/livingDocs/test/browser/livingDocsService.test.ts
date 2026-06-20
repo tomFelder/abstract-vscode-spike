@@ -46,6 +46,15 @@ const WEEKLY_MD = [
 	'Growth remained steady this week, continuing the gradual climb seen since early Q2.',
 ].join('\n');
 
+const PLAIN_MD = [
+	'# Project Readme',
+	'',
+	'Some **bold** intro prose with a [link](https://example.com).',
+	'',
+	'- first item',
+	'- second item',
+].join('\n');
+
 suite('LivingDocsService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -55,6 +64,7 @@ suite('LivingDocsService', () => {
 		const files = new Map<string, string>();
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
 		files.set(URI.file('/ws/Weekly Summary.living.md').toString(), WEEKLY_MD);
+		files.set(URI.file('/ws/README.md').toString(), PLAIN_MD);
 
 		const fileService = {
 			readFile: async (resource: URI) => {
@@ -140,6 +150,37 @@ suite('LivingDocsService', () => {
 		assert.ok(opened[0].resource!.path.endsWith('metrics.csv'), 'opened metrics.csv');
 		// header is line 1; week 23 is the 2nd data row (weeks 22,23,24) -> line 3
 		assert.strictEqual(opened[0].options?.selection?.startLineNumber, 3, 'selected the week-23 row');
+	});
+
+	test('plain Markdown is not treated as a Living Document and takes its title from the first H1', () => {
+		const doc = parseLivingDoc(PLAIN_MD);
+		assert.strictEqual(doc.isLiving, false, 'no frontmatter flag and no bindings -> plain');
+		assert.strictEqual(doc.title, 'Project Readme', 'title from first H1');
+		assert.ok(doc.body.includes('- first item'), 'body retains the raw Markdown for generic rendering');
+	});
+
+	test('a bound document is detected as living even without the frontmatter flag', () => {
+		const doc = parseLivingDoc(WEEKLY_MD);
+		assert.strictEqual(doc.isLiving, true);
+	});
+
+	test('loading plain Markdown reads no source and reports a Markdown status', async () => {
+		const service = createService();
+		await service.loadDocument(URI.file('/ws/README.md'));
+		assert.strictEqual(service.getDoc()?.isLiving, false);
+		assert.strictEqual(service.getStatus(), 'Markdown');
+		assert.strictEqual(service.getKpiRows().length, 0, 'no KPI rows for plain Markdown');
+	});
+
+	test('saveRawText persists verbatim and reparses the document', async () => {
+		const service = createService();
+		await service.loadDocument(URI.file('/ws/README.md'));
+
+		const edited = PLAIN_MD.replace('Project Readme', 'Renamed Readme');
+		await service.saveRawText(edited);
+
+		assert.strictEqual(service.getRawText(), edited, 'raw text updated');
+		assert.strictEqual(service.getDoc()?.title, 'Renamed Readme', 'reparsed after save');
 	});
 
 	test('markdown parses bindings from comments and round-trips through serialize', () => {

@@ -27,6 +27,12 @@ export interface ILivingDoc {
 	source: string;
 	syncedWeek: number;
 	readonly blocks: ILivingDocBlock[];
+	// True when the file declares itself a Living Document (frontmatter livingDoc: true) or
+	// carries data bindings. Plain Markdown (READMEs, notes) renders generically instead.
+	readonly isLiving: boolean;
+	// Markdown body after the frontmatter, used to render plain documents and as the
+	// source-of-truth fallback for the raw editing view.
+	readonly body: string;
 }
 
 // figure  -> low risk, auto-applies

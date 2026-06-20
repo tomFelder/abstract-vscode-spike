@@ -42,6 +42,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _docUri: URI | undefined;
 	private _csvUri: URI | undefined;
 	private _doc: ILivingDoc | undefined;
+	private _rawText = '';
 	private _rows: ICsvRow[] = [];
 	private _pending: IProposedChange[] = [];
 	private _audit: IAuditEntry[] = [];
@@ -62,6 +63,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	getDoc(): ILivingDoc | undefined { return this._doc; }
+	getRawText(): string { return this._rawText; }
 	getPending(): readonly IProposedChange[] { return this._pending; }
 	getAudit(): readonly IAuditEntry[] { return this._audit; }
 	getStatus(): string { return this._status; }
@@ -88,19 +90,48 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._via.clear();
 		this._recent.clear();
 		try {
-			const raw = (await this._files.readFile(resource)).value.toString();
-			this._doc = parseLivingDoc(raw);
+			this._rawText = (await this._files.readFile(resource)).value.toString();
+			this._doc = parseLivingDoc(this._rawText);
 		} catch (e) {
 			this._log.error('[livingDocs] failed to parse document', e);
 			this._doc = undefined;
+			this._rawText = '';
 			this._status = 'Could not open document';
 			this._onDidChange.fire();
 			return;
 		}
-		this._csvUri = joinPath(dirname(resource), this._doc.source);
-		await this._loadCsv();
-		this._status = 'All sources synced';
+		if (this._doc.isLiving) {
+			this._csvUri = joinPath(dirname(resource), this._doc.source);
+			await this._loadCsv();
+			this._status = 'All sources synced';
+		} else {
+			// Plain Markdown: nothing to sync, just render it.
+			this._csvUri = undefined;
+			this._rows = [];
+			this._status = 'Markdown';
+		}
 		// The document opens full-width; the source pane is summoned on demand via a provenance dot.
+		this._onDidChange.fire();
+	}
+
+	async saveRawText(text: string): Promise<void> {
+		if (!this._docUri) { return; }
+		this._rawText = text;
+		this._doc = parseLivingDoc(text);
+		try {
+			await this._files.writeFile(this._docUri, VSBuffer.fromString(text));
+		} catch (e) {
+			this._log.warn('[livingDocs] raw save failed', e);
+		}
+		if (this._doc.isLiving) {
+			this._csvUri = joinPath(dirname(this._docUri), this._doc.source);
+			await this._loadCsv();
+			this._status = 'All sources synced';
+		} else {
+			this._csvUri = undefined;
+			this._rows = [];
+			this._status = 'Markdown';
+		}
 		this._onDidChange.fire();
 	}
 

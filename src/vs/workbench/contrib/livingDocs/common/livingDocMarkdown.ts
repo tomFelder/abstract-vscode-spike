@@ -37,10 +37,11 @@ function slug(s: string): string {
 }
 
 export function parseLivingDoc(text: string): ILivingDoc {
-	let title = 'Untitled';
+	let title = '';
 	let subtitle = '';
 	let source = 'metrics.csv';
 	let syncedWeek = 0;
+	let isLiving = false;
 
 	let body = text;
 	const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
@@ -55,6 +56,7 @@ export function parseLivingDoc(text: string): ILivingDoc {
 			else if (key === 'subtitle') { subtitle = value; }
 			else if (key === 'source') { source = value; }
 			else if (key === 'syncedWeek') { syncedWeek = parseInt(value, 10) || 0; }
+			else if (key === 'livingDoc') { isLiving = value === 'true'; }
 		}
 	}
 
@@ -90,7 +92,15 @@ export function parseLivingDoc(text: string): ILivingDoc {
 		}
 	}
 
-	return { title, subtitle, source, syncedWeek, blocks };
+	// A document with bindings is a Living Document even without the frontmatter flag.
+	if (blocks.some(b => b.binding)) { isLiving = true; }
+	// Plain Markdown has no frontmatter title; fall back to the first H1, else a default.
+	if (!title) {
+		const h1 = /^#\s+(.+?)\s*$/m.exec(body);
+		title = h1 ? h1[1].trim() : 'Untitled';
+	}
+
+	return { title, subtitle, source, syncedWeek, blocks, isLiving, body };
 }
 
 export function serializeLivingDoc(doc: ILivingDoc): string {
