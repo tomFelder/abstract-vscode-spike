@@ -7,7 +7,7 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { dirname, joinPath } from '../../../../base/common/resources.js';
+import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -16,6 +16,7 @@ import { INotificationService } from '../../../../platform/notification/common/n
 import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
+import { parseLivingDoc, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { ChangeKind, IAuditEntry, IKpiRow, ILivingDoc, IProposedChange } from '../common/livingDocsModel.js';
 
 interface ICsvRow {
@@ -84,7 +85,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._recent.clear();
 		try {
 			const raw = (await this._files.readFile(resource)).value.toString();
-			this._doc = JSON.parse(raw) as ILivingDoc;
+			this._doc = parseLivingDoc(raw);
 		} catch (e) {
 			this._log.error('[livingDocs] failed to parse document', e);
 			this._doc = undefined;
@@ -92,8 +93,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._onDidChange.fire();
 			return;
 		}
-		const sourceName = this._doc.blocks.find(b => b.binding)?.binding?.source ?? 'metrics.csv';
-		this._csvUri = joinPath(dirname(resource), sourceName);
+		this._csvUri = joinPath(dirname(resource), this._doc.source);
 		await this._loadCsv();
 		this._status = 'All sources synced';
 		// Open the bound source beside the document (the "source pane").
@@ -274,8 +274,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private async _persist(): Promise<void> {
 		if (!this._docUri || !this._doc) { return; }
 		try {
-			await this._files.writeFile(this._docUri, VSBuffer.fromString(JSON.stringify(this._doc, null, 2)));
-			const auditUri = joinPath(dirname(this._docUri), 'Weekly Summary.audit.json');
+			await this._files.writeFile(this._docUri, VSBuffer.fromString(serializeLivingDoc(this._doc)));
+			const stem = basename(this._docUri).replace(/\.living\.md$/, '').replace(/\.md$/, '');
+			const auditUri = joinPath(dirname(this._docUri), `${stem}.audit.json`);
 			await this._files.writeFile(auditUri, VSBuffer.fromString(JSON.stringify(this._audit, null, 2)));
 		} catch (e) {
 			this._log.warn('[livingDocs] persist failed', e);

@@ -13,6 +13,7 @@ import { INotificationService } from '../../../../../platform/notification/commo
 import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
+import { parseLivingDoc, serializeLivingDoc } from '../../common/livingDocMarkdown.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -21,18 +22,27 @@ const METRICS_CSV = [
 	'24,Jun 19,48600,427,2.4,205',
 ].join('\n');
 
-const WEEKLY_LDOC = JSON.stringify({
-	title: 'Weekly Operating Summary',
-	subtitle: 'Week 23 · as authored',
-	syncedWeek: 23,
-	blocks: [
-		{ id: 'h-highlights', type: 'heading', text: 'Highlights' },
-		{ id: 'p-highlights', type: 'paragraph', kind: 'figure', binding: { source: 'metrics.csv', cells: ['mrr', 'signups', 'churn'] }, text: 'Revenue grew 12% week-on-week to $41.2k MRR, on 312 new signups. Churn held at 3.1%.' },
-		{ id: 'kpi-table', type: 'kpiTable', binding: { source: 'metrics.csv', cells: ['mrr'] } },
-		{ id: 'h-commentary', type: 'heading', text: 'Commentary' },
-		{ id: 'p-commentary', type: 'paragraph', kind: 'narrative', binding: { source: 'metrics.csv', cells: ['mrr'] }, text: 'Growth remained steady this week, continuing the gradual climb seen since early Q2.' },
-	],
-});
+const WEEKLY_MD = [
+	'---',
+	'livingDoc: true',
+	'title: Weekly Operating Summary',
+	'subtitle: Week 23 as authored',
+	'source: metrics.csv',
+	'syncedWeek: 23',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'<!-- bind id=p-highlights kind=figure cells=mrr,signups,churn -->',
+	'Revenue grew 12% week-on-week to $41.2k MRR, on 312 new signups. Churn held at 3.1%.',
+	'',
+	'<!-- table id=kpi-table cells=mrr,signups,churn,active -->',
+	'',
+	'## Commentary',
+	'',
+	'<!-- bind id=p-commentary kind=narrative cells=mrr -->',
+	'Growth remained steady this week, continuing the gradual climb seen since early Q2.',
+].join('\n');
 
 suite('LivingDocsService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -40,7 +50,7 @@ suite('LivingDocsService', () => {
 	function createService(): LivingDocsService {
 		const files = new Map<string, string>();
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
-		files.set(URI.file('/ws/Weekly Summary.ldoc').toString(), WEEKLY_LDOC);
+		files.set(URI.file('/ws/Weekly Summary.living.md').toString(), WEEKLY_MD);
 
 		const fileService = {
 			readFile: async (resource: URI) => {
@@ -65,7 +75,7 @@ suite('LivingDocsService', () => {
 	test('refresh auto-applies figures and queues the meaning-change; approve applies it with an audit trail', async () => {
 		const service = createService();
 
-		await service.loadDocument(URI.file('/ws/Weekly Summary.ldoc'));
+		await service.loadDocument(URI.file('/ws/Weekly Summary.living.md'));
 		assert.strictEqual(service.getDoc()?.syncedWeek, 23, 'loads at authored week');
 		assert.strictEqual(service.getPending().length, 0, 'nothing pending before refresh');
 
@@ -100,7 +110,7 @@ suite('LivingDocsService', () => {
 
 	test('reject leaves the document unchanged but records the decision', async () => {
 		const service = createService();
-		await service.loadDocument(URI.file('/ws/Weekly Summary.ldoc'));
+		await service.loadDocument(URI.file('/ws/Weekly Summary.living.md'));
 		await service.refreshFromSources();
 
 		const change = service.getPending()[0];
@@ -110,5 +120,22 @@ suite('LivingDocsService', () => {
 		assert.ok(commentary.text!.includes('steady'), 'commentary left unchanged on reject');
 		assert.strictEqual(service.getPending().length, 0);
 		assert.ok(service.getAudit().some(e => e.action === 'rejected' && e.blockId === 'p-commentary'), 'rejection audited');
+	});
+
+	test('markdown parses bindings from comments and round-trips through serialize', () => {
+		const doc = parseLivingDoc(WEEKLY_MD);
+		assert.strictEqual(doc.title, 'Weekly Operating Summary');
+		assert.strictEqual(doc.source, 'metrics.csv');
+		assert.strictEqual(doc.syncedWeek, 23);
+		const fig = doc.blocks.find(b => b.id === 'p-highlights')!;
+		assert.strictEqual(fig.kind, 'figure');
+		assert.deepStrictEqual([...fig.binding!.cells], ['mrr', 'signups', 'churn']);
+		assert.ok(doc.blocks.some(b => b.type === 'kpiTable' && b.id === 'kpi-table'));
+
+		// serialize -> parse preserves block ids, kinds, and bindings
+		const again = parseLivingDoc(serializeLivingDoc(doc));
+		assert.deepStrictEqual(again.blocks.map(b => b.id), doc.blocks.map(b => b.id));
+		assert.deepStrictEqual(again.blocks.map(b => b.kind), doc.blocks.map(b => b.kind));
+		assert.strictEqual(again.blocks.find(b => b.id === 'p-commentary')!.text, doc.blocks.find(b => b.id === 'p-commentary')!.text);
 	});
 });

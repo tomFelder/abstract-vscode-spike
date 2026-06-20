@@ -24,6 +24,7 @@ export interface ILivingDocBlock {
 export interface ILivingDoc {
 	title: string;
 	subtitle: string;
+	source: string;
 	syncedWeek: number;
 	readonly blocks: ILivingDocBlock[];
 }

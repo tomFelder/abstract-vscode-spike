@@ -42,7 +42,7 @@ class LivingDocsEditorResolverContribution extends Disposable implements IWorkbe
 	) {
 		super();
 		this._register(editorResolverService.registerEditor(
-			'**/*.ldoc',
+			'**/*.living.md',
 			{
 				id: LIVING_DOC_EDITOR_ID,
 				label: localize('livingDoc.label', "Living Document"),
@@ -50,7 +50,7 @@ class LivingDocsEditorResolverContribution extends Disposable implements IWorkbe
 			},
 			{
 				singlePerResource: true,
-				canSupportResource: uri => uri.path.endsWith('.ldoc'),
+				canSupportResource: uri => uri.path.endsWith('.living.md'),
 			},
 			{
 				createEditorInput: ({ resource, options }) => ({
