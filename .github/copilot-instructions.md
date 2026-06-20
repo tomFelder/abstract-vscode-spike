@@ -148,6 +148,23 @@ function f(x: number, y: string): void { }
 - Avoid using events to drive control flow between components. Instead, prefer direct method calls or service interactions to ensure clearer dependencies and easier traceability of logic. Events should be reserved for broadcasting state changes or notifications rather than orchestrating behavior across components.
 - Service dependencies MUST be declared in constructors and MUST NOT be accessed through the `IInstantiationService` at any other point in time.
 
+## Documentation & specs
+
+- The project's thinking lives in the **`docs/`** folder. Put design specs, brainstorm write-ups,
+  decision logs, and any companion artifacts (e.g. explanatory HTML) **in `docs/`** — not in a
+  separate `docs/superpowers/specs/` tree. Follow the existing numbered convention
+  (`NN-topic.md`) for top-level docs and `docs/plans/` for handoff prompts; add new docs to the
+  index table in `docs/README.md`.
+
+## Git & PR workflow
+
+- **Commits are welcome — be liberal.** You do not need to ask before committing work in progress;
+  commit at natural checkpoints with clear messages. (Still branch off `main` rather than committing
+  directly to it.)
+- **PRs must include screenshots** that visually validate the change. Drive the web build with the
+  chrome-devtools MCP (`./scripts/code-web.sh ./living-docs-sample`), capture the relevant
+  before/after states, and embed them in the PR description so updates can be visually confirmed.
+
 ## Learnings
 - Minimize the amount of assertions in tests. Prefer one snapshot-style `assert.deepStrictEqual` over multiple precise assertions, as they are much more difficult to understand and to update.
 - Do not stub a global object (e.g. `(mainWindow as any).ResizeObserver = ...`) or use `any` casts to install fakes in tests. Instead, make the dependency injectable: add an optional constructor parameter on the production class that defaults to the real implementation (e.g. `targetWindow.ResizeObserver`), and have the test pass a fake that implements the real interface.

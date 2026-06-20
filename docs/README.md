@@ -21,6 +21,7 @@ what is likely to become problematic, the open decisions, and the design intent.
 | [05-open-questions.md](05-open-questions.md) | Unresolved decisions: file format, editor maturity, **fork vs greenfield** |
 | [06-design-notes.md](06-design-notes.md) | UI/UX intent vs reality: provenance gutter redesign, header issues, the calm shell |
 | [07-decision-log.md](07-decision-log.md) | Decisions made during the spike, with rationale (ADR-style) |
+| [08-living-documents-format-spec.md](08-living-documents-format-spec.md) | The raw-Markdown format + dependency model design spec (clean file + lock file); resolves Q1, with full decision log. Companion visual: [option-10-living-docs-format.html](option-10-living-docs-format.html) |
 | [plans/](plans/) | The handoff prompts that drove (and will drive) the work |
 
 ## Status at a glance (2026-06-20)
