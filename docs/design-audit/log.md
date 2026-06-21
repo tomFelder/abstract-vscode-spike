@@ -20,6 +20,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 |-----------|---------|------|
 | 1 (baseline) | **~78%** | Full survey, baselines seeded below. |
 | 2 | **~80%** | Context panel 48 -> 80: now groups Linked sources + Referenced files (was a flat list that omitted the doc's bound sources entirely). |
+| 3 | **~81%** | Global top bar added to all four screens (Home/Templates/Knowledge/Agents) — brand + crumb + sync pill + Present + avatar. Lifts Home 82->85, Templates 88->89, Knowledge 80->83, Agents 82->84. |
 
 ---
 
@@ -32,11 +33,11 @@ the handoff, iteration 1 is the survey. Iteration 2 attacks the lowest-scoring, 
 
 | # | Surface | Layout | Styling | Comp. | IA | Behav. | **Score** | Shot |
 |---|---------|:--:|:--:|:--:|:--:|:--:|:--:|------|
-| 1 | Home dashboard | 75 | 88 | 90 | 82 | 75 | **82** | `shots/baseline/01-home-app.png` |
+| 1 | Home dashboard | 75→88 | 88 | 90 | 82 | 75 | **82** → **85** (iter 3) | `shots/baseline/01-home-app.png` → `shots/iter3-home-after.png` |
 | 2 | Document editor (rendered) | 78 | 82 | 75 | 85 | 78 | **80** | `shots/baseline/02-editor-app.png` |
-| 3 | Templates (run wizard) | 90 | 88 | 90 | 88 | 86 | **88** | `shots/baseline/03-templates-app.png` |
-| 4 | Knowledge (decision stack) | 82 | 85 | 72 | 85 | 78 | **80** | `shots/baseline/04-knowledge-app.png` |
-| 5 | Agents list | 85 | 84 | 85 | 78 | 80 | **82** | `shots/baseline/05-agents-app.png` |
+| 3 | Templates (run wizard) | 90 | 88 | 90 | 88 | 86 | **88** → **89** (iter 3) | `shots/baseline/03-templates-app.png` → `shots/iter3-templates-after.png` |
+| 4 | Knowledge (decision stack) | 82 | 85 | 72 | 85 | 78 | **80** → **83** (iter 3) | `shots/baseline/04-knowledge-app.png` |
+| 5 | Agents list | 85 | 84 | 85 | 78 | 80 | **82** → **84** (iter 3) | `shots/baseline/05-agents-app.png` |
 | 6 | Workflow canvas | 75 | 75 | 70 | 75 | 65 | **72** | _not captured — built, unverified_ |
 | 7 | Context panel | 50 | 55 | 35 | 55 | 45 | **48** → **80** (iter 2) | `shots/baseline/06-context-app.png` → `shots/iter2-context-after.png` |
 | 8 | Right rail — Chat | 90 | 92 | 90 | 90 | 85 | **90** | `shots/baseline/07-chat-app.png` |
@@ -154,8 +155,8 @@ Copy) that the app's modal does not show.
    "Add context" (deferred — no sample data).
 2. **Review rail populated diff/approve** (55) — make the pending-review state reachable (out-of-sync
    fixture) and verify the approve/reject flow matches the comp. Core flow.
-3. **Global top bar** (cross-cutting) — add the unified 48px top bar to Home + the screen webviews
-   (branding / sync pill / Present / avatar), not just the doc editor.
+3. ~~**Global top bar** (cross-cutting) — add the unified 48px top bar to the screen webviews.~~
+   **DONE (iter 3):** added to Home/Templates/Knowledge/Agents.
 4. **Workflow canvas** (72) — verify the open-agent canvas renders; score and close gaps.
 5. **Navigation blank-out bug** — screen launchers blank the main area after a doc editor was opened.
 6. **Editor extras** — doc tab bar, provenance gutter dots, source-peek + "Sync across" circle.
@@ -205,6 +206,36 @@ so fabricating those rows would be dishonest placeholder UI. They remain deferre
 > fallback: the panel's **exact output DOM + injected CSS rendered to PNG via Playwright** (faithful
 > to the production render code, populated with the real sample doc's values), not a live-workbench
 > capture. A fresh session restores the MCP for live shots.
+
+---
+
+## Iteration 3 — global top bar on all four screens (Home/Templates/Knowledge/Agents)
+
+**Gap:** the cross-cutting layout hole from iter 1 — the comp's 48px top bar (brand `L` +
+"Opportunity OS" + per-screen crumb on the left; "All sources synced" pill + Present + `TS` avatar on
+the right) appeared **only inside the doc-editor webview**. Home and the three screens rendered with
+no top bar, so the app's chrome was inconsistent surface-to-surface.
+
+**Change (TDD).**
+- New `topBar(crumb)` + `withTopBar(html, crumb)` helpers in `screenRender.ts`; `renderScreenHtml`
+  now prepends the bar as the first flex child of every screen (crumb = Home / Templates / Knowledge
+  / Agents). Reuses the editor's exact `.topbar/.brand/.logo/.pill/...` styling for consistency;
+  Present posts the same `present` message the host already handles. 0 added core patches.
+- New `screenRender.test.ts` (5 tests): each screen renders the bar with the right crumb + sync pill
+  + Present control + avatar, and **exactly one** bar per screen. **52 tests pass** (47 prior + 5).
+
+**Result.** Home / Templates / Knowledge / Agents now all carry the design's top bar (see after-shots).
+Lifts the Layout dimension on those surfaces: Home 82→85, Templates 88→89, Knowledge 80→83,
+Agents 82→84. **Overall ~80 → ~81.**
+
+*Honest caveat:* the bar renders inside each screen's webview (matching the doc editor's approach), so
+it spans the editor content area rather than the full workbench width over the activity bar / right
+rail. That matches the comp visually within the content column; a true full-width chrome bar would be
+a larger, riskier change (likely a core patch) and is intentionally not attempted.
+
+**After:** `shots/iter3-home-after.png`, `shots/iter3-templates-after.png` (rendered from the real
+`renderScreenHtml` output via the Playwright fallback — exact for these pure-HTML screens; the
+chrome-devtools MCP remains down this session).
 
 ---
 

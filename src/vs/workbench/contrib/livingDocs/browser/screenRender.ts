@@ -53,6 +53,16 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 .scr-body{flex:1;overflow-y:auto;background:#f8f9fb}
 .btn-primary{border:none;border-radius:8px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer}
 .btn-ghost{border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer}
+.topbar{flex:none;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc}
+.brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
+.logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
+.sep{color:#c8cbd2}
+.crumb{color:#868b95;font-weight:400}
+.right{display:flex;align-items:center;gap:8px}
+.pill{display:flex;align-items:center;gap:7px;font:500 12px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px}
+.pill .dot{width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)}
+.tb-present{border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer;display:flex;align-items:center;gap:6px}
+.av{flex:none;width:27px;height:27px;border-radius:50%;background:${ACCENT};color:#fff;font:600 11px/27px system-ui;text-align:center}
 </style>`;
 
 // Generic message bridge: any element with data-msg posts {type:<msg>, arg:<data-arg>} to the host.
@@ -65,12 +75,27 @@ function page(body: string): string {
 	return `<!DOCTYPE html><html><head>${HEAD}</head><body>${body}<script>${SCRIPT}</script></body></html>`;
 }
 
+// The comp's global top bar, shown on every main-area screen (the doc editor renders its own variant
+// in livingDocRender). Brand + per-screen crumb on the left; sync-status pill, Present (posts the
+// same `present` message the host already handles), and the user avatar on the right.
+function topBar(crumb: string): string {
+	return `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${esc(crumb)}</span></div>`
+		+ `<div class="right"><span class="pill"><span class="dot"></span>All sources synced</span>`
+		+ `<button class="tb-present" data-msg="present">&#8599; Present</button>`
+		+ `<span class="av">TS</span></div></div>`;
+}
+
+// Insert the top bar as the first flex child of the screen column (each renderer opens with .screen).
+function withTopBar(html: string, crumb: string): string {
+	return html.replace('<div class="screen">', `<div class="screen">${topBar(crumb)}`);
+}
+
 export function renderScreenHtml(screen: ScreenId, state: IScreenState): string {
 	switch (screen) {
-		case 'home': return page(renderHome());
-		case 'templates': return page(renderTemplates());
-		case 'knowledge': return page(renderKnowledge(state));
-		case 'agents': return page(renderAgents(state));
+		case 'home': return page(withTopBar(renderHome(), 'Home'));
+		case 'templates': return page(withTopBar(renderTemplates(), 'Templates'));
+		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge'));
+		case 'agents': return page(withTopBar(renderAgents(state), 'Agents'));
 	}
 }
 
