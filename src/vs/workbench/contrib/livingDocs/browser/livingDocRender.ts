@@ -73,6 +73,7 @@ html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-
 .pill.warn{color:#9a6b16;background:#fdf2dc;border-color:#f0e2c0}
 .pill.warn .dot{background:oklch(0.66 0.16 45)}
 .btn{border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+.av{flex:none;width:27px;height:27px;border-radius:50%;background:${ACCENT};color:#fff;font:600 11px/27px system-ui;text-align:center}
 .docwrap{max-width:780px;margin:0 auto;padding:48px 28px 80px;display:grid;grid-template-columns:30px 1fr;column-gap:10px;align-items:start}
 .docfull{grid-column:1 / -1}
 h1.title{margin:0 0 6px;font:600 30px/1.2 system-ui;letter-spacing:-.015em;color:#15171c}
@@ -228,7 +229,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		: '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}${downloadBtn}${refresh}</div></div>`;
+		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}${downloadBtn}${refresh}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 

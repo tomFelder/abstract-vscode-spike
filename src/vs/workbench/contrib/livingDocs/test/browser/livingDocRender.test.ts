@@ -33,6 +33,15 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 		}
 	});
 
+	test('the editor top bar carries the user avatar, matching the screens and the comp', () => {
+		const input: ILivingDocRenderInput = {
+			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',
+			recent: new Set(), mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' },
+		};
+		const h = renderLivingDocHtml(input);
+		assert.ok(h.includes('class="topbar"') && h.includes('class="av">TS<'), 'top bar shows the TS avatar');
+	});
+
 	test('the shareable URL row appears for link/public scopes and is hidden when workspace-only', () => {
 		assert.ok(!html({ open: true, choice: 'gdoc', scope: 'internal' }).includes('opportunity-os.live'), 'no public URL when workspace-only');
 		assert.ok(html({ open: true, choice: 'gdoc', scope: 'link' }).includes('opportunity-os.live'), 'URL shown for anyone-with-link');

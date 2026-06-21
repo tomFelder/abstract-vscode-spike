@@ -22,6 +22,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 2 | **~80%** | Context panel 48 -> 80: now groups Linked sources + Referenced files (was a flat list that omitted the doc's bound sources entirely). |
 | 3 | **~81%** | Global top bar added to all four screens (Home/Templates/Knowledge/Agents) — brand + crumb + sync pill + Present + avatar. Lifts Home 82->85, Templates 88->89, Knowledge 80->83, Agents 82->84. |
 | 4 | **~82%** | Present modal WHO CAN ACCESS now shown for every export (was site-only) 80->85; workflow canvas verified rendering + functional 72->80. |
+| 5 | **~83%** | Knowledge verified: Project tab's Strategy + Q3 OKRs (KR bars) + metrics are built 83->88; editor top bar gains the TS avatar (consistency) + gutter dots / inline-diff / approve-reject verified built 80->84. |
 
 ---
 
@@ -35,9 +36,9 @@ the handoff, iteration 1 is the survey. Iteration 2 attacks the lowest-scoring, 
 | # | Surface | Layout | Styling | Comp. | IA | Behav. | **Score** | Shot |
 |---|---------|:--:|:--:|:--:|:--:|:--:|:--:|------|
 | 1 | Home dashboard | 75→88 | 88 | 90 | 82 | 75 | **82** → **85** (iter 3) | `shots/baseline/01-home-app.png` → `shots/iter3-home-after.png` |
-| 2 | Document editor (rendered) | 78 | 82 | 75 | 85 | 78 | **80** | `shots/baseline/02-editor-app.png` |
+| 2 | Document editor (rendered) | 78 | 82→84 | 75→82 | 85 | 78→84 | **80** → **84** (iter 5) | `shots/baseline/02-editor-app.png` → `shots/iter5-editor-topbar-after.png` |
 | 3 | Templates (run wizard) | 90 | 88 | 90 | 88 | 86 | **88** → **89** (iter 3) | `shots/baseline/03-templates-app.png` → `shots/iter3-templates-after.png` |
-| 4 | Knowledge (decision stack) | 82 | 85 | 72 | 85 | 78 | **80** → **83** (iter 3) | `shots/baseline/04-knowledge-app.png` |
+| 4 | Knowledge (decision stack) | 82 | 85 | 72→88 | 85→90 | 78→88 | **80** → **83** (iter 3) → **88** (iter 5, verified) | `shots/baseline/04-knowledge-app.png` → `shots/iter5-knowledge-project.png` |
 | 5 | Agents list | 85 | 84 | 85 | 78 | 80 | **82** → **84** (iter 3) | `shots/baseline/05-agents-app.png` |
 | 6 | Workflow canvas | 75→80 | 75→82 | 70→78 | 75→80 | 65→80 | **72** → **80** (iter 4, verified) | `shots/iter4-canvas-verified.png` |
 | 7 | Context panel | 50 | 55 | 35 | 55 | 45 | **48** → **80** (iter 2) | `shots/baseline/06-context-app.png` → `shots/iter2-context-after.png` |
@@ -161,9 +162,11 @@ Copy) that the app's modal does not show.
 4. ~~**Workflow canvas** (72) — verify the open-agent canvas renders.~~ **DONE (iter 4 → 80):**
    verified rendering + functional; design-divergence (pipeline vs 3-column) noted.
 5. **Navigation blank-out bug** — screen launchers blank the main area after a doc editor was opened.
-6. **Editor extras** — doc tab bar, provenance gutter dots, source-peek + "Sync across" circle.
+6. **Editor extras** — ~~provenance gutter dots~~ (verified built, iter 5), ~~avatar~~ (added, iter 5);
+   remaining: source-peek pane + "Sync across" circle (doc tab bar is the workbench's editor tabs).
 7. ~~**Present modal** — add the WHO CAN ACCESS scope selector.~~ **DONE (iter 4):** shown for all exports.
-8. **Knowledge** — confirm/restore the DIRECTIONAL (Strategy) + MEASURABLE (OKRs) sections.
+8. ~~**Knowledge** — confirm the DIRECTIONAL (Strategy) + MEASURABLE (OKRs) sections.~~
+   **DONE (iter 5):** verified built on the Project tab.
 
 ---
 
@@ -269,6 +272,41 @@ per-doc statuses can't be shown without a data-model change. Left as a deliberat
 alternative rather than fabricating per-doc rows. Shot: `shots/iter4-canvas-verified.png`.
 
 **Overall ~81 → ~82.** Typecheck clean; 54 tests green.
+
+---
+
+## Iteration 5 — Knowledge verified (83→88) + editor top-bar avatar & verification (80→84)
+
+A verification-led iteration: two surfaces the **baseline under-scored as "unverified"** turned out to
+be substantially built. Corrected the scores with captured evidence, plus one consistency fix.
+
+**Knowledge (83 → 88).** The baseline flagged the comp's DIRECTIONAL (Product Strategy) + MEASURABLE
+(Q3 OKRs) sections as "needs scroll-verification". Rendering the **Project** tab
+(`knScope: 'project'`) confirms they are fully built and match the comp: Product Strategy
+(Wedge / Moat / Expand), Q3 OKRs with KR progress bars (KR1 18/25, KR2 +13%, KR3 94%), and the
+Activation / Net retention / Time-to-trust metric cards. The app splits the stack across the
+Organization (enduring) and Project (directional + measurable) tabs — a faithful read of the comp's
+own scope toggle. Shot: `shots/iter5-knowledge-project.png`.
+
+**Document editor (80 → 84).** Verified the editor already renders the comp's hallmark provenance
+affordances: a **blue gutter dot** on every bound block (`.pdot`, carrying `data-cells` for
+provenance), and a **pending meaning-change rendered inline as a word-level diff** (red strike /
+green add) with **Approve changes / Reject** controls — i.e. the review flow lives in the editor, not
+only the rail. One real gap remained: the editor top bar had the sync pill + controls but **no user
+avatar**, unlike the four screens (iter 3) and the comp. Added the `TS` avatar (+ `.av` style) to the
+editor top bar; 1 new test asserts it. Shot: `shots/iter5-editor-topbar-after.png`.
+*Remaining editor gap:* the comp's **source-peek pane + "Sync across" circle** (open a CSV beside the
+doc and apply edits with a diff) is not confirmed built — the next editor target.
+
+**Overall ~82 → ~83.** 55 tests pass; typecheck clean. 0 added core patches.
+
+> **Re-scoring note.** Iterations 4-5 surfaced a pattern: the app is **more complete than the baseline
+> scored** — several surfaces (canvas, Knowledge project tab, editor diff/approve) were scored low only
+> because they were *unverified*, not because they were missing. The biggest genuinely-open item is the
+> **populated Review rail** (55), whose approve/reject logic is in fact built + unit-tested (service
+> level) and rendered in the editor — what's unverified is the *right-rail* presentation of a pending
+> change, which needs **live workbench driving** (blocked while the chrome-devtools MCP is down). A
+> fresh session (restoring the MCP) is the clean way to live-verify it and re-audit at full fidelity.
 
 ---
 
