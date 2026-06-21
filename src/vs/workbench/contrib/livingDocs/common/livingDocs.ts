@@ -88,6 +88,9 @@ export interface ILivingDocsService {
 	/** The registered orchestration agents (for the Agents view). */
 	getAgents(): readonly IAgentDef[];
 
+	/** Run an agent now over its flow documents (or the whole workspace if it scopes none). */
+	runAgent(agentId: string): Promise<void>;
+
 	/** Create a new blank Living Document from a template in the workspace and return its resource. */
 	createDocument(): Promise<URI | undefined>;
 

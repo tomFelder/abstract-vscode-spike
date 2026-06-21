@@ -36,7 +36,7 @@ const TICK_MS = 60_000;
 // The default automation set (spec 7) seeded when no registry exists yet.
 function defaultAgents(): IAgentDef[] {
 	return [
-		{ id: 'weekly-refresh', name: 'Weekly refresh', trigger: { kind: 'cron', cron: 'Mon 09:00' }, flow: { sources: [], docs: [] }, policy: 'ask-before-apply', status: 'idle' },
+		{ id: 'weekly-refresh', name: 'Weekly refresh', trigger: { kind: 'cron', cron: 'Mon 09:00' }, flow: { sources: [], docs: [] }, policy: 'auto-figures', status: 'idle' },
 		{ id: 'source-watcher', name: 'Source-change watcher', trigger: { kind: 'event', source: '*' }, flow: { sources: [], docs: [] }, policy: 'auto-figures', status: 'idle' },
 		{ id: 'freshness-sweep', name: 'Freshness sweep', trigger: { kind: 'heartbeat', everyHours: 6 }, flow: { sources: [], docs: [] }, policy: 'draft-only', status: 'idle' },
 		{ id: 'before-export-gate', name: 'Before-export gate', trigger: { kind: 'lifecycle', lifecycle: 'before-export' }, flow: { sources: [], docs: [] }, policy: 'ask-before-apply', status: 'idle' },

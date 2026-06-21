@@ -25,7 +25,7 @@ import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { emptyLock, IAgentDef, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { AgentPolicy, emptyLock, IAgentDef, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 // One freshly-read source value for a bind key, before it is written into the lock.
 interface IResolution {
@@ -536,24 +536,80 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// Re-sync the lock from the current sources (value bindings are figures -> auto-apply): update each
-	// binding's resolved/sourceHash/syncedAt, reconcile the `.md` visible cache to the lock, audit each
-	// block whose value moved, and flag it for the just-synced highlight. Caller persists.
-	private async _syncLock(state: IDocState): Promise<void> {
+	// Resolve the current source values into the lock (update each binding's resolved/sourceHash/
+	// syncedAt). No prose is touched.
+	private async _resolveIntoLock(state: IDocState): Promise<void> {
 		const resolution = await this._resolveCurrent(state);
 		for (const [key, r] of resolution) {
 			state.lock.bindings[key] = this._bindingEntry(r);
 		}
+	}
+
+	// The figure changes a re-sync would make: each bound block whose visible cache no longer matches the
+	// lock's resolved values. Computed without mutating the document, so the policy router can apply,
+	// queue, or draft them.
+	private _figureReconciles(state: IDocState): { blockId: string; oldText: string; newText: string }[] {
 		const resolved = this.getResolved(state.uri);
+		const changes: { blockId: string; oldText: string; newText: string }[] = [];
 		for (const block of state.doc.blocks) {
 			if (block.binds.length === 0) { continue; }
 			const next = reconcileBindLinks(block.text, resolved);
-			if (next === block.text) { continue; }
-			state.lock.audit.push(this._entry(block.id, 'auto-applied', block.text, next, 'heuristic'));
-			block.text = next;
-			block.binds = extractBindLinks(next);
-			state.recent.add(block.id);
+			if (next !== block.text) { changes.push({ blockId: block.id, oldText: block.text, newText: next }); }
 		}
+		return changes;
+	}
+
+	private _applyFigure(state: IDocState, change: { blockId: string; oldText: string; newText: string }): void {
+		const block = state.doc.blocks.find(b => b.id === change.blockId);
+		if (!block) { return; }
+		state.lock.audit.push(this._entry(block.id, 'auto-applied', change.oldText, change.newText, 'heuristic'));
+		block.text = change.newText;
+		block.binds = extractBindLinks(change.newText);
+		state.recent.add(block.id);
+	}
+
+	// Re-sync the lock from the current sources and auto-apply every figure (the manual "Refresh from
+	// sources" path; figures are deterministic and low-risk). Caller persists.
+	private async _syncLock(state: IDocState): Promise<void> {
+		await this._resolveIntoLock(state);
+		for (const change of this._figureReconciles(state)) { this._applyFigure(state, change); }
+	}
+
+	// Route a document's figure changes by the agent's policy (spec 4.2): auto-figures applies silently
+	// (audited); ask-before-apply queues a pending change; draft-only queues a draft and never lands.
+	// Returns how many were applied vs queued. Caller persists when something applied.
+	private async _runFiguresByPolicy(state: IDocState, policy: AgentPolicy): Promise<{ applied: number; queued: number }> {
+		await this._resolveIntoLock(state);
+		const changes = this._figureReconciles(state);
+		let applied = 0;
+		let queued = 0;
+		for (const change of changes) {
+			if (policy === 'auto-figures') {
+				this._applyFigure(state, change);
+				applied++;
+				continue;
+			}
+			// ask-before-apply / draft-only: queue for the rail without touching the doc.
+			const block = state.doc.blocks.find(b => b.id === change.blockId);
+			this._pending = this._pending.filter(c => !(c.docId === state.uri.toString() && c.blockId === change.blockId));
+			this._pending.push({
+				id: generateUuid(),
+				docId: state.uri.toString(),
+				docTitle: state.doc.title,
+				blockId: change.blockId,
+				blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
+				oldText: change.oldText,
+				newText: change.newText,
+				kind: 'figure',
+				confidence: 1,
+				rationale: 'Source value changed; figure update prepared.',
+				sourceCells: block ? block.binds.map(b => b.key) : [],
+				via: 'heuristic',
+				draft: policy === 'draft-only',
+			});
+			queued++;
+		}
+		return { applied, queued };
 	}
 
 	async saveRawText(resource: URI, text: string): Promise<void> {
@@ -659,30 +715,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
-	// The orchestration host: how an agent actually does its work once a trigger fires. Dispatched by
-	// the agent's nature (its trigger kind), whether the run came from the scheduler or a manual Run now.
-	// (Per-edge policy refines the apply/queue/draft decision in Item 3; the verify gate in Item 4.)
+	// "Run now": run an agent over its flow documents (or the whole workspace if it scopes none).
+	async runAgent(agentId: string): Promise<void> {
+		await this._orchestrator.ensureLoaded();
+		const agent = this._orchestrator.getAgent(agentId);
+		if (!agent) { return; }
+		const docs = agent.flow.docs.length ? agent.flow.docs.map(d => URI.parse(d)) : await this._discoverLivingDocUris();
+		await this._orchestrator.runAgent(agentId, 'manual', docs);
+	}
+
+	// The orchestration host: how an agent does its work once a trigger fires. Event agents only flag
+	// along the graph (propagation already ran); lifecycle hooks fire from the document lifecycle
+	// (Item 5). Everything else re-derives each in-scope document and routes its figure changes through
+	// the per-edge policy (auto-apply / queue / draft). Meaning/influence + the verify gate land in Item 4.
 	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<void> {
-		switch (agent.trigger.kind) {
-			case 'cron':
-			case 'manual':
-				// The recurring/manual refresh: re-derive figures across the workspace.
-				await this.refreshFromSources();
-				break;
-			case 'heartbeat':
-				// The Freshness sweep: impact-pass each flagged doc, then drain it from the queue.
-				for (const uri of context.docs) {
-					await this.loadDocument(uri);
-					await this.reviewImpact(uri);
-					this._orchestrator.clearDirty(uri);
-				}
-				break;
-			case 'event':
-			case 'lifecycle':
-				// Event agents only flag along the graph (propagation already ran); lifecycle hooks fire
-				// from the document lifecycle (Item 5), not from a run.
-				break;
+		if (agent.trigger.kind === 'event' || agent.trigger.kind === 'lifecycle') { return; }
+		for (const uri of context.docs) {
+			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
+			if (!state || !state.doc.isLiving) { continue; }
+			state.recent = new Set<string>();
+			const { applied } = await this._runFiguresByPolicy(state, agent.policy);
+			if (applied) { await this._persist(state); } else { await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e)); }
+			await this._recomputeFreshness(state);
+			// The heartbeat drains each doc it processed from the dirty queue.
+			if (agent.trigger.kind === 'heartbeat') { this._orchestrator.clearDirty(uri); }
 		}
+		this._onDidChange.fire();
 	}
 
 	// --- the Review-impact pass (expensive, on-demand): spec 3.6 ---

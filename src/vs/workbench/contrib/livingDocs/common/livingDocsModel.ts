@@ -197,6 +197,9 @@ export interface IProposedChange {
 	readonly contextReviewed?: readonly string[];
 	readonly via?: 'model' | 'heuristic';
 	readonly relink?: boolean;
+	// A draft prepared proactively by a `draft-only` agent (e.g. the Freshness sweep): it waits in the
+	// rail like any pending change but is flagged as never-auto-landed.
+	readonly draft?: boolean;
 }
 
 export interface IAuditEntry {

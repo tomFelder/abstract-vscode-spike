@@ -17,6 +17,7 @@ import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
+import { AgentPolicy, IAgentDef } from '../../common/livingDocsModel.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -112,13 +113,15 @@ suite('LivingDocsService', () => {
 
 	let lastFiles: Map<string, string> | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; agents?: IAgentDef[] } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
 		files.set(URI.file('/ws/market-research.md').toString(), MARKET_MD);
 		files.set(WEEKLY.toString(), WEEKLY_MD);
 		files.set(README.toString(), PLAIN_MD);
+		// Seed the agent registry before construction so the orchestrator loads it instead of defaults.
+		if (opts.agents) { files.set(URI.file('/ws/agents.json').toString(), JSON.stringify(opts.agents)); }
 		if (opts.boardNote) { files.set(BOARD.toString(), BOARD_MD); }
 		if (opts.api) { files.set(API.toString(), API_MD); }
 
@@ -423,6 +426,44 @@ suite('LivingDocsService', () => {
 		assert.ok(md.startsWith('# Weekly Operating Summary'), 'starts with the H1 title');
 		assert.ok(md.includes('$48.6k') && md.includes('427'), 'resolved values inlined');
 		assert.ok(!md.includes('bind:') && !md.includes(']('), 'no bind-link syntax in the export');
+	});
+
+	function manualAgent(policy: AgentPolicy): IAgentDef {
+		return { id: 'agent', name: 'Agent', trigger: { kind: 'manual' }, flow: { sources: [], docs: [WEEKLY.toString()] }, policy, status: 'idle' };
+	}
+
+	test('policy auto-figures applies the figure silently and audits it, with nothing queued', async () => {
+		const service = createService([], { agents: [manualAgent('auto-figures')] });
+		await service.loadDocument(WEEKLY);
+
+		await service.runAgent('agent');
+
+		const highlights = blockText(service, WEEKLY, 'h-highlights');
+		assert.ok(highlights.includes('[$48.6k](bind:metrics.mrr)'), `figure auto-applied to the doc: ${highlights}`);
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'nothing queued for review');
+		assert.ok(service.getAudit().some(e => e.action === 'auto-applied'), 'auto-apply audited in the lock');
+	});
+
+	test('policy ask-before-apply queues a pending figure change and leaves the doc untouched', async () => {
+		const service = createService([], { agents: [manualAgent('ask-before-apply')] });
+		await service.loadDocument(WEEKLY);
+
+		await service.runAgent('agent');
+
+		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'doc cache untouched');
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.deepStrictEqual({ count: pending.length, kind: pending[0]?.kind, draft: !!pending[0]?.draft }, { count: 1, kind: 'figure', draft: false });
+	});
+
+	test('policy draft-only prepares a draft in the rail and never lands it', async () => {
+		const service = createService([], { agents: [manualAgent('draft-only')] });
+		await service.loadDocument(WEEKLY);
+
+		await service.runAgent('agent');
+
+		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'doc untouched by a draft-only run');
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.deepStrictEqual({ count: pending.length, draft: !!pending[0]?.draft }, { count: 1, draft: true });
 	});
 
 	test('revealSource opens a styled source view listing bound keys and the referencing document', async () => {

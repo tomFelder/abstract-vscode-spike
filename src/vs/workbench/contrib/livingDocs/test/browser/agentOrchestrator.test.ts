@@ -109,7 +109,7 @@ suite('AgentOrchestrator', () => {
 		assert.deepStrictEqual(
 			orch.getAgents().map(a => ({ id: a.id, trigger: a.trigger.kind, policy: a.policy })),
 			[
-				{ id: 'weekly-refresh', trigger: 'cron', policy: 'ask-before-apply' },
+				{ id: 'weekly-refresh', trigger: 'cron', policy: 'auto-figures' },
 				{ id: 'source-watcher', trigger: 'event', policy: 'auto-figures' },
 				{ id: 'freshness-sweep', trigger: 'heartbeat', policy: 'draft-only' },
 				{ id: 'before-export-gate', trigger: 'lifecycle', policy: 'ask-before-apply' },
