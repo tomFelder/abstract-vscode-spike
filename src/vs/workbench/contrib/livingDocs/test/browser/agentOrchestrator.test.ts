@@ -68,6 +68,7 @@ suite('AgentOrchestrator', () => {
 		const runs: IRunRecord[] = [];
 		orch.setRunner(async (agent, context: IAgentRunContext) => {
 			runs.push({ agentId: agent.id, trigger: context.trigger, docs: context.docs.map(u => u.toString()) });
+			return { applied: 0, queued: 0 };
 		});
 		store.add(orch);
 		return { orch, written, runs };

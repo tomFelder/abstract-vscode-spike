@@ -23,9 +23,9 @@ import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
-import { AgentOrchestrator, IAgentRunContext } from './agentOrchestrator.js';
+import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AgentPolicy, emptyLock, IAgentDef, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { AgentPolicy, emptyLock, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
 interface IGradeResult {
@@ -813,35 +813,38 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	// "Run now": run an agent over its flow documents (or the whole workspace if it scopes none).
-	async runAgent(agentId: string): Promise<void> {
+	async runAgent(agentId: string): Promise<IAgentRun | undefined> {
 		await this._orchestrator.ensureLoaded();
 		const agent = this._orchestrator.getAgent(agentId);
-		if (!agent) { return; }
+		if (!agent) { return undefined; }
 		const docs = agent.flow.docs.length ? agent.flow.docs.map(d => URI.parse(d)) : await this._discoverLivingDocUris();
-		await this._orchestrator.runAgent(agentId, 'manual', docs);
+		return this._orchestrator.runAgent(agentId, 'manual', docs);
 	}
 
 	// The orchestration host: how an agent does its work once a trigger fires. Event agents only flag
 	// along the graph (propagation already ran); lifecycle hooks fire from the document lifecycle
 	// (Item 5). Everything else re-derives each in-scope document and routes its figure changes through
-	// the per-edge policy (auto-apply / queue / draft). Meaning/influence + the verify gate land in Item 4.
-	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<void> {
-		if (agent.trigger.kind === 'event' || agent.trigger.kind === 'lifecycle') { return; }
+	// the verify gate then the per-edge policy (auto-apply / queue / draft). Reports what landed/queued.
+	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<IAgentRunResult> {
+		if (agent.trigger.kind === 'event' || agent.trigger.kind === 'lifecycle') { return { applied: 0, queued: 0 }; }
+		let applied = 0;
+		let queued = 0;
 		let blocked: string | undefined;
 		for (const uri of context.docs) {
 			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
 			if (!state || !state.doc.isLiving) { continue; }
 			state.recent = new Set<string>();
 			const result = await this._runFiguresByPolicy(state, agent.policy);
+			applied += result.applied;
+			queued += result.queued;
 			if (result.blocked) { blocked = result.blocked; }
 			if (result.applied) { await this._persist(state); } else { await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e)); }
 			await this._recomputeFreshness(state);
 			// The heartbeat drains each doc it processed from the dirty queue.
 			if (agent.trigger.kind === 'heartbeat') { this._orchestrator.clearDirty(uri); }
 		}
-		// A grader failure stops the run at the gate - surface it as the agent's status (spec 5).
-		if (blocked) { agent.status = 'blocked'; }
 		this._onDidChange.fire();
+		return { applied, queued, blocked };
 	}
 
 	// --- the Review-impact pass (expensive, on-demand): spec 3.6 ---

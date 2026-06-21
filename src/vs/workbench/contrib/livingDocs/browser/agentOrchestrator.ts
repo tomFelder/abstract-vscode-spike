@@ -9,17 +9,23 @@ import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { parseLivingDoc } from '../common/livingDocMarkdown.js';
-import { AgentTriggerKind, IAgentDef, IDirtyEntry } from '../common/livingDocsModel.js';
+import { AgentTriggerKind, IAgentDef, IAgentRun, IDirtyEntry } from '../common/livingDocsModel.js';
 import { IAgentStore } from './agentStore.js';
 import { IClock, RealClock } from './clock.js';
 
 // How the orchestrator runs an agent once a trigger fires: the host (the service) supplies the actual
-// work (re-derive figures, impact-pass, draft) given the agent + the documents in scope.
+// work (re-derive figures, impact-pass, draft) given the agent + the documents in scope, and reports
+// what landed/queued so the orchestrator can set status and record the run.
 export interface IAgentRunContext {
 	readonly trigger: AgentTriggerKind;
 	readonly docs: readonly URI[];
 }
-export type AgentRunner = (agent: IAgentDef, context: IAgentRunContext) => Promise<void>;
+export interface IAgentRunResult {
+	readonly applied: number;
+	readonly queued: number;
+	readonly blocked?: string;
+}
+export type AgentRunner = (agent: IAgentDef, context: IAgentRunContext) => Promise<IAgentRunResult>;
 
 // Map a weekday abbreviation to its UTC day index (cron is interpreted in UTC for test determinism).
 const WEEKDAYS: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -67,6 +73,7 @@ export class AgentOrchestrator extends Disposable {
 	private readonly _dirty = new Map<string, IDirtyEntry>();
 	private _runner: AgentRunner | undefined;
 	private readonly _ticker = this._register(new MutableDisposable());
+	private readonly _lastRuns = new Map<string, IAgentRun>();
 
 	constructor(
 		private readonly _files: IFileService,
@@ -220,23 +227,33 @@ export class AgentOrchestrator extends Disposable {
 		await this.runAgent(agentId, 'heartbeat', docs);
 	}
 
-	// Run one agent end-to-end via the host runner (also the manual "Run now" path). Tracks status +
-	// last-run for the Agents view / History trace.
-	async runAgent(agentId: string, trigger: AgentTriggerKind, docs: readonly URI[]): Promise<void> {
+	getLastRun(agentId: string): IAgentRun | undefined { return this._lastRuns.get(agentId); }
+
+	// Run one agent end-to-end via the host runner (also the manual "Run now" path). Sets status from
+	// the result (blocked / needs-approval / idle) and records the run for the Agents view + History.
+	async runAgent(agentId: string, trigger: AgentTriggerKind, docs: readonly URI[]): Promise<IAgentRun | undefined> {
 		const agent = this.getAgent(agentId);
-		if (!agent || !this._runner) { return; }
+		if (!agent || !this._runner) { return undefined; }
+		const startedAt = new Date(this._clock.now()).toISOString();
 		agent.status = 'running';
 		this._onDidChange.fire();
+		const run: IAgentRun = { agentId, startedAt, applied: 0, queued: 0 };
 		try {
-			await this._runner(agent, { trigger, docs });
-			if (agent.status === 'running') { agent.status = 'idle'; }
+			const result = await this._runner(agent, { trigger, docs });
+			run.applied = result.applied;
+			run.queued = result.queued;
+			run.blocked = result.blocked;
+			agent.status = result.blocked ? 'blocked' : result.queued > 0 ? 'needs-approval' : 'idle';
 		} catch (e) {
 			agent.status = 'error';
 			this._log.warn('[livingDocs] agent run failed', agentId, e instanceof Error ? e.message : String(e));
 		}
-		agent.lastRun = new Date(this._clock.now()).toISOString();
+		run.finishedAt = new Date(this._clock.now()).toISOString();
+		agent.lastRun = run.finishedAt;
+		this._lastRuns.set(agentId, run);
 		await this._persistAgents();
 		this._onDidChange.fire();
+		return run;
 	}
 
 	// --- the dirty queue (drained by the heartbeat) ---

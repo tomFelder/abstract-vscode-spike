@@ -9,15 +9,27 @@
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
+import { IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger } from '../common/livingDocsModel.js';
+
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents';
+
+export type AgentFilter = 'all' | 'scheduled' | 'event' | 'needs-approval';
 
 export interface IScreenState {
 	/** Knowledge: which scope tab is selected. */
 	readonly knScope: 'org' | 'project';
-	/** Agents: whether the workflow canvas is open (vs the agents list). */
-	readonly agentOpen: boolean;
-	/** Agents: whether the open workflow has been run (drives the canvas highlights). */
-	readonly ranWf: boolean;
+	/** Agents: the live registry (drives the table + canvas). */
+	readonly agents: readonly IAgentDef[];
+	/** Agents: the agent whose workflow canvas is open (vs the list). */
+	readonly openAgentId?: string;
+	/** Agents: the active table filter chip. */
+	readonly filter: AgentFilter;
+	/** Agents: the result of the most recent Run now, for the canvas banner. */
+	readonly lastRun?: IAgentRun;
+}
+
+function esc(s: string): string {
+	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 const ACCENT = 'oklch(0.55 0.13 255)';
@@ -194,90 +206,123 @@ function renderKnowledge(state: IScreenState): string {
 </div>`;
 }
 
-// ---- Agents: the list of background agents, and the workflow canvas for one. ----
+// ---- Agents: the live registry table, and the workflow canvas for one agent. ----
 function renderAgents(state: IScreenState): string {
-	return state.agentOpen ? renderAgentCanvas(state) : renderAgentList();
+	const open = state.openAgentId ? state.agents.find(a => a.id === state.openAgentId) : undefined;
+	return open ? renderAgentCanvas(open, state) : renderAgentList(state);
 }
 
-function renderAgentList(): string {
-	const openBadge = `<span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#aeb6e0">open &#8599;</span>`;
-	const row = (icon: string, name: string, trigger: string, flow: string, last: string, status: string, opts: { open?: boolean; bg?: string } = {}) => `<div ${opts.open ? 'data-msg="openAgent" ' : ''}style="display:flex;align-items:center;padding:15px 18px;border-bottom:1px solid #f1f2f5;font:400 13px/1.4 system-ui;${opts.open ? 'cursor:pointer;' : ''}${opts.bg ? 'background:' + opts.bg : ''}">
-		<div style="flex:2.4;display:flex;align-items:center;gap:9px"><span style="color:${ACCENT}">${icon}</span><span style="font-weight:500">${name}</span>${opts.open ? openBadge : ''}</div>
-		<div style="flex:1.4;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#696e78">${trigger}</div>
-		<div style="flex:2.6;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#868b95">${flow}</div>
-		<div style="flex:1.3;color:#969ba4">${last}</div>
-		<div style="flex:1.4">${status}</div>
-	</div>`;
-	const healthy = `<span style="display:inline-flex;align-items:center;gap:6px;font:600 11px/1 system-ui;color:#1f7a44"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Healthy</span>`;
-	const idle = `<span style="display:inline-flex;align-items:center;gap:6px;font:600 11px/1 system-ui;color:#868b95"><span style="width:7px;height:7px;border-radius:50%;background:#cdd1d8"></span>Idle</span>`;
-	const approval = `<span style="font:600 11px/1 system-ui;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 10px">1 approval</span>`;
-	const filterChip = (label: string, on: boolean, warn = false) => `<span style="font:500 12px/1 system-ui;${on ? 'color:#15181f;background:#fff;border:1px solid #e6e8ed;box-shadow:0 1px 2px rgba(0,0,0,.04);border-radius:8px;' : warn ? 'color:#9a6b16;' : 'color:#868b95;'}padding:7px 12px">${label}</span>`;
+const AGENT_ICON: Record<string, string> = { cron: '&#10227;', heartbeat: '&#9673;', event: '&#8853;', lifecycle: '&#9638;', manual: '&#9654;' };
+
+function base(path: string): string { return esc(path.split('/').pop() ?? path); }
+
+function triggerLabel(t: IAgentTrigger): string {
+	switch (t.kind) {
+		case 'cron': return `cron &middot; ${esc(t.cron ?? '')}`;
+		case 'heartbeat': return `heartbeat &middot; ${t.everyHours ?? 6}h`;
+		case 'event': return `event &middot; ${esc(t.source ?? '*')}`;
+		case 'lifecycle': return `lifecycle &middot; ${esc(t.lifecycle ?? '')}`;
+		default: return 'manual';
+	}
+}
+
+function flowLabel(f: IAgentFlow): string {
+	const s = f.sources.length ? f.sources.map(base).join(', ') : 'all sources';
+	const d = f.docs.length ? f.docs.map(base).join(', ') : 'all documents';
+	return `${s} &#8594; ${d}`;
+}
+
+function statusBadge(status: string): string {
+	const dot = (color: string, label: string, fg = '#52575f') => `<span style="display:inline-flex;align-items:center;gap:6px;font:600 11px/1 system-ui;color:${fg}"><span style="width:7px;height:7px;border-radius:50%;background:${color}"></span>${label}</span>`;
+	switch (status) {
+		case 'running': return dot('oklch(0.66 0.16 45)', 'Running', '#9a6b16');
+		case 'needs-approval': return `<span style="font:600 11px/1 system-ui;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 10px">Needs approval</span>`;
+		case 'blocked': return `<span style="font:600 11px/1 system-ui;color:#b4332f;background:#fdecec;border-radius:999px;padding:5px 10px">Blocked</span>`;
+		case 'error': return dot('#b4332f', 'Error', '#b4332f');
+		default: return dot('#cdd1d8', 'Idle', '#868b95');
+	}
+}
+
+function isScheduled(a: IAgentDef): boolean { return a.trigger.kind === 'cron' || a.trigger.kind === 'heartbeat'; }
+function isEvent(a: IAgentDef): boolean { return a.trigger.kind === 'event' || a.trigger.kind === 'lifecycle'; }
+
+function renderAgentList(state: IScreenState): string {
+	const agents = state.agents;
+	const counts = {
+		all: agents.length,
+		scheduled: agents.filter(isScheduled).length,
+		event: agents.filter(isEvent).length,
+		needs: agents.filter(a => a.status === 'needs-approval').length,
+	};
+	const chip = (id: AgentFilter, label: string, warn = false) => {
+		const on = state.filter === id;
+		return `<button data-msg="setFilter" data-arg="${id}" style="font:500 12px/1 system-ui;cursor:pointer;${on ? 'color:#15181f;background:#fff;border:1px solid #e6e8ed;box-shadow:0 1px 2px rgba(0,0,0,.04);' : `color:${warn ? '#9a6b16' : '#868b95'};background:none;border:1px solid transparent;`}border-radius:8px;padding:7px 12px">${label}</button>`;
+	};
+	const shown = agents.filter(a => state.filter === 'all'
+		|| (state.filter === 'scheduled' && isScheduled(a))
+		|| (state.filter === 'event' && isEvent(a))
+		|| (state.filter === 'needs-approval' && a.status === 'needs-approval'));
+	const rows = shown.map(a => `<div data-msg="openAgent" data-arg="${esc(a.id)}" style="display:flex;align-items:center;padding:15px 18px;border-bottom:1px solid #f1f2f5;font:400 13px/1.4 system-ui;cursor:pointer">
+		<div style="flex:2.2;display:flex;align-items:center;gap:9px"><span style="color:${ACCENT}">${AGENT_ICON[a.trigger.kind] ?? '&#9679;'}</span><span style="font-weight:500">${esc(a.name)}</span><span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#aeb6e0">open &#8599;</span></div>
+		<div style="flex:1.6;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#696e78">${triggerLabel(a.trigger)}</div>
+		<div style="flex:1.3;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#5b6dc4">${esc(a.policy)}</div>
+		<div style="flex:2.4;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#868b95">${flowLabel(a.flow)}</div>
+		<div style="flex:1.1;color:#969ba4;font:400 12px/1 system-ui">${a.lastRun ? 'ran' : 'never'}</div>
+		<div style="flex:1.3">${statusBadge(a.status)}</div>
+	</div>`).join('');
+	const empty = `<div style="padding:24px 18px;font:400 12.5px/1.5 system-ui;color:#969ba4">No agents match this filter.</div>`;
 	return `<div class="screen">
 	<div class="scr-head"><div><h2 class="scr-title">Agents</h2><div class="scr-sub">Documents talking to documents &mdash; running quietly in the background.</div></div><button class="btn-primary" style="margin-left:auto">&#65291; New agent</button></div>
 	<div class="scr-body">
 		<div style="max-width:1040px;margin:0 auto;padding:24px 28px 80px">
-			<div style="display:flex;gap:6px;margin-bottom:16px">${filterChip('All &middot; 4', true)}${filterChip('Scheduled', false)}${filterChip('Triggered', false)}${filterChip('Needs approval &middot; 1', false, true)}</div>
+			<div style="display:flex;gap:6px;margin-bottom:16px">${chip('all', `All &middot; ${counts.all}`)}${chip('scheduled', `Scheduled &middot; ${counts.scheduled}`)}${chip('event', `Event &middot; ${counts.event}`)}${chip('needs-approval', `Needs approval &middot; ${counts.needs}`, true)}</div>
 			<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden">
-				<div style="display:flex;align-items:center;padding:11px 18px;background:#f8f9fb;border-bottom:1px solid #eef0f3;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2"><div style="flex:2.4">AGENT</div><div style="flex:1.4">TRIGGER</div><div style="flex:2.6">FLOW</div><div style="flex:1.3">LAST RUN</div><div style="flex:1.4">STATUS</div></div>
-				${row('&#10227;', 'Weekly refresh', 'cron &middot; Mon 9:00', 'metrics.csv &#8594; Weekly Summary.md', '2m ago', approval, { open: true, bg: '#fcfdff' })}
-				${row('&#8853;', 'Quote &#8594; tracker', 'folder watch', '/quotes &#8594; pipeline.csv', '9m ago', healthy)}
-				${row('&#9719;', 'KPI &#8594; commentary', 'webhook', 'kpi.api &#8594; Board Note.md', '1h ago', healthy)}
-				${row('&#9638;', 'SOP &#8594; policy index', 'cron &middot; daily', '/sops &#8594; Policy Index.md', 'yesterday', idle)}
+				<div style="display:flex;align-items:center;padding:11px 18px;background:#f8f9fb;border-bottom:1px solid #eef0f3;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2"><div style="flex:2.2">AGENT</div><div style="flex:1.6">TRIGGER</div><div style="flex:1.3">POLICY</div><div style="flex:2.4">FLOW</div><div style="flex:1.1">LAST RUN</div><div style="flex:1.3">STATUS</div></div>
+				${rows || empty}
 			</div>
-			<div style="margin-top:14px;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8">Tip: open an agent to see and edit its flow on the canvas.</div>
+			<div style="margin-top:14px;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8">Tip: open an agent to see its flow on the canvas, then Run now.</div>
 		</div>
 	</div>
 </div>`;
 }
 
-function renderAgentCanvas(state: IScreenState): string {
-	const ran = state.ranWf;
-	const wsStroke = ran ? 'oklch(0.66 0.16 45)' : '#cdd5e2';
-	const bnStroke = ran ? 'oklch(0.6 0.13 150)' : '#cdd5e2';
-	const wsNodeBorder = ran ? 'oklch(0.78 0.1 70)' : '#e6e8ed';
-	const runBanner = ran
-		? `<div style="flex:none;display:flex;align-items:center;gap:10px;padding:11px 24px;background:#fdf6e9;border-bottom:1px solid #f0e2c4;font:500 12.5px/1.4 system-ui;color:#9a6b16"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.66 0.16 45)"></span>Run complete &middot; 3 figure updates applied &middot; 1 narrative change needs approval<button data-msg="goReview" style="margin-left:auto;border:none;background:none;font:600 12.5px/1 system-ui;color:${ACCENT_DK};cursor:pointer">Review &#8594;</button></div>`
-		: '';
-	const wsNodeInner = ran
-		? `<button data-msg="goReview" style="margin-top:9px;width:100%;text-align:left;border:1px solid #f0e2c4;background:#fdf6e9;border-radius:7px;padding:7px 9px;font:600 11px/1.3 system-ui;color:#9a6b16;cursor:pointer">2 applied &middot; 1 to review &#8594;</button>`
-		: `<div style="font:400 10.5px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:7px">awaiting run</div>`;
-	const bnNodeInner = ran
-		? `<div style="display:inline-flex;align-items:center;gap:6px;margin-top:9px;font:600 11px/1 system-ui;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:5px 9px">&#10003; 1 figure applied</div>`
-		: `<div style="font:400 10.5px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:7px">awaiting run</div>`;
-	const q2NodeInner = ran
-		? `<div style="font:400 11px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#969ba4;margin-top:9px">no change &middot; source stable</div>`
-		: `<div style="font:400 10.5px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:7px">awaiting run</div>`;
-	const wsPulse = ran ? `<span style="margin-left:auto;width:8px;height:8px;border-radius:50%;background:oklch(0.7 0.15 150);animation:lwdPulse 1.4s infinite"></span>` : '';
-	const lastRun = ran ? '' : `<span style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">last run 2m ago</span>`;
+// The workflow canvas renders the agent as the loop (spec 5): trigger -> sources -> agent -> verify
+// gate -> policy gate -> documents -> review rail. Run state comes from the last run.
+function renderAgentCanvas(agent: IAgentDef, state: IScreenState): string {
+	const run = state.lastRun && state.lastRun.agentId === agent.id ? state.lastRun : undefined;
+	const node = (label: string, sub: string, accent = false, tint = '#fff') => `<div style="flex:none;width:150px;background:${tint};border:1.5px solid ${accent ? ACCENT : '#e6e8ed'};border-radius:11px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="font:600 12.5px/1.2 system-ui;color:#1a1c20">${label}</div><div style="font:400 10.5px/1.35 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:6px">${sub}</div></div>`;
+	const arrow = `<div style="flex:none;align-self:center;color:#c2c8d4;font-size:18px">&#8594;</div>`;
+	const stages = [
+		node('Trigger', triggerLabel(agent.trigger), true),
+		arrow,
+		node('Sources', agent.flow.sources.length ? agent.flow.sources.map(base).join('<br>') : 'workspace sources'),
+		arrow,
+		node(esc(agent.name), 'read &middot; diff &middot; rewrite'),
+		arrow,
+		node('Verify', 'Financial &middot; Strategy &middot; Formatting', true, '#f7f9ff'),
+		arrow,
+		node('Policy gate', esc(agent.policy), true, '#f7f9ff'),
+		arrow,
+		node('Documents', agent.flow.docs.length ? agent.flow.docs.map(base).join('<br>') : 'workspace docs'),
+		arrow,
+		node('Review rail', run ? `${run.queued} queued` : 'awaiting run', true, '#fdf6e9'),
+	].join('');
+	let banner = '';
+	if (run) {
+		banner = run.blocked
+			? `<div style="flex:none;display:flex;align-items:center;gap:10px;padding:11px 24px;background:#fdecec;border-bottom:1px solid #f3c9c6;font:500 12.5px/1.4 system-ui;color:#b4332f"><span style="width:8px;height:8px;border-radius:50%;background:#b4332f"></span>Blocked at the verify gate &middot; ${esc(run.blocked)}</div>`
+			: `<div style="flex:none;display:flex;align-items:center;gap:10px;padding:11px 24px;background:#fdf6e9;border-bottom:1px solid #f0e2c4;font:500 12.5px/1.4 system-ui;color:#9a6b16"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.66 0.16 45)"></span>Run complete &middot; ${run.applied} figure update${run.applied === 1 ? '' : 's'} applied &middot; ${run.queued} change${run.queued === 1 ? '' : 's'} queued<button data-msg="goReview" style="margin-left:auto;border:none;background:none;font:600 12.5px/1 system-ui;color:${ACCENT_DK};cursor:pointer">Review &#8594;</button></div>`;
+	}
 	return `<div class="screen">
 	<div style="flex:none;display:flex;align-items:center;gap:14px;padding:13px 24px;border-bottom:1px solid #eef0f3">
 		<button class="btn-ghost" data-msg="closeAgent">&#8592; Agents</button>
-		<div><div style="display:flex;align-items:center;gap:8px"><span style="color:${ACCENT}">&#10227;</span><h2 style="margin:0;font:600 16px/1.2 system-ui;color:#15171c">Weekly refresh</h2></div><div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:4px">cron &middot; Mon 9:00 &middot; 2 sources &#8594; 3 documents</div></div>
-		<div style="margin-left:auto;display:flex;align-items:center;gap:12px">${lastRun}<button data-msg="runWf" style="border:none;border-radius:8px;padding:9px 16px;background:oklch(0.55 0.14 150);color:#fff;font:600 13px/1 system-ui;cursor:pointer">&#9654; Run now</button></div>
+		<div><div style="display:flex;align-items:center;gap:8px"><span style="color:${ACCENT}">${AGENT_ICON[agent.trigger.kind] ?? '&#9679;'}</span><h2 style="margin:0;font:600 16px/1.2 system-ui;color:#15171c">${esc(agent.name)}</h2></div><div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:4px">${triggerLabel(agent.trigger)} &middot; ${esc(agent.policy)}</div></div>
+		<div style="margin-left:auto;display:flex;align-items:center;gap:12px">${statusBadge(agent.status)}<button data-msg="runWf" data-arg="${esc(agent.id)}" style="border:none;border-radius:8px;padding:9px 16px;background:oklch(0.55 0.14 150);color:#fff;font:600 13px/1 system-ui;cursor:pointer">&#9654; Run now</button></div>
 	</div>
-	${runBanner}
+	${banner}
 	<div style="flex:1;overflow:auto;background:#f8f9fb;background-image:radial-gradient(#e2e6ee 1px,transparent 1px);background-size:22px 22px">
-		<div style="position:relative;width:980px;height:520px;margin:28px auto">
-			<svg width="980" height="520" style="position:absolute;top:0;left:0;pointer-events:none">
-				<path d="M208,120 C300,120 300,250 380,250" stroke="#cdd5e2" stroke-width="2" fill="none"></path>
-				<path d="M208,330 C300,330 300,250 380,250" stroke="#cdd5e2" stroke-width="2" fill="none"></path>
-				<path d="M590,250 C680,250 680,90 740,90" stroke="${wsStroke}" stroke-width="2" fill="none"></path>
-				<path d="M590,250 C680,250 680,262 740,262" stroke="${bnStroke}" stroke-width="2" fill="none"></path>
-				<path d="M590,250 C680,250 680,422 740,422" stroke="#cdd5e2" stroke-width="2" fill="none"></path>
-				<circle cx="380" cy="250" r="3.5" fill="#cdd5e2"></circle>
-				<circle cx="740" cy="90" r="3.5" fill="${wsStroke}"></circle>
-				<circle cx="740" cy="262" r="3.5" fill="${bnStroke}"></circle>
-				<circle cx="740" cy="422" r="3.5" fill="#cdd5e2"></circle>
-			</svg>
-			<div style="position:absolute;left:18px;top:160px;font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#bcc0c8">SOURCES</div>
-			<div style="position:absolute;left:20px;top:92px;width:188px;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f"><span style="color:#5b6dc4">&#8862;</span>metrics.csv</div><div style="font:400 10.5px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:6px">12 rows &middot; changed 2m ago</div></div>
-			<div style="position:absolute;left:20px;top:302px;width:188px;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f"><span style="color:#5b6dc4">&#8644;</span>crm.api</div><div style="font:400 10.5px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:6px">win-rate &middot; polled hourly</div></div>
-			<div style="position:absolute;left:380px;top:212px;width:210px;background:#1a1c20;border-radius:11px;padding:13px 15px;box-shadow:0 6px 18px rgba(20,30,60,.2)"><div style="display:flex;align-items:center;gap:8px;font:600 13px/1 system-ui;color:#fff"><span style="color:#9db4ff">&#10227;</span>Weekly refresh${wsPulse}</div><div style="font:400 10.5px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#9aa0b4;margin-top:8px">read &middot; diff &middot; rewrite<br>policy: ask before apply</div></div>
-			<div style="position:absolute;left:740px;top:160px;font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#bcc0c8">DOCUMENTS</div>
-			<div style="position:absolute;left:740px;top:58px;width:222px;background:#fff;border:1.5px solid ${wsNodeBorder};border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#1a1c20"><span style="color:${ACCENT}">&#9635;</span>Weekly Summary.md</div>${wsNodeInner}</div>
-			<div style="position:absolute;left:740px;top:230px;width:222px;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#1a1c20">&#9634; Board Note.md</div>${bnNodeInner}</div>
-			<div style="position:absolute;left:740px;top:392px;width:222px;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#1a1c20">&#9634; Q2 Strategy.md</div>${q2NodeInner}</div>
-		</div>
+		<div style="display:flex;align-items:stretch;gap:8px;padding:40px 28px;min-width:max-content">${stages}</div>
+		<div style="padding:0 28px 40px;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8">The loop: trigger &#8594; sources &#8594; agent &#8594; verify gate &#8594; policy gate &#8594; documents &#8594; review rail.</div>
 	</div>
 </div>`;
 }

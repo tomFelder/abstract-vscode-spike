@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAgentDef, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -89,7 +89,7 @@ export interface ILivingDocsService {
 	getAgents(): readonly IAgentDef[];
 
 	/** Run an agent now over its flow documents (or the whole workspace if it scopes none). */
-	runAgent(agentId: string): Promise<void>;
+	runAgent(agentId: string): Promise<IAgentRun | undefined>;
 
 	/** Create a new blank Living Document from a template in the workspace and return its resource. */
 	createDocument(): Promise<URI | undefined>;
