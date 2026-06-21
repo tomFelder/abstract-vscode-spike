@@ -1,0 +1,171 @@
+# Living Documents — design-audit log
+
+Tracking the gap between the running app (`living-docs-design-audit` branch, web build at
+`http://localhost:8080` via `./scripts/code-web.sh ./living-docs-sample`) and the **Claude Design**
+(DesignSync project "Agentic Workbench" `d198ca07-9eef-4d05-96e1-b383e6c19c03`, file
+`Living Documents - Workbench.dc.html` — the locked hi-fi comp; its inline styles are the pixel spec).
+
+**Goal:** >= 90% visual + functional match, surface by surface, with core flows working.
+Each surface scored 0-100 = avg of five dimensions: **Layout**, **Styling**, **Components**,
+**Information architecture (IA)**, **Behaviour**. Overall = mean across surfaces. Scoring is honest:
+a surface that looks right but whose flow doesn't work is dragged down by Behaviour.
+
+Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
+
+---
+
+## Score trajectory (overall)
+
+| Iteration | Overall | Note |
+|-----------|---------|------|
+| 1 (baseline) | **~78%** | Full survey, baselines seeded below. |
+
+---
+
+## Iteration 1 — baseline survey (all surfaces)
+
+Surveyed every surface in the comp's set and seeded baselines. **No gap closed this iteration** — per
+the handoff, iteration 1 is the survey. Iteration 2 attacks the lowest-scoring, most-visible gap.
+
+### Baseline scores
+
+| # | Surface | Layout | Styling | Comp. | IA | Behav. | **Score** | Shot |
+|---|---------|:--:|:--:|:--:|:--:|:--:|:--:|------|
+| 1 | Home dashboard | 75 | 88 | 90 | 82 | 75 | **82** | `shots/baseline/01-home-app.png` |
+| 2 | Document editor (rendered) | 78 | 82 | 75 | 85 | 78 | **80** | `shots/baseline/02-editor-app.png` |
+| 3 | Templates (run wizard) | 90 | 88 | 90 | 88 | 86 | **88** | `shots/baseline/03-templates-app.png` |
+| 4 | Knowledge (decision stack) | 82 | 85 | 72 | 85 | 78 | **80** | `shots/baseline/04-knowledge-app.png` |
+| 5 | Agents list | 85 | 84 | 85 | 78 | 80 | **82** | `shots/baseline/05-agents-app.png` |
+| 6 | Workflow canvas | 75 | 75 | 70 | 75 | 65 | **72** | _not captured — built, unverified_ |
+| 7 | Context panel | 50 | 55 | 35 | 55 | 45 | **48** | `shots/baseline/06-context-app.png` |
+| 8 | Right rail — Chat | 90 | 92 | 90 | 90 | 85 | **90** | `shots/baseline/07-chat-app.png` |
+| 9 | Right rail — Review | 60 | 60 | 50 | 60 | 45 | **55** | `shots/baseline/10-review-app.png` (empty state) |
+| 10 | Right rail — History | 92 | 92 | 92 | 92 | 90 | **92** | `shots/baseline/09-history-app.png` |
+| 11 | Right rail — Skills | 88 | 90 | 88 | 90 | 85 | **88** | `shots/baseline/08-skills-app.png` |
+| 12 | Present / export modal | 85 | 85 | 75 | 80 | 78 | **80** | `shots/baseline/11-present-app.png` |
+
+**Overall: ~78%** (mean of the twelve). The app is a genuinely high-fidelity recreation — most
+surfaces are 80-92. The number is dragged down by three real holes: the **Context panel**, the
+**populated Review rail**, and the **workflow canvas** (unverified).
+
+### Cross-cutting findings (affect multiple surfaces)
+
+- **Global top bar is missing on every non-editor surface.** The design has a single 48px top bar
+  across *all* screens (`L` logo, "Opportunity OS / {crumb}", green **"All sources synced"** pill,
+  **Present** button, **TS** avatar). In the app this bar exists **only inside the document-editor
+  webview** — Home / Templates / Knowledge / Agents render without it. This is the most pervasive
+  layout gap and lowers Layout on surfaces 1, 4, 5.
+  *Design feature not yet built (as a global chrome element).*
+- **Left-rail IA diverges from the comp.** The design is a single 264px tree-rail with tabs
+  **Files / Context / Outline / Search** and a folder tree (Reports / Clients / Sources / Templates).
+  The app uses the VS Code activity bar as the icon-nav (intentional, per arch decision) but splits
+  the rail into separate containers — **Documents** (flat list of 2 docs, no folders) and **Context**
+  (separate icon) — with no Outline or in-rail Search, and no source/template folders. IA divergence.
+- **Navigation bug: launcher screens blank out after opening a doc.** From a clean load, clicking an
+  icon-nav screen (Templates/Knowledge/Agents) renders its main-area webview correctly. But once a
+  Living Document editor has been opened, clicking a screen's "Open X" launcher leaves the **main area
+  blank**. Reproduced on Templates, Knowledge, and Agents; a page reload restores rendering.
+  *Bug in built behaviour — strong candidate for an early iteration.*
+- **Builtin-extension error toasts on load** ("Activating extension 'vscode.merge-conflict' /
+  'git-base' / 'emmet' failed: Not Found"). Cosmetic noise from deregistered builtins; not in the
+  design. Minor, but pollutes first impression.
+
+### Per-surface diff notes
+
+**1. Home** — Strong match: greeting + summary strip, QUICK START (3 cards), YOUR PROJECTS 2x2 grid
+with per-project "since your last visit" + approval pills + Review/Open buttons, "All·4 / Needs
+approval·2" filter. Gaps: (a) no global top bar; (b) the Context panel + right rail are visible
+flanking Home, but the design shows Home full-bleed (icon-nav + centered 1080px content only — the
+tree rail is hidden via `notHome` and no right rail). Behaviour of "Open project"/"Review change"
+buttons not yet verified.
+
+**2. Document editor** — Has the doc top bar (branding/sync/Present/Download/Refresh), a formatting
+toolbar (Heading/B/I/U/List/Quote/Ask AI/raw-markdown), rendered title + bound subtitle, Highlights,
+KPI table (Metric/Previous/Current/Change), Commentary, What to watch, provenance hint footer.
+`Refresh from sources` works (sync status flipped to "2 documents synced"). Gaps vs design: no
+**doc tab bar** (design shows Weekly Summary.md / Q2 Strategy.md / metrics.csv tabs), no
+**provenance gutter dots**, no **source-peek pane** + **"Sync across" circle** on a divider, KPI table
+styling plainer than the comp. The design's editor also leads with a tabbed document surface rather
+than a formatting toolbar.
+
+**3. Templates** — Near-exact match to the comp's "Run template — Weekly report" wizard: numbered
+steps (1 Template ▾, 2 Prompt + 🎙 Voice, 3 Sources + add source), Generate draft, and a live
+**Draft preview** with "ALL SLOTS RESOLVED" badge, green=filled-from-source highlighting, Review diff →
+/ Export. Highest-fidelity surface. Minor: the sidebar "Open Templates" launcher is extra chrome the
+design doesn't have.
+
+**4. Knowledge** — Matches the ENDURING (Mission/Vision) + HOW WE OPERATE (Values/Principles) +
+"How this is used" + DECISION STACK (Mission&Vision → Strategy → OKRs&KPIs) blocks, plus the
+Organization/Project toggle + Edit. **Needs scroll-verification:** the comp also has DIRECTIONAL
+(Product Strategy wedge/moat/expand) and MEASURABLE (Q3 OKRs with KR progress bars + Activation /
+Net retention / Time-to-trust metrics) — these were not visible in the captured viewport; confirm
+they render below the fold or are missing.
+
+**5. Agents list** — Table with AGENT/TRIGGER/**POLICY**/FLOW/LAST RUN/STATUS and filters
+(All·5/Scheduled·2/Event·3/Needs approval·0), "+ New agent", per-row "open ↗". The app actually
+carries *more* than the comp (added POLICY column + lifecycle agents from the orchestration build:
+Source-change watcher, Freshness sweep, Before-export gate, On-publish snapshot). Gaps: comp's FLOW
+is specific ("metrics.csv → Weekly Summary.md"); app shows generic "all sources → all documents".
+Filter labels differ (comp: Scheduled/Triggered/Needs approval·1).
+
+**6. Workflow canvas** — **Not captured.** The Agents list footer says "open an agent to see its flow
+on the canvas, then Run now"; the orchestration build (PR #6) reportedly added this. The comp's canvas
+has SOURCES → agent → DOCUMENTS columns, a Run-now control, and a run-complete banner with Review →.
+Verify it renders and scores it next time it's the top gap.
+
+**7. Context panel** — **Biggest gap.** App shows a near-empty panel: heading "CONTEXT / Sources that
+shape this document." + one item ("market-research.md · current") + "Review impact (up to date)". The
+comp is a rich, multi-category inventory of *everything the agent can see*: **LINKED SOURCES·3**
+(metrics.csv live, crm.api, kpi.webhook with freshness dots), **REFERENCED FILES·2**, **PASTED TEXT·1**,
+**IMAGES·2** (thumbnails), **COMPANY KNOWLEDGE·3** (auto-attached), and a "+ Add context" button. This
+surface is central to the product's "what the agent sees / freshness" value prop.
+
+**8. Right rail — Chat** — Near-exact: agent activity feed (@mentions, tool-call checklist
+"Read metrics.csv · 12 rows / Diffed against last sync / Found 3 changed values"), applied-figure
+chips (MRR 12%→18% applied, Signups 312→427 applied), "⚠ Commentary rewrite Review →", run summary
+("3 changes · Approve all / Review each"), follow-up Q&A, and a composer (Sonnet 4.5 ▾ · Agent ▾ · ↑).
+
+**9. Right rail — Review** — Shows the **empty state** ("No changes waiting…"). The comp's populated
+Review is the core approval flow: "Pending review / metrics.csv changed · 3 cells / COMMENTARY·REWRITE
+/ old→new text / CONFIDENCE High 0.93 / RISK Medium / Approve change / Reject". Could not reach the
+populated state — the sample doc is already fully synced, so `Refresh from sources` produces no
+pending diff. **Functional behaviour of the approve/reject flow is unverified** → low Behaviour score.
+Reaching + verifying this (e.g. an out-of-sync source fixture) is a priority.
+
+**10. Right rail — History** — Exact match: version timeline v14 CURRENT (Approved commentary rewrite)
+/ v13 (Auto-refresh ⟳ Weekly refresh) / v12 (Edited "What to watch") / v11 ★ SNAPSHOT (Created from
+template), with authors + timestamps.
+
+**11. Right rail — Skills** — Near-exact: DOCUMENT AGENTS (Strategy agent ⚠ 1 flag + Apply fix,
+Financial agent PASS + Re-run, Formatting agent + Run), RUN ON EXPORT toggle (Formatting + Financial),
+"+ Add skill from library". Minor: comp's Strategy card also has a "View in Knowledge →" link.
+
+**12. Present / export modal** — Strong match: "Present & export", SEND A COPY TO list (Google Docs /
+Sheets / Word / Excel / Hosted web page), selected-format detail with doc preview + "4 source-linked
+blocks included" + Export CTA + "Provenance & approval history are retained on export." **Gap:** the
+comp has a **WHO CAN ACCESS** scope row (Workspace only / Anyone with link / Public + a public URL +
+Copy) that the app's modal does not show.
+
+### Prioritized gap backlog (lowest score x most visible first)
+
+1. **Context panel** (48) — build the full multi-category context inventory. *Top candidate for
+   iteration 2.* Likely real implementation work (TDD on the context model + webview render).
+2. **Review rail populated diff/approve** (55) — make the pending-review state reachable (out-of-sync
+   fixture) and verify the approve/reject flow matches the comp. Core flow.
+3. **Global top bar** (cross-cutting) — add the unified 48px top bar to Home + the screen webviews
+   (branding / sync pill / Present / avatar), not just the doc editor.
+4. **Workflow canvas** (72) — verify the open-agent canvas renders; score and close gaps.
+5. **Navigation blank-out bug** — screen launchers blank the main area after a doc editor was opened.
+6. **Editor extras** — doc tab bar, provenance gutter dots, source-peek + "Sync across" circle.
+7. **Present modal** — add the WHO CAN ACCESS scope selector.
+8. **Knowledge** — confirm/restore the DIRECTIONAL (Strategy) + MEASURABLE (OKRs) sections.
+
+### Notes for next session
+
+- DesignSync target confirmed: project `d198ca07-9eef-4d05-96e1-b383e6c19c03`, file
+  `Living Documents - Workbench.dc.html`. Reference screenshots also live under `screenshots/` in that
+  project (home / inline-diff / wb-editor-chat / wb-history / wb-source / wb-canvas-outputs /
+  chat-approveall) — useful rendered-state references.
+- Do **not** `pkill` the chrome-devtools Chrome (drops the MCP for the session). Close pages via MCP.
+- The Context panel reads the **active editor** — open the doc from the Documents list first.
+- Web build caches builtin-extension scan + theme in IndexedDB and `product.json` at server start.
