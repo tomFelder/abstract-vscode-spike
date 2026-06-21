@@ -45,7 +45,20 @@ Tiers, cheapest first: `settings` -> `theme` -> `styleOverrides-CSS` -> `additiv
 | F5 | Review-impact pass + prose-claim anchoring | our-surface | `livingDocs/browser/livingDocsService.ts`, `contextPanelView.ts` | Model-or-heuristic; routes through the existing review rail |
 | F6 | Migrate the sample docs to the new format | our-surface | `living-docs-sample/*.md` (+ `market-research.md`) | Sample content only |
 
-## Core-patch count: 0 added (this phase + build-out round + format round) (1 pre-existing, from the engine phase)
+### Orchestration round (this update) - triggers, graph event-bus, policy, verify gate, still 0 added core patches
+
+| Item | Change | Tier | File(s) | Note |
+|------|--------|------|---------|------|
+| O1 | Agent registry + dependency-graph event-bus (reverse-edge propagation) | our-surface | `livingDocs/browser/agentOrchestrator.ts`, `agentStore.ts`, `common/livingDocsModel.ts` | `WorkspaceAgentStore` (agents.json) behind an `IAgentStore` seam; one write -> reverse-edge walk -> dirty queue |
+| O2 | Trigger layer: event + cron/heartbeat + manual | our-surface | `livingDocs/browser/clock.ts`, `agentOrchestrator.ts`, `livingDocsService.ts` | `IClock`/`RealClock` (mainWindow.setInterval) - a thin injectable clock, no framework; correlated watcher routes to the orchestrator |
+| O3 | Per-edge policy router (auto / ask / draft) | our-surface | `livingDocs/browser/livingDocsService.ts`, `common/livingDocsModel.ts` | figure changes routed by policy through the run host |
+| O4 | Verify gate: Skills as graders (Financial deterministic-first) | our-surface | `livingDocs/browser/livingDocsService.ts` | gate between rewrite and apply; failed grader blocks the run |
+| O5 | Lifecycle hooks: before-export gate, on-publish pin, on-open freshness | our-surface | `livingDocs/browser/livingDocsService.ts`, `common/livingDocs.ts` | uses the pins[] field reserved in the format round |
+| O6 | Live Agents view + workflow canvas (POLICY column, real status, Run now) | our-surface | `livingDocs/browser/screenRender.ts`, `screenEditor.ts` | the previously-static comp HTML now renders from the registry |
+
+No framework was added (spec 09 section 8): the inner loop reuses `ILanguageModelsService` + the heuristic fallback, triggers reuse `fileService.createWatcher` + `IRequestService` + a thin clock, and durable state is the lock + `agents.json`. The orchestration logic (graph event-bus, policy, verify gate, review rail) is our own product code.
+
+## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round) (1 pre-existing, from the engine phase)
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
