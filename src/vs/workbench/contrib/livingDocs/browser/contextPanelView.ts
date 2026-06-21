@@ -18,6 +18,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
+import { buildContextGroups, ContextItemKind } from '../common/contextGroups.js';
 
 // The Context panel (spec 3.5): for the active Living Document, list its `context:` (influence)
 // sources with a freshness status - current / changed-since-review - driven by the always-on dirty
@@ -76,33 +77,39 @@ export class ContextPanelView extends ViewPane {
 			return;
 		}
 
-		const stale = new Set(this._livingDocs.getFreshness(resource).staleContext);
-
 		const section = append(body, $('div.ldc-section'));
 		const label = append(section, $('div.ldc-label'));
-		label.textContent = 'Context';
+		label.textContent = 'Context in this file';
 		const sub = append(section, $('div.ldc-sub'));
-		sub.textContent = 'Sources that shape this document.';
+		sub.textContent = 'Everything the agent can see when working on this document.';
 
-		if (!doc.context.length) {
+		const groups = buildContextGroups(doc, this._livingDocs.getFreshness(resource));
+		if (!groups.length) {
 			const none = append(body, $('div.ldc-empty'));
-			none.textContent = 'No context sources yet.';
+			none.textContent = 'No sources or references yet.';
 			return;
 		}
 
-		const list = append(body, $('div.ldc-list'));
+		// One labelled section per kind (Linked sources / Referenced files), each row carrying its
+		// kind icon, name, a freshness sub-label, and a status dot (green current / amber changed).
 		let anyChanged = false;
-		for (const file of doc.context) {
-			const changed = stale.has(file);
-			anyChanged = anyChanged || changed;
-			const row = append(list, $('div.ldc-row'));
-			const status = append(row, $(`span.ldc-status.${changed ? 'ldc-warn' : 'ldc-ok'}`));
-			// Unicode escapes keep the source ASCII-only: U+26A0 warning sign / U+2713 check mark.
-			status.textContent = changed ? '\u26A0' : '\u2713';
-			const name = append(row, $('span.ldc-name'));
-			name.textContent = file;
-			const tag = append(row, $('span.ldc-tag'));
-			tag.textContent = changed ? 'changed since review' : 'current';
+		for (const group of groups) {
+			const head = append(body, $('div.ldc-group-head'));
+			head.textContent = `${group.label.toUpperCase()} \u00B7 ${group.items.length}`;
+			const list = append(body, $('div.ldc-list'));
+			for (const item of group.items) {
+				anyChanged = anyChanged || item.changed;
+				const row = append(list, $('div.ldc-row'));
+				const icon = append(row, $('span.ldc-icon'));
+				icon.textContent = this._iconFor(item.kind);
+				const text = append(row, $('span.ldc-text'));
+				const name = append(text, $('span.ldc-name'));
+				name.textContent = item.name;
+				const detail = append(text, $('span.ldc-detail'));
+				detail.textContent = item.detail;
+				const dot = append(row, $(`span.ldc-dot.${item.changed ? 'ldc-warn' : 'ldc-ok'}`));
+				dot.title = item.changed ? 'changed' : 'current';
+			}
 		}
 
 		// "Review impact" runs the expensive on-demand pass; emphasized when a source has changed.
@@ -110,6 +117,17 @@ export class ContextPanelView extends ViewPane {
 		review.textContent = anyChanged ? 'Review impact' : 'Review impact (up to date)';
 		review.classList.toggle('ldc-review-warn', anyChanged);
 		this._renderDisposables.add(addDisposableListener(review, 'click', () => void this._livingDocs.reviewImpact(resource)));
+	}
+
+	// Kind glyphs (ASCII-only via Unicode escapes): file U+229E squared-plus, api U+21C4 arrows,
+	// mcp U+25F7 quadrant arc, reference U+25A2 white square.
+	private _iconFor(kind: ContextItemKind): string {
+		switch (kind) {
+			case 'api': return '\u21C4';
+			case 'mcp': return '\u25F7';
+			case 'reference': return '\u25A2';
+			default: return '\u229E';
+		}
 	}
 
 	private _injectStyles(container: HTMLElement): void {
@@ -122,14 +140,17 @@ export class ContextPanelView extends ViewPane {
 		.living-docs-context .ldc-section{margin:0 0 10px}
 		.living-docs-context .ldc-label{font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--vscode-descriptionForeground)}
 		.living-docs-context .ldc-sub{font:400 11.5px/1.4 system-ui;color:var(--vscode-descriptionForeground);margin-top:5px}
+		.living-docs-context .ldc-group-head{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:var(--vscode-descriptionForeground);opacity:.85;margin:15px 2px 7px}
 		.living-docs-context .ldc-list{display:flex;flex-direction:column;gap:6px}
-		.living-docs-context .ldc-row{display:flex;align-items:center;gap:9px;border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:9px;padding:9px 11px;background:var(--vscode-editorWidget-background)}
-		.living-docs-context .ldc-status{flex:none;width:16px;text-align:center;font-size:12px}
-		.living-docs-context .ldc-ok{color:oklch(0.6 0.13 150)}
-		.living-docs-context .ldc-warn{color:oklch(0.66 0.16 45)}
-		.living-docs-context .ldc-name{flex:1;min-width:0;font:500 12.5px/1.3 system-ui;color:var(--vscode-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-		.living-docs-context .ldc-tag{font:500 10px/1 system-ui;color:var(--vscode-descriptionForeground)}
-		.living-docs-context .ldc-review{width:100%;margin-top:12px;border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:8px;padding:9px 11px;background:var(--vscode-editorWidget-background);color:var(--vscode-foreground);font:600 12px/1 system-ui;cursor:pointer}
+		.living-docs-context .ldc-row{display:flex;align-items:center;gap:9px;border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:9px;padding:8px 10px;background:var(--vscode-editorWidget-background)}
+		.living-docs-context .ldc-icon{flex:none;width:16px;text-align:center;font-size:13px;color:#5b6dc4}
+		.living-docs-context .ldc-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+		.living-docs-context .ldc-name{font:500 12.5px/1.3 system-ui;color:var(--vscode-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-context .ldc-detail{font:400 10px/1.3 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-context .ldc-dot{flex:none;width:7px;height:7px;border-radius:50%}
+		.living-docs-context .ldc-ok{background:oklch(0.6 0.13 150)}
+		.living-docs-context .ldc-warn{background:oklch(0.66 0.16 45)}
+		.living-docs-context .ldc-review{width:100%;margin-top:14px;border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:8px;padding:9px 11px;background:var(--vscode-editorWidget-background);color:var(--vscode-foreground);font:600 12px/1 system-ui;cursor:pointer}
 		.living-docs-context .ldc-review:hover{background:var(--vscode-list-hoverBackground)}
 		.living-docs-context .ldc-review-warn{border-color:oklch(0.66 0.16 45);color:#9a6b16;background:#fdf2dc}
 		`;

@@ -19,6 +19,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | Iteration | Overall | Note |
 |-----------|---------|------|
 | 1 (baseline) | **~78%** | Full survey, baselines seeded below. |
+| 2 | **~80%** | Context panel 48 -> 80: now groups Linked sources + Referenced files (was a flat list that omitted the doc's bound sources entirely). |
 
 ---
 
@@ -37,7 +38,7 @@ the handoff, iteration 1 is the survey. Iteration 2 attacks the lowest-scoring, 
 | 4 | Knowledge (decision stack) | 82 | 85 | 72 | 85 | 78 | **80** | `shots/baseline/04-knowledge-app.png` |
 | 5 | Agents list | 85 | 84 | 85 | 78 | 80 | **82** | `shots/baseline/05-agents-app.png` |
 | 6 | Workflow canvas | 75 | 75 | 70 | 75 | 65 | **72** | _not captured — built, unverified_ |
-| 7 | Context panel | 50 | 55 | 35 | 55 | 45 | **48** | `shots/baseline/06-context-app.png` |
+| 7 | Context panel | 50 | 55 | 35 | 55 | 45 | **48** → **80** (iter 2) | `shots/baseline/06-context-app.png` → `shots/iter2-context-after.png` |
 | 8 | Right rail — Chat | 90 | 92 | 90 | 90 | 85 | **90** | `shots/baseline/07-chat-app.png` |
 | 9 | Right rail — Review | 60 | 60 | 50 | 60 | 45 | **55** | `shots/baseline/10-review-app.png` (empty state) |
 | 10 | Right rail — History | 92 | 92 | 92 | 92 | 90 | **92** | `shots/baseline/09-history-app.png` |
@@ -148,8 +149,9 @@ Copy) that the app's modal does not show.
 
 ### Prioritized gap backlog (lowest score x most visible first)
 
-1. **Context panel** (48) — build the full multi-category context inventory. *Top candidate for
-   iteration 2.* Likely real implementation work (TDD on the context model + webview render).
+1. ~~**Context panel** (48) — build the full multi-category context inventory.~~ **DONE (iter 2 → 80):**
+   grouped Linked sources + Referenced files. Remaining: Pasted text / Images / Company knowledge +
+   "Add context" (deferred — no sample data).
 2. **Review rail populated diff/approve** (55) — make the pending-review state reachable (out-of-sync
    fixture) and verify the approve/reject flow matches the comp. Core flow.
 3. **Global top bar** (cross-cutting) — add the unified 48px top bar to Home + the screen webviews
@@ -159,6 +161,52 @@ Copy) that the app's modal does not show.
 6. **Editor extras** — doc tab bar, provenance gutter dots, source-peek + "Sync across" circle.
 7. **Present modal** — add the WHO CAN ACCESS scope selector.
 8. **Knowledge** — confirm/restore the DIRECTIONAL (Strategy) + MEASURABLE (OKRs) sections.
+
+---
+
+## Iteration 2 — Context panel: group Linked sources + Referenced files (48 → 80)
+
+**Surface:** Context panel (lowest baseline, highest visibility — central to the "what the agent
+sees" value prop).
+
+**Diff (baseline vs design).** The panel iterated **only `doc.context`** (influence files) and
+**omitted `doc.sources` entirely** — so the document's primary bound data source (`metrics.csv`) never
+appeared, leaving a one-row panel. The design groups context by kind: **LINKED SOURCES · N** (the
+bound data sources, with a "feeds N blocks" sub-label + freshness dot) then **REFERENCED FILES · N**
+(influence files), each row carrying a kind icon and a green/amber status dot.
+
+**Change (TDD).**
+- New pure builder `common/contextGroups.ts` → `buildContextGroups(doc, freshness)` returns
+  `[{label, items:[{name, kind, detail, changed}]}]`: a **Linked sources** group from `doc.sources`
+  (kind via `sourceKindOf`; `detail` = `live · feeds N blocks` for files, derived by counting blocks
+  whose binds fall in the source's namespace; `changed` from `freshness.staleBindings`) and a
+  **Referenced files** group from `doc.context` (`changed` from `freshness.staleContext`). Pure +
+  DOM-free so it is unit-tested directly.
+- 3 new tests in `livingDocsService.test.ts` (snapshot-style `deepStrictEqual`): fresh grouping for a
+  bound doc; a changed value source + changed context source flipping both rows to `changed`; an api
+  source grouped with its kind. **All 30 LivingDocsService tests pass.**
+- `contextPanelView.ts` rewritten to render the groups — `LABEL · count` headers (JetBrains Mono),
+  rows with a kind icon (file `⊞` / api `⇄` / mcp `◷` / reference `▢`, Unicode-escaped to keep
+  source ASCII-only), a name + freshness sub-label, and a status dot. "Review impact" retained.
+- **0 added core patches**; all inside the `livingDocs` contrib.
+
+**Result.** The panel now shows `metrics.csv` (LINKED SOURCES · 1, "live · feeds 2 blocks") and
+`market-research.md` (REFERENCED FILES · 1, "current") — matching the design's grouped, iconed,
+freshness-dotted structure. Per-dimension: Layout 85 / Styling 85 / Components 70 / IA 85 /
+Behaviour 85 → **80**. Held below 90 honestly: the design also shows **Pasted text / Images /
+Company knowledge** groups and a **+ Add context** button — the sample document carries no such data,
+so fabricating those rows would be dishonest placeholder UI. They remain deferred until the sample
+(or model) provides that context. Typecheck clean; tests green.
+
+**Before:** `shots/baseline/06-context-app.png` · **After:** `shots/iter2-context-after.png`.
+
+> **Tooling note.** The chrome-devtools MCP server disconnected mid-iteration (the page dropped to
+> `about:blank` and the server died — not a `pkill`). The after-shot is the handoff's prescribed
+> fallback: the panel's **exact output DOM + injected CSS rendered to PNG via Playwright** (faithful
+> to the production render code, populated with the real sample doc's values), not a live-workbench
+> capture. A fresh session restores the MCP for live shots.
+
+---
 
 ### Notes for next session
 
