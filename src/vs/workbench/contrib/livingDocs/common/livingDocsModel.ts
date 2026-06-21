@@ -122,6 +122,61 @@ export function emptyLock(): ILivingDocLock {
 	return { version: LOCK_VERSION, bindings: {}, context: {}, claims: {}, pins: [], audit: [] };
 }
 
+// --- orchestration: agents, triggers, policy, runs (spec 09) ---
+// Triggers wake the loop; the dependency graph decides what is affected; the review rail is where
+// output lands. An agent decouples those three: when it runs (trigger), what it touches (flow), and
+// how its output is gated (policy). Persisted as workspace external state (`agents.json`), behind the
+// same read/write seam as the lock.
+
+export type AgentTriggerKind = 'event' | 'cron' | 'heartbeat' | 'lifecycle' | 'manual';
+export type LifecycleHook = 'before-export' | 'on-publish' | 'on-open';
+
+export interface IAgentTrigger {
+	readonly kind: AgentTriggerKind;
+	readonly source?: string;       // event: the source/folder path whose change wakes the agent ('*' = any)
+	readonly cron?: string;         // cron: a simple schedule, e.g. "Mon 09:00"
+	readonly everyHours?: number;   // heartbeat: cadence in hours
+	readonly lifecycle?: LifecycleHook; // lifecycle: which document moment fires it
+}
+
+// The per-edge safety dial (spec 4.2): figures may apply silently; prose waits for approval; the
+// heartbeat only ever drafts.
+export type AgentPolicy = 'auto-figures' | 'ask-before-apply' | 'draft-only';
+
+export type AgentStatus = 'idle' | 'running' | 'needs-approval' | 'blocked' | 'error';
+
+// The source -> document edges the agent operates over (its slice of the dependency graph).
+export interface IAgentFlow {
+	readonly sources: readonly string[];
+	readonly docs: readonly string[];
+}
+
+export interface IAgentDef {
+	readonly id: string;
+	readonly name: string;
+	readonly trigger: IAgentTrigger;
+	readonly flow: IAgentFlow;
+	readonly policy: AgentPolicy;
+	lastRun?: string;
+	status: AgentStatus;
+}
+
+// One execution of an agent, recorded for the History/observability trace.
+export interface IAgentRun {
+	readonly agentId: string;
+	readonly startedAt: string;
+	finishedAt?: string;
+	applied: number;        // figures auto-applied
+	queued: number;         // candidates queued in the review rail
+	blocked?: string;       // the grader flag if the verify gate stopped the run
+}
+
+// One document's dirty bits in the workspace queue, split by edge kind (the heartbeat drains this).
+export interface IDirtyEntry {
+	readonly value: string[];       // changed value-binding source paths
+	readonly influence: string[];   // changed influence/context source paths
+}
+
 export interface IProposedChange {
 	readonly id: string;
 	readonly docId: string;         // URI string of the document this change belongs to

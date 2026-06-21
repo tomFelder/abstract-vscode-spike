@@ -23,7 +23,9 @@ import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
-import { emptyLock, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { AgentOrchestrator } from './agentOrchestrator.js';
+import { WorkspaceAgentStore } from './agentStore.js';
+import { emptyLock, IAgentDef, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 // One freshly-read source value for a bind key, before it is written into the lock.
 interface IResolution {
@@ -108,6 +110,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _docs = new Map<string, IDocState>();
 	private _pending: IProposedChange[] = [];
 	private readonly _lockStore: ILockStore;
+	// The orchestration engine: agent registry + dependency-graph event-bus (+ triggers/policy/verify).
+	private readonly _orchestrator: AgentOrchestrator;
 	// Correlated source watchers, one store per loaded document. Disposed/recreated on reload, and
 	// all torn down when the service is disposed.
 	private readonly _watchers = new Map<string, IDisposable>();
@@ -125,11 +129,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	) {
 		super();
 		this._lockStore = new SidecarLockStore(this._files);
+		const folder = this._workspace.getWorkspace().folders[0]?.uri ?? URI.file('/');
+		this._orchestrator = this._register(new AgentOrchestrator(
+			this._files, this._log, new WorkspaceAgentStore(this._files, folder), () => this._discoverLivingDocUris()));
+		// Surface orchestration state changes (dirty queue, agent status) through the service event.
+		this._register(this._orchestrator.onDidChange(() => this._onDidChange.fire()));
+		void this._orchestrator.ensureLoaded();
 		this._register(toDisposable(() => {
 			for (const w of this._watchers.values()) { w.dispose(); }
 			this._watchers.clear();
 		}));
 	}
+
+	/** The orchestration engine (agent registry, graph event-bus, triggers, policy, verify gate). */
+	get orchestrator(): AgentOrchestrator { return this._orchestrator; }
+
+	getAgents(): readonly IAgentDef[] { return this._orchestrator.getAgents(); }
 
 	// --- per-document views ---
 

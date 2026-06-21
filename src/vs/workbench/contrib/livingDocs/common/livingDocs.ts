@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { IAgentDef, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -84,6 +84,9 @@ export interface ILivingDocsService {
 
 	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
 	listDocuments(): Promise<readonly ILivingDocSummary[]>;
+
+	/** The registered orchestration agents (for the Agents view). */
+	getAgents(): readonly IAgentDef[];
 
 	/** Create a new blank Living Document from a template in the workspace and return its resource. */
 	createDocument(): Promise<URI | undefined>;
