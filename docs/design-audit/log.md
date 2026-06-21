@@ -25,6 +25,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 5 | **~83%** | Knowledge verified: Project tab's Strategy + Q3 OKRs (KR bars) + metrics are built 83->88; editor top bar gains the TS avatar (consistency) + gutter dots / inline-diff / approve-reject verified built 80->84. |
 | 6 | **~84%** | **Functional fix:** the navigation blank-out bug is resolved — screens (Templates/Knowledge/Agents) now render reliably after a document editor was open (was: blank main area). Verified live + auto-figure sync + agent run/canvas flow. MCP restored. |
 | 7 | **~86%** | **Core flow verified live:** Review rail 55->82 — Review impact queues pending meaning-changes (inline + right rail, old→new diff, confidence, risk); **Approve applies & clears**, **Reject discards & reverts**. The product's central approve/reject loop works end-to-end. |
+| 8 | **~86%** | **Functional audit:** editor raw-Markdown editing verified (round-trips to the clean-file bind-link format). All core flows now confirmed functional. Pinned down that Chat/History/Skills tab bodies are *intentionally static comp reproductions* — composer + Apply-fix/Run/Re-run not wired (only Approve-all/Review-each are). Honest scoring note below; no inflation. |
 
 ---
 
@@ -402,6 +403,45 @@ No code change this iteration — it is a functional verification that corrects 
 "unverified" baseline with live evidence. The sample workspace was restored to pristine afterward.
 
 **Overall ~84 → ~86.**
+
+---
+
+## Iteration 8 — functional audit: what genuinely works vs. what's a static mockup
+
+Per the goal's "core flows functional / does it feel nice" bar (not just visual match), a deliberate
+pass over every interactive control to separate *real* functionality from comp-faithful presentation.
+
+**Verified functional (live):**
+- **Editor — raw-Markdown editing.** The `</> Edit raw Markdown` toggle round-trips: rendered view <->
+  the real clean-file source (frontmatter + inline `[value](bind:key)` links + the bind-linked table).
+  Shot: `shots/iter8-editor-rawmarkdown.png`.
+- **Review / approve-reject** (iter 7), **auto-figure sync** + **agent run/canvas** (iter 6),
+  **navigation across surfaces** (iter 6), **Context grouping** (iter 2), **Approve all / Review each**
+  in the Chat tab (wired via `data-approve-all` / `data-go-review`). These are the product's core loop
+  and they work.
+
+**Found to be intentionally static (comp reproductions, per the code's own comment "Static
+comp-faithful tab bodies"):** the **Chat composer** ("Ask the agent…" is display text, not an input)
+and the **Skills** tab's **Apply fix / Run / Re-run** buttons (no handlers). The Chat conversation +
+Skills cards are hardcoded to mirror the comp exactly. Against the **design-match** goal these are
+faithful (the comp's own chat/skills are non-interactive prototype UI), so their visual/structure/IA
+scores stand. Against a **full-product functionality** bar they are unwired — recorded here as the
+main known gap, not silently scored as working.
+
+**Scoring honesty.** No scores changed this iteration: the core flows that *should* work do (verified),
+and the static tabs already reflect comp-fidelity rather than claimed interactivity. The functional
+gap (composer + skills actions) is logged explicitly rather than hidden. Net overall unchanged (~86).
+
+**Two known, deliberately-not-fixed items** (out of scope / not product defects): the dev-build
+extension-activation toasts ("merge-conflict / git-base / emmet … Not Found") are a `@vscode/test-web`
+artifact (those builtins are bundled in a packaged build), and the doc **subtitle** ("Week 24") is
+static frontmatter that doesn't track the latest resolved week.
+
+**Remaining path to ~90 (for iters 9-10):** wire the Skills/Chat actions to real (model-gated)
+behaviour, OR build the editor **source-peek + "Sync across"** pane (the last comp feature), OR enrich
+the **Context** sample with pasted-text/images/company-knowledge (needs a small model extension). The
+biggest honest lever is a **language model** wired in — it lifts Review-rail suggestion quality,
+Chat, and the Skills graders together.
 
 ---
 
