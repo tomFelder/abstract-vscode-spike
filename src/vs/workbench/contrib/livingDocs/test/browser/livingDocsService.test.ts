@@ -185,6 +185,50 @@ suite('LivingDocsService', () => {
 		assert.ok(service.getAudit().some(e => e.action === 'auto-applied'), 'figure auto-apply audited');
 	});
 
+	test('first open bootstraps a lock sidecar from the sources (resolved value, hash, syncedAt, kind)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		const lockText = lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString());
+		assert.ok(lockText, 'a lock sidecar was written on first open');
+		const lock = JSON.parse(lockText!);
+		const mrr = lock.bindings['metrics.mrr'];
+		assert.strictEqual(mrr.resolved, '$48.6k', 'resolved value bootstrapped from the source');
+		assert.ok(mrr.sourceHash && mrr.syncedAt, 'binding carries a source hash and sync time');
+		assert.deepStrictEqual({ appliedBy: mrr.appliedBy, kind: mrr.kind }, { appliedBy: 'agent', kind: 'figure' });
+	});
+
+	test('the lock is the source of truth for resolved values: load does not re-read sources (lock wins)', async () => {
+		const service = createService();
+		// Seed a lock whose resolved value is NOT derivable from the CSV; load must honour it.
+		lastFiles!.set(URI.file('/ws/Weekly Summary.lock.json').toString(), JSON.stringify({
+			version: 1,
+			bindings: { 'metrics.mrr': { resolved: '$99.9k', source: 'metrics.csv#mrr', sourceHash: 'stale', syncedAt: 't', appliedBy: 'agent', kind: 'figure' } },
+			context: {}, claims: {}, pins: [], audit: [],
+		}));
+
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getResolved(WEEKLY).get('metrics.mrr'), '$99.9k', 'load shows the lock value, not a fresh source read');
+	});
+
+	test('re-syncing a changed source updates the lock binding resolved + sourceHash and reconciles the .md', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/Weekly Summary.lock.json').toString(), JSON.stringify({
+			version: 1,
+			bindings: { 'metrics.mrr': { resolved: '$99.9k', source: 'metrics.csv#mrr', sourceHash: 'stale', syncedAt: 't', appliedBy: 'agent', kind: 'figure' } },
+			context: {}, claims: {}, pins: [], audit: [],
+		}));
+		await service.loadDocument(WEEKLY);
+
+		await service.refreshFromSources();
+
+		const mrr = service.getLock(WEEKLY)!.bindings['metrics.mrr'];
+		assert.strictEqual(mrr.resolved, '$48.6k', 're-sync pulls the current source value into the lock');
+		assert.notStrictEqual(mrr.sourceHash, 'stale', 'source hash refreshed at sync');
+		const lockOnDisk = JSON.parse(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!);
+		assert.strictEqual(lockOnDisk.bindings['metrics.mrr'].resolved, '$48.6k', 'lock persisted to its sidecar');
+	});
+
 	test('a clean Markdown table with bind links in cells resolves each cell on refresh', async () => {
 		const service = createService([], { boardNote: true });
 		await service.loadDocument(BOARD);

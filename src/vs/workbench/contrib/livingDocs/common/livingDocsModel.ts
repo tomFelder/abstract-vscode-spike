@@ -61,6 +61,58 @@ export interface ILivingDoc {
 // meaning -> changes the meaning, waits for one-click approval
 export type ChangeKind = 'figure' | 'meaning';
 
+// --- the lock file (<doc>.lock.json) - the dependency graph + provenance ledger (spec 3.3) ---
+// The lock is the source of truth for resolved values and freshness. It is generated/maintained by
+// the app and is rebuildable from the sources; the `.md` carries only the visible (cached) values.
+
+export const LOCK_VERSION = 1;
+
+// One exact value edge: a bind key (token) resolved from a source cell.
+export interface IBindingEntry {
+	readonly resolved: string;          // the value at last sync (what the .md cache reconciles to)
+	readonly source: string;            // human-ish origin, e.g. "metrics.csv#mrr"
+	readonly sourceHash: string;        // hash of the source value at last sync (freshness compare)
+	readonly syncedAt: string;
+	readonly appliedBy: 'agent' | 'user';
+	readonly kind: ChangeKind;
+}
+
+// One influence edge: a source that shapes the framing of the prose (1:many, judged by a model).
+export interface IContextEntry {
+	readonly reviewedHash: string;      // hash of the source at last review
+	readonly reviewedAt: string;
+	readonly scope: 'document';         // v1: whole-doc; later: section/claim
+}
+
+// Prose bound to sources, anchored by its sentence text (relocated by fuzzy match on re-derive).
+export interface IClaimEntry {
+	readonly anchor: string;            // sentence text + surrounding context
+	readonly boundTo: readonly string[];// bind keys / context files this claim draws on
+	readonly kind: ChangeKind;
+	readonly state: 'applied' | 'pending';
+}
+
+// Reserved: freeze a published doc to a source version so later changes don't rewrite history.
+export interface IPin {
+	readonly source: string;
+	readonly version: string;
+}
+
+export interface ILivingDocLock {
+	version: number;
+	bindings: Record<string, IBindingEntry>;
+	context: Record<string, IContextEntry>;
+	claims: Record<string, IClaimEntry>;
+	pins: IPin[];
+	// The provenance audit, folded in from the old `.audit.json` sidecar so the lock is the single
+	// durable home for a document's dependency graph + history.
+	audit: IAuditEntry[];
+}
+
+export function emptyLock(): ILivingDocLock {
+	return { version: LOCK_VERSION, bindings: {}, context: {}, claims: {}, pins: [], audit: [] };
+}
+
 export interface IProposedChange {
 	readonly id: string;
 	readonly docId: string;         // URI string of the document this change belongs to

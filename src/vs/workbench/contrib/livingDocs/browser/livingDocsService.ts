@@ -21,13 +21,14 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
-import { IAuditEntry, ILivingDoc, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
+import { emptyLock, IAuditEntry, IBindingEntry, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
-// A resolved value for one bind key, plus the source hash it was read from. The lock file (Item 2)
-// will persist these; in Item 1 they are re-derived from the sources on each load/refresh.
-interface IResolved {
+// One freshly-read source value for a bind key, before it is written into the lock.
+interface IResolution {
 	readonly value: string;
 	readonly sourceHash: string;
+	readonly source: string;        // human-ish origin, e.g. "metrics.csv#mrr"
 }
 
 // Everything we hold for one open or discovered document.
@@ -35,8 +36,8 @@ interface IDocState {
 	readonly uri: URI;
 	doc: ILivingDoc;
 	rawText: string;
-	resolved: Map<string, IResolved>;   // bind key -> resolved value (+ source hash)
-	recent: Set<string>;                // block ids changed in the last resolve (for the highlight)
+	lock: ILivingDocLock;           // the source of truth for resolved values + freshness
+	recent: Set<string>;            // block ids changed in the last refresh (for the highlight)
 	status: string;
 }
 
@@ -88,7 +89,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	private readonly _docs = new Map<string, IDocState>();
 	private _pending: IProposedChange[] = [];
-	private _audit: IAuditEntry[] = [];
+	private readonly _lockStore: ILockStore;
 
 	constructor(
 		@IFileService private readonly _files: IFileService,
@@ -102,6 +103,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
 	) {
 		super();
+		this._lockStore = new SidecarLockStore(this._files);
 	}
 
 	// --- per-document views ---
@@ -111,11 +113,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	getStatus(resource: URI): string { return this._docs.get(resource.toString())?.status ?? 'No document'; }
 	getRecentlyApplied(resource: URI): ReadonlySet<string> { return this._docs.get(resource.toString())?.recent ?? new Set<string>(); }
 	getResolved(resource: URI): ReadonlyMap<string, string> {
+		// The lock is the source of truth for resolved values.
 		const out = new Map<string, string>();
 		const state = this._docs.get(resource.toString());
-		if (state) { for (const [key, r] of state.resolved) { out.set(key, r.value); } }
+		if (state) { for (const key of Object.keys(state.lock.bindings)) { out.set(key, state.lock.bindings[key].resolved); } }
 		return out;
 	}
+	getLock(resource: URI): ILivingDocLock | undefined { return this._docs.get(resource.toString())?.lock; }
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
 		return this._pending.filter(c => c.docId === id);
@@ -124,7 +128,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// --- workspace-wide views ---
 
 	getAllPending(): readonly IProposedChange[] { return this._pending; }
-	getAudit(): readonly IAuditEntry[] { return this._audit; }
+	getAudit(): readonly IAuditEntry[] {
+		// The audit is folded into each document's lock; aggregate across the loaded documents.
+		return [...this._docs.values()].flatMap(s => s.lock.audit);
+	}
 
 	focusPanel(tab: LivingDocsPanelTab): void {
 		this._onDidRequestPanel.fire(tab);
@@ -194,8 +201,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// A `.md` is a Living Document when its content declares sources/context or carries bind links, or
-	// when a sibling `<doc>.lock.json` exists. Generated `.export.md` / `.source.md` views are skipped.
+	// A `.md` is a Living Document when its content declares sources/context or carries bind links.
+	// Generated `.export.md` / `.source.md` views are skipped.
 	private async _isLivingDocFile(resource: URI): Promise<boolean> {
 		const path = resource.path;
 		if (!path.endsWith('.md') || path.endsWith('.export.md') || path.endsWith('.source.md')) { return false; }
@@ -250,10 +257,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async loadDocument(resource: URI): Promise<void> {
 		const state = await this._loadState(resource);
 		if (state) {
-			// Resolve bind links from the sources so the rendered doc can show current values. Load is
-			// read-only: the on-disk cache is reconciled at render time (lock wins) and persisted only
-			// on an explicit refresh/save.
-			await this._resolveSources(state);
+			// First open with no lock yet: bootstrap it from the sources (the initial sync). Otherwise
+			// the lock is authoritative - load is read-only and the cache reconciles to it at render.
+			await this._bootstrapLock(state);
 			state.recent = new Set<string>();
 		}
 		this._onDidChange.fire();
@@ -270,11 +276,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._docs.delete(resource.toString());
 			return undefined;
 		}
+		const lock = (await this._lockStore.read(resource)) ?? emptyLock();
 		const state: IDocState = {
 			uri: resource,
 			doc,
 			rawText,
-			resolved: new Map<string, IResolved>(),
+			lock,
 			recent: this._docs.get(resource.toString())?.recent ?? new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 		};
@@ -282,15 +289,45 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return state;
 	}
 
-	// Read every `sources:` file and build the bind-key -> resolved value map. A CSV produces the
-	// latest row's columns (plus `.prev` / `.delta` qualifiers); an api/JSON source produces its
+	// When a doc carries bind keys with no lock entry yet (a brand-new or never-synced doc), resolve
+	// them once from the sources and write the initial lock. Existing lock entries are left untouched
+	// so the lock stays the source of truth across opens.
+	private async _bootstrapLock(state: IDocState): Promise<void> {
+		const keys = new Set<string>();
+		for (const block of state.doc.blocks) { for (const b of block.binds) { keys.add(b.key); } }
+		const missing = [...keys].some(key => !Object.prototype.hasOwnProperty.call(state.lock.bindings, key));
+		if (!missing) { return; }
+		const resolution = await this._resolveCurrent(state);
+		let added = false;
+		for (const key of keys) {
+			if (Object.prototype.hasOwnProperty.call(state.lock.bindings, key)) { continue; }
+			const r = resolution.get(key);
+			if (!r) { continue; }
+			state.lock.bindings[key] = this._bindingEntry(r);
+			added = true;
+		}
+		if (added) {
+			try {
+				await this._lockStore.write(state.uri, state.lock);
+			} catch (e) {
+				this._log.warn('[livingDocs] lock bootstrap write failed', e);
+			}
+		}
+	}
+
+	private _bindingEntry(r: IResolution): IBindingEntry {
+		return { resolved: r.value, source: r.source, sourceHash: r.sourceHash, syncedAt: new Date().toISOString(), appliedBy: 'agent', kind: 'figure' };
+	}
+
+	// Read every `sources:` file and build the bind-key -> freshly-resolved value map. A CSV produces
+	// the latest row's columns (plus `.prev` / `.delta` qualifiers); an api/JSON source produces its
 	// top-level fields. Influence (`context:`) sources are not value-resolved here (see Item 5).
-	private async _resolveSources(state: IDocState): Promise<void> {
-		const resolved = new Map<string, IResolved>();
+	private async _resolveCurrent(state: IDocState): Promise<Map<string, IResolution>> {
+		const resolved = new Map<string, IResolution>();
 		for (const source of state.doc.sources) {
 			const alias = sourceAlias(source);
 			if (sourceKind(source) === 'api') {
-				await this._resolveApiSource(state, source, alias, resolved);
+				await this._resolveApiSource(source, alias, resolved);
 				continue;
 			}
 			const uri = joinPath(dirname(state.uri), source);
@@ -302,13 +339,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				continue;
 			}
 			if (source.endsWith('.csv')) {
-				this._resolveCsv(text, alias, resolved);
+				this._resolveCsv(text, source, alias, resolved);
 			}
 		}
-		state.resolved = resolved;
+		return resolved;
 	}
 
-	private _resolveCsv(text: string, alias: string, resolved: Map<string, IResolved>): void {
+	private _resolveCsv(text: string, source: string, alias: string, resolved: Map<string, IResolution>): void {
 		const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
 		if (lines.length < 2) { return; }
 		const cols = lines[0].split(',').map(c => c.trim());
@@ -319,12 +356,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		for (let i = 0; i < cols.length; i++) {
 			const col = cols[i];
 			const cur = (latest[i] ?? '').trim();
-			resolved.set(`${alias}.${col}`, { value: this._formatCell(col, cur), sourceHash: hash });
+			resolved.set(`${alias}.${col}`, { value: this._formatCell(col, cur), sourceHash: hash, source: `${source}#${col}` });
 			if (prev) {
 				const pv = (prev[i] ?? '').trim();
-				resolved.set(`${alias}.${col}.prev`, { value: this._formatCell(col, pv), sourceHash: hash });
+				resolved.set(`${alias}.${col}.prev`, { value: this._formatCell(col, pv), sourceHash: hash, source: `${source}#${col}` });
 				const delta = this._deltaCell(col, pv, cur);
-				if (delta) { resolved.set(`${alias}.${col}.delta`, { value: delta, sourceHash: hash }); }
+				if (delta) { resolved.set(`${alias}.${col}.delta`, { value: delta, sourceHash: hash, source: `${source}#${col}` }); }
 			}
 		}
 	}
@@ -346,7 +383,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return undefined;
 	}
 
-	private async _resolveApiSource(state: IDocState, url: string, alias: string, resolved: Map<string, IResolved>): Promise<void> {
+	private async _resolveApiSource(url: string, alias: string, resolved: Map<string, IResolution>): Promise<void> {
 		try {
 			const context = await this._request.request({ type: 'GET', url, callSite: 'livingDocs.apiSource' }, CancellationToken.None);
 			const json = await asJson<Record<string, unknown>>(context);
@@ -355,23 +392,27 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			for (const key of Object.keys(json)) {
 				const value = json[key];
 				const text = typeof value === 'number' ? value.toLocaleString('en-US') : String(value);
-				resolved.set(`${alias}.${key}`, { value: text, sourceHash: hash });
+				resolved.set(`${alias}.${key}`, { value: text, sourceHash: hash, source: `${url}#${key}` });
 			}
 		} catch (e) {
 			this._log.warn('[livingDocs] api source failed', e instanceof Error ? e.message : String(e));
 		}
 	}
 
-	// Reconcile each block's visible bind-link cache to the resolved values (value bindings are
-	// figures -> auto-apply), auditing and flagging each block whose value moved. Mutates the in-memory
-	// doc; the caller persists. Used on an explicit refresh - render-time reconciliation is read-only.
-	private _reconcile(state: IDocState): void {
+	// Re-sync the lock from the current sources (value bindings are figures -> auto-apply): update each
+	// binding's resolved/sourceHash/syncedAt, reconcile the `.md` visible cache to the lock, audit each
+	// block whose value moved, and flag it for the just-synced highlight. Caller persists.
+	private async _syncLock(state: IDocState): Promise<void> {
+		const resolution = await this._resolveCurrent(state);
+		for (const [key, r] of resolution) {
+			state.lock.bindings[key] = this._bindingEntry(r);
+		}
 		const resolved = this.getResolved(state.uri);
 		for (const block of state.doc.blocks) {
 			if (block.binds.length === 0) { continue; }
 			const next = reconcileBindLinks(block.text, resolved);
 			if (next === block.text) { continue; }
-			this._audit.push(this._entry(state.doc.title, block.id, 'auto-applied', block.text, next, 'heuristic'));
+			state.lock.audit.push(this._entry(block.id, 'auto-applied', block.text, next, 'heuristic'));
 			block.text = next;
 			block.binds = extractBindLinks(next);
 			state.recent.add(block.id);
@@ -381,11 +422,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async saveRawText(resource: URI, text: string): Promise<void> {
 		const id = resource.toString();
 		const doc = parseLivingDoc(text);
+		const lock = this._docs.get(id)?.lock ?? (await this._lockStore.read(resource)) ?? emptyLock();
 		const state: IDocState = {
 			uri: resource,
 			doc,
 			rawText: text,
-			resolved: new Map<string, IResolved>(),
+			lock,
 			recent: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 		};
@@ -395,7 +437,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._log.warn('[livingDocs] raw save failed', e);
 		}
 		this._docs.set(id, state);
-		await this._resolveSources(state);
+		await this._bootstrapLock(state);
 		this._onDidChange.fire();
 	}
 
@@ -462,9 +504,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (!state) { state = await this._loadState(uri); }
 			if (!state || !state.doc.isLiving) { continue; }
 			state.recent = new Set<string>();
-			await this._resolveSources(state);
-			this._reconcile(state);
-			if (state.recent.size) { await this._persist(state); }
+			await this._syncLock(state);
+			await this._persist(state);
 			derived++;
 		}
 
@@ -484,7 +525,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const block = state.doc.blocks.find(b => b.id === change.blockId);
 		if (block) { block.text = change.newText; block.binds = extractBindLinks(change.newText); }
 		this._pending = this._pending.filter(c => c.id !== changeId);
-		this._audit.push(this._entry(change.docTitle, change.blockId, 'approved', change.oldText, change.newText, 'model'));
+		state.lock.audit.push(this._entry(change.blockId, 'approved', change.oldText, change.newText, 'model'));
 		state.status = `Change approved - applied to ${change.docTitle}`;
 		await this._persist(state);
 		this._onDidChange.fire();
@@ -494,10 +535,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const change = this._pending.find(c => c.id === changeId);
 		if (!change) { return; }
 		this._pending = this._pending.filter(c => c.id !== changeId);
-		this._audit.push(this._entry(change.docTitle, change.blockId, 'rejected', change.oldText, change.newText, 'model'));
 		const state = this._docs.get(change.docId);
 		if (state) {
+			state.lock.audit.push(this._entry(change.blockId, 'rejected', change.oldText, change.newText, 'model'));
 			state.status = `Change rejected - ${change.docTitle} left unchanged`;
+			void this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e));
 		}
 		this._onDidChange.fire();
 	}
@@ -521,10 +563,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	private _renderSourceMarkdown(state: IDocState, cells: readonly string[]): string {
 		const selected = new Set(cells);
-		const rows = [...state.resolved.entries()].map(([key, r]) => {
-			const mark = selected.has(key) ? `**${key}**` : key;
-			const value = selected.has(key) ? `**${r.value}**` : r.value;
-			return `| ${mark} | ${value} |`;
+		const rows = Object.keys(state.lock.bindings).map(key => {
+			const value = state.lock.bindings[key].resolved;
+			const markedKey = selected.has(key) ? `**${key}**` : key;
+			const markedValue = selected.has(key) ? `**${value}**` : value;
+			return `| ${markedKey} | ${markedValue} |`;
 		}).join('\n');
 		const referencedBy = [...this._docs.values()]
 			.filter(s => s.doc.isLiving && s.doc.sources.some(src => state.doc.sources.includes(src)))
@@ -569,15 +612,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return [...found.values()];
 	}
 
-	private _entry(docTitle: string, blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: IAuditEntry['via']): IAuditEntry {
+	private _entry(blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: IAuditEntry['via']): IAuditEntry {
+		const docTitle = [...this._docs.values()].find(s => s.doc.blocks.some(b => b.id === blockId))?.doc.title ?? '';
 		return { time: new Date().toISOString(), docTitle, blockId, action, oldText, newText, via };
 	}
 
+	// Persist the document (.md) and its lock together - the pair is one logical unit.
 	private async _persist(state: IDocState): Promise<void> {
 		try {
 			const serialized = serializeLivingDoc(state.doc);
 			state.rawText = serialized;
 			await this._files.writeFile(state.uri, VSBuffer.fromString(serialized));
+			await this._lockStore.write(state.uri, state.lock);
 		} catch (e) {
 			this._log.warn('[livingDocs] persist failed', e);
 		}

@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAuditEntry, ILivingDoc, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { IAuditEntry, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -63,6 +63,8 @@ export interface ILivingDocsService {
 	getRawText(resource: URI): string;
 	/** The resolved value of each bind key for a document (mirrors the lock's resolved values). */
 	getResolved(resource: URI): ReadonlyMap<string, string>;
+	/** The document's lock (dependency graph + provenance ledger), if loaded. */
+	getLock(resource: URI): ILivingDocLock | undefined;
 	getStatus(resource: URI): string;
 	/** Block ids that were auto-applied in the last refresh (for the green "just updated" highlight). */
 	getRecentlyApplied(resource: URI): ReadonlySet<string>;
