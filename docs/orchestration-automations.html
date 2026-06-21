@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Living Documents — Orchestration, Triggers & Hooks</title>
+<style>
+  :root{
+    --ink:#1a1c20;--ink2:#52575f;--muted:#868b95;--faint:#a3a8b2;
+    --line:#e9eaee;--line2:#eef0f3;--paper:#fff;--wash:#fbfbfc;--wash2:#f6f7f9;
+    --blue:oklch(0.55 0.13 255);--blue-wash:#f4f6ff;--blue-line:#e0e6ff;--blue-ink:#5b6dc4;
+    --amber:#9a6b16;--amber-wash:#fdf2dc;--amber-line:#e8d9b0;
+    --green:#1f7a44;--green-wash:#e7f6ec;--green-line:#bfe6cc;--green-ink:#1f5a36;
+    --violet:#6a4ec4;--violet-wash:#f1edfb;--violet-line:#ddd2f3;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:#f1f2f5;color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1060px;margin:0 auto;padding:40px 22px 96px}
+  ::selection{background:rgba(80,110,235,.18)}
+  .kicker{font:600 11.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--blue-ink)}
+  h1{font:650 30px/1.18 var(--sans);letter-spacing:-.02em;margin:14px 0 10px}
+  .lede{font-size:16px;color:var(--ink2);max-width:74ch;margin:0}
+  .lede b{color:var(--ink);font-weight:600}
+  section{margin-top:46px}
+  h2{font:640 19px/1.3 var(--sans);letter-spacing:-.01em;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  h2 .n{display:inline-flex;width:24px;height:24px;flex:none;align-items:center;justify-content:center;border-radius:7px;background:var(--blue);color:#fff;font:600 12px/1 var(--mono)}
+  .sub{color:var(--muted);font-size:13.5px;margin:2px 0 18px 34px}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .pad{padding:20px 22px}
+  .note{font-size:12.5px;color:var(--muted);margin:12px 2px 0}
+  .note b{color:var(--ink2);font-weight:600}
+  code{font-family:var(--mono);font-size:.92em}
+
+  /* reframe band */
+  .reframe{display:flex;flex-wrap:wrap;align-items:stretch;gap:0}
+  .rstep{flex:1 1 220px;border:1px solid var(--line);border-radius:12px;padding:15px 17px;background:#fff}
+  .rstep .t{font:600 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--blue-ink);margin-bottom:6px}
+  .rstep h4{margin:0 0 3px;font-size:14px}
+  .rstep p{margin:0;font-size:12.5px;color:var(--muted)}
+  .rarrow{display:flex;align-items:center;color:var(--faint);font-size:22px;padding:0 10px}
+
+  /* taxonomy columns */
+  .tax{display:flex;flex-wrap:wrap;gap:14px}
+  .taxcol{flex:1 1 280px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .taxcol .h{padding:12px 15px;font:600 13px/1.2 var(--sans);display:flex;align-items:center;gap:8px}
+  .taxcol.ev .h{background:var(--blue-wash);color:var(--blue-ink)}
+  .taxcol.sc .h{background:var(--violet-wash);color:var(--violet)}
+  .taxcol.mn .h{background:var(--wash2);color:var(--ink2)}
+  .trow{padding:11px 15px;border-top:1px solid var(--line2)}
+  .trow .nm{font:600 12.5px/1.3 var(--sans);display:flex;align-items:center;gap:7px}
+  .trow .ds{font-size:12px;color:var(--muted);margin-top:2px}
+  .chip{font:600 9px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;padding:3px 6px;border-radius:5px;margin-left:auto}
+  .chip.have{background:var(--green-wash);color:var(--green-ink)}
+  .chip.add{background:var(--amber-wash);color:var(--amber)}
+
+  /* agents table */
+  .agview{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+  .agtop{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line2)}
+  .agtop h3{margin:0;font:650 16px/1 var(--sans)}
+  .agtop .desc{font-size:12px;color:var(--muted)}
+  .agfilters{margin-left:auto;display:flex;gap:6px}
+  .agfilters span{font:500 11px/1 var(--sans);color:var(--ink2);padding:5px 9px;border-radius:7px;background:var(--wash2)}
+  .agfilters span.on{background:var(--blue);color:#fff}
+  .tablescroll{overflow-x:auto}
+  table.ag{width:100%;border-collapse:collapse;font-size:12.5px;min-width:760px}
+  table.ag th{font:600 9.5px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 14px;border-bottom:1px solid var(--line2);background:var(--wash)}
+  table.ag td{padding:12px 14px;border-bottom:1px solid var(--line2);vertical-align:top;color:var(--ink2)}
+  table.ag tr:last-child td{border-bottom:none}
+  .agname{font-weight:600;color:var(--ink);display:flex;align-items:center;gap:7px}
+  .trg{display:inline-block;font:600 10px/1.3 var(--mono);padding:4px 7px;border-radius:6px}
+  .trg.ev{background:var(--blue-wash);color:var(--blue-ink)}
+  .trg.sc{background:var(--violet-wash);color:var(--violet)}
+  .trg.mn{background:var(--wash2);color:var(--ink2)}
+  .flow{font:400 11px/1.4 var(--mono);color:var(--muted)}
+  .pol{font:600 10px/1 var(--mono);padding:4px 7px;border-radius:6px;white-space:nowrap}
+  .pol.auto{background:var(--green-wash);color:var(--green-ink)}
+  .pol.ask{background:var(--amber-wash);color:var(--amber)}
+  .pol.draft{background:var(--wash2);color:var(--ink2)}
+  .stat{display:inline-flex;align-items:center;gap:5px;font-size:11.5px}
+  .dotg{width:7px;height:7px;border-radius:50%}
+  .new-col{position:relative}
+  .new-col::after{content:"NEW";position:absolute;top:-7px;right:8px;font:600 8px/1 var(--mono);color:#fff;background:var(--amber);padding:2px 4px;border-radius:4px}
+
+  /* pipeline canvas */
+  .pipe{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;border:1px solid var(--line);border-radius:12px;background:linear-gradient(#fff,#fcfcfd);padding:18px 14px;overflow-x:auto}
+  .pnode{flex:0 0 auto;min-width:118px;max-width:160px;border:1px solid var(--line);border-radius:11px;padding:11px 12px;background:#fff;text-align:center}
+  .pnode .pl{font:600 9px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
+  .pnode .pt{font:600 12px/1.25 var(--sans);color:var(--ink)}
+  .pnode .ps{font:400 10px/1.3 var(--mono);color:var(--muted);margin-top:4px}
+  .pnode.trig{border-color:var(--blue-line);background:var(--blue-wash)}
+  .pnode.verify{border-color:var(--green-line);background:var(--green-wash)}
+  .pnode.gate{border-color:var(--amber-line);background:var(--amber-wash)}
+  .pnode.rail{border-color:var(--violet-line);background:var(--violet-wash)}
+  .parrow{display:flex;align-items:center;color:var(--faint);font-size:18px;padding:0 7px}
+
+  /* principles map */
+  .pmap{width:100%;border-collapse:collapse;font-size:13.5px}
+  .pmap th,.pmap td{text-align:left;padding:11px 13px;border-bottom:1px solid var(--line2);vertical-align:top}
+  .pmap th{font:600 10px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--wash)}
+  .pmap td:first-child{font-weight:600;color:var(--ink);white-space:nowrap}
+  .pmap tr:last-child td{border-bottom:none}
+  .pmap .el{font:600 11px/1.4 var(--mono);color:var(--blue-ink)}
+
+  /* default automations */
+  .defs{display:flex;flex-wrap:wrap;gap:12px}
+  .def{flex:1 1 300px;border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff}
+  .def .top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .def .ic{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:var(--wash2);font-size:13px;flex:none}
+  .def h4{margin:0;font-size:13.5px}
+  .def .tg{font:600 9px/1 var(--mono);text-transform:uppercase;padding:3px 6px;border-radius:5px;margin-left:auto}
+  .def p{margin:6px 0 0;font-size:12.5px;color:var(--muted)}
+  .foot{margin-top:54px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Living Documents · orchestration</div>
+  <h1>Automations, triggers &amp; hooks</h1>
+  <p class="lede">How agents and skills actually <b>run</b> — mapped onto the Agents view, the Workflow canvas, and the Skills panel you've already designed, and grounded in loop-engineering practice. The throughline: <b>triggers wake the loop · the dependency graph decides what's affected · the review rail is where output lands.</b></p>
+
+  <!-- REFRAME -->
+  <section>
+    <h2><span class="n">1</span>Decouple the three things</h2>
+    <div class="sub">Today "an agent" bundles trigger + logic + output. Separate them and the hooks get simple.</div>
+    <div class="card pad">
+      <div class="reframe">
+        <div class="rstep"><div class="t">Triggers</div><h4>wake the loop</h4><p>cron, heartbeat, source-change, webhook, lifecycle, manual. Interchangeable — they only decide <em>when</em>.</p></div>
+        <div class="rarrow">→</div>
+        <div class="rstep"><div class="t">Dependency graph</div><h4>decides what's affected</h4><p>one rule: a write emits a change event; the orchestrator walks the lock-file's reverse edges and marks dependents dirty.</p></div>
+        <div class="rarrow">→</div>
+        <div class="rstep"><div class="t">Review rail</div><h4>is where output lands</h4><p>every result — figure, sentiment, skill flag — arrives as an approve/reject diff with provenance. One grammar.</p></div>
+      </div>
+      <p class="note"><b>This is the clean version of "a doc update hooks other docs."</b> No doc-to-doc wiring (hook spaghetti). One event → graph walk → policy decides flag / impact-pass / auto-apply <em>per edge</em>. Scales to millions of edges.</p>
+    </div>
+  </section>
+
+  <!-- TRIGGER TAXONOMY -->
+  <section>
+    <h2><span class="n">2</span>The trigger taxonomy — all of the above, layered</h2>
+    <div class="sub">Not a choice between scheduler vs cron vs manual. Each has a distinct job. <span style="color:var(--green-ink)">●</span> in your design today &nbsp; <span style="color:var(--amber)">●</span> recommended addition</div>
+    <div class="tax">
+      <div class="taxcol ev">
+        <div class="h">⚡ Event-driven <span style="font:400 11px/1 var(--sans);color:var(--muted)">— primary</span></div>
+        <div class="trow"><div class="nm">Source-change graph-hook<span class="chip add">add</span></div><div class="ds">a source/doc saves → walk reverse edges → flag dependents dirty (cheap)</div></div>
+        <div class="trow"><div class="nm">Connector webhook<span class="chip have">have</span></div><div class="ds">CRM / sheet / API pushes → e.g. <code>kpi.api → Board Note</code></div></div>
+        <div class="trow"><div class="nm">Folder watch<span class="chip have">have</span></div><div class="ds">new file in a watched folder → <code>/quotes → pipeline.csv</code></div></div>
+        <div class="trow"><div class="nm">Document lifecycle<span class="chip add">add</span></div><div class="ds">on-open freshness · before-export verify · on-publish snapshot</div></div>
+      </div>
+      <div class="taxcol sc">
+        <div class="h">⏱ Scheduled <span style="font:400 11px/1 var(--sans);color:var(--muted)">— two jobs</span></div>
+        <div class="trow"><div class="nm">Cron · specific time<span class="chip have">have</span></div><div class="ds">the recurring cadence — <code>Mon 9:00 weekly refresh</code>. Your beachhead.</div></div>
+        <div class="trow"><div class="nm">Heartbeat · every X hrs<span class="chip add">add</span></div><div class="ds"><b>drains the dirty-bit backlog</b> — impact-passes flagged-but-unreviewed docs. Does <em>not</em> re-derive everything.</div></div>
+        <div class="trow"><div class="nm">Backoff / quiet hours<span class="chip add">add</span></div><div class="ds">don't nag; batch low-priority staleness into the next heartbeat</div></div>
+      </div>
+      <div class="taxcol mn">
+        <div class="h">👆 Manual <span style="font:400 11px/1 var(--sans);color:var(--muted)">— the floor</span></div>
+        <div class="trow"><div class="nm">Run now<span class="chip have">have</span></div><div class="ds">force an agent run from the canvas</div></div>
+        <div class="trow"><div class="nm">Review impact<span class="chip have">have</span></div><div class="ds">on-demand impact pass for a flagged doc</div></div>
+        <div class="trow"><div class="nm">Re-run skill<span class="chip have">have</span></div><div class="ds">re-run Financial / Formatting / Strategy on a doc</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AGENTS VIEW -->
+  <section>
+    <h2><span class="n">3</span>The Agents view, enhanced</h2>
+    <div class="sub">Your existing table + two columns that make the model explicit: an honest TRIGGER type and a POLICY (currently buried in the canvas).</div>
+    <div class="agview">
+      <div class="agtop">
+        <div><h3>Agents</h3><div class="desc">Documents talking to documents — running quietly in the background.</div></div>
+        <div class="agfilters"><span class="on">All · 5</span><span>Scheduled</span><span>Event</span><span>Needs approval · 1</span></div>
+      </div>
+      <div class="tablescroll">
+        <table class="ag">
+          <thead><tr><th>Agent</th><th>Trigger</th><th>Flow (graph edge)</th><th class="new-col">Policy</th><th>Last run</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="agname">⟳ Weekly refresh</span></td>
+              <td><span class="trg sc">cron · Mon 9:00</span></td>
+              <td class="flow">metrics.csv → Weekly Summary.md</td>
+              <td><span class="pol ask">ask before apply</span></td>
+              <td>2m ago</td>
+              <td><span class="stat" style="color:var(--amber)"><span class="dotg" style="background:var(--amber)"></span>1 approval</span></td>
+            </tr>
+            <tr>
+              <td><span class="agname">⊕ Quote → tracker</span></td>
+              <td><span class="trg ev">folder watch</span></td>
+              <td class="flow">/quotes → pipeline.csv</td>
+              <td><span class="pol auto">auto · figures</span></td>
+              <td>9m ago</td>
+              <td><span class="stat" style="color:var(--green-ink)"><span class="dotg" style="background:var(--green)"></span>Healthy</span></td>
+            </tr>
+            <tr>
+              <td><span class="agname">◷ KPI → commentary</span></td>
+              <td><span class="trg ev">webhook</span></td>
+              <td class="flow">kpi.api → Board Note.md</td>
+              <td><span class="pol ask">ask before apply</span></td>
+              <td>1h ago</td>
+              <td><span class="stat" style="color:var(--green-ink)"><span class="dotg" style="background:var(--green)"></span>Healthy</span></td>
+            </tr>
+            <tr style="background:var(--amber-wash)">
+              <td><span class="agname">↯ Freshness sweep</span></td>
+              <td><span class="trg sc">heartbeat · 6h</span></td>
+              <td class="flow">dirty-bit queue → all flagged docs</td>
+              <td><span class="pol draft">draft only</span></td>
+              <td>3h ago</td>
+              <td><span class="stat" style="color:var(--green-ink)"><span class="dotg" style="background:var(--green)"></span>Idle · queue empty</span></td>
+            </tr>
+            <tr>
+              <td><span class="agname">▦ SOP → policy index</span></td>
+              <td><span class="trg sc">cron · daily</span></td>
+              <td class="flow">/sops → Policy Index.md</td>
+              <td><span class="pol auto">auto · figures</span></td>
+              <td>yesterday</td>
+              <td><span class="stat" style="color:var(--muted)"><span class="dotg" style="background:var(--faint)"></span>Idle</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="note"><b>POLICY is the safety dial.</b> <code>auto · figures</code> = deterministic value updates apply silently; <code>ask before apply</code> = meaning changes wait in the rail; <code>draft only</code> = the heartbeat may prepare candidates but never lands them. The new <b>Freshness sweep</b> row (amber) is the heartbeat that drains staleness — the one automation your design didn't yet name.</p>
+  </section>
+
+  <!-- WORKFLOW CANVAS -->
+  <section>
+    <h2><span class="n">4</span>The Workflow canvas, as a loop</h2>
+    <div class="sub">Your canvas is sources → agent → docs. Loop engineering adds two stages: an explicit <em>trigger node</em> at the front, and a <em>verification gate</em> (your Skills as graders) before anything lands — because the writer can't grade its own homework.</div>
+    <div class="pipe">
+      <div class="pnode trig"><div class="pl">Trigger</div><div class="pt">cron · Mon 9:00</div><div class="ps">or source-change</div></div>
+      <div class="parrow">→</div>
+      <div class="pnode"><div class="pl">Sources</div><div class="pt">metrics.csv · crm.api</div><div class="ps">read · diff</div></div>
+      <div class="parrow">→</div>
+      <div class="pnode"><div class="pl">Agent (maker)</div><div class="pt">rewrite</div><div class="ps">figures + commentary</div></div>
+      <div class="parrow">→</div>
+      <div class="pnode verify"><div class="pl">Verify (checker)</div><div class="pt">Skills as graders</div><div class="ps">Financial ✓ · Strategy · Format</div></div>
+      <div class="parrow">→</div>
+      <div class="pnode gate"><div class="pl">Policy gate</div><div class="pt">ask before apply</div><div class="ps">stop-condition met?</div></div>
+      <div class="parrow">→</div>
+      <div class="pnode"><div class="pl">Documents</div><div class="pt">3 docs</div><div class="ps">2 applied · 1 queued</div></div>
+      <div class="parrow">→</div>
+      <div class="pnode rail"><div class="pl">Review rail</div><div class="pt">approve / reject</div><div class="ps">+ audit · provenance</div></div>
+    </div>
+    <p class="note"><b>The Verify stage is the whole game for trust.</b> Financial agent is a <em>deterministic</em> grader (figures reconcile to sources) — run it first and cheap; Strategy (claims vs OKRs in Knowledge) and Formatting may use a model. If a grader fails, the run stops at the gate and surfaces the flag instead of applying — exactly the maker≠checker split the loop-engineering writing insists on.</p>
+  </section>
+
+  <!-- PRINCIPLES MAP -->
+  <section>
+    <h2><span class="n">5</span>Loop-engineering principles → already in your design</h2>
+    <div class="sub">The encouraging part: most of these map to UI you've already drawn.</div>
+    <div class="card" style="overflow:hidden">
+      <table class="pmap">
+        <thead><tr><th style="width:230px">Principle</th><th>Where it lives here</th></tr></thead>
+        <tbody>
+          <tr><td>Maker ≠ checker</td><td><span class="el">Skills panel</span> — Strategy / Financial / Formatting grade the updater's output before it lands.</td></tr>
+          <tr><td>Deterministic graders first</td><td><span class="el">Financial agent</span> (figures reconcile) runs cheaply before any model call for sentiment.</td></tr>
+          <tr><td>External state = the spine</td><td><span class="el">.lock.json + audit + Agents table</span> — on-disk memory; the model forgets between runs.</td></tr>
+          <tr><td>Human-in-the-loop</td><td><span class="el">Policy "ask before apply" · Needs-approval filter</span> — meaning changes always wait.</td></tr>
+          <tr><td>Event-driven over polling</td><td><span class="el">webhook / folder-watch / graph-hook triggers</span> — react to change, don't churn tokens.</td></tr>
+          <tr><td>Heartbeat for discovery/triage</td><td><span class="el">Freshness sweep (new)</span> — drains the dirty-bit queue every X hours.</td></tr>
+          <tr><td>Explicit stopping conditions</td><td><span class="el">Policy gate</span> — done = all bindings resolved + all graders PASS; not open-ended.</td></tr>
+          <tr><td>Observability → hill-climbing</td><td><span class="el">History tab + audit trail</span> — traces; later, an agent that improves agents from them.</td></tr>
+          <tr><td>Align to institutional memory</td><td><span class="el">Knowledge view</span> — the decision stack (Mission / OKRs) Strategy agent checks against.</td></tr>
+          <tr><td>Isolation for parallel writes</td><td>Multi-doc fan-out should write per-run (branch/worktree) so concurrent updates don't collide at scale.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- DEFAULT AUTOMATIONS -->
+  <section>
+    <h2><span class="n">6</span>Recommended default automations</h2>
+    <div class="sub">A trust-first starter set for the recurring-report beachhead.</div>
+    <div class="defs">
+      <div class="def"><div class="top"><span class="ic">⟳</span><h4>Weekly refresh</h4><span class="tg" style="background:var(--violet-wash);color:var(--violet)">cron</span></div><p>Mon 9:00 — re-derive figures, draft commentary, queue meaning-changes for the Monday review.</p></div>
+      <div class="def"><div class="top"><span class="ic">⚡</span><h4>Source-change watcher</h4><span class="tg" style="background:var(--blue-wash);color:var(--blue-ink)">event</span></div><p>On a source/connector change → walk the graph, flag affected docs. No rewrite — cheap, silent, always-on.</p></div>
+      <div class="def"><div class="top"><span class="ic">↯</span><h4>Freshness sweep</h4><span class="tg" style="background:var(--violet-wash);color:var(--violet)">heartbeat</span></div><p>Every 6h — impact-pass any flagged-but-unreviewed docs, prepare candidates as <em>drafts</em> for review. Never auto-lands.</p></div>
+      <div class="def"><div class="top"><span class="ic">⛉</span><h4>Before-export gate</h4><span class="tg" style="background:var(--green-wash);color:var(--green-ink)">lifecycle</span></div><p>Financial (must PASS, deterministic) + Formatting run before export; block if figures don't reconcile.</p></div>
+      <div class="def"><div class="top"><span class="ic">⊚</span><h4>On-publish snapshot</h4><span class="tg" style="background:var(--green-wash);color:var(--green-ink)">lifecycle</span></div><p>Pin the doc to current source versions so a published report stays reproducible if sources later move.</p></div>
+    </div>
+  </section>
+
+  <div class="foot">Companion to <code>docs/08-living-documents-format-spec.md</code> &amp; <code>docs/option-10-living-docs-format.html</code>. Grounded in Addy Osmani, "Loop Engineering" &amp; LangChain, "The Art of Loop Engineering."</div>
+
+</div>
+</body>
+</html>

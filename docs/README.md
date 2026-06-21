@@ -22,6 +22,7 @@ what is likely to become problematic, the open decisions, and the design intent.
 | [06-design-notes.md](06-design-notes.md) | UI/UX intent vs reality: provenance gutter redesign, header issues, the calm shell |
 | [07-decision-log.md](07-decision-log.md) | Decisions made during the spike, with rationale (ADR-style) |
 | [08-living-documents-format-spec.md](08-living-documents-format-spec.md) | The raw-Markdown format + dependency model design spec (clean file + lock file); resolves Q1, with full decision log. Companion visual: [option-10-living-docs-format.html](option-10-living-docs-format.html) |
+| [09-orchestration-and-automation.md](09-orchestration-and-automation.md) | How agents/skills run: trigger taxonomy, the graph-propagation rule, policy model, verify gate, and the LangChain/LangGraph-vs-built-in tech-stack call. Companion visual: [orchestration-automations.html](orchestration-automations.html) |
 | [plans/](plans/) | The handoff prompts that drove (and will drive) the work |
 
 ## Status at a glance (2026-06-21)
