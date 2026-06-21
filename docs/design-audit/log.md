@@ -21,6 +21,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 1 (baseline) | **~78%** | Full survey, baselines seeded below. |
 | 2 | **~80%** | Context panel 48 -> 80: now groups Linked sources + Referenced files (was a flat list that omitted the doc's bound sources entirely). |
 | 3 | **~81%** | Global top bar added to all four screens (Home/Templates/Knowledge/Agents) — brand + crumb + sync pill + Present + avatar. Lifts Home 82->85, Templates 88->89, Knowledge 80->83, Agents 82->84. |
+| 4 | **~82%** | Present modal WHO CAN ACCESS now shown for every export (was site-only) 80->85; workflow canvas verified rendering + functional 72->80. |
 
 ---
 
@@ -38,13 +39,13 @@ the handoff, iteration 1 is the survey. Iteration 2 attacks the lowest-scoring, 
 | 3 | Templates (run wizard) | 90 | 88 | 90 | 88 | 86 | **88** → **89** (iter 3) | `shots/baseline/03-templates-app.png` → `shots/iter3-templates-after.png` |
 | 4 | Knowledge (decision stack) | 82 | 85 | 72 | 85 | 78 | **80** → **83** (iter 3) | `shots/baseline/04-knowledge-app.png` |
 | 5 | Agents list | 85 | 84 | 85 | 78 | 80 | **82** → **84** (iter 3) | `shots/baseline/05-agents-app.png` |
-| 6 | Workflow canvas | 75 | 75 | 70 | 75 | 65 | **72** | _not captured — built, unverified_ |
+| 6 | Workflow canvas | 75→80 | 75→82 | 70→78 | 75→80 | 65→80 | **72** → **80** (iter 4, verified) | `shots/iter4-canvas-verified.png` |
 | 7 | Context panel | 50 | 55 | 35 | 55 | 45 | **48** → **80** (iter 2) | `shots/baseline/06-context-app.png` → `shots/iter2-context-after.png` |
 | 8 | Right rail — Chat | 90 | 92 | 90 | 90 | 85 | **90** | `shots/baseline/07-chat-app.png` |
 | 9 | Right rail — Review | 60 | 60 | 50 | 60 | 45 | **55** | `shots/baseline/10-review-app.png` (empty state) |
 | 10 | Right rail — History | 92 | 92 | 92 | 92 | 90 | **92** | `shots/baseline/09-history-app.png` |
 | 11 | Right rail — Skills | 88 | 90 | 88 | 90 | 85 | **88** | `shots/baseline/08-skills-app.png` |
-| 12 | Present / export modal | 85 | 85 | 75 | 80 | 78 | **80** | `shots/baseline/11-present-app.png` |
+| 12 | Present / export modal | 85 | 85 | 75→85 | 80 | 78→85 | **80** → **85** (iter 4) | `shots/baseline/11-present-app.png` → `shots/iter4-present-after.png` |
 
 **Overall: ~78%** (mean of the twelve). The app is a genuinely high-fidelity recreation — most
 surfaces are 80-92. The number is dragged down by three real holes: the **Context panel**, the
@@ -157,10 +158,11 @@ Copy) that the app's modal does not show.
    fixture) and verify the approve/reject flow matches the comp. Core flow.
 3. ~~**Global top bar** (cross-cutting) — add the unified 48px top bar to the screen webviews.~~
    **DONE (iter 3):** added to Home/Templates/Knowledge/Agents.
-4. **Workflow canvas** (72) — verify the open-agent canvas renders; score and close gaps.
+4. ~~**Workflow canvas** (72) — verify the open-agent canvas renders.~~ **DONE (iter 4 → 80):**
+   verified rendering + functional; design-divergence (pipeline vs 3-column) noted.
 5. **Navigation blank-out bug** — screen launchers blank the main area after a doc editor was opened.
 6. **Editor extras** — doc tab bar, provenance gutter dots, source-peek + "Sync across" circle.
-7. **Present modal** — add the WHO CAN ACCESS scope selector.
+7. ~~**Present modal** — add the WHO CAN ACCESS scope selector.~~ **DONE (iter 4):** shown for all exports.
 8. **Knowledge** — confirm/restore the DIRECTIONAL (Strategy) + MEASURABLE (OKRs) sections.
 
 ---
@@ -236,6 +238,37 @@ a larger, riskier change (likely a core patch) and is intentionally not attempte
 **After:** `shots/iter3-home-after.png`, `shots/iter3-templates-after.png` (rendered from the real
 `renderScreenHtml` output via the Playwright fallback — exact for these pure-HTML screens; the
 chrome-devtools MCP remains down this session).
+
+---
+
+## Iteration 4 — Present modal WHO CAN ACCESS for all exports (80→85) + workflow canvas verified (72→80)
+
+**Primary gap (Present modal).** The WHO CAN ACCESS scope selector
+(Workspace only / Anyone with link / Public) existed but was gated to the **Hosted web page**
+(`'site'`) choice only — so the default Google Docs export showed no access control, while the comp
+surfaces it for every destination.
+
+- `renderPresentModal` now renders WHO CAN ACCESS for **all** export choices; the shareable-URL row
+  (`opportunity-os.live/...` + Copy) is gated to non-workspace scopes (`link`/`public`) since a
+  workspace-only copy has no public URL — both design-aligned and sensible. 0 added core patches.
+- New `livingDocRender.test.ts` (2 tests via the public `renderLivingDocHtml`): WHO CAN ACCESS shows
+  for every `PresentChoice`; the URL row appears for link/public and is hidden for workspace-only.
+  **54 tests pass.** After: `shots/iter4-present-after.png` (isolated render of the exact modal markup).
+
+**Secondary (workflow canvas — verified, not previously captured).** Rendered the open-agent canvas
+(`renderAgentCanvas`) for the first time. It is well-built and functional: header (back / Run now /
+status), a run-complete banner with **Review →**, and the full loop on a dotted-grid canvas —
+**Trigger → Sources → agent → Verify → Policy gate → Documents → Review rail** — now also carrying
+the iter-3 top bar. Re-scored **72 → 80**.
+*Honest divergence note:* the comp's canvas is a **SOURCES → agent → DOCUMENTS** 3-column flow with
+per-source / per-document live-status cards (e.g. "metrics.csv · changed 2m ago", "Weekly Summary ·
+2 applied · 1 to review"). The app shows a richer **loop pipeline** (adds the Verify + Policy gates
+from the orchestration spec) but its Sources/Documents nodes list names without per-item run results
+— and `IAgentRun` only carries applied/queued **totals**, not a per-doc breakdown, so faithful
+per-doc statuses can't be shown without a data-model change. Left as a deliberate, defensible
+alternative rather than fabricating per-doc rows. Shot: `shots/iter4-canvas-verified.png`.
+
+**Overall ~81 → ~82.** Typecheck clean; 54 tests green.
 
 ---
 
