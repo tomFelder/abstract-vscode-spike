@@ -26,6 +26,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 6 | **~84%** | **Functional fix:** the navigation blank-out bug is resolved — screens (Templates/Knowledge/Agents) now render reliably after a document editor was open (was: blank main area). Verified live + auto-figure sync + agent run/canvas flow. MCP restored. |
 | 7 | **~86%** | **Core flow verified live:** Review rail 55->82 — Review impact queues pending meaning-changes (inline + right rail, old→new diff, confidence, risk); **Approve applies & clears**, **Reject discards & reverts**. The product's central approve/reject loop works end-to-end. |
 | 8 | **~86%** | **Functional audit:** editor raw-Markdown editing verified (round-trips to the clean-file bind-link format). All core flows now confirmed functional. Pinned down that Chat/History/Skills tab bodies are *intentionally static comp reproductions* — composer + Apply-fix/Run/Re-run not wired (only Approve-all/Review-each are). Honest scoring note below; no inflation. |
+| 9 | **~86%** | **Skills tab made functional** (was static): real deterministic graders — Financial reconciles all 12 bound figures (PASS) + working Re-run; Formatting flags the 2 sentence-case headings (live count) + Run; Strategy honestly reports NO MODEL. Closes the iter-8 functional gap. Skills score now *earned*, not just visual. |
 
 ---
 
@@ -48,7 +49,7 @@ the handoff, iteration 1 is the survey. Iteration 2 attacks the lowest-scoring, 
 | 8 | Right rail — Chat | 90 | 92 | 90 | 90 | 85 | **90** | `shots/baseline/07-chat-app.png` |
 | 9 | Right rail — Review | 60→85 | 60→85 | 50→85 | 60→85 | 45→80 | **55** → **82** (iter 7, verified live) | `shots/baseline/10-review-app.png` → `shots/iter7-review-populated.png` |
 | 10 | Right rail — History | 92 | 92 | 92 | 92 | 90 | **92** | `shots/baseline/09-history-app.png` |
-| 11 | Right rail — Skills | 88 | 90 | 88 | 90 | 85 | **88** | `shots/baseline/08-skills-app.png` |
+| 11 | Right rail — Skills | 88 | 90 | 88 | 90 | 85→90 | **88** (now functional, iter 9) | `shots/baseline/08-skills-app.png` → `shots/iter9-skills-functional.png` |
 | 12 | Present / export modal | 85 | 85 | 75→85 | 80 | 78→85 | **80** → **85** (iter 4) | `shots/baseline/11-present-app.png` → `shots/iter4-present-after.png` |
 
 **Overall (after iter 7): ~86%** (baseline was ~78%). The app is a genuinely high-fidelity recreation — most
@@ -442,6 +443,39 @@ behaviour, OR build the editor **source-peek + "Sync across"** pane (the last co
 the **Context** sample with pasted-text/images/company-knowledge (needs a small model extension). The
 biggest honest lever is a **language model** wired in — it lifts Review-rail suggestion quality,
 Chat, and the Skills graders together.
+
+---
+
+## Iteration 9 — make the Skills tab genuinely functional (was a static mockup)
+
+Directly closes the functional gap flagged in iter 8: the Skills tab was hardcoded HTML with dead
+buttons. Now it grades the **active document** live with real, deterministic checks.
+
+**Change (TDD).**
+- New `getSkillReport(resource)` on the service (+ `ISkillCheck` type on the interface): runs the
+  document's Skills as graders over its current state.
+  - **Financial** (deterministic): every bound figure must resolve to a source value. For the sample
+    that is **"All 12 linked figures reconcile with sources." → PASS**; a doc with an unresolvable bind
+    (`metrics.unknown`) reports **"1 of 2 figures do not reconcile…" → FLAG**.
+  - **Formatting** (deterministic): a title-case house-style check on headings. The sample's
+    sentence-case "Key metrics" + "What to watch" yield **"2 heading-case fixes suggested." → FLAG**
+    (matches the comp's "2 fixes" exactly).
+  - **Strategy**: needs a model to test claims against the decision stack → honest **NO MODEL** state
+    (no fabricated flag/Apply-fix).
+- 2 new tests (`getSkillReport` for the bound doc + the unresolvable-bind doc). **57 tests pass.**
+- `reviewRailView.ts`: the Skills tab is now data-driven from `getSkillReport` of the active editor's
+  document (injected `IEditorService`; re-renders on active-editor change). **Run / Re-run** buttons
+  re-grade the live document (`data-skill-run` -> re-render); verified live (clicking Re-run re-grades
+  cleanly). Empty state when no Living Document is active. 0 added core patches.
+
+**Result.** The Skills surface went from a fully static mockup to genuine functionality: 2 of 3 skills
+are real deterministic verdicts on the live doc, the 3rd is honestly model-gated, and the Run buttons
+work. Matches the comp's layout *and* its "2 heading-case fixes" — now computed, not hardcoded.
+Shot: `shots/iter9-skills-functional.png`.
+
+**Score:** Skills stays **88** but is now *earned* (functional, not just visual) — resolving the iter-8
+honesty caveat. Overall **~86** (the figure was already counting Skills at 88; this restores its
+integrity). The remaining static surface is the **Chat composer** (a real agent chat is model-gated).
 
 ---
 

@@ -39,6 +39,22 @@ export interface ILivingDocSummary {
 }
 
 /**
+ * One document Skill's verdict for the Skills rail (spec 5, maker != checker). Financial and
+ * Formatting are deterministic and run with no model; Strategy needs a model to test claims against
+ * the Knowledge decision stack, so it reports `needs-model` in the model-less build.
+ */
+export interface ISkillCheck {
+	readonly id: 'financial' | 'strategy' | 'formatting';
+	readonly name: string;
+	readonly blurb: string;
+	readonly status: 'pass' | 'flag' | 'needs-model';
+	/** Human summary, e.g. "All 6 linked figures reconcile with sources." */
+	readonly detail: string;
+	/** True when the check is deterministic and can be (re-)run locally (drives the Run button). */
+	readonly canRun: boolean;
+}
+
+/**
  * Holds every loaded Living Document and drives the core loop:
  *   source change -> agent proposes edits -> figures auto-apply, meaning-changes queue ->
  *   approve/reject -> audit trail.
@@ -70,6 +86,8 @@ export interface ILivingDocsService {
 	getLock(resource: URI): ILivingDocLock | undefined;
 	/** The cheap always-on staleness signal: which bindings/context changed since last sync/review. */
 	getFreshness(resource: URI): IFreshness;
+	/** Run the document's Skills as graders over its current state (for the Skills rail). Deterministic. */
+	getSkillReport(resource: URI): readonly ISkillCheck[];
 	/** Re-hash the document's sources and recompute its dirty bits (what the source watcher triggers). */
 	checkSources(resource: URI): Promise<void>;
 	getStatus(resource: URI): string;

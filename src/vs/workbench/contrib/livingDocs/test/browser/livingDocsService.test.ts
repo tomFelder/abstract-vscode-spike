@@ -311,6 +311,29 @@ suite('LivingDocsService', () => {
 		]);
 	});
 
+	test('the Skills report grades the document: Financial reconciles, Formatting flags sentence-case headings, Strategy needs a model', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		const report = service.getSkillReport(WEEKLY).map(s => ({ id: s.id, status: s.status, detail: s.detail, canRun: s.canRun }));
+		assert.deepStrictEqual(report, [
+			{ id: 'strategy', status: 'needs-model', detail: 'Connect a model to test claims against the decision stack.', canRun: false },
+			{ id: 'financial', status: 'pass', detail: 'All 3 linked figures reconcile with sources.', canRun: true },
+			{ id: 'formatting', status: 'flag', detail: '1 heading-case fix suggested.', canRun: true },
+		]);
+	});
+
+	test('the Financial skill flags a bound figure that does not reconcile to its source', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+
+		const financial = service.getSkillReport(BADBIND).find(s => s.id === 'financial')!;
+		assert.deepStrictEqual(
+			{ status: financial.status, detail: financial.detail },
+			{ status: 'flag', detail: '1 of 2 figures do not reconcile: metrics.unknown.' },
+		);
+	});
+
 	test('refreshing re-syncs the value bindings and clears their dirty bits', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);
