@@ -129,6 +129,9 @@ export interface ILivingDocsService {
 	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
 	shareDocument(resource: URI): void;
 
+	/** Publish a document: snapshot (pin) its sources to current versions for reproducibility. */
+	publishDocument(resource: URI): Promise<void>;
+
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;
 

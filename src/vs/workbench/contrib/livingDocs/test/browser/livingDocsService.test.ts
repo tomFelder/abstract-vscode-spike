@@ -498,6 +498,38 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.getAgents().find(a => a.id === 'agent')!.status, 'idle', 'agent is not blocked');
 	});
 
+	test('before-export gate blocks export when the document figures do not reconcile', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+
+		const target = await service.exportMarkdown(BADBIND);
+
+		assert.strictEqual(target, undefined, 'export blocked at the gate');
+		assert.strictEqual(lastFiles!.get(URI.file('/ws/Ratio Doc.export.md').toString()), undefined, 'no export file written');
+	});
+
+	test('on-publish writes a pin snapshotting the current source versions', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		await service.publishDocument(WEEKLY);
+
+		const pins = service.getLock(WEEKLY)!.pins;
+		assert.ok(pins.some(p => p.source === 'metrics.csv' && !!p.version), `pinned to the source version: ${JSON.stringify(pins)}`);
+	});
+
+	test('on-open freshness shows a changed source as stale without a manual refresh', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getFreshness(WEEKLY).dirty, false, 'current on first open');
+
+		// A source moves on while the doc is closed; re-opening must surface the staleness.
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.loadDocument(WEEKLY);
+
+		assert.ok(service.getFreshness(WEEKLY).dirty, 'on-open recompute flags the changed source');
+	});
+
 	test('revealSource opens a styled source view listing bound keys and the referencing document', async () => {
 		const opened: IOpenedEditor[] = [];
 		const service = createService(opened);

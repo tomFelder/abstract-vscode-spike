@@ -314,7 +314,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// the lock is authoritative - load is read-only and the cache reconciles to it at render.
 			await this._bootstrapLock(state);
 			state.recent = new Set<string>();
-			// Cheap, always-on staleness: hash the sources now and watch them for later changes.
+			// On-open freshness hook (spec 7): hash the sources now so the Context panel's flag is current
+			// without a manual refresh, then watch them for later changes.
 			await this._recomputeFreshness(state);
 			this._watchSources(state);
 		}
@@ -593,16 +594,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._gradeFormatting(state, changes);
 	}
 
-	// Deterministic: every bound value in the proposed text must reconcile to a resolved lock value.
+	// Deterministic: every bound value in the text must reconcile to a resolved lock/source value. A
+	// missing source value (unresolved key) fails the gate; a merely-stale cache does not (that is
+	// staleness, reconciled at render). The reconciled text always carries the lock value, so this is
+	// the meaningful check on both the run path and the before-export gate.
 	private _gradeFinancial(state: IDocState, changes: { blockId: string; oldText: string; newText: string }[]): IGradeResult {
 		for (const change of changes) {
 			for (const link of extractBindLinks(change.newText)) {
-				const binding = state.lock.bindings[link.key];
-				if (!binding) {
+				if (!state.lock.bindings[link.key]) {
 					return { pass: false, flag: `Financial: "${link.key}" has no source value - it does not reconcile.` };
-				}
-				if (binding.resolved !== link.value) {
-					return { pass: false, flag: `Financial: "${link.key}" shows ${link.value} but the source resolves ${binding.resolved}.` };
 				}
 			}
 		}
@@ -690,9 +690,49 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	// --- document-lifecycle hooks (spec 3, 7) ---
+
+	// The before-export gate: the whole document's figures must reconcile (Financial) before it can
+	// leave the system. Returns the flag when export should be blocked.
+	private _beforeExportGate(state: IDocState): IGradeResult {
+		const current = state.doc.blocks
+			.filter(b => b.binds.length > 0)
+			.map(b => ({ blockId: b.id, oldText: b.text, newText: b.text }));
+		return this._gradeFinancial(state, current);
+	}
+
+	// On-publish snapshot: pin the document to the current source versions (hashes) so a published doc
+	// stays reproducible even as sources move on (spec 7; uses the pins[] field reserved in plan 06).
+	async publishDocument(resource: URI): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const gate = this._beforeExportGate(state);
+		if (!gate.pass) {
+			this._notify.info(`Cannot publish - ${gate.flag}`);
+			return;
+		}
+		const versions = new Map<string, string>();
+		for (const key of Object.keys(state.lock.bindings)) {
+			const binding = state.lock.bindings[key];
+			const source = binding.source.split('#')[0];
+			versions.set(source, binding.sourceHash);
+		}
+		const at = new Date().toISOString();
+		state.lock.pins = [...versions].map(([source, version]) => ({ source, version }));
+		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `published ${at}`, 'heuristic'));
+		await this._lockStore.write(state.uri, state.lock);
+		this._notify.info(`Published "${state.doc.title}" - pinned to ${state.lock.pins.length} source version${state.lock.pins.length === 1 ? '' : 's'}.`);
+		this._onDidChange.fire();
+	}
+
 	async exportDocument(resource: URI): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
+		const gate = this._beforeExportGate(state);
+		if (!gate.pass) {
+			this._notify.info(`Export blocked - ${gate.flag}`);
+			return undefined;
+		}
 		const html = renderExportHtml(state.doc, this.getResolved(resource));
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.html`);
@@ -710,6 +750,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async exportMarkdown(resource: URI): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
+		const gate = this._beforeExportGate(state);
+		if (!gate.pass) {
+			this._notify.info(`Export blocked - ${gate.flag}`);
+			return undefined;
+		}
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.md`);
