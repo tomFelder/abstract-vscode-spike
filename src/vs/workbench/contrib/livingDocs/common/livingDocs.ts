@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -85,6 +85,12 @@ export interface ILivingDocsService {
 	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
 	listDocuments(): Promise<readonly ILivingDocSummary[]>;
 
+	/** The registered orchestration agents (for the Agents view). */
+	getAgents(): readonly IAgentDef[];
+
+	/** Run an agent now over its flow documents (or the whole workspace if it scopes none). */
+	runAgent(agentId: string): Promise<IAgentRun | undefined>;
+
 	/** Create a new blank Living Document from a template in the workspace and return its resource. */
 	createDocument(): Promise<URI | undefined>;
 
@@ -122,6 +128,9 @@ export interface ILivingDocsService {
 
 	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
 	shareDocument(resource: URI): void;
+
+	/** Publish a document: snapshot (pin) its sources to current versions for reproducibility. */
+	publishDocument(resource: URI): Promise<void>;
 
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;

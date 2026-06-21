@@ -23,7 +23,15 @@ import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
-import { emptyLock, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
+import { WorkspaceAgentStore } from './agentStore.js';
+import { AgentPolicy, emptyLock, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+
+// The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
+interface IGradeResult {
+	readonly pass: boolean;
+	readonly flag?: string;
+}
 
 // One freshly-read source value for a bind key, before it is written into the lock.
 interface IResolution {
@@ -108,6 +116,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _docs = new Map<string, IDocState>();
 	private _pending: IProposedChange[] = [];
 	private readonly _lockStore: ILockStore;
+	// The orchestration engine: agent registry + dependency-graph event-bus (+ triggers/policy/verify).
+	private readonly _orchestrator: AgentOrchestrator;
 	// Correlated source watchers, one store per loaded document. Disposed/recreated on reload, and
 	// all torn down when the service is disposed.
 	private readonly _watchers = new Map<string, IDisposable>();
@@ -125,11 +135,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	) {
 		super();
 		this._lockStore = new SidecarLockStore(this._files);
+		const folder = this._workspace.getWorkspace().folders[0]?.uri ?? URI.file('/');
+		this._orchestrator = this._register(new AgentOrchestrator(
+			this._files, this._log, new WorkspaceAgentStore(this._files, folder), () => this._discoverLivingDocUris()));
+		// Surface orchestration state changes (dirty queue, agent status) through the service event.
+		this._register(this._orchestrator.onDidChange(() => this._onDidChange.fire()));
+		this._orchestrator.setRunner((agent, context) => this._runAgent(agent, context));
+		void this._orchestrator.ensureLoaded().then(() => this._orchestrator.start());
 		this._register(toDisposable(() => {
 			for (const w of this._watchers.values()) { w.dispose(); }
 			this._watchers.clear();
 		}));
 	}
+
+	/** The orchestration engine (agent registry, graph event-bus, triggers, policy, verify gate). */
+	get orchestrator(): AgentOrchestrator { return this._orchestrator; }
+
+	getAgents(): readonly IAgentDef[] { return this._orchestrator.getAgents(); }
 
 	// --- per-document views ---
 
@@ -292,7 +314,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// the lock is authoritative - load is read-only and the cache reconciles to it at render.
 			await this._bootstrapLock(state);
 			state.recent = new Set<string>();
-			// Cheap, always-on staleness: hash the sources now and watch them for later changes.
+			// On-open freshness hook (spec 7): hash the sources now so the Context panel's flag is current
+			// without a manual refresh, then watch them for later changes.
 			await this._recomputeFreshness(state);
 			this._watchSources(state);
 		}
@@ -423,7 +446,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		for (const target of targets) {
 			try {
 				const watcher = store.add(this._files.createWatcher(target, { recursive: false, excludes: [] }));
-				store.add(watcher.onDidChange(() => void this.checkSources(state.uri)));
+				const sourcePath = target.path;
+				store.add(watcher.onDidChange(() => {
+					// Per-document freshness recompute + the workspace-wide graph propagation / event agents.
+					void this.checkSources(state.uri);
+					void this._orchestrator.onSourceChanged(sourcePath);
+				}));
 			} catch (e) {
 				this._log.trace('[livingDocs] watch failed', e instanceof Error ? e.message : String(e));
 			}
@@ -515,24 +543,125 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// Re-sync the lock from the current sources (value bindings are figures -> auto-apply): update each
-	// binding's resolved/sourceHash/syncedAt, reconcile the `.md` visible cache to the lock, audit each
-	// block whose value moved, and flag it for the just-synced highlight. Caller persists.
-	private async _syncLock(state: IDocState): Promise<void> {
+	// Resolve the current source values into the lock (update each binding's resolved/sourceHash/
+	// syncedAt). No prose is touched.
+	private async _resolveIntoLock(state: IDocState): Promise<void> {
 		const resolution = await this._resolveCurrent(state);
 		for (const [key, r] of resolution) {
 			state.lock.bindings[key] = this._bindingEntry(r);
 		}
+	}
+
+	// The figure changes a re-sync would make: each bound block whose visible cache no longer matches the
+	// lock's resolved values. Computed without mutating the document, so the policy router can apply,
+	// queue, or draft them.
+	private _figureReconciles(state: IDocState): { blockId: string; oldText: string; newText: string }[] {
 		const resolved = this.getResolved(state.uri);
+		const changes: { blockId: string; oldText: string; newText: string }[] = [];
 		for (const block of state.doc.blocks) {
 			if (block.binds.length === 0) { continue; }
 			const next = reconcileBindLinks(block.text, resolved);
-			if (next === block.text) { continue; }
-			state.lock.audit.push(this._entry(block.id, 'auto-applied', block.text, next, 'heuristic'));
-			block.text = next;
-			block.binds = extractBindLinks(next);
-			state.recent.add(block.id);
+			if (next !== block.text) { changes.push({ blockId: block.id, oldText: block.text, newText: next }); }
 		}
+		return changes;
+	}
+
+	private _applyFigure(state: IDocState, change: { blockId: string; oldText: string; newText: string }): void {
+		const block = state.doc.blocks.find(b => b.id === change.blockId);
+		if (!block) { return; }
+		state.lock.audit.push(this._entry(block.id, 'auto-applied', change.oldText, change.newText, 'heuristic'));
+		block.text = change.newText;
+		block.binds = extractBindLinks(change.newText);
+		state.recent.add(block.id);
+	}
+
+	// Re-sync the lock from the current sources and auto-apply every figure (the manual "Refresh from
+	// sources" path; figures are deterministic and low-risk). Caller persists.
+	private async _syncLock(state: IDocState): Promise<void> {
+		await this._resolveIntoLock(state);
+		for (const change of this._figureReconciles(state)) { this._applyFigure(state, change); }
+	}
+
+	// The verify gate (spec 5, maker != checker): run the document's Skills as graders before apply.
+	// Deterministic Financial runs first and cheap (figures must reconcile to the lock/source); Strategy
+	// (claims vs the Knowledge decision stack) and Formatting (house style) may use a model - in the
+	// no-model spike they pass. A failed grader stops the run before anything lands.
+	private async _verifyGate(state: IDocState, changes: { blockId: string; oldText: string; newText: string }[]): Promise<IGradeResult> {
+		const financial = this._gradeFinancial(state, changes);
+		if (!financial.pass) { return financial; }
+		const strategy = await this._gradeStrategy(state, changes);
+		if (!strategy.pass) { return strategy; }
+		return this._gradeFormatting(state, changes);
+	}
+
+	// Deterministic: every bound value in the text must reconcile to a resolved lock/source value. A
+	// missing source value (unresolved key) fails the gate; a merely-stale cache does not (that is
+	// staleness, reconciled at render). The reconciled text always carries the lock value, so this is
+	// the meaningful check on both the run path and the before-export gate.
+	private _gradeFinancial(state: IDocState, changes: { blockId: string; oldText: string; newText: string }[]): IGradeResult {
+		for (const change of changes) {
+			for (const link of extractBindLinks(change.newText)) {
+				if (!state.lock.bindings[link.key]) {
+					return { pass: false, flag: `Financial: "${link.key}" has no source value - it does not reconcile.` };
+				}
+			}
+		}
+		return { pass: true };
+	}
+
+	// Strategy / Formatting may consult the model; the no-model spike passes them (a hook for the model
+	// path, kept here so the gate ordering and maker != checker structure are real).
+	private async _gradeStrategy(_state: IDocState, _changes: { blockId: string }[]): Promise<IGradeResult> {
+		return { pass: true };
+	}
+	private _gradeFormatting(_state: IDocState, _changes: { blockId: string }[]): IGradeResult {
+		return { pass: true };
+	}
+
+	// Route a document's figure changes by the agent's policy (spec 4.2), after the verify gate. The
+	// gate runs between rewrite and apply: a failed grader blocks the whole run (nothing applied or
+	// queued) and surfaces the flag (spec 5). auto-figures applies silently (audited); ask-before-apply
+	// queues a pending change; draft-only queues a draft and never lands.
+	private async _runFiguresByPolicy(state: IDocState, policy: AgentPolicy): Promise<{ applied: number; queued: number; blocked?: string }> {
+		await this._resolveIntoLock(state);
+		const changes = this._figureReconciles(state);
+		if (changes.length) {
+			const gate = await this._verifyGate(state, changes);
+			if (!gate.pass) {
+				state.status = `Blocked at the verify gate - ${gate.flag}`;
+				this._notify.info(gate.flag ?? 'Blocked at the verify gate.');
+				return { applied: 0, queued: 0, blocked: gate.flag };
+			}
+		}
+		let applied = 0;
+		let queued = 0;
+		for (const change of changes) {
+			if (policy === 'auto-figures') {
+				this._applyFigure(state, change);
+				applied++;
+				continue;
+			}
+			// ask-before-apply / draft-only: queue for the rail without touching the doc.
+			const block = state.doc.blocks.find(b => b.id === change.blockId);
+			this._pending = this._pending.filter(c => !(c.docId === state.uri.toString() && c.blockId === change.blockId));
+			this._pending.push({
+				id: generateUuid(),
+				docId: state.uri.toString(),
+				docTitle: state.doc.title,
+				blockId: change.blockId,
+				blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
+				oldText: change.oldText,
+				newText: change.newText,
+				kind: 'figure',
+				confidence: 1,
+				rationale: 'Source value changed; figure update prepared.',
+				sourceCells: block ? block.binds.map(b => b.key) : [],
+				via: 'heuristic',
+				draft: policy === 'draft-only',
+			});
+			queued++;
+		}
+		return { applied, queued };
 	}
 
 	async saveRawText(resource: URI, text: string): Promise<void> {
@@ -561,9 +690,49 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	// --- document-lifecycle hooks (spec 3, 7) ---
+
+	// The before-export gate: the whole document's figures must reconcile (Financial) before it can
+	// leave the system. Returns the flag when export should be blocked.
+	private _beforeExportGate(state: IDocState): IGradeResult {
+		const current = state.doc.blocks
+			.filter(b => b.binds.length > 0)
+			.map(b => ({ blockId: b.id, oldText: b.text, newText: b.text }));
+		return this._gradeFinancial(state, current);
+	}
+
+	// On-publish snapshot: pin the document to the current source versions (hashes) so a published doc
+	// stays reproducible even as sources move on (spec 7; uses the pins[] field reserved in plan 06).
+	async publishDocument(resource: URI): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const gate = this._beforeExportGate(state);
+		if (!gate.pass) {
+			this._notify.info(`Cannot publish - ${gate.flag}`);
+			return;
+		}
+		const versions = new Map<string, string>();
+		for (const key of Object.keys(state.lock.bindings)) {
+			const binding = state.lock.bindings[key];
+			const source = binding.source.split('#')[0];
+			versions.set(source, binding.sourceHash);
+		}
+		const at = new Date().toISOString();
+		state.lock.pins = [...versions].map(([source, version]) => ({ source, version }));
+		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `published ${at}`, 'heuristic'));
+		await this._lockStore.write(state.uri, state.lock);
+		this._notify.info(`Published "${state.doc.title}" - pinned to ${state.lock.pins.length} source version${state.lock.pins.length === 1 ? '' : 's'}.`);
+		this._onDidChange.fire();
+	}
+
 	async exportDocument(resource: URI): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
+		const gate = this._beforeExportGate(state);
+		if (!gate.pass) {
+			this._notify.info(`Export blocked - ${gate.flag}`);
+			return undefined;
+		}
 		const html = renderExportHtml(state.doc, this.getResolved(resource));
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.html`);
@@ -581,6 +750,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async exportMarkdown(resource: URI): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
+		const gate = this._beforeExportGate(state);
+		if (!gate.pass) {
+			this._notify.info(`Export blocked - ${gate.flag}`);
+			return undefined;
+		}
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.md`);
@@ -636,6 +810,41 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (state.doc.isLiving) { state.status = `${derived} document${derived === 1 ? '' : 's'} synced`; }
 		}
 		this._onDidChange.fire();
+	}
+
+	// "Run now": run an agent over its flow documents (or the whole workspace if it scopes none).
+	async runAgent(agentId: string): Promise<IAgentRun | undefined> {
+		await this._orchestrator.ensureLoaded();
+		const agent = this._orchestrator.getAgent(agentId);
+		if (!agent) { return undefined; }
+		const docs = agent.flow.docs.length ? agent.flow.docs.map(d => URI.parse(d)) : await this._discoverLivingDocUris();
+		return this._orchestrator.runAgent(agentId, 'manual', docs);
+	}
+
+	// The orchestration host: how an agent does its work once a trigger fires. Event agents only flag
+	// along the graph (propagation already ran); lifecycle hooks fire from the document lifecycle
+	// (Item 5). Everything else re-derives each in-scope document and routes its figure changes through
+	// the verify gate then the per-edge policy (auto-apply / queue / draft). Reports what landed/queued.
+	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<IAgentRunResult> {
+		if (agent.trigger.kind === 'event' || agent.trigger.kind === 'lifecycle') { return { applied: 0, queued: 0 }; }
+		let applied = 0;
+		let queued = 0;
+		let blocked: string | undefined;
+		for (const uri of context.docs) {
+			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
+			if (!state || !state.doc.isLiving) { continue; }
+			state.recent = new Set<string>();
+			const result = await this._runFiguresByPolicy(state, agent.policy);
+			applied += result.applied;
+			queued += result.queued;
+			if (result.blocked) { blocked = result.blocked; }
+			if (result.applied) { await this._persist(state); } else { await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e)); }
+			await this._recomputeFreshness(state);
+			// The heartbeat drains each doc it processed from the dirty queue.
+			if (agent.trigger.kind === 'heartbeat') { this._orchestrator.clearDirty(uri); }
+		}
+		this._onDidChange.fire();
+		return { applied, queued, blocked };
 	}
 
 	// --- the Review-impact pass (expensive, on-demand): spec 3.6 ---
