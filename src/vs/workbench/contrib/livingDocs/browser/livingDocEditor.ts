@@ -169,6 +169,7 @@ export class LivingDocEditor extends EditorPane {
 			doc: this._livingDocs.getDoc(resource),
 			pending: this._livingDocs.getPendingForDoc(resource),
 			resolved: this._livingDocs.getResolved(resource),
+			dirty: this._livingDocs.getFreshness(resource).dirty,
 			status: this._livingDocs.getStatus(resource),
 			recent: this._livingDocs.getRecentlyApplied(resource),
 			mode: this._mode,

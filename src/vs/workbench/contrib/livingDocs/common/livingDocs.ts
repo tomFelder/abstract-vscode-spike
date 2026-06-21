@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAuditEntry, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -65,6 +65,10 @@ export interface ILivingDocsService {
 	getResolved(resource: URI): ReadonlyMap<string, string>;
 	/** The document's lock (dependency graph + provenance ledger), if loaded. */
 	getLock(resource: URI): ILivingDocLock | undefined;
+	/** The cheap always-on staleness signal: which bindings/context changed since last sync/review. */
+	getFreshness(resource: URI): IFreshness;
+	/** Re-hash the document's sources and recompute its dirty bits (what the source watcher triggers). */
+	checkSources(resource: URI): Promise<void>;
 	getStatus(resource: URI): string;
 	/** Block ids that were auto-applied in the last refresh (for the green "just updated" highlight). */
 	getRecentlyApplied(resource: URI): ReadonlySet<string>;

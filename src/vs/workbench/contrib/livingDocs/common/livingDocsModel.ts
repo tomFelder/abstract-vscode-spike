@@ -61,6 +61,15 @@ export interface ILivingDoc {
 // meaning -> changes the meaning, waits for one-click approval
 export type ChangeKind = 'figure' | 'meaning';
 
+// The cheap, always-on staleness signal for one document (spec 3.4). Value bindings are stale when
+// their source's current hash no longer matches the lock; context sources are stale when changed
+// since last review. Computed without any model calls.
+export interface IFreshness {
+	readonly staleBindings: readonly string[];  // bind keys whose source value changed since last sync
+	readonly staleContext: readonly string[];   // context files changed since last review
+	readonly dirty: boolean;                     // true when anything is stale ("may be affected")
+}
+
 // --- the lock file (<doc>.lock.json) - the dependency graph + provenance ledger (spec 3.3) ---
 // The lock is the source of truth for resolved values and freshness. It is generated/maintained by
 // the app and is rebuildable from the sources; the `.md` carries only the visible (cached) values.

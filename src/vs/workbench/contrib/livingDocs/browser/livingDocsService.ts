@@ -6,7 +6,7 @@
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -22,7 +22,7 @@ import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
-import { emptyLock, IAuditEntry, IBindingEntry, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { emptyLock, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 // One freshly-read source value for a bind key, before it is written into the lock.
 interface IResolution {
@@ -38,6 +38,8 @@ interface IDocState {
 	rawText: string;
 	lock: ILivingDocLock;           // the source of truth for resolved values + freshness
 	recent: Set<string>;            // block ids changed in the last refresh (for the highlight)
+	staleBindings: Set<string>;     // dirty bits: bind keys whose source changed since last sync
+	staleContext: Set<string>;      // dirty bits: context files changed since last review
 	status: string;
 }
 
@@ -90,6 +92,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _docs = new Map<string, IDocState>();
 	private _pending: IProposedChange[] = [];
 	private readonly _lockStore: ILockStore;
+	// Correlated source watchers, one store per loaded document. Disposed/recreated on reload, and
+	// all torn down when the service is disposed.
+	private readonly _watchers = new Map<string, IDisposable>();
 
 	constructor(
 		@IFileService private readonly _files: IFileService,
@@ -104,6 +109,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	) {
 		super();
 		this._lockStore = new SidecarLockStore(this._files);
+		this._register(toDisposable(() => {
+			for (const w of this._watchers.values()) { w.dispose(); }
+			this._watchers.clear();
+		}));
 	}
 
 	// --- per-document views ---
@@ -120,6 +129,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return out;
 	}
 	getLock(resource: URI): ILivingDocLock | undefined { return this._docs.get(resource.toString())?.lock; }
+	getFreshness(resource: URI): IFreshness {
+		const state = this._docs.get(resource.toString());
+		const staleBindings = state ? [...state.staleBindings] : [];
+		const staleContext = state ? [...state.staleContext] : [];
+		return { staleBindings, staleContext, dirty: staleBindings.length > 0 || staleContext.length > 0 };
+	}
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
 		return this._pending.filter(c => c.docId === id);
@@ -261,6 +276,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// the lock is authoritative - load is read-only and the cache reconciles to it at render.
 			await this._bootstrapLock(state);
 			state.recent = new Set<string>();
+			// Cheap, always-on staleness: hash the sources now and watch them for later changes.
+			await this._recomputeFreshness(state);
+			this._watchSources(state);
 		}
 		this._onDidChange.fire();
 	}
@@ -283,6 +301,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			rawText,
 			lock,
 			recent: this._docs.get(resource.toString())?.recent ?? new Set<string>(),
+			staleBindings: new Set<string>(),
+			staleContext: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 		};
 		this._docs.set(resource.toString(), state);
@@ -295,24 +315,104 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private async _bootstrapLock(state: IDocState): Promise<void> {
 		const keys = new Set<string>();
 		for (const block of state.doc.blocks) { for (const b of block.binds) { keys.add(b.key); } }
-		const missing = [...keys].some(key => !Object.prototype.hasOwnProperty.call(state.lock.bindings, key));
-		if (!missing) { return; }
+		const missingBinding = [...keys].some(key => !Object.prototype.hasOwnProperty.call(state.lock.bindings, key));
+		const missingContext = state.doc.context.some(file => !Object.prototype.hasOwnProperty.call(state.lock.context, file));
+		if (!missingBinding && !missingContext) { return; }
+
 		const resolution = await this._resolveCurrent(state);
-		let added = false;
+		let changed = false;
 		for (const key of keys) {
 			if (Object.prototype.hasOwnProperty.call(state.lock.bindings, key)) { continue; }
 			const r = resolution.get(key);
 			if (!r) { continue; }
 			state.lock.bindings[key] = this._bindingEntry(r);
-			added = true;
+			changed = true;
 		}
-		if (added) {
+		// Seed each context source as reviewed-at-current so it reads as current until it next changes.
+		for (const file of state.doc.context) {
+			if (Object.prototype.hasOwnProperty.call(state.lock.context, file)) { continue; }
+			state.lock.context[file] = { reviewedHash: await this._hashContext(state, file), reviewedAt: new Date().toISOString(), scope: 'document' };
+			changed = true;
+		}
+		if (changed) {
 			try {
 				await this._lockStore.write(state.uri, state.lock);
 			} catch (e) {
 				this._log.warn('[livingDocs] lock bootstrap write failed', e);
 			}
 		}
+	}
+
+	// --- staleness detection (cheap, always-on): the dirty bit (spec 3.4) ---
+
+	async checkSources(resource: URI): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		await this._recomputeFreshness(state);
+		this._onDidChange.fire();
+	}
+
+	// Re-hash every source and flip the dirty bits. Value bindings compare the source value's hash to
+	// the lock's; context sources compare to the lock's reviewedHash. No prose is touched, no model is
+	// called - this is the always-on layer.
+	private async _recomputeFreshness(state: IDocState): Promise<void> {
+		const staleBindings = new Set<string>();
+		const staleContext = new Set<string>();
+		if (state.doc.isLiving) {
+			const resolution = await this._resolveCurrent(state);
+			for (const key of Object.keys(state.lock.bindings)) {
+				const cur = resolution.get(key);
+				if (cur && cur.sourceHash !== state.lock.bindings[key].sourceHash) { staleBindings.add(key); }
+			}
+			for (const file of state.doc.context) {
+				const entry = state.lock.context[file];
+				const hash = await this._hashContext(state, file);
+				if (!entry || entry.reviewedHash !== hash) { staleContext.add(file); }
+			}
+		}
+		state.staleBindings = staleBindings;
+		state.staleContext = staleContext;
+		if (state.doc.isLiving) {
+			state.status = (staleBindings.size || staleContext.size) ? 'Sources changed - may be affected' : 'All sources synced';
+		}
+	}
+
+	private async _hashContext(state: IDocState, file: string): Promise<string> {
+		if (sourceKind(file) === 'api') { return ''; }
+		try {
+			const text = (await this._files.readFile(joinPath(dirname(state.uri), file))).value.toString();
+			return hashString(text);
+		} catch (e) {
+			this._log.trace('[livingDocs] context unreadable', file, e instanceof Error ? e.message : String(e));
+			return '';
+		}
+	}
+
+	// Watch each file source + context source with a correlated watcher so a source change flips the
+	// dirty bit on its own (the always-on layer). Recreated per load; best-effort (no-op where the
+	// platform has no watcher, e.g. unit tests).
+	private _watchSources(state: IDocState): void {
+		const id = state.uri.toString();
+		this._watchers.get(id)?.dispose();
+		this._watchers.delete(id);
+		if (typeof this._files.createWatcher !== 'function') { return; }
+		const store = new DisposableStore();
+		const targets: URI[] = [];
+		for (const source of state.doc.sources) {
+			if (sourceKind(source) === 'file') { targets.push(joinPath(dirname(state.uri), source)); }
+		}
+		for (const file of state.doc.context) {
+			if (sourceKind(file) === 'file') { targets.push(joinPath(dirname(state.uri), file)); }
+		}
+		for (const target of targets) {
+			try {
+				const watcher = store.add(this._files.createWatcher(target, { recursive: false, excludes: [] }));
+				store.add(watcher.onDidChange(() => void this.checkSources(state.uri)));
+			} catch (e) {
+				this._log.trace('[livingDocs] watch failed', e instanceof Error ? e.message : String(e));
+			}
+		}
+		this._watchers.set(id, store);
 	}
 
 	private _bindingEntry(r: IResolution): IBindingEntry {
@@ -429,6 +529,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			rawText: text,
 			lock,
 			recent: new Set<string>(),
+			staleBindings: new Set<string>(),
+			staleContext: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 		};
 		try {
@@ -438,6 +540,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		this._docs.set(id, state);
 		await this._bootstrapLock(state);
+		await this._recomputeFreshness(state);
+		this._watchSources(state);
 		this._onDidChange.fire();
 	}
 
@@ -506,6 +610,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			state.recent = new Set<string>();
 			await this._syncLock(state);
 			await this._persist(state);
+			// The value bindings are now in sync, so their dirty bits clear (context stays stale until
+			// a Review-impact pass, Item 5).
+			await this._recomputeFreshness(state);
 			derived++;
 		}
 

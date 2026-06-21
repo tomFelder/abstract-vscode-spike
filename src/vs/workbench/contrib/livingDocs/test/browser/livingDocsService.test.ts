@@ -79,6 +79,13 @@ const PLAIN_MD = [
 	'- second item',
 ].join('\n') + '\n';
 
+// The influence (context) source for the Weekly Summary - plain Markdown, not itself a living doc.
+const MARKET_MD = [
+	'# Market research',
+	'',
+	'Steady competitive landscape; no major moves this week.',
+].join('\n') + '\n';
+
 const API_MD = [
 	'---',
 	'title: Ecosystem Signal',
@@ -109,6 +116,7 @@ suite('LivingDocsService', () => {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
+		files.set(URI.file('/ws/market-research.md').toString(), MARKET_MD);
 		files.set(WEEKLY.toString(), WEEKLY_MD);
 		files.set(README.toString(), PLAIN_MD);
 		if (opts.boardNote) { files.set(BOARD.toString(), BOARD_MD); }
@@ -227,6 +235,43 @@ suite('LivingDocsService', () => {
 		assert.notStrictEqual(mrr.sourceHash, 'stale', 'source hash refreshed at sync');
 		const lockOnDisk = JSON.parse(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!);
 		assert.strictEqual(lockOnDisk.bindings['metrics.mrr'].resolved, '$48.6k', 'lock persisted to its sidecar');
+	});
+
+	test('changing a value source flips the binding dirty bit (hash mismatch), with no model calls', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getFreshness(WEEKLY).dirty, false, 'fresh immediately after load');
+
+		// A new week lands in the CSV - the bound document may be affected.
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.checkSources(WEEKLY);
+
+		const fresh = service.getFreshness(WEEKLY);
+		assert.ok(fresh.dirty && fresh.staleBindings.includes('metrics.mrr'), `binding dirty on source change: ${JSON.stringify(fresh)}`);
+	});
+
+	test('changing a context source flips its freshness to stale (the influence path)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleContext, [], 'context current after load');
+
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+
+		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleContext, ['market-research.md'], 'context flagged changed-since-review');
+	});
+
+	test('refreshing re-syncs the value bindings and clears their dirty bits', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.checkSources(WEEKLY);
+		assert.ok(service.getFreshness(WEEKLY).dirty, 'dirty before refresh');
+
+		await service.refreshFromSources();
+
+		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleBindings, [], 'binding dirty bits cleared after re-sync');
+		assert.strictEqual(service.getResolved(WEEKLY).get('metrics.mrr'), '$52.0k', 'lock now holds the new value');
 	});
 
 	test('a clean Markdown table with bind links in cells resolves each cell on refresh', async () => {

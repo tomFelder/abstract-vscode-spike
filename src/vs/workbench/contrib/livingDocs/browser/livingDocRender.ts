@@ -32,6 +32,8 @@ export interface ILivingDocRenderInput {
 	readonly pending: readonly IProposedChange[];
 	/** Resolved value per bind key; the visible cache is reconciled to these at render time (lock wins). */
 	readonly resolved: ReadonlyMap<string, string>;
+	/** True when a source changed since last sync/review ("may be affected"). */
+	readonly dirty: boolean;
 	readonly status: string;
 	readonly recent: ReadonlySet<string>;
 	readonly mode: LivingDocViewMode;
@@ -203,14 +205,14 @@ for (const el of document.querySelectorAll('[data-block]')) {
 }`;
 
 export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
-	const { doc, pending, resolved, status, recent, mode, rawText } = input;
+	const { doc, pending, resolved, dirty, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
 	const crumb = isLiving ? 'Living Document' : 'Markdown';
 
 	const isRendered = mode === 'rendered';
 
 	// Status pill + "Refresh from sources" are only meaningful for bound Living Documents.
-	const warn = pending.length ? 'warn' : '';
+	const warn = (pending.length || dirty) ? 'warn' : '';
 	const livingControls = isLiving
 		? `<span class="pill ${warn}"><span class="dot"></span>${esc(status)}</span>`
 		: '';
