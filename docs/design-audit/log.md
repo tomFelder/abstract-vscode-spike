@@ -27,6 +27,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 7 | **~86%** | **Core flow verified live:** Review rail 55->82 — Review impact queues pending meaning-changes (inline + right rail, old→new diff, confidence, risk); **Approve applies & clears**, **Reject discards & reverts**. The product's central approve/reject loop works end-to-end. |
 | 8 | **~86%** | **Functional audit:** editor raw-Markdown editing verified (round-trips to the clean-file bind-link format). All core flows now confirmed functional. Pinned down that Chat/History/Skills tab bodies are *intentionally static comp reproductions* — composer + Apply-fix/Run/Re-run not wired (only Approve-all/Review-each are). Honest scoring note below; no inflation. |
 | 9 | **~86%** | **Skills tab made functional** (was static): real deterministic graders — Financial reconciles all 12 bound figures (PASS) + working Re-run; Formatting flags the 2 sentence-case headings (live count) + Run; Strategy honestly reports NO MODEL. Closes the iter-8 functional gap. Skills score now *earned*, not just visual. |
+| 10 | **~86%** | **Final re-score + summary** (10-iteration cap reached). All core flows live-verified functional. Honest landing: ~86% — short of the 90% early-exit; remaining gap is model-gated/data-model work, documented below. |
 
 ---
 
@@ -476,6 +477,57 @@ Shot: `shots/iter9-skills-functional.png`.
 **Score:** Skills stays **88** but is now *earned* (functional, not just visual) — resolving the iter-8
 honesty caveat. Overall **~86** (the figure was already counting Skills at 88; this restores its
 integrity). The remaining static surface is the **Chat composer** (a real agent chat is model-gated).
+
+---
+
+## Iteration 10 — final re-score, trajectory, and summary
+
+The loop hit its **10-iteration cap** at **~86%** (the >=90% early-exit was not reached). Honest final
+scorecard, after all the verification and fixes:
+
+| Surface | Baseline | Final | What moved it |
+|---|:--:|:--:|---|
+| Home dashboard | 82 | **85** | global top bar (iter 3) |
+| Document editor | 80 | **84** | avatar + gutter/diff/raw-edit verified (iter 5, 8) |
+| Templates | 88 | **89** | top bar (iter 3) |
+| Knowledge | 80 | **88** | OKRs/Strategy verified built (iter 5) |
+| Agents list | 82 | **85** | top bar + nav-bug fix (iter 3, 6) |
+| Workflow canvas | 72 | **80** | verified functional (iter 4) |
+| Context panel | 48 | **80** | grouped Linked sources + Referenced files (iter 2) |
+| Right rail — Chat | 90 | **88** | trimmed: composer is comp-static (model-gated) |
+| Right rail — Review | 55 | **82** | approve/reject verified live (iter 7) |
+| Right rail — History | 92 | **92** | (faithful from baseline) |
+| Right rail — Skills | 88 | **88** | now *functional* graders, not just visual (iter 9) |
+| Present / export modal | 80 | **85** | WHO CAN ACCESS for all exports (iter 4) |
+
+**Overall: ~78% -> ~86%.** Every **core flow is functionally verified live**: figure auto-sync,
+the review/approve-reject loop, agents run + canvas, cross-surface navigation (bug fixed), context
+inventory, raw-Markdown editing, and the Skills graders.
+
+### Why ~86% and not 90% (honest)
+The remaining gap is concentrated in a few surfaces whose lift is **model-gated or needs a data-model
+change**, not polish:
+- **Context (80):** the comp also shows Pasted-text / Images / Company-knowledge groups; the data model
+  only carries file-path context, so rendering those faithfully needs a small model extension (not
+  fabricated rows).
+- **Review (82):** the approve/reject flow works, but the *suggestion wording* is heuristic ("revisit
+  whether this still holds") vs the comp's model-quality rewrite.
+- **Chat (88):** composer is an intentionally static comp reproduction; a real agent chat is
+  model-gated.
+- **Canvas (80):** a deliberate loop-pipeline alternative to the comp's 3-column source->doc layout.
+- **Editor (84):** the comp's source-peek + "Sync across" side pane is not built.
+
+**The single biggest lever to clear 90% is wiring a language model** — it simultaneously lifts the
+Review suggestion quality, the Chat composer, and the Strategy skill. Next after that: the editor
+source-peek pane, and a context-kind model extension for the Context groups.
+
+### Deferred (documented, not hidden)
+Editor source-peek + Sync-across pane; Context pasted-text/images/company-knowledge groups + Add-context;
+Chat composer + Strategy skill (model); dev-build extension-activation toasts; dynamic doc subtitle.
+
+### Core-flow verification index (where each was proven)
+auto-figure sync — iter 6 · review/approve-reject — iter 7 · agent run + canvas — iter 4/6 · navigation —
+iter 6 · context grouping — iter 2 · raw-Markdown editing — iter 8 · Skills graders — iter 9.
 
 ---
 
