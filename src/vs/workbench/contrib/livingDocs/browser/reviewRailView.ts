@@ -18,11 +18,16 @@ import { IViewDescriptorService } from '../../../common/views.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
 import { IAuditEntry, IProposedChange } from '../common/livingDocsModel.js';
 
-type PanelTab = 'chat' | 'review' | 'history';
+type PanelTab = 'chat' | 'review' | 'history' | 'skills';
 
-// The Studio right panel: a Chat / Review / History tabbed surface matching the Workbench hi-fi.
-// Review shows pending meaning-changes (the working feature); History shows the audit trail; Chat
-// is a styled placeholder for the agent surface that lands in a later phase.
+function esc(s: string): string {
+	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// The Studio right panel: a Chat / Review / History / Skills tabbed surface matching the Workbench
+// hi-fi. Review shows the real pending meaning-changes (wired to approve/reject); Chat is the agent
+// front door; History is the version timeline (seeded from the real audit when present); Skills lists
+// the document agents that run on the file. Our own surface -- no core patch.
 export class ReviewRailView extends ViewPane {
 
 	private _root: HTMLElement | undefined;
@@ -52,6 +57,7 @@ export class ReviewRailView extends ViewPane {
 		this._root.style.height = '100%';
 		this._injectStyles(container);
 		this._register(this._livingDocs.onDidChange(() => this._render()));
+		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
 		this._render();
 	}
 
@@ -80,13 +86,16 @@ export class ReviewRailView extends ViewPane {
 		addTab('chat', 'Chat');
 		addTab('review', 'Review', pending.length);
 		addTab('history', 'History');
+		addTab('skills', 'Skills');
 
 		// --- content ---
 		const content = append(root, $('div.ldp-content'));
 		if (this._activeTab === 'chat') {
-			this._renderChat(content);
+			this._renderChat(content, pending.length);
 		} else if (this._activeTab === 'history') {
 			this._renderHistory(content, audit);
+		} else if (this._activeTab === 'skills') {
+			content.innerHTML = SKILLS_HTML;
 		} else {
 			this._renderReview(content, pending);
 		}
@@ -151,24 +160,28 @@ export class ReviewRailView extends ViewPane {
 	}
 
 	private _renderHistory(content: HTMLElement, audit: readonly IAuditEntry[]): void {
-		if (!audit.length) {
-			const empty = append(content, $('div.ldp-empty'));
-			empty.textContent = 'No history yet. Approved, rejected, and auto-applied changes will appear here.';
-			return;
-		}
-		for (const e of audit.slice().reverse()) {
-			const row = append(content, $('div.ldr-audit'));
-			const verb = e.action === 'rejected' ? 'rejected' : e.action === 'approved' ? 'approved' : 'auto-applied';
-			row.textContent = `${verb} - ${e.docTitle} / ${e.blockId} - via ${e.via} - ${e.time.slice(11, 19)}`;
-		}
+		content.innerHTML = historyHtml(audit);
 	}
 
-	private _renderChat(content: HTMLElement): void {
-		const empty = append(content, $('div.ldp-empty'));
-		const title = append(empty, $('div.ldp-empty-title'));
-		title.textContent = 'Chat';
-		const body = append(empty, $('div.ldp-empty-body'));
-		body.textContent = 'Ask the document agent to draft sections, connect sources, or explain a change. Coming in a later phase.';
+	private _renderChat(content: HTMLElement, pendingCount: number): void {
+		content.innerHTML = chatHtml(pendingCount);
+		// Wire the two real actions in the chat surface via delegation (no fragile selectors): walk up
+		// from the click target looking for our data-attributes -- approve everything, or jump to Review.
+		this._renderDisposables.add(addDisposableListener(content, 'click', e => {
+			let el = e.target as HTMLElement | null;
+			while (el && el !== content) {
+				if (el.hasAttribute('data-approve-all')) {
+					for (const change of this._livingDocs.getAllPending()) { void this._livingDocs.approve(change.id); }
+					return;
+				}
+				if (el.hasAttribute('data-go-review')) {
+					this._activeTab = 'review';
+					this._render();
+					return;
+				}
+				el = el.parentElement;
+			}
+		}));
 	}
 
 	private _injectStyles(container: HTMLElement): void {
@@ -176,36 +189,33 @@ export class ReviewRailView extends ViewPane {
 		this._stylesInjected = true;
 		const style = document.createElement('style');
 		style.textContent = `
-		.living-docs-panel{display:flex;flex-direction:column;height:100%;font:13px system-ui}
-		.living-docs-panel .ldp-tabs{display:flex;gap:2px;flex:none;padding:0 8px;border-bottom:1px solid var(--vscode-widget-border,#e9eaee)}
-		.living-docs-panel .ldp-tab{position:relative;border:none;background:transparent;padding:11px 12px 10px;font:600 12px/1 system-ui;color:var(--vscode-descriptionForeground);cursor:pointer;display:flex;align-items:center;gap:6px}
-		.living-docs-panel .ldp-tab:hover{color:var(--vscode-foreground)}
-		.living-docs-panel .ldp-tab.active{color:var(--vscode-foreground)}
+		.living-docs-panel{display:flex;flex-direction:column;height:100%;font:13px system-ui;background:#fbfbfc}
+		.living-docs-panel .ldp-tabs{display:flex;gap:2px;flex:none;padding:0 4px;border-bottom:1px solid #eef0f3}
+		.living-docs-panel .ldp-tab{position:relative;border:none;background:transparent;padding:11px 11px 10px;font:500 12.5px/1 system-ui;color:#868b95;cursor:pointer;display:flex;align-items:center;gap:6px}
+		.living-docs-panel .ldp-tab:hover{color:#1a1c20}
+		.living-docs-panel .ldp-tab.active{color:#1a1c20;font-weight:600}
 		.living-docs-panel .ldp-tab.active::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:2px;background:oklch(0.55 0.13 255)}
-		.living-docs-panel .ldp-tab-count{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#fff;background:oklch(0.66 0.16 45);border-radius:999px;padding:3px 6px}
-		.living-docs-panel .ldp-content{flex:1;overflow-y:auto;padding:14px 12px}
-		.living-docs-panel .ldp-empty{padding:8px 2px}
-		.living-docs-panel .ldp-empty-title{font:600 13px/1 system-ui;color:var(--vscode-foreground);margin-bottom:8px}
-		.living-docs-panel .ldp-empty-body{font:400 12px/1.6 system-ui;color:var(--vscode-descriptionForeground)}
-		.living-docs-panel .ldr-status{font:400 11.5px/1.5 system-ui;color:var(--vscode-descriptionForeground);margin-bottom:14px}
+		.living-docs-panel .ldp-tab-count{font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#fff;background:oklch(0.66 0.16 45);border-radius:999px;padding:3px 5px}
+		.living-docs-panel .ldp-content{flex:1;overflow-y:auto}
+		.living-docs-panel .ldr-content,.living-docs-panel .ldp-content{padding:14px 12px}
+		.living-docs-panel .ldr-status{font:400 11.5px/1.5 system-ui;color:#868b95;margin-bottom:14px}
 		.living-docs-panel .ldr-group{margin-bottom:16px}
-		.living-docs-panel .ldr-group-head{display:flex;align-items:center;gap:8px;font:600 11px/1 system-ui;letter-spacing:.02em;color:var(--vscode-foreground);text-transform:uppercase;margin:6px 0 8px}
-		.living-docs-panel .ldr-group-count{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground);background:var(--vscode-badge-background,#0002);border-radius:999px;padding:2px 7px}
-		.living-docs-panel .ldr-card{border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:10px;padding:13px;margin-bottom:12px;background:var(--vscode-editorWidget-background)}
+		.living-docs-panel .ldr-group-head{display:flex;align-items:center;gap:8px;font:600 11px/1 system-ui;letter-spacing:.02em;color:#1a1c20;text-transform:uppercase;margin:6px 0 8px}
+		.living-docs-panel .ldr-group-count{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;background:#0001;border-radius:999px;padding:2px 7px}
+		.living-docs-panel .ldr-card{border:1px solid #eceef2;border-radius:10px;padding:13px;margin-bottom:12px;background:#fff}
 		.living-docs-panel .ldr-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
-		.living-docs-panel .ldr-card-name{font:600 12.5px/1 system-ui;color:var(--vscode-foreground)}
+		.living-docs-panel .ldr-card-name{font:600 12.5px/1 system-ui;color:#1a1c20}
 		.living-docs-panel .ldr-tag{font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;color:#b4332f;background:#fdecec;border-radius:999px;padding:4px 7px}
-		.living-docs-panel .ldr-diff{border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:7px;overflow:hidden;margin-bottom:10px}
+		.living-docs-panel .ldr-diff{border:1px solid #eceef2;border-radius:7px;overflow:hidden;margin-bottom:10px}
 		.living-docs-panel .ldr-o{background:#fdecec;color:#7a3a38;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.4);padding:8px 10px;font:400 12.5px/1.45 system-ui}
 		.living-docs-panel .ldr-n{background:#e7f6ec;color:#1f5a36;padding:8px 10px;font:400 12.5px/1.45 system-ui}
-		.living-docs-panel .ldr-why{font:400 11.5px/1.5 system-ui;color:var(--vscode-descriptionForeground);background:var(--vscode-textBlockQuote-background,#f4f5f7);border-radius:7px;padding:8px 10px;margin-bottom:10px}
-		.living-docs-panel .ldr-meta{display:flex;flex-wrap:wrap;gap:12px;font:600 10px/1.4 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground);margin-bottom:12px}
+		.living-docs-panel .ldr-why{font:400 11.5px/1.5 system-ui;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:7px;padding:8px 10px;margin-bottom:10px}
+		.living-docs-panel .ldr-meta{display:flex;flex-wrap:wrap;gap:12px;font:600 10px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#868b95;margin-bottom:12px}
 		.living-docs-panel .ldr-actions{display:flex;gap:8px}
 		.living-docs-panel .ldr-approve{flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer}
 		.living-docs-panel .ldr-approve:hover{background:oklch(0.5 0.13 255)}
-		.living-docs-panel .ldr-reject{border:1px solid var(--vscode-widget-border,#e0e2e8);border-radius:8px;padding:9px 14px;background:transparent;color:var(--vscode-foreground);font:500 12px/1 system-ui;cursor:pointer}
-		.living-docs-panel .ldr-reject:hover{background:var(--vscode-list-hoverBackground)}
-		.living-docs-panel .ldr-audit{font:400 10.5px/1.7 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
+		.living-docs-panel .ldr-reject{border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer}
+		.living-docs-panel .ldr-reject:hover{background:#f4f5f7}
 		`;
 		container.appendChild(style);
 	}
@@ -217,3 +227,100 @@ export class ReviewRailView extends ViewPane {
 		}
 	}
 }
+
+// ---- Static comp-faithful tab bodies (Chat / History / Skills). Light colours match the registered
+// "Opportunity OS" theme, so hardcoding them here reproduces the comp exactly. ----
+
+function chatHtml(pendingCount: number): string {
+	const summaryActions = pendingCount > 0
+		? `<div style="display:flex;gap:7px"><button data-approve-all style="flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Approve all</button><button data-go-review style="border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer">Review each</button></div>`
+		: `<div style="display:flex;align-items:center;gap:7px;font:600 12px/1 system-ui;color:#1f7a44"><span>&#10003; All changes approved</span></div>`;
+	return `<div style="display:flex;flex-direction:column;gap:16px">
+		<div style="text-align:center;font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#bcc0c8">TODAY &middot; 9:02</div>
+		<div style="align-self:flex-end;max-width:88%;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+			<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end"><span style="font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px">@Weekly Summary.md</span><span style="font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px">@metrics.csv</span></div>
+			<div style="background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36">metrics.csv just refreshed &mdash; update this week's summary and tighten the commentary.</div>
+		</div>
+		<div style="display:flex;gap:9px">
+			<span style="flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center">&#10022;</span>
+			<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:10px">
+				<div style="border:1px solid #eceef2;border-radius:10px;overflow:hidden;background:#fff">
+					<div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66;border-bottom:1px solid #f4f5f7"><span>&#10003;</span>Read metrics.csv &middot; 12 rows</div>
+					<div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66;border-bottom:1px solid #f4f5f7"><span>&#10003;</span>Diffed against last sync (v13)</div>
+					<div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66"><span>&#10003;</span>Found 3 changed values</div>
+				</div>
+				<p style="margin:0;font:400 13.5px/1.6 system-ui;color:#2c2f36">I applied two low-risk figure updates and drafted one tone change that needs your call:</p>
+				<div style="display:flex;flex-direction:column;gap:7px">
+					<div style="display:flex;align-items:center;gap:8px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#1f5a36">&#10003; MRR <span style="text-decoration:line-through;opacity:.7">12%</span> &rarr; 18% <span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66">applied</span></div>
+					<div style="display:flex;align-items:center;gap:8px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#1f5a36">&#10003; Signups 312 &rarr; 427 <span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66">applied</span></div>
+					<button data-go-review style="text-align:left;display:flex;align-items:center;gap:8px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#9a6b16;cursor:pointer">&#9888; Commentary rewrite <span style="margin-left:auto;font:600 11px/1 system-ui;color:oklch(0.5 0.13 255)">Review &rarr;</span></button>
+				</div>
+				<div style="border:1px solid #e0e6ff;background:#f7f9ff;border-radius:10px;padding:11px 12px">
+					<div style="display:flex;align-items:center;gap:7px;margin-bottom:9px"><span style="font:600 11.5px/1 system-ui;color:#3a3f49">Summary of this run</span><span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#8a93c4">3 changes</span></div>
+					<div style="font:400 12px/1.55 system-ui;color:#52575f;margin-bottom:11px">2 figure updates applied automatically; 1 commentary tone rewrite is waiting on you.</div>
+					${summaryActions}
+				</div>
+			</div>
+		</div>
+		<div style="align-self:flex-end;max-width:88%;background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36">Why "accelerated" and not just "strong"?</div>
+		<div style="display:flex;gap:9px">
+			<span style="flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center">&#10022;</span>
+			<p style="flex:1;margin:0;font:400 13.5px/1.6 system-ui;color:#2c2f36">The +18% MRR delta crosses this report's "accelerating" threshold (set at &gt;15%). "Strong" describes size; "accelerated" captures the change in trajectory &mdash; which is what actually moved this week. No new facts were added.</p>
+		</div>
+		<div style="border:1px solid #e0e2e8;border-radius:11px;background:#fff;padding:10px 11px">
+			<div style="font:400 13px/1.4 system-ui;color:#a3a8b2;padding:2px 2px 12px">Ask the agent, or @mention a file&hellip;</div>
+			<div style="display:flex;align-items:center;gap:7px">
+				<span style="font:500 11px/1 system-ui;color:#52575f;background:#f4f5f7;border-radius:7px;padding:6px 9px;display:inline-flex;gap:5px;align-items:center">&#10022; Sonnet 4.5 <span style="color:#a3a8b2">&#9662;</span></span>
+				<span style="font:500 11px/1 system-ui;color:#52575f;background:#f4f5f7;border-radius:7px;padding:6px 9px;display:inline-flex;gap:5px;align-items:center">Agent <span style="color:#a3a8b2">&#9662;</span></span>
+				<button style="margin-left:auto;width:30px;height:30px;border:none;border-radius:8px;background:oklch(0.55 0.13 255);color:#fff;font-size:15px;cursor:pointer">&#8593;</button>
+			</div>
+		</div>
+	</div>`;
+}
+
+function timelineRow(dot: string, title: string, badge: string, body: string, meta: string, last: boolean): string {
+	const connector = last ? '' : `<span style="flex:1;width:2px;background:#e6e8ed"></span>`;
+	return `<div style="display:flex;gap:11px"><div style="flex:none;display:flex;flex-direction:column;align-items:center">${dot}${connector}</div>`
+		+ `<div style="flex:1;padding-bottom:${last ? '0' : '18px'}"><div style="display:flex;align-items:center;gap:7px"><span style="font:600 12.5px/1 system-ui;color:#1a1c20">${title}</span>${badge}</div>`
+		+ `<div style="font:400 12.5px/1.5 system-ui;color:#52575f;margin:5px 0 3px">${body}</div><div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${meta}</div></div></div>`;
+}
+
+function historyHtml(audit: readonly IAuditEntry[]): string {
+	const dot = (color: string) => `<span style="width:10px;height:10px;border-radius:50%;background:${color}"></span>`;
+	const head = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;padding:0 2px 14px">VERSION HISTORY &middot; WEEKLY SUMMARY.MD</div>`;
+	// Seed the timeline with the real audit entries when present (most recent first), then the comp's
+	// earlier sample versions for context.
+	const real = audit.slice().reverse().slice(0, 4).map((e, i, arr) => {
+		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'approved' ? 'Approved' : 'Auto-applied';
+		const badge = i === 0 ? `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:3px 6px">CURRENT</span>` : '';
+		return timelineRow(dot(i === 0 ? 'oklch(0.55 0.13 255)' : '#cfd3da'), `${verb}`, badge, `${esc(e.docTitle)} / ${esc(e.blockId)}`, `${esc(e.via)} &middot; ${esc(e.time.slice(11, 19))}`, false);
+	}).join('');
+	const sample = [
+		timelineRow(dot('oklch(0.55 0.13 255)'), 'v14', `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:3px 6px">CURRENT</span>`, 'Approved commentary rewrite', 'just now &middot; Tom', false),
+		timelineRow(dot('#cfd3da'), 'v13', '', 'Auto-refresh: MRR, signups updated', `<span style="color:oklch(0.55 0.13 255)">&#10227;</span> 2m ago &middot; Weekly refresh`, false),
+		timelineRow(dot('#cfd3da'), 'v12', '', 'Edited "What to watch"', 'yesterday 18:00 &middot; Tom', false),
+		timelineRow(`<span style="font-size:12px;color:oklch(0.66 0.16 45)">&#9733;</span>`, 'v11', `<span style="font:500 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:3px 6px">SNAPSHOT</span>`, 'Created from Weekly report template', 'Jun 12 &middot; Tom', true),
+	].join('');
+	return head + (real || sample);
+}
+
+// Skills (document agents) tab -- the agents that run on this document, on demand or before export.
+const SKILLS_HTML = `<div style="display:flex;flex-direction:column">
+	<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;padding:0 2px 4px">DOCUMENT AGENTS</div>
+	<div style="font:400 11px/1.45 system-ui;color:#a3a8b2;padding:0 2px 14px">Skills that run on Weekly&nbsp;Summary.md &mdash; on demand or before export.</div>
+	<div style="border:1.5px solid oklch(0.78 0.1 70);border-radius:11px;overflow:hidden;margin-bottom:11px;box-shadow:0 2px 10px rgba(180,130,40,.07)">
+		<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#fdf2dc;color:#9a6b16;font-size:14px;display:flex;align-items:center;justify-content:center">&#9672;</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Strategy agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Tests claims against strategy &amp; OKRs</div></div></div>
+		<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:11px 0"><div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px"><span style="color:#9a6b16;font:600 12px/1.4 system-ui">&#9888;</span><p style="margin:0;font:400 12px/1.5 system-ui;color:#52575f"><strong style="font-weight:600">1 flag.</strong> "Revisit the Q3 target" isn't grounded in <span style="color:#9a6b16">Objective&nbsp;2</span> &mdash; restate against the +20% MRR key result?</p></div><div style="display:flex;gap:7px"><button style="border:none;border-radius:7px;padding:7px 12px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer">Apply fix</button></div></div>
+	</div>
+	<div style="border:1px solid #eceef2;border-radius:11px;overflow:hidden;margin-bottom:11px">
+		<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#e7f3ec;color:#217346;font-size:14px;display:flex;align-items:center;justify-content:center">&#8721;</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Financial agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Validates figures in reports &amp; quotes</div></div><span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:4px 7px;flex:none">PASS</span></div>
+		<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="font:400 12px/1.4 system-ui;color:#52575f">All 4 linked figures reconcile with sources.</span><button style="margin-left:auto;border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">Re-run</button></div>
+	</div>
+	<div style="border:1px solid #eceef2;border-radius:11px;overflow:hidden;margin-bottom:14px">
+		<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#eef1f6;color:#52575f;font-size:14px;display:flex;align-items:center;justify-content:center">&#182;</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Formatting agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Checks house style before export</div></div></div>
+		<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="font:400 12px/1.4 system-ui;color:#868b95">2 heading-case fixes suggested.</span><button style="margin-left:auto;border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">Run</button></div>
+	</div>
+	<div style="font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 2px 8px">RUN ON EXPORT</div>
+	<div style="display:flex;align-items:center;gap:9px;border:1px solid #eceef2;background:#fff;border-radius:9px;padding:10px 12px;margin-bottom:14px"><span style="font:400 12px/1.4 system-ui;color:#52575f">Formatting + Financial</span><span style="margin-left:auto;width:34px;height:20px;border-radius:999px;background:oklch(0.55 0.13 255);position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;background:#fff"></span></span></div>
+	<button style="width:100%;border:1px dashed #d4d7de;background:#fff;border-radius:8px;padding:9px;font:500 12px/1 system-ui;color:#868b95;cursor:pointer">&#65291; Add skill from library</button>
+</div>`;

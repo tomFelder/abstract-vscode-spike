@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Living Documents — Clean File + Lock File</title>
+<style>
+  :root{
+    --ink:#1a1c20; --ink2:#52575f; --muted:#868b95; --faint:#a3a8b2;
+    --line:#e9eaee; --line2:#eef0f3; --paper:#fff; --wash:#fbfbfc; --wash2:#f6f7f9;
+    --blue:oklch(0.55 0.13 255); --blue-wash:#f4f6ff; --blue-line:#e0e6ff; --blue-ink:#5b6dc4;
+    --amber:#9a6b16; --amber-wash:#fdf2dc; --amber-line:#e8d9b0;
+    --green:#1f7a44; --green-wash:#e7f6ec; --green-line:#bfe6cc; --green-ink:#1f5a36;
+    --red:#b4453a; --red-wash:#fbece9;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:#f1f2f5;color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1040px;margin:0 auto;padding:40px 22px 96px}
+  ::selection{background:rgba(80,110,235,.18)}
+
+  /* hero */
+  .kicker{font:600 11.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--blue-ink)}
+  h1{font:650 30px/1.18 var(--sans);letter-spacing:-.02em;margin:14px 0 10px}
+  .lede{font-size:16px;color:var(--ink2);max-width:72ch;margin:0}
+  .lede b{color:var(--ink);font-weight:600}
+
+  section{margin-top:46px}
+  h2{font:640 19px/1.3 var(--sans);letter-spacing:-.01em;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  h2 .n{display:inline-flex;width:24px;height:24px;flex:none;align-items:center;justify-content:center;border-radius:7px;background:var(--blue);color:#fff;font:600 12px/1 var(--mono)}
+  .sub{color:var(--muted);font-size:13.5px;margin:2px 0 18px 34px}
+
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .pad{padding:20px 22px}
+
+  /* analogy strip */
+  .analogy{display:flex;flex-wrap:wrap;gap:14px}
+  .analogy .col{flex:1 1 240px;border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:var(--wash)}
+  .analogy h4{margin:0 0 4px;font:600 13px/1 var(--mono);color:var(--ink2)}
+  .analogy p{margin:0;font-size:13px;color:var(--muted)}
+  .analogy .you{background:var(--blue-wash);border-color:var(--blue-line)}
+  .analogy .app{background:var(--wash2)}
+  .arrow{display:flex;align-items:center;color:var(--faint);font-size:22px;font-weight:300}
+
+  /* split files */
+  .split{display:flex;flex-wrap:wrap;gap:18px}
+  .filebox{flex:1 1 380px;min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--paper)}
+  .filehead{display:flex;align-items:center;gap:8px;padding:9px 13px;border-bottom:1px solid var(--line2);background:var(--wash2)}
+  .filehead .fn{font:600 12.5px/1 var(--mono);color:var(--ink2)}
+  .filehead .tag{margin-left:auto;font:500 10px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:5px}
+  .tag.user{background:var(--blue-wash);color:var(--blue-ink);border:1px solid var(--blue-line)}
+  .tag.gen{background:var(--wash);color:var(--muted);border:1px solid var(--line)}
+  pre{margin:0;padding:14px 15px;overflow-x:auto;font:400 12.5px/1.7 var(--mono);color:#2c2f36;background:var(--paper)}
+  pre .fm{color:var(--muted)}
+  pre .tok{background:var(--blue-wash);color:var(--blue-ink);border:1px solid var(--blue-line);border-radius:4px;padding:.5px 4px;font-weight:600}
+  pre .k{color:var(--blue-ink)}
+  pre .s{color:var(--green-ink)}
+  pre .c{color:var(--faint);font-style:italic}
+  pre .h{color:var(--ink);font-weight:700}
+  .note{font-size:12.5px;color:var(--muted);margin:10px 2px 0}
+  .note b{color:var(--ink2);font-weight:600}
+
+  /* interactive doc demo */
+  .demo{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--paper)}
+  .demo .toolbar{flex:1 1 100%;display:flex;align-items:center;gap:8px;padding:9px 13px;border-bottom:1px solid var(--line2);background:var(--wash)}
+  .seg{display:inline-flex;background:#eceef2;border-radius:8px;padding:3px}
+  .seg button{border:none;background:none;font:500 12px/1 var(--sans);color:var(--ink2);padding:6px 12px;border-radius:6px;cursor:pointer}
+  .seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:8px;font:500 12px/1 var(--sans);color:var(--ink2);padding:8px 13px;cursor:pointer;transition:.12s}
+  .btn:hover{border-color:#cdd5e2;color:var(--ink)}
+  .btn.primary{background:var(--blue);border-color:transparent;color:#fff}
+  .btn.primary:hover{filter:brightness(1.05)}
+  .btn.ghost{background:none;border-color:transparent;color:var(--muted)}
+  .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+
+  .panes{flex:1 1 100%;display:flex;min-height:340px}
+  .docpane{flex:1 1 60%;min-width:0;border-right:1px solid var(--line2);position:relative}
+  .sourcepane{flex:1 1 40%;min-width:0;background:var(--wash);display:none;flex-direction:column}
+  .sourcepane.show{display:flex}
+  .sourcehead{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line2);font:500 12px/1 var(--mono);color:var(--ink2)}
+  .sourcehead .meta{margin-left:auto;font:400 10px/1 var(--mono);color:var(--faint)}
+  table.csv{width:100%;border-collapse:collapse;font:400 11.5px/1 var(--mono)}
+  table.csv th,table.csv td{padding:6px 9px;text-align:right;border-bottom:1px solid var(--line2)}
+  table.csv th{color:var(--faint);font-weight:600;text-align:right}
+  table.csv th:first-child,table.csv td:first-child{text-align:left}
+  table.csv tr.hot td{background:var(--blue-wash)}
+  table.csv td.flash{animation:flash 1.1s ease}
+  @keyframes flash{0%{background:var(--green-wash)}100%{background:transparent}}
+
+  /* the document itself */
+  .doc{padding:22px 26px 30px;font-size:14.5px;color:var(--ink)}
+  .doc.raw{font-family:var(--mono);font-size:12.5px;color:#2c2f36;white-space:pre-wrap}
+  .docrow{position:relative;padding-left:30px}
+  .gutter{position:absolute;left:0;top:.55em;width:18px;display:flex;justify-content:center}
+  .dot{width:8px;height:8px;border-radius:50%;cursor:pointer}
+  .dot.blue{background:var(--blue)}
+  .dot.amber{background:var(--amber);animation:pulse 1.6s ease-in-out infinite}
+  .bar{width:3px;border-radius:2px;height:100%;position:absolute;left:7px;top:.4em}
+  .bar.amber{background:var(--amber);animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .doc h1.dt{font:650 22px/1.25 var(--sans);margin:0 0 2px}
+  .doc .dmeta{color:var(--muted);font-size:12.5px;margin:0 0 18px}
+  .doc h2.dh{font:640 14px/1 var(--sans);letter-spacing:.02em;text-transform:uppercase;color:var(--ink2);margin:22px 0 8px}
+  .doc p{margin:0 0 4px}
+  .val{color:var(--blue-ink);font-weight:600}
+  .val.fig-applied{background:var(--green-wash);border-radius:3px;padding:0 3px;animation:flash 1.1s ease}
+  .tokenchip{background:var(--blue-wash);color:var(--blue-ink);border:1px solid var(--blue-line);border-radius:4px;padding:.5px 5px;font:600 12px/1.4 var(--mono)}
+
+  .diff{background:var(--amber-wash);border:1px solid var(--amber-line);border-radius:9px;padding:11px 13px;margin-top:6px}
+  .diff .lab{font:600 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--amber);margin-bottom:7px;display:flex;align-items:center;gap:6px}
+  .del{background:var(--red-wash);color:var(--red);text-decoration:line-through;border-radius:3px;padding:0 2px}
+  .ins{background:var(--green-wash);color:var(--green-ink);border-radius:3px;padding:0 2px;font-weight:600}
+  .diffactions{display:flex;gap:8px;margin-top:11px;align-items:center}
+  .diffactions .src{margin-left:auto;font:400 10.5px/1 var(--mono);color:var(--amber)}
+  .applied-note{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--green-ink);margin-top:6px}
+
+  .pop{position:absolute;z-index:5;background:#23262c;color:#e6e8ed;border-radius:8px;padding:9px 11px;font-size:11.5px;max-width:230px;box-shadow:0 8px 24px rgba(0,0,0,.22);left:30px;display:none}
+  .pop b{color:#fff}
+  .pop code{font-family:var(--mono);color:#9fb4ff}
+
+  /* multiplayer layers */
+  .layers{display:flex;flex-direction:column;gap:12px}
+  .layer{display:flex;gap:14px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:15px 17px;background:var(--paper)}
+  .layer .badge{flex:none;width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:22px}
+  .layer h4{margin:0 0 3px;font-size:14px}
+  .layer p{margin:0;font-size:13px;color:var(--muted)}
+  .layer .tag2{font:600 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;padding:3px 7px;border-radius:5px;margin-left:auto;flex:none}
+  .now{background:var(--green-wash);color:var(--green-ink)}
+  .later{background:var(--blue-wash);color:var(--blue-ink)}
+  .layer.text{background:var(--wash)}
+
+  /* two kinds of dependency */
+  .kinds{display:flex;flex-wrap:wrap;gap:14px}
+  .kind{flex:1 1 300px;border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .kind.val{background:var(--blue-wash);border-color:var(--blue-line)}
+  .kind.inf{background:var(--amber-wash);border-color:var(--amber-line)}
+  .kind h4{margin:0 0 5px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .kind .pill{font:600 9.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;padding:3px 6px;border-radius:5px}
+  .kind.val .pill{background:#fff;color:var(--blue-ink)}
+  .kind.inf .pill{background:#fff;color:var(--amber)}
+  .kind p{margin:0;font-size:13px;color:var(--ink2)}
+  .kind ul{margin:8px 0 0;padding-left:17px;font-size:12.5px;color:var(--ink2)}
+  .kind li{margin:2px 0}
+
+  /* context / sources panel + impact demo */
+  .impact{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .ctxpanel{flex:1 1 270px;min-width:0;background:var(--wash);border-right:1px solid var(--line2);display:flex;flex-direction:column}
+  .ctxhead{padding:12px 15px 9px;border-bottom:1px solid var(--line2)}
+  .ctxhead .t{font:600 11px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+  .ctxhead .s{font-size:12px;color:var(--faint);margin-top:3px}
+  .ctxlist{padding:8px;display:flex;flex-direction:column;gap:4px}
+  .ctxitem{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:9px;background:#fff;border:1px solid var(--line2)}
+  .ctxitem .ic{flex:none;width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;background:var(--wash2)}
+  .ctxitem .nm{font:500 12.5px/1.3 var(--sans);color:var(--ink)}
+  .ctxitem .st{font:400 11px/1.3 var(--sans);color:var(--muted)}
+  .ctxitem .stat{margin-left:auto;flex:none;font:600 9.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;padding:4px 7px;border-radius:6px}
+  .stat.ok{background:var(--green-wash);color:var(--green-ink)}
+  .stat.stale{background:var(--amber-wash);color:var(--amber);animation:pulse 1.6s ease-in-out infinite}
+  .ctxitem.warn{border-color:var(--amber-line);background:#fffdf7}
+  .ctxfoot{margin-top:auto;padding:11px;border-top:1px solid var(--line2)}
+  .ctxfoot .btn{width:100%;justify-content:center;display:flex}
+
+  .impactdoc{flex:1 1 340px;min-width:0;background:#fff;display:flex;flex-direction:column}
+  .impactdoc .banner{display:none;align-items:center;gap:9px;padding:10px 15px;background:var(--amber-wash);border-bottom:1px solid var(--amber-line);font-size:12.5px;color:var(--amber)}
+  .impactdoc .banner.show{display:flex}
+  .impactdoc .body{padding:18px 20px;font-size:14px;overflow:auto}
+  .impactdoc h3{font:650 16px/1.3 var(--sans);margin:0 0 12px}
+  .impactdoc p{margin:0 0 10px;color:var(--ink)}
+  .cand{border:1px solid var(--amber-line);background:var(--amber-wash);border-radius:10px;padding:12px 13px;margin:10px 0}
+  .cand .ch{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .cand .ch .lab{font:600 10px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--amber)}
+  .conf{font:600 9.5px/1 var(--mono);text-transform:uppercase;padding:3px 6px;border-radius:5px;margin-left:auto}
+  .conf.hi{background:var(--green-wash);color:var(--green-ink)}
+  .conf.med{background:#fff;color:var(--amber);border:1px solid var(--amber-line)}
+  .cand .prov{font:400 10.5px/1 var(--mono);color:var(--amber);margin-top:8px}
+  .cand .acts{display:flex;gap:7px;margin-top:9px}
+  .cand .acts .btn{padding:6px 11px;font-size:11.5px}
+  .spin{width:13px;height:13px;border:2px solid var(--amber-line);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* dep graph */
+  .graph{display:flex;align-items:center;justify-content:center;gap:0;flex-wrap:wrap;padding:6px 0}
+  .gnode{border:1px solid var(--line);border-radius:10px;padding:10px 13px;font:500 12px/1.2 var(--sans);background:#fff;text-align:center}
+  .gnode .sub{font:400 10.5px/1 var(--mono);color:var(--faint);margin-top:3px;display:block}
+  .gnode.doc{border-color:var(--blue-line);background:var(--blue-wash);color:var(--blue-ink);font-weight:600}
+  .gedge{display:flex;flex-direction:column;align-items:center;color:var(--faint);font-size:11px;padding:0 4px}
+  .gedge .ln{font-size:20px;line-height:1}
+  .gcol{display:flex;flex-direction:column;gap:8px}
+
+  /* scorecard */
+  .score{width:100%;border-collapse:collapse;font-size:13.5px}
+  .score th,.score td{padding:11px 13px;text-align:left;border-bottom:1px solid var(--line2);vertical-align:top}
+  .score th{font:600 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--wash)}
+  .score td.rank{font:600 12px/1 var(--mono);color:var(--blue-ink);white-space:nowrap}
+  .score tr:last-child td{border-bottom:none}
+  .pri{display:inline-block;font:600 10px/1 var(--mono);padding:3px 6px;border-radius:5px;background:var(--blue-wash);color:var(--blue-ink)}
+
+  .foot{margin-top:54px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Living Documents · format direction</div>
+  <h1>Clean file&nbsp;+&nbsp;lock file</h1>
+  <p class="lede">Keep the document as <b>raw, hand-editable Markdown</b> you can open in Obsidian, diff in git, and hand to an agent — while it still carries bound values, provenance, and a review trail. The trick is borrowed from package managers: a clean file you write, and a generated lock file that remembers where every number came from.</p>
+
+  <!-- ===== MENTAL MODEL ===== -->
+  <section>
+    <h2><span class="n">1</span>The mental model</h2>
+    <div class="sub">Two files per document. You own one; the app maintains the other.</div>
+    <div class="card pad">
+      <div class="analogy">
+        <div class="col you">
+          <h4>Weekly&nbsp;Summary.md</h4>
+          <p>The document. ~99% pure Markdown prose that you write and edit anywhere. The <em>only</em> departure: a small token <span class="tokenchip">{{metrics.mrr}}</span> wherever a value is pulled from a source.</p>
+        </div>
+        <div class="arrow">+</div>
+        <div class="col app">
+          <h4>Weekly&nbsp;Summary.lock.json</h4>
+          <p>Hidden. Generated &amp; maintained by the app. Remembers each binding's resolved value, its source, a hash of the source at last sync, and who applied it. This is the provenance ledger.</p>
+        </div>
+      </div>
+      <p class="note"><b>Like <code style="font-family:var(--mono)">package.json</code> + <code style="font-family:var(--mono)">package-lock.json</code></b> — you hand-edit the manifest; the lock file is the machine's record of exactly what got resolved. Delete the lock and the app rebuilds it from the sources.</p>
+    </div>
+  </section>
+
+  <!-- ===== THE TWO FILES ===== -->
+  <section>
+    <h2><span class="n">2</span>What's actually on disk</h2>
+    <div class="sub">The file stays legible. Bound values are visible, meaningful tokens — never smuggled metadata.</div>
+    <div class="split">
+      <div class="filebox">
+        <div class="filehead"><span class="fn">⌘ Weekly Summary.md</span><span class="tag user">you write this</span></div>
+<pre><span class="fm">---
+title: Weekly Operating Summary
+sources: { metrics: ./metrics.csv }
+---</span>
+
+<span class="h"># Weekly Operating Summary</span>
+<span class="c">Week 24 · Jun 15–19, 2026</span>
+
+<span class="h">## Highlights</span>
+Revenue grew <span class="tok">{{metrics.mrr.delta}}</span> week-on-week to
+<span class="tok">{{metrics.mrr}}</span> MRR, carried by <span class="tok">{{metrics.signups}}</span>
+new signups. Churn eased to <span class="tok">{{metrics.churn}}</span>.
+
+<span class="h">## Commentary</span>
+Growth accelerated sharply this week.
+<span class="c">&lt;!-- your prose. not bound. you own every word. --&gt;</span></pre>
+      </div>
+      <div class="filebox">
+        <div class="filehead"><span class="fn">⛒ Weekly Summary.lock.json</span><span class="tag gen">app generates this</span></div>
+<pre>{
+  <span class="k">"version"</span>: 14,
+  <span class="k">"bindings"</span>: {
+    <span class="k">"metrics.mrr"</span>: {
+      <span class="k">"resolved"</span>:   <span class="s">"$48.6k"</span>,
+      <span class="k">"source"</span>:     <span class="s">"metrics.csv#w=24,mrr"</span>,
+      <span class="k">"sourceHash"</span>: <span class="s">"a1b2c3"</span>,
+      <span class="k">"syncedAt"</span>:   <span class="s">"2026-06-21T09:02Z"</span>,
+      <span class="k">"kind"</span>:       <span class="s">"figure"</span>
+    }
+  },
+  <span class="k">"context"</span>: {            <span class="c">// influence edges</span>
+    <span class="k">"market-research.md"</span>: {
+      <span class="k">"reviewedHash"</span>: <span class="s">"9f0e1d"</span>,
+      <span class="k">"reviewedAt"</span>:   <span class="s">"2026-06-19T…"</span>,
+      <span class="k">"scope"</span>:        <span class="s">"document"</span>
+    }
+  },
+  <span class="k">"claims"</span>: {
+    <span class="k">"commentary-tone"</span>: {
+      <span class="k">"anchor"</span>:  <span class="s">"Growth accelerated…"</span>,
+      <span class="k">"boundTo"</span>: [<span class="s">"metrics.mrr"</span>],
+      <span class="k">"kind"</span>:    <span class="s">"meaning"</span>,
+      <span class="k">"state"</span>:   <span class="s">"applied"</span>
+    }
+  }
+}</pre>
+      </div>
+    </div>
+    <p class="note"><b>The token <em>is</em> the anchor.</b> Reorder paragraphs, insert ten lines above it, paste it elsewhere — <code style="font-family:var(--mono)">{{metrics.mrr}}</code> still resolves. No line numbers to drift, nothing to silently break. (Contrast: anchoring by line number breaks the instant anyone adds a line above.)</p>
+  </section>
+
+  <!-- ===== LIVE FLOW ===== -->
+  <section>
+    <h2><span class="n">3</span>The loop, live</h2>
+    <div class="sub">Toggle how the same file is shown, then push a source change and watch figures auto-apply while meaning waits for you.</div>
+    <div class="demo">
+      <div class="toolbar">
+        <div class="seg" id="seg">
+          <button data-v="rendered" class="on">Rendered</button>
+          <button data-v="raw">Raw .md</button>
+        </div>
+        <div class="right">
+          <button class="btn" id="srcBtn">Show source</button>
+          <button class="btn primary" id="changeBtn">Simulate source change ⟳</button>
+          <button class="btn ghost" id="resetBtn">Reset</button>
+        </div>
+      </div>
+      <div class="panes">
+        <div class="docpane">
+          <!-- RENDERED -->
+          <div class="doc" id="docRendered">
+            <h1 class="dt">Weekly Operating Summary</h1>
+            <p class="dmeta">Week 24 · Jun 15–19, 2026 · owner Tom</p>
+
+            <h2 class="dh">Highlights</h2>
+            <div class="docrow">
+              <div class="gutter"><span class="dot blue" data-pop="popRev"></span></div>
+              <div class="pop" id="popRev"><b>⊞ metrics.csv</b><br>Bound to <code>w24 · mrr</code><br>synced 2m ago · auto-applies</div>
+              <p>Revenue grew <span class="val" id="vDelta">12%</span> week-on-week to <span class="val" id="vMrr">$43.0k</span> MRR, carried by <span class="val" id="vSign">312</span> new signups. Churn eased to <span class="val" id="vChurn">3.1%</span>.</p>
+            </div>
+
+            <h2 class="dh">Commentary</h2>
+            <div class="docrow" id="commRow">
+              <div class="gutter" id="commGutter"><span class="dot blue" data-pop="popComm"></span></div>
+              <div class="pop" id="popComm"><b>Commentary</b><br>Bound to <code>mrr, signups</code><br>tone tracks the figures</div>
+              <div id="commBody">
+                <p>Growth remained steady this week.</p>
+              </div>
+            </div>
+          </div>
+          <!-- RAW -->
+          <div class="doc raw" id="docRaw" style="display:none">---
+title: Weekly Operating Summary
+sources: { metrics: ./metrics.csv }
+---
+# Weekly Operating Summary
+Week 24 · Jun 15–19, 2026
+
+## Highlights
+Revenue grew {{metrics.mrr.delta}} week-on-week to {{metrics.mrr}} MRR,
+carried by {{metrics.signups}} new signups. Churn eased to {{metrics.churn}}.
+
+## Commentary
+Growth remained steady this week.</div>
+        </div>
+
+        <div class="sourcepane" id="sourcePane">
+          <div class="sourcehead">⊞ metrics.csv <span class="meta" id="srcMeta">12 rows · synced</span></div>
+          <div style="overflow:auto">
+            <table class="csv">
+              <thead><tr><th>week</th><th>mrr</th><th>signups</th><th>churn%</th></tr></thead>
+              <tbody>
+                <tr><td>w22</td><td>$39.1k</td><td>288</td><td>3.4</td></tr>
+                <tr><td>w23</td><td>$41.2k</td><td>301</td><td>3.2</td></tr>
+                <tr class="hot"><td>w24</td><td id="cMrr">$43.0k</td><td id="cSign">312</td><td id="cChurn">3.1</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note" id="flowNote"><b>Try it:</b> hit <em>Simulate source change</em>. The two figures update themselves (green = auto-applied, low-risk). The commentary's <em>meaning</em> would change, so it waits in an amber pending diff for your call — exactly the blue / orange / green grammar from the Workbench hi-fi.</p>
+  </section>
+
+  <!-- ===== TWO KINDS OF DEPENDENCY ===== -->
+  <section>
+    <h2><span class="n">4</span>When meaning changes, not just numbers</h2>
+    <div class="sub">A token covers a value. But a whole paragraph's <em>sentiment</em> can be informed by another document — and that's the real superpower.</div>
+    <div class="card pad">
+      <div class="kinds">
+        <div class="kind val">
+          <h4><span class="pill">exact</span>Value binding</h4>
+          <p><code style="font-family:var(--mono)">{{metrics.mrr}}</code> → a cell. 1:1, deterministic, a hash compare tells you it changed. Cheap.</p>
+          <ul><li>"Revenue grew to <b>$48.6k</b>"</li></ul>
+        </div>
+        <div class="kind inf">
+          <h4><span class="pill">judgment</span>Influence dependency</h4>
+          <p>A source shapes the <em>framing or facts</em> of prose — one-to-many, diffuse. "Did it change in a way that matters, and where?" is a model's judgment, not a hash.</p>
+          <ul><li>A shifting <b>product principle</b> rewording a thesis</li><li>A <b>new competitor</b> that should ripple through every mention</li></ul>
+        </div>
+      </div>
+      <p class="note"><b>The architecture:</b> generalize the lock file's binding <em>table</em> into a dependency <em>graph</em>, then split <b>cheap staleness detection</b> (always-on, a dirty bit — costs nothing) from <b>expensive impact computation</b> (a model call, only on demand). Impact results become pending changes in the <em>same</em> review rail — no new grammar.</p>
+      <div class="graph" style="margin-top:14px">
+        <div class="gcol">
+          <div class="gnode">⊞ metrics.csv<span class="sub">value → cell</span></div>
+          <div class="gnode">principles.md<span class="sub">influence</span></div>
+          <div class="gnode" style="border-color:var(--amber-line);background:var(--amber-wash)">market-research.md<span class="sub">influence · ⚠ changed</span></div>
+        </div>
+        <div class="gedge"><span class="ln">⟶</span>depends on</div>
+        <div class="gnode doc">Weekly Summary.md<span class="sub">+ .lock.json</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== IMPACT REVIEW DEMO ===== -->
+  <section>
+    <h2><span class="n">5</span>Context panel &amp; “Review impact”</h2>
+    <div class="sub">v1: every document lists what informs it, each with a freshness status. When a source changes, the doc is <em>flagged</em> — nothing is rewritten until you ask.</div>
+    <div class="impact">
+      <div class="ctxpanel">
+        <div class="ctxhead"><div class="t">Context · what informs this doc</div><div class="s">tracked in the lock file</div></div>
+        <div class="ctxlist">
+          <div class="ctxitem"><span class="ic">⊞</span><div><div class="nm">metrics.csv</div><div class="st">12 rows · values</div></div><span class="stat ok">current</span></div>
+          <div class="ctxitem"><span class="ic">◆</span><div><div class="nm">principles.md</div><div class="st">influence</div></div><span class="stat ok">current</span></div>
+          <div class="ctxitem warn" id="ctxResearch"><span class="ic">◆</span><div><div class="nm">market-research.md</div><div class="st" id="ctxResearchSt">changed since last review · 2d ago</div></div><span class="stat stale" id="ctxResearchStat">changed</span></div>
+        </div>
+        <div class="ctxfoot"><button class="btn primary" id="reviewImpactBtn">Review impact ⟳</button></div>
+      </div>
+      <div class="impactdoc">
+        <div class="banner" id="impactBanner"></div>
+        <div class="body" id="impactBody">
+          <h3>Market Landscape</h3>
+          <p>The strategy rests on truth-maintenance becoming the scarce layer as generation gets cheap.</p>
+          <p id="pCompetitors">Today there are no direct competitors shipping a review-first document engine.</p>
+          <p>Our wedge is provenance: every claim traces to a source, every edit was approved.</p>
+        </div>
+      </div>
+    </div>
+    <p class="note" id="impactNote"><b>Try it:</b> <em>market-research.md</em> changed (a new competitor appeared). Click <em>Review impact</em> — a model pass reads the diff against the whole doc and proposes candidates, routed by confidence: a high-confidence factual add, and a lower-confidence sentiment softening. Both land in the review rail for your call. Nothing was eagerly rewritten.</p>
+  </section>
+
+  <!-- ===== MULTIPLAYER ===== -->
+  <section>
+    <h2><span class="n">6</span>Multiplayer, without painting us in a corner</h2>
+    <div class="sub">Keep the provenance layer keyed by <em>binding identity</em>, never by text position. Then collaboration is a layer we can upgrade — not an architecture we have to redo.</div>
+    <div class="card pad">
+      <div class="layers">
+        <div class="layer text">
+          <div class="badge" style="background:var(--wash2)">⌨️</div>
+          <div><h4>Text layer — how bytes merge</h4><p>Start with save-based / file-level editing. Swap in a CRDT (Yjs / Automerge) later for Google-Docs-grade simultaneous typing. Markdown is just its serialization.</p></div>
+          <span class="tag2 later">upgrade later</span>
+        </div>
+        <div class="layer">
+          <div class="badge" style="background:var(--blue-wash)">🔗</div>
+          <div><h4>Binding &amp; provenance layer — the lock file</h4><p>Keyed by identity (<code style="font-family:var(--mono)">metrics.mrr</code>, claim IDs), <b>not</b> by line/character position. So it rides on top of <em>any</em> text layer, untouched, whether bytes merge via save or via CRDT.</p></div>
+          <span class="tag2 now">build now</span>
+        </div>
+      </div>
+      <p class="note"><b>The one commitment we make today:</b> identity-keyed bindings. Going from file-level → full CRDT later changes only how text bytes merge; the binding / provenance / review model never moves. The rejected line-number approach is precisely what <em>couldn't</em> have done this — positions are unstable the moment two people type at once.</p>
+    </div>
+  </section>
+
+  <!-- ===== SCORECARD ===== -->
+  <section>
+    <h2><span class="n">7</span>Against your priorities</h2>
+    <div class="sub">Trust → UX → LLM-native → scale-as-a-constraint.</div>
+    <div class="card" style="overflow:hidden">
+      <table class="score">
+        <thead><tr><th style="width:150px">Priority</th><th>How clean-file + lock-file serves it</th></tr></thead>
+        <tbody>
+          <tr><td class="rank">1 · Trust</td><td>Bound values are token-anchored, so they can't silently drift. The one hard case — prose claims you can't tokenize — fuzzy-matches its anchor and fails <b>loudly</b> ("re-link?"), never silently mis-attributes. The file is always a real, readable file.</td></tr>
+          <tr><td class="rank">2 · UX</td><td>Rendered view is clean Word/Docs-grade prose; raw view shows honest, legible tokens; provenance is the blue gutter dot, pending is amber, applied is green — the designed grammar.</td></tr>
+          <tr><td class="rank">3 · LLM</td><td><code style="font-family:var(--mono)">{{source.field}}</code> actively tells an agent "this is derived — don't rewrite it," which is <em>more</em> legible than a hardcoded number. Skills, connectors, and chat all operate on near-pure Markdown.</td></tr>
+          <tr><td class="rank">4 · Scale</td><td>Lock files are per-document and content-addressed by source + hash. Millions of docs = millions of small independent records, no global state. Bindings resolve and fan out independently.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="foot">
+    Direction picked in brainstorm · reference: Agentic Workbench — “Living Documents - Workbench”. &nbsp;Next: full format spec, then implementation plan.
+  </div>
+
+</div>
+
+<script>
+  const state = { changed:false, view:'rendered', source:false, commentary:'steady' };
+
+  // view toggle
+  const seg = document.getElementById('seg');
+  seg.addEventListener('click', e => {
+    const b = e.target.closest('button'); if(!b) return;
+    [...seg.children].forEach(x=>x.classList.toggle('on', x===b));
+    state.view = b.dataset.v;
+    document.getElementById('docRendered').style.display = state.view==='rendered'?'':'none';
+    document.getElementById('docRaw').style.display = state.view==='raw'?'':'none';
+  });
+
+  // source peek
+  const srcPane = document.getElementById('sourcePane');
+  document.getElementById('srcBtn').addEventListener('click', ()=>{
+    state.source=!state.source; srcPane.classList.toggle('show', state.source);
+    document.getElementById('srcBtn').textContent = state.source?'Hide source':'Show source';
+  });
+
+  // gutter dot popovers
+  document.querySelectorAll('.dot[data-pop]').forEach(d=>{
+    const pop = document.getElementById(d.dataset.pop);
+    const row = d.closest('.docrow');
+    const show=()=>{ pop.style.display='block'; pop.style.top=(row.offsetTop+ d.offsetTop+14)+'px'; };
+    d.addEventListener('mouseenter', show);
+    d.addEventListener('mouseleave', ()=>pop.style.display='none');
+  });
+
+  const vMrr=document.getElementById('vMrr'), vSign=document.getElementById('vSign'),
+        vChurn=document.getElementById('vChurn'), vDelta=document.getElementById('vDelta');
+  const cMrr=document.getElementById('cMrr'), cSign=document.getElementById('cSign'), cChurn=document.getElementById('cChurn');
+  const commBody=document.getElementById('commBody'), commGutter=document.getElementById('commGutter');
+  const flowNote=document.getElementById('flowNote');
+
+  function flashCell(el){ el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+
+  document.getElementById('changeBtn').addEventListener('click', ()=>{
+    if(state.changed) return;
+    state.changed=true;
+    // update source cells
+    cMrr.textContent='$48.6k'; cSign.textContent='427'; cChurn.textContent='2.4';
+    [cMrr,cSign,cChurn].forEach(flashCell);
+    // figures auto-apply (green)
+    vMrr.textContent='$48.6k'; vSign.textContent='427'; vChurn.textContent='2.4%'; vDelta.textContent='18%';
+    [vMrr,vSign,vChurn,vDelta].forEach(el=>{ el.classList.add('fig-applied'); });
+    // commentary becomes a pending amber diff
+    commGutter.innerHTML='<span class="bar amber"></span>';
+    commBody.innerHTML = `
+      <div class="diff">
+        <div class="lab">⚠ Pending rewrite · tone follows the figures</div>
+        <p>Growth <span class="del">remained steady</span> <span class="ins">accelerated sharply</span> this week<span class="ins">, the fastest pace of the quarter</span>.</p>
+        <div class="diffactions">
+          <button class="btn primary" id="approveBtn">Approve change</button>
+          <button class="btn" id="rejectBtn">Reject</button>
+          <span class="src">from metrics.csv · +1 added · 1 removed</span>
+        </div>
+      </div>`;
+    flowNote.innerHTML = '<b>Two figures auto-applied</b> (green) — low-risk, the lock file just updated its <code style="font-family:'+"'JetBrains Mono'"+'">resolved</code> + <code style="font-family:'+"'JetBrains Mono'"+'">sourceHash</code>. The <b>commentary waits</b> (amber) because its <em>meaning</em> changed. Approve or reject to land it.';
+    document.getElementById('approveBtn').addEventListener('click', ()=>{
+      commGutter.innerHTML='<span class="dot blue" data-pop="popComm"></span>';
+      commBody.innerHTML = '<p>Growth accelerated sharply this week, the fastest pace of the quarter.</p><div class="applied-note">✓ Approved · applied to document · audit recorded</div>';
+    });
+    document.getElementById('rejectBtn').addEventListener('click', ()=>{
+      commGutter.innerHTML='<span class="dot blue" data-pop="popComm"></span>';
+      commBody.innerHTML = '<p>Growth remained steady this week.</p><div class="applied-note" style="color:var(--muted)">↩ Rejected · figures kept, prose unchanged</div>';
+    });
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', ()=>location.reload());
+
+  // ===== Review-impact demo =====
+  const reviewBtn = document.getElementById('reviewImpactBtn');
+  const banner = document.getElementById('impactBanner');
+  const impactNote = document.getElementById('impactNote');
+  let impactRun = false;
+  reviewBtn.addEventListener('click', ()=>{
+    if(impactRun) return; impactRun = true;
+    reviewBtn.disabled = true; reviewBtn.style.opacity = .5;
+    banner.classList.add('show');
+    banner.innerHTML = '<span class="spin"></span> Reading market-research.md diff against this document…';
+    setTimeout(()=>{
+      banner.innerHTML = '⚠ 2 candidate changes from market-research.md — review each below';
+      // candidate 1: high-confidence factual add (after the competitors paragraph)
+      const p = document.getElementById('pCompetitors');
+      const c1 = document.createElement('div');
+      c1.className = 'cand';
+      c1.innerHTML = `
+        <div class="ch"><span class="lab">⚠ Suggested addition</span><span class="conf hi">high · factual</span></div>
+        <p style="margin:0">Add: “<span class="ins">Acme launched a comparable tool in May; we remain the only one with an approval trail.</span>”</p>
+        <div class="prov">grounded in market-research.md · §competitors</div>
+        <div class="acts"><button class="btn primary" data-a="ok">Approve</button><button class="btn" data-a="no">Reject</button></div>`;
+      p.after(c1);
+      // candidate 2: medium-confidence sentiment softening
+      const c2 = document.createElement('div');
+      c2.className = 'cand';
+      c2.innerHTML = `
+        <div class="ch"><span class="lab">⚠ Suggested rewrite</span><span class="conf med">medium · sentiment</span></div>
+        <p style="margin:0">“Today there are <span class="del">no direct competitors</span> <span class="ins">few direct competitors</span> shipping a review-first document engine.”</p>
+        <div class="prov">market-research.md introduced a new entrant · waits for your call</div>
+        <div class="acts"><button class="btn primary" data-a="ok">Approve</button><button class="btn" data-a="no">Reject</button></div>`;
+      p.after(c2);
+      impactNote.innerHTML = '<b>This is the moat.</b> A cheap dirty-bit flagged the doc; the model only ran when you asked. The factual add is high-confidence, the sentiment softening is lower — both route into the same review rail you already have. Approve to mark <em>market-research.md</em> reviewed (its hash updates in the lock file).';
+      // wire candidate buttons
+      document.querySelectorAll('.cand .acts .btn').forEach(b=>{
+        b.addEventListener('click', e=>{
+          const cand = e.target.closest('.cand');
+          const ok = e.target.dataset.a==='ok';
+          cand.outerHTML = '<div class="applied-note" style="'+(ok?'':'color:var(--muted)')+'">'+(ok?'✓ Approved · applied · audit recorded':'↩ Rejected')+'</div>';
+          // when both resolved, clear the stale flag
+          if(!document.querySelector('.cand')){
+            document.getElementById('ctxResearchStat').className='stat ok';
+            document.getElementById('ctxResearchStat').textContent='current';
+            document.getElementById('ctxResearch').classList.remove('warn');
+            document.getElementById('ctxResearchSt').textContent='reviewed just now';
+            banner.innerHTML='✓ market-research.md reviewed';
+            banner.style.cssText='display:flex;background:var(--green-wash);border-color:var(--green-line);color:var(--green-ink)';
+          }
+        });
+      });
+    }, 1100);
+  });
+</script>
+</body>
+</html>

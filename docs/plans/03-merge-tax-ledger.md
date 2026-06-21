@@ -21,11 +21,28 @@ Tiers, cheapest first: `settings` -> `theme` -> `styleOverrides-CSS` -> `additiv
 | F | Provenance gutter redesign (line numbers, dots, spanning bars) | our-surface | `livingDocs/browser/livingDocRender.ts` | Our webview |
 | G | "Download as Markdown" export + format-options memo | our-surface | `livingDocRender.ts`, `livingDocsService.ts`, `docs/plans/04-file-format-options.md` | Service/webview + docs |
 
-## Core-patch count: 0 (final)
+### Build-out round (this update) — the rest of the comp's surfaces, still 0 added core patches
 
-The entire Studio de-IDE (Items A–G) shipped **without a single patch to upstream VS Code core**
-(`src/vs/base|platform|editor|workbench/browser|workbench/api` were never edited). Everything landed
-through the cheap tiers:
+| Item | Change | Tier | File(s) | Note |
+|------|--------|------|---------|------|
+| BO1 | Home / Templates / Knowledge / Agents screens (webview editor) | our-surface + additive-contribution | `livingDocs/browser/screenRender.ts`, `screenEditor.ts`, `screenEditorInput.ts` | Generic webview editor pane + input registered via public `IEditorPaneRegistry`; HTML is our surface |
+| BO2 | Icon-nav containers + launcher views (Home/Templates/Knowledge/Agents) | additive-contribution | `livingDocs/browser/screenLauncherView.ts`, `livingDocs.contribution.ts` | New activity-bar view containers + views via public registry; launcher opens the screen editor |
+| BO3 | Open-screen palette commands | additive-contribution | `livingDocs.contribution.ts` | `registerAction2` per screen; public API |
+| BO4 | Present & export modal + share scope | our-surface | `livingDocRender.ts`, `livingDocEditor.ts` | Overlay inside our document webview; wired to existing exports |
+| BO5 | Chat / History / Skills panel tabs (Skills new) | our-surface | `livingDocs/browser/reviewRailView.ts` | Our view; static comp content + real `approve()` from Chat |
+| BO6 | Show the activity bar (it is the comp's icon nav) | settings | `living-docs-sample/.vscode/settings.json` | `activityBar.location: default` (was `hidden`) |
+| BO7 | Hide built-in IDE containers (Search/SCM/Debug/Extensions, + Explorer) | additive-contribution | `livingDocs.contribution.ts` (`HideIdeContainersContribution`) | `deregisterViewContainer` per id via public registry; see HIGH-risk note below |
+| BO8 | First-run opens the Home dashboard | additive-contribution | `livingDocs.contribution.ts` (`StudioStartupContribution`) | Opens our screen editor when no editor is restored |
+
+## Core-patch count: 0 added (this phase + build-out round) (1 pre-existing, from the engine phase)
+
+The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
+(`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
+precise, though: the feature as a whole carries **one** core edit — a single contribution-registration
+import line in `src/vs/workbench/workbench.common.main.ts` (added in the engine phase, Items 0–5, so it
+predates the Studio merge-base and doesn't show in this phase's diff). It is the standard, low-fragility
+way every contribution registers; but it *is* a core-owned file, so the honest headline is "0 **added**
+this phase," not "0 in the feature." Everything else landed through the cheap tiers:
 - **settings** — the calm ~80% (hidden activity bar / tabs / status bar / menu / command center, theme).
 - **a registered theme** — the full palette, no per-key `colorCustomizations` hacks.
 - **styleOverrides CSS** — chrome removal, added inside the fork-owned `contrib/styleOverrides/` exactly
@@ -36,20 +53,27 @@ through the cheap tiers:
 > Deferred (not blocking): a fully styled **source pane** (the hi-fi CSV viewer). Provenance reveal
 > already works (clicking a dot opens the bound source); the bespoke source viewer is a follow-up.
 
-### Where the (small) residual tax actually lives
-Zero core patches does not mean zero upstream coupling. The additive route leans on a few internal
-seams that a VS Code rebase could silently break:
-- **String ids** — `workbench.view.explorer` (deregistered), the built-in Chat aux-bar container winning
-  the default slot (worked around by `isDefault` + a startup `openView`), `workbench.editors.gettingStartedInput`
-  (closed on first run).
-- **DOM-class CSS selectors** in `studio.css` (`.editor-group-watermark`, `.editor-group-container > .title`,
-  `.part.auxiliarybar > .composite.title`) — appearance-only, fail soft (a missed selector just shows a
-  bit of chrome, nothing breaks).
-- **One builtin-extension manifest edit** (`theme-defaults/package.json`) to register the theme.
+### Where the residual tax actually lives (per-seam fragility)
+Zero added core patches does not mean zero upstream coupling. The additive route leans on internal seams
+a VS Code rebase could break, ordered worst → best:
+- **HIGH / fails *unsafely* — `deregisterViewContainer(...)` for Explorer, Search, SCM, Debug, Extensions.**
+  These fail toward *showing the IDE*: if upstream renames/restructures any of these containers, that icon
+  silently reappears in the activity bar. Order-dependent on `WorkbenchPhase.BlockRestore`. A miss is a visible
+  regression, not a cosmetic gap. The build-out round widened this from Explorer-only to five containers, so
+  re-pin the whole id list on every rebase.
+- **MED — default-slot / startup string ids** — the built-in Chat aux-bar container winning the default
+  slot (worked around by `isDefault` + a startup `openView`), and `workbench.editors.gettingStartedInput`
+  (closed once on first run). Break toward extra chrome, recoverable.
+- **LOW / pre-existing core import** — `workbench.common.main.ts` contribution registration (the one core
+  edit named above). Mechanical; every contrib does it.
+- **LOW / fail-soft — DOM-class CSS selectors** in `studio.css` (`.editor-group-watermark`,
+  `.editor-group-container > .title`, `.part.auxiliarybar > .composite.title`) — appearance-only; a missed
+  selector just shows a bit of chrome.
+- **LOW — one builtin-extension manifest edit** (`theme-defaults/package.json`) to register the theme.
 
-These are *appearance/wiring* couplings, not behavioural core forks — cheap to re-pin after a rebase, and
-each fails soft. This is a categorically smaller tax than the Cursor-style core-patch surface the Item-5
-finding feared.
+Apart from the Explorer-hide, these are *appearance/wiring* couplings, not behavioural core forks — cheap
+to re-pin after a rebase. Still a categorically smaller tax than the Cursor-style core-patch surface the
+Item-5 finding feared.
 
 ## Recommendation — keep the fork; defer the web rebuild
 

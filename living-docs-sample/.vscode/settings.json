@@ -2,7 +2,9 @@
 	// "Studio" skin: strip the IDE chrome so the workspace reads as a calm word processor.
 	// Workspace-scoped on purpose so the experiment is reversible and does not touch global state.
 	"workbench.experimental.modernUI": true,
-	"workbench.activityBar.location": "hidden",
+	// The locked Workbench comp has a left icon-nav rail (Documents / Templates / Knowledge /
+	// Agents), so the activity bar is shown -- it IS the comp's icon nav -- rather than hidden.
+	"workbench.activityBar.location": "default",
 	"workbench.editor.showTabs": "none",
 	"workbench.editor.editorActionsLocation": "hidden",
 	"workbench.layoutControl.enabled": false,

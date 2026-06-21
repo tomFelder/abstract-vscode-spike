@@ -1,5 +1,10 @@
 # Canonical file-format options (open decision — do NOT silently pick)
 
+> **SUPERSEDED (2026-06-21).** This memo framed the question; it is now resolved by
+> [`../08-living-documents-format-spec.md`](../08-living-documents-format-spec.md), which chose
+> **Option 10 — clean `<doc>.md` + generated `<doc>.lock.json`** (a refinement of option 3's hybrid,
+> with token-anchored bind links + a lock-file dependency graph). Kept for the record / the reasoning trail.
+
 This memo exists to *frame*, not settle, the canonical-format question for Living Documents (open
 question **Q1** in `docs/05-open-questions.md`). The decision is deferred on purpose — it is downstream
 of two bigger calls (the WYSIWYG-editor depth, and fork-vs-greenfield). What ships now is the low-risk,

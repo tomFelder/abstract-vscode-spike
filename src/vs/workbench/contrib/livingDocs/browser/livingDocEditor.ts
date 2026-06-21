@@ -17,7 +17,7 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
-import { LivingDocViewMode, renderLivingDocHtml } from './livingDocRender.js';
+import { IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocHtml, ShareScope } from './livingDocRender.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -27,6 +27,7 @@ export class LivingDocEditor extends EditorPane {
 	private _webview: IWebviewElement | undefined;
 	private _mode: LivingDocViewMode = 'rendered';
 	private _resource: URI | undefined;
+	private _present: IPresentState = { open: false, choice: 'gdoc', scope: 'internal' };
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -51,6 +52,7 @@ export class LivingDocEditor extends EditorPane {
 		await super.setInput(input, options, context, token);
 		this._ensureWebview();
 		this._mode = 'rendered';
+		this._present = { open: false, choice: 'gdoc', scope: 'internal' };
 		this._resource = input.resource;
 		this._inputDisposables.clear();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
@@ -72,16 +74,51 @@ export class LivingDocEditor extends EditorPane {
 		this._register(this._webview.onMessage(e => this._onMessage(e.message)));
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string }): void {
 		switch (message?.type) {
 			case 'refresh':
 				void this._livingDocs.refreshFromSources();
+				break;
+			case 'presentOpen':
+				this._present = { ...this._present, open: true };
+				this._render();
+				break;
+			case 'presentClose':
+				this._present = { ...this._present, open: false };
+				this._render();
+				break;
+			case 'presentChoice':
+				if (typeof message.choice === 'string') {
+					this._present = { ...this._present, choice: message.choice as PresentChoice };
+					this._render();
+				}
+				break;
+			case 'presentScope':
+				if (typeof message.scope === 'string') {
+					this._present = { ...this._present, scope: message.scope as ShareScope };
+					this._render();
+				}
+				break;
+			case 'presentCta':
+				void this._runPresent();
+				break;
+			case 'approve':
+				if (typeof message.id === 'string') { void this._livingDocs.approve(message.id); }
+				break;
+			case 'reject':
+				if (typeof message.id === 'string') { this._livingDocs.reject(message.id); }
+				break;
+			case 'askAi':
+				this._livingDocs.focusPanel('chat');
 				break;
 			case 'export':
 				if (this._resource) { void this._livingDocs.exportDocument(this._resource); }
 				break;
 			case 'exportMd':
 				if (this._resource) { void this._livingDocs.exportMarkdown(this._resource); }
+				break;
+			case 'share':
+				if (this._resource) { this._livingDocs.shareDocument(this._resource); }
 				break;
 			case 'reveal':
 				if (this._resource && Array.isArray(message.cells)) { void this._livingDocs.revealSource(this._resource, message.cells); }
@@ -103,6 +140,20 @@ export class LivingDocEditor extends EditorPane {
 		}
 	}
 
+	// The Present/export CTA maps each destination onto the export the spike actually produces:
+	// the hosted web page reuses the self-contained HTML export; the file/doc destinations produce
+	// the clean resolved Markdown. Then the modal closes.
+	private async _runPresent(): Promise<void> {
+		if (!this._resource) { return; }
+		if (this._present.choice === 'site') {
+			await this._livingDocs.exportDocument(this._resource);
+		} else {
+			await this._livingDocs.exportMarkdown(this._resource);
+		}
+		this._present = { ...this._present, open: false };
+		this._render();
+	}
+
 	private async _applyRaw(text: string): Promise<void> {
 		if (!this._resource) { return; }
 		this._mode = 'rendered';
@@ -122,6 +173,7 @@ export class LivingDocEditor extends EditorPane {
 			recent: this._livingDocs.getRecentlyApplied(resource),
 			mode: this._mode,
 			rawText: this._livingDocs.getRawText(resource),
+			present: this._present,
 		}));
 	}
 

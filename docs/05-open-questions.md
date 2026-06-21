@@ -5,7 +5,12 @@ over-commit the spike.
 
 ---
 
-## Q1 — The file format: Markdown vs LDOC/JSON (the big one)
+## Q1 — The file format: Markdown vs LDOC/JSON (the big one) — **RESOLVED 2026-06-21**
+
+> **Resolved** by [`08-living-documents-format-spec.md`](08-living-documents-format-spec.md): **Option 10 —
+> clean `<doc>.md` + generated `<doc>.lock.json`** (token-anchored `bind:` links in the Markdown; a lock file
+> as the provenance/dependency graph). The original framing below is kept for the reasoning trail. Q2 (editor
+> depth) and Q3 (fork-vs-greenfield) remain open; the chosen format is designed to survive both.
 
 ### The tension (in Tom's words, paraphrased)
 The original hope was **"just work on top of Markdown"** — a persistent `.md` you can edit by hand,
