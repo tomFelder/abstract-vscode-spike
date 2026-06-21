@@ -3,157 +3,155 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ILivingDocBinding, ILivingDoc, ILivingDocBlock, SourceKind } from './livingDocsModel.js';
+import { IBindLink, ILivingDoc, ILivingDocBlock, LivingDocBlockType } from './livingDocsModel.js';
 
-// A Living Document is a portable Markdown file:
-//   - YAML-ish frontmatter holds doc-level scalars (title, subtitle, source, syncedWeek)
-//   - data-bindings live in HTML comments before the block they annotate, so the file still
-//     renders cleanly in any Markdown viewer:
-//       <!-- bind id=p-highlights kind=figure cells=mrr,signups,churn -->
-//       <!-- table id=kpi-table cells=mrr,signups,churn,active -->
+// The clean-file format (spec 08). A Living Document is portable Markdown:
+//   - YAML-ish frontmatter holds the title/subtitle and the `sources:` / `context:` dependency lists
+//   - value bindings live inline as real Markdown links with a `bind:` scheme, so the file renders
+//     correctly in any viewer and the resolved value is its own visible text:
+//       Revenue grew [18%](bind:metrics.mrr.delta) week-on-week to [$48.6k](bind:metrics.mrr) MRR.
+//
+// There are no HTML comments, no `{cell}` placeholders, and no slugged block ids on disk: the bind
+// link's key is the durable anchor. The companion `<doc>.lock.json` carries the dependency graph.
 
-interface IAttrs {
-	id?: string;
-	kind?: 'figure' | 'narrative';
-	cells: string[];
-	src?: SourceKind;
-	url?: string;
-	tool?: string;
-}
+// Matches one inline bind link: [visible value](bind:key). The key runs to the closing paren and
+// carries no whitespace, e.g. `metrics.mrr` or `metrics.mrr.delta`.
+const BIND_LINK_RE = /\[([^\]]*)\]\(bind:([^)\s]+)\)/g;
 
-function parseAttrs(s: string): IAttrs {
-	const out: IAttrs = { cells: [] };
-	for (const tok of s.trim().split(/\s+/)) {
-		const eq = tok.indexOf('=');
-		if (eq < 0) { continue; }
-		const key = tok.slice(0, eq);
-		const value = tok.slice(eq + 1);
-		if (key === 'cells') { out.cells = value ? value.split(',') : []; }
-		else if (key === 'id') { out.id = value; }
-		else if (key === 'kind') { out.kind = value === 'narrative' ? 'narrative' : 'figure'; }
-		else if (key === 'src') { out.src = value === 'api' ? 'api' : value === 'mcp' ? 'mcp' : 'file'; }
-		else if (key === 'url') { out.url = value; }
-		else if (key === 'tool') { out.tool = value; }
+/** Every bind-link occurrence in a span of Markdown, in document order. */
+export function extractBindLinks(text: string): IBindLink[] {
+	const out: IBindLink[] = [];
+	for (const m of text.matchAll(BIND_LINK_RE)) {
+		out.push({ value: m[1], key: m[2] });
 	}
 	return out;
 }
 
-function bindingFor(a: IAttrs, fileSource: string): ILivingDocBinding {
-	const sourceKind: SourceKind = a.src ?? 'file';
-	return {
-		source: sourceKind === 'file' ? fileSource : (a.url ?? a.tool ?? fileSource),
-		cells: a.cells,
-		sourceKind,
-		url: a.url,
-		tool: a.tool,
-	};
+/**
+ * Rewrite the visible link text of every bind link to the resolved value from the lock (lock wins).
+ * Keys absent from `resolved` keep their current cached text. This is the rendered-cache
+ * reconciliation: the `.md` is brought in line with the lock's authoritative values.
+ */
+export function reconcileBindLinks(text: string, resolved: ReadonlyMap<string, string>): string {
+	return text.replace(BIND_LINK_RE, (whole, _value: string, key: string) => {
+		const next = resolved.get(key);
+		return next === undefined ? whole : `[${next}](bind:${key})`;
+	});
 }
 
 function slug(s: string): string {
 	return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'section';
 }
 
-export function parseLivingDoc(text: string): ILivingDoc {
-	let title = '';
-	let subtitle = '';
-	let source = 'metrics.csv';
-	let syncedWeek = 0;
-	let isLiving = false;
-
-	let body = text;
-	const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
-	if (fm) {
-		body = text.slice(fm[0].length);
-		for (const line of fm[1].split(/\r?\n/)) {
-			const i = line.indexOf(':');
-			if (i < 0) { continue; }
-			const key = line.slice(0, i).trim();
-			const value = line.slice(i + 1).trim().replace(/^["']|["']$/g, '');
-			if (key === 'title') { title = value; }
-			else if (key === 'subtitle') { subtitle = value; }
-			else if (key === 'source') { source = value; }
-			else if (key === 'syncedWeek') { syncedWeek = parseInt(value, 10) || 0; }
-			else if (key === 'livingDoc') { isLiving = value === 'true'; }
-		}
-	}
-
-	const blocks: ILivingDocBlock[] = [];
-	let pending: IAttrs | undefined;
-	let auto = 0;
-	for (const raw of body.split(/\r?\n/)) {
-		const line = raw.trim();
-		if (!line) { continue; }
-
-		let m = /^<!--\s*bind\s+(.*?)\s*-->$/.exec(line);
-		if (m) { pending = parseAttrs(m[1]); continue; }
-
-		m = /^<!--\s*table\s+(.*?)\s*-->$/.exec(line);
-		if (m) {
-			const a = parseAttrs(m[1]);
-			blocks.push({ id: a.id ?? 'kpi-table', type: 'kpiTable', binding: bindingFor(a, source) });
-			continue;
-		}
-
-		if (line.startsWith('## ')) {
-			const t = line.slice(3).trim();
-			blocks.push({ id: 'h-' + slug(t), type: 'heading', text: t });
-			continue;
-		}
-		if (line.startsWith('#')) { continue; } // title is taken from frontmatter
-
-		if (pending) {
-			// api/mcp blocks author their text as a {cell}-placeholder template.
-			const isTemplate = (pending.src === 'api' || pending.src === 'mcp') && line.includes('{');
-			blocks.push({ id: pending.id ?? 'p-' + (++auto), type: 'paragraph', kind: pending.kind, binding: bindingFor(pending, source), text: line, template: isTemplate ? line : undefined });
-			pending = undefined;
-		} else {
-			blocks.push({ id: 'p-' + (++auto), type: 'paragraph', text: line });
-		}
-	}
-
-	// A document with bindings is a Living Document even without the frontmatter flag.
-	if (blocks.some(b => b.binding)) { isLiving = true; }
-	// Plain Markdown has no frontmatter title; fall back to the first H1, else a default.
-	if (!title) {
-		const h1 = /^#\s+(.+?)\s*$/m.exec(body);
-		title = h1 ? h1[1].trim() : 'Untitled';
-	}
-
-	return { title, subtitle, source, syncedWeek, blocks, isLiving, body };
+interface IFrontmatter {
+	title: string;
+	subtitle: string;
+	sources: string[];
+	context: string[];
 }
 
-function sourceAttrs(binding: ILivingDocBinding | undefined): string {
-	if (!binding || binding.sourceKind === 'file') { return ''; }
-	const parts = [` src=${binding.sourceKind}`];
-	if (binding.url) { parts.push(`url=${binding.url}`); }
-	if (binding.tool) { parts.push(`tool=${binding.tool}`); }
-	return parts.join(' ');
+// Parse the YAML-ish frontmatter: `title`/`subtitle` scalars and `sources:` / `context:` block
+// lists (`- item` lines). Returns the frontmatter values and the body that follows.
+function parseFrontmatter(text: string): { fm: IFrontmatter; body: string } {
+	const fm: IFrontmatter = { title: '', subtitle: '', sources: [], context: [] };
+	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+	if (!match) {
+		return { fm, body: text };
+	}
+	const lines = match[1].split(/\r?\n/);
+	let listInto: string[] | undefined;
+	for (const line of lines) {
+		const item = /^\s+-\s+(.*)$/.exec(line);
+		if (item && listInto) {
+			const value = item[1].trim().replace(/^["']|["']$/g, '');
+			if (value) { listInto.push(value); }
+			continue;
+		}
+		const i = line.indexOf(':');
+		if (i < 0) { continue; }
+		const key = line.slice(0, i).trim();
+		const value = line.slice(i + 1).trim().replace(/^["']|["']$/g, '');
+		listInto = undefined;
+		if (key === 'title') { fm.title = value; }
+		else if (key === 'subtitle') { fm.subtitle = value; }
+		else if (key === 'sources') { listInto = fm.sources; if (value) { fm.sources.push(value); } }
+		else if (key === 'context') { listInto = fm.context; if (value) { fm.context.push(value); } }
+	}
+	return { fm, body: text.slice(match[0].length) };
+}
+
+function classify(chunk: string): LivingDocBlockType {
+	const lines = chunk.split(/\r?\n/).filter(l => l.trim().length > 0);
+	if (lines.length === 1 && /^#{1,6}\s+/.test(lines[0])) { return 'heading'; }
+	if (lines.length > 0 && lines.every(l => l.trim().startsWith('|'))) { return 'table'; }
+	return 'paragraph';
+}
+
+function blockFor(chunk: string, index: number): ILivingDocBlock {
+	const type = classify(chunk);
+	const binds = extractBindLinks(chunk);
+	if (type === 'heading') {
+		const m = /^(#{1,6})\s+(.*)$/.exec(chunk.trim())!;
+		const headingText = m[2].trim();
+		return { id: 'h-' + slug(headingText), type, text: headingText, level: m[1].length, binds };
+	}
+	return { id: 'b-' + index, type, text: chunk, binds };
+}
+
+export function parseLivingDoc(text: string): ILivingDoc {
+	const { fm, body } = parseFrontmatter(text);
+	const cleanBody = body.replace(/^\r?\n+/, '').replace(/\s+$/, '') + '\n';
+
+	const blocks: ILivingDocBlock[] = [];
+	let index = 0;
+	for (const chunk of cleanBody.split(/\r?\n[ \t]*\r?\n/)) {
+		if (chunk.trim().length === 0) { continue; }
+		blocks.push(blockFor(chunk.replace(/\s+$/, ''), index++));
+	}
+
+	const hasBinds = blocks.some(b => b.binds.length > 0);
+	const isLiving = fm.sources.length > 0 || fm.context.length > 0 || hasBinds;
+
+	let title = fm.title;
+	if (!title) {
+		const h1 = blocks.find(b => b.type === 'heading' && b.level === 1);
+		title = h1 ? h1.text : 'Untitled';
+	}
+
+	return {
+		title,
+		subtitle: fm.subtitle,
+		sources: fm.sources,
+		context: fm.context,
+		blocks,
+		isLiving,
+		body: cleanBody,
+	};
+}
+
+// Render one block back to its Markdown source. Headings re-emit their `#` prefix from the level;
+// everything else round-trips its raw text verbatim.
+function serializeBlock(block: ILivingDocBlock): string {
+	if (block.type === 'heading') {
+		return `${'#'.repeat(block.level ?? 2)} ${block.text}`;
+	}
+	return block.text;
 }
 
 export function serializeLivingDoc(doc: ILivingDoc): string {
-	const lines: string[] = [
-		'---',
-		'livingDoc: true',
-		`title: ${doc.title}`,
-		`subtitle: ${doc.subtitle}`,
-		`source: ${doc.source}`,
-		`syncedWeek: ${doc.syncedWeek}`,
-		'---',
-		'',
-	];
-	for (const b of doc.blocks) {
-		if (b.type === 'heading') {
-			lines.push(`## ${b.text ?? ''}`, '');
-		} else if (b.type === 'kpiTable') {
-			lines.push(`<!-- table id=${b.id}${sourceAttrs(b.binding)} cells=${b.binding?.cells.join(',') ?? ''} -->`, '');
-		} else {
-			if (b.binding) {
-				const kind = b.kind ? ` kind=${b.kind}` : '';
-				lines.push(`<!-- bind id=${b.id}${kind}${sourceAttrs(b.binding)} cells=${b.binding.cells.join(',')} -->`);
-			}
-			// Keep the placeholder template on disk so live values re-derive on the next refresh.
-			lines.push(b.template ?? b.text ?? '', '');
-		}
+	const fm: string[] = ['---'];
+	if (doc.title) { fm.push(`title: ${doc.title}`); }
+	if (doc.subtitle) { fm.push(`subtitle: ${doc.subtitle}`); }
+	if (doc.sources.length) {
+		fm.push('sources:');
+		for (const s of doc.sources) { fm.push(`  - ${s}`); }
 	}
-	return lines.join('\n').replace(/\n+$/, '\n');
+	if (doc.context.length) {
+		fm.push('context:');
+		for (const c of doc.context) { fm.push(`  - ${c}`); }
+	}
+	fm.push('---', '');
+
+	const body = doc.blocks.map(serializeBlock).join('\n\n');
+	return `${fm.join('\n')}\n${body}\n`;
 }

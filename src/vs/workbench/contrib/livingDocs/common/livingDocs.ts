@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAuditEntry, IKpiRow, ILivingDoc, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -15,6 +15,9 @@ export const REVIEW_RAIL_CONTAINER_ID = 'workbench.viewContainer.livingDocs';
 
 export const DOCUMENTS_VIEW_ID = 'workbench.view.livingDocs.documents';
 export const DOCUMENTS_CONTAINER_ID = 'workbench.viewContainer.livingDocs.documents';
+
+export const CONTEXT_VIEW_ID = 'workbench.view.livingDocs.context';
+export const CONTEXT_CONTAINER_ID = 'workbench.viewContainer.livingDocs.context';
 
 /** The tabs of the Studio right panel. */
 export type LivingDocsPanelTab = 'chat' | 'review' | 'history';
@@ -61,7 +64,14 @@ export interface ILivingDocsService {
 	getDoc(resource: URI): ILivingDoc | undefined;
 	/** The verbatim Markdown source of a document (for the Raw Markdown view). */
 	getRawText(resource: URI): string;
-	getKpiRows(resource: URI): readonly IKpiRow[];
+	/** The resolved value of each bind key for a document (mirrors the lock's resolved values). */
+	getResolved(resource: URI): ReadonlyMap<string, string>;
+	/** The document's lock (dependency graph + provenance ledger), if loaded. */
+	getLock(resource: URI): ILivingDocLock | undefined;
+	/** The cheap always-on staleness signal: which bindings/context changed since last sync/review. */
+	getFreshness(resource: URI): IFreshness;
+	/** Re-hash the document's sources and recompute its dirty bits (what the source watcher triggers). */
+	checkSources(resource: URI): Promise<void>;
 	getStatus(resource: URI): string;
 	/** Block ids that were auto-applied in the last refresh (for the green "just updated" highlight). */
 	getRecentlyApplied(resource: URI): ReadonlySet<string>;
@@ -74,6 +84,12 @@ export interface ILivingDocsService {
 
 	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
 	listDocuments(): Promise<readonly ILivingDocSummary[]>;
+
+	/** The registered orchestration agents (for the Agents view). */
+	getAgents(): readonly IAgentDef[];
+
+	/** Run an agent now over its flow documents (or the whole workspace if it scopes none). */
+	runAgent(agentId: string): Promise<IAgentRun | undefined>;
 
 	/** Create a new blank Living Document from a template in the workspace and return its resource. */
 	createDocument(): Promise<URI | undefined>;
@@ -93,6 +109,14 @@ export interface ILivingDocsService {
 	/** Re-derive bound blocks across every bound document from the latest source values. */
 	refreshFromSources(): Promise<void>;
 
+	/**
+	 * The expensive, on-demand impact pass (spec 3.6): read the changed context sources against the
+	 * document's prose claims and queue candidate edits (with provenance + confidence) into the review
+	 * rail. Figures auto-apply; meaning/influence changes wait for approval. A claim whose anchor no
+	 * longer confidently matches the prose surfaces a loud "re-link?" prompt instead of re-attaching.
+	 */
+	reviewImpact(resource: URI): Promise<void>;
+
 	/** Export a document's current state to a self-contained HTML page and open it. */
 	exportDocument(resource: URI): Promise<URI | undefined>;
 
@@ -104,6 +128,9 @@ export interface ILivingDocsService {
 
 	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
 	shareDocument(resource: URI): void;
+
+	/** Publish a document: snapshot (pin) its sources to current versions for reproducibility. */
+	publishDocument(resource: URI): Promise<void>;
 
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;

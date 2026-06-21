@@ -5,6 +5,8 @@
 
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { IAgentRun } from '../common/livingDocsModel.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
@@ -17,7 +19,15 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
-import { IScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
+import { AgentFilter, renderScreenHtml, ScreenId } from './screenRender.js';
+
+// The editor's interactive state; the live agent registry is injected at render time.
+interface IScreenEditorState {
+	knScope: 'org' | 'project';
+	openAgentId?: string;
+	filter: AgentFilter;
+	lastRun?: IAgentRun;
+}
 
 // Webview editor that hosts one Opportunity OS screen (Templates / Knowledge / Agents) in the
 // editor area. The screen's small interactive state (Knowledge scope, agent canvas, run state)
@@ -30,7 +40,8 @@ export class ScreenEditor extends EditorPane {
 	private _container: HTMLElement | undefined;
 	private _webview: IWebviewElement | undefined;
 	private _screen: ScreenId = 'templates';
-	private _state: IScreenState = { knScope: 'org', agentOpen: false, ranWf: false };
+	private _state: IScreenEditorState = { knScope: 'org', filter: 'all' };
+	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
 		group: IEditorGroup,
@@ -56,8 +67,11 @@ export class ScreenEditor extends EditorPane {
 		await super.setInput(input, options, context, token);
 		this._ensureWebview();
 		this._screen = input.screen;
-		// Reset per-screen state on (re)open so each visit starts from the comp's default view.
-		this._state = { knScope: 'org', agentOpen: false, ranWf: false };
+		// Reset per-screen state on (re)open so each visit starts from the default view.
+		this._state = { knScope: 'org', filter: 'all' };
+		this._inputDisposables.clear();
+		// Re-render when agent status / the registry changes (e.g. a run completes or a trigger fires).
+		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		this._render();
 	}
 
@@ -75,7 +89,7 @@ export class ScreenEditor extends EditorPane {
 		this._register(this._webview.onMessage(e => this._onMessage(e.message)));
 	}
 
-	private _onMessage(message: { type?: string }): void {
+	private _onMessage(message: { type?: string; arg?: string }): void {
 		switch (message?.type) {
 			case 'setKnOrg':
 				this._state = { ...this._state, knScope: 'org' };
@@ -85,17 +99,20 @@ export class ScreenEditor extends EditorPane {
 				this._state = { ...this._state, knScope: 'project' };
 				this._render();
 				break;
+			case 'setFilter':
+				this._state = { ...this._state, filter: (message.arg as AgentFilter) ?? 'all' };
+				this._render();
+				break;
 			case 'openAgent':
-				this._state = { ...this._state, agentOpen: true, ranWf: false };
+				this._state = { ...this._state, openAgentId: message.arg, lastRun: undefined };
 				this._render();
 				break;
 			case 'closeAgent':
-				this._state = { ...this._state, agentOpen: false, ranWf: false };
+				this._state = { ...this._state, openAgentId: undefined, lastRun: undefined };
 				this._render();
 				break;
 			case 'runWf':
-				this._state = { ...this._state, ranWf: true };
-				this._render();
+				if (message.arg) { void this._runAgent(message.arg); }
 				break;
 			case 'goReview':
 				this._livingDocs.focusPanel('review');
@@ -110,6 +127,15 @@ export class ScreenEditor extends EditorPane {
 		}
 	}
 
+	// "Run now": execute the agent end-to-end, show its run on the canvas, and reveal the review rail
+	// when it queued anything for approval.
+	private async _runAgent(agentId: string): Promise<void> {
+		const run = await this._livingDocs.runAgent(agentId);
+		this._state = { ...this._state, lastRun: run };
+		this._render();
+		if (run && run.queued > 0) { this._livingDocs.focusPanel('review'); }
+	}
+
 	// Templates "Export" lands the user on a real document, where the Present/export modal lives.
 	private async _openFirstDocument(): Promise<void> {
 		const docs = await this._livingDocs.listDocuments();
@@ -120,7 +146,8 @@ export class ScreenEditor extends EditorPane {
 	}
 
 	private _render(): void {
-		this._webview?.setHtml(renderScreenHtml(this._screen, this._state));
+		// Inject the live agent registry at render time so the Agents view always reflects current state.
+		this._webview?.setHtml(renderScreenHtml(this._screen, { ...this._state, agents: this._livingDocs.getAgents() }));
 	}
 
 	layout(dimension: Dimension): void {
