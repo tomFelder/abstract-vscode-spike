@@ -3,6 +3,9 @@
 **Date:** 2026-06-21 · **Status:** approved direction, pre-implementation · **Resolves:** Q1 in
 `docs/05-open-questions.md`; supersedes the framing in `docs/plans/04-file-format-options.md`.
 **Companion visual:** `docs/option-10-living-docs-format.html`.
+**Followed by:** `docs/09-orchestration-and-automation.md` (the layer that runs agents/skills on top of
+this graph). **Build order:** this spec → [plan 06](plans/06-format-implementation-handoff.md), then
+orchestration → [plan 07](plans/07-orchestration-handoff.md).
 
 ---
 
@@ -128,8 +131,8 @@ queue as red/green inline diffs with Approve/Reject and an audit entry. No new U
   review). "Review impact" scans the whole doc against a changed source. (Grows into
   section/claim-level edges later without rework.)
 - **Trigger:** **flag + on-demand review.** Passive staleness flag; a model call only when the user
-  asks. (A scheduled "freshness agent" operating on the dirty bits is a later, opt-in extension —
-  it must still route through the review rail, never auto-edit.)
+  asks. (A scheduled "freshness agent" operating on the dirty bits is the orchestration layer — now
+  specced in doc 09 / built in plan 07 — and it must still route through the review rail, never auto-edit.)
 
 ### 3.6 Trust guardrails
 
@@ -179,13 +182,15 @@ This is a learning exercise; we expect it to surface issues that inform a future
 ## 6. Scope for the spike implementation
 
 **In:** the `.md` bind-link format + parser/serializer; the `.lock.json` schema + read/write;
-bind-link resolution & rendered-cache reconciliation; hash-based staleness + dirty-bit; the Context
-panel with freshness status; "Review impact" wired to the model-or-heuristic pass; results into the
-existing review rail; migration of the sample docs.
+bind-link resolution & rendered-cache reconciliation; hash-based staleness + dirty-bit (**single
+document** — cross-document propagation, triggers & policy are the orchestration layer, doc 09 /
+plan 07); the Context panel with freshness status; "Review impact" wired to the model-or-heuristic
+pass; results into the existing review rail; migration of the sample docs.
 
-**Deferred (named, not built):** section/claim-level influence edges; scheduled freshness agent;
-CRDT text layer; salient-fact semantic gating; entity index for "mentioned everywhere"; pinning UI
-(schema field reserved). Cloud/platform persistence (spike stays on sidecar files).
+**Deferred (named, not built in this phase):** section/claim-level influence edges; the scheduled
+freshness agent + cross-document propagation (specced in doc 09, built in plan 07); CRDT text layer;
+salient-fact semantic gating; entity index for "mentioned everywhere"; pinning UI (schema field
+reserved). Cloud/platform persistence (spike stays on sidecar files).
 
 ## 7. Verification
 
