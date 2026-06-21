@@ -23,7 +23,8 @@ import { IEditorResolverService, RegisteredEditorPriority } from '../../../servi
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { CONTEXT_CONTAINER_ID, CONTEXT_VIEW_ID, DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { ContextPanelView } from './contextPanelView.js';
 import { DocumentsView } from './documentsView.js';
 import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
@@ -136,6 +137,30 @@ const documentsViewDescriptor: IViewDescriptor = {
 	canMoveView: false,
 };
 Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([documentsViewDescriptor], documentsContainer);
+
+// --- "Context" panel in the primary sidebar: the influence sources of the active document ---
+// ADDITIVE-CONTRIBUTION (merge-tax ledger).
+const contextIcon = registerIcon('living-docs-context', Codicon.references, localize('livingDocs.contextIcon', "Document context sources"));
+
+const contextContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+	id: CONTEXT_CONTAINER_ID,
+	title: localize2('livingDocs.context', "Context"),
+	icon: contextIcon,
+	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [CONTEXT_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
+	storageId: CONTEXT_CONTAINER_ID,
+	hideIfEmpty: false,
+	order: 1,
+}, ViewContainerLocation.Sidebar);
+
+const contextViewDescriptor: IViewDescriptor = {
+	id: CONTEXT_VIEW_ID,
+	name: localize2('livingDocs.contextView', "Context"),
+	containerIcon: contextIcon,
+	ctorDescriptor: new SyncDescriptor(ContextPanelView),
+	canToggleVisibility: false,
+	canMoveView: true,
+};
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([contextViewDescriptor], contextContainer);
 
 // Hide the built-in IDE view containers additively: deregister them once registries are populated,
 // rather than patching each contribution. ADDITIVE-CONTRIBUTION (merge-tax ledger). NOTE: this leans

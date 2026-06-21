@@ -17,7 +17,6 @@ import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
-import { parseLivingDoc, serializeLivingDoc } from '../../common/livingDocMarkdown.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -26,80 +25,85 @@ const METRICS_CSV = [
 	'24,Jun 19,48600,427,2.4,205',
 ].join('\n');
 
+// A clean-file Living Document: bind links authored at the week-23 values; resolving against the CSV
+// (latest = week 24) should reconcile the visible cache to the week-24 values.
 const WEEKLY_MD = [
 	'---',
-	'livingDoc: true',
 	'title: Weekly Operating Summary',
-	'subtitle: Week 23 as authored',
-	'source: metrics.csv',
-	'syncedWeek: 23',
+	'subtitle: Week 23',
+	'sources:',
+	'  - metrics.csv',
+	'context:',
+	'  - market-research.md',
 	'---',
 	'',
 	'## Highlights',
 	'',
-	'<!-- bind id=p-highlights kind=figure cells=mrr,signups,churn -->',
-	'Revenue grew 12% week-on-week to $41.2k MRR, on 312 new signups. Churn held at 3.1%.',
-	'',
-	'<!-- table id=kpi-table cells=mrr,signups,churn,active -->',
+	'Revenue grew [12%](bind:metrics.mrr.delta) week-on-week to [$41.2k](bind:metrics.mrr) MRR, on [312](bind:metrics.signups) new signups.',
 	'',
 	'## Commentary',
 	'',
-	'<!-- bind id=p-commentary kind=narrative cells=mrr -->',
-	'Growth remained steady this week, continuing the gradual climb seen since early Q2.',
+	'Growth remained steady this week.',
 	'',
 	'## What to watch',
 	'',
 	'Activation rate on the new onboarding flow.',
-].join('\n');
+].join('\n') + '\n';
 
+// A second bound document - its KPI table is a clean Markdown table whose cells are bind links.
 const BOARD_MD = [
 	'---',
-	'livingDoc: true',
 	'title: Board Note',
-	'subtitle: Week 23 as authored',
-	'source: metrics.csv',
-	'syncedWeek: 23',
+	'sources:',
+	'  - metrics.csv',
 	'---',
 	'',
 	'## Numbers',
 	'',
-	'<!-- table id=kpi-table cells=mrr,signups,churn,active -->',
+	'| Metric | Current |',
+	'| --- | --- |',
+	'| MRR | [$41.2k](bind:metrics.mrr) |',
+	'| Signups | [312](bind:metrics.signups) |',
 	'',
 	'## Note to the board',
 	'',
-	'<!-- bind id=p-commentary kind=narrative cells=mrr -->',
-	'Momentum is steady; we continue to track plan with no surprises this week.',
-].join('\n');
+	'Momentum is steady this week.',
+].join('\n') + '\n';
 
 const PLAIN_MD = [
-	'# Project Readme',
+	'# Team Notes',
 	'',
-	'Some **bold** intro prose with a [link](https://example.com).',
+	'A plain Markdown file with **no** frontmatter and no bindings.',
 	'',
 	'- first item',
 	'- second item',
-].join('\n');
+].join('\n') + '\n';
+
+// The influence (context) source for the Weekly Summary - plain Markdown, not itself a living doc.
+const MARKET_MD = [
+	'# Market research',
+	'',
+	'Steady competitive landscape; no major moves this week.',
+].join('\n') + '\n';
 
 const API_MD = [
 	'---',
-	'livingDoc: true',
 	'title: Ecosystem Signal',
-	'source: metrics.csv',
-	'syncedWeek: 24',
+	'sources:',
+	'  - https://api.example.com/repo',
 	'---',
 	'',
 	'## Ecosystem',
 	'',
-	'<!-- bind id=p-eco kind=figure src=api url=https://api.example.com/repo cells=stargazers_count,open_issues_count -->',
-	'The repository has {stargazers_count} stars and {open_issues_count} open issues.',
-].join('\n');
+	'The repository has [0](bind:repo.stargazers_count) stars and [0](bind:repo.open_issues_count) open issues.',
+].join('\n') + '\n';
 
 const API_PAYLOAD = { stargazers_count: 12345, open_issues_count: 678, full_name: 'microsoft/vscode' };
 
-const WEEKLY = URI.file('/ws/Weekly Summary.living.md');
-const BOARD = URI.file('/ws/Board Note.living.md');
-const README = URI.file('/ws/README.md');
-const API = URI.file('/ws/Ecosystem.living.md');
+const WEEKLY = URI.file('/ws/Weekly Summary.md');
+const BOARD = URI.file('/ws/Board Note.md');
+const README = URI.file('/ws/Team Notes.md');
+const API = URI.file('/ws/Ecosystem.md');
 
 suite('LivingDocsService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -112,6 +116,7 @@ suite('LivingDocsService', () => {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
+		files.set(URI.file('/ws/market-research.md').toString(), MARKET_MD);
 		files.set(WEEKLY.toString(), WEEKLY_MD);
 		files.set(README.toString(), PLAIN_MD);
 		if (opts.boardNote) { files.set(BOARD.toString(), BOARD_MD); }
@@ -154,234 +159,284 @@ suite('LivingDocsService', () => {
 		return service;
 	}
 
-	test('refresh auto-applies figures and queues the meaning-change; approve applies it with an audit trail', async () => {
-		const service = createService();
+	function blockText(service: LivingDocsService, uri: URI, headingId: string): string {
+		// The bound paragraph follows its heading; return the first block after the given heading.
+		const blocks = service.getDoc(uri)!.blocks;
+		const i = blocks.findIndex(b => b.id === headingId);
+		return blocks[i + 1].text;
+	}
 
+	test('loading a bound document resolves its bind keys to the latest source values', async () => {
+		const service = createService();
 		await service.loadDocument(WEEKLY);
-		assert.strictEqual(service.getDoc(WEEKLY)?.syncedWeek, 23, 'loads at authored week');
-		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'nothing pending before refresh');
+
+		// Authored at the week-23 cache ($41.2k / 312 / 12%); resolved to week-24 ($48.6k / 427 / +18%).
+		const resolved = service.getResolved(WEEKLY);
+		assert.deepStrictEqual(
+			{ mrr: resolved.get('metrics.mrr'), signups: resolved.get('metrics.signups'), delta: resolved.get('metrics.mrr.delta') },
+			{ mrr: '$48.6k', signups: '427', delta: '+18%' },
+		);
+		// Load is read-only: the on-disk cache is untouched until an explicit refresh/save.
+		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'on-disk cache unchanged on load');
+	});
+
+	test('refreshFromSources reconciles the visible cache (figures auto-apply), persists, and audits', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
 
 		await service.refreshFromSources();
 
-		// Figure paragraph auto-applied with the real week-24 numbers (delta 41.2k -> 48.6k = +18%).
-		const fig = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-highlights')!;
-		assert.ok(fig.text!.includes('18%'), `figure recomputed delta: ${fig.text}`);
-		assert.ok(fig.text!.includes('$48.6k') && fig.text!.includes('427'), `figure has new values: ${fig.text}`);
-		assert.strictEqual(service.getDoc(WEEKLY)!.syncedWeek, 24, 'KPI table advanced to latest week');
-		assert.ok(service.getRecentlyApplied(WEEKLY).has('p-highlights'), 'figure flagged as auto-applied');
+		const highlights = blockText(service, WEEKLY, 'h-highlights');
+		assert.ok(highlights.includes('[$48.6k](bind:metrics.mrr)') && highlights.includes('[427](bind:metrics.signups)') && highlights.includes('[+18%](bind:metrics.mrr.delta)'), `reconciled in memory: ${highlights}`);
+		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
+		assert.ok(onDisk.includes('[$48.6k](bind:metrics.mrr)'), `persisted resolved value: ${onDisk}`);
+		assert.ok(service.getAudit().some(e => e.action === 'auto-applied'), 'figure auto-apply audited');
+	});
 
-		// Meaning-change queued, NOT auto-applied.
+	test('first open bootstraps a lock sidecar from the sources (resolved value, hash, syncedAt, kind)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		const lockText = lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString());
+		assert.ok(lockText, 'a lock sidecar was written on first open');
+		const lock = JSON.parse(lockText!);
+		const mrr = lock.bindings['metrics.mrr'];
+		assert.strictEqual(mrr.resolved, '$48.6k', 'resolved value bootstrapped from the source');
+		assert.ok(mrr.sourceHash && mrr.syncedAt, 'binding carries a source hash and sync time');
+		assert.deepStrictEqual({ appliedBy: mrr.appliedBy, kind: mrr.kind }, { appliedBy: 'agent', kind: 'figure' });
+	});
+
+	test('the lock is the source of truth for resolved values: load does not re-read sources (lock wins)', async () => {
+		const service = createService();
+		// Seed a lock whose resolved value is NOT derivable from the CSV; load must honour it.
+		lastFiles!.set(URI.file('/ws/Weekly Summary.lock.json').toString(), JSON.stringify({
+			version: 1,
+			bindings: { 'metrics.mrr': { resolved: '$99.9k', source: 'metrics.csv#mrr', sourceHash: 'stale', syncedAt: 't', appliedBy: 'agent', kind: 'figure' } },
+			context: {}, claims: {}, pins: [], audit: [],
+		}));
+
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getResolved(WEEKLY).get('metrics.mrr'), '$99.9k', 'load shows the lock value, not a fresh source read');
+	});
+
+	test('re-syncing a changed source updates the lock binding resolved + sourceHash and reconciles the .md', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/Weekly Summary.lock.json').toString(), JSON.stringify({
+			version: 1,
+			bindings: { 'metrics.mrr': { resolved: '$99.9k', source: 'metrics.csv#mrr', sourceHash: 'stale', syncedAt: 't', appliedBy: 'agent', kind: 'figure' } },
+			context: {}, claims: {}, pins: [], audit: [],
+		}));
+		await service.loadDocument(WEEKLY);
+
+		await service.refreshFromSources();
+
+		const mrr = service.getLock(WEEKLY)!.bindings['metrics.mrr'];
+		assert.strictEqual(mrr.resolved, '$48.6k', 're-sync pulls the current source value into the lock');
+		assert.notStrictEqual(mrr.sourceHash, 'stale', 'source hash refreshed at sync');
+		const lockOnDisk = JSON.parse(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!);
+		assert.strictEqual(lockOnDisk.bindings['metrics.mrr'].resolved, '$48.6k', 'lock persisted to its sidecar');
+	});
+
+	test('changing a value source flips the binding dirty bit (hash mismatch), with no model calls', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getFreshness(WEEKLY).dirty, false, 'fresh immediately after load');
+
+		// A new week lands in the CSV - the bound document may be affected.
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.checkSources(WEEKLY);
+
+		const fresh = service.getFreshness(WEEKLY);
+		assert.ok(fresh.dirty && fresh.staleBindings.includes('metrics.mrr'), `binding dirty on source change: ${JSON.stringify(fresh)}`);
+	});
+
+	test('changing a context source flips its freshness to stale (the influence path)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleContext, [], 'context current after load');
+
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+
+		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleContext, ['market-research.md'], 'context flagged changed-since-review');
+	});
+
+	test('refreshing re-syncs the value bindings and clears their dirty bits', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.checkSources(WEEKLY);
+		assert.ok(service.getFreshness(WEEKLY).dirty, 'dirty before refresh');
+
+		await service.refreshFromSources();
+
+		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleBindings, [], 'binding dirty bits cleared after re-sync');
+		assert.strictEqual(service.getResolved(WEEKLY).get('metrics.mrr'), '$52.0k', 'lock now holds the new value');
+	});
+
+	function seedLock(uri: URI, lock: object): void {
+		const stem = uri.path.split('/').pop()!.replace(/\.md$/, '');
+		lastFiles!.set(URI.file(`/ws/${stem}.lock.json`).toString(), JSON.stringify(lock));
+	}
+
+	test('Review impact on a changed context queues a candidate; approve applies it, updates the lock, and clears the flag', async () => {
+		const service = createService();
+		// Authored claim bound to the context, anchored to the Commentary sentence.
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'commentary-tone': { anchor: 'Growth remained steady this week.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+
+		// The context source changes -> the document is flagged, then the user runs Review impact.
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+		await service.reviewImpact(WEEKLY);
+
 		const pending = service.getPendingForDoc(WEEKLY);
-		assert.strictEqual(pending.length, 1, 'exactly one change needs approval');
-		assert.strictEqual(pending[0].blockId, 'p-commentary');
-		assert.strictEqual(pending[0].kind, 'meaning');
-		assert.ok(pending[0].newText.toLowerCase().includes('accelerated'), `commentary rewrite: ${pending[0].newText}`);
-		const commentaryBefore = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!;
-		assert.ok(commentaryBefore.text!.includes('steady'), 'commentary unchanged until approved');
+		assert.strictEqual(pending.length, 1, 'one impact candidate queued');
+		assert.deepStrictEqual(
+			{ kind: pending[0].kind, via: pending[0].via, context: pending[0].contextReviewed, claim: pending[0].claimId, relink: !!pending[0].relink },
+			{ kind: 'meaning', via: 'heuristic', context: ['market-research.md'], claim: 'commentary-tone', relink: false },
+		);
+		const commentaryBlockId = pending[0].blockId;
+		assert.notStrictEqual(pending[0].newText, pending[0].oldText, 'a real edit is proposed');
 
-		// Audit records the auto-applied figures.
-		assert.ok(service.getAudit().some(e => e.action === 'auto-applied' && e.blockId === 'p-highlights'), 'figure auto-apply audited');
-
-		// Approve the meaning-change.
 		await service.approve(pending[0].id);
-		const commentaryAfter = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!;
-		assert.ok(commentaryAfter.text!.toLowerCase().includes('accelerated'), 'commentary applied after approval');
-		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'no pending after approval');
-		assert.ok(service.getAudit().some(e => e.action === 'approved' && e.blockId === 'p-commentary'), 'approval audited');
+
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'cleared from the rail');
+		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleContext, [], 'context flag cleared after approve');
+		const lock = service.getLock(WEEKLY)!;
+		assert.strictEqual(lock.claims['commentary-tone'].state, 'applied', 'claim re-anchored + applied');
+		assert.ok(lock.audit.some(e => e.action === 'approved' && e.blockId === commentaryBlockId), 'approval audited in the lock');
 	});
 
-	test('a source change fans out to every bound document; approving one leaves the others', async () => {
-		const service = createService([], { boardNote: true });
-		await service.loadDocument(WEEKLY);
-
-		await service.refreshFromSources();
-
-		const docsWithChanges = new Set(service.getAllPending().map(c => c.docTitle));
-		assert.deepStrictEqual([...docsWithChanges].sort(), ['Board Note', 'Weekly Operating Summary'], 'both bound docs surfaced changes');
-
-		const weeklyChange = service.getAllPending().find(c => c.docTitle === 'Weekly Operating Summary')!;
-		const boardChange = service.getAllPending().find(c => c.docTitle === 'Board Note')!;
-
-		await service.approve(weeklyChange.id);
-
-		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'approved document is cleared');
-		assert.strictEqual(service.getAllPending().length, 1, 'the other document is still pending');
-		assert.strictEqual(service.getAllPending()[0].id, boardChange.id, 'the untouched change is the board note');
-		assert.ok(service.getDoc(BOARD)!.blocks.find(b => b.id === 'p-commentary')!.text!.includes('steady'), 'board note left unchanged');
-		assert.ok(service.getAudit().some(e => e.docTitle === 'Weekly Operating Summary' && e.action === 'approved'), 'audit spans documents');
-	});
-
-	test('reject leaves the document unchanged but records the decision', async () => {
+	test('a claim whose anchor no longer matches surfaces a re-link prompt instead of mis-attaching', async () => {
 		const service = createService();
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'orphan': { anchor: 'A sentence that does not appear anywhere in this document.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
 		await service.loadDocument(WEEKLY);
+		const before = service.getDoc(WEEKLY)!.blocks.map(b => b.text).join('\n');
+
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+		await service.reviewImpact(WEEKLY);
+
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.strictEqual(pending.length, 1, 'one prompt queued');
+		assert.ok(pending[0].relink, 'it is a loud re-link prompt, not a silent re-attach');
+		assert.ok(/re-link/i.test(pending[0].rationale), `prompt explains the re-link: ${pending[0].rationale}`);
+		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.map(b => b.text).join('\n'), before, 'no prose was changed');
+	});
+
+	test('with no model available, Review impact is a visible heuristic state (not a silent degrade)', async () => {
+		const service = createService();
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'commentary-tone': { anchor: 'Growth remained steady this week.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+
+		await service.reviewImpact(WEEKLY);
+
+		assert.ok(/no model/i.test(service.getStatus(WEEKLY)), `surfaces the no-model state: ${service.getStatus(WEEKLY)}`);
+		assert.strictEqual(service.getPendingForDoc(WEEKLY)[0].via, 'heuristic', 'candidate marked as the heuristic fallback');
+	});
+
+	test('a clean Markdown table with bind links in cells resolves each cell on refresh', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(BOARD);
 		await service.refreshFromSources();
 
-		const change = service.getPendingForDoc(WEEKLY)[0];
-		service.reject(change.id);
-
-		const commentary = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!;
-		assert.ok(commentary.text!.includes('steady'), 'commentary left unchanged on reject');
-		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0);
-		assert.ok(service.getAudit().some(e => e.action === 'rejected' && e.blockId === 'p-commentary'), 'rejection audited');
+		const table = service.getDoc(BOARD)!.blocks.find(b => b.type === 'table')!;
+		assert.ok(table.text.includes('[$48.6k](bind:metrics.mrr)') && table.text.includes('[427](bind:metrics.signups)'), `table cells resolved: ${table.text}`);
 	});
 
-	test('revealSource opens a styled source view (not the raw CSV) with the synced row and referencing docs', async () => {
-		const opened: IOpenedEditor[] = [];
-		const service = createService(opened);
-		await service.loadDocument(WEEKLY);
-		opened.length = 0; // ignore anything opened during load
-
-		await service.revealSource(WEEKLY, ['mrr']);
-
-		assert.strictEqual(opened.length, 1, 'opened the source view once');
-		assert.ok(opened[0].resource!.path.endsWith('metrics.source.md'), `opened a styled source view: ${opened[0].resource!.path}`);
-		const md = lastFiles!.get(opened[0].resource!.toString()) ?? '';
-		assert.ok(md.startsWith('# metrics.csv'), 'titled with the source file');
-		assert.ok(md.includes('Bound columns'), 'calls out the bound columns');
-		assert.ok(md.includes('| **23**'), 'emphasizes the synced-week (23) row');
-		assert.ok(md.includes('Weekly Operating Summary'), 'lists the referencing document');
-	});
-
-	test('plain Markdown is not treated as a Living Document and takes its title from the first H1', () => {
-		const doc = parseLivingDoc(PLAIN_MD);
-		assert.strictEqual(doc.isLiving, false, 'no frontmatter flag and no bindings -> plain');
-		assert.strictEqual(doc.title, 'Project Readme', 'title from first H1');
-		assert.ok(doc.body.includes('- first item'), 'body retains the raw Markdown for generic rendering');
-	});
-
-	test('a bound document is detected as living even without the frontmatter flag', () => {
-		const doc = parseLivingDoc(WEEKLY_MD);
-		assert.strictEqual(doc.isLiving, true);
-	});
-
-	test('loading plain Markdown reads no source and reports a Markdown status', async () => {
+	test('plain Markdown is not a Living Document and reports a Markdown status', async () => {
 		const service = createService();
 		await service.loadDocument(README);
 		assert.strictEqual(service.getDoc(README)?.isLiving, false);
 		assert.strictEqual(service.getStatus(README), 'Markdown');
-		assert.strictEqual(service.getKpiRows(README).length, 0, 'no KPI rows for plain Markdown');
 	});
 
 	test('saveRawText persists verbatim and reparses the document', async () => {
 		const service = createService();
 		await service.loadDocument(README);
 
-		const edited = PLAIN_MD.replace('Project Readme', 'Renamed Readme');
+		const edited = PLAIN_MD.replace('Team Notes', 'Renamed Notes');
 		await service.saveRawText(README, edited);
 
 		assert.strictEqual(service.getRawText(README), edited, 'raw text updated');
-		assert.strictEqual(service.getDoc(README)?.title, 'Renamed Readme', 'reparsed after save');
+		assert.strictEqual(service.getDoc(README)?.title, 'Renamed Notes', 'reparsed after save');
 	});
 
-	test('an api-bound block fetches live values and substitutes them into its template', async () => {
+	test('an api source resolves live values into its bind links on refresh', async () => {
 		const service = createService([], { api: true });
 		await service.loadDocument(API);
-
 		await service.refreshFromSources();
 
-		const eco = service.getDoc(API)!.blocks.find(b => b.id === 'p-eco')!;
-		assert.ok(eco.text!.includes('12,345 stars'), `live stars substituted: ${eco.text}`);
-		assert.ok(eco.text!.includes('678 open issues'), `live issues substituted: ${eco.text}`);
-		assert.strictEqual(eco.binding!.sourceKind, 'api', 'binding records the api source kind');
-		assert.strictEqual(eco.template, 'The repository has {stargazers_count} stars and {open_issues_count} open issues.', 'template preserved for re-derivation');
-		assert.ok(service.getAudit().some(e => e.blockId === 'p-eco' && e.via === 'api'), 'audited as an api source');
-		// The on-disk Markdown keeps the placeholder template, not the filled values.
-		assert.ok(service.getRawText(API).includes('{stargazers_count}'), 'serialized form keeps the template');
-	});
-
-	test('api/mcp source kinds round-trip through the Markdown', () => {
-		const doc = parseLivingDoc(API_MD);
-		const eco = doc.blocks.find(b => b.id === 'p-eco')!;
-		assert.strictEqual(eco.binding!.sourceKind, 'api');
-		assert.strictEqual(eco.binding!.url, 'https://api.example.com/repo');
-		const again = parseLivingDoc(serializeLivingDoc(doc));
-		const eco2 = again.blocks.find(b => b.id === 'p-eco')!;
-		assert.strictEqual(eco2.binding!.sourceKind, 'api');
-		assert.strictEqual(eco2.binding!.url, 'https://api.example.com/repo');
-	});
-
-	test('exportDocument writes a self-contained HTML page with the resolved content', async () => {
-		const opened: IOpenedEditor[] = [];
-		const service = createService(opened);
-		await service.loadDocument(WEEKLY);
-		await service.refreshFromSources();
-
-		const target = await service.exportDocument(WEEKLY);
-		assert.ok(target, 'export returned a target uri');
-		assert.ok(target!.path.endsWith('Weekly Summary.export.html'), `target name: ${target!.path}`);
-		assert.ok(opened.some(o => o.resource?.path.endsWith('.export.html')), 'opened the exported page');
-
-		const html = lastFiles!.get(target!.toString()) ?? '';
-		assert.ok(html.includes('<!DOCTYPE html>') && html.includes('Weekly Operating Summary'), 'standalone HTML with the title');
-		assert.ok(html.includes('$48.6k'), 'KPI values exported');
-		assert.ok(!html.includes('contenteditable') && !html.includes('data-refresh'), 'no editor chrome in the export');
-	});
-
-	test('exportMarkdown writes a clean static .md with resolved values and no binding metadata', async () => {
-		const opened: IOpenedEditor[] = [];
-		const service = createService(opened);
-		await service.loadDocument(WEEKLY);
-		await service.refreshFromSources();
-
-		const target = await service.exportMarkdown(WEEKLY);
-		assert.ok(target, 'export returned a target uri');
-		assert.ok(target!.path.endsWith('Weekly Summary.export.md'), `target name: ${target!.path}`);
-		assert.ok(opened.some(o => o.resource?.path.endsWith('.export.md')), 'opened the exported markdown');
-
-		const md = lastFiles!.get(target!.toString()) ?? '';
-		assert.ok(md.startsWith('# Weekly Operating Summary'), 'starts with the H1 title');
-		assert.ok(md.includes('$48.6k'), 'resolved KPI values inlined');
-		assert.ok(md.includes('| Metric | Prev | Current | Change |'), 'KPI table flattened to a markdown table');
-		assert.ok(!md.includes('<!-- bind') && !md.includes('<!-- table') && !md.includes('{'), 'no binding metadata or {cell} placeholders');
+		const eco = service.getDoc(API)!.blocks.find(b => b.type === 'paragraph' && b.binds.length > 0)!;
+		assert.ok(eco.text.includes('[12,345](bind:repo.stargazers_count)'), `live stars resolved: ${eco.text}`);
+		assert.ok(eco.text.includes('[678](bind:repo.open_issues_count)'), `live issues resolved: ${eco.text}`);
 	});
 
 	test('editBlock edits non-bound prose and persists it, but ignores bound blocks', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);
 
-		// "What to watch" is a non-bound paragraph -> editable.
-		const watch = service.getDoc(WEEKLY)!.blocks.find(b => b.type === 'paragraph' && !b.binding)!;
-		await service.editBlock(WEEKLY, watch.id, 'Edited watch item.');
-		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.find(b => b.id === watch.id)!.text, 'Edited watch item.', 'non-bound prose updated');
-		assert.ok(service.getRawText(WEEKLY).includes('Edited watch item.'), 'edit persisted to the Markdown source');
+		const watch = service.getDoc(WEEKLY)!.blocks.find(b => b.type === 'paragraph' && b.binds.length === 0)!;
+		await service.editBlock(WEEKLY, watch.id, 'Edited prose.');
+		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.find(b => b.id === watch.id)!.text, 'Edited prose.', 'non-bound prose updated');
+		assert.ok(service.getRawText(WEEKLY).includes('Edited prose.'), 'edit persisted to the Markdown source');
 
-		// A bound block (the commentary) is driven by its source and must not be hand-edited.
-		const before = service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!.text;
-		await service.editBlock(WEEKLY, 'p-commentary', 'Should be ignored.');
-		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.find(b => b.id === 'p-commentary')!.text, before, 'bound block left unchanged');
+		const bound = service.getDoc(WEEKLY)!.blocks.find(b => b.binds.length > 0)!;
+		const before = bound.text;
+		await service.editBlock(WEEKLY, bound.id, 'Should be ignored.');
+		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.find(b => b.id === bound.id)!.text, before, 'bound block left unchanged');
 	});
 
-	test('listDocuments discovers Living Documents in the workspace, excludes plain Markdown, and counts pending', async () => {
+	test('listDocuments discovers Living Documents, excludes plain Markdown, and sorts by title', async () => {
 		const service = createService([], { boardNote: true, api: true });
 
-		// Before any refresh, every document discovers with zero pending changes.
-		const before = await service.listDocuments();
-		assert.deepStrictEqual(before.map(d => d.title), ['Board Note', 'Ecosystem Signal', 'Weekly Operating Summary'], 'living docs listed (README.md excluded), sorted by title');
-		assert.ok(before.every(d => d.isLiving), 'all discovered documents are living');
-		assert.deepStrictEqual(before.find(d => d.title === 'Ecosystem Signal')!.sourceKinds, ['api'], 'api source kind surfaced for the chip');
-		assert.strictEqual(before.reduce((n, d) => n + d.pendingCount, 0), 0, 'nothing pending before a refresh');
-
-		// After a refresh fans out, the home reflects the queued meaning-changes per document.
-		await service.loadDocument(WEEKLY);
-		await service.refreshFromSources();
-		const after = await service.listDocuments();
-		assert.strictEqual(after.find(d => d.title === 'Weekly Operating Summary')!.pendingCount, 1, 'pending count mirrors the review rail');
+		const docs = await service.listDocuments();
+		assert.deepStrictEqual(docs.map(d => d.title), ['Board Note', 'Ecosystem Signal', 'Weekly Operating Summary'], 'living docs listed (Team Notes excluded), sorted by title');
+		assert.ok(docs.every(d => d.isLiving), 'all discovered documents are living');
+		assert.deepStrictEqual(docs.find(d => d.title === 'Ecosystem Signal')!.sourceKinds, ['api'], 'api source kind surfaced for the chip');
 	});
 
-	test('markdown parses bindings from comments and round-trips through serialize', () => {
-		const doc = parseLivingDoc(WEEKLY_MD);
-		assert.strictEqual(doc.title, 'Weekly Operating Summary');
-		assert.strictEqual(doc.source, 'metrics.csv');
-		assert.strictEqual(doc.syncedWeek, 23);
-		const fig = doc.blocks.find(b => b.id === 'p-highlights')!;
-		assert.strictEqual(fig.kind, 'figure');
-		assert.deepStrictEqual([...fig.binding!.cells], ['mrr', 'signups', 'churn']);
-		assert.ok(doc.blocks.some(b => b.type === 'kpiTable' && b.id === 'kpi-table'));
+	test('exportMarkdown writes a clean static .md with resolved values and no bind syntax', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
 
-		// serialize -> parse preserves block ids, kinds, and bindings
-		const again = parseLivingDoc(serializeLivingDoc(doc));
-		assert.deepStrictEqual(again.blocks.map(b => b.id), doc.blocks.map(b => b.id));
-		assert.deepStrictEqual(again.blocks.map(b => b.kind), doc.blocks.map(b => b.kind));
-		assert.strictEqual(again.blocks.find(b => b.id === 'p-commentary')!.text, doc.blocks.find(b => b.id === 'p-commentary')!.text);
+		const target = await service.exportMarkdown(WEEKLY);
+		assert.ok(target && target.path.endsWith('Weekly Summary.export.md'), `target name: ${target?.path}`);
+		const md = lastFiles!.get(target!.toString()) ?? '';
+		assert.ok(md.startsWith('# Weekly Operating Summary'), 'starts with the H1 title');
+		assert.ok(md.includes('$48.6k') && md.includes('427'), 'resolved values inlined');
+		assert.ok(!md.includes('bind:') && !md.includes(']('), 'no bind-link syntax in the export');
+	});
+
+	test('revealSource opens a styled source view listing bound keys and the referencing document', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+		await service.loadDocument(WEEKLY);
+		opened.length = 0;
+
+		await service.revealSource(WEEKLY, ['metrics.mrr']);
+
+		assert.strictEqual(opened.length, 1, 'opened the source view once');
+		assert.ok(opened[0].resource!.path.endsWith('metrics.source.md'), `styled source view: ${opened[0].resource!.path}`);
+		const md = lastFiles!.get(opened[0].resource!.toString()) ?? '';
+		assert.ok(md.includes('**metrics.mrr**'), 'emphasizes the selected bound key');
+		assert.ok(md.includes('Weekly Operating Summary'), 'lists the referencing document');
 	});
 });

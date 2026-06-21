@@ -3,53 +3,124 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Living Documents — research spike data model.
-// A document is a flat list of blocks; "bound" blocks declare which source cells feed them.
+// Living Documents - research spike data model (clean-file + lock-file format, spec 08).
+//
+// A document is ~99% pure Markdown the user owns. Where a value is bound to a source, the author
+// (or agent) writes a bind link inline - a real Markdown link with a `bind:` scheme:
+//
+//   Revenue grew [18%](bind:metrics.mrr.delta) week-on-week to [$48.6k](bind:metrics.mrr) MRR.
+//
+// The bind link IS the anchor (no line numbers, no slugged ids that drift). The visible link text
+// is a rendered cache of the resolved value, so the file reads correctly standalone and an LLM sees
+// both the value and its origin. The companion `<doc>.lock.json` is the source of truth for resolved
+// values + freshness; on render/save the visible cache is reconciled to the lock (lock wins).
 
-// Where a bound block draws its data from.
+// Where a source draws its data from.
 //   file -> a sibling file in the workspace (e.g. metrics.csv)
 //   api  -> a live HTTP JSON endpoint (e.g. a CRM or product metrics API)
 //   mcp  -> a tool exposed over MCP / the language-model tools service
 export type SourceKind = 'file' | 'api' | 'mcp';
 
-export interface ILivingDocBinding {
-	readonly source: string;            // sibling source file, e.g. "metrics.csv" (file kind)
-	readonly cells: readonly string[];  // column / JSON keys the block depends on
-	readonly sourceKind: SourceKind;    // file | api | mcp
-	readonly url?: string;              // api kind: the HTTP endpoint to fetch
-	readonly tool?: string;             // mcp kind: the tool to invoke
+// One inline bind-link occurrence found in the prose: [value](bind:key).
+//   key   -> the binding identity, e.g. "metrics.mrr" or "metrics.mrr.delta". This is the anchor.
+//   value -> the visible (rendered-cache) link text at parse time.
+export interface IBindLink {
+	readonly key: string;
+	readonly value: string;
 }
 
-export type LivingDocBlockType = 'heading' | 'paragraph' | 'kpiTable';
+export type LivingDocBlockType = 'heading' | 'paragraph' | 'table';
 
+// A block is one top-level Markdown element, used only for rendering + review correlation. Block
+// ids are content/ordinal-derived render keys, NOT persistence keys: the bind link's `key` is the
+// durable anchor (spec 3.7 - identity-keyed, never text-position-keyed).
 export interface ILivingDocBlock {
 	readonly id: string;
 	readonly type: LivingDocBlockType;
-	text?: string;                  // mutated in-place when a change is applied
-	readonly binding?: ILivingDocBinding;
-	readonly kind?: 'figure' | 'narrative';
-	// For api/mcp figure blocks: the authored text with {cell} placeholders. The live values
-	// are substituted into `text` on refresh; the template is what round-trips to disk.
-	template?: string;
+	text: string;                       // raw Markdown for this block, including inline bind links
+	readonly level?: number;            // heading level (1-6) for `heading` blocks
+	binds: IBindLink[];                 // bind links found in this block (cache of the parse)
 }
 
 export interface ILivingDoc {
 	title: string;
 	subtitle: string;
-	source: string;
-	syncedWeek: number;
+	readonly sources: string[];         // frontmatter `sources:` (value-binding sources)
+	readonly context: string[];         // frontmatter `context:` (influence sources)
 	readonly blocks: ILivingDocBlock[];
-	// True when the file declares itself a Living Document (frontmatter livingDoc: true) or
-	// carries data bindings. Plain Markdown (READMEs, notes) renders generically instead.
+	// True when the file declares sources/context in frontmatter or carries bind links. Plain
+	// Markdown (READMEs, notes) renders generically instead. The service additionally treats a
+	// `.md` with a sibling `<doc>.lock.json` as living.
 	readonly isLiving: boolean;
-	// Markdown body after the frontmatter, used to render plain documents and as the
-	// source-of-truth fallback for the raw editing view.
+	// Clean Markdown body after the frontmatter, used to render plain documents and as the raw
+	// editing view. Reconstructable from `blocks`.
 	readonly body: string;
 }
 
 // figure  -> low risk, auto-applies
 // meaning -> changes the meaning, waits for one-click approval
 export type ChangeKind = 'figure' | 'meaning';
+
+// The cheap, always-on staleness signal for one document (spec 3.4). Value bindings are stale when
+// their source's current hash no longer matches the lock; context sources are stale when changed
+// since last review. Computed without any model calls.
+export interface IFreshness {
+	readonly staleBindings: readonly string[];  // bind keys whose source value changed since last sync
+	readonly staleContext: readonly string[];   // context files changed since last review
+	readonly dirty: boolean;                     // true when anything is stale ("may be affected")
+}
+
+// --- the lock file (<doc>.lock.json) - the dependency graph + provenance ledger (spec 3.3) ---
+// The lock is the source of truth for resolved values and freshness. It is generated/maintained by
+// the app and is rebuildable from the sources; the `.md` carries only the visible (cached) values.
+
+export const LOCK_VERSION = 1;
+
+// One exact value edge: a bind key (token) resolved from a source cell.
+export interface IBindingEntry {
+	readonly resolved: string;          // the value at last sync (what the .md cache reconciles to)
+	readonly source: string;            // human-ish origin, e.g. "metrics.csv#mrr"
+	readonly sourceHash: string;        // hash of the source value at last sync (freshness compare)
+	readonly syncedAt: string;
+	readonly appliedBy: 'agent' | 'user';
+	readonly kind: ChangeKind;
+}
+
+// One influence edge: a source that shapes the framing of the prose (1:many, judged by a model).
+export interface IContextEntry {
+	readonly reviewedHash: string;      // hash of the source at last review
+	readonly reviewedAt: string;
+	readonly scope: 'document';         // v1: whole-doc; later: section/claim
+}
+
+// Prose bound to sources, anchored by its sentence text (relocated by fuzzy match on re-derive).
+export interface IClaimEntry {
+	readonly anchor: string;            // sentence text + surrounding context
+	readonly boundTo: readonly string[];// bind keys / context files this claim draws on
+	readonly kind: ChangeKind;
+	readonly state: 'applied' | 'pending';
+}
+
+// Reserved: freeze a published doc to a source version so later changes don't rewrite history.
+export interface IPin {
+	readonly source: string;
+	readonly version: string;
+}
+
+export interface ILivingDocLock {
+	version: number;
+	bindings: Record<string, IBindingEntry>;
+	context: Record<string, IContextEntry>;
+	claims: Record<string, IClaimEntry>;
+	pins: IPin[];
+	// The provenance audit, folded in from the old `.audit.json` sidecar so the lock is the single
+	// durable home for a document's dependency graph + history.
+	audit: IAuditEntry[];
+}
+
+export function emptyLock(): ILivingDocLock {
+	return { version: LOCK_VERSION, bindings: {}, context: {}, claims: {}, pins: [], audit: [] };
+}
 
 export interface IProposedChange {
 	readonly id: string;
@@ -63,6 +134,14 @@ export interface IProposedChange {
 	readonly confidence: number;    // 0..1
 	readonly rationale: string;
 	readonly sourceCells: readonly string[];
+	// Set by the Review-impact pass (Item 5): which lock claim this edit re-anchors, the context
+	// sources it reviews (so approval can mark them reviewed), and whether the model/heuristic produced
+	// it. `relink` marks a loud-failure prompt: the claim's anchor no longer confidently matches the
+	// prose, so the user is asked to re-link rather than the edit silently re-attaching.
+	readonly claimId?: string;
+	readonly contextReviewed?: readonly string[];
+	readonly via?: 'model' | 'heuristic';
+	readonly relink?: boolean;
 }
 
 export interface IAuditEntry {
@@ -73,12 +152,4 @@ export interface IAuditEntry {
 	readonly oldText: string;
 	readonly newText: string;
 	readonly via: 'model' | 'heuristic' | 'api';
-}
-
-export interface IKpiRow {
-	readonly metric: string;
-	readonly prev: string;
-	readonly curr: string;
-	readonly delta: string;
-	readonly positive: boolean;
 }
