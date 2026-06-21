@@ -5,6 +5,7 @@
 
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -15,7 +16,8 @@ import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
-import { ILivingDocsService } from '../common/livingDocs.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { ILivingDocsService, ISkillCheck } from '../common/livingDocs.js';
 import { IAuditEntry, IProposedChange } from '../common/livingDocsModel.js';
 
 type PanelTab = 'chat' | 'review' | 'history' | 'skills';
@@ -47,8 +49,15 @@ export class ReviewRailView extends ViewPane {
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+		@IEditorService private readonly _editors: IEditorService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+	}
+
+	// The Skills tab grades the active document, so re-render when the active editor changes.
+	private _activeDoc(): URI | undefined {
+		const resource = this._editors.activeEditor?.resource;
+		return resource && this._livingDocs.getDoc(resource)?.isLiving ? resource : undefined;
 	}
 
 	protected override renderBody(container: HTMLElement): void {
@@ -58,6 +67,7 @@ export class ReviewRailView extends ViewPane {
 		this._injectStyles(container);
 		this._register(this._livingDocs.onDidChange(() => this._render()));
 		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
+		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'skills') { this._render(); } }));
 		this._render();
 	}
 
@@ -95,7 +105,7 @@ export class ReviewRailView extends ViewPane {
 		} else if (this._activeTab === 'history') {
 			this._renderHistory(content, audit);
 		} else if (this._activeTab === 'skills') {
-			content.innerHTML = SKILLS_HTML;
+			this._renderSkills(content);
 		} else {
 			this._renderReview(content, pending);
 		}
@@ -161,6 +171,21 @@ export class ReviewRailView extends ViewPane {
 
 	private _renderHistory(content: HTMLElement, audit: readonly IAuditEntry[]): void {
 		content.innerHTML = historyHtml(audit);
+	}
+
+	private _renderSkills(content: HTMLElement): void {
+		const resource = this._activeDoc();
+		const report = resource ? this._livingDocs.getSkillReport(resource) : [];
+		const title = resource ? this._livingDocs.getDoc(resource)?.title : undefined;
+		content.innerHTML = skillsHtml(report, title);
+		// "Run" / "Re-run" re-grade the live document and re-render with the fresh verdict.
+		this._renderDisposables.add(addDisposableListener(content, 'click', e => {
+			let el = e.target as HTMLElement | null;
+			while (el && el !== content) {
+				if (el.hasAttribute('data-skill-run')) { this._render(); return; }
+				el = el.parentElement;
+			}
+		}));
 	}
 
 	private _renderChat(content: HTMLElement, pendingCount: number): void {
@@ -305,22 +330,45 @@ function historyHtml(audit: readonly IAuditEntry[]): string {
 }
 
 // Skills (document agents) tab -- the agents that run on this document, on demand or before export.
-const SKILLS_HTML = `<div style="display:flex;flex-direction:column">
+// The Skills tab, data-driven from the live grader report (spec 5). Financial + Formatting are
+// deterministic verdicts on the active document; Strategy reports a needs-model state. "Run"/"Re-run"
+// re-grade. The decorative RUN ON EXPORT toggle + Add-skill row match the comp.
+function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined): string {
+	if (!report.length) {
+		return `<div style="font:400 12.5px/1.6 system-ui;color:#868b95;padding:8px 2px">Open a Living Document to see the Skills that run on it.</div>`;
+	}
+	const icons: Record<string, { glyph: string; bg: string; fg: string }> = {
+		strategy: { glyph: '&#9672;', bg: '#fdf2dc', fg: '#9a6b16' },
+		financial: { glyph: '&#8721;', bg: '#e7f3ec', fg: '#217346' },
+		formatting: { glyph: '&#182;', bg: '#eef1f6', fg: '#52575f' },
+	};
+	const badge = (s: ISkillCheck): string => {
+		const m: Record<string, { label: string; color: string; bg: string }> = {
+			pass: { label: 'PASS', color: '#1f7a44', bg: '#e7f6ec' },
+			flag: { label: 'FLAG', color: '#9a6b16', bg: '#fdf2dc' },
+			'needs-model': { label: 'NO MODEL', color: '#868b95', bg: '#eef1f6' },
+		};
+		const b = m[s.status];
+		return `<span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:${b.color};background:${b.bg};border-radius:999px;padding:4px 7px;flex:none">${b.label}</span>`;
+	};
+	const runBtn = (s: ISkillCheck): string => s.canRun
+		? `<button data-skill-run="${s.id}" style="margin-left:auto;border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">${s.status === 'pass' ? 'Re-run' : 'Run'}</button>`
+		: '';
+	const card = (s: ISkillCheck): string => {
+		const ic = icons[s.id];
+		const border = s.status === 'flag' ? '1.5px solid oklch(0.78 0.1 70)' : '1px solid #eceef2';
+		const detailColor = s.status === 'flag' ? '#52575f' : '#868b95';
+		return `<div style="border:${border};border-radius:11px;overflow:hidden;margin-bottom:11px">`
+			+ `<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:${ic.bg};color:${ic.fg};font-size:14px;display:flex;align-items:center;justify-content:center">${ic.glyph}</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">${esc(s.name)}</div><div style="font:400 11px/1.3 system-ui;color:#868b95">${esc(s.blurb)}</div></div>${badge(s)}</div>`
+			+ `<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="font:400 12px/1.4 system-ui;color:${detailColor}">${esc(s.detail)}</span>${runBtn(s)}</div></div>`;
+	};
+	const sub = docTitle ? `Skills that run on ${esc(docTitle)} &mdash; on demand or before export.` : 'Skills that run on this document.';
+	return `<div style="display:flex;flex-direction:column">
 	<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;padding:0 2px 4px">DOCUMENT AGENTS</div>
-	<div style="font:400 11px/1.45 system-ui;color:#a3a8b2;padding:0 2px 14px">Skills that run on Weekly&nbsp;Summary.md &mdash; on demand or before export.</div>
-	<div style="border:1.5px solid oklch(0.78 0.1 70);border-radius:11px;overflow:hidden;margin-bottom:11px;box-shadow:0 2px 10px rgba(180,130,40,.07)">
-		<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#fdf2dc;color:#9a6b16;font-size:14px;display:flex;align-items:center;justify-content:center">&#9672;</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Strategy agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Tests claims against strategy &amp; OKRs</div></div></div>
-		<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:11px 0"><div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px"><span style="color:#9a6b16;font:600 12px/1.4 system-ui">&#9888;</span><p style="margin:0;font:400 12px/1.5 system-ui;color:#52575f"><strong style="font-weight:600">1 flag.</strong> "Revisit the Q3 target" isn't grounded in <span style="color:#9a6b16">Objective&nbsp;2</span> &mdash; restate against the +20% MRR key result?</p></div><div style="display:flex;gap:7px"><button style="border:none;border-radius:7px;padding:7px 12px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer">Apply fix</button></div></div>
-	</div>
-	<div style="border:1px solid #eceef2;border-radius:11px;overflow:hidden;margin-bottom:11px">
-		<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#e7f3ec;color:#217346;font-size:14px;display:flex;align-items:center;justify-content:center">&#8721;</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Financial agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Validates figures in reports &amp; quotes</div></div><span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:4px 7px;flex:none">PASS</span></div>
-		<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="font:400 12px/1.4 system-ui;color:#52575f">All 4 linked figures reconcile with sources.</span><button style="margin-left:auto;border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">Re-run</button></div>
-	</div>
-	<div style="border:1px solid #eceef2;border-radius:11px;overflow:hidden;margin-bottom:14px">
-		<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#eef1f6;color:#52575f;font-size:14px;display:flex;align-items:center;justify-content:center">&#182;</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Formatting agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Checks house style before export</div></div></div>
-		<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="font:400 12px/1.4 system-ui;color:#868b95">2 heading-case fixes suggested.</span><button style="margin-left:auto;border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">Run</button></div>
-	</div>
+	<div style="font:400 11px/1.45 system-ui;color:#a3a8b2;padding:0 2px 14px">${sub}</div>
+	${report.map(card).join('')}
 	<div style="font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 2px 8px">RUN ON EXPORT</div>
 	<div style="display:flex;align-items:center;gap:9px;border:1px solid #eceef2;background:#fff;border-radius:9px;padding:10px 12px;margin-bottom:14px"><span style="font:400 12px/1.4 system-ui;color:#52575f">Formatting + Financial</span><span style="margin-left:auto;width:34px;height:20px;border-radius:999px;background:oklch(0.55 0.13 255);position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;background:#fff"></span></span></div>
 	<button style="width:100%;border:1px dashed #d4d7de;background:#fff;border-radius:8px;padding:9px;font:500 12px/1 system-ui;color:#868b95;cursor:pointer">&#65291; Add skill from library</button>
 </div>`;
+}

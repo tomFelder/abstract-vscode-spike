@@ -5,7 +5,7 @@
 
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { IAgentRun } from '../common/livingDocsModel.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
@@ -42,6 +42,10 @@ export class ScreenEditor extends EditorPane {
 	private _screen: ScreenId = 'templates';
 	private _state: IScreenEditorState = { knScope: 'org', filter: 'all' };
 	private readonly _inputDisposables = this._register(new DisposableStore());
+	// Holds the current webview. The iframe reloads (blank) whenever this pane is hidden by another
+	// editor in the group and later re-shown (DOM re-parent), and the low-level webview does not
+	// re-apply its HTML, so we recreate it fresh each time the pane becomes visible.
+	private readonly _webviewStore = this._register(new MutableDisposable<DisposableStore>());
 
 	constructor(
 		group: IEditorGroup,
@@ -65,28 +69,41 @@ export class ScreenEditor extends EditorPane {
 
 	override async setInput(input: ScreenEditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		this._ensureWebview();
 		this._screen = input.screen;
 		// Reset per-screen state on (re)open so each visit starts from the default view.
 		this._state = { knScope: 'org', filter: 'all' };
 		this._inputDisposables.clear();
 		// Re-render when agent status / the registry changes (e.g. a run completes or a trigger fires).
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
-		this._render();
+		this._mountWebview();
 	}
 
-	private _ensureWebview(): void {
-		if (this._webview || !this._container) {
+	// Recreate the webview fresh and render the current screen into it. Called on setInput and whenever
+	// the pane becomes visible, so a screen reopened after a document editor was active is never blank.
+	private _mountWebview(): void {
+		if (!this._container) {
 			return;
 		}
-		this._webview = this._register(this._webviewService.createWebviewElement({
+		const store = new DisposableStore();
+		const webview = store.add(this._webviewService.createWebviewElement({
 			options: {},
 			contentOptions: { allowScripts: true },
 			title: 'Opportunity OS',
 			extension: undefined,
 		}));
-		this._webview.mountTo(this._container, this.window);
-		this._register(this._webview.onMessage(e => this._onMessage(e.message)));
+		this._container.replaceChildren();
+		webview.mountTo(this._container, this.window);
+		store.add(webview.onMessage(e => this._onMessage(e.message)));
+		this._webview = webview;
+		this._webviewStore.value = store;
+		this._render();
+	}
+
+	protected override setEditorVisible(visible: boolean): void {
+		super.setEditorVisible(visible);
+		if (visible) {
+			this._mountWebview();
+		}
 	}
 
 	private _onMessage(message: { type?: string; arg?: string }): void {

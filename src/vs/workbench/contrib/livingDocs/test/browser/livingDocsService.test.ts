@@ -18,6 +18,7 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AgentPolicy, IAgentDef } from '../../common/livingDocsModel.js';
+import { buildContextGroups } from '../../common/contextGroups.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -271,6 +272,66 @@ suite('LivingDocsService', () => {
 		await service.checkSources(WEEKLY);
 
 		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleContext, ['market-research.md'], 'context flagged changed-since-review');
+	});
+
+	test('the Context panel groups the document\'s linked sources and referenced files, fresh by default', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		const groups = buildContextGroups(service.getDoc(WEEKLY)!, service.getFreshness(WEEKLY));
+		// metrics.csv feeds the one bound block (Highlights); market-research.md is influence-only.
+		assert.deepStrictEqual(groups, [
+			{ label: 'Linked sources', items: [{ name: 'metrics.csv', kind: 'file', detail: 'live · feeds 1 block', changed: false }] },
+			{ label: 'Referenced files', items: [{ name: 'market-research.md', kind: 'reference', detail: 'current', changed: false }] },
+		]);
+	});
+
+	test('a changed value source flips its linked-source row to changed; a changed context source flips its referenced row', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+
+		const groups = buildContextGroups(service.getDoc(WEEKLY)!, service.getFreshness(WEEKLY));
+		assert.deepStrictEqual(groups, [
+			{ label: 'Linked sources', items: [{ name: 'metrics.csv', kind: 'file', detail: 'changed · feeds 1 block', changed: true }] },
+			{ label: 'Referenced files', items: [{ name: 'market-research.md', kind: 'reference', detail: 'changed since review', changed: true }] },
+		]);
+	});
+
+	test('an api source is grouped as a linked source with its kind', async () => {
+		const service = createService([], { api: true });
+		await service.loadDocument(API);
+
+		const groups = buildContextGroups(service.getDoc(API)!, service.getFreshness(API));
+		assert.deepStrictEqual(groups, [
+			{ label: 'Linked sources', items: [{ name: 'https://api.example.com/repo', kind: 'api', detail: 'live · polled', changed: false }] },
+		]);
+	});
+
+	test('the Skills report grades the document: Financial reconciles, Formatting flags sentence-case headings, Strategy needs a model', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		const report = service.getSkillReport(WEEKLY).map(s => ({ id: s.id, status: s.status, detail: s.detail, canRun: s.canRun }));
+		assert.deepStrictEqual(report, [
+			{ id: 'strategy', status: 'needs-model', detail: 'Connect a model to test claims against the decision stack.', canRun: false },
+			{ id: 'financial', status: 'pass', detail: 'All 3 linked figures reconcile with sources.', canRun: true },
+			{ id: 'formatting', status: 'flag', detail: '1 heading-case fix suggested.', canRun: true },
+		]);
+	});
+
+	test('the Financial skill flags a bound figure that does not reconcile to its source', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+
+		const financial = service.getSkillReport(BADBIND).find(s => s.id === 'financial')!;
+		assert.deepStrictEqual(
+			{ status: financial.status, detail: financial.detail },
+			{ status: 'flag', detail: '1 of 2 figures do not reconcile: metrics.unknown.' },
+		);
 	});
 
 	test('refreshing re-syncs the value bindings and clears their dirty bits', async () => {
