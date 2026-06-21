@@ -83,6 +83,52 @@ suite('LivingDoc bind-link format', () => {
 		]);
 	});
 
+	// The migrated KPI table (spec 4): a clean Markdown table whose cells are bind links.
+	const MIGRATED_TABLE_MD = [
+		'---',
+		'title: Board Note',
+		'sources:',
+		'  - metrics.csv',
+		'---',
+		'',
+		'## Numbers',
+		'',
+		'| Metric | Previous | Current | Change |',
+		'| --- | --- | --- | --- |',
+		'| MRR | [$41.2k](bind:metrics.mrr.prev) | [$48.6k](bind:metrics.mrr) | [+18%](bind:metrics.mrr.delta) |',
+		'| New signups | [312](bind:metrics.signups.prev) | [427](bind:metrics.signups) | [+37%](bind:metrics.signups.delta) |',
+	].join('\n') + '\n';
+
+	// The OLD format we replaced: bindings smuggled into HTML comments, a `{cell}`-free figure.
+	const OLD_LIVING_MD = [
+		'---',
+		'livingDoc: true',
+		'title: Weekly',
+		'source: metrics.csv',
+		'syncedWeek: 23',
+		'---',
+		'',
+		'## Highlights',
+		'',
+		'<!-- bind id=p-highlights kind=figure cells=mrr -->',
+		'Revenue grew 12% to $41.2k MRR.',
+	].join('\n') + '\n';
+
+	test('migrated sample: a clean table of bind links parses, exposes its keys, and round-trips', () => {
+		const doc = parseLivingDoc(MIGRATED_TABLE_MD);
+		const table = doc.blocks.find(b => b.type === 'table')!;
+		assert.deepStrictEqual(
+			{ keys: table.binds.map(b => b.key), roundTrips: serializeLivingDoc(doc) === MIGRATED_TABLE_MD },
+			{ keys: ['metrics.mrr.prev', 'metrics.mrr', 'metrics.mrr.delta', 'metrics.signups.prev', 'metrics.signups', 'metrics.signups.delta'], roundTrips: true },
+		);
+	});
+
+	test('the old HTML-comment binding scheme is no longer a Living Document signal', () => {
+		const doc = parseLivingDoc(OLD_LIVING_MD);
+		// No frontmatter sources/context and no inline bind links -> the old comment scheme is inert.
+		assert.deepStrictEqual({ isLiving: doc.isLiving, binds: doc.blocks.flatMap(b => b.binds).length }, { isLiving: false, binds: 0 });
+	});
+
 	test('plain Markdown is not a Living Document and takes its title from the first H1', () => {
 		const doc = parseLivingDoc(PLAIN_MD);
 		assert.strictEqual(doc.isLiving, false);
