@@ -23,6 +23,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 3 | **~81%** | Global top bar added to all four screens (Home/Templates/Knowledge/Agents) — brand + crumb + sync pill + Present + avatar. Lifts Home 82->85, Templates 88->89, Knowledge 80->83, Agents 82->84. |
 | 4 | **~82%** | Present modal WHO CAN ACCESS now shown for every export (was site-only) 80->85; workflow canvas verified rendering + functional 72->80. |
 | 5 | **~83%** | Knowledge verified: Project tab's Strategy + Q3 OKRs (KR bars) + metrics are built 83->88; editor top bar gains the TS avatar (consistency) + gutter dots / inline-diff / approve-reject verified built 80->84. |
+| 6 | **~84%** | **Functional fix:** the navigation blank-out bug is resolved — screens (Templates/Knowledge/Agents) now render reliably after a document editor was open (was: blank main area). Verified live + auto-figure sync + agent run/canvas flow. MCP restored. |
 
 ---
 
@@ -161,7 +162,8 @@ Copy) that the app's modal does not show.
    **DONE (iter 3):** added to Home/Templates/Knowledge/Agents.
 4. ~~**Workflow canvas** (72) — verify the open-agent canvas renders.~~ **DONE (iter 4 → 80):**
    verified rendering + functional; design-divergence (pipeline vs 3-column) noted.
-5. **Navigation blank-out bug** — screen launchers blank the main area after a doc editor was opened.
+5. ~~**Navigation blank-out bug** — screen launchers blank the main area after a doc editor was opened.~~
+   **DONE (iter 6):** webview recreated on becoming visible; live-verified across screens.
 6. **Editor extras** — ~~provenance gutter dots~~ (verified built, iter 5), ~~avatar~~ (added, iter 5);
    remaining: source-peek pane + "Sync across" circle (doc tab bar is the workbench's editor tabs).
 7. ~~**Present modal** — add the WHO CAN ACCESS scope selector.~~ **DONE (iter 4):** shown for all exports.
@@ -307,6 +309,56 @@ doc and apply edits with a diff) is not confirmed built — the next editor targ
 > level) and rendered in the editor — what's unverified is the *right-rail* presentation of a pending
 > change, which needs **live workbench driving** (blocked while the chrome-devtools MCP is down). A
 > fresh session (restoring the MCP) is the clean way to live-verify it and re-audit at full fidelity.
+
+---
+
+## Iteration 6 — fix the navigation blank-out bug (functional/UX), live-verify core flows
+
+*(MCP restored this session — live driving is back.)* Focus per the goal's functional + "does it feel
+nice" criteria, not just visuals.
+
+**The bug (baseline backlog #5, now reproduced live).** After a Living Document editor is open,
+clicking a screen launcher ("Open Agents/Templates/Knowledge") — or just switching to that
+activity-bar container — left the **main area blank**. A reload was the only recovery. This breaks a
+core navigation flow and made the screens feel unreliable.
+
+**Root cause.** `ScreenEditor` (and `LivingDocEditor`) host their content in a low-level webview via
+`createWebviewElement` + `mountTo`. When the pane is hidden by another editor in the group and later
+re-shown, the webview's `<iframe>` is DOM-re-parented, which **reloads it blank**, and the low-level
+webview does not re-apply its HTML. Nothing re-issued `setHtml`, so the screen stayed empty.
+
+**Fix.** `screenEditor.ts`: recreate the webview fresh (new `createWebviewElement` + `mountTo` +
+`setHtml`, old one disposed via a `MutableDisposable`) both on `setInput` and on becoming visible
+(`setEditorVisible(true)`). Mirrors the recreate-on-render pattern used by `imageCarouselEditor`.
+0 added core patches.
+
+**Verification (live, the right test for a webview-lifecycle fix).**
+- Repro before: open Weekly doc -> Agents -> "Open Agents" -> blank (this session + iter 1).
+- After: open Weekly doc -> Agents -> screen renders the full agent table; Templates spot-checked the
+  same way -> renders. Shot: `shots/iter6-nav-fixed.png`. **55 tests pass; typecheck clean; no
+  regressions.** (No unit test added — this is webview re-parent lifecycle, exercised via the live
+  flow; the contrib's editors have no unit harness and mocking the webview/group is brittle.)
+
+**Also verified functionally this iteration:**
+- **Auto-figure sync:** appended new weeks to `metrics.csv`; on open the doc's bound figures
+  re-resolved to the latest values ($52.0k -> $55.8k MRR, signups, churn, deltas) while the Commentary
+  (a meaning statement) correctly stayed put. The freshness/auto-apply behaviour works.
+- **Agent run / canvas:** opened the `Before-export gate` (ask-before-apply) canvas, **Run now** ->
+  "Run complete" banner with a **Review ->** action. The run + canvas + navigation flow works.
+
+**Review rail — honest status (still ~55, not reachable live here).** The populated approve/reject
+state could not be produced in this headless web build: (a) figure bindings **auto-resolve to the
+latest source on every render**, so there is never a standing figure delta for an agent to queue
+(the `ask-before-apply` run reported `0 queued`); (b) the rail's hero state is a **meaning rewrite**,
+produced by the `reviewImpact` pass which needs a **language model** the web build lacks (it shows a
+visible "no model" heuristic state). The approve/reject + queueing **logic is unit-tested at the
+service level** (orchestration tests: ask-before-apply queues; approve applies + clears), and the
+in-editor inline-diff + Approve/Reject UI is built (iter 5). So this is an **environment limitation,
+not an app defect** — confirming the populated rail needs a model-backed run or a seeded out-of-sync
+fixture. Recommend a small dev affordance (e.g. a "simulate pending change" seed) to make this
+demoable.
+
+**Overall ~83 -> ~84** (resolved a cross-cutting functional defect; core flows live-verified).
 
 ---
 
