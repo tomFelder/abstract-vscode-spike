@@ -16,6 +16,9 @@ export const REVIEW_RAIL_CONTAINER_ID = 'workbench.viewContainer.livingDocs';
 export const DOCUMENTS_VIEW_ID = 'workbench.view.livingDocs.documents';
 export const DOCUMENTS_CONTAINER_ID = 'workbench.viewContainer.livingDocs.documents';
 
+export const CONTEXT_VIEW_ID = 'workbench.view.livingDocs.context';
+export const CONTEXT_CONTAINER_ID = 'workbench.viewContainer.livingDocs.context';
+
 /** The tabs of the Studio right panel. */
 export type LivingDocsPanelTab = 'chat' | 'review' | 'history';
 
