@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAuditEntry, IKpiRow, ILivingDoc, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { IAuditEntry, ILivingDoc, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -61,7 +61,8 @@ export interface ILivingDocsService {
 	getDoc(resource: URI): ILivingDoc | undefined;
 	/** The verbatim Markdown source of a document (for the Raw Markdown view). */
 	getRawText(resource: URI): string;
-	getKpiRows(resource: URI): readonly IKpiRow[];
+	/** The resolved value of each bind key for a document (mirrors the lock's resolved values). */
+	getResolved(resource: URI): ReadonlyMap<string, string>;
 	getStatus(resource: URI): string;
 	/** Block ids that were auto-applied in the last refresh (for the green "just updated" highlight). */
 	getRecentlyApplied(resource: URI): ReadonlySet<string>;

@@ -3,47 +3,57 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Living Documents — research spike data model.
-// A document is a flat list of blocks; "bound" blocks declare which source cells feed them.
+// Living Documents - research spike data model (clean-file + lock-file format, spec 08).
+//
+// A document is ~99% pure Markdown the user owns. Where a value is bound to a source, the author
+// (or agent) writes a bind link inline - a real Markdown link with a `bind:` scheme:
+//
+//   Revenue grew [18%](bind:metrics.mrr.delta) week-on-week to [$48.6k](bind:metrics.mrr) MRR.
+//
+// The bind link IS the anchor (no line numbers, no slugged ids that drift). The visible link text
+// is a rendered cache of the resolved value, so the file reads correctly standalone and an LLM sees
+// both the value and its origin. The companion `<doc>.lock.json` is the source of truth for resolved
+// values + freshness; on render/save the visible cache is reconciled to the lock (lock wins).
 
-// Where a bound block draws its data from.
+// Where a source draws its data from.
 //   file -> a sibling file in the workspace (e.g. metrics.csv)
 //   api  -> a live HTTP JSON endpoint (e.g. a CRM or product metrics API)
 //   mcp  -> a tool exposed over MCP / the language-model tools service
 export type SourceKind = 'file' | 'api' | 'mcp';
 
-export interface ILivingDocBinding {
-	readonly source: string;            // sibling source file, e.g. "metrics.csv" (file kind)
-	readonly cells: readonly string[];  // column / JSON keys the block depends on
-	readonly sourceKind: SourceKind;    // file | api | mcp
-	readonly url?: string;              // api kind: the HTTP endpoint to fetch
-	readonly tool?: string;             // mcp kind: the tool to invoke
+// One inline bind-link occurrence found in the prose: [value](bind:key).
+//   key   -> the binding identity, e.g. "metrics.mrr" or "metrics.mrr.delta". This is the anchor.
+//   value -> the visible (rendered-cache) link text at parse time.
+export interface IBindLink {
+	readonly key: string;
+	readonly value: string;
 }
 
-export type LivingDocBlockType = 'heading' | 'paragraph' | 'kpiTable';
+export type LivingDocBlockType = 'heading' | 'paragraph' | 'table';
 
+// A block is one top-level Markdown element, used only for rendering + review correlation. Block
+// ids are content/ordinal-derived render keys, NOT persistence keys: the bind link's `key` is the
+// durable anchor (spec 3.7 - identity-keyed, never text-position-keyed).
 export interface ILivingDocBlock {
 	readonly id: string;
 	readonly type: LivingDocBlockType;
-	text?: string;                  // mutated in-place when a change is applied
-	readonly binding?: ILivingDocBinding;
-	readonly kind?: 'figure' | 'narrative';
-	// For api/mcp figure blocks: the authored text with {cell} placeholders. The live values
-	// are substituted into `text` on refresh; the template is what round-trips to disk.
-	template?: string;
+	text: string;                       // raw Markdown for this block, including inline bind links
+	readonly level?: number;            // heading level (1-6) for `heading` blocks
+	binds: IBindLink[];                 // bind links found in this block (cache of the parse)
 }
 
 export interface ILivingDoc {
 	title: string;
 	subtitle: string;
-	source: string;
-	syncedWeek: number;
+	readonly sources: string[];         // frontmatter `sources:` (value-binding sources)
+	readonly context: string[];         // frontmatter `context:` (influence sources)
 	readonly blocks: ILivingDocBlock[];
-	// True when the file declares itself a Living Document (frontmatter livingDoc: true) or
-	// carries data bindings. Plain Markdown (READMEs, notes) renders generically instead.
+	// True when the file declares sources/context in frontmatter or carries bind links. Plain
+	// Markdown (READMEs, notes) renders generically instead. The service additionally treats a
+	// `.md` with a sibling `<doc>.lock.json` as living.
 	readonly isLiving: boolean;
-	// Markdown body after the frontmatter, used to render plain documents and as the
-	// source-of-truth fallback for the raw editing view.
+	// Clean Markdown body after the frontmatter, used to render plain documents and as the raw
+	// editing view. Reconstructable from `blocks`.
 	readonly body: string;
 }
 
@@ -73,12 +83,4 @@ export interface IAuditEntry {
 	readonly oldText: string;
 	readonly newText: string;
 	readonly via: 'model' | 'heuristic' | 'api';
-}
-
-export interface IKpiRow {
-	readonly metric: string;
-	readonly prev: string;
-	readonly curr: string;
-	readonly delta: string;
-	readonly positive: boolean;
 }

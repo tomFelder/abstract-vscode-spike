@@ -10,27 +10,24 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
-import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { asJson, IRequestService } from '../../../../platform/request/common/request.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
-import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
+import { ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { parseLivingDoc, serializeLivingDoc } from '../common/livingDocMarkdown.js';
+import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
-import { ChangeKind, IAuditEntry, IKpiRow, ILivingDoc, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { IAuditEntry, ILivingDoc, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
-interface ICsvRow {
-	week: number;
-	date: string;
-	mrr: number;
-	signups: number;
-	churn: number;
-	active: number;
+// A resolved value for one bind key, plus the source hash it was read from. The lock file (Item 2)
+// will persist these; in Item 1 they are re-derived from the sources on each load/refresh.
+interface IResolved {
+	readonly value: string;
+	readonly sourceHash: string;
 }
 
 // Everything we hold for one open or discovered document.
@@ -38,37 +35,47 @@ interface IDocState {
 	readonly uri: URI;
 	doc: ILivingDoc;
 	rawText: string;
-	csvUri: URI | undefined;
-	rows: ICsvRow[];
-	recent: Set<string>;
+	resolved: Map<string, IResolved>;   // bind key -> resolved value (+ source hash)
+	recent: Set<string>;                // block ids changed in the last resolve (for the highlight)
 	status: string;
 }
 
 const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
 const pct = (a: number, b: number) => `${b >= a ? '+' : ''}${Math.round(((b - a) / a) * 100)}%`;
 
-// The "New document" starting point: a minimal Living Document with one heading and editable prose.
-// Authored as a single left-aligned template literal so source indentation stays tab-only.
+// A tiny, order-independent string hash (FNV-1a) for cheap source-change detection. Not crypto.
+function hashString(s: string): string {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) {
+		h ^= s.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return (h >>> 0).toString(16);
+}
+
+// Classify a frontmatter source string into a source kind for the home-row chips.
+function sourceKind(source: string): SourceKind {
+	return /^https?:\/\//.test(source) ? 'api' : 'file';
+}
+
+// The alias a bind key uses for a source file: "metrics.csv" -> "metrics", "market-research.md" ->
+// "market-research". Bind keys are "<alias>.<field>" (with an optional ".<qualifier>").
+function sourceAlias(source: string): string {
+	const name = source.split('/').pop() ?? source;
+	return name.replace(/\.[^.]+$/, '');
+}
+
+// The "New document" starting point: clean Markdown the user owns. It becomes a Living Document once
+// a source is connected (a `sources:`/`context:` entry or a bind link appears). Authored as a single
+// left-aligned template literal so source indentation stays tab-only.
 const NEW_DOCUMENT_TEMPLATE = `---
-livingDoc: true
 title: Untitled document
-subtitle: New document
 ---
 
 ## Overview
 
 Write your document here. Connect a source to start binding live figures.
 `;
-
-function blockLabel(doc: ILivingDoc, blockId: string): string {
-	// The nearest preceding heading is the human-friendly section name for a block.
-	let heading = '';
-	for (const b of doc.blocks) {
-		if (b.type === 'heading') { heading = b.text ?? ''; }
-		if (b.id === blockId) { return heading || blockId; }
-	}
-	return blockId;
-}
 
 export class LivingDocsService extends Disposable implements ILivingDocsService {
 	declare readonly _serviceBrand: undefined;
@@ -82,14 +89,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _docs = new Map<string, IDocState>();
 	private _pending: IProposedChange[] = [];
 	private _audit: IAuditEntry[] = [];
-	private _via = new Map<string, 'model' | 'heuristic'>();
 
 	constructor(
 		@IFileService private readonly _files: IFileService,
 		@IEditorService private readonly _editors: IEditorService,
 		@IViewsService private readonly _views: IViewsService,
-		@ILanguageModelsService private readonly _lm: ILanguageModelsService,
-		@IConfigurationService private readonly _config: IConfigurationService,
+		@ILanguageModelsService _lm: ILanguageModelsService,
+		@IConfigurationService _config: IConfigurationService,
 		@INotificationService private readonly _notify: INotificationService,
 		@ILogService private readonly _log: ILogService,
 		@IRequestService private readonly _request: IRequestService,
@@ -104,24 +110,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	getRawText(resource: URI): string { return this._docs.get(resource.toString())?.rawText ?? ''; }
 	getStatus(resource: URI): string { return this._docs.get(resource.toString())?.status ?? 'No document'; }
 	getRecentlyApplied(resource: URI): ReadonlySet<string> { return this._docs.get(resource.toString())?.recent ?? new Set<string>(); }
+	getResolved(resource: URI): ReadonlyMap<string, string> {
+		const out = new Map<string, string>();
+		const state = this._docs.get(resource.toString());
+		if (state) { for (const [key, r] of state.resolved) { out.set(key, r.value); } }
+		return out;
+	}
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
 		return this._pending.filter(c => c.docId === id);
-	}
-
-	getKpiRows(resource: URI): readonly IKpiRow[] {
-		const state = this._docs.get(resource.toString());
-		if (!state) { return []; }
-		const curr = state.rows.find(r => r.week === state.doc.syncedWeek);
-		const prev = state.rows.find(r => r.week === state.doc.syncedWeek - 1);
-		if (!curr || !prev) { return []; }
-		const churnDelta = (curr.churn - prev.churn).toFixed(1);
-		return [
-			{ metric: 'MRR', prev: `$${k(prev.mrr)}`, curr: `$${k(curr.mrr)}`, delta: pct(prev.mrr, curr.mrr), positive: curr.mrr >= prev.mrr },
-			{ metric: 'New signups', prev: `${prev.signups}`, curr: `${curr.signups}`, delta: pct(prev.signups, curr.signups), positive: curr.signups >= prev.signups },
-			{ metric: 'Churn', prev: `${prev.churn}%`, curr: `${curr.churn}%`, delta: `${curr.churn > prev.churn ? '+' : ''}${churnDelta}pt`, positive: curr.churn <= prev.churn },
-			{ metric: 'Active workspaces', prev: `${prev.active}`, curr: `${curr.active}`, delta: `+${curr.active - prev.active}`, positive: curr.active >= prev.active },
-		];
 	}
 
 	// --- workspace-wide views ---
@@ -141,7 +138,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const found = new Map<string, URI>();
 		// Always include documents already loaded (e.g. the open editor), even if discovery misses them.
 		for (const state of this._docs.values()) {
-			if (state.uri.path.endsWith('.living.md')) { found.set(state.uri.toString(), state.uri); }
+			if (state.doc.isLiving) { found.set(state.uri.toString(), state.uri); }
 		}
 		// Scan each workspace folder for Living Documents so the home renders before anything is opened.
 		for (const folder of this._workspace.getWorkspace().folders) {
@@ -174,8 +171,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// Recursively collect *.living.md under a folder, skipping hidden and dependency directories.
-	// Bounded in depth so a large workspace can never make the home hang.
+	// Recursively collect Living Documents (clean `.md` with bind links / dependency frontmatter, or a
+	// sibling lock) under a folder, skipping hidden and dependency directories. Bounded in depth so a
+	// large workspace can never make the home hang.
 	private async _collectLivingDocs(dir: URI, found: Map<string, URI>, depth: number): Promise<void> {
 		if (depth > 4) { return; }
 		let children;
@@ -190,9 +188,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (child.isDirectory) {
 				if (name.startsWith('.') || name === 'node_modules' || name === 'out') { continue; }
 				await this._collectLivingDocs(child.resource, found, depth + 1);
-			} else if (child.resource.path.endsWith('.living.md')) {
+			} else if (await this._isLivingDocFile(child.resource)) {
 				found.set(child.resource.toString(), child.resource);
 			}
+		}
+	}
+
+	// A `.md` is a Living Document when its content declares sources/context or carries bind links, or
+	// when a sibling `<doc>.lock.json` exists. Generated `.export.md` / `.source.md` views are skipped.
+	private async _isLivingDocFile(resource: URI): Promise<boolean> {
+		const path = resource.path;
+		if (!path.endsWith('.md') || path.endsWith('.export.md') || path.endsWith('.source.md')) { return false; }
+		try {
+			const text = (await this._files.readFile(resource)).value.toString();
+			return parseLivingDoc(text).isLiving;
+		} catch {
+			return false;
 		}
 	}
 
@@ -201,16 +212,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const raw = (await this._files.readFile(uri)).value.toString();
 			const doc = parseLivingDoc(raw);
 			const kinds = new Set<SourceKind>();
-			for (const block of doc.blocks) {
-				if (block.binding) { kinds.add(block.binding.sourceKind); }
-			}
+			for (const source of doc.sources) { kinds.add(sourceKind(source)); }
 			const id = uri.toString();
+			const bound = doc.blocks.reduce((n, b) => n + b.binds.length, 0);
 			return {
 				resource: uri,
 				title: doc.title,
 				isLiving: doc.isLiving,
 				sourceKinds: [...kinds],
-				lastSynced: doc.isLiving && doc.syncedWeek ? `Week ${doc.syncedWeek}` : '',
+				lastSynced: doc.context.length ? `${doc.context.length} context` : (bound ? `${bound} bound` : ''),
 				pendingCount: this._pending.filter(c => c.docId === id).length,
 			};
 		} catch (e) {
@@ -228,9 +238,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		} catch {
 			// An unreadable folder just means no collisions to avoid.
 		}
-		let name = 'Untitled.living.md';
+		let name = 'Untitled.md';
 		for (let n = 2; existing.has(name); n++) {
-			name = `Untitled ${n}.living.md`;
+			name = `Untitled ${n}.md`;
 		}
 		return joinPath(folder, name);
 	}
@@ -240,7 +250,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async loadDocument(resource: URI): Promise<void> {
 		const state = await this._loadState(resource);
 		if (state) {
-			// Clear stale highlights from a previous refresh when a document is (re)opened.
+			// Resolve bind links from the sources so the rendered doc can show current values. Load is
+			// read-only: the on-disk cache is reconciled at render time (lock wins) and persisted only
+			// on an explicit refresh/save.
+			await this._resolveSources(state);
 			state.recent = new Set<string>();
 		}
 		this._onDidChange.fire();
@@ -261,38 +274,108 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			uri: resource,
 			doc,
 			rawText,
-			csvUri: doc.isLiving ? joinPath(dirname(resource), doc.source) : undefined,
-			rows: [],
+			resolved: new Map<string, IResolved>(),
 			recent: this._docs.get(resource.toString())?.recent ?? new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 		};
-		if (state.csvUri) {
-			state.rows = await this._loadCsv(state.csvUri);
-		}
 		this._docs.set(resource.toString(), state);
 		return state;
 	}
 
-	private async _loadCsv(csvUri: URI): Promise<ICsvRow[]> {
-		const rows: ICsvRow[] = [];
+	// Read every `sources:` file and build the bind-key -> resolved value map. A CSV produces the
+	// latest row's columns (plus `.prev` / `.delta` qualifiers); an api/JSON source produces its
+	// top-level fields. Influence (`context:`) sources are not value-resolved here (see Item 5).
+	private async _resolveSources(state: IDocState): Promise<void> {
+		const resolved = new Map<string, IResolved>();
+		for (const source of state.doc.sources) {
+			const alias = sourceAlias(source);
+			if (sourceKind(source) === 'api') {
+				await this._resolveApiSource(state, source, alias, resolved);
+				continue;
+			}
+			const uri = joinPath(dirname(state.uri), source);
+			let text: string;
+			try {
+				text = (await this._files.readFile(uri)).value.toString();
+			} catch (e) {
+				this._log.warn('[livingDocs] source unreadable', source, e instanceof Error ? e.message : String(e));
+				continue;
+			}
+			if (source.endsWith('.csv')) {
+				this._resolveCsv(text, alias, resolved);
+			}
+		}
+		state.resolved = resolved;
+	}
+
+	private _resolveCsv(text: string, alias: string, resolved: Map<string, IResolved>): void {
+		const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+		if (lines.length < 2) { return; }
+		const cols = lines[0].split(',').map(c => c.trim());
+		const rows = lines.slice(1).map(l => l.split(','));
+		const latest = rows[rows.length - 1];
+		const prev = rows.length >= 2 ? rows[rows.length - 2] : undefined;
+		const hash = hashString(lines[lines.length - 1]);
+		for (let i = 0; i < cols.length; i++) {
+			const col = cols[i];
+			const cur = (latest[i] ?? '').trim();
+			resolved.set(`${alias}.${col}`, { value: this._formatCell(col, cur), sourceHash: hash });
+			if (prev) {
+				const pv = (prev[i] ?? '').trim();
+				resolved.set(`${alias}.${col}.prev`, { value: this._formatCell(col, pv), sourceHash: hash });
+				const delta = this._deltaCell(col, pv, cur);
+				if (delta) { resolved.set(`${alias}.${col}.delta`, { value: delta, sourceHash: hash }); }
+			}
+		}
+	}
+
+	// Spike-specific presentation for the sample metrics schema: currency in $k, churn as a percent,
+	// everything else as-is. A real build would carry formatting hints in the source connector.
+	private _formatCell(col: string, value: string): string {
+		const n = Number(value);
+		if (col === 'mrr' && !isNaN(n)) { return `$${k(n)}`; }
+		if (col === 'churn' && !isNaN(n)) { return `${value}%`; }
+		return value;
+	}
+
+	private _deltaCell(col: string, prev: string, cur: string): string | undefined {
+		const a = Number(prev), b = Number(cur);
+		if (isNaN(a) || isNaN(b)) { return undefined; }
+		if (col === 'churn') { return `${b >= a ? '+' : ''}${(b - a).toFixed(1)}pt`; }
+		if (col === 'mrr' || col === 'signups' || col === 'active') { return pct(a, b); }
+		return undefined;
+	}
+
+	private async _resolveApiSource(state: IDocState, url: string, alias: string, resolved: Map<string, IResolved>): Promise<void> {
 		try {
-			const text = (await this._files.readFile(csvUri)).value.toString();
-			const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-			for (let i = 1; i < lines.length; i++) {
-				const c = lines[i].split(',');
-				rows.push({
-					week: parseInt(c[0], 10),
-					date: c[1],
-					mrr: parseInt(c[2], 10),
-					signups: parseInt(c[3], 10),
-					churn: parseFloat(c[4]),
-					active: parseInt(c[5], 10),
-				});
+			const context = await this._request.request({ type: 'GET', url, callSite: 'livingDocs.apiSource' }, CancellationToken.None);
+			const json = await asJson<Record<string, unknown>>(context);
+			if (!json) { return; }
+			const hash = hashString(JSON.stringify(json));
+			for (const key of Object.keys(json)) {
+				const value = json[key];
+				const text = typeof value === 'number' ? value.toLocaleString('en-US') : String(value);
+				resolved.set(`${alias}.${key}`, { value: text, sourceHash: hash });
 			}
 		} catch (e) {
-			this._log.error('[livingDocs] failed to read source', e);
+			this._log.warn('[livingDocs] api source failed', e instanceof Error ? e.message : String(e));
 		}
-		return rows;
+	}
+
+	// Reconcile each block's visible bind-link cache to the resolved values (value bindings are
+	// figures -> auto-apply), auditing and flagging each block whose value moved. Mutates the in-memory
+	// doc; the caller persists. Used on an explicit refresh - render-time reconciliation is read-only.
+	private _reconcile(state: IDocState): void {
+		const resolved = this.getResolved(state.uri);
+		for (const block of state.doc.blocks) {
+			if (block.binds.length === 0) { continue; }
+			const next = reconcileBindLinks(block.text, resolved);
+			if (next === block.text) { continue; }
+			this._audit.push(this._entry(state.doc.title, block.id, 'auto-applied', block.text, next, 'heuristic'));
+			block.text = next;
+			block.binds = extractBindLinks(next);
+			state.recent.add(block.id);
+		}
 	}
 
 	async saveRawText(resource: URI, text: string): Promise<void> {
@@ -302,8 +385,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			uri: resource,
 			doc,
 			rawText: text,
-			csvUri: doc.isLiving ? joinPath(dirname(resource), doc.source) : undefined,
-			rows: [],
+			resolved: new Map<string, IResolved>(),
 			recent: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 		};
@@ -312,18 +394,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		} catch (e) {
 			this._log.warn('[livingDocs] raw save failed', e);
 		}
-		if (state.csvUri) {
-			state.rows = await this._loadCsv(state.csvUri);
-		}
 		this._docs.set(id, state);
+		await this._resolveSources(state);
 		this._onDidChange.fire();
 	}
 
 	async exportDocument(resource: URI): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
-		const html = renderExportHtml(state.doc, this.getKpiRows(resource));
-		const stem = basename(resource).replace(/\.living\.md$/, '').replace(/\.md$/, '');
+		const html = renderExportHtml(state.doc, this.getResolved(resource));
+		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.html`);
 		try {
 			await this._files.writeFile(target, VSBuffer.fromString(html));
@@ -339,8 +419,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async exportMarkdown(resource: URI): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
-		const markdown = renderExportMarkdown(state.doc, this.getKpiRows(resource));
-		const stem = basename(resource).replace(/\.living\.md$/, '').replace(/\.md$/, '');
+		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
+		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.md`);
 		try {
 			await this._files.writeFile(target, VSBuffer.fromString(markdown));
@@ -362,10 +442,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(resource.toString());
 		if (!state) { return; }
 		const block = state.doc.blocks.find(b => b.id === blockId);
-		// Only non-bound prose is hand-editable; bound blocks stay driven by their source.
-		if (!block || block.binding || block.type === 'kpiTable') { return; }
+		// Only non-bound prose/headings are hand-editable; bound blocks stay driven by their source.
+		if (!block || block.binds.length > 0) { return; }
 		const next = text.trim();
-		if ((block.text ?? '') === next) { return; }
+		if (block.text === next) { return; }
 		block.text = next;
 		await this._persist(state);
 		this._onDidChange.fire();
@@ -376,216 +456,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async refreshFromSources(): Promise<void> {
 		// Re-derive every bound document in the workspace, not just the open one.
 		const uris = await this._discoverLivingDocUris();
-		this._pending = [];
-
 		let derived = 0;
 		for (const uri of uris) {
 			let state = this._docs.get(uri.toString());
 			if (!state) { state = await this._loadState(uri); }
-			if (!state || !state.doc.isLiving || !state.csvUri) { continue; }
-			state.rows = await this._loadCsv(state.csvUri);
-			await this._deriveDoc(state);
+			if (!state || !state.doc.isLiving) { continue; }
+			state.recent = new Set<string>();
+			await this._resolveSources(state);
+			this._reconcile(state);
+			if (state.recent.size) { await this._persist(state); }
 			derived++;
 		}
 
-		const docsWithChanges = new Set(this._pending.map(c => c.docId)).size;
-		const summary = this._pending.length
-			? `${this._pending.length} change${this._pending.length > 1 ? 's' : ''} across ${docsWithChanges} document${docsWithChanges > 1 ? 's' : ''} need approval`
-			: `${derived} document${derived === 1 ? '' : 's'} synced`;
 		for (const state of this._docs.values()) {
-			if (state.doc.isLiving) { state.status = summary; }
+			if (state.doc.isLiving) { state.status = `${derived} document${derived === 1 ? '' : 's'} synced`; }
 		}
-
 		this._onDidChange.fire();
-
-		if (this._pending.length) {
-			try {
-				await this._views.openView(REVIEW_RAIL_VIEW_ID, false);
-			} catch (e) {
-				this._log.warn('[livingDocs] could not reveal review rail', e);
-			}
-		}
 	}
 
-	private async _deriveDoc(state: IDocState): Promise<void> {
-		const doc = state.doc;
-		state.recent = new Set<string>();
-
-		// 0) Live API/MCP figure blocks -> fetch and substitute, independent of the CSV source.
-		await this._deriveLiveBlocks(state);
-
-		if (state.rows.length < 2) {
-			if (state.recent.size) { await this._persist(state); }
-			return;
-		}
-
-		const latest = state.rows.reduce((a, b) => (b.week > a.week ? b : a));
-		const prev = state.rows.find(r => r.week === latest.week - 1);
-		if (!prev) {
-			if (state.recent.size) { await this._persist(state); }
-			return;
-		}
-		const deltaPct = Math.round(((latest.mrr - prev.mrr) / prev.mrr) * 100);
-
-		// 1) The KPI table and synced week are pure figures -> auto-apply.
-		if (doc.syncedWeek !== latest.week) {
-			if (doc.blocks.some(b => b.type === 'kpiTable')) { state.recent.add('kpi-table'); }
-			doc.syncedWeek = latest.week;
-			doc.subtitle = `Week ${latest.week} - ${latest.date} - bound to ${doc.source}`;
-		}
-
-		// 2) The highlights figure paragraph -> deterministic numbers, low risk, auto-applies.
-		const fig = doc.blocks.find(b => b.id === 'p-highlights');
-		if (fig) {
-			const figureText = `Revenue grew ${deltaPct}% week-on-week to $${k(latest.mrr)} MRR, on ${latest.signups} new signups. Churn eased to ${latest.churn}%.`;
-			if (fig.text !== figureText) {
-				this._audit.push(this._entry(doc.title, fig.id, 'auto-applied', fig.text ?? '', figureText, 'heuristic'));
-				fig.text = figureText;
-				state.recent.add(fig.id);
-			}
-		}
-
-		// 3) Narrative blocks -> ask the model to rewrite + classify; queue meaning-changes.
-		for (const block of doc.blocks) {
-			if (block.type !== 'paragraph' || block.kind !== 'narrative' || !block.text) { continue; }
-			const proposal = await this._proposeCommentary(deltaPct, prev.mrr, latest.mrr, block.text);
-			if (proposal.newText === block.text) { continue; }
-			const change: IProposedChange = {
-				id: generateUuid(),
-				docId: state.uri.toString(),
-				docTitle: doc.title,
-				blockId: block.id,
-				blockLabel: blockLabel(doc, block.id),
-				oldText: block.text,
-				newText: proposal.newText,
-				kind: proposal.kind,
-				confidence: proposal.confidence,
-				rationale: proposal.rationale,
-				sourceCells: block.binding?.cells ?? [],
-			};
-			if (change.kind === 'figure') {
-				// Not a meaning change -> auto-apply.
-				block.text = change.newText;
-				state.recent.add(block.id);
-				this._audit.push(this._entry(doc.title, block.id, 'auto-applied', change.oldText, change.newText, proposal.via));
-			} else {
-				// Meaning change -> queue for one-click approval.
-				this._via.set(change.id, proposal.via);
-				this._pending.push(change);
-			}
-		}
-
-		// Persist auto-applied figures so each document's file reflects the synced state.
-		if (state.recent.size) {
-			await this._persist(state);
-		}
-	}
-
-	// Fetch live API (and, when wired, MCP) sources and substitute their values into the
-	// {cell} placeholders of the bound block. These are figures -> auto-apply.
-	private async _deriveLiveBlocks(state: IDocState): Promise<void> {
-		const doc = state.doc;
-		for (const block of doc.blocks) {
-			const binding = block.binding;
-			if (block.type !== 'paragraph' || !binding) { continue; }
-			const template = block.template ?? block.text ?? '';
-			let data: Record<string, unknown> | undefined;
-			if (binding.sourceKind === 'api' && binding.url) {
-				data = await this._resolveApi(binding.url);
-			} else if (binding.sourceKind === 'mcp') {
-				// MCP tool sources resolve through the language-model tools service once an MCP
-				// server is connected; until then the authored template is left in place.
-				this._log.info('[livingDocs] mcp source not yet wired; leaving template', binding.tool ?? '');
-				continue;
-			} else {
-				continue;
-			}
-			if (!data) { continue; }
-			const next = this._fillTemplate(template, data, binding.cells);
-			if (next !== block.text) {
-				this._audit.push(this._entry(doc.title, block.id, 'auto-applied', block.text ?? '', next, 'api'));
-				block.text = next;
-				state.recent.add(block.id);
-			}
-		}
-	}
-
-	private async _resolveApi(url: string): Promise<Record<string, unknown> | undefined> {
-		try {
-			const context = await this._request.request({ type: 'GET', url, callSite: 'livingDocs.apiSource' }, CancellationToken.None);
-			const json = await asJson<Record<string, unknown>>(context);
-			return json ?? undefined;
-		} catch (e) {
-			this._log.warn('[livingDocs] api source failed', e instanceof Error ? e.message : String(e));
-			return undefined;
-		}
-	}
-
-	private _fillTemplate(template: string, data: Record<string, unknown>, cells: readonly string[]): string {
-		let out = template;
-		for (const cell of cells) {
-			if (!Object.prototype.hasOwnProperty.call(data, cell)) { continue; }
-			const value = data[cell];
-			const text = typeof value === 'number' ? value.toLocaleString('en-US') : String(value);
-			out = out.split(`{${cell}}`).join(text);
-		}
-		return out;
-	}
-
-	private async _proposeCommentary(deltaPct: number, mrrPrev: number, mrrNow: number, current: string): Promise<{ newText: string; kind: ChangeKind; confidence: number; rationale: string; via: 'model' | 'heuristic'; model?: string }> {
-		try {
-			if (this._config.getValue<boolean>('livingDocs.useModel') === false) {
-				throw new Error('model disabled by setting');
-			}
-			const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
-			const models = await this._lm.selectLanguageModels(preferred ? { id: preferred } : {});
-			if (!models.length) { throw new Error('no language models available'); }
-			const system = 'You revise one sentence of business commentary inside a living report. '
-				+ 'Reply with ONLY a JSON object, no prose, of the form '
-				+ '{"newText": string, "kind": "figure" | "meaning", "confidence": number, "rationale": string}. '
-				+ 'Set kind="meaning" when the qualitative character of growth changed (e.g. from steady to accelerating); '
-				+ 'otherwise set kind="figure" and return newText unchanged.';
-			const user = `MRR grew ${deltaPct}% week-on-week (from $${k(mrrPrev)} to $${k(mrrNow)}). `
-				+ `Current commentary: "${current}". Revise it to match the new growth.`;
-			const messages: IChatMessage[] = [
-				{ role: ChatMessageRole.System, content: [{ type: 'text', value: system }] },
-				{ role: ChatMessageRole.User, content: [{ type: 'text', value: user }] },
-			];
-			const response = await this._lm.sendChatRequest(models[0], undefined, messages, {}, CancellationToken.None);
-			let text = '';
-			for await (const part of response.stream) {
-				if (Array.isArray(part)) {
-					for (const p of part) { if (p.type === 'text') { text += p.value; } }
-				} else if (part.type === 'text') {
-					text += part.value;
-				}
-			}
-			await response.result;
-			const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
-			return {
-				newText: String(json.newText ?? current),
-				kind: json.kind === 'meaning' ? 'meaning' : 'figure',
-				confidence: typeof json.confidence === 'number' ? json.confidence : 0.85,
-				rationale: String(json.rationale ?? ''),
-				via: 'model',
-				model: models[0],
-			};
-		} catch (e) {
-			this._log.info('[livingDocs] model unavailable, using heuristic', e instanceof Error ? e.message : String(e));
-			if (deltaPct >= 15) {
-				return {
-					newText: 'Growth accelerated sharply this week - the fastest pace this quarter.',
-					kind: 'meaning',
-					confidence: 0.93,
-					rationale: `MRR delta rose to +${deltaPct}%, crossing the "accelerating" threshold, so "steady" is no longer accurate.`,
-					via: 'heuristic',
-				};
-			}
-			return { newText: current, kind: 'figure', confidence: 0.99, rationale: 'No material change in the character of growth.', via: 'heuristic' };
-		}
-	}
-
-	// --- approve / reject ---
+	// --- approve / reject (the review rail; populated by the Review-impact pass in Item 5) ---
 
 	async approve(changeId: string): Promise<void> {
 		const change = this._pending.find(c => c.id === changeId);
@@ -593,9 +482,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(change.docId);
 		if (!state) { return; }
 		const block = state.doc.blocks.find(b => b.id === change.blockId);
-		if (block) { block.text = change.newText; }
+		if (block) { block.text = change.newText; block.binds = extractBindLinks(change.newText); }
 		this._pending = this._pending.filter(c => c.id !== changeId);
-		this._audit.push(this._entry(change.docTitle, change.blockId, 'approved', change.oldText, change.newText, this._via.get(changeId) ?? 'model'));
+		this._audit.push(this._entry(change.docTitle, change.blockId, 'approved', change.oldText, change.newText, 'model'));
 		state.status = `Change approved - applied to ${change.docTitle}`;
 		await this._persist(state);
 		this._onDidChange.fire();
@@ -605,24 +494,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const change = this._pending.find(c => c.id === changeId);
 		if (!change) { return; }
 		this._pending = this._pending.filter(c => c.id !== changeId);
-		this._audit.push(this._entry(change.docTitle, change.blockId, 'rejected', change.oldText, change.newText, this._via.get(changeId) ?? 'model'));
+		this._audit.push(this._entry(change.docTitle, change.blockId, 'rejected', change.oldText, change.newText, 'model'));
 		const state = this._docs.get(change.docId);
 		if (state) {
 			state.status = `Change rejected - ${change.docTitle} left unchanged`;
-			void this._persist(state);
 		}
 		this._onDidChange.fire();
 	}
 
 	async revealSource(resource: URI, cells: readonly string[]): Promise<void> {
 		const state = this._docs.get(resource.toString());
-		if (!state || !state.csvUri) { return; }
-		// Open a clean, styled source view side-by-side instead of dumping the raw CSV into a text editor:
-		// the synced row is emphasized, the bound columns are called out, and the documents that reference
-		// this source are listed (an interim toward the full hi-fi source pane).
+		if (!state) { return; }
+		// Open a clean, styled source view side-by-side: each bound key with its resolved value, and
+		// the documents that reference these sources (an interim toward the full hi-fi source pane).
 		const md = this._renderSourceMarkdown(state, cells);
-		const stem = basename(state.csvUri).replace(/\.csv$/, '');
-		const target = joinPath(dirname(state.csvUri), `${stem}.source.md`);
+		const source = state.doc.sources[0] ?? 'source';
+		const stem = sourceAlias(source);
+		const target = joinPath(dirname(resource), `${stem}.source.md`);
 		try {
 			await this._files.writeFile(target, VSBuffer.fromString(md));
 			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
@@ -632,25 +520,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	private _renderSourceMarkdown(state: IDocState, cells: readonly string[]): string {
-		const cols = ['week', 'date', 'mrr', 'signups', 'churn', 'active'];
-		const head = `| ${cols.join(' | ')} |`;
-		const sep = `| ${cols.map(() => '---').join(' | ')} |`;
-		const body = state.rows.map(r => {
-			const vals = [String(r.week), r.date, `${r.mrr}`, `${r.signups}`, `${r.churn}`, `${r.active}`];
-			// Emphasize the synced-week row -- this is the row the document's live figures are read from.
-			const out = r.week === state.doc.syncedWeek ? vals.map(v => `**${v}**`) : vals;
-			return `| ${out.join(' | ')} |`;
+		const selected = new Set(cells);
+		const rows = [...state.resolved.entries()].map(([key, r]) => {
+			const mark = selected.has(key) ? `**${key}**` : key;
+			const value = selected.has(key) ? `**${r.value}**` : r.value;
+			return `| ${mark} | ${value} |`;
 		}).join('\n');
 		const referencedBy = [...this._docs.values()]
-			.filter(s => s.doc.isLiving && s.doc.source === state.doc.source)
+			.filter(s => s.doc.isLiving && s.doc.sources.some(src => state.doc.sources.includes(src)))
 			.map(s => s.doc.title);
-		const bound = cells.length ? `Bound columns for the selected text: **${cells.join('**, **')}**.` : '';
 		const refs = referencedBy.length ? `## Referenced by\n\n${referencedBy.map(t => `- ${t}`).join('\n')}` : '';
+		const sources = state.doc.sources.join(', ') || 'sources';
 		return [
-			`# ${state.doc.source}`,
-			`Live source &middot; synced to week ${state.doc.syncedWeek}. ${bound}`.trim(),
+			`# ${sources}`,
+			`Live sources for "${state.doc.title}". Bound keys for the selected text are emphasized.`,
 			'',
-			`${head}\n${sep}\n${body}`,
+			`| Key | Resolved |\n| --- | --- |\n${rows}`,
 			'',
 			refs,
 		].join('\n').replace(/\n+$/, '\n');
@@ -672,7 +557,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			try {
 				const stat = await this._files.resolve(dir);
 				for (const child of stat.children ?? []) {
-					if (!child.isDirectory && child.resource.path.endsWith('.living.md')) {
+					if (!child.isDirectory && await this._isLivingDocFile(child.resource)) {
 						found.set(child.resource.toString(), child.resource);
 					}
 				}
@@ -693,10 +578,6 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const serialized = serializeLivingDoc(state.doc);
 			state.rawText = serialized;
 			await this._files.writeFile(state.uri, VSBuffer.fromString(serialized));
-			const stem = basename(state.uri).replace(/\.living\.md$/, '').replace(/\.md$/, '');
-			const auditUri = joinPath(dirname(state.uri), `${stem}.audit.json`);
-			const docAudit = this._audit.filter(e => e.docTitle === state.doc.title);
-			await this._files.writeFile(auditUri, VSBuffer.fromString(JSON.stringify(docAudit, null, 2)));
 		} catch (e) {
 			this._log.warn('[livingDocs] persist failed', e);
 		}

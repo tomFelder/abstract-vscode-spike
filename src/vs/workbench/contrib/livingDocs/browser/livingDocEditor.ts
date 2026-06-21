@@ -168,7 +168,7 @@ export class LivingDocEditor extends EditorPane {
 		this._webview?.setHtml(renderLivingDocHtml({
 			doc: this._livingDocs.getDoc(resource),
 			pending: this._livingDocs.getPendingForDoc(resource),
-			kpiRows: this._livingDocs.getKpiRows(resource),
+			resolved: this._livingDocs.getResolved(resource),
 			status: this._livingDocs.getStatus(resource),
 			recent: this._livingDocs.getRecentlyApplied(resource),
 			mode: this._mode,

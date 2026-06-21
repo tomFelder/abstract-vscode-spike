@@ -4,7 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
-import { IKpiRow, ILivingDoc, IProposedChange } from '../common/livingDocsModel.js';
+import { reconcileBindLinks } from '../common/livingDocMarkdown.js';
+import { ILivingDoc, ILivingDocBlock, IProposedChange } from '../common/livingDocsModel.js';
+
+// Bind links render as plain text - the resolved value is its own visible text, and the `bind:` URL
+// is never shown to the reader (spec 3.2). A blue gutter dot marks the bound line instead.
+const BIND_LINK_RE = /\[([^\]]*)\]\(bind:([^)\s]+)\)/g;
+function bindToValue(text: string): string {
+	return text.replace(BIND_LINK_RE, '$1');
+}
+
+const EMPTY_RESOLVED: ReadonlyMap<string, string> = new Map<string, string>();
 
 export type LivingDocViewMode = 'rendered' | 'raw';
 
@@ -20,7 +30,8 @@ export interface IPresentState {
 export interface ILivingDocRenderInput {
 	readonly doc: ILivingDoc | undefined;
 	readonly pending: readonly IProposedChange[];
-	readonly kpiRows: readonly IKpiRow[];
+	/** Resolved value per bind key; the visible cache is reconciled to these at render time (lock wins). */
+	readonly resolved: ReadonlyMap<string, string>;
 	readonly status: string;
 	readonly recent: ReadonlySet<string>;
 	readonly mode: LivingDocViewMode;
@@ -192,7 +203,7 @@ for (const el of document.querySelectorAll('[data-block]')) {
 }`;
 
 export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
-	const { doc, pending, kpiRows, status, recent, mode, rawText } = input;
+	const { doc, pending, resolved, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
 	const crumb = isLiving ? 'Living Document' : 'Markdown';
 
@@ -242,7 +253,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	} else if (!doc) {
 		body = `<div class="empty">No document loaded.</div>`;
 	} else if (isLiving) {
-		body = etoolbar + renderDoc(doc, pending, kpiRows, recent);
+		body = etoolbar + renderDoc(doc, pending, recent, resolved);
 	} else {
 		body = `<div class="doc prose">${renderGenericMarkdown(doc.body)}</div>`;
 	}
@@ -349,31 +360,32 @@ function inlineDiff(oldText: string, newText: string): { html: string; added: nu
 	return { html: segs.join(' '), added, removed };
 }
 
-function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], kpiRows: readonly IKpiRow[], recent: ReadonlySet<string>): string {
+// Render one block's Markdown to sanitized HTML, with bind links reconciled to their resolved value
+// (lock wins) and shown as plain text.
+function renderBlockMarkdown(block: ILivingDocBlock, resolved: ReadonlyMap<string, string>): string {
+	const raw = block.type === 'heading' ? `${'#'.repeat(block.level ?? 2)} ${block.text}` : block.text;
+	const rendered = renderMarkdown({ value: bindToValue(reconcileBindLinks(raw, resolved)) });
+	try {
+		return rendered.element.innerHTML;
+	} finally {
+		rendered.dispose();
+	}
+}
+
+function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>, resolved: ReadonlyMap<string, string>): string {
 	const parts: string[] = [`<div class="docwrap">`,
 		`<div class="docfull"><h1 class="title">${esc(doc.title)}</h1><div class="subtitle">${esc(doc.subtitle)}</div></div>`];
 
 	for (const block of doc.blocks) {
 		const change = pending.find(c => c.blockId === block.id);
-		const cells = block.binding?.cells.join(',') ?? '';
+		const cells = block.binds.map(b => b.key).join(',');
 		const isRecent = recent.has(block.id);
-
-		if (block.type === 'heading') {
-			parts.push(gutterCell('', false),
-				`<div class="pcell"><h2 class="section editable" contenteditable="true" data-block="${esc(block.id)}" data-orig="${esc(block.text ?? '')}">${esc(block.text ?? '')}</h2></div>`);
-			continue;
-		}
-
-		if (block.type === 'kpiTable') {
-			parts.push(gutterCell(`<span class="pdot" data-cells="${cells}" data-prov title="Bound to source"></span>`, false),
-				`<div class="pcell" data-cells="${cells}" data-prov>${renderKpi(kpiRows, isRecent)}</div>`);
-			continue;
-		}
+		const bound = block.binds.length > 0;
 
 		if (change) {
 			// Render the meaning-change as an inline word-diff with an amber accent and a control row.
-			const d = inlineDiff(change.oldText, change.newText);
-			const src = esc(doc.source);
+			const d = inlineDiff(bindToValue(change.oldText), bindToValue(change.newText));
+			const src = esc(doc.sources.concat(doc.context).join(', '));
 			parts.push(gutterCell(`<span class="gbar warn" data-cells="${cells}" data-prov title="Pending change"></span>`, true),
 				`<div class="pcell editblock">`
 				+ `<p class="editp">${d.html}</p>`
@@ -384,29 +396,35 @@ function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], kpiRows
 			continue;
 		}
 
-		const text = esc(block.text ?? '');
-		if (block.binding) {
-			// Bound prose: driven by its source. Dotted underline + hover/click reveals provenance.
-			parts.push(gutterCell(`<span class="pdot" data-cells="${cells}" data-prov title="Bound to source"></span>`, false),
-				`<div class="pcell"><p class="block bound${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${text}</p></div>`);
+		if (block.type === 'heading' && !bound) {
+			// Headings are hand-editable in place (plain text, not rendered Markdown).
+			parts.push(gutterCell('', false),
+				`<div class="pcell"><h2 class="section editable" contenteditable="true" data-block="${esc(block.id)}" data-orig="${esc(block.text)}">${esc(block.text)}</h2></div>`);
 			continue;
 		}
-		// Non-bound prose is hand-editable in place.
-		parts.push(gutterCell('', false),
-			`<div class="pcell"><p class="block editable${isRecent ? ' applied' : ''}" contenteditable="true" data-block="${esc(block.id)}" data-orig="${text}">${text}</p></div>`);
+
+		if (bound) {
+			// A bound block is driven by its sources: a blue gutter dot, rendered Markdown with the
+			// resolved values inline, and hover/click reveals provenance. Not hand-editable.
+			parts.push(gutterCell(`<span class="pdot${isRecent ? ' warn' : ''}" data-cells="${cells}" data-prov title="Bound to source"></span>`, false),
+				`<div class="pcell${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${renderBlockMarkdown(block, resolved)}</div>`);
+			continue;
+		}
+
+		if (block.type === 'paragraph') {
+			// Non-bound prose is hand-editable in place.
+			const text = esc(block.text);
+			parts.push(gutterCell('', false),
+				`<div class="pcell"><p class="block editable${isRecent ? ' applied' : ''}" contenteditable="true" data-block="${esc(block.id)}" data-orig="${text}">${text}</p></div>`);
+			continue;
+		}
+
+		// Non-bound tables (and other rich blocks): render as Markdown, no inline editing.
+		parts.push(gutterCell('', false), `<div class="pcell">${renderBlockMarkdown(block, resolved)}</div>`);
 	}
 
 	parts.push(`</div>`);
 	return parts.join('\n');
-}
-
-function renderKpi(rows: readonly IKpiRow[], isRecent: boolean): string {
-	if (!rows.length) {
-		return `<table class="kpi"><tr><td>No source rows available.</td></tr></table>`;
-	}
-	const head = `<tr><th>METRIC</th><th>Prev</th><th>Current</th><th>&Delta;</th></tr>`;
-	const body = rows.map(r => `<tr><td>${esc(r.metric)}</td><td style="color:#86868f">${esc(r.prev)}</td><td${isRecent ? ' class="applied"' : ''}>${esc(r.curr)}</td><td class="${r.positive ? 'up' : 'down'}">${esc(r.delta)}</td></tr>`).join('');
-	return `<table class="kpi">${head}${body}</table>`;
 }
 
 // Clean, self-contained export: no IDE chrome, no provenance dots, no diff UI -- just the
@@ -429,45 +447,19 @@ pre{background:#f7f7f9;border:1px solid #ececf0;border-radius:8px;padding:14px 1
 blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid #e1e2e8;color:#6a6a73}
 footer{margin-top:48px;padding-top:14px;border-top:1px solid #eee;font:400 11px/1.5 system-ui,sans-serif;color:#a3a8b2}`;
 
-function exportKpi(rows: readonly IKpiRow[]): string {
-	if (!rows.length) { return ''; }
-	const head = `<tr><th>Metric</th><th>Prev</th><th>Current</th><th>Change</th></tr>`;
-	const body = rows.map(r => `<tr><td>${esc(r.metric)}</td><td>${esc(r.prev)}</td><td>${esc(r.curr)}</td><td class="${r.positive ? 'up' : 'down'}">${esc(r.delta)}</td></tr>`).join('');
-	return `<table>${head}${body}</table>`;
-}
-
 /** Build a standalone, shareable HTML page from a document's current (resolved) state. */
-export function renderExportHtml(doc: ILivingDoc, kpiRows: readonly IKpiRow[]): string {
-	let body: string;
-	if (doc.isLiving) {
-		const parts: string[] = [`<h1>${esc(doc.title)}</h1>`];
-		if (doc.subtitle) { parts.push(`<div class="subtitle">${esc(doc.subtitle)}</div>`); }
-		for (const block of doc.blocks) {
-			if (block.type === 'heading') { parts.push(`<h2>${esc(block.text ?? '')}</h2>`); }
-			else if (block.type === 'kpiTable') { parts.push(exportKpi(kpiRows)); }
-			else { parts.push(`<p>${esc(block.text ?? '')}</p>`); }
-		}
-		body = parts.join('\n');
-	} else {
-		body = renderGenericMarkdown(doc.body);
-	}
+export function renderExportHtml(doc: ILivingDoc, resolved: ReadonlyMap<string, string> = EMPTY_RESOLVED): string {
+	const body = renderGenericMarkdown(renderExportMarkdown(doc, resolved));
 	const footer = `<footer>Exported from Opportunity OS &middot; Living Document</footer>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(doc.title)}</title><style>${EXPORT_STYLE}</style></head><body><main class="page">${body}${footer}</main></body></html>`;
 }
 
-function exportKpiMarkdown(rows: readonly IKpiRow[]): string {
-	if (!rows.length) { return ''; }
-	const header = `| Metric | Prev | Current | Change |\n| --- | --- | --- | --- |`;
-	const body = rows.map(r => `| ${r.metric} | ${r.prev} | ${r.curr} | ${r.delta} |`).join('\n');
-	return `${header}\n${body}`;
-}
-
 /**
- * Build a clean, static Markdown document from a document's current (resolved) state: live values
- * are already inlined into each block's text, so there are no bindings, no HTML-comment metadata and
- * no {cell} placeholders -- just portable Markdown that opens anywhere (Obsidian, GitHub, a share).
+ * Build a clean, static Markdown document from a document's current (resolved) state: the bind links
+ * collapse to their resolved values, so there are no bindings and no metadata -- just portable
+ * Markdown that opens anywhere (Obsidian, GitHub, a share).
  */
-export function renderExportMarkdown(doc: ILivingDoc, kpiRows: readonly IKpiRow[]): string {
+export function renderExportMarkdown(doc: ILivingDoc, resolved: ReadonlyMap<string, string> = EMPTY_RESOLVED): string {
 	if (!doc.isLiving) {
 		// Plain Markdown already is its own clean export.
 		return doc.body.trim() + '\n';
@@ -476,12 +468,9 @@ export function renderExportMarkdown(doc: ILivingDoc, kpiRows: readonly IKpiRow[
 	if (doc.subtitle) { parts.push(`_${doc.subtitle}_`); }
 	for (const block of doc.blocks) {
 		if (block.type === 'heading') {
-			parts.push(`## ${block.text ?? ''}`);
-		} else if (block.type === 'kpiTable') {
-			const table = exportKpiMarkdown(kpiRows);
-			if (table) { parts.push(table); }
+			parts.push(`${'#'.repeat(block.level ?? 2)} ${block.text}`);
 		} else {
-			parts.push(block.text ?? '');
+			parts.push(bindToValue(reconcileBindLinks(block.text, resolved)));
 		}
 	}
 	return parts.join('\n\n') + '\n';
