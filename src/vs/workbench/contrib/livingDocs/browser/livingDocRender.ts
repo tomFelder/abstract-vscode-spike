@@ -73,6 +73,7 @@ html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-
 .pill.warn{color:#9a6b16;background:#fdf2dc;border-color:#f0e2c0}
 .pill.warn .dot{background:oklch(0.66 0.16 45)}
 .btn{border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+.av{flex:none;width:27px;height:27px;border-radius:50%;background:${ACCENT};color:#fff;font:600 11px/27px system-ui;text-align:center}
 .docwrap{max-width:780px;margin:0 auto;padding:48px 28px 80px;display:grid;grid-template-columns:30px 1fr;column-gap:10px;align-items:start}
 .docfull{grid-column:1 / -1}
 h1.title{margin:0 0 6px;font:600 30px/1.2 system-ui;letter-spacing:-.015em;color:#15171c}
@@ -228,7 +229,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		: '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}${downloadBtn}${refresh}</div></div>`;
+		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}${downloadBtn}${refresh}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 
@@ -295,11 +296,16 @@ function renderPresentModal(present: IPresentState, title: string): string {
 		? 'border:1.5px solid ' + ACCENT + ';background:#f4f6ff;color:' + ACCENT_DK
 		: 'border:1px solid #e0e2e8;background:#fff;color:#696e78';
 	const scopeBtn = (scope: ShareScope, label: string) => `<button class="pm-scope" data-present-scope="${scope}" style="border-radius:8px;padding:9px 12px;font:500 12px/1 system-ui;cursor:pointer;${scopeStyle(present.scope === scope)}">${label}</button>`;
-	const siteScope = present.choice === 'site'
-		? `<div style="margin-bottom:18px"><div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">WHO CAN ACCESS</div>`
-		+ `<div style="display:flex;gap:7px;margin-bottom:12px">${scopeBtn('internal', '&#128274; Workspace only')}${scopeBtn('link', '&#128279; Anyone with link')}${scopeBtn('public', '&#127760; Public')}</div>`
-		+ `<div style="display:flex;align-items:center;gap:8px;border:1px solid #e6e8ed;border-radius:8px;padding:9px 11px;background:#fcfcfd"><span style="font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">opportunity-os.live/weekly-summary</span><button class="pm-copy" style="border:1px solid #e0e2e8;background:#fff;border-radius:6px;padding:6px 10px;font:500 11px/1 system-ui;color:#52575f;cursor:pointer">Copy</button></div></div>`
+	// WHO CAN ACCESS applies to every export (the comp shows it for all destinations, not only the
+	// hosted page): the scope sets who may open the copy. The shareable-URL row only makes sense once
+	// the scope is beyond the workspace (anyone-with-link / public), so it is gated on that.
+	const showUrl = present.scope !== 'internal';
+	const urlRow = showUrl
+		? `<div style="display:flex;align-items:center;gap:8px;border:1px solid #e6e8ed;border-radius:8px;padding:9px 11px;background:#fcfcfd"><span style="font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">opportunity-os.live/weekly-summary</span><button class="pm-copy" style="border:1px solid #e0e2e8;background:#fff;border-radius:6px;padding:6px 10px;font:500 11px/1 system-ui;color:#52575f;cursor:pointer">Copy</button></div>`
 		: '';
+	const siteScope = `<div style="margin-bottom:18px"><div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">WHO CAN ACCESS</div>`
+		+ `<div style="display:flex;gap:7px;margin-bottom:${showUrl ? '12px' : '0'}">${scopeBtn('internal', '&#128274; Workspace only')}${scopeBtn('link', '&#128279; Anyone with link')}${scopeBtn('public', '&#127760; Public')}</div>`
+		+ `${urlRow}</div>`;
 
 	return `<div class="pm-overlay" data-present-close>`
 		+ `<div class="pm-card" data-present-stop>`

@@ -19,7 +19,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
@@ -176,6 +176,45 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
 		return this._pending.filter(c => c.docId === id);
+	}
+
+	// Run the document's Skills as deterministic graders over its current state (spec 5). Financial =
+	// every bound figure resolves to a source value; Formatting = headings follow title-case house
+	// style; Strategy needs a model so it reports a needs-model state in the model-less build.
+	getSkillReport(resource: URI): readonly ISkillCheck[] {
+		const state = this._docs.get(resource.toString());
+		if (!state || !state.doc.isLiving) { return []; }
+		const resolved = this.getResolved(resource);
+
+		const keys = new Set<string>();
+		for (const block of state.doc.blocks) { for (const link of block.binds) { keys.add(link.key); } }
+		const total = keys.size;
+		const unresolved = [...keys].filter(k => !resolved.has(k));
+		const financial: ISkillCheck = unresolved.length === 0
+			? { id: 'financial', name: 'Financial agent', blurb: 'Validates figures in reports & quotes', status: 'pass', detail: `All ${total} linked figure${total === 1 ? '' : 's'} reconcile with sources.`, canRun: true }
+			: { id: 'financial', name: 'Financial agent', blurb: 'Validates figures in reports & quotes', status: 'flag', detail: `${unresolved.length} of ${total} figures do not reconcile: ${unresolved.join(', ')}.`, canRun: true };
+
+		const fixes = state.doc.blocks.filter(b => b.type === 'heading' && (b.level ?? 0) >= 2 && !LivingDocsService._isTitleCase(b.text)).length;
+		const formatting: ISkillCheck = fixes === 0
+			? { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'pass', detail: 'All headings follow house style.', canRun: true }
+			: { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'flag', detail: `${fixes} heading-case fix${fixes === 1 ? '' : 'es'} suggested.`, canRun: true };
+
+		const strategy: ISkillCheck = { id: 'strategy', name: 'Strategy agent', blurb: 'Tests claims against strategy & OKRs', status: 'needs-model', detail: 'Connect a model to test claims against the decision stack.', canRun: false };
+
+		return [strategy, financial, formatting];
+	}
+
+	// House style: title-case headings. A heading passes when every significant word (the first word,
+	// and any word that is not a minor word) is capitalized. Deterministic - no model.
+	private static readonly _MINOR_WORDS = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'nor', 'for', 'of', 'to', 'by', 'in', 'on', 'at', 'as', 'is', 'with']);
+	private static _isTitleCase(text: string): boolean {
+		const words = text.trim().split(/\s+/);
+		return words.every((word, i) => {
+			const letters = word.replace(/[^A-Za-z].*$/, '');
+			if (!letters) { return true; }
+			if (i !== 0 && LivingDocsService._MINOR_WORDS.has(letters.toLowerCase())) { return true; }
+			return letters[0] === letters[0].toUpperCase();
+		});
 	}
 
 	// --- workspace-wide views ---
