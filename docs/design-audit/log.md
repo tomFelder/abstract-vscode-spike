@@ -24,6 +24,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 4 | **~82%** | Present modal WHO CAN ACCESS now shown for every export (was site-only) 80->85; workflow canvas verified rendering + functional 72->80. |
 | 5 | **~83%** | Knowledge verified: Project tab's Strategy + Q3 OKRs (KR bars) + metrics are built 83->88; editor top bar gains the TS avatar (consistency) + gutter dots / inline-diff / approve-reject verified built 80->84. |
 | 6 | **~84%** | **Functional fix:** the navigation blank-out bug is resolved — screens (Templates/Knowledge/Agents) now render reliably after a document editor was open (was: blank main area). Verified live + auto-figure sync + agent run/canvas flow. MCP restored. |
+| 7 | **~86%** | **Core flow verified live:** Review rail 55->82 — Review impact queues pending meaning-changes (inline + right rail, old→new diff, confidence, risk); **Approve applies & clears**, **Reject discards & reverts**. The product's central approve/reject loop works end-to-end. |
 
 ---
 
@@ -44,12 +45,12 @@ the handoff, iteration 1 is the survey. Iteration 2 attacks the lowest-scoring, 
 | 6 | Workflow canvas | 75→80 | 75→82 | 70→78 | 75→80 | 65→80 | **72** → **80** (iter 4, verified) | `shots/iter4-canvas-verified.png` |
 | 7 | Context panel | 50 | 55 | 35 | 55 | 45 | **48** → **80** (iter 2) | `shots/baseline/06-context-app.png` → `shots/iter2-context-after.png` |
 | 8 | Right rail — Chat | 90 | 92 | 90 | 90 | 85 | **90** | `shots/baseline/07-chat-app.png` |
-| 9 | Right rail — Review | 60 | 60 | 50 | 60 | 45 | **55** | `shots/baseline/10-review-app.png` (empty state) |
+| 9 | Right rail — Review | 60→85 | 60→85 | 50→85 | 60→85 | 45→80 | **55** → **82** (iter 7, verified live) | `shots/baseline/10-review-app.png` → `shots/iter7-review-populated.png` |
 | 10 | Right rail — History | 92 | 92 | 92 | 92 | 90 | **92** | `shots/baseline/09-history-app.png` |
 | 11 | Right rail — Skills | 88 | 90 | 88 | 90 | 85 | **88** | `shots/baseline/08-skills-app.png` |
 | 12 | Present / export modal | 85 | 85 | 75→85 | 80 | 78→85 | **80** → **85** (iter 4) | `shots/baseline/11-present-app.png` → `shots/iter4-present-after.png` |
 
-**Overall: ~78%** (mean of the twelve). The app is a genuinely high-fidelity recreation — most
+**Overall (after iter 7): ~86%** (baseline was ~78%). The app is a genuinely high-fidelity recreation — most
 surfaces are 80-92. The number is dragged down by three real holes: the **Context panel**, the
 **populated Review rail**, and the **workflow canvas** (unverified).
 
@@ -156,8 +157,9 @@ Copy) that the app's modal does not show.
 1. ~~**Context panel** (48) — build the full multi-category context inventory.~~ **DONE (iter 2 → 80):**
    grouped Linked sources + Referenced files. Remaining: Pasted text / Images / Company knowledge +
    "Add context" (deferred — no sample data).
-2. **Review rail populated diff/approve** (55) — make the pending-review state reachable (out-of-sync
-   fixture) and verify the approve/reject flow matches the comp. Core flow.
+2. ~~**Review rail populated diff/approve** (55) — make the pending-review state reachable and verify
+   the approve/reject flow.~~ **DONE (iter 7 → 82):** verified live via Context → Review impact;
+   Approve applies, Reject reverts. Remaining: model-quality suggestion wording.
 3. ~~**Global top bar** (cross-cutting) — add the unified 48px top bar to the screen webviews.~~
    **DONE (iter 3):** added to Home/Templates/Knowledge/Agents.
 4. ~~**Workflow canvas** (72) — verify the open-agent canvas renders.~~ **DONE (iter 4 → 80):**
@@ -359,6 +361,47 @@ fixture. Recommend a small dev affordance (e.g. a "simulate pending change" seed
 demoable.
 
 **Overall ~83 -> ~84** (resolved a cross-cutting functional defect; core flows live-verified).
+
+---
+
+## Iteration 7 — the Review rail / approve-reject flow, verified live end-to-end (55 → 82)
+
+The product's central premise — *an agent proposes changes; you review old→new with provenance and
+approve or reject* — was the last unverified core flow (and the biggest score deficit). Found the
+right trigger and drove the whole loop live.
+
+**How it's reached (no model needed).** `reviewImpact` (the Context panel's **"Review impact"**
+button) falls back to treating each non-bound prose paragraph as an influence target when no lock
+claims are authored, and the no-model `_heuristicImpact` always produces a "...revisit whether this
+still holds" suggestion. So changing the context source (`market-research.md`) then clicking
+**Review impact** queues real pending meaning-changes — no language model required. (The earlier
+*agent* path queued 0 because figures auto-resolve; this is the correct entry point.)
+
+**Verified live (the flow the goal calls "core flows functional"):**
+1. Changed `market-research.md`, opened the doc, clicked **Review impact** → **2 pending meaning
+   changes** queued for Commentary + What-to-watch.
+2. They render **both inline in the editor** (amber gutter bar, word-diff, "Tone rewrite from
+   metrics.csv, market-research.md · +1 added · 0 removed · 50% confidence", Approve/Reject) **and in
+   the right Review rail** ("Review **2**", "2 changes need approval", per-change card: old text →
+   new text, Why, Confidence 50%, Risk: narrative, Source, **Approve & apply** / **Reject**) — matching
+   the comp's Pending-review structure.
+3. **Approve & apply** on Commentary → the rewrite applied to the document, the card cleared, the rail
+   count dropped to **1**. Persisted.
+4. **Reject** on What-to-watch → the paragraph reverted to its original text, the rail emptied
+   ("No changes waiting"). The approved Commentary change stuck.
+
+Shot: `shots/iter7-review-populated.png` (the populated rail + inline pending changes).
+
+**Score 55 → 82.** Layout/Styling/Components/IA all match the comp (85+); Behaviour now *verified
+working* (80). Held below the high-80s only because the **suggestion wording is heuristic** ("revisit
+whether this still holds") rather than a model-quality rewrite (e.g. the comp's "Growth accelerated
+sharply") — a model-availability gap in the headless build, not a flow/UI defect. With a model wired
+in, this surface is ~90.
+
+No code change this iteration — it is a functional verification that corrects a conservative
+"unverified" baseline with live evidence. The sample workspace was restored to pristine afterward.
+
+**Overall ~84 → ~86.**
 
 ---
 
