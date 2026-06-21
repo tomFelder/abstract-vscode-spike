@@ -23,7 +23,7 @@ import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
-import { AgentOrchestrator } from './agentOrchestrator.js';
+import { AgentOrchestrator, IAgentRunContext } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
 import { emptyLock, IAgentDef, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
@@ -134,7 +134,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._files, this._log, new WorkspaceAgentStore(this._files, folder), () => this._discoverLivingDocUris()));
 		// Surface orchestration state changes (dirty queue, agent status) through the service event.
 		this._register(this._orchestrator.onDidChange(() => this._onDidChange.fire()));
-		void this._orchestrator.ensureLoaded();
+		this._orchestrator.setRunner((agent, context) => this._runAgent(agent, context));
+		void this._orchestrator.ensureLoaded().then(() => this._orchestrator.start());
 		this._register(toDisposable(() => {
 			for (const w of this._watchers.values()) { w.dispose(); }
 			this._watchers.clear();
@@ -438,7 +439,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		for (const target of targets) {
 			try {
 				const watcher = store.add(this._files.createWatcher(target, { recursive: false, excludes: [] }));
-				store.add(watcher.onDidChange(() => void this.checkSources(state.uri)));
+				const sourcePath = target.path;
+				store.add(watcher.onDidChange(() => {
+					// Per-document freshness recompute + the workspace-wide graph propagation / event agents.
+					void this.checkSources(state.uri);
+					void this._orchestrator.onSourceChanged(sourcePath);
+				}));
 			} catch (e) {
 				this._log.trace('[livingDocs] watch failed', e instanceof Error ? e.message : String(e));
 			}
@@ -651,6 +657,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (state.doc.isLiving) { state.status = `${derived} document${derived === 1 ? '' : 's'} synced`; }
 		}
 		this._onDidChange.fire();
+	}
+
+	// The orchestration host: how an agent actually does its work once a trigger fires. Dispatched by
+	// the agent's nature (its trigger kind), whether the run came from the scheduler or a manual Run now.
+	// (Per-edge policy refines the apply/queue/draft decision in Item 3; the verify gate in Item 4.)
+	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<void> {
+		switch (agent.trigger.kind) {
+			case 'cron':
+			case 'manual':
+				// The recurring/manual refresh: re-derive figures across the workspace.
+				await this.refreshFromSources();
+				break;
+			case 'heartbeat':
+				// The Freshness sweep: impact-pass each flagged doc, then drain it from the queue.
+				for (const uri of context.docs) {
+					await this.loadDocument(uri);
+					await this.reviewImpact(uri);
+					this._orchestrator.clearDirty(uri);
+				}
+				break;
+			case 'event':
+			case 'lifecycle':
+				// Event agents only flag along the graph (propagation already ran); lifecycle hooks fire
+				// from the document lifecycle (Item 5), not from a run.
+				break;
+		}
 	}
 
 	// --- the Review-impact pass (expensive, on-demand): spec 3.6 ---

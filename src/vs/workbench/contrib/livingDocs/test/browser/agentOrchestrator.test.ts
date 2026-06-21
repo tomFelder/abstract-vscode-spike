@@ -5,13 +5,27 @@
 
 import assert from 'assert';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
-import { AgentOrchestrator } from '../../browser/agentOrchestrator.js';
+import { AgentOrchestrator, IAgentRunContext } from '../../browser/agentOrchestrator.js';
 import { IAgentStore } from '../../browser/agentStore.js';
-import { IAgentDef } from '../../common/livingDocsModel.js';
+import { IClock } from '../../browser/clock.js';
+import { AgentTriggerKind, IAgentDef } from '../../common/livingDocsModel.js';
+
+// A controllable clock: the test sets the wall time and drives the scheduler tick directly.
+class FakeClock implements IClock {
+	constructor(private _now: number) { }
+	now(): number { return this._now; }
+	set(now: number): void { this._now = now; }
+	advance(ms: number): void { this._now += ms; }
+	scheduleInterval(): IDisposable { return toDisposable(() => { }); }
+}
+
+// Monday 2026-06-22, 09:00:00 UTC - matches the "Mon 09:00" weekly-refresh cron.
+const MONDAY_0900 = Date.UTC(2026, 5, 22, 9, 0, 0);
 
 // Two documents that share metrics.csv; one also draws on market-research.md as context.
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
@@ -30,7 +44,9 @@ const BOARD_MD = [
 suite('AgentOrchestrator', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function createOrchestrator(opts: { agents?: IAgentDef[] } = {}): { orch: AgentOrchestrator; written: { agents?: readonly IAgentDef[] } } {
+	interface IRunRecord { agentId: string; trigger: AgentTriggerKind; docs: string[] }
+
+	function createOrchestrator(opts: { agents?: IAgentDef[]; clock?: FakeClock } = {}): { orch: AgentOrchestrator; written: { agents?: readonly IAgentDef[] }; runs: IRunRecord[] } {
 		const files = new Map<string, string>([
 			[WEEKLY.toString(), WEEKLY_MD],
 			[BOARD.toString(), BOARD_MD],
@@ -48,9 +64,13 @@ suite('AgentOrchestrator', () => {
 			read: async () => opts.agents,
 			write: async agents => { written.agents = agents; },
 		};
-		const orch = new AgentOrchestrator(fileService, new NullLogService(), agentStore, async () => [WEEKLY, BOARD]);
+		const orch = new AgentOrchestrator(fileService, new NullLogService(), agentStore, async () => [WEEKLY, BOARD], opts.clock);
+		const runs: IRunRecord[] = [];
+		orch.setRunner(async (agent, context: IAgentRunContext) => {
+			runs.push({ agentId: agent.id, trigger: context.trigger, docs: context.docs.map(u => u.toString()) });
+		});
 		store.add(orch);
-		return { orch, written };
+		return { orch, written, runs };
 	}
 
 	test('a single write to a shared source dirties every dependent document (reverse-edge walk)', async () => {
@@ -104,5 +124,60 @@ suite('AgentOrchestrator', () => {
 		const { orch } = createOrchestrator({ agents: custom });
 		await orch.ensureLoaded();
 		assert.deepStrictEqual(orch.getAgents().map(a => a.id), ['only']);
+	});
+
+	test('a cron agent fires at its scheduled time and not otherwise (fake clock)', async () => {
+		const clock = new FakeClock(MONDAY_0900);
+		const { orch, runs } = createOrchestrator({ clock });
+		await orch.ensureLoaded();
+
+		await orch.runDueAgents();
+		const cronRuns = runs.filter(r => r.trigger === 'cron');
+		assert.deepStrictEqual(cronRuns, [{ agentId: 'weekly-refresh', trigger: 'cron', docs: [WEEKLY.toString(), BOARD.toString()] }], 'weekly-refresh fired at Mon 09:00');
+
+		// One hour later it is no longer due (and it already ran this period).
+		runs.length = 0;
+		clock.advance(3_600_000);
+		await orch.runDueAgents();
+		assert.deepStrictEqual(runs.filter(r => r.trigger === 'cron'), [], 'cron does not re-fire off-schedule');
+	});
+
+	test('the heartbeat drains only dirty docs and is a no-op on an empty queue', async () => {
+		const clock = new FakeClock(MONDAY_0900 + 3_600_000); // 10:00 - cron not due, heartbeat is
+		const { orch, runs } = createOrchestrator({ clock });
+		await orch.ensureLoaded();
+
+		await orch.runDueAgents();
+		assert.strictEqual(runs.length, 0, 'empty dirty queue -> heartbeat is a no-op (no re-derive)');
+
+		await orch.propagate('/ws/metrics.csv');
+		await orch.runDueAgents();
+		assert.deepStrictEqual(
+			runs.map((r: IRunRecord) => ({ agentId: r.agentId, trigger: r.trigger, docs: r.docs.slice().sort() })),
+			[{ agentId: 'freshness-sweep', trigger: 'heartbeat', docs: [BOARD.toString(), WEEKLY.toString()].sort() }],
+			'heartbeat processes exactly the flagged docs',
+		);
+	});
+
+	test('a source change fires the matching event agent with the dirtied docs', async () => {
+		const { orch, runs } = createOrchestrator();
+		await orch.ensureLoaded();
+
+		await orch.onSourceChanged('/ws/metrics.csv');
+
+		assert.deepStrictEqual(
+			runs.map(r => ({ agentId: r.agentId, trigger: r.trigger, docs: r.docs.slice().sort() })),
+			[{ agentId: 'source-watcher', trigger: 'event', docs: [BOARD.toString(), WEEKLY.toString()].sort() }],
+		);
+	});
+
+	test('Run now executes an agent manually', async () => {
+		const { orch, runs } = createOrchestrator();
+		await orch.ensureLoaded();
+
+		await orch.runAgent('weekly-refresh', 'manual', []);
+
+		assert.deepStrictEqual(runs, [{ agentId: 'weekly-refresh', trigger: 'manual', docs: [] }]);
+		assert.ok(orch.getAgent('weekly-refresh')!.lastRun, 'last-run recorded for the History trace');
 	});
 });

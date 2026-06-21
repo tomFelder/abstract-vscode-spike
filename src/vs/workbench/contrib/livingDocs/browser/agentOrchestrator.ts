@@ -4,13 +4,26 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { parseLivingDoc } from '../common/livingDocMarkdown.js';
-import { IAgentDef, IDirtyEntry } from '../common/livingDocsModel.js';
+import { AgentTriggerKind, IAgentDef, IDirtyEntry } from '../common/livingDocsModel.js';
 import { IAgentStore } from './agentStore.js';
+import { IClock, RealClock } from './clock.js';
+
+// How the orchestrator runs an agent once a trigger fires: the host (the service) supplies the actual
+// work (re-derive figures, impact-pass, draft) given the agent + the documents in scope.
+export interface IAgentRunContext {
+	readonly trigger: AgentTriggerKind;
+	readonly docs: readonly URI[];
+}
+export type AgentRunner = (agent: IAgentDef, context: IAgentRunContext) => Promise<void>;
+
+// Map a weekday abbreviation to its UTC day index (cron is interpreted in UTC for test determinism).
+const WEEKDAYS: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+const TICK_MS = 60_000;
 
 // The orchestration engine (spec 09): the agent registry, the dependency-graph event-bus, and (in
 // later items) the trigger layer, policy router, and verify gate. Owned by LivingDocsService - it is
@@ -50,17 +63,24 @@ export class AgentOrchestrator extends Disposable {
 	private _agents: IAgentDef[] = [];
 	private _loaded = false;
 	// The workspace-wide dirty queue: doc URI -> changed dependency paths, split by edge kind. The
-	// Freshness-sweep heartbeat (Item 2) drains this.
+	// Freshness-sweep heartbeat drains this.
 	private readonly _dirty = new Map<string, IDirtyEntry>();
+	private _runner: AgentRunner | undefined;
+	private readonly _ticker = this._register(new MutableDisposable());
 
 	constructor(
 		private readonly _files: IFileService,
 		private readonly _log: ILogService,
 		private readonly _agentStore: IAgentStore,
 		private readonly _provideDocUris: () => Promise<URI[]>,
+		private readonly _clock: IClock = new RealClock(),
 	) {
 		super();
 	}
+
+	// The host (the service) registers how an agent actually does its work. Kept as a setter so the
+	// service can wire it after construction without a circular dependency.
+	setRunner(runner: AgentRunner): void { this._runner = runner; }
 
 	// --- agent registry ---
 
@@ -141,7 +161,85 @@ export class AgentOrchestrator extends Disposable {
 		return dirtied;
 	}
 
-	// --- the dirty queue (drained by the heartbeat in Item 2) ---
+	// --- the trigger layer (spec 3): event + scheduled (cron/heartbeat) + manual ---
+
+	// Start the scheduler: a single periodic tick checks which cron/heartbeat agents are due. Idempotent.
+	start(): void {
+		this._ticker.value = this._clock.scheduleInterval(TICK_MS, () => void this.runDueAgents());
+	}
+
+	// Fire every cron/heartbeat agent that is due at the clock's current time. Public + awaitable so a
+	// fake clock can drive it deterministically in tests.
+	async runDueAgents(): Promise<void> {
+		for (const agent of this._agents) {
+			if (agent.trigger.kind === 'cron' && this._cronDue(agent)) {
+				await this.runAgent(agent.id, 'cron', await this._provideDocUris());
+			} else if (agent.trigger.kind === 'heartbeat' && this._heartbeatDue(agent)) {
+				await this.runHeartbeat(agent.id);
+			}
+		}
+	}
+
+	// Cron "Mon 09:00" is due when now (UTC) matches its weekday + time and it has not already fired
+	// within this minute.
+	private _cronDue(agent: IAgentDef): boolean {
+		const match = /^(\w{3})\s+(\d{2}):(\d{2})$/.exec(agent.trigger.cron ?? '');
+		if (!match) { return false; }
+		const day = WEEKDAYS[match[1]];
+		const now = this._clock.now();
+		const d = new Date(now);
+		if (day === undefined || d.getUTCDay() !== day || d.getUTCHours() !== Number(match[2]) || d.getUTCMinutes() !== Number(match[3])) {
+			return false;
+		}
+		return !agent.lastRun || now - Date.parse(agent.lastRun) >= TICK_MS;
+	}
+
+	private _heartbeatDue(agent: IAgentDef): boolean {
+		const everyMs = (agent.trigger.everyHours ?? 6) * 3_600_000;
+		const last = agent.lastRun ? Date.parse(agent.lastRun) : 0;
+		return this._clock.now() - last >= everyMs;
+	}
+
+	// A source/folder change (from a correlated watcher): walk the graph (cheap dirty flagging) and fire
+	// any event-triggered agent whose source matches ('*' = any).
+	async onSourceChanged(changedPath: string): Promise<void> {
+		const dirtied = await this.propagate(changedPath);
+		for (const agent of this._agents) {
+			const source = agent.trigger.source;
+			if (agent.trigger.kind === 'event' && (source === '*' || (source && pathKey(source) === pathKey(changedPath)))) {
+				await this.runAgent(agent.id, 'event', dirtied);
+			}
+		}
+	}
+
+	// The heartbeat drains the dirty queue: it only ever processes flagged docs, and is a no-op when the
+	// queue is empty (it does NOT re-derive everything - spec 3).
+	async runHeartbeat(agentId: string): Promise<void> {
+		const docs = this.getDirtyDocs();
+		if (!docs.length) { return; }
+		await this.runAgent(agentId, 'heartbeat', docs);
+	}
+
+	// Run one agent end-to-end via the host runner (also the manual "Run now" path). Tracks status +
+	// last-run for the Agents view / History trace.
+	async runAgent(agentId: string, trigger: AgentTriggerKind, docs: readonly URI[]): Promise<void> {
+		const agent = this.getAgent(agentId);
+		if (!agent || !this._runner) { return; }
+		agent.status = 'running';
+		this._onDidChange.fire();
+		try {
+			await this._runner(agent, { trigger, docs });
+			if (agent.status === 'running') { agent.status = 'idle'; }
+		} catch (e) {
+			agent.status = 'error';
+			this._log.warn('[livingDocs] agent run failed', agentId, e instanceof Error ? e.message : String(e));
+		}
+		agent.lastRun = new Date(this._clock.now()).toISOString();
+		await this._persistAgents();
+		this._onDidChange.fire();
+	}
+
+	// --- the dirty queue (drained by the heartbeat) ---
 
 	getDirty(resource: URI): IDirtyEntry | undefined { return this._dirty.get(resource.toString()); }
 	getDirtyDocs(): URI[] { return [...this._dirty.keys()].map(s => URI.parse(s)); }
