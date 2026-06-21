@@ -274,6 +274,82 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.getResolved(WEEKLY).get('metrics.mrr'), '$52.0k', 'lock now holds the new value');
 	});
 
+	function seedLock(uri: URI, lock: object): void {
+		const stem = uri.path.split('/').pop()!.replace(/\.md$/, '');
+		lastFiles!.set(URI.file(`/ws/${stem}.lock.json`).toString(), JSON.stringify(lock));
+	}
+
+	test('Review impact on a changed context queues a candidate; approve applies it, updates the lock, and clears the flag', async () => {
+		const service = createService();
+		// Authored claim bound to the context, anchored to the Commentary sentence.
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'commentary-tone': { anchor: 'Growth remained steady this week.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+
+		// The context source changes -> the document is flagged, then the user runs Review impact.
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+		await service.reviewImpact(WEEKLY);
+
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.strictEqual(pending.length, 1, 'one impact candidate queued');
+		assert.deepStrictEqual(
+			{ kind: pending[0].kind, via: pending[0].via, context: pending[0].contextReviewed, claim: pending[0].claimId, relink: !!pending[0].relink },
+			{ kind: 'meaning', via: 'heuristic', context: ['market-research.md'], claim: 'commentary-tone', relink: false },
+		);
+		const commentaryBlockId = pending[0].blockId;
+		assert.notStrictEqual(pending[0].newText, pending[0].oldText, 'a real edit is proposed');
+
+		await service.approve(pending[0].id);
+
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'cleared from the rail');
+		assert.deepStrictEqual(service.getFreshness(WEEKLY).staleContext, [], 'context flag cleared after approve');
+		const lock = service.getLock(WEEKLY)!;
+		assert.strictEqual(lock.claims['commentary-tone'].state, 'applied', 'claim re-anchored + applied');
+		assert.ok(lock.audit.some(e => e.action === 'approved' && e.blockId === commentaryBlockId), 'approval audited in the lock');
+	});
+
+	test('a claim whose anchor no longer matches surfaces a re-link prompt instead of mis-attaching', async () => {
+		const service = createService();
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'orphan': { anchor: 'A sentence that does not appear anywhere in this document.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+		const before = service.getDoc(WEEKLY)!.blocks.map(b => b.text).join('\n');
+
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+		await service.reviewImpact(WEEKLY);
+
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.strictEqual(pending.length, 1, 'one prompt queued');
+		assert.ok(pending[0].relink, 'it is a loud re-link prompt, not a silent re-attach');
+		assert.ok(/re-link/i.test(pending[0].rationale), `prompt explains the re-link: ${pending[0].rationale}`);
+		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.map(b => b.text).join('\n'), before, 'no prose was changed');
+	});
+
+	test('with no model available, Review impact is a visible heuristic state (not a silent degrade)', async () => {
+		const service = createService();
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'commentary-tone': { anchor: 'Growth remained steady this week.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+
+		await service.reviewImpact(WEEKLY);
+
+		assert.ok(/no model/i.test(service.getStatus(WEEKLY)), `surfaces the no-model state: ${service.getStatus(WEEKLY)}`);
+		assert.strictEqual(service.getPendingForDoc(WEEKLY)[0].via, 'heuristic', 'candidate marked as the heuristic fallback');
+	});
+
 	test('a clean Markdown table with bind links in cells resolves each cell on refresh', async () => {
 		const service = createService([], { boardNote: true });
 		await service.loadDocument(BOARD);

@@ -134,6 +134,14 @@ export interface IProposedChange {
 	readonly confidence: number;    // 0..1
 	readonly rationale: string;
 	readonly sourceCells: readonly string[];
+	// Set by the Review-impact pass (Item 5): which lock claim this edit re-anchors, the context
+	// sources it reviews (so approval can mark them reviewed), and whether the model/heuristic produced
+	// it. `relink` marks a loud-failure prompt: the claim's anchor no longer confidently matches the
+	// prose, so the user is asked to re-link rather than the edit silently re-attaching.
+	readonly claimId?: string;
+	readonly contextReviewed?: readonly string[];
+	readonly via?: 'model' | 'heuristic';
+	readonly relink?: boolean;
 }
 
 export interface IAuditEntry {

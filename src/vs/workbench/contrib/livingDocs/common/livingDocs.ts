@@ -103,6 +103,14 @@ export interface ILivingDocsService {
 	/** Re-derive bound blocks across every bound document from the latest source values. */
 	refreshFromSources(): Promise<void>;
 
+	/**
+	 * The expensive, on-demand impact pass (spec 3.6): read the changed context sources against the
+	 * document's prose claims and queue candidate edits (with provenance + confidence) into the review
+	 * rail. Figures auto-apply; meaning/influence changes wait for approval. A claim whose anchor no
+	 * longer confidently matches the prose surfaces a loud "re-link?" prompt instead of re-attaching.
+	 */
+	reviewImpact(resource: URI): Promise<void>;
+
 	/** Export a document's current state to a self-contained HTML page and open it. */
 	exportDocument(resource: URI): Promise<URI | undefined>;
 

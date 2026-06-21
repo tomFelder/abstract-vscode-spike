@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { $, append, clearNode } from '../../../../base/browser/dom.js';
+import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -91,8 +91,10 @@ export class ContextPanelView extends ViewPane {
 		}
 
 		const list = append(body, $('div.ldc-list'));
+		let anyChanged = false;
 		for (const file of doc.context) {
 			const changed = stale.has(file);
+			anyChanged = anyChanged || changed;
 			const row = append(list, $('div.ldc-row'));
 			const status = append(row, $(`span.ldc-status.${changed ? 'ldc-warn' : 'ldc-ok'}`));
 			// Unicode escapes keep the source ASCII-only: U+26A0 warning sign / U+2713 check mark.
@@ -102,6 +104,12 @@ export class ContextPanelView extends ViewPane {
 			const tag = append(row, $('span.ldc-tag'));
 			tag.textContent = changed ? 'changed since review' : 'current';
 		}
+
+		// "Review impact" runs the expensive on-demand pass; emphasized when a source has changed.
+		const review = append(body, $('button.ldc-review')) as HTMLButtonElement;
+		review.textContent = anyChanged ? 'Review impact' : 'Review impact (up to date)';
+		review.classList.toggle('ldc-review-warn', anyChanged);
+		this._renderDisposables.add(addDisposableListener(review, 'click', () => void this._livingDocs.reviewImpact(resource)));
 	}
 
 	private _injectStyles(container: HTMLElement): void {
@@ -121,6 +129,9 @@ export class ContextPanelView extends ViewPane {
 		.living-docs-context .ldc-warn{color:oklch(0.66 0.16 45)}
 		.living-docs-context .ldc-name{flex:1;min-width:0;font:500 12.5px/1.3 system-ui;color:var(--vscode-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		.living-docs-context .ldc-tag{font:500 10px/1 system-ui;color:var(--vscode-descriptionForeground)}
+		.living-docs-context .ldc-review{width:100%;margin-top:12px;border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:8px;padding:9px 11px;background:var(--vscode-editorWidget-background);color:var(--vscode-foreground);font:600 12px/1 system-ui;cursor:pointer}
+		.living-docs-context .ldc-review:hover{background:var(--vscode-list-hoverBackground)}
+		.living-docs-context .ldc-review-warn{border-color:oklch(0.66 0.16 45);color:#9a6b16;background:#fdf2dc}
 		`;
 		container.appendChild(style);
 	}

@@ -10,12 +10,13 @@ import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../..
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
+import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { asJson, IRequestService } from '../../../../platform/request/common/request.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
-import { ILanguageModelsService } from '../../chat/common/languageModels.js';
+import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { ILivingDocsService, ILivingDocSummary, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
@@ -68,6 +69,21 @@ function sourceAlias(source: string): string {
 	return name.replace(/\.[^.]+$/, '');
 }
 
+function tokenize(s: string): string[] {
+	return s.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+}
+
+// Token-overlap (Jaccard) similarity of two strings, 0..1. Used to relocate a prose claim against the
+// current text - deterministic, no model. 1 = identical token sets, 0 = nothing in common.
+function similarity(a: string, b: string): number {
+	const ta = new Set(tokenize(a));
+	const tb = new Set(tokenize(b));
+	if (ta.size === 0 || tb.size === 0) { return 0; }
+	let inter = 0;
+	for (const t of ta) { if (tb.has(t)) { inter++; } }
+	return inter / (ta.size + tb.size - inter);
+}
+
 // The "New document" starting point: clean Markdown the user owns. It becomes a Living Document once
 // a source is connected (a `sources:`/`context:` entry or a bind link appears). Authored as a single
 // left-aligned template literal so source indentation stays tab-only.
@@ -100,8 +116,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IFileService private readonly _files: IFileService,
 		@IEditorService private readonly _editors: IEditorService,
 		@IViewsService private readonly _views: IViewsService,
-		@ILanguageModelsService _lm: ILanguageModelsService,
-		@IConfigurationService _config: IConfigurationService,
+		@ILanguageModelsService private readonly _lm: ILanguageModelsService,
+		@IConfigurationService private readonly _config: IConfigurationService,
 		@INotificationService private readonly _notify: INotificationService,
 		@ILogService private readonly _log: ILogService,
 		@IRequestService private readonly _request: IRequestService,
@@ -622,7 +638,216 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
-	// --- approve / reject (the review rail; populated by the Review-impact pass in Item 5) ---
+	// --- the Review-impact pass (expensive, on-demand): spec 3.6 ---
+
+	// Above this similarity a claim's anchor is taken to still point at the right prose; below it the
+	// pass fails loudly with a re-link prompt rather than re-attaching to the wrong sentence.
+	private static readonly _CLAIM_CONFIDENT = 0.5;
+
+	async reviewImpact(resource: URI): Promise<void> {
+		const id = resource.toString();
+		const state = this._docs.get(id);
+		if (!state || !state.doc.isLiving) { return; }
+
+		// Review the changed context sources (or all of them if nothing is flagged dirty yet).
+		const freshness = this.getFreshness(resource);
+		const contextFiles = freshness.staleContext.length ? [...freshness.staleContext] : [...state.doc.context];
+		const diff = await this._readContext(state, contextFiles);
+		const modelAvailable = await this._hasModel();
+
+		// Re-running the pass replaces this document's earlier impact candidates so it stays idempotent.
+		this._pending = this._pending.filter(c => c.docId !== id);
+
+		for (const target of this._claimTargets(state)) {
+			if (target.relink) {
+				// Guardrail 2: a low-confidence anchor match fails loudly - ask to re-link, never re-attach.
+				this._pending.push(this._relinkPrompt(state, target, contextFiles));
+				this._notify.info(`This commentary is bound to ${contextFiles.join(', ') || 'a source'} - re-link?`);
+				continue;
+			}
+			const block = state.doc.blocks.find(b => b.id === target.blockId);
+			if (!block) { continue; }
+			const proposal = await this._proposeImpact(diff, contextFiles, block.text, modelAvailable);
+			if (proposal.newText === block.text) { continue; }
+			const change: IProposedChange = {
+				id: generateUuid(),
+				docId: id,
+				docTitle: state.doc.title,
+				blockId: block.id,
+				blockLabel: this._blockLabel(state.doc, block.id),
+				oldText: block.text,
+				newText: proposal.newText,
+				kind: proposal.kind,
+				confidence: proposal.confidence,
+				rationale: proposal.rationale,
+				sourceCells: [],
+				claimId: target.claimId,
+				contextReviewed: contextFiles,
+				via: proposal.via,
+			};
+			if (proposal.kind === 'figure') {
+				// Confidence-gated routing (guardrail 4): figure-class ripples may auto-stage.
+				if (block) { block.text = proposal.newText; block.binds = extractBindLinks(proposal.newText); state.recent.add(block.id); }
+				state.lock.audit.push(this._entry(block.id, 'auto-applied', change.oldText, change.newText, proposal.via));
+			} else {
+				// Meaning/influence changes wait for approval in the review rail (no eager rewrites).
+				this._pending.push(change);
+			}
+		}
+
+		const queued = this._pending.filter(c => c.docId === id).length;
+		state.status = modelAvailable
+			? `${queued} impact ${queued === 1 ? 'change' : 'changes'} to review`
+			: 'No model available - showing heuristic suggestions';
+		await this._persist(state);
+		this._onDidChange.fire();
+		try {
+			await this._views.openView(REVIEW_RAIL_VIEW_ID, false);
+		} catch (e) {
+			this._log.warn('[livingDocs] could not reveal review rail', e);
+		}
+	}
+
+	// The prose targets the impact pass should consider: authored lock claims (relocated by fuzzy
+	// match on their anchor), or - when none are authored - each non-bound prose paragraph as an
+	// implicit influence target.
+	private _claimTargets(state: IDocState): { claimId?: string; blockId?: string; relink?: boolean }[] {
+		const claimIds = Object.keys(state.lock.claims);
+		if (claimIds.length) {
+			return claimIds.map(claimId => {
+				const best = this._relocateClaim(state.doc, state.lock.claims[claimId].anchor);
+				const relink = best.score < LivingDocsService._CLAIM_CONFIDENT;
+				return { claimId, blockId: best.blockId, relink };
+			});
+		}
+		return state.doc.blocks.filter(b => b.type === 'paragraph' && b.binds.length === 0).map(b => ({ blockId: b.id }));
+	}
+
+	// Relocate a claim by fuzzy-matching its stored anchor against the current prose (the file may have
+	// moved/edited). Token-overlap similarity - deterministic, no model.
+	private _relocateClaim(doc: ILivingDoc, anchor: string): { blockId: string | undefined; score: number } {
+		let best: { blockId: string | undefined; score: number } = { blockId: undefined, score: 0 };
+		for (const block of doc.blocks) {
+			if (block.type === 'heading') { continue; }
+			const score = similarity(anchor, block.text);
+			if (score > best.score) { best = { blockId: block.id, score }; }
+		}
+		return best;
+	}
+
+	private _relinkPrompt(state: IDocState, target: { claimId?: string; blockId?: string }, contextFiles: string[]): IProposedChange {
+		const claim = target.claimId ? state.lock.claims[target.claimId] : undefined;
+		const best = target.blockId ? state.doc.blocks.find(b => b.id === target.blockId) : undefined;
+		return {
+			id: generateUuid(),
+			docId: state.uri.toString(),
+			docTitle: state.doc.title,
+			blockId: target.blockId ?? '',
+			blockLabel: 'Re-link claim',
+			oldText: claim?.anchor ?? '',
+			newText: best?.text ?? '',
+			kind: 'meaning',
+			confidence: 0,
+			rationale: `This commentary is bound to ${contextFiles.join(', ') || 'a source'} but its anchor no longer matches the prose - re-link?`,
+			sourceCells: [],
+			claimId: target.claimId,
+			contextReviewed: contextFiles,
+			via: 'heuristic',
+			relink: true,
+		};
+	}
+
+	private async _hasModel(): Promise<boolean> {
+		if (this._config.getValue<boolean>('livingDocs.useModel') === false) { return false; }
+		try {
+			const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
+			const models = await this._lm.selectLanguageModels(preferred ? { id: preferred } : {});
+			return models.length > 0;
+		} catch {
+			return false;
+		}
+	}
+
+	private async _proposeImpact(diff: string, contextFiles: string[], oldText: string, modelAvailable: boolean): Promise<{ newText: string; kind: 'figure' | 'meaning'; confidence: number; rationale: string; via: 'model' | 'heuristic' }> {
+		if (modelAvailable) {
+			try {
+				return await this._modelImpact(diff, contextFiles, oldText);
+			} catch (e) {
+				this._log.info('[livingDocs] model impact failed, using heuristic', e instanceof Error ? e.message : String(e));
+			}
+		}
+		return this._heuristicImpact(diff, contextFiles, oldText);
+	}
+
+	private async _modelImpact(diff: string, contextFiles: string[], oldText: string): Promise<{ newText: string; kind: 'figure' | 'meaning'; confidence: number; rationale: string; via: 'model' }> {
+		const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
+		const models = await this._lm.selectLanguageModels(preferred ? { id: preferred } : {});
+		if (!models.length) { throw new Error('no language models available'); }
+		const system = 'You revise one sentence of business commentary so it stays consistent with a changed source. '
+			+ 'Reply with ONLY a JSON object: {"newText": string, "kind": "figure" | "meaning", "confidence": number, "rationale": string}. '
+			+ 'Use kind="meaning" when the qualitative framing should change; otherwise kind="figure" and return newText unchanged.';
+		const user = `The source(s) ${contextFiles.join(', ')} now read:\n"""${diff}"""\nCurrent commentary: "${oldText}". Revise it if the framing should change.`;
+		const messages: IChatMessage[] = [
+			{ role: ChatMessageRole.System, content: [{ type: 'text', value: system }] },
+			{ role: ChatMessageRole.User, content: [{ type: 'text', value: user }] },
+		];
+		const response = await this._lm.sendChatRequest(models[0], undefined, messages, {}, CancellationToken.None);
+		let text = '';
+		for await (const part of response.stream) {
+			if (Array.isArray(part)) {
+				for (const p of part) { if (p.type === 'text') { text += p.value; } }
+			} else if (part.type === 'text') {
+				text += part.value;
+			}
+		}
+		await response.result;
+		const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+		return {
+			newText: String(json.newText ?? oldText),
+			kind: json.kind === 'meaning' ? 'meaning' : 'figure',
+			confidence: typeof json.confidence === 'number' ? json.confidence : 0.8,
+			rationale: String(json.rationale ?? ''),
+			via: 'model',
+		};
+	}
+
+	// The no-model path is a VISIBLE, conservative suggestion (not a silent degrade): it surfaces the
+	// salient change and proposes a clearly-heuristic addition for the user to approve or reject.
+	private _heuristicImpact(diff: string, contextFiles: string[], oldText: string): { newText: string; kind: 'meaning'; confidence: number; rationale: string; via: 'heuristic' } {
+		const salient = diff.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('#')).pop() ?? '';
+		const note = salient ? ` In light of an update to ${contextFiles.join(', ')} ("${salient}"), revisit whether this still holds.` : ` ${contextFiles.join(', ')} changed since last review - revisit this.`;
+		return {
+			newText: `${oldText}${note}`,
+			kind: 'meaning',
+			confidence: 0.5,
+			rationale: `Heuristic suggestion (no model available): ${contextFiles.join(', ')} changed since last review.`,
+			via: 'heuristic',
+		};
+	}
+
+	private async _readContext(state: IDocState, files: string[]): Promise<string> {
+		const parts: string[] = [];
+		for (const file of files) {
+			if (sourceKind(file) === 'api') { continue; }
+			try {
+				parts.push((await this._files.readFile(joinPath(dirname(state.uri), file))).value.toString());
+			} catch {
+				// An unreadable context source contributes nothing to the diff.
+			}
+		}
+		return parts.join('\n\n');
+	}
+
+	private _blockLabel(doc: ILivingDoc, blockId: string): string {
+		let heading = '';
+		for (const b of doc.blocks) {
+			if (b.type === 'heading') { heading = b.text; }
+			if (b.id === blockId) { return heading || blockId; }
+		}
+		return blockId;
+	}
+
+	// --- approve / reject (the review rail) ---
 
 	async approve(changeId: string): Promise<void> {
 		const change = this._pending.find(c => c.id === changeId);
@@ -630,11 +855,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(change.docId);
 		if (!state) { return; }
 		const block = state.doc.blocks.find(b => b.id === change.blockId);
-		if (block) { block.text = change.newText; block.binds = extractBindLinks(change.newText); }
+		// A re-link prompt re-anchors the claim to the current best-match prose without rewriting it;
+		// a normal impact change applies its rewrite to the block.
+		if (block && !change.relink) { block.text = change.newText; block.binds = extractBindLinks(change.newText); state.recent.add(block.id); }
+		if (change.claimId) {
+			const prior = state.lock.claims[change.claimId];
+			state.lock.claims[change.claimId] = {
+				anchor: change.relink ? (block?.text ?? prior?.anchor ?? '') : change.newText,
+				boundTo: prior?.boundTo ?? change.contextReviewed ?? [],
+				kind: 'meaning',
+				state: 'applied',
+			};
+		}
 		this._pending = this._pending.filter(c => c.id !== changeId);
-		state.lock.audit.push(this._entry(change.blockId, 'approved', change.oldText, change.newText, 'model'));
+		state.lock.audit.push(this._entry(change.blockId, 'approved', change.oldText, change.newText, change.via ?? 'model'));
+		await this._markContextReviewed(state, change.contextReviewed);
 		state.status = `Change approved - applied to ${change.docTitle}`;
 		await this._persist(state);
+		await this._recomputeFreshness(state);
 		this._onDidChange.fire();
 	}
 
@@ -644,11 +882,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._pending = this._pending.filter(c => c.id !== changeId);
 		const state = this._docs.get(change.docId);
 		if (state) {
-			state.lock.audit.push(this._entry(change.blockId, 'rejected', change.oldText, change.newText, 'model'));
+			state.lock.audit.push(this._entry(change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model'));
 			state.status = `Change rejected - ${change.docTitle} left unchanged`;
-			void this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e));
+			// Rejecting still counts as reviewing the changed context, so the flag clears.
+			void this._markContextReviewed(state, change.contextReviewed)
+				.then(() => this._recomputeFreshness(state))
+				.then(() => this._onDidChange.fire())
+				.catch(e => this._log.warn('[livingDocs] reject follow-up failed', e));
 		}
 		this._onDidChange.fire();
+	}
+
+	// Mark each reviewed context source as reviewed-at-current in the lock so its stale flag clears.
+	private async _markContextReviewed(state: IDocState, files: readonly string[] | undefined): Promise<void> {
+		if (!files?.length) { return; }
+		for (const file of files) {
+			state.lock.context[file] = { reviewedHash: await this._hashContext(state, file), reviewedAt: new Date().toISOString(), scope: 'document' };
+		}
 	}
 
 	async revealSource(resource: URI, cells: readonly string[]): Promise<void> {
