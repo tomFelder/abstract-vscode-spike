@@ -16,6 +16,11 @@ that keeps a document current when its sources change.** This is the foundationa
   and the full decision log. **§6 is your scope; §7 is your acceptance test.** Build exactly that.
 - **`docs/option-10-living-docs-format.html`** — the companion visual (the clean-file + lock-file anatomy on
   the Weekly Operating Summary). Open it in a browser for the target rendering of bind links + the gutter dot.
+- `docs/09-orchestration-and-automation.md` — **context only, do NOT build it here.** It specs the layer that
+  sits ON TOP of this one (triggers, the cross-document graph event-bus, per-edge policy, the verify gate). It
+  is the next handoff ([plan 07](07-orchestration-handoff.md)). This phase builds the format + the
+  **single-document** staleness/dirty-bit foundation it depends on; the scheduler/heartbeat/policy/verify
+  engine is explicitly out of scope here (see the Item 3 boundary note).
 - `docs/05-open-questions.md` — Q1 (format) is now **resolved by spec 08**. Q2 (editor depth) and Q3
   (fork-vs-greenfield) are still open; the format in spec 08 is deliberately chosen to survive both — keep it
   that way (identity-keyed, never text-position-keyed).
@@ -82,6 +87,10 @@ A correlated file watcher (`fileService.createWatcher`) / source poll hashes eac
 Value bindings (`bindings`) use exact hash compare; influence sources (`context`) just flag staleness.
 Acceptance: changing `metrics.csv` marks the bound doc dirty (hash mismatch); changing a `context:` source
 flips its freshness to ⚠ — both with zero model calls.
+Boundary: build the per-document dirty-bit here. The **cross-document reverse-edge propagation** (one write →
+walk the graph → dirty every dependent), the **trigger layer** (cron/heartbeat/webhook), **per-edge policy**,
+and the **verify gate** are the orchestration phase (plan 07) — do not build the scheduler/heartbeat/policy
+engine in this phase. (Existing multi-doc `refreshFromSources` fan-out is fine to keep as-is.)
 
 **ITEM 4 — The Context panel (left) with freshness status.**
 A left panel listing the document's `context:` sources (whole-document granularity, spec §3.5) each with
@@ -96,8 +105,14 @@ heuristic fallback when no model — and per spec §3.6 guardrail 3, **no eager 
 "no model available" should be a visible state, not a silent degrade). It reads the *diff* of a changed source
 against the doc and returns **candidate edits with provenance + confidence**. Figure-class auto-applies;
 meaning/influence changes queue as red/green inline diffs with Approve/Reject + an audit entry **in the lock**.
+Sub-task (the one genuinely hard, trust-critical mechanic): **prose-claim anchoring.** A `claims[]` entry
+stores its `anchor` (sentence text + surrounding context); on re-derive, relocate the claim by fuzzy match
+against the current prose (the file moved/edited). Per spec §3.6 guardrail 2, **a low-confidence match must fail
+loudly** — surface a "this commentary is bound to <source> — re-link?" prompt rather than silently
+re-attaching to the wrong sentence. This is the prose counterpart to the self-anchoring bind link.
 Acceptance: change a `context:` source → ⚠ → "Review impact" → candidates appear in the review rail → approve →
-flag clears, lock `claims`/`context` updated, audit entry written.
+flag clears, lock `claims`/`context` updated, audit entry written. A claim whose anchor no longer confidently
+matches surfaces the re-link prompt instead of mis-attaching.
 
 **ITEM 6 — Migrate the sample `.living.md` documents to the new format.**
 Convert `living-docs-sample/*.living.md` (spec §4): HTML-comment binds → inline `[value](bind:…)`; `{cell}` api
