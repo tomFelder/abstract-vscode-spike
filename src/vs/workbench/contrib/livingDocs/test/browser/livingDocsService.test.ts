@@ -99,12 +99,20 @@ const API_MD = [
 	'The repository has [0](bind:repo.stargazers_count) stars and [0](bind:repo.open_issues_count) open issues.',
 ].join('\n') + '\n';
 
+// A document whose figure block mixes a resolvable bind with one the source can't provide; the
+// Financial grader must block the run because metrics.unknown does not reconcile.
+const BADBIND_MD = [
+	'---', 'title: Ratio Doc', 'sources:', '  - metrics.csv', '---', '',
+	'## Ratio', '', 'MRR is [$41.2k](bind:metrics.mrr) at a ratio of [0.0](bind:metrics.unknown).',
+].join('\n') + '\n';
+
 const API_PAYLOAD = { stargazers_count: 12345, open_issues_count: 678, full_name: 'microsoft/vscode' };
 
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
 const BOARD = URI.file('/ws/Board Note.md');
 const README = URI.file('/ws/Team Notes.md');
 const API = URI.file('/ws/Ecosystem.md');
+const BADBIND = URI.file('/ws/Ratio Doc.md');
 
 suite('LivingDocsService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -113,7 +121,7 @@ suite('LivingDocsService', () => {
 
 	let lastFiles: Map<string, string> | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; agents?: IAgentDef[] } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[] } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -124,6 +132,7 @@ suite('LivingDocsService', () => {
 		if (opts.agents) { files.set(URI.file('/ws/agents.json').toString(), JSON.stringify(opts.agents)); }
 		if (opts.boardNote) { files.set(BOARD.toString(), BOARD_MD); }
 		if (opts.api) { files.set(API.toString(), API_MD); }
+		if (opts.badBind) { files.set(BADBIND.toString(), BADBIND_MD); }
 
 		const fileService = {
 			readFile: async (resource: URI) => {
@@ -464,6 +473,29 @@ suite('LivingDocsService', () => {
 		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'doc untouched by a draft-only run');
 		const pending = service.getPendingForDoc(WEEKLY);
 		assert.deepStrictEqual({ count: pending.length, draft: !!pending[0]?.draft }, { count: 1, draft: true });
+	});
+
+	test('the verify gate blocks a run whose figures do not reconcile (Financial flag), applying nothing', async () => {
+		const agent: IAgentDef = { id: 'agent', name: 'Agent', trigger: { kind: 'manual' }, flow: { sources: [], docs: [BADBIND.toString()] }, policy: 'auto-figures', status: 'idle' };
+		const service = createService([], { badBind: true, agents: [agent] });
+		await service.loadDocument(BADBIND);
+
+		await service.runAgent('agent');
+
+		const ratio = service.getDoc(BADBIND)!.blocks.find(b => b.type === 'paragraph' && b.binds.length > 0)!;
+		assert.ok(ratio.text.includes('[$41.2k](bind:metrics.mrr)'), 'no figure applied - the run was blocked at the gate');
+		assert.strictEqual(service.getAgents().find(a => a.id === 'agent')!.status, 'blocked', 'agent surfaces the blocked state');
+		assert.strictEqual(service.getPendingForDoc(BADBIND).length, 0, 'nothing queued either');
+	});
+
+	test('a clean run passes the verify gate and lands the figure', async () => {
+		const service = createService([], { agents: [manualAgent('auto-figures')] });
+		await service.loadDocument(WEEKLY);
+
+		await service.runAgent('agent');
+
+		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$48.6k](bind:metrics.mrr)'), 'clean figures land');
+		assert.strictEqual(service.getAgents().find(a => a.id === 'agent')!.status, 'idle', 'agent is not blocked');
 	});
 
 	test('revealSource opens a styled source view listing bound keys and the referencing document', async () => {

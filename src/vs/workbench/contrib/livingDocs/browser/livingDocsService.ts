@@ -27,6 +27,12 @@ import { AgentOrchestrator, IAgentRunContext } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
 import { AgentPolicy, emptyLock, IAgentDef, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
+// The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
+interface IGradeResult {
+	readonly pass: boolean;
+	readonly flag?: string;
+}
+
 // One freshly-read source value for a bind key, before it is written into the lock.
 interface IResolution {
 	readonly value: string;
@@ -575,12 +581,58 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		for (const change of this._figureReconciles(state)) { this._applyFigure(state, change); }
 	}
 
-	// Route a document's figure changes by the agent's policy (spec 4.2): auto-figures applies silently
-	// (audited); ask-before-apply queues a pending change; draft-only queues a draft and never lands.
-	// Returns how many were applied vs queued. Caller persists when something applied.
-	private async _runFiguresByPolicy(state: IDocState, policy: AgentPolicy): Promise<{ applied: number; queued: number }> {
+	// The verify gate (spec 5, maker != checker): run the document's Skills as graders before apply.
+	// Deterministic Financial runs first and cheap (figures must reconcile to the lock/source); Strategy
+	// (claims vs the Knowledge decision stack) and Formatting (house style) may use a model - in the
+	// no-model spike they pass. A failed grader stops the run before anything lands.
+	private async _verifyGate(state: IDocState, changes: { blockId: string; oldText: string; newText: string }[]): Promise<IGradeResult> {
+		const financial = this._gradeFinancial(state, changes);
+		if (!financial.pass) { return financial; }
+		const strategy = await this._gradeStrategy(state, changes);
+		if (!strategy.pass) { return strategy; }
+		return this._gradeFormatting(state, changes);
+	}
+
+	// Deterministic: every bound value in the proposed text must reconcile to a resolved lock value.
+	private _gradeFinancial(state: IDocState, changes: { blockId: string; oldText: string; newText: string }[]): IGradeResult {
+		for (const change of changes) {
+			for (const link of extractBindLinks(change.newText)) {
+				const binding = state.lock.bindings[link.key];
+				if (!binding) {
+					return { pass: false, flag: `Financial: "${link.key}" has no source value - it does not reconcile.` };
+				}
+				if (binding.resolved !== link.value) {
+					return { pass: false, flag: `Financial: "${link.key}" shows ${link.value} but the source resolves ${binding.resolved}.` };
+				}
+			}
+		}
+		return { pass: true };
+	}
+
+	// Strategy / Formatting may consult the model; the no-model spike passes them (a hook for the model
+	// path, kept here so the gate ordering and maker != checker structure are real).
+	private async _gradeStrategy(_state: IDocState, _changes: { blockId: string }[]): Promise<IGradeResult> {
+		return { pass: true };
+	}
+	private _gradeFormatting(_state: IDocState, _changes: { blockId: string }[]): IGradeResult {
+		return { pass: true };
+	}
+
+	// Route a document's figure changes by the agent's policy (spec 4.2), after the verify gate. The
+	// gate runs between rewrite and apply: a failed grader blocks the whole run (nothing applied or
+	// queued) and surfaces the flag (spec 5). auto-figures applies silently (audited); ask-before-apply
+	// queues a pending change; draft-only queues a draft and never lands.
+	private async _runFiguresByPolicy(state: IDocState, policy: AgentPolicy): Promise<{ applied: number; queued: number; blocked?: string }> {
 		await this._resolveIntoLock(state);
 		const changes = this._figureReconciles(state);
+		if (changes.length) {
+			const gate = await this._verifyGate(state, changes);
+			if (!gate.pass) {
+				state.status = `Blocked at the verify gate - ${gate.flag}`;
+				this._notify.info(gate.flag ?? 'Blocked at the verify gate.');
+				return { applied: 0, queued: 0, blocked: gate.flag };
+			}
+		}
 		let applied = 0;
 		let queued = 0;
 		for (const change of changes) {
@@ -730,16 +782,20 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// the per-edge policy (auto-apply / queue / draft). Meaning/influence + the verify gate land in Item 4.
 	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<void> {
 		if (agent.trigger.kind === 'event' || agent.trigger.kind === 'lifecycle') { return; }
+		let blocked: string | undefined;
 		for (const uri of context.docs) {
 			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
 			if (!state || !state.doc.isLiving) { continue; }
 			state.recent = new Set<string>();
-			const { applied } = await this._runFiguresByPolicy(state, agent.policy);
-			if (applied) { await this._persist(state); } else { await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e)); }
+			const result = await this._runFiguresByPolicy(state, agent.policy);
+			if (result.blocked) { blocked = result.blocked; }
+			if (result.applied) { await this._persist(state); } else { await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e)); }
 			await this._recomputeFreshness(state);
 			// The heartbeat drains each doc it processed from the dirty queue.
 			if (agent.trigger.kind === 'heartbeat') { this._orchestrator.clearDirty(uri); }
 		}
+		// A grader failure stops the run at the gate - surface it as the agent's status (spec 5).
+		if (blocked) { agent.status = 'blocked'; }
 		this._onDidChange.fire();
 	}
 
