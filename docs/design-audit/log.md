@@ -30,6 +30,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 10 | **~86%** | **Final re-score + summary** (10-iteration cap reached). All core flows live-verified functional. Honest landing: ~86% — short of the 90% early-exit; remaining gap is model-gated/data-model work, documented below. |
 | 11 (v1 #1) | **functional focus** | **Chat is now a real model-backed agent** (was a static comp reproduction). Live composer + `@mention` chips + tool-step rendering; the agent replies from the document + sources via `_callModel`, and any prose edit it proposes queues into the Review rail (inline diff + Approve/Reject + Approve-all). Verified live (OpenRouter test backend): a "tighten the Commentary" ask produced a real rewrite, queued it, and Approve applied it to the prose. Closes the biggest dead-control (criterion 2 + criterion 6). |
 | 12 (v1 #2) | **functional focus** | **Apply-fix now edits the document** (criterion 3's open half). The Formatting agent's "Apply fix" button title-cases every flagged heading in place (`applySkillFix`), audits each, persists, and re-grades to PASS. Verified live: "2 heading-case fixes suggested" -> click -> "Key metrics"->"Key Metrics", "What to watch"->"What to Watch" (minor word stays lower), Formatting flips to PASS. Deterministic, TDD-covered. |
+| 13 (v1 #3) | **functional focus** | **Source-peek + "Sync across" (criterion 4's signature interaction).** A "&#8646; Source" toolbar button opens the real source file (the CSV) beside the doc; `syncFromSources` re-derives this doc's figures and returns the old->new diff, surfaced as a "Synced N figures" banner (also recorded on the existing Refresh). Verified live: edit the CSV beside the doc -> Sync -> banner "metrics.mrr $61.0k->$90.0k, signups 540->720, ..." + the doc figures update. 2 new TDD tests. |
 
 ---
 
@@ -38,15 +39,15 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 The loop now scores the **7 v1 criteria** from `docs/plans/09-v1-functionality-handoff.md` (v1 = every line >= 85),
 weighted to *behaviour*. Carrying the visual match forward at ~86% (design-audit landing, unchanged).
 
-| # | v1 criterion | Iter 10 (start) | Iter 11 | Iter 12 | Real / rough |
-|---|--------------|:--:|:--:|:--:|------|
-| 1 | Agentic loop is real (model-backed) | 86 | 88 | 88 | **Real.** Context "Review impact" rewrites (plan 10) *and* the Chat agent path both yield model rewrites that land in Review. |
-| 2 | Chat is a working agent | 40 | 88 | 88 | **Real (live-verified).** Composer, `@mention`, model reply over doc+sources, tool-steps, proposed edits → Review, Approve-all/Review-each. Rough: `@mention` is chip-insert + parse (no keystroke autocomplete); model pill is static. |
-| 3 | Skills run for real (+ Apply-fix) | 72 | 72 | **86** | **Real (live-verified).** Graders real; **Apply-fix now edits the doc** (Formatting title-cases flagged headings → PASS). Rough: a Strategy flag surfaces a reason, not yet a one-tap structured fix (the chat→propose→approve path covers model prose edits). |
-| 4 | Editor is a real editor | 72 | 72 | 72 | Toolbar + raw-Markdown + inline diff real. **Open:** source-peek + "Sync across" pane; clickable provenance dots. Next lever. |
-| 5 | Context is complete | 70 | 70 | 70 | Linked sources + Referenced files real. **Open:** Pasted text / Images / Company knowledge + Add context (needs context-kind model ext). |
-| 6 | No dead ends, no rough edges | 70 | 80 | **82** | Chat (the largest dead control) is now real; Apply-fix no longer a dead button; nav fix held; subtitle tracks resolved week. **Open:** dev-build extension-activation error toast still shows. |
-| 7 | Core flows pass tests + live click-through | 80 | 85 | **86** | 6 new TDD tests across iters 11-12 (41/41 green) + clean live click-throughs. |
+| # | v1 criterion | Iter 10 | Iter 11 | Iter 12 | Iter 13 | Real / rough |
+|---|--------------|:--:|:--:|:--:|:--:|------|
+| 1 | Agentic loop is real (model-backed) | 86 | 88 | 88 | 88 | **Real.** Context "Review impact" rewrites (plan 10) *and* the Chat agent path both yield model rewrites that land in Review. |
+| 2 | Chat is a working agent | 40 | 88 | 88 | 88 | **Real (live-verified).** Composer, `@mention`, model reply over doc+sources, tool-steps, proposed edits → Review, Approve-all/Review-each. Rough: `@mention` is chip-insert + parse (no keystroke autocomplete); model pill is static. |
+| 3 | Skills run for real (+ Apply-fix) | 72 | 72 | 86 | 86 | **Real (live-verified).** Graders real; **Apply-fix edits the doc** (Formatting title-cases flagged headings → PASS). Rough: a Strategy flag surfaces a reason, not yet a one-tap structured fix. |
+| 4 | Editor is a real editor | 72 | 72 | 72 | **86** | **Real (live-verified).** Toolbar + raw-Markdown + inline diff + clickable provenance dots; **source-peek (⇆ Source opens the real CSV beside) + "Sync across" figure diff** now work. Rough: the side pane is a real editor (not the comp's bespoke diff pane); the watcher needs a manual Refresh after an external edit. |
+| 5 | Context is complete | 70 | 70 | 70 | 70 | Linked sources + Referenced files real. **Open:** Pasted text / Images / Company knowledge + Add context (needs context-kind model ext). **Next lever.** |
+| 6 | No dead ends, no rough edges | 70 | 80 | 82 | **84** | Chat, Apply-fix, Source/Sync all now real controls; nav fix held; subtitle tracks resolved week. **Open:** dev-build extension-activation error toast still shows; doc subtitle still reads "Week 24" after a sync. |
+| 7 | Core flows pass tests + live click-through | 80 | 85 | 86 | **88** | 8 new TDD tests across iters 11-13 (53/53 green) + clean live click-throughs each iteration. |
 
 **What works (iter 11):** open Weekly Summary → Chat tab → real composer with live `@metrics.csv` / `@market-research.md`
 chips → send → model reply with a ✓/→ tool-step card → proposed Commentary rewrite queued (inline diff in the
@@ -59,10 +60,14 @@ extension-activation error toast still appears on load. Shots: `shots/iter11-cha
 PASS (`applySkillFix`, deterministic, audited, persisted). Shots: `shots/iter12-applyfix-before.png`,
 `shots/iter12-applyfix-after.png`.
 
-**Next (highest lever):** the three remaining sub-85 criteria are 4 (editor source-peek + "Sync across" pane;
-clickable provenance dots), 5 (Context kinds: Pasted text / Images / Company knowledge + Add context — needs a
-context-kind model extension), and the rough edges in 6 (suppress the dev-build extension-activation toast). Criterion
-4 source-peek is the next lever — `revealSource` already exists, so it is mostly wiring the gutter dots + a side pane.
+**Iter 13 (source-peek + Sync across):** "&#8646; Source" opens the real CSV beside the doc; `syncFromSources` returns
+the old->new figure diff, surfaced as a "Synced N figures" banner (also recorded by Refresh). Shots:
+`shots/iter13-syncacross-before.png`, `shots/iter13-sourcepeek-live.png`, `shots/iter13-syncacross-diff.png`.
+
+**Next (highest lever):** only **criterion 5 (Context kinds: Pasted text / Images / Company knowledge + Add context)**
+remains clearly sub-85 — it needs a small context-kind data-model extension (`doc.context` is currently `string[]`).
+After that, the criterion-6 rough edges (suppress the dev-build extension-activation toast; make the doc subtitle track
+the resolved week) are the last things between here and the v1 bar (all 7 >= 85).
 
 ---
 

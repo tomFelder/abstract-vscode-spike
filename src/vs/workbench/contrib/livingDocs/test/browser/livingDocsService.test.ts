@@ -332,6 +332,30 @@ suite('LivingDocsService', () => {
 		]);
 	});
 
+	test('syncFromSources re-derives the figures, returns the old->new diff, and records the last sync diff', async () => {
+		const service = createService();
+		// Seed a stale MRR in the lock so a sync produces a visible figure change.
+		lastFiles!.set(URI.file('/ws/Weekly Summary.lock.json').toString(), JSON.stringify({
+			version: 1,
+			bindings: { 'metrics.mrr': { resolved: '$99.9k', source: 'metrics.csv#mrr', sourceHash: 'stale', syncedAt: 't', appliedBy: 'agent', kind: 'figure' } },
+			context: {}, claims: {}, pins: [], audit: [],
+		}));
+		await service.loadDocument(WEEKLY);
+
+		const diff = await service.syncFromSources(WEEKLY);
+
+		assert.ok(diff.some(c => c.key === 'metrics.mrr' && c.old === '$99.9k' && c.next === '$48.6k'), `mrr diff present: ${JSON.stringify(diff)}`);
+		assert.deepStrictEqual(service.getLastSyncDiff(WEEKLY), diff, 'the last sync diff is recorded for the editor banner');
+		assert.strictEqual(service.getLock(WEEKLY)!.bindings['metrics.mrr'].resolved, '$48.6k', 'the figure is applied to the lock');
+	});
+
+	test('syncFromSources records no diff when the figures already match their source', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // the seeded lock already resolves to the latest week
+		await service.syncFromSources(WEEKLY);
+		assert.deepStrictEqual(service.getLastSyncDiff(WEEKLY), [], 'a no-op sync reports an empty diff');
+	});
+
 	test('the Formatting flag is fixable; applySkillFix title-cases the headings in place and the grader then passes', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);

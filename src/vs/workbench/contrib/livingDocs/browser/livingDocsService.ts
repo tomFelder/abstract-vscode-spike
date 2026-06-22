@@ -18,7 +18,7 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
@@ -142,6 +142,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// "working" indicator. Kept in the service so the rail survives re-renders and tab switches.
 	private readonly _chats = new Map<string, IChatMessage[]>();
 	private readonly _chatBusy = new Set<string>();
+	// The figure diff from each document's last "Sync across", for the editor's synced banner.
+	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
 
 	constructor(
 		@IFileService private readonly _files: IFileService,
@@ -948,8 +950,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			let state = this._docs.get(uri.toString());
 			if (!state) { state = await this._loadState(uri); }
 			if (!state || !state.doc.isLiving) { continue; }
-			state.recent = new Set<string>();
-			await this._syncLock(state);
+			await this._syncLockWithDiff(state);
 			await this._persist(state);
 			// The value bindings are now in sync, so their dirty bits clear (context stays stale until
 			// a Review-impact pass, Item 5).
@@ -1446,6 +1447,59 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		} catch (e) {
 			this._log.warn('[livingDocs] reveal source failed', e);
 		}
+	}
+
+	// Source-peek: open the document's primary file source (its CSV) beside it, editable. The "Sync
+	// across" loop is then: edit the source here -> the watcher flips the dirty bit -> Sync re-derives.
+	async openSourceBeside(resource: URI): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const fileSource = state.doc.sources.find(s => sourceKind(s) === 'file') ?? state.doc.sources[0];
+		if (!fileSource) { return; }
+		const target = joinPath(dirname(resource), fileSource);
+		try {
+			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
+		} catch (e) {
+			this._log.warn('[livingDocs] open source beside failed', e);
+		}
+	}
+
+	// "Sync across": re-derive this one document's bound figures from its current sources and return the
+	// old -> new diff (the visible result of a source edit). Figures auto-apply (low risk); the diff is
+	// recorded for the editor's synced banner. Meaning-changes still go through Review-impact, not here.
+	async syncFromSources(resource: URI): Promise<readonly IFigureChange[]> {
+		const id = resource.toString();
+		const state = this._docs.get(id);
+		if (!state || !state.doc.isLiving) { return []; }
+		const changes = await this._syncLockWithDiff(state);
+		await this._persist(state);
+		await this._recomputeFreshness(state);
+		state.status = changes.length
+			? `Synced - ${changes.length} figure${changes.length === 1 ? '' : 's'} updated`
+			: 'Synced - figures already up to date';
+		this._onDidChange.fire();
+		return changes;
+	}
+
+	// Re-derive a document's figures (the existing _syncLock) while capturing the old -> new diff of the
+	// resolved values, recorded per document for the editor's "Sync across" banner. Shared by the focused
+	// per-document sync and the workspace-wide refresh.
+	private async _syncLockWithDiff(state: IDocState): Promise<IFigureChange[]> {
+		const before = new Map(this.getResolved(state.uri));
+		state.recent = new Set<string>();
+		await this._syncLock(state);
+		const after = this.getResolved(state.uri);
+		const changes: IFigureChange[] = [];
+		for (const [key, next] of after) {
+			const old = before.get(key);
+			if (old !== undefined && old !== next) { changes.push({ key, old, next }); }
+		}
+		this._lastSyncDiff.set(state.uri.toString(), changes);
+		return changes;
+	}
+
+	getLastSyncDiff(resource: URI): readonly IFigureChange[] {
+		return this._lastSyncDiff.get(resource.toString()) ?? [];
 	}
 
 	private _renderSourceMarkdown(state: IDocState, cells: readonly string[]): string {

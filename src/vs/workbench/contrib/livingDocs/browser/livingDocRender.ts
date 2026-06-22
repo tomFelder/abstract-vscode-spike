@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
+import { IFigureChange } from '../common/livingDocs.js';
 import { reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { ILivingDoc, ILivingDocBlock, IProposedChange } from '../common/livingDocsModel.js';
 
@@ -39,6 +40,8 @@ export interface ILivingDocRenderInput {
 	readonly mode: LivingDocViewMode;
 	readonly rawText: string;
 	readonly present: IPresentState;
+	/** The figure diff from the last "Sync across" (drives the synced banner). */
+	readonly syncDiff: readonly IFigureChange[];
 }
 
 function esc(s: string): string {
@@ -140,6 +143,13 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .etoolbar .espacer{flex:1}
 .etoolbar .rawmini{border:1px solid #e6e8ed;background:#fff;border-radius:7px;padding:6px 9px;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;cursor:pointer}
 .etoolbar .rawmini:hover{background:#f4f5f7;color:#52575f}
+/* Source-peek / Sync-across banner. */
+.syncbar{display:flex;align-items:center;gap:8px;margin:14px 16px 0;padding:9px 13px;border:1px solid #f0e2c4;background:#fdf6e9;border-radius:9px;font:500 12px/1.4 system-ui;color:#9a6b16}
+.syncbar.done{border-color:#d7ecdc;background:#eef7f0;color:#1f5a36}
+.syncbar .sb-spacer{flex:1}
+.syncbar .sb-btn{border:none;border-radius:7px;padding:7px 12px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer}
+.syncbar .sb-btn:hover{background:oklch(0.5 0.13 255)}
+.syncbar .sb-diff{font:500 11px/1.5 'JetBrains Mono',ui-monospace,monospace}
 .prose{max-width:720px;margin:0 auto;padding:24px 40px 80px;font:400 15px/1.7 system-ui;color:#2a2a31}
 .prose h1{font:600 27px/1.25 system-ui;letter-spacing:-.01em;color:#15151a;margin:24px 0 12px}
 .prose h2{font:600 20px/1.3 system-ui;color:#26262d;margin:26px 0 10px}
@@ -184,6 +194,10 @@ for (const b of document.querySelectorAll('[data-approve]')) { b.addEventListene
 for (const b of document.querySelectorAll('[data-reject]')) { b.addEventListener('click', e => { e.stopPropagation(); vscode.postMessage({ type: 'reject', id: b.getAttribute('data-reject') }); }); }
 const askAi = document.querySelector('[data-ask-ai]');
 if (askAi) { askAi.addEventListener('click', () => vscode.postMessage({ type: 'askAi' })); }
+const sourceOpen = document.querySelector('[data-source-open]');
+if (sourceOpen) { sourceOpen.addEventListener('click', () => vscode.postMessage({ type: 'openSource' })); }
+const syncBtn = document.querySelector('[data-sync]');
+if (syncBtn) { syncBtn.addEventListener('click', () => vscode.postMessage({ type: 'sync' })); }
 const presentOpen = document.querySelector('[data-present-open]');
 if (presentOpen) { presentOpen.addEventListener('click', () => vscode.postMessage({ type: 'presentOpen' })); }
 for (const c of document.querySelectorAll('[data-present-close]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'presentClose' })); }
@@ -245,9 +259,21 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		+ `<button class="fbtn ic" data-fmt="formatBlock" data-fmt-arg="&lt;blockquote&gt;" title="Quote">&#10078;</button>`
 		+ `</div>`
 		+ `<button class="askai" data-ask-ai>&#10022; Ask AI</button>`
+		+ `<button class="fbtn" data-source-open title="Open the source beside this document">&#8646; Source</button>`
 		+ `<span class="espacer"></span>`
 		+ `<button class="rawmini" data-to-raw title="Edit raw Markdown">&lt;/&gt;</button>`
 		+ `</div>`
+		: '';
+
+	// Source-peek / "Sync across" banner: when a linked source changed, offer a one-tap Sync; after a
+	// sync, show the figure diff (old -> new) so the source edit's effect on the document is visible.
+	const syncDiff = input.syncDiff ?? [];
+	const syncBar = (isLiving && isRendered)
+		? (dirty
+			? `<div class="syncbar"><span>&#9888; A linked source changed since the last sync.</span><span class="sb-spacer"></span><button class="sb-btn" data-sync>Sync figures</button></div>`
+			: (syncDiff.length
+				? `<div class="syncbar done"><span>&#10003; Synced ${syncDiff.length} figure${syncDiff.length === 1 ? '' : 's'}:</span> <span class="sb-diff">${syncDiff.map(c => `${esc(c.key)} ${esc(c.old)}&rarr;${esc(c.next)}`).join(' &middot; ')}</span></div>`
+				: ''))
 		: '';
 
 	let body: string;
@@ -256,7 +282,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	} else if (!doc) {
 		body = `<div class="empty">No document loaded.</div>`;
 	} else if (isLiving) {
-		body = etoolbar + renderDoc(doc, pending, recent, resolved);
+		body = etoolbar + syncBar + renderDoc(doc, pending, recent, resolved);
 	} else {
 		body = `<div class="doc prose">${renderGenericMarkdown(doc.body)}</div>`;
 	}

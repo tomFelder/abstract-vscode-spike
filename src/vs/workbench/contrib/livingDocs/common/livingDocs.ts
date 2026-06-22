@@ -57,6 +57,16 @@ export interface ISkillCheck {
 }
 
 /**
+ * One bound figure that moved in a sync: its bind key and the old -> new resolved values. Powers the
+ * editor's "Sync across" diff banner (source-peek: edit a source, sync, see which figures changed).
+ */
+export interface IFigureChange {
+	readonly key: string;
+	readonly old: string;
+	readonly next: string;
+}
+
+/**
  * One step the Chat agent took while answering, rendered as a tool-call row in the conversation
  * (e.g. "Read metrics.csv", "Proposed: Commentary rewrite"). `done` steps already happened
  * (a read/analysis); `queued` steps produced a pending change waiting in the Review rail.
@@ -199,4 +209,12 @@ export interface ILivingDocsService {
 
 	/** Reveal the source cells behind a block (provenance) for a given document. */
 	revealSource(resource: URI, cells: readonly string[]): Promise<void>;
+
+	// --- source-peek + "Sync across" (the comp's signature editing interaction) ---
+	/** Open the document's primary file source (e.g. its CSV) beside it, so it can be peeked and edited. */
+	openSourceBeside(resource: URI): Promise<void>;
+	/** Re-derive this document's bound figures from its current sources, apply them, and return the old -> new diff. */
+	syncFromSources(resource: URI): Promise<readonly IFigureChange[]>;
+	/** The figure diff from the last syncFromSources for a document (for the editor's "synced" banner). */
+	getLastSyncDiff(resource: URI): readonly IFigureChange[];
 }

@@ -19,7 +19,7 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 	function html(present: IPresentState): string {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: '',
-			recent: new Set(), mode: 'rendered', rawText: '', present,
+			recent: new Set(), mode: 'rendered', rawText: '', present, syncDiff: [],
 		};
 		return renderLivingDocHtml(input);
 	}
@@ -36,7 +36,7 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 	test('the editor top bar carries the user avatar, matching the screens and the comp', () => {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',
-			recent: new Set(), mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' },
+			recent: new Set(), mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
 		};
 		const h = renderLivingDocHtml(input);
 		assert.ok(h.includes('class="topbar"') && h.includes('class="av">TS<'), 'top bar shows the TS avatar');

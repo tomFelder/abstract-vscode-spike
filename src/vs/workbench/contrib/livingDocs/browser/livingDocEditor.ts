@@ -123,6 +123,12 @@ export class LivingDocEditor extends EditorPane {
 			case 'reveal':
 				if (this._resource && Array.isArray(message.cells)) { void this._livingDocs.revealSource(this._resource, message.cells); }
 				break;
+			case 'openSource':
+				if (this._resource) { void this._livingDocs.openSourceBeside(this._resource); }
+				break;
+			case 'sync':
+				if (this._resource) { void this._livingDocs.syncFromSources(this._resource); }
+				break;
 			case 'edit':
 				if (this._resource && typeof message.blockId === 'string' && typeof message.text === 'string') {
 					void this._livingDocs.editBlock(this._resource, message.blockId, message.text);
@@ -175,6 +181,7 @@ export class LivingDocEditor extends EditorPane {
 			mode: this._mode,
 			rawText: this._livingDocs.getRawText(resource),
 			present: this._present,
+			syncDiff: this._livingDocs.getLastSyncDiff(resource),
 		}));
 	}
 
