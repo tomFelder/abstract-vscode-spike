@@ -18,6 +18,9 @@ means the decision was pragmatic for the spike and is expected to change for pro
 | 11 | **Calm shell via workspace settings, not core patches** | ~80% calm for free, reversible, zero merge-tax | Done; the hard 20% is the next pass |
 | 12 | **`product.json` rebrand: display-only** (`nameShort`/`nameLong`); leave `applicationName`/`dataFolderName` | Those control the user-data dir; changing them is a footgun | Done |
 | 13 | **Verify on the web build via chrome-devtools MCP**, unit-test the service headlessly | No GUI needed; fast iteration; the core loop is covered by mocked-service tests | Done; standing practice |
+| 14 | **Model calls go through a localhost OAuth proxy**, not from the renderer | `livingDocsService` runs in the browser; a credential must never be embedded there. The proxy holds the dev's OAuth token (via `ant`) server-side. The sources build sets no `connect-src` CSP, so renderer->proxy works via CORS with zero core changes | Done (PR #11); see [10-model-integration.md](10-model-integration.md) |
+| 15 | **OAuth (Console billing), not a static API key or Pro/Max sub** | No key in the repo; auto-refreshing token; the claude.ai subscription flow is first-party only. OAuth bills the Anthropic Console org, which needs API credits | Done; **org credits outstanding** |
+| 16 | **Optional OpenRouter test backend in the proxy** | Verify the live renderer->proxy->model->render flow against a cheap model without Anthropic credits; default path stays Anthropic OAuth, key never committed | Done; dev-only |
 
 ## Decisions still open (tracked in [05-open-questions.md](05-open-questions.md))
 
