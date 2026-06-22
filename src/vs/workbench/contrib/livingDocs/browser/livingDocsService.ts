@@ -220,7 +220,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const fixes = state.doc.blocks.filter(b => b.type === 'heading' && (b.level ?? 0) >= 2 && !LivingDocsService._isTitleCase(b.text)).length;
 		const formatting: ISkillCheck = fixes === 0
 			? { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'pass', detail: 'All headings follow house style.', canRun: true }
-			: { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'flag', detail: `${fixes} heading-case fix${fixes === 1 ? '' : 'es'} suggested.`, canRun: true };
+			: { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'flag', detail: `${fixes} heading-case fix${fixes === 1 ? '' : 'es'} suggested.`, canRun: true, fixable: true };
 
 		// Strategy is model-backed: NO MODEL when the proxy is unreachable; otherwise READY until run,
 		// then the cached PASS/FLAG verdict from runSkillCheck.
@@ -254,6 +254,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	// Apply a Skill's deterministic fix to the document (spec 5, the Apply-fix half of criterion 3).
+	// Formatting title-cases every flagged heading in place, audits each, and persists once; the grader
+	// then re-derives to PASS. A no-op for skills with no deterministic fix or nothing to fix.
+	async applySkillFix(resource: URI, id: ISkillCheck['id']): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state || !state.doc.isLiving) { return; }
+		let fixed = 0;
+		if (id === 'formatting') {
+			for (const block of state.doc.blocks) {
+				if (block.type !== 'heading' || (block.level ?? 0) < 2 || LivingDocsService._isTitleCase(block.text)) { continue; }
+				const next = LivingDocsService._toTitleCase(block.text);
+				if (next === block.text) { continue; }
+				state.lock.audit.push(this._entry(block.id, 'approved', block.text, next, 'heuristic'));
+				block.text = next;
+				state.recent.add(block.id);
+				fixed++;
+			}
+		}
+		if (!fixed) { return; }
+		state.status = `Formatting fix applied - ${fixed} heading${fixed === 1 ? '' : 's'} title-cased`;
+		await this._persist(state);
+		this._onDidChange.fire();
+	}
+
 	// House style: title-case headings. A heading passes when every significant word (the first word,
 	// and any word that is not a minor word) is capitalized. Deterministic - no model.
 	private static readonly _MINOR_WORDS = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'nor', 'for', 'of', 'to', 'by', 'in', 'on', 'at', 'as', 'is', 'with']);
@@ -265,6 +289,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (i !== 0 && LivingDocsService._MINOR_WORDS.has(letters.toLowerCase())) { return true; }
 			return letters[0] === letters[0].toUpperCase();
 		});
+	}
+
+	// Rewrite a heading to house style: capitalize the first letter of every significant word, lower-case
+	// minor words (except the first). Only the leading letter is touched, so acronyms (MRR, OKRs) survive.
+	private static _toTitleCase(text: string): string {
+		return text.trim().split(/\s+/).map((word, i) => {
+			const letters = word.replace(/[^A-Za-z].*$/, '');
+			if (i !== 0 && letters && LivingDocsService._MINOR_WORDS.has(letters.toLowerCase())) { return word.toLowerCase(); }
+			return word.replace(/[A-Za-z]/, c => c.toUpperCase());
+		}).join(' ');
 	}
 
 	// --- workspace-wide views ---

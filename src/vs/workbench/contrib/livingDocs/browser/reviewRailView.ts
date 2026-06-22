@@ -180,11 +180,17 @@ export class ReviewRailView extends ViewPane {
 		const report = resource ? this._livingDocs.getSkillReport(resource) : [];
 		const title = resource ? this._livingDocs.getDoc(resource)?.title : undefined;
 		content.innerHTML = skillsHtml(report, title);
-		// "Run" / "Re-run" re-grade the live document (Strategy calls the model via the proxy) and
-		// re-render with the fresh verdict; the service fires onDidChange when the verdict lands.
+		// "Run" / "Re-run" re-grade the live document (Strategy calls the model via the proxy); "Apply fix"
+		// applies a skill's deterministic edit (Formatting title-cases the flagged headings). Both re-render
+		// when the service fires onDidChange.
 		this._renderDisposables.add(addDisposableListener(content, 'click', e => {
 			let el = e.target as HTMLElement | null;
 			while (el && el !== content) {
+				const fixId = el.getAttribute('data-skill-fix');
+				if (fixId) {
+					if (resource) { void this._livingDocs.applySkillFix(resource, fixId as ISkillCheck['id']); }
+					return;
+				}
 				const id = el.getAttribute('data-skill-run');
 				if (id) {
 					if (resource) { this._livingDocs.runSkillCheck(resource, id as ISkillCheck['id']); }
@@ -463,7 +469,12 @@ function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined
 		return `<span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:${b.color};background:${b.bg};border-radius:999px;padding:4px 7px;flex:none">${b.label}</span>`;
 	};
 	const runBtn = (s: ISkillCheck): string => s.canRun
-		? `<button data-skill-run="${s.id}" style="margin-left:auto;border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">${s.status === 'pass' ? 'Re-run' : 'Run'}</button>`
+		? `<button data-skill-run="${s.id}" style="border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">${s.status === 'pass' ? 'Re-run' : 'Run'}</button>`
+		: '';
+	// "Apply fix" appears on a flagged skill that carries a deterministic edit (Formatting heading-case);
+	// it is the primary action, so it takes the right-aligned slot with Run beside it.
+	const fixBtn = (s: ISkillCheck): string => (s.fixable && s.status === 'flag')
+		? `<button data-skill-fix="${s.id}" style="margin-left:auto;border:none;border-radius:7px;padding:7px 11px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer">Apply fix</button>`
 		: '';
 	const card = (s: ISkillCheck): string => {
 		const ic = icons[s.id];
@@ -471,7 +482,7 @@ function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined
 		const detailColor = s.status === 'flag' ? '#52575f' : '#868b95';
 		return `<div style="border:${border};border-radius:11px;overflow:hidden;margin-bottom:11px">`
 			+ `<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:${ic.bg};color:${ic.fg};font-size:14px;display:flex;align-items:center;justify-content:center">${ic.glyph}</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">${esc(s.name)}</div><div style="font:400 11px/1.3 system-ui;color:#868b95">${esc(s.blurb)}</div></div>${badge(s)}</div>`
-			+ `<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="font:400 12px/1.4 system-ui;color:${detailColor}">${esc(s.detail)}</span>${runBtn(s)}</div></div>`;
+			+ `<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="flex:1;font:400 12px/1.4 system-ui;color:${detailColor}">${esc(s.detail)}</span>${fixBtn(s)}${runBtn(s)}</div></div>`;
 	};
 	const sub = docTitle ? `Skills that run on ${esc(docTitle)} &mdash; on demand or before export.` : 'Skills that run on this document.';
 	return `<div style="display:flex;flex-direction:column">

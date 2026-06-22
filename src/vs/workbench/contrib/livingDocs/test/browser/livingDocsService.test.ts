@@ -332,6 +332,26 @@ suite('LivingDocsService', () => {
 		]);
 	});
 
+	test('the Formatting flag is fixable; applySkillFix title-cases the headings in place and the grader then passes', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		const before = service.getSkillReport(WEEKLY).find(s => s.id === 'formatting')!;
+		const financial = service.getSkillReport(WEEKLY).find(s => s.id === 'financial')!;
+		assert.deepStrictEqual(
+			{ formattingFlag: before.status, formattingFixable: before.fixable, financialFixable: !!financial.fixable },
+			{ formattingFlag: 'flag', formattingFixable: true, financialFixable: false },
+		);
+
+		await service.applySkillFix(WEEKLY, 'formatting');
+
+		const heading = service.getDoc(WEEKLY)!.blocks.find(b => b.type === 'heading' && /watch/i.test(b.text))!;
+		assert.strictEqual(heading.text, 'What to Watch', 'the flagged heading is title-cased in place (minor word stays lower)');
+		assert.strictEqual(service.getSkillReport(WEEKLY).find(s => s.id === 'formatting')!.status, 'pass', 'the grader now passes');
+		assert.ok((lastFiles!.get(WEEKLY.toString()) ?? '').includes('## What to Watch'), 'the fix is persisted to disk');
+		assert.ok(service.getAudit().some(e => e.newText === 'What to Watch'), 'the fix is audited');
+	});
+
 	test('the Financial skill flags a bound figure that does not reconcile to its source', async () => {
 		const service = createService([], { badBind: true });
 		await service.loadDocument(BADBIND);

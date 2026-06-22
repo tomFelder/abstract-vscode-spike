@@ -52,6 +52,8 @@ export interface ISkillCheck {
 	readonly detail: string;
 	/** True when the check can be (re-)run: deterministic locally, or model-backed via the proxy. */
 	readonly canRun: boolean;
+	/** True when a flagged check has a deterministic one-tap fix that edits the document (e.g. Formatting heading-case). */
+	readonly fixable?: boolean;
 }
 
 /**
@@ -113,6 +115,8 @@ export interface ILivingDocsService {
 	getSkillReport(resource: URI): readonly ISkillCheck[];
 	/** Run a single Skill on demand (e.g. the model-backed Strategy grader); caches the verdict. */
 	runSkillCheck(resource: URI, id: ISkillCheck['id']): Promise<void>;
+	/** Apply a Skill's deterministic fix to the document (e.g. Formatting title-cases the flagged headings). */
+	applySkillFix(resource: URI, id: ISkillCheck['id']): Promise<void>;
 	/** Re-hash the document's sources and recompute its dirty bits (what the source watcher triggers). */
 	checkSources(resource: URI): Promise<void>;
 	getStatus(resource: URI): string;
