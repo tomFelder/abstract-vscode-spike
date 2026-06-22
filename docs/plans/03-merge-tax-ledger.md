@@ -110,7 +110,19 @@ additive-contribution, still no core file touched. **Residual** (a full G4 pass)
 keybinding and pane-resize sashes are core-owned; removing those (not just their UI surface) is the one
 place G4 may finally need a `core-patch` — deferred and re-evaluated when tackled.
 
-## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round + v2 iter 2 source-peek + v2 iter 3 tree-rail + v2 iter 4 header + v2 iter 5 chrome-removal) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
+**v2 iter 6 — exclude IDE-only builtins (gate G6): the FIRST v2 CORE PATCH (1 added).**
+`src/vs/workbench/services/extensionManagement/browser/builtinExtensionsScannerService.ts` — a 3-id
+denylist (`vscode.emmet`, `vscode.git-base`, `vscode.merge-conflict`) filtered out of the scanned web
+builtins. These IDE-only builtins are irrelevant to a word processor AND their web bundle 404s in the
+dev run (the "Activating extension failed" toasts). Tier: **core-patch** — the builtin set is injected
+(dev DOM / prod build) and read only here, so the scanner is the single clean exclusion point.
+- **Merge-tax cost:** minimal/low-fragility. One small filter guarded by a named const; survives rebases
+  unless the scanner is rewritten. Re-pin check: confirm the const + `.filter(...)` line still sit before
+  `this.builtinExtensionsPromises = bundledExtensions.map(...)`.
+- **Greenfield evidence (Q3):** the entire v2 calm shell (source-peek in-surface, tree-rail, calm header,
+  chrome removal, builtin exclusion) needed exactly **one** tiny core seam — the fork de-IDEs cheaply.
+
+## Core-patch count: **1 added in v2** (iter 6, builtin exclusion) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1 + v2 iters 2-5) (1 pre-existing, from the engine phase). v2 (plan 11) permits this - logged above.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be

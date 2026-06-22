@@ -45,7 +45,7 @@ Target: overall **>= 95%** + every hard gate passing.
 | **G3** — Left rail matches the comp | **MOSTLY PASS (tree-rail) — iter 3** | The sidebar is now one **`TreeRailView`** with the comp's **Files / Context / Outline / Search** tab strip + a **folder tree** (REPORTS + SOURCES), replacing the separate Documents + Context containers — verified live across all 4 tabs + doc-open (`shots/v2-iter3/01-04`). _Residual:_ the **76px labeled icon-nav** (VS Code's activity bar is still ~48px unlabeled) + making Home/Templates/etc. pure nav — a follow-up slice. Before: `shots/v2-iter1/01,06`. |
 | **G4** — No VS Code optionality leaks | **MOSTLY PASS — iters 2/4/5** | Removed: the source open-beside split (iter 2), the Download/Refresh/Ask-AI/Source header buttons (iter 4), and the **menubar + Accounts + Manage(gear) chrome** (iter 5, `studio.css`). Already off via settings: editor **tabs**, status bar, command center, editor-group **title/close** (studio.css). The command palette is **no longer surfaced** (commandCenter off + Manage gone). `shots/v2-iter5/01`. _Residual:_ the raw `Ctrl+Shift+P` keybinding + pane-resize sashes (core-owned) — a later iteration, may need a core patch. Before: `shots/v2-iter1/01`. |
 | **G5** — Provenance gutter detached (D1) + doc/rail pixel-aligned (D4) | **PARTIAL → FAIL** | Dots render in a **thin left margin**, not the comp's clean **30px detached gutter column**; no multi-line "vertical bar" marker; doc column not pixel-aligned (width/centering differ). `shots/06`. |
-| **G6** — Nav never blanks + dev-build ext toast gone | **PARTIAL → FAIL** | Nav switching no longer blanks (iter-6 fix holds — verified across Home/Editor/Templates/Knowledge/Agents). **But** the **ext-activation toasts** (`vscode.merge-conflict`, `vscode.emmet`, `vscode.git-base` "failed: Not Found") fire on **every** load. `shots/01,05`. |
+| **G6** — Nav never blanks + dev-build ext toast gone | **PASS — iter 6** | Nav switching never blanks (v1 iter-6 fix holds). The **ext-activation toasts are gone**: the IDE-only builtins (`emmet`/`git-base`/`merge-conflict`) are excluded from the product in the web `BuiltinExtensionsScannerService` (first v2 core patch). Verified live: clean launch + click-through, zero toasts (`shots/v2-iter6/01-no-toasts.png`). Before: `shots/v2-iter1/01`. |
 
 ## Per-surface inventory + live scores
 
@@ -66,10 +66,12 @@ Target: overall **>= 95%** + every hard gate passing.
 
 \* Present scored from comp + v1 evidence; not re-driven live in iteration 1 (flagged for iter-2+).
 
-**Overall alignment: iter-1 ~56% → -2 ~61% → -3 ~67% → -4 ~70% → -5 ~73%** (mean of the 12 rows;
-iter-5 lifted interaction 35→70 by removing the IDE chrome). Remaining gap is now the **provenance
-gutter detach (G5 / doc editor 70)**, **right rail polish (65)**, the **icon-nav restyle** (tree-rail
-residual), the **dev-build ext toasts (G6)**, and per-surface pixel alignment.
+**Overall alignment: iter-1 ~56% → -2 ~61% → -3 ~67% → -4 ~70% → -5 ~73% → -6 ~73%** (mean of the 12
+surface rows; iter-6 fixed gate **G6** — toasts — which isn't a per-surface score, so the mean holds but
+a gate flips and the **live click-through is now clean**). **Gate status after iter 6:** G1 ✅, G2 ✅,
+G3 mostly ✅, G4 mostly ✅, G5 partial (gutter detached; pixel-align pending), **G6 ✅**. Remaining for
+the surface mean: **right rail (65)** + the **70-cluster** (doc editor, Templates, Knowledge, Agents,
+Present) + the **icon-nav restyle** — i.e. per-surface pixel alignment to lift toward 95%.
 
 ## Ranked gap backlog (most abrasive × most central)
 

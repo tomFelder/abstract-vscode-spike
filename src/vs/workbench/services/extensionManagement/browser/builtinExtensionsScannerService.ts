@@ -25,6 +25,13 @@ interface IBundledExtension {
 	changelogPath?: string;
 }
 
+// Living Documents (Opportunity OS) is a word processor, not an IDE, so these IDE-only first-party
+// builtins are excluded from the product. They are also the ones whose web bundle 404s in the
+// @vscode/test-web dev run, producing "Activating extension '...' failed: Not Found" toasts on every
+// launch (v2 design gate G6). Removing them here clears the toasts and keeps the shell calm.
+// Merge-tax: core patch (livingDocs v2 iter 6) -- see docs/plans/03-merge-tax-ledger.md.
+const LIVING_DOCS_EXCLUDED_BUILTINS = new Set<string>(['vscode.emmet', 'vscode.git-base', 'vscode.merge-conflict']);
+
 export class BuiltinExtensionsScannerService implements IBuiltinExtensionsScannerService {
 
 	declare readonly _serviceBrand: undefined;
@@ -65,6 +72,8 @@ export class BuiltinExtensionsScannerService implements IBuiltinExtensionsScanne
 						} catch (error) { /* ignore error*/ }
 					}
 				}
+
+				bundledExtensions = bundledExtensions.filter(e => !LIVING_DOCS_EXCLUDED_BUILTINS.has(getGalleryExtensionId(e.packageJSON.publisher, e.packageJSON.name)));
 
 				this.builtinExtensionsPromises = bundledExtensions.map(async e => {
 					const id = getGalleryExtensionId(e.packageJSON.publisher, e.packageJSON.name);

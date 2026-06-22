@@ -38,6 +38,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | **v2-3 (tree-rail, G3)** | **~67%** | **Built the left tree-rail.** One `TreeRailView` with **Files / Context / Outline / Search** tabs + a folder tree (REPORTS + SOURCES), replacing the separate Documents + Context activity-bar containers (both deleted). Pure helpers `buildFileTree`/`buildOutline`/`searchTreeRail` in `common/treeRail.ts` (TDD, 74/74 green); `ILivingDocSummary` gained `sources`. **0 core patches.** Verified live: all 4 tabs + folder tree + doc-open from Files (opens clean, no split). **G3 MOSTLY PASS** (residual: the 76px labeled icon-nav restyle). left rail 35->75, Context 50->78. |
 | **v2-4 (calm header, G2)** | **~70%** | **Calmed the doc header to the comp's single bar.** Removed Download (Present covers it) + the standalone Refresh button (the **sync pill is now the refresh**) + the persistent formatting-toolbar row (now a **floating selection toolbar**); Ask-AI/Source header buttons dropped (Chat rail + provenance dots are the comp's entries); raw-Markdown toggle moved to the footer hint. **0 core patches** (webview only). TDD: a render assertion for the calm bar (75/75 green). Verified live: single calm bar; **G1 still holds** — a provenance dot opens the in-surface source pane (one iframe, no split). **G2 PASS** (residual: the VS Code menubar still leaks above — a G4 item). header 48->85, interaction 30->35. |
 | **v2-5 (remove IDE chrome, G4)** | **~73%** | **Removed the residual IDE chrome.** Three `studio.css` rules hide the modernUI **menubar** ("Application Menu" hamburger, which ignored `menuBarVisibility:hidden`) + the **Accounts** and **Manage(gear)** global activity-bar actions (Manage was the command-palette surface). With tabs/status/command-center/group-title already off, the shell now reads as a calm app, not an IDE. Tier: **styleOverrides-CSS**, 0 core patches. Verified live: chrome gone, doc opens clean (G1-G3 hold, G2 calm bar intact). **G4 MOSTLY PASS** (residual: raw `Ctrl+Shift+P` keybinding + pane-resize sashes — core-owned). interaction 35->70. |
+| **v2-6 (kill ext toasts, G6)** | **~73%** | **Killed the dev-build ext-activation toasts.** Excluded the IDE-only builtins (`emmet`/`git-base`/`merge-conflict`) from the product via a 3-id denylist in the web `BuiltinExtensionsScannerService` — the **first v2 core patch** (tiny, surgical, product-correct: a word processor doesn't want them, and they were the ones whose web bundle 404s in the dev run). Verified live: **zero toasts on launch; the click-through is now clean** end-to-end. 75/75 green. **G6 PASS.** Mean holds (toasts aren't a per-surface score) but a hard gate flips + the stop-condition's "clean click-through" is satisfied. |
 
 ---
 
@@ -793,3 +794,35 @@ Three rules in `styleOverrides/browser/media/studio.css` (the existing `.style-o
 **G5 — detach the provenance gutter** (D1: a 30px gutter column, dot per bound line, vertical bar for
 multi-line edits) + pixel-align the doc column; then per-surface pixel polish (right rail, Present) and
 the dev-build ext-activation toasts (G6).
+
+---
+
+## v2 Iteration 6 — kill the dev-build ext-activation toasts (G6) · ~73% (gate flip)
+
+Backlog #6. The three "Activating extension '...' failed: Not Found" toasts (`emmet`/`git-base`/
+`merge-conflict`) fired on every launch — the last not-clean part of the click-through and a failing
+hard gate. Screenshots: [`shots/v2-iter6/`](shots/v2-iter6/).
+
+### What changed (decision log 26; FIRST v2 core patch)
+The builtin set is injected (dev: a DOM `data-settings` blob from `@vscode/test-web`; prod: build-time)
+and read only by the web `BuiltinExtensionsScannerService`. So the single clean exclusion point is that
+scanner: a 3-id denylist (`vscode.emmet`, `vscode.git-base`, `vscode.merge-conflict`) filtered out of
+`bundledExtensions`. These IDE-only builtins are irrelevant to a word processor and were the ones whose
+web bundle 404s in the dev run. Tier: **core-patch** (the first in v2; merge-tax ledger updated — minimal,
+low-fragility, product-correct).
+
+### Verification + gate re-check (chrome-devtools MCP)
+- **Before:** three error toasts bottom-right on every load (`shots/v2-iter1/01`). **After:** zero toasts;
+  the alert regions are empty (`shots/v2-iter6/01-no-toasts.png`).
+- **G6 PASS.** **Clean live click-through confirmed:** Home → open a document → calm header + tree-rail +
+  gutter + right rail, no toasts, no menubar, no IDE chrome (`02-clean-clickthrough-doc.png`).
+- **No regressions:** G1 (single iframe, no split), G2 (calm bar), G3 (tree-rail), G4 (no chrome) all
+  hold. `typecheck-client` clean; **75/75 tests green**.
+
+### Gate status after iter 6
+G1 ✅ · G2 ✅ · G3 mostly ✅ · G4 mostly ✅ · G5 partial (gutter detached, pixel-align pending) · G6 ✅.
+
+### Next
+Lift the surface mean toward 95% with per-surface **pixel alignment**: the **right rail** (65, the
+lowest) and the **70-cluster** (doc editor incl. the G5 gutter pixel-align, Templates, Knowledge, Agents,
+Present), plus the **icon-nav restyle** (the G3 residual).
