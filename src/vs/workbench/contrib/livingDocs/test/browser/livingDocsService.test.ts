@@ -120,6 +120,7 @@ suite('LivingDocsService', () => {
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
 
 	let lastFiles: Map<string, string> | undefined;
+	let lastModelBody: string | undefined;
 
 	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[]; model?: object } = {}): LivingDocsService {
 		const files = new Map<string, string>();
@@ -160,12 +161,12 @@ suite('LivingDocsService', () => {
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
 		const requestService = {
-			request: async (options: { url?: string }) => {
+			request: async (options: { url?: string; data?: string }) => {
 				const url = options.url ?? '';
 				let payload: object = API_PAYLOAD;
 				if (opts.model) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
-					else if (url.includes('/v1/messages')) { payload = opts.model; }
+					else if (url.includes('/v1/messages')) { payload = opts.model; lastModelBody = options.data; }
 				}
 				return {
 					res: { statusCode: 200, headers: {} },
@@ -469,6 +470,85 @@ suite('LivingDocsService', () => {
 		await service.reviewImpact(WEEKLY);
 
 		assert.strictEqual(service.getPendingForDoc(WEEKLY)[0].via, 'heuristic', 'a refusal degrades to the heuristic candidate');
+	});
+
+	// --- Chat agent (criterion 2): a real model-backed conversation over the document + sources ---
+
+	// One Claude reply carrying the Chat agent's JSON contract: a prose reply plus optional edits.
+	function chatReply(reply: string, edits: object[] = []): object {
+		return modelMessage({ reply, edits });
+	}
+
+	test('sendChatMessage records the user turn (with parsed @mentions) and a model-backed assistant reply', async () => {
+		const service = createService([], { model: chatReply('metrics.csv shows MRR up 18% to $48.6k this week.') });
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Summarise this week @metrics.csv');
+
+		const msgs = service.getChatMessages(WEEKLY);
+		assert.deepStrictEqual(
+			msgs.map(m => ({ role: m.role, via: m.via, content: m.content, mentions: m.mentions })),
+			[
+				{ role: 'user', via: undefined, content: 'Summarise this week @metrics.csv', mentions: ['metrics.csv'] },
+				{ role: 'assistant', via: 'model', content: 'metrics.csv shows MRR up 18% to $48.6k this week.', mentions: undefined },
+			],
+		);
+		assert.strictEqual(service.isChatBusy(WEEKLY), false, 'no longer busy once the reply lands');
+	});
+
+	test('the chat prompt carries the document, its resolved figures, and the @mentioned source', async () => {
+		const service = createService([], { model: chatReply('Done.') });
+		await service.loadDocument(WEEKLY);
+		lastModelBody = undefined;
+
+		await service.sendChatMessage(WEEKLY, 'Check the numbers @metrics.csv');
+
+		const body = lastModelBody ?? '';
+		assert.ok(body.includes('Weekly Operating Summary'), 'prompt includes the document title');
+		assert.ok(body.includes('$48.6k'), 'prompt includes the resolved figure value');
+		assert.ok(body.includes('week,mrr') || body.includes('metrics.csv'), `prompt includes the mentioned source: ${body.slice(0, 120)}`);
+	});
+
+	test('a chat reply that proposes an edit queues it to the Review rail; approve applies it to the prose', async () => {
+		const newText = 'Growth accelerated this week.';
+		const service = createService([], {
+			model: chatReply('I drafted a sharper commentary line for your approval.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText, rationale: 'The +18% MRR delta crosses the accelerating threshold.' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.strictEqual(pending.length, 1, 'one proposed edit queued from chat');
+		assert.deepStrictEqual(
+			{ via: pending[0].via, kind: pending[0].kind, newText: pending[0].newText },
+			{ via: 'model', kind: 'meaning', newText },
+		);
+		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok((assistant.steps ?? []).some(s => s.status === 'queued'), 'the assistant turn renders a queued tool-step');
+
+		await service.approve(pending[0].id);
+		assert.strictEqual(blockText(service, WEEKLY, 'h-commentary'), newText, 'approving the chat-proposed edit rewrites the block');
+	});
+
+	test('with no model reachable, chat is honest (fallback turn, no faked reply, nothing queued)', async () => {
+		const service = createService(); // no opts.model -> /healthz is unhealthy -> no model
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Summarise this week');
+
+		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.strictEqual(assistant.via, 'fallback', 'the no-model turn is marked as a fallback');
+		assert.ok(/proxy|model/i.test(assistant.content), `the fallback names the missing model: ${assistant.content}`);
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'no edits queued without a model');
+	});
+
+	test('getMentionableFiles lists the document\'s linked sources and context files', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.deepStrictEqual([...service.getMentionableFiles(WEEKLY)].sort(), ['market-research.md', 'metrics.csv']);
 	});
 
 	test('runSkillCheck strategy surfaces a model verdict against the decision stack', async () => {

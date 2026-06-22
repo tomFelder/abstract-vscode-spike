@@ -18,13 +18,13 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AgentPolicy, emptyLock, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { AgentPolicy, emptyLock, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
 interface IGradeResult {
@@ -138,6 +138,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _modelProbe: Promise<boolean> | undefined;
 	// The latest model-backed Strategy verdict per document, surfaced in the Skills rail after a Run.
 	private readonly _strategyGrades = new Map<string, IGradeResult>();
+	// The Chat conversation per document (the right-panel Chat tab) and the in-flight set for the
+	// "working" indicator. Kept in the service so the rail survives re-renders and tab switches.
+	private readonly _chats = new Map<string, IChatMessage[]>();
+	private readonly _chatBusy = new Set<string>();
 
 	constructor(
 		@IFileService private readonly _files: IFileService,
@@ -1212,6 +1216,131 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (b.id === blockId) { return heading || blockId; }
 		}
 		return blockId;
+	}
+
+	// --- Chat agent (the right-panel Chat tab) ---
+
+	getChatMessages(resource: URI): readonly IChatMessage[] {
+		return this._chats.get(resource.toString()) ?? [];
+	}
+
+	getMentionableFiles(resource: URI): readonly string[] {
+		const doc = this._docs.get(resource.toString())?.doc;
+		if (!doc) { return []; }
+		const out: string[] = [];
+		for (const f of [...doc.sources, ...doc.context]) { if (!out.includes(f)) { out.push(f); } }
+		return out;
+	}
+
+	isChatBusy(resource: URI): boolean {
+		return this._chatBusy.has(resource.toString());
+	}
+
+	async sendChatMessage(resource: URI, text: string): Promise<void> {
+		const trimmed = text.trim();
+		if (!trimmed) { return; }
+		const id = resource.toString();
+		const history = this._chats.get(id) ?? [];
+		this._chats.set(id, history);
+
+		const mentions = this._parseMentions(resource, trimmed);
+		history.push({ role: 'user', content: trimmed, mentions: mentions.length ? mentions : undefined });
+		this._chatBusy.add(id);
+		this._onDidChange.fire();
+
+		try {
+			const state = this._docs.get(id);
+			if (!state || !state.doc.isLiving) {
+				history.push({ role: 'assistant', via: 'fallback', content: 'Open a Living Document in the editor to chat about it - I answer using the document and its sources.' });
+				return;
+			}
+			if (!await this._hasModel()) {
+				history.push({ role: 'assistant', via: 'fallback', content: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this document and its sources.' });
+				return;
+			}
+			const reply = await this._chatRespond(state, trimmed, mentions);
+			history.push(reply);
+		} catch (e) {
+			this._log.info('[livingDocs] chat failed, honest fallback', e instanceof Error ? e.message : String(e));
+			history.push({ role: 'assistant', via: 'fallback', content: 'I could not complete that just now (the agent model errored). The proxy may be down - try again once it is back.' });
+		} finally {
+			this._chatBusy.delete(id);
+			this._onDidChange.fire();
+		}
+	}
+
+	// Build the model prompt from the document (figures resolved) + the @mentioned and context sources,
+	// ask for a reply plus optional prose edits, render tool-steps, and queue any edits into the rail.
+	private async _chatRespond(state: IDocState, text: string, mentions: string[]): Promise<IChatMessage> {
+		const docText = this._serializeDocForChat(state);
+		const sourceFiles = mentions.length ? mentions : [...state.doc.sources, ...state.doc.context];
+		const sources = await this._readContext(state, sourceFiles);
+		const system = 'You are the agent inside a Living Document editor. Answer the user using the document and its sources. '
+			+ 'You may propose edits to existing prose paragraphs (never to bound figures). Reply with ONLY a JSON object: '
+			+ '{"reply": string, "edits": [{"heading": string, "oldText": string, "newText": string, "rationale": string}]}. '
+			+ 'Use edits only for genuine wording or meaning improvements grounded in the sources; otherwise return an empty edits array. Keep reply concise.';
+		const user = `Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\nUser: ${text}`;
+		const raw = await this._callModel(system, user);
+		const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { reply?: string; edits?: { heading?: string; oldText?: string; newText?: string; rationale?: string }[] };
+
+		const steps: IChatStep[] = [];
+		if (sourceFiles.length) { steps.push({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
+		const edits = Array.isArray(json.edits) ? json.edits : [];
+		for (const edit of edits) {
+			const queued = this._queueChatEdit(state, edit);
+			if (queued) { steps.push({ label: `Proposed: ${queued}`, status: 'queued' }); }
+		}
+		return { role: 'assistant', via: 'model', content: String(json.reply ?? raw).trim(), steps: steps.length ? steps : undefined };
+	}
+
+	// Locate the prose block an edit targets (best token-overlap match under the named heading) and queue
+	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the
+	// block label when queued, else undefined.
+	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string }): string | undefined {
+		const newText = String(edit.newText ?? '').trim();
+		const oldText = String(edit.oldText ?? '').trim();
+		if (!newText || !oldText) { return undefined; }
+		let best: ILivingDocBlock | undefined;
+		let bestScore = 0.5;
+		for (const block of state.doc.blocks) {
+			if (block.type === 'heading' || block.binds.length) { continue; }
+			const score = similarity(block.text, oldText);
+			if (score > bestScore) { bestScore = score; best = block; }
+		}
+		if (!best || best.text.trim() === newText) { return undefined; }
+		const label = this._blockLabel(state.doc, best.id);
+		this._pending.push({
+			id: generateUuid(),
+			docId: state.uri.toString(),
+			docTitle: state.doc.title,
+			blockId: best.id,
+			blockLabel: label,
+			oldText: best.text,
+			newText,
+			kind: 'meaning',
+			confidence: 0.85,
+			rationale: String(edit.rationale ?? 'Proposed by the Chat agent.'),
+			sourceCells: [],
+			via: 'model',
+		});
+		return label;
+	}
+
+	private _parseMentions(resource: URI, text: string): string[] {
+		if (!text.includes('@')) { return []; }
+		return this.getMentionableFiles(resource).filter(f => text.includes(`@${f}`));
+	}
+
+	// The document as clean prose for the model: title + headings + paragraphs with bind links resolved
+	// to their live values (so the agent reasons over the figures the reader sees, not the raw markup).
+	private _serializeDocForChat(state: IDocState): string {
+		const resolved = this.getResolved(state.uri);
+		const resolve = (s: string) => s.replace(/\[([^\]]*)\]\(bind:([^)]+)\)/g, (_m, label: string, key: string) => resolved.get(key) ?? label);
+		const lines: string[] = [];
+		for (const block of state.doc.blocks) {
+			lines.push(block.type === 'heading' ? `${'#'.repeat(block.level ?? 1)} ${resolve(block.text)}` : resolve(block.text));
+		}
+		return lines.join('\n');
 	}
 
 	// --- approve / reject (the review rail) ---

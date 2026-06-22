@@ -55,6 +55,29 @@ export interface ISkillCheck {
 }
 
 /**
+ * One step the Chat agent took while answering, rendered as a tool-call row in the conversation
+ * (e.g. "Read metrics.csv", "Proposed: Commentary rewrite"). `done` steps already happened
+ * (a read/analysis); `queued` steps produced a pending change waiting in the Review rail.
+ */
+export interface IChatStep {
+	readonly label: string;
+	readonly status: 'done' | 'queued';
+}
+
+/**
+ * One turn in a document's Chat conversation. User turns carry the parsed `@mention` file names;
+ * assistant turns carry the model reply, the tool-call `steps`, and whether the reply was a real
+ * model answer or the honest no-model fallback.
+ */
+export interface IChatMessage {
+	readonly role: 'user' | 'assistant';
+	readonly content: string;
+	readonly mentions?: readonly string[];
+	readonly steps?: readonly IChatStep[];
+	readonly via?: 'model' | 'fallback';
+}
+
+/**
  * Holds every loaded Living Document and drives the core loop:
  *   source change -> agent proposes edits -> figures auto-apply, meaning-changes queue ->
  *   approve/reject -> audit trail.
@@ -151,6 +174,21 @@ export interface ILivingDocsService {
 
 	/** Publish a document: snapshot (pin) its sources to current versions for reproducibility. */
 	publishDocument(resource: URI): Promise<void>;
+
+	// --- Chat agent (the right-panel Chat tab) ---
+	/** The conversation so far for a document (empty until the first message). */
+	getChatMessages(resource: URI): readonly IChatMessage[];
+	/** The files a `@mention` can attach for a document: its linked sources + context files. */
+	getMentionableFiles(resource: URI): readonly string[];
+	/** True while a chat reply is in flight for a document (renders the "working" indicator). */
+	isChatBusy(resource: URI): boolean;
+	/**
+	 * Send one user message to the document's Chat agent. Parses `@mentions`, gathers the document
+	 * (with resolved figures) plus the mentioned/context sources, and asks the model for a reply that
+	 * may also propose prose edits - those queue into the Review rail like any other pending change.
+	 * With no model reachable it appends an honest fallback turn and proposes nothing (never fakes a reply).
+	 */
+	sendChatMessage(resource: URI, text: string): Promise<void>;
 
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;

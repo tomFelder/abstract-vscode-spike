@@ -28,6 +28,34 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 8 | **~86%** | **Functional audit:** editor raw-Markdown editing verified (round-trips to the clean-file bind-link format). All core flows now confirmed functional. Pinned down that Chat/History/Skills tab bodies are *intentionally static comp reproductions* — composer + Apply-fix/Run/Re-run not wired (only Approve-all/Review-each are). Honest scoring note below; no inflation. |
 | 9 | **~86%** | **Skills tab made functional** (was static): real deterministic graders — Financial reconciles all 12 bound figures (PASS) + working Re-run; Formatting flags the 2 sentence-case headings (live count) + Run; Strategy honestly reports NO MODEL. Closes the iter-8 functional gap. Skills score now *earned*, not just visual. |
 | 10 | **~86%** | **Final re-score + summary** (10-iteration cap reached). All core flows live-verified functional. Honest landing: ~86% — short of the 90% early-exit; remaining gap is model-gated/data-model work, documented below. |
+| 11 (v1 #1) | **functional focus** | **Chat is now a real model-backed agent** (was a static comp reproduction). Live composer + `@mention` chips + tool-step rendering; the agent replies from the document + sources via `_callModel`, and any prose edit it proposes queues into the Review rail (inline diff + Approve/Reject + Approve-all). Verified live (OpenRouter test backend): a "tighten the Commentary" ask produced a real rewrite, queued it, and Approve applied it to the prose. Closes the biggest dead-control (criterion 2 + criterion 6). |
+
+---
+
+## Plan 9 — v1 functionality & UX loop (per-criterion scores)
+
+The loop now scores the **7 v1 criteria** from `docs/plans/09-v1-functionality-handoff.md` (v1 = every line >= 85),
+weighted to *behaviour*. Carrying the visual match forward at ~86% (design-audit landing, unchanged).
+
+| # | v1 criterion | Iter 10 (start) | Iter 11 | Real / rough |
+|---|--------------|:--:|:--:|------|
+| 1 | Agentic loop is real (model-backed) | 86 | **88** | **Real.** Context "Review impact" rewrites (plan 10) *and* now the Chat agent path both yield model rewrites that land in Review. |
+| 2 | Chat is a working agent | 40 | **88** | **Real (live-verified).** Composer, `@mention`, model reply over doc+sources, tool-steps, proposed edits → Review, Approve-all/Review-each. Rough: `@mention` is chip-insert + parse (no keystroke autocomplete); model pill is static. |
+| 3 | Skills run for real (+ Apply-fix) | 72 | 72 | Graders real (Financial/Formatting/Strategy). **Open:** Apply-fix doesn't yet edit the doc. Next lever. |
+| 4 | Editor is a real editor | 72 | 72 | Toolbar + raw-Markdown + inline diff real. **Open:** source-peek + "Sync across" pane; clickable provenance dots. |
+| 5 | Context is complete | 70 | 70 | Linked sources + Referenced files real. **Open:** Pasted text / Images / Company knowledge + Add context (needs context-kind model ext). |
+| 6 | No dead ends, no rough edges | 70 | **80** | Chat (the largest dead control) is now real; nav fix held; subtitle tracks resolved week. **Open:** dev-build extension-activation error toast still shows. |
+| 7 | Core flows pass tests + live click-through | 80 | **85** | Chat flow has 5 new TDD tests (40/40 green) + a clean live click-through. |
+
+**What works (iter 11):** open Weekly Summary → Chat tab → real composer with live `@metrics.csv` / `@market-research.md`
+chips → send → model reply with a ✓/→ tool-step card → proposed Commentary rewrite queued (inline diff in the
+editor + Review rail "1" + Documents "1 pending") → Approve all → applied to the prose, badges cleared, history kept.
+**What's rough:** no keystroke-triggered `@mention` dropdown (chips + parse only); the model/agent pills are static;
+extension-activation error toast still appears on load. Shots: `shots/iter11-chat-composer-before.png`,
+`shots/iter11-chat-agent-reply.png`, `shots/iter11-chat-edit-applied.png`.
+
+**Next (highest lever):** criterion 3 **Apply-fix** — make a Formatting/Strategy suggested edit actually edit the doc
+(reuse the chat→`IProposedChange`→approve path just proven), then criterion 4 source-peek/Sync-across.
 
 ---
 

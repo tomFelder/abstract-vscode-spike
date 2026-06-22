@@ -35,6 +35,8 @@ export class ReviewRailView extends ViewPane {
 	private _root: HTMLElement | undefined;
 	private _activeTab: PanelTab = 'review';
 	private _stylesInjected = false;
+	// The unsent composer text, kept across re-renders so a background refresh never eats a draft.
+	private _chatDraft = '';
 	private readonly _renderDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -67,7 +69,7 @@ export class ReviewRailView extends ViewPane {
 		this._injectStyles(container);
 		this._register(this._livingDocs.onDidChange(() => this._render()));
 		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
-		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'skills') { this._render(); } }));
+		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'skills' || this._activeTab === 'chat') { this._render(); } }));
 		this._render();
 	}
 
@@ -193,25 +195,174 @@ export class ReviewRailView extends ViewPane {
 		}));
 	}
 
+	// The Chat tab is a real, model-backed agent surface: a scrolling conversation over the active
+	// Living Document plus a live composer with @mention chips. Replies (and any prose edits the agent
+	// proposes) come from livingDocsService.sendChatMessage; proposed edits land in the Review rail, so
+	// "Approve all / Review each" keep working on them. Built as DOM (the rail is not a webview).
 	private _renderChat(content: HTMLElement, pendingCount: number): void {
-		content.innerHTML = chatHtml(pendingCount);
-		// Wire the two real actions in the chat surface via delegation (no fragile selectors): walk up
-		// from the click target looking for our data-attributes -- approve everything, or jump to Review.
-		this._renderDisposables.add(addDisposableListener(content, 'click', e => {
-			let el = e.target as HTMLElement | null;
-			while (el && el !== content) {
-				if (el.hasAttribute('data-approve-all')) {
-					for (const change of this._livingDocs.getAllPending()) { void this._livingDocs.approve(change.id); }
-					return;
+		const doc = this._activeDoc();
+		content.style.cssText = 'display:flex;flex-direction:column;height:100%;padding:0';
+
+		const scroll = append(content, $('div'));
+		scroll.style.cssText = 'flex:1;min-height:0;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:16px';
+
+		const messages = doc ? this._livingDocs.getChatMessages(doc) : [];
+		if (!doc) {
+			this._renderChatEmpty(scroll, 'Open a Living Document in the editor to chat with its agent.');
+		} else if (messages.length === 0) {
+			this._renderChatEmpty(scroll, 'Ask the agent about this document, or @mention a source to pull it in.');
+		} else {
+			for (const m of messages) { this._renderChatMessage(scroll, m); }
+		}
+
+		if (doc && this._livingDocs.isChatBusy(doc)) {
+			const busy = append(scroll, $('div'));
+			busy.style.cssText = 'display:flex;gap:9px;align-items:center';
+			const avatar = append(busy, $('span'));
+			avatar.style.cssText = 'flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center';
+			avatar.textContent = '\u273B';
+			const dots = append(busy, $('span'));
+			dots.style.cssText = 'font:400 13px/1.6 system-ui;color:#a3a8b2';
+			dots.textContent = 'Working\u2026';
+		}
+
+		// The standing approve/reject summary: whenever changes are pending, the agent surfaces the
+		// one-tap "Approve all" + "Review each" controls (criterion 2 keeps these wired).
+		if (pendingCount > 0) {
+			const summary = append(scroll, $('div'));
+			summary.style.cssText = 'border:1px solid #e0e6ff;background:#f7f9ff;border-radius:10px;padding:11px 12px';
+			const head = append(summary, $('div'));
+			head.style.cssText = 'font:600 11.5px/1 system-ui;color:#3a3f49;margin-bottom:9px';
+			head.textContent = `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting on you`;
+			const actions = append(summary, $('div'));
+			actions.style.cssText = 'display:flex;gap:7px';
+			const approveAll = append(actions, $('button')) as HTMLButtonElement;
+			approveAll.style.cssText = 'flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer';
+			approveAll.textContent = 'Approve all';
+			this._renderDisposables.add(addDisposableListener(approveAll, 'click', () => {
+				for (const change of this._livingDocs.getAllPending()) { void this._livingDocs.approve(change.id); }
+			}));
+			const reviewEach = append(actions, $('button')) as HTMLButtonElement;
+			reviewEach.style.cssText = 'border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer';
+			reviewEach.textContent = 'Review each';
+			this._renderDisposables.add(addDisposableListener(reviewEach, 'click', () => { this._activeTab = 'review'; this._render(); }));
+		}
+
+		this._renderChatComposer(content, doc);
+	}
+
+	private _renderChatEmpty(scroll: HTMLElement, text: string): void {
+		const empty = append(scroll, $('div'));
+		empty.style.cssText = 'margin:auto 0;text-align:center;font:400 12.5px/1.6 system-ui;color:#a3a8b2;padding:24px 8px';
+		empty.textContent = text;
+	}
+
+	private _renderChatMessage(scroll: HTMLElement, m: { role: 'user' | 'assistant'; content: string; mentions?: readonly string[]; steps?: readonly { label: string; status: 'done' | 'queued' }[]; via?: 'model' | 'fallback' }): void {
+		if (m.role === 'user') {
+			const wrap = append(scroll, $('div'));
+			wrap.style.cssText = 'align-self:flex-end;max-width:88%;display:flex;flex-direction:column;align-items:flex-end;gap:6px';
+			if (m.mentions && m.mentions.length) {
+				const chips = append(wrap, $('div'));
+				chips.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end';
+				for (const mention of m.mentions) {
+					const chip = append(chips, $('span'));
+					chip.style.cssText = 'font:500 10.5px/1 ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px';
+					chip.textContent = `@${mention}`;
 				}
-				if (el.hasAttribute('data-go-review')) {
-					this._activeTab = 'review';
-					this._render();
-					return;
-				}
-				el = el.parentElement;
 			}
+			const bubble = append(wrap, $('div'));
+			bubble.style.cssText = 'background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36;white-space:pre-wrap';
+			bubble.textContent = m.content;
+			return;
+		}
+
+		const row = append(scroll, $('div'));
+		row.style.cssText = 'display:flex;gap:9px';
+		const avatar = append(row, $('span'));
+		avatar.style.cssText = 'flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center';
+		avatar.textContent = '\u273B';
+		const col = append(row, $('div'));
+		col.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:10px';
+
+		if (m.steps && m.steps.length) {
+			const card = append(col, $('div'));
+			card.style.cssText = 'border:1px solid #eceef2;border-radius:10px;overflow:hidden;background:#fff';
+			m.steps.forEach((step, i) => {
+				const stepRow = append(card, $('div'));
+				const queued = step.status === 'queued';
+				stepRow.style.cssText = `display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 ui-monospace,monospace;color:${queued ? '#9a6b16' : '#5d8a66'}${i < m.steps!.length - 1 ? ';border-bottom:1px solid #f4f5f7' : ''}`;
+				const glyph = append(stepRow, $('span'));
+				glyph.textContent = queued ? '\u2192' : '\u2713';
+				const label = append(stepRow, $('span'));
+				label.textContent = step.label;
+			});
+		}
+
+		const body = append(col, $('p'));
+		const fallback = m.via === 'fallback';
+		body.style.cssText = `margin:0;font:400 13.5px/1.6 system-ui;white-space:pre-wrap;color:${fallback ? '#9a6b16' : '#2c2f36'}${fallback ? ';background:#fdf6e9;border:1px solid #f0e2c4;border-radius:9px;padding:9px 11px' : ''}`;
+		body.textContent = m.content;
+	}
+
+	private _renderChatComposer(content: HTMLElement, doc: URI | undefined): void {
+		const footer = append(content, $('div'));
+		footer.style.cssText = 'flex:none;border-top:1px solid #eef0f3;padding:10px 12px;background:#fbfbfc';
+
+		const box = append(footer, $('div'));
+		box.style.cssText = 'border:1px solid #e0e2e8;border-radius:11px;background:#fff;padding:8px 9px';
+
+		const input = append(box, $('textarea')) as HTMLTextAreaElement;
+		input.placeholder = doc ? 'Ask the agent, or @mention a file\u2026' : 'Open a Living Document to chat\u2026';
+		input.value = this._chatDraft;
+		input.rows = 2;
+		input.disabled = !doc;
+		input.style.cssText = 'width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;font:400 13px/1.5 system-ui;color:#2c2f36';
+		this._renderDisposables.add(addDisposableListener(input, 'input', () => { this._chatDraft = input.value; }));
+
+		const mentions = doc ? this._livingDocs.getMentionableFiles(doc) : [];
+		if (mentions.length) {
+			const chips = append(box, $('div'));
+			chips.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;padding:8px 0 2px';
+			const hint = append(chips, $('span'));
+			hint.style.cssText = 'font:500 10.5px/1.6 system-ui;color:#bcc0c8';
+			hint.textContent = 'Attach:';
+			for (const file of mentions) {
+				const chip = append(chips, $('button')) as HTMLButtonElement;
+				chip.style.cssText = 'font:500 10.5px/1 ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px;cursor:pointer';
+				chip.textContent = `@${file}`;
+				this._renderDisposables.add(addDisposableListener(chip, 'click', () => {
+					const sep = input.value.length && !input.value.endsWith(' ') ? ' ' : '';
+					input.value = `${input.value}${sep}@${file} `;
+					this._chatDraft = input.value;
+					input.focus();
+				}));
+			}
+		}
+
+		const bar = append(box, $('div'));
+		bar.style.cssText = 'display:flex;align-items:center;gap:7px;padding-top:8px';
+		const model = append(bar, $('span'));
+		model.style.cssText = 'font:500 11px/1 system-ui;color:#52575f;background:#f4f5f7;border-radius:7px;padding:6px 9px;display:inline-flex;gap:5px;align-items:center';
+		model.textContent = '\u273B Agent';
+		const send = append(bar, $('button')) as HTMLButtonElement;
+		send.style.cssText = 'margin-left:auto;width:30px;height:30px;border:none;border-radius:8px;background:oklch(0.55 0.13 255);color:#fff;font-size:15px;cursor:pointer';
+		send.textContent = '\u2191';
+		send.disabled = !doc;
+
+		const submit = () => {
+			if (!doc) { return; }
+			const text = input.value.trim();
+			if (!text) { return; }
+			this._chatDraft = '';
+			void this._livingDocs.sendChatMessage(doc, text);
+		};
+		this._renderDisposables.add(addDisposableListener(send, 'click', submit));
+		this._renderDisposables.add(addDisposableListener(input, 'keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
 		}));
+
+		// Keep the cursor in the composer across the re-render that each message triggers.
+		if (doc && !this._livingDocs.isChatBusy(doc)) { input.focus(); }
 	}
 
 	private _injectStyles(container: HTMLElement): void {
@@ -258,55 +409,9 @@ export class ReviewRailView extends ViewPane {
 	}
 }
 
-// ---- Static comp-faithful tab bodies (Chat / History / Skills). Light colours match the registered
-// "Opportunity OS" theme, so hardcoding them here reproduces the comp exactly. ----
-
-function chatHtml(pendingCount: number): string {
-	const summaryActions = pendingCount > 0
-		? `<div style="display:flex;gap:7px"><button data-approve-all style="flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Approve all</button><button data-go-review style="border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer">Review each</button></div>`
-		: `<div style="display:flex;align-items:center;gap:7px;font:600 12px/1 system-ui;color:#1f7a44"><span>&#10003; All changes approved</span></div>`;
-	return `<div style="display:flex;flex-direction:column;gap:16px">
-		<div style="text-align:center;font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#bcc0c8">TODAY &middot; 9:02</div>
-		<div style="align-self:flex-end;max-width:88%;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
-			<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end"><span style="font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px">@Weekly Summary.md</span><span style="font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px">@metrics.csv</span></div>
-			<div style="background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36">metrics.csv just refreshed &mdash; update this week's summary and tighten the commentary.</div>
-		</div>
-		<div style="display:flex;gap:9px">
-			<span style="flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center">&#10022;</span>
-			<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:10px">
-				<div style="border:1px solid #eceef2;border-radius:10px;overflow:hidden;background:#fff">
-					<div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66;border-bottom:1px solid #f4f5f7"><span>&#10003;</span>Read metrics.csv &middot; 12 rows</div>
-					<div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66;border-bottom:1px solid #f4f5f7"><span>&#10003;</span>Diffed against last sync (v13)</div>
-					<div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66"><span>&#10003;</span>Found 3 changed values</div>
-				</div>
-				<p style="margin:0;font:400 13.5px/1.6 system-ui;color:#2c2f36">I applied two low-risk figure updates and drafted one tone change that needs your call:</p>
-				<div style="display:flex;flex-direction:column;gap:7px">
-					<div style="display:flex;align-items:center;gap:8px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#1f5a36">&#10003; MRR <span style="text-decoration:line-through;opacity:.7">12%</span> &rarr; 18% <span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66">applied</span></div>
-					<div style="display:flex;align-items:center;gap:8px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#1f5a36">&#10003; Signups 312 &rarr; 427 <span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5d8a66">applied</span></div>
-					<button data-go-review style="text-align:left;display:flex;align-items:center;gap:8px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#9a6b16;cursor:pointer">&#9888; Commentary rewrite <span style="margin-left:auto;font:600 11px/1 system-ui;color:oklch(0.5 0.13 255)">Review &rarr;</span></button>
-				</div>
-				<div style="border:1px solid #e0e6ff;background:#f7f9ff;border-radius:10px;padding:11px 12px">
-					<div style="display:flex;align-items:center;gap:7px;margin-bottom:9px"><span style="font:600 11.5px/1 system-ui;color:#3a3f49">Summary of this run</span><span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#8a93c4">3 changes</span></div>
-					<div style="font:400 12px/1.55 system-ui;color:#52575f;margin-bottom:11px">2 figure updates applied automatically; 1 commentary tone rewrite is waiting on you.</div>
-					${summaryActions}
-				</div>
-			</div>
-		</div>
-		<div style="align-self:flex-end;max-width:88%;background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36">Why "accelerated" and not just "strong"?</div>
-		<div style="display:flex;gap:9px">
-			<span style="flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center">&#10022;</span>
-			<p style="flex:1;margin:0;font:400 13.5px/1.6 system-ui;color:#2c2f36">The +18% MRR delta crosses this report's "accelerating" threshold (set at &gt;15%). "Strong" describes size; "accelerated" captures the change in trajectory &mdash; which is what actually moved this week. No new facts were added.</p>
-		</div>
-		<div style="border:1px solid #e0e2e8;border-radius:11px;background:#fff;padding:10px 11px">
-			<div style="font:400 13px/1.4 system-ui;color:#a3a8b2;padding:2px 2px 12px">Ask the agent, or @mention a file&hellip;</div>
-			<div style="display:flex;align-items:center;gap:7px">
-				<span style="font:500 11px/1 system-ui;color:#52575f;background:#f4f5f7;border-radius:7px;padding:6px 9px;display:inline-flex;gap:5px;align-items:center">&#10022; Sonnet 4.5 <span style="color:#a3a8b2">&#9662;</span></span>
-				<span style="font:500 11px/1 system-ui;color:#52575f;background:#f4f5f7;border-radius:7px;padding:6px 9px;display:inline-flex;gap:5px;align-items:center">Agent <span style="color:#a3a8b2">&#9662;</span></span>
-				<button style="margin-left:auto;width:30px;height:30px;border:none;border-radius:8px;background:oklch(0.55 0.13 255);color:#fff;font-size:15px;cursor:pointer">&#8593;</button>
-			</div>
-		</div>
-	</div>`;
-}
+// ---- Static comp-faithful tab bodies (History / Skills). Light colours match the registered
+// "Opportunity OS" theme, so hardcoding them here reproduces the comp exactly. (Chat is now a live
+// DOM surface in _renderChat, not a static string.) ----
 
 function timelineRow(dot: string, title: string, badge: string, body: string, meta: string, last: boolean): string {
 	const connector = last ? '' : `<span style="flex:1;width:2px;background:#e6e8ed"></span>`;
