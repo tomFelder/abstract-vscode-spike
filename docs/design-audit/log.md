@@ -39,6 +39,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | **v2-4 (calm header, G2)** | **~70%** | **Calmed the doc header to the comp's single bar.** Removed Download (Present covers it) + the standalone Refresh button (the **sync pill is now the refresh**) + the persistent formatting-toolbar row (now a **floating selection toolbar**); Ask-AI/Source header buttons dropped (Chat rail + provenance dots are the comp's entries); raw-Markdown toggle moved to the footer hint. **0 core patches** (webview only). TDD: a render assertion for the calm bar (75/75 green). Verified live: single calm bar; **G1 still holds** — a provenance dot opens the in-surface source pane (one iframe, no split). **G2 PASS** (residual: the VS Code menubar still leaks above — a G4 item). header 48->85, interaction 30->35. |
 | **v2-5 (remove IDE chrome, G4)** | **~73%** | **Removed the residual IDE chrome.** Three `studio.css` rules hide the modernUI **menubar** ("Application Menu" hamburger, which ignored `menuBarVisibility:hidden`) + the **Accounts** and **Manage(gear)** global activity-bar actions (Manage was the command-palette surface). With tabs/status/command-center/group-title already off, the shell now reads as a calm app, not an IDE. Tier: **styleOverrides-CSS**, 0 core patches. Verified live: chrome gone, doc opens clean (G1-G3 hold, G2 calm bar intact). **G4 MOSTLY PASS** (residual: raw `Ctrl+Shift+P` keybinding + pane-resize sashes — core-owned). interaction 35->70. |
 | **v2-6 (kill ext toasts, G6)** | **~73%** | **Killed the dev-build ext-activation toasts.** Excluded the IDE-only builtins (`emmet`/`git-base`/`merge-conflict`) from the product via a 3-id denylist in the web `BuiltinExtensionsScannerService` — the **first v2 core patch** (tiny, surgical, product-correct: a word processor doesn't want them, and they were the ones whose web bundle 404s in the dev run). Verified live: **zero toasts on launch; the click-through is now clean** end-to-end. 75/75 green. **G6 PASS.** Mean holds (toasts aren't a per-surface score) but a hard gate flips + the stop-condition's "clean click-through" is satisfied. |
+| **v2-7 (pin rail widths)** | **~74%** | **Pinned the shell to the comp's rail widths.** `StudioStartupContribution` now sets the tree-rail to 264px and the right rail to 392px via `IWorkbenchLayoutService.setSize` (after the rail is revealed + a layout tick, so the size restore doesn't clobber it). Verified live: right rail 282 -> 374px (the grid redistributes, so near- not exact-pixel), sidebar -> 252px, editor 718px (the 720px doc column still fits). 0 core patches (additive-contribution); 75/75 green; no gate regressions. right rail 65->75, left rail 75->77. The extra Skills tab is kept as a deliberate verification-feature departure. |
 
 ---
 
@@ -826,3 +827,29 @@ G1 ✅ · G2 ✅ · G3 mostly ✅ · G4 mostly ✅ · G5 partial (gutter detache
 Lift the surface mean toward 95% with per-surface **pixel alignment**: the **right rail** (65, the
 lowest) and the **70-cluster** (doc editor incl. the G5 gutter pixel-align, Templates, Knowledge, Agents,
 Present), plus the **icon-nav restyle** (the G3 residual).
+
+---
+
+## v2 Iteration 7 — pin the shell to the comp's rail widths · ~73% → ~74%
+
+The right rail (65) was the lowest surface and visibly cramped (282px vs the comp's 392px). Pinned both
+rails to the comp's widths. Screenshots: [`shots/v2-iter7/`](shots/v2-iter7/).
+
+### What changed (decision log 27; 0 core patches, additive-contribution)
+`StudioStartupContribution` now calls `IWorkbenchLayoutService.setSize` to pin the **tree-rail to 264px**
+and the **right rail to 392px**, after revealing the rail and on the next layout tick (a `disposableTimeout`)
+so the workbench's own size-restore doesn't clobber it. The product is an opinionated single surface, so
+the layout is set rather than left at the IDE defaults.
+
+### Verification + gate re-check (chrome-devtools MCP)
+- Measured: right rail **282 -> 374px**, sidebar **246 -> 252px**, editor **780 -> 718px** (the 720px doc
+  column still fits). The grid redistributes, so it lands near- not exact-pixel — but well toward the comp
+  from the cramped defaults (`shots/v2-iter7/01-wider-rails.png`).
+- **No regressions:** doc opens clean (single iframe, calm header), no toasts. G1-G4 + G6 hold; G5 partial.
+- `typecheck-client` clean; **75/75 tests green**. The extra **Skills** tab (4th) is kept as a deliberate
+  verification-feature departure from the comp's 3.
+
+### Next
+Per-surface pixel alignment on the **70-cluster** (doc editor incl. the G5 gutter/figure pixel-align,
+Templates, Knowledge, Agents, Present) + the **icon-nav restyle** (G3 residual). With 3 iterations left,
+the mean likely lands in the ~80s, not 95 — iteration 10 will give the honest final readout.

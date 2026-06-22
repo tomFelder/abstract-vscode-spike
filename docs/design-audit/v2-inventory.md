@@ -53,10 +53,10 @@ Target: overall **>= 95%** + every hard gate passing.
 |---------|------------------------------|----------------|:----:|----------|
 | **Source-peek / "Sync across"** | **iter 2:** "⇆ Source" / provenance dot opens an **in-surface left pane** (styled source table, "REFERENCED BY", floating ⟳ "Sync across" circle, close ✕) inside the one webview — no 2nd group, no blank pane | In-surface LEFT pane inside the editor + floating ⟳ "Sync across" circle; never a 2nd group | **78** ↑ | _Remaining:_ pane shows bound key→value rows, not the comp's raw CSV grid w/ latest row highlighted; no in-pane CSV edit yet |
 | **Interaction grammar** | **iter 5:** menubar + Accounts + Manage(gear) removed; tabs/status/command-center/group-title already off; palette no longer surfaced. The shell reads as a calm app, not an IDE | Opinionated Word/Docs/Notion grammar; optionality **removed** | **70** ↑ | _Residual:_ raw `Ctrl+Shift+P` keybinding + pane-resize sashes (core-owned) |
-| **Left rail / nav** | **iter 3:** one `TreeRailView` with **Files/Context/Outline/Search** tabs + folder tree (REPORTS + SOURCES); Documents + Context containers folded in | 76px labeled icon-nav + 264px **Files/Context/Outline/Search** tree-rail + folder tree | **75** ↑ | _Residual:_ the 76px labeled icon-nav restyle (activity bar still ~48px); make Home/Templates/etc. pure nav |
+| **Left rail / nav** | **iter 3+7:** one `TreeRailView` (Files/Context/Outline/Search + folder tree), width pinned toward the comp's 264px (iter 7) | 76px labeled icon-nav + 264px **Files/Context/Outline/Search** tree-rail + folder tree | **77** ↑ | _Residual:_ the 76px labeled icon-nav restyle (activity bar still ~48px); make Home/Templates/etc. pure nav |
 | **Global header** | **iter 4:** the doc header is the comp's single calm bar (brand/crumb + pill + Present + avatar); pill refreshes, formatting is a floating selection toolbar, Download/Refresh removed | Single calm 48px bar (brand/crumb/synced/Present/avatar) | **85** ↑ | _Residual:_ VS Code menubar leaks above (G4); the bar is per-webview, not one unified shell header |
 | **Context panel** | **iter 3:** now a **tab inside the tree-rail** (verified: Linked sources / Referenced files groups for the active doc), reusing `buildContextGroups` | A **tab inside the tree-rail**: Linked sources / Referenced files / Pasted text / Images / Company knowledge + Add context | **78** ↑ | Surface Pasted/Images/Knowledge groups + Add-context inside the rail tab (data model already supports) |
-| **Right rail (Chat/Review/History)** | 4 tabs — **Chat / Review / History / Skills** (one extra); functional; empty-state shown | 392px rail, **Chat / Review / History** (3 only) | **65** | Reconcile the extra "Skills" tab; pixel-align width/typography |
+| **Right rail (Chat/Review/History)** | **iter 7:** pinned to ~374px (was 282; comp 392) — roomy, functional; 4 tabs (Chat/Review/History/**Skills** — Skills kept as a deliberate verification-feature departure) | 392px rail, **Chat / Review / History** (3 only) | **75** ↑ | Content typography pixel-pass; Skills is an accepted departure |
 | **Document editor (body + gutter)** | Body reads like Word — h1, subtitle, sections, KPI table, dotted-underline bindings (high fidelity); gutter dots in thin margin | hi-fi doc + **30px detached gutter** + 720px centered column | **70** | **G5/D1** — detach gutter to 30px column; pixel-align column |
 | **Templates** | Faithful webview (Run template / Template / Prompt / Sources / Generate draft) but opened as an editor, squeezed beside the blank group | Dedicated full-width surface | **70** | Host outside editor-groups; full-width; pixel pass |
 | **Knowledge** | Faithful (Org/Project toggle, "How this is used", DECISION STACK: Mission/Strategy/OKRs) but squeezed | Dedicated full-width surface | **70** | Same as Templates |
@@ -66,12 +66,12 @@ Target: overall **>= 95%** + every hard gate passing.
 
 \* Present scored from comp + v1 evidence; not re-driven live in iteration 1 (flagged for iter-2+).
 
-**Overall alignment: iter-1 ~56% → -2 ~61% → -3 ~67% → -4 ~70% → -5 ~73% → -6 ~73%** (mean of the 12
-surface rows; iter-6 fixed gate **G6** — toasts — which isn't a per-surface score, so the mean holds but
-a gate flips and the **live click-through is now clean**). **Gate status after iter 6:** G1 ✅, G2 ✅,
-G3 mostly ✅, G4 mostly ✅, G5 partial (gutter detached; pixel-align pending), **G6 ✅**. Remaining for
-the surface mean: **right rail (65)** + the **70-cluster** (doc editor, Templates, Knowledge, Agents,
-Present) + the **icon-nav restyle** — i.e. per-surface pixel alignment to lift toward 95%.
+**Overall alignment: iter-1 ~56% → -2 ~61% → -3 ~67% → -4 ~70% → -5 ~73% → -6 ~73% → -7 ~74%** (mean of
+the 12 surface rows; iter-7 pinned the rail widths: right rail 65→75, left rail 75→77). **Gate status
+after iter 7:** G1 ✅, G2 ✅, G3 mostly ✅, G4 mostly ✅, G5 partial (gutter detached; pixel-align
+pending), G6 ✅; live click-through clean. Remaining for the surface mean: the **70-cluster** (doc editor
+incl. G5 gutter pixel-align, Templates, Knowledge, Agents, Present) + the **icon-nav restyle** — i.e.
+per-surface pixel alignment to lift toward 95%.
 
 ## Ranked gap backlog (most abrasive × most central)
 

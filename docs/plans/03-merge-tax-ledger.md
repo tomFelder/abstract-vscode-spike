@@ -122,7 +122,13 @@ dev run (the "Activating extension failed" toasts). Tier: **core-patch** — the
 - **Greenfield evidence (Q3):** the entire v2 calm shell (source-peek in-surface, tree-rail, calm header,
   chrome removal, builtin exclusion) needed exactly **one** tiny core seam — the fork de-IDEs cheaply.
 
-## Core-patch count: **1 added in v2** (iter 6, builtin exclusion) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1 + v2 iters 2-5) (1 pre-existing, from the engine phase). v2 (plan 11) permits this - logged above.
+**v2 iter 7 — pin the shell widths (right-rail pixel-align): 0 core patches.**
+`StudioStartupContribution` calls `IWorkbenchLayoutService.setSize` (a public service) after revealing
+the rail + a layout tick, to pin the tree-rail to 264px and the right rail to 392px (the comp). Tier:
+**additive-contribution** — no core file touched. (The grid redistributes to ~252/374, near- not
+exact-pixel, but well toward the comp from the cramped 246/282 defaults.)
+
+## Core-patch count: **1 added in v2** (iter 6, builtin exclusion) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1 + v2 iters 2-5,7) (1 pre-existing, from the engine phase). v2 (plan 11) permits this - logged above.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be

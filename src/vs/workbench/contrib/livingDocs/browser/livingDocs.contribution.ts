@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { disposableTimeout } from '../../../../base/common/async.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -21,6 +22,7 @@ import { EditorExtensions } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
+import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
@@ -257,6 +259,7 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
 		@IEditorService private readonly _editorService: IEditorService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
+		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -273,8 +276,27 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		if (this._editorService.editors.length === 0) {
 			void this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'home'), { pinned: true });
 		}
-		// Reveal the Studio right panel (Chat / Review / History / Skills) without stealing focus.
-		void viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
+		// Reveal the Studio right panel (Chat / Review / History / Skills) without stealing focus, then
+		// pin the shell to the comp's pixel widths: a 264px tree-rail and a 392px right rail. Sizing
+		// happens AFTER the rail is revealed (setSize is a no-op on a hidden part) and after a layout
+		// tick so it isn't overwritten by the workbench's own size restore. The product is an opinionated
+		// single surface, so the layout is set rather than left at the IDE defaults.
+		void viewsService.openView(REVIEW_RAIL_VIEW_ID, false).then(() => {
+			this._pinShellWidths(layoutService);
+		});
+	}
+
+	private _pinShellWidths(layoutService: IWorkbenchLayoutService): void {
+		const apply = () => {
+			try {
+				layoutService.setSize(Parts.SIDEBAR_PART, { width: 264, height: layoutService.getSize(Parts.SIDEBAR_PART).height });
+				layoutService.setSize(Parts.AUXILIARYBAR_PART, { width: 392, height: layoutService.getSize(Parts.AUXILIARYBAR_PART).height });
+			} catch (e) { /* layout not ready in some hosts; the default widths still apply */ }
+		};
+		// Run after the current layout pass and once more on the next animation frame, so the sizes win
+		// over the workbench's restore (which can land a tick later).
+		this._register(disposableTimeout(apply, 0));
+		apply();
 	}
 
 	private _closeWelcomeEditors(): void {
