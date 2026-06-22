@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { AddedContextKind, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -217,4 +217,10 @@ export interface ILivingDocsService {
 	syncFromSources(resource: URI): Promise<readonly IFigureChange[]>;
 	/** The figure diff from the last syncFromSources for a document (for the editor's "synced" banner). */
 	getLastSyncDiff(resource: URI): readonly IFigureChange[];
+
+	// --- typed context (the Context panel's Pasted text / Images / Company knowledge groups) ---
+	/** The context the user added by hand (pasted text / images / company knowledge), persisted in the lock. */
+	getAddedContext(resource: URI): readonly IAddedContext[];
+	/** Add a typed context item to a document (from the Context panel's "Add context") and persist it. */
+	addContext(resource: URI, kind: AddedContextKind, text: string): Promise<void>;
 }

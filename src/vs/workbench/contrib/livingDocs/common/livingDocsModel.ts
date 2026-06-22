@@ -107,6 +107,17 @@ export interface IPin {
 	readonly version: string;
 }
 
+// Context the user adds by hand (not a frontmatter file source): a pasted note, an image, or a piece
+// of company knowledge. Stored in the lock (not the clean .md) so the file stays portable. `pasted`
+// and `knowledge` carry their text in `detail`; `image` carries its path/URL in `label`.
+export type AddedContextKind = 'pasted' | 'image' | 'knowledge';
+
+export interface IAddedContext {
+	readonly kind: AddedContextKind;
+	readonly label: string;
+	readonly detail?: string;
+}
+
 export interface ILivingDocLock {
 	version: number;
 	bindings: Record<string, IBindingEntry>;
@@ -116,10 +127,13 @@ export interface ILivingDocLock {
 	// The provenance audit, folded in from the old `.audit.json` sidecar so the lock is the single
 	// durable home for a document's dependency graph + history.
 	audit: IAuditEntry[];
+	// User-added context (pasted text / images / company knowledge), kept here so the clean .md stays
+	// just prose + frontmatter file sources.
+	contextItems: IAddedContext[];
 }
 
 export function emptyLock(): ILivingDocLock {
-	return { version: LOCK_VERSION, bindings: {}, context: {}, claims: {}, pins: [], audit: [] };
+	return { version: LOCK_VERSION, bindings: {}, context: {}, claims: {}, pins: [], audit: [], contextItems: [] };
 }
 
 // --- orchestration: agents, triggers, policy, runs (spec 09) ---

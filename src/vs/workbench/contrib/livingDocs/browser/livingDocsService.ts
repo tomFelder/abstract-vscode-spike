@@ -24,7 +24,7 @@ import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AgentPolicy, emptyLock, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
 interface IGradeResult {
@@ -1500,6 +1500,28 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getLastSyncDiff(resource: URI): readonly IFigureChange[] {
 		return this._lastSyncDiff.get(resource.toString()) ?? [];
+	}
+
+	// --- typed context (Pasted text / Images / Company knowledge + Add context) ---
+
+	getAddedContext(resource: URI): readonly IAddedContext[] {
+		return this._docs.get(resource.toString())?.lock.contextItems ?? [];
+	}
+
+	// Add a typed context item from the Context panel. Pasted notes and knowledge keep their full text in
+	// `detail` with a truncated `label`; an image keeps its path/URL as the label. Persisted in the lock.
+	async addContext(resource: URI, kind: AddedContextKind, text: string): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		const trimmed = text.trim();
+		if (!state || !trimmed) { return; }
+		if (!state.lock.contextItems) { state.lock.contextItems = []; }
+		const oneLine = trimmed.replace(/\s+/g, ' ');
+		const label = kind === 'image' ? oneLine : (oneLine.length > 48 ? `${oneLine.slice(0, 47)}\u2026` : oneLine);
+		const detail = kind === 'image' ? 'image' : (kind === 'knowledge' ? 'company knowledge' : 'pasted note');
+		state.lock.contextItems.push({ kind, label, detail });
+		state.status = 'Context added';
+		await this._persist(state);
+		this._onDidChange.fire();
 	}
 
 	private _renderSourceMarkdown(state: IDocState, cells: readonly string[]): string {

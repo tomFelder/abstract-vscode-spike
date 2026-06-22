@@ -16,7 +16,7 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
-import { AgentPolicy, IAgentDef } from '../../common/livingDocsModel.js';
+import { AgentPolicy, IAgentDef, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
 
 const METRICS_CSV = [
@@ -308,6 +308,37 @@ suite('LivingDocsService', () => {
 			{ label: 'Linked sources', items: [{ name: 'metrics.csv', kind: 'file', detail: 'changed · feeds 1 block', changed: true }] },
 			{ label: 'Referenced files', items: [{ name: 'market-research.md', kind: 'reference', detail: 'changed since review', changed: true }] },
 		]);
+	});
+
+	test('buildContextGroups splits image references into Images and surfaces added pasted/knowledge groups', () => {
+		const doc: ILivingDoc = { title: 't', subtitle: '', sources: [], context: ['market-research.md', 'chart.png'], blocks: [], isLiving: true, body: '' };
+		const fresh: IFreshness = { staleBindings: [], staleContext: [], dirty: false };
+		const groups = buildContextGroups(doc, fresh, [
+			{ kind: 'pasted', label: 'Q3 plan notes', detail: 'pasted note' },
+			{ kind: 'knowledge', label: 'North Star metric', detail: 'company knowledge' },
+		]);
+		assert.deepStrictEqual(groups.map(g => [g.label, g.items.map(i => `${i.kind}:${i.name}`)]), [
+			['Referenced files', ['reference:market-research.md']],
+			['Images', ['image:chart.png']],
+			['Pasted text', ['pasted:Q3 plan notes']],
+			['Company knowledge', ['knowledge:North Star metric']],
+		]);
+	});
+
+	test('addContext persists a typed context item to the lock; getAddedContext + the Context panel surface it', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		await service.addContext(WEEKLY, 'pasted', 'Customer interview: pricing is the blocker.');
+
+		assert.deepStrictEqual(
+			service.getAddedContext(WEEKLY).map(a => ({ kind: a.kind, label: a.label, detail: a.detail })),
+			[{ kind: 'pasted', label: 'Customer interview: pricing is the blocker.', detail: 'pasted note' }],
+		);
+		const groups = buildContextGroups(service.getDoc(WEEKLY)!, service.getFreshness(WEEKLY), service.getAddedContext(WEEKLY));
+		assert.ok(groups.some(g => g.label === 'Pasted text'), 'the Pasted text group now renders');
+		const lockOnDisk = JSON.parse(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!);
+		assert.strictEqual(lockOnDisk.contextItems[0].kind, 'pasted', 'persisted to the lock sidecar');
 	});
 
 	test('an api source is grouped as a linked source with its kind', async () => {
