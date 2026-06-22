@@ -122,6 +122,10 @@ dev run (the "Activating extension failed" toasts). Tier: **core-patch** — the
 - **Greenfield evidence (Q3):** the entire v2 calm shell (source-peek in-surface, tree-rail, calm header,
   chrome removal, builtin exclusion) needed exactly **one** tiny core seam — the fork de-IDEs cheaply.
 
+**v2 iter 8 — inline bound-figure highlighting (doc G5 pixel-align): 0 core patches.**
+Entirely in `livingDocRender.ts`: bound prose wraps each resolved figure in a `.bound` span (tokenize
+before the Markdown renderer, swap after). Tier: **additive-contribution** (webview only).
+
 **v2 iter 7 — pin the shell widths (right-rail pixel-align): 0 core patches.**
 `StudioStartupContribution` calls `IWorkbenchLayoutService.setSize` (a public service) after revealing
 the rail + a layout tick, to pin the tree-rail to 264px and the right rail to 392px (the comp). Tier:

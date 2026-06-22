@@ -105,7 +105,10 @@ h2.section{margin:26px 0 12px;font:600 19px/1.3 system-ui;color:#23262c}
 .gbar{width:3px;flex:1;min-height:16px;border-radius:2px;background:${ACCENT};cursor:pointer}
 .gbar.warn{background:oklch(0.66 0.16 45)}
 p.block{margin:0 0 22px;font:400 16px/1.78 system-ui;color:#2c2f36}
-.bound{border-bottom:1.5px dotted #c2c9f0}
+/* A source-bound figure inline in the prose: the comp's faint-blue highlight + underline, so the reader
+ * sees exactly which words are live. Clicking one peeks its source. */
+.bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 1px;cursor:pointer}
+.bound:hover{background:rgba(80,110,235,.16)}
 .editable{border-radius:4px;transition:background .1s,box-shadow .1s;cursor:text}
 .editable:hover{background:rgba(80,90,160,.06)}
 .editable:focus{outline:none;background:rgba(80,90,160,.08);box-shadow:0 0 0 1px #c2c9f0}
@@ -322,7 +325,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	}
 
 	const hint = (mode === 'rendered' && isLiving)
-		? `<div class="hint">Bound text is dotted-underlined &mdash; click a provenance dot to trace it back to the source. `
+		? `<div class="hint">Bound figures are highlighted in blue &mdash; click one (or a gutter dot) to trace it back to the source. `
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
@@ -460,6 +463,24 @@ function renderBlockMarkdown(block: ILivingDocBlock, resolved: ReadonlyMap<strin
 	}
 }
 
+// A bound paragraph: render its Markdown, but wrap each resolved figure in a `.bound` span (the comp's
+// blue dotted-underline highlight) so the reader can see exactly which words are source-bound. Each
+// figure is tokenized BEFORE Markdown rendering (so any formatting around it survives) and the token is
+// swapped for the highlighted span afterwards -- safe against the sanitizing Markdown renderer.
+function renderBoundParagraph(block: ILivingDocBlock, resolved: ReadonlyMap<string, string>): string {
+	const SEP = '\u0001';
+	const tokenized = reconcileBindLinks(block.text, resolved).replace(BIND_LINK_RE, (_m, value, key) => `${SEP}${key}${SEP}${value}${SEP}`);
+	const rendered = renderMarkdown({ value: tokenized });
+	let html: string;
+	try {
+		html = rendered.element.innerHTML;
+	} finally {
+		rendered.dispose();
+	}
+	const tokenRe = new RegExp(`${SEP}([^${SEP}]+)${SEP}([^${SEP}]*)${SEP}`, 'g');
+	return html.replace(tokenRe, (_m, key, value) => `<span class="bound" data-cells="${key}" data-prov>${value}</span>`);
+}
+
 function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>, resolved: ReadonlyMap<string, string>): string {
 	const parts: string[] = [`<div class="docwrap">`,
 		`<div class="docfull"><h1 class="title">${esc(doc.title)}</h1><div class="subtitle">${esc(doc.subtitle)}</div></div>`];
@@ -493,9 +514,13 @@ function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], recent:
 
 		if (bound) {
 			// A bound block is driven by its sources: a blue gutter dot, rendered Markdown with the
-			// resolved values inline, and hover/click reveals provenance. Not hand-editable.
+			// resolved values inline, and hover/click reveals provenance. Not hand-editable. Bound prose
+			// additionally highlights each figure inline (the comp's blue underline); tables stay plain.
+			const inner = block.type === 'paragraph'
+				? renderBoundParagraph(block, resolved)
+				: renderBlockMarkdown(block, resolved);
 			parts.push(gutterCell(`<span class="pdot${isRecent ? ' warn' : ''}" data-cells="${cells}" data-prov title="Bound to source"></span>`, false),
-				`<div class="pcell${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${renderBlockMarkdown(block, resolved)}</div>`);
+				`<div class="pcell${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${inner}</div>`);
 			continue;
 		}
 

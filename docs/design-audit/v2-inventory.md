@@ -44,7 +44,7 @@ Target: overall **>= 95%** + every hard gate passing.
 | **G2** — Calm, light 48px header | **PASS (doc header) — iter 4** | The doc header is now the comp's **single calm bar**: brand/crumb + "All sources synced" pill + ↗ Present + avatar — verified live, nothing else (`shots/v2-iter4/01`). Removed Download (Present modal covers it) + the standalone Refresh (the **pill is the refresh**) + the whole formatting-toolbar row (now a **floating selection toolbar**); raw-Markdown moved to the footer. _Residual:_ the VS Code **menubar ("Application Menu")** still sits above the webview (a G4 optionality item). Before: `shots/v2-iter1/06`. |
 | **G3** — Left rail matches the comp | **MOSTLY PASS (tree-rail) — iter 3** | The sidebar is now one **`TreeRailView`** with the comp's **Files / Context / Outline / Search** tab strip + a **folder tree** (REPORTS + SOURCES), replacing the separate Documents + Context containers — verified live across all 4 tabs + doc-open (`shots/v2-iter3/01-04`). _Residual:_ the **76px labeled icon-nav** (VS Code's activity bar is still ~48px unlabeled) + making Home/Templates/etc. pure nav — a follow-up slice. Before: `shots/v2-iter1/01,06`. |
 | **G4** — No VS Code optionality leaks | **MOSTLY PASS — iters 2/4/5** | Removed: the source open-beside split (iter 2), the Download/Refresh/Ask-AI/Source header buttons (iter 4), and the **menubar + Accounts + Manage(gear) chrome** (iter 5, `studio.css`). Already off via settings: editor **tabs**, status bar, command center, editor-group **title/close** (studio.css). The command palette is **no longer surfaced** (commandCenter off + Manage gone). `shots/v2-iter5/01`. _Residual:_ the raw `Ctrl+Shift+P` keybinding + pane-resize sashes (core-owned) — a later iteration, may need a core patch. Before: `shots/v2-iter1/01`. |
-| **G5** — Provenance gutter detached (D1) + doc/rail pixel-aligned (D4) | **PARTIAL → FAIL** | Dots render in a **thin left margin**, not the comp's clean **30px detached gutter column**; no multi-line "vertical bar" marker; doc column not pixel-aligned (width/centering differ). `shots/06`. |
+| **G5** — Provenance gutter detached (D1) + doc/rail pixel-aligned (D4) | **PASS — iters (prior)+8** | The gutter is a **30px detached grid column** (dot per bound line, vertical bar for multi-line edits — `.docwrap`/`.gutter2`), and **iter 8** added the comp's **inline bound-figure highlighting** (faint-blue bg + underline on each resolved figure in prose; tables stay plain) so the reader sees what's live. Doc column 720px centered; the rail was widened toward 392px (iter 7). `shots/v2-iter8/01-inline-figure-highlight.png`. |
 | **G6** — Nav never blanks + dev-build ext toast gone | **PASS — iter 6** | Nav switching never blanks (v1 iter-6 fix holds). The **ext-activation toasts are gone**: the IDE-only builtins (`emmet`/`git-base`/`merge-conflict`) are excluded from the product in the web `BuiltinExtensionsScannerService` (first v2 core patch). Verified live: clean launch + click-through, zero toasts (`shots/v2-iter6/01-no-toasts.png`). Before: `shots/v2-iter1/01`. |
 
 ## Per-surface inventory + live scores
@@ -57,7 +57,7 @@ Target: overall **>= 95%** + every hard gate passing.
 | **Global header** | **iter 4:** the doc header is the comp's single calm bar (brand/crumb + pill + Present + avatar); pill refreshes, formatting is a floating selection toolbar, Download/Refresh removed | Single calm 48px bar (brand/crumb/synced/Present/avatar) | **85** ↑ | _Residual:_ VS Code menubar leaks above (G4); the bar is per-webview, not one unified shell header |
 | **Context panel** | **iter 3:** now a **tab inside the tree-rail** (verified: Linked sources / Referenced files groups for the active doc), reusing `buildContextGroups` | A **tab inside the tree-rail**: Linked sources / Referenced files / Pasted text / Images / Company knowledge + Add context | **78** ↑ | Surface Pasted/Images/Knowledge groups + Add-context inside the rail tab (data model already supports) |
 | **Right rail (Chat/Review/History)** | **iter 7:** pinned to ~374px (was 282; comp 392) — roomy, functional; 4 tabs (Chat/Review/History/**Skills** — Skills kept as a deliberate verification-feature departure) | 392px rail, **Chat / Review / History** (3 only) | **75** ↑ | Content typography pixel-pass; Skills is an accepted departure |
-| **Document editor (body + gutter)** | Body reads like Word — h1, subtitle, sections, KPI table, dotted-underline bindings (high fidelity); gutter dots in thin margin | hi-fi doc + **30px detached gutter** + 720px centered column | **70** | **G5/D1** — detach gutter to 30px column; pixel-align column |
+| **Document editor (body + gutter)** | **iter 8:** 30px detached gutter (dot/bar), **inline blue figure highlighting** in prose, 720px centered column, calm header (iter 4) | hi-fi doc + 30px detached gutter + 720px centered column + inline bound figures | **88** ↑ | Minor: bound-paragraph bold/italic not preserved by the highlight path (edge case) |
 | **Templates** | Faithful webview (Run template / Template / Prompt / Sources / Generate draft) but opened as an editor, squeezed beside the blank group | Dedicated full-width surface | **70** | Host outside editor-groups; full-width; pixel pass |
 | **Knowledge** | Faithful (Org/Project toggle, "How this is used", DECISION STACK: Mission/Strategy/OKRs) but squeezed | Dedicated full-width surface | **70** | Same as Templates |
 | **Agents** | Faithful (header, ＋ New agent, All/Scheduled/Event/Needs-approval filters, 5-agent table, canvas tip) but squeezed | Dedicated full-width surface + per-agent canvas | **70** | Same as Templates |
@@ -66,12 +66,12 @@ Target: overall **>= 95%** + every hard gate passing.
 
 \* Present scored from comp + v1 evidence; not re-driven live in iteration 1 (flagged for iter-2+).
 
-**Overall alignment: iter-1 ~56% → -2 ~61% → -3 ~67% → -4 ~70% → -5 ~73% → -6 ~73% → -7 ~74%** (mean of
-the 12 surface rows; iter-7 pinned the rail widths: right rail 65→75, left rail 75→77). **Gate status
-after iter 7:** G1 ✅, G2 ✅, G3 mostly ✅, G4 mostly ✅, G5 partial (gutter detached; pixel-align
-pending), G6 ✅; live click-through clean. Remaining for the surface mean: the **70-cluster** (doc editor
-incl. G5 gutter pixel-align, Templates, Knowledge, Agents, Present) + the **icon-nav restyle** — i.e.
-per-surface pixel alignment to lift toward 95%.
+**Overall alignment: iter-1 ~56% → … → -7 ~74% → -8 ~76%** (mean of the 12 surface rows; iter-8 lifted
+the doc editor 70→88 via inline figure highlighting + completed G5). **Gate status after iter 8:**
+G1 ✅, G2 ✅, G3 mostly ✅, G4 mostly ✅, **G5 ✅**, G6 ✅; live click-through clean. Only G3/G4 are
+"mostly" (residuals: the 76px labeled icon-nav restyle; the raw palette keybinding + pane sashes).
+Remaining for the surface mean: the **70-cluster** (Templates, Knowledge, Agents, Present) + the
+**icon-nav restyle** — per-surface pixel alignment.
 
 ## Ranked gap backlog (most abrasive × most central)
 

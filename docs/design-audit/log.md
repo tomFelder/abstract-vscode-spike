@@ -40,6 +40,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | **v2-5 (remove IDE chrome, G4)** | **~73%** | **Removed the residual IDE chrome.** Three `studio.css` rules hide the modernUI **menubar** ("Application Menu" hamburger, which ignored `menuBarVisibility:hidden`) + the **Accounts** and **Manage(gear)** global activity-bar actions (Manage was the command-palette surface). With tabs/status/command-center/group-title already off, the shell now reads as a calm app, not an IDE. Tier: **styleOverrides-CSS**, 0 core patches. Verified live: chrome gone, doc opens clean (G1-G3 hold, G2 calm bar intact). **G4 MOSTLY PASS** (residual: raw `Ctrl+Shift+P` keybinding + pane-resize sashes — core-owned). interaction 35->70. |
 | **v2-6 (kill ext toasts, G6)** | **~73%** | **Killed the dev-build ext-activation toasts.** Excluded the IDE-only builtins (`emmet`/`git-base`/`merge-conflict`) from the product via a 3-id denylist in the web `BuiltinExtensionsScannerService` — the **first v2 core patch** (tiny, surgical, product-correct: a word processor doesn't want them, and they were the ones whose web bundle 404s in the dev run). Verified live: **zero toasts on launch; the click-through is now clean** end-to-end. 75/75 green. **G6 PASS.** Mean holds (toasts aren't a per-surface score) but a hard gate flips + the stop-condition's "clean click-through" is satisfied. |
 | **v2-7 (pin rail widths)** | **~74%** | **Pinned the shell to the comp's rail widths.** `StudioStartupContribution` now sets the tree-rail to 264px and the right rail to 392px via `IWorkbenchLayoutService.setSize` (after the rail is revealed + a layout tick, so the size restore doesn't clobber it). Verified live: right rail 282 -> 374px (the grid redistributes, so near- not exact-pixel), sidebar -> 252px, editor 718px (the 720px doc column still fits). 0 core patches (additive-contribution); 75/75 green; no gate regressions. right rail 65->75, left rail 75->77. The extra Skills tab is kept as a deliberate verification-feature departure. |
+| **v2-8 (inline figures, G5)** | **~76%** | **Inline bound-figure highlighting** — the comp's "living figure" treatment. Bound prose now wraps each resolved figure in a faint-blue `.bound` span (underline + bg); the KPI table stays plain (as the comp). Technique: tokenize each `[value](bind:key)` before the sanitizing Markdown renderer, swap the token for the span after — formatting survives, no raw HTML injected; each span carries `data-cells` (click a figure -> peek its source). 0 core patches (webview). TDD: a render assertion (76/76 green). Verified live: "+18% / $48.6k / 427 / 2.4%" highlighted in the Highlights prose, single iframe, calm header. **Completes G5** (gutter detached + figures highlighted + doc aligned). doc editor 70->88. |
 
 ---
 
@@ -853,3 +854,36 @@ the layout is set rather than left at the IDE defaults.
 Per-surface pixel alignment on the **70-cluster** (doc editor incl. the G5 gutter/figure pixel-align,
 Templates, Knowledge, Agents, Present) + the **icon-nav restyle** (G3 residual). With 3 iterations left,
 the mean likely lands in the ~80s, not 95 — iteration 10 will give the honest final readout.
+
+---
+
+## v2 Iteration 8 — inline bound-figure highlighting (completes G5) · ~74% → ~76%
+
+The doc was the heart of the product but its bound figures rendered as plain text (only a block-level
+gutter dot showed something was bound). The comp marks each live figure inline. Screenshots:
+[`shots/v2-iter8/`](shots/v2-iter8/).
+
+### What changed (decision log 28; 0 core patches, webview only)
+`renderBoundParagraph` (in `livingDocRender.ts`): bound prose now wraps each resolved figure in a
+`.bound` span styled like the comp (faint-blue bg + 1.5px blue underline). Tables stay plain (as the
+comp). The figure is **tokenized before** the sanitizing Markdown renderer and the token is **swapped
+for the span after** — so Markdown formatting around it survives and no raw HTML is injected. Each span
+carries `data-cells`, so clicking a figure peeks its source (same path as the gutter dot). The footer
+hint updated to "Bound figures are highlighted in blue."
+
+### Verification (chrome-devtools MCP) + gate re-check
+- Live: in Highlights, **"+18%", "$48.6k", "427", "2.4%" are highlighted in blue**; the Key metrics
+  table stays plain (`shots/v2-iter8/01-inline-figure-highlight.png`).
+- **G5 PASS** (gutter detached + figures highlighted + doc column 720px aligned + rail widened in iter 7).
+- **No regressions:** doc opens in a single iframe (G1), calm header (G2), no toasts (G6). `typecheck-client`
+  clean; **76/76 tests green** (a new render assertion for the bound span).
+- _Minor:_ the highlight path doesn't preserve bold/italic *inside* a bound paragraph (an edge case the
+  sample doesn't hit) — tracked.
+
+### Gate status after iter 8
+G1 ✅ · G2 ✅ · G3 mostly ✅ · G4 mostly ✅ · **G5 ✅** · G6 ✅. Only G3/G4 remain "mostly" (residuals:
+the 76px labeled icon-nav; the raw palette keybinding + pane sashes).
+
+### Next
+The **70-cluster** secondary surfaces (Templates / Knowledge / Agents / Present) — now un-squeezed since
+the shell fixes — and the **icon-nav restyle** (G3 residual). Iteration 10 = final re-score + summary.
