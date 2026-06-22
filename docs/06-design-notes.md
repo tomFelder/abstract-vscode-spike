@@ -137,3 +137,10 @@ to a guess:
   Agents) is a webview *editor*; with a leftover/blank group open they render in a narrow column. So
   G1 (kill split/blank groups) and G3 (replace activity-bar-of-editors with a real shell) are the same
   root cause — fixing the hosting model un-squeezes the secondary surfaces for free.
+- **(iter 3) G3 splits cleanly into two slices.** The **tree-rail** (Files/Context/Outline/Search +
+  folder tree) is a single DOM-rendered `ViewPane` and was buildable contrib-only (done, decision 23).
+  The remaining slice — the comp's **76px labeled icon-nav** (vs VS Code's ~48px unlabeled activity
+  bar) and making Home/Templates/Knowledge/Agents *pure nav actions* that keep the tree-rail visible
+  rather than activity-bar containers that swap the sidebar — fights VS Code's one-icon-per-container
+  model and likely needs a `styleOverrides`-CSS pass and/or a small core seam. Treat it as its own
+  iteration, not part of the tree-rail build.

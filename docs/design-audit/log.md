@@ -35,6 +35,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 15 (v1 #5) | **v1 bar reached** | **Doc subtitle tracks the resolved week (criterion 6).** `_resolveSubtitle` refreshes a "Week N" subtitle from the primary source's latest `week` on load + sync. Verified live: sync to week 25 -> subtitle "Week 24..." -> "Week 25 - bound to metrics.csv". 1 new TDD test (71/71 suite green). **Remaining (deferred, infra):** the dev-build extension-activation toast (emmet/git-base/merge-conflict 404 in @vscode/test-web) is an upstream dev-web artifact, not a product dead-end - out of scope for the livingDocs contrib. |
 | **v2-1 (audit)** | **~56%** (experience-weighted) | **v2 shell audit — no code.** Re-scored every surface weighting UX/UI/IA/visual (not behaviour). Content surfaces are 65-78 (Home 78, doc body 70, Templates/Knowledge/Agents 70); shell/IA surfaces are 18-50 (source-peek 18, interaction grammar 25, left rail 35, header 48, Context 50). **All 6 hard gates FAIL/PARTIAL** (see `v2-inventory.md`). The ~86 -> ~56 drop is the re-weighting, not a regression: v1 measured "does it work", v2 measures "does it feel like the comp". |
 | **v2-2 (G1 fix)** | **~61%** | **Killed the #1 abrasion: split/blank panes.** Source-peek + "Sync across" now render **in-surface** (a styled source pane + floating ⟳ circle inside the one webview) instead of opening a `SIDE_GROUP` editor. Removed `revealSource`/`openSourceBeside`; added a pure `getSourcePeek` (TDD, 71/71 green). **0 core patches.** Verified live: open Source -> in-surface pane (no 2nd group, no blank pane) -> Sync (green confirmation) -> close. **G1 PASS** for source-peek (export-open still SIDE_GROUP, tracked). source-peek 18->78, interaction 25->30. |
+| **v2-3 (tree-rail, G3)** | **~67%** | **Built the left tree-rail.** One `TreeRailView` with **Files / Context / Outline / Search** tabs + a folder tree (REPORTS + SOURCES), replacing the separate Documents + Context activity-bar containers (both deleted). Pure helpers `buildFileTree`/`buildOutline`/`searchTreeRail` in `common/treeRail.ts` (TDD, 74/74 green); `ILivingDocSummary` gained `sources`. **0 core patches.** Verified live: all 4 tabs + folder tree + doc-open from Files (opens clean, no split). **G3 MOSTLY PASS** (residual: the 76px labeled icon-nav restyle). left rail 35->75, Context 50->78. |
 
 ---
 
@@ -684,3 +685,43 @@ referencing docs). `typecheck-client` clean; **71/71 tests green**.
 Backlog #2 — **the left tree-rail (G3)**: the comp's 76px labeled icon-nav + 264px
 Files/Context/Outline/Search rail + folder tree, replacing the activity-bar-per-view containers. This is
 also what un-squeezes Templates/Knowledge/Agents (they stop being editors beside leftover panes).
+
+---
+
+## v2 Iteration 3 — the left tree-rail (G3) · ~61% → ~67%
+
+Backlog #2. Replaced the spike-era activity-bar-per-view split (separate **Documents** + **Context**
+containers, a flat doc list, no folders) with the comp's **single tabbed tree-rail**. Screenshots:
+[`shots/v2-iter3/`](shots/v2-iter3/).
+
+### What changed (0 core patches — additive-contribution, decision log 23)
+- **New `common/treeRail.ts`** (pure, TDD): `buildFileTree` (docs → Reports folder, deduped sources →
+  Sources folder), `buildOutline` (heading blocks → entries, Markdown/bind syntax stripped),
+  `searchTreeRail` (title/body match + snippet, blank query → none).
+- **New `browser/treeRailView.ts`** (`ViewPane`, DOM-rendered like the old DocumentsView): a 4-tab strip
+  (Files / Context / Outline / Search) + the active tab's body. Files = folder tree (doc rows open the
+  editor, pending dot mirrors the Review count); Context = `buildContextGroups` for the active doc;
+  Outline = the doc's headings; Search = input + result snippets.
+- **`livingDocs.contribution.ts`**: the default sidebar container now hosts `TreeRailView` (titled
+  "Workspace", `listTree` icon); **deleted** the separate Context container and the now-orphaned
+  `documentsView.ts` + `contextPanelView.ts`.
+- **`ILivingDocSummary` gained `sources`** (the Files tab's Sources folder needs the names).
+
+### TDD
+3 new `treeRail` tests (file-tree grouping, outline stripping, search). `typecheck-client` clean;
+**74/74 tests green** (71 + 3).
+
+### Live verification + gate re-check (chrome-devtools MCP)
+- **G3 — MOSTLY PASS.** The rail shows the **Files / Context / Outline / Search** tab strip + a folder
+  tree (REPORTS: Board Note, Weekly Operating Summary; SOURCES: metrics.csv). All four tabs verified:
+  Files (folder tree + doc-open), Outline (Highlights / Key metrics / Commentary / What to watch),
+  Context (Linked sources · 1 / Referenced files · 1), Search ("growth" → 1 result + snippet).
+  `shots/v2-iter3/01-tree-rail-files.png` … `04-search-tab.png`. _Residual:_ the 76px labeled icon-nav.
+- **No regressions:** **G1 still PASS** — opening a doc from the Files tab opens it cleanly in the one
+  editor (single iframe, no split, no blank pane). G2 / G4 / G5 unchanged; G6 toasts still fire.
+
+### Next
+The remaining shell gaps are **the calm header (G2, score 48)** and **removing IDE optionality
+(G4, 30)**; then the icon-nav restyle and per-surface pixel alignment. Next iteration: **G2 — calm the
+header** (strip the doc editor's second formatting-toolbar row + Download/Refresh, unify to the comp's
+single 48px bar).

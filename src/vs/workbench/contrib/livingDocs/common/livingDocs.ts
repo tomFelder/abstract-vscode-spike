@@ -32,6 +32,8 @@ export interface ILivingDocSummary {
 	readonly isLiving: boolean;
 	/** The distinct source kinds (file | api | mcp) the document binds to, for the row chips. */
 	readonly sourceKinds: readonly SourceKind[];
+	/** The document's binding sources (e.g. "metrics.csv", "crm.api"), for the tree-rail Sources folder. */
+	readonly sources: readonly string[];
 	/** Human label for when the document was last synced, e.g. "Week 24" (empty for plain Markdown). */
 	readonly lastSynced: string;
 	/** Pending meaning-changes for this document (mirrors the Review rail count). */

@@ -405,6 +405,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				title: doc.title,
 				isLiving: doc.isLiving,
 				sourceKinds: [...kinds],
+				sources: doc.sources,
 				lastSynced: doc.context.length ? `${doc.context.length} context` : (bound ? `${bound} bound` : ''),
 				pendingCount: this._pending.filter(c => c.docId === id).length,
 			};

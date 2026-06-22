@@ -23,13 +23,12 @@ import { IEditorResolverService, RegisteredEditorPriority } from '../../../servi
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { CONTEXT_CONTAINER_ID, CONTEXT_VIEW_ID, DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { ContextPanelView } from './contextPanelView.js';
-import { DocumentsView } from './documentsView.js';
+import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
 import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
+import { TreeRailView } from './treeRailView.js';
 import { ScreenEditor } from './screenEditor.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenLauncherView } from './screenLauncherView.js';
@@ -120,52 +119,30 @@ class LivingDocsEditorResolverContribution extends Disposable implements IWorkbe
 }
 registerWorkbenchContribution2(LivingDocsEditorResolverContribution.ID, LivingDocsEditorResolverContribution, WorkbenchPhase.BlockRestore);
 
-// --- "Documents" home in the primary sidebar (replaces the file Explorer) ---
-const documentsIcon = registerIcon('living-docs-documents', Codicon.book, localize('livingDocs.documentsIcon', "Living Documents home"));
+// --- the left tree-rail in the primary sidebar (one rail: Files / Context / Outline / Search + a
+// folder tree, replacing the file Explorer AND the spike-era separate Documents + Context containers).
+// The single TreeRailView holds the tabbed rail (decision log 23). ADDITIVE-CONTRIBUTION (merge-tax ledger).
+const workspaceIcon = registerIcon('living-docs-workspace', Codicon.listTree, localize('livingDocs.workspaceIcon', "Workspace tree-rail"));
 
-const documentsContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+const workspaceContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
 	id: DOCUMENTS_CONTAINER_ID,
-	title: localize2('livingDocs.documents', "Documents"),
-	icon: documentsIcon,
+	title: localize2('livingDocs.workspace', "Workspace"),
+	icon: workspaceIcon,
 	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [DOCUMENTS_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
 	storageId: DOCUMENTS_CONTAINER_ID,
 	hideIfEmpty: false,
 	order: 0,
 }, ViewContainerLocation.Sidebar, { isDefault: true });
 
-const documentsViewDescriptor: IViewDescriptor = {
+const treeRailViewDescriptor: IViewDescriptor = {
 	id: DOCUMENTS_VIEW_ID,
-	name: localize2('livingDocs.documentsView', "Documents"),
-	containerIcon: documentsIcon,
-	ctorDescriptor: new SyncDescriptor(DocumentsView),
+	name: localize2('livingDocs.workspaceView', "Workspace"),
+	containerIcon: workspaceIcon,
+	ctorDescriptor: new SyncDescriptor(TreeRailView),
 	canToggleVisibility: false,
 	canMoveView: false,
 };
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([documentsViewDescriptor], documentsContainer);
-
-// --- "Context" panel in the primary sidebar: the influence sources of the active document ---
-// ADDITIVE-CONTRIBUTION (merge-tax ledger).
-const contextIcon = registerIcon('living-docs-context', Codicon.references, localize('livingDocs.contextIcon', "Document context sources"));
-
-const contextContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
-	id: CONTEXT_CONTAINER_ID,
-	title: localize2('livingDocs.context', "Context"),
-	icon: contextIcon,
-	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [CONTEXT_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
-	storageId: CONTEXT_CONTAINER_ID,
-	hideIfEmpty: false,
-	order: 1,
-}, ViewContainerLocation.Sidebar);
-
-const contextViewDescriptor: IViewDescriptor = {
-	id: CONTEXT_VIEW_ID,
-	name: localize2('livingDocs.contextView', "Context"),
-	containerIcon: contextIcon,
-	ctorDescriptor: new SyncDescriptor(ContextPanelView),
-	canToggleVisibility: false,
-	canMoveView: true,
-};
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([contextViewDescriptor], contextContainer);
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([treeRailViewDescriptor], workspaceContainer);
 
 // Hide the built-in IDE view containers additively: deregister them once registries are populated,
 // rather than patching each contribution. ADDITIVE-CONTRIBUTION (merge-tax ledger). NOTE: this leans

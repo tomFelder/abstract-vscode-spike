@@ -86,7 +86,16 @@ the existing `livingDocEditor` webview (`livingDocRender.ts`). Tier reached: **a
 (no `styleOverrides`, no theme, no core file touched). The single biggest expected core-patch candidate
 turned out contrib-only — mild evidence the fork can still de-IDE without core forks (Q3).
 
-## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round + v2 iter 2 source-peek) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
+**v2 iter 3 — the left tree-rail (the second expected candidate above): 0 core patches.**
+Built one `TreeRailView` (a standard `ViewPane`, like the old DocumentsView) with internal Files /
+Context / Outline / Search tabs + a folder tree, registered as the single default sidebar container;
+folded the separate Documents + Context containers into it (deleted `documentsView.ts` +
+`contextPanelView.ts`). Pure helpers in `common/treeRail.ts`. Tier reached: **additive-contribution** —
+the tabbed rail was reachable as one DOM-rendered view without touching the activity-bar/part core. The
+**residual** 76px labeled icon-nav (vs VS Code's ~48px activity bar) + making Home/Templates/etc. pure
+nav may need a `styleOverrides`-CSS or core seam; deferred to a later iteration and re-evaluated then.
+
+## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round + v2 iter 2 source-peek + v2 iter 3 tree-rail) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
