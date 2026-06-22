@@ -42,6 +42,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | **v2-7 (pin rail widths)** | **~74%** | **Pinned the shell to the comp's rail widths.** `StudioStartupContribution` now sets the tree-rail to 264px and the right rail to 392px via `IWorkbenchLayoutService.setSize` (after the rail is revealed + a layout tick, so the size restore doesn't clobber it). Verified live: right rail 282 -> 374px (the grid redistributes, so near- not exact-pixel), sidebar -> 252px, editor 718px (the 720px doc column still fits). 0 core patches (additive-contribution); 75/75 green; no gate regressions. right rail 65->75, left rail 75->77. The extra Skills tab is kept as a deliberate verification-feature departure. |
 | **v2-8 (inline figures, G5)** | **~76%** | **Inline bound-figure highlighting** — the comp's "living figure" treatment. Bound prose now wraps each resolved figure in a faint-blue `.bound` span (underline + bg); the KPI table stays plain (as the comp). Technique: tokenize each `[value](bind:key)` before the sanitizing Markdown renderer, swap the token for the span after — formatting survives, no raw HTML injected; each span carries `data-cells` (click a figure -> peek its source). 0 core patches (webview). TDD: a render assertion (76/76 green). Verified live: "+18% / $48.6k / 427 / 2.4%" highlighted in the Highlights prose, single iframe, calm header. **Completes G5** (gutter detached + figures highlighted + doc aligned). doc editor 70->88. |
 | **v2-9 (labeled icon-nav, G3)** | **~77%** | **The 76px labeled icon-nav.** `ACTIVITYBAR_WIDTH 48 -> 76` (second v2 core patch) so the grid allocates the comp's wider rail, + `studio.css` renders a text label under each icon (`::after { content: attr(aria-label) }`). Verified live: 76px rail with Workspace/Home/Templates/Knowledge/Agents labels, sidebar reflows with **no overlap**, doc/Home click-through clean. **Completes G3** (tree-rail iter 3 + icon-nav now). The guard test (activitybarPart.test) updated 48->76; activitybar 14/14 + livingDocs 76/76 green. left rail 77->90. **Gates now: only G4 is "mostly"** (palette keybinding + sashes residual). |
+| **v2-10 (final re-verify + summary)** | **~82%** | **Cap iteration: no new build — full live re-verification + honest re-score + the readiness summary.** Re-drove every surface; the secondary surfaces (Templates/Knowledge/Agents/Present), now un-squeezed by the shell fixes, render full-width and faithful (re-scored 70->85/88/85/85; Home 78->80). Present modal re-verified live (destinations + WHO CAN ACCESS + preview + CTA). **Final gates: G1-G3 ✅, G4 mostly ✅, G5-G6 ✅; click-through clean.** Landed at ~82% (not the 95% bar) — the remainder is honest per-surface pixel-polish, with nothing squeezed/abrasive/IDE-leaking. 10-iteration cap reached. |
 
 ---
 
@@ -920,3 +921,64 @@ Final re-score across all surfaces + a v2 readiness summary (before -> after per
 status, deferred items, and the keep-fork-vs-greenfield read given the 2 tiny core patches). The mean
 won't reach 95% in one more iteration, so iteration 10 is the honest landing + PR readiness, not a new
 build.
+
+---
+
+## v2 Iteration 10 — final readiness summary (10-iteration cap reached)
+
+The v2 design-alignment loop ran its full 10 iterations. **Stop bar (>= 95% + all gates + clean
+click-through) NOT fully met** — landed at **~82%** with **5 of 6 hard gates fully passing** and a clean
+live click-through. This is an honest cap landing, not a regression: every named abrasion is gone.
+
+### Per-surface: before (iter-1 baseline) -> after (iter-10)
+
+| Surface | Before | After | What changed |
+|---------|:-----:|:----:|--------------|
+| Source-peek / Sync-across | 18 | 78 | In-surface pane (iter 2) — no split, no blank pane |
+| Interaction grammar | 25 | 70 | Menubar/Accounts/Manage removed; palette not surfaced (iters 2/4/5) |
+| Left rail / nav | 35 | 90 | Tree-rail (iter 3) + 76px labeled icon-nav (iter 9) |
+| Global header | 48 | 85 | Single calm bar; selection toolbar; pill = refresh (iter 4) |
+| Context | 50 | 78 | A tab in the tree-rail (iter 3) |
+| Right rail | 65 | 75 | Pinned to ~374px (iter 7) |
+| Document editor | 70 | 88 | 30px gutter + inline blue figures + calm header (iters 4/8) |
+| Templates | 70 | 85 | Un-squeezed full-width (shell fixes) |
+| Knowledge | 70 | 88 | Un-squeezed full-width |
+| Agents | 70 | 85 | Un-squeezed full-width |
+| Present modal | 70 | 85 | Re-verified live |
+| Home | 78 | 80 | Clean, no toasts, labeled nav |
+| **Overall** | **~56%** | **~82%** | |
+
+### Hard UX gates: FAIL -> final
+
+| Gate | iter-1 | final | Notes |
+|------|:-----:|:----:|-------|
+| G1 — no split/blank panes | FAIL | **PASS** | Source-peek in-surface; verified no 2nd editor group |
+| G2 — calm 48px header | FAIL | **PASS** | Single comp bar; formatting -> selection toolbar |
+| G3 — left tree-rail | FAIL | **PASS** | Tabbed tree-rail + 76px labeled icon-nav |
+| G4 — no IDE optionality | FAIL | **MOSTLY** | Chrome + palette surface removed; **residual:** raw `Ctrl+Shift+P` keybinding + pane-resize sashes (core-owned) |
+| G5 — gutter detached + pixel-align | PARTIAL | **PASS** | 30px gutter (dot/bar) + inline figure highlighting |
+| G6 — no nav-blank + no ext toast | FAIL | **PASS** | Builtins excluded; zero toasts; nav never blanks |
+
+### Deferred / still off (honest)
+- **G4 residual:** the command palette's raw keybinding still opens it, and the pane sashes still drag
+  (resize). Both are core-owned; fully removing them is a larger core patch deferred past the cap.
+- **Per-surface pixel polish:** surfaces sit at 75-90, not 95 — typography/spacing nits remain (right
+  rail content, per-agent canvas, Present pixel pass).
+- **Minor:** the activity-bar screen items (Templates/Knowledge/Agents) show a stub launcher in the
+  sidebar when active (the comp would keep the tree-rail); bound-paragraph bold/italic isn't preserved
+  by the figure-highlight path (edge case); our icon-nav label set differs from the comp's literal
+  Home/Editor/Review.
+
+### Merge-tax / keep-fork-vs-greenfield read (Q3)
+The entire v2 calm shell needed **2 tiny core patches** (a 3-id builtin denylist + the activity-bar
+width constant); everything else — in-surface source-peek, the tabbed tree-rail, the calm header +
+selection toolbar, removing IDE chrome, the rail widths, inline figure highlighting — landed as
+**contributions + styleOverrides CSS**. The Item-5 fear that the "costly 20%" would force a web rebuild
+did not materialize: **the fork de-IDEs cheaply.** Recommendation stands — keep the fork for validation;
+the web rebuild remains a product decision (true block editor / canonical format / multiplayer), not a
+merge-tax escape.
+
+### Verification index (where each was proven live)
+source-peek in-surface — iter 2 · calm header — iter 4 · tree-rail — iter 3 · IDE-chrome removed —
+iter 5 · ext-toasts gone / clean click-through — iter 6 · rail widths — iter 7 · inline figures — iter 8
+· labeled icon-nav — iter 9 · full-surface re-verify — iter 10.

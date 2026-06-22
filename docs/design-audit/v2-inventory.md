@@ -58,20 +58,20 @@ Target: overall **>= 95%** + every hard gate passing.
 | **Context panel** | **iter 3:** now a **tab inside the tree-rail** (verified: Linked sources / Referenced files groups for the active doc), reusing `buildContextGroups` | A **tab inside the tree-rail**: Linked sources / Referenced files / Pasted text / Images / Company knowledge + Add context | **78** ↑ | Surface Pasted/Images/Knowledge groups + Add-context inside the rail tab (data model already supports) |
 | **Right rail (Chat/Review/History)** | **iter 7:** pinned to ~374px (was 282; comp 392) — roomy, functional; 4 tabs (Chat/Review/History/**Skills** — Skills kept as a deliberate verification-feature departure) | 392px rail, **Chat / Review / History** (3 only) | **75** ↑ | Content typography pixel-pass; Skills is an accepted departure |
 | **Document editor (body + gutter)** | **iter 8:** 30px detached gutter (dot/bar), **inline blue figure highlighting** in prose, 720px centered column, calm header (iter 4) | hi-fi doc + 30px detached gutter + 720px centered column + inline bound figures | **88** ↑ | Minor: bound-paragraph bold/italic not preserved by the highlight path (edge case) |
-| **Templates** | Faithful webview (Run template / Template / Prompt / Sources / Generate draft) but opened as an editor, squeezed beside the blank group | Dedicated full-width surface | **70** | Host outside editor-groups; full-width; pixel pass |
-| **Knowledge** | Faithful (Org/Project toggle, "How this is used", DECISION STACK: Mission/Strategy/OKRs) but squeezed | Dedicated full-width surface | **70** | Same as Templates |
-| **Agents** | Faithful (header, ＋ New agent, All/Scheduled/Event/Needs-approval filters, 5-agent table, canvas tip) but squeezed | Dedicated full-width surface + per-agent canvas | **70** | Same as Templates |
-| **Present / export modal** | "↗ Present" entry present in webview headers; modal built in v1 — **not re-opened this iteration** | 740px centered modal (destinations + preview) | **70\*** | Re-verify live next iteration; pixel pass |
-| **Home** | High-fidelity webview (greeting/summary/Quick Start/4 project cards/calm brand bar); clean & full on first load | 1080px Home surface | **78** | Hide tree-rail on Home (matches `notHome`); pixel pass |
+| **Templates** | **iter 10 re-verify:** now **full-width** (un-squeezed) — 3-step config (Template/Prompt/Sources/Generate) + a live Draft preview with highlighted figures | Dedicated full-width surface | **85** ↑ | Minor: the activity-bar nav item shows a stub launcher in the rail when active |
+| **Knowledge** | **iter 10:** full-width — decision stack (Mission/Vision enduring, Strategy directional, OKRs measurable), Org/Project toggle, Values chips, Principles, "How this is used" | Dedicated full-width surface | **88** ↑ | Pixel pass |
+| **Agents** | **iter 10:** full-width — header, ＋ New agent, All/Scheduled/Event/Needs-approval filters, 5-agent table (trigger/policy/flow/status) | Dedicated full-width surface + per-agent canvas | **85** ↑ | Per-agent canvas pixel pass |
+| **Present / export modal** | **iter 10 re-verified live:** centered modal — destinations (Docs/Sheets/Word/Excel/Hosted page) + detail/preview + WHO CAN ACCESS + Export CTA | 740px centered modal (destinations + preview) | **85** ↑ | Pixel pass |
+| **Home** | High-fidelity webview (greeting/summary/Quick Start/4 project cards/calm brand bar); clean & full, no toasts, labeled nav | 1080px Home surface | **80** ↑ | Pixel pass |
 
 \* Present scored from comp + v1 evidence; not re-driven live in iteration 1 (flagged for iter-2+).
 
-**Overall alignment: iter-1 ~56% → … → -8 ~76% → -9 ~77%** (mean of the 12 surface rows; iter-9 lifted
-the left rail 77→90 via the 76px labeled icon-nav + completed G3). **Gate status after iter 9:**
-G1 ✅, G2 ✅, **G3 ✅**, G4 mostly ✅, G5 ✅, G6 ✅; live click-through clean. **Only G4 is "mostly"**
-(residual: the raw `Ctrl+Shift+P` keybinding + pane-resize sashes — the surfaced optionality is gone).
-Remaining for the surface mean: the **70-cluster** (Templates, Knowledge, Agents, Present) — per-surface
-pixel alignment.
+**Overall alignment: iter-1 ~56% → … → -9 ~77% → -10 ~82%** (final, mean of the 12 surface rows). Iter-10
+re-verified the secondary surfaces live now that the shell is fixed — un-squeezed + full-width, they
+score 80-88 (Templates 70→85, Knowledge 70→88, Agents 70→85, Present 70→85, Home 78→80). **Final gate
+status:** G1 ✅, G2 ✅, G3 ✅, **G4 mostly ✅**, G5 ✅, G6 ✅; **live click-through clean**. The ~82%
+(not 95%) reflects honest remaining pixel-polish across surfaces — see the per-surface scores; nothing
+is squeezed, abrasive, or IDE-leaking anymore. Two tiny core patches total.
 
 ## Ranked gap backlog (most abrasive × most central)
 
