@@ -18,7 +18,7 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
@@ -1452,36 +1452,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	async revealSource(resource: URI, cells: readonly string[]): Promise<void> {
+	// Source-peek: the styled source data rendered as an IN-SURFACE pane inside the one document
+	// surface (the comp's "Sync across" source panel) - never a second editor group. The cells behind
+	// the clicked provenance dot are marked `selected`; the "Sync across" loop then re-derives figures.
+	getSourcePeek(resource: URI, cells: readonly string[]): ISourcePeek | undefined {
 		const state = this._docs.get(resource.toString());
-		if (!state) { return; }
-		// Open a clean, styled source view side-by-side: each bound key with its resolved value, and
-		// the documents that reference these sources (an interim toward the full hi-fi source pane).
-		const md = this._renderSourceMarkdown(state, cells);
-		const source = state.doc.sources[0] ?? 'source';
-		const stem = sourceAlias(source);
-		const target = joinPath(dirname(resource), `${stem}.source.md`);
-		try {
-			await this._files.writeFile(target, VSBuffer.fromString(md));
-			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
-		} catch (e) {
-			this._log.warn('[livingDocs] reveal source failed', e);
-		}
-	}
-
-	// Source-peek: open the document's primary file source (its CSV) beside it, editable. The "Sync
-	// across" loop is then: edit the source here -> the watcher flips the dirty bit -> Sync re-derives.
-	async openSourceBeside(resource: URI): Promise<void> {
-		const state = this._docs.get(resource.toString());
-		if (!state) { return; }
-		const fileSource = state.doc.sources.find(s => sourceKind(s) === 'file') ?? state.doc.sources[0];
-		if (!fileSource) { return; }
-		const target = joinPath(dirname(resource), fileSource);
-		try {
-			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
-		} catch (e) {
-			this._log.warn('[livingDocs] open source beside failed', e);
-		}
+		if (!state || !state.doc.isLiving) { return undefined; }
+		const selected = new Set(cells);
+		const rows: ISourcePeekRow[] = Object.keys(state.lock.bindings).map(key => ({
+			key,
+			value: state.lock.bindings[key].resolved,
+			selected: selected.has(key),
+		}));
+		const source = state.doc.sources.find(s => sourceKind(s) === 'file') ?? state.doc.sources[0] ?? 'source';
+		const referencedBy = [...this._docs.values()]
+			.filter(s => s.doc.isLiving && s.doc.sources.some(src => state.doc.sources.includes(src)))
+			.map(s => s.doc.title);
+		return { source, rows, referencedBy };
 	}
 
 	// "Sync across": re-derive this one document's bound figures from its current sources and return the
@@ -1543,29 +1530,6 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.status = 'Context added';
 		await this._persist(state);
 		this._onDidChange.fire();
-	}
-
-	private _renderSourceMarkdown(state: IDocState, cells: readonly string[]): string {
-		const selected = new Set(cells);
-		const rows = Object.keys(state.lock.bindings).map(key => {
-			const value = state.lock.bindings[key].resolved;
-			const markedKey = selected.has(key) ? `**${key}**` : key;
-			const markedValue = selected.has(key) ? `**${value}**` : value;
-			return `| ${markedKey} | ${markedValue} |`;
-		}).join('\n');
-		const referencedBy = [...this._docs.values()]
-			.filter(s => s.doc.isLiving && s.doc.sources.some(src => state.doc.sources.includes(src)))
-			.map(s => s.doc.title);
-		const refs = referencedBy.length ? `## Referenced by\n\n${referencedBy.map(t => `- ${t}`).join('\n')}` : '';
-		const sources = state.doc.sources.join(', ') || 'sources';
-		return [
-			`# ${sources}`,
-			`Live sources for "${state.doc.title}". Bound keys for the selected text are emphasized.`,
-			'',
-			`| Key | Resolved |\n| --- | --- |\n${rows}`,
-			'',
-			refs,
-		].join('\n').replace(/\n+$/, '\n');
 	}
 
 	// --- discovery + persistence ---

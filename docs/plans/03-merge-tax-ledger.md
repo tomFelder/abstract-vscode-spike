@@ -78,7 +78,15 @@ Expected candidates: the single-surface layout (no editor groups / source-peek a
 reversing V3's `SIDE_GROUP`), the bespoke left tree-rail, removing IDE optionality (drag/split/
 reopen-with/palette/group-close), and excluding the unused first-party builtins that 404 in the dev run.
 
-## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
+**v2 iter 2 — kill the split-pane abrasion (the first expected candidate above): 0 core patches.**
+Source-peek + Sync-across moved fully in-surface entirely inside the `livingDocs` contrib: removed the
+two `SIDE_GROUP` `openEditor` calls (`revealSource`/`openSourceBeside`) in `livingDocsService.ts`,
+replaced them with a pure `getSourcePeek` data method, and rendered the pane + floating Sync circle in
+the existing `livingDocEditor` webview (`livingDocRender.ts`). Tier reached: **additive-contribution**
+(no `styleOverrides`, no theme, no core file touched). The single biggest expected core-patch candidate
+turned out contrib-only — mild evidence the fork can still de-IDE without core forks (Q3).
+
+## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round + v2 iter 2 source-peek) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be

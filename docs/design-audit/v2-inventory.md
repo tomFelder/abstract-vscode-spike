@@ -40,7 +40,7 @@ Target: overall **>= 95%** + every hard gate passing.
 
 | Gate | Live status (iter 1) | Evidence |
 |------|----------------------|----------|
-| **G1** — No split editor groups / no blank panes | **FAIL** | "⇆ Source" (tooltip *"Open the source beside this document"*) opens `metrics.csv` in **Editor Group 2** and leaves Group 1 **blank**. On reload, prior source-peeks persist as **3 stacked `metrics.csv` groups**. Every non-doc surface also opens as an editor, so it renders **squeezed beside the blank/leftover group**. `shots/01,07,08`. |
+| **G1** — No split editor groups / no blank panes | **PASS (source-peek) — iter 2** | "⇆ Source" now opens an **in-surface pane inside the one webview** (source table + floating "Sync across" circle + close ✕) — verified live: NO 2nd editor group, NO blank pane (`shots/v2-iter2/01,03`). Provenance-dot reveal shares the same in-surface path. _Remaining:_ the **export/Download** flow still opens its generated artifact in a `SIDE_GROUP` (separate flow, not the named abrasion) — tracked for a later iteration. Before: `shots/v2-iter1/07`. |
 | **G2** — Calm, light 48px header | **FAIL** | No unified shell header. The doc editor webview carries a **heavy 2-row header**: brand + synced pill + **↗ Present + ⇣ Download + ↻ Refresh from sources** + avatar, then a **formatting toolbar** (Heading / B / I / U / list / quote / ✦ Ask AI / ⇆ Source / </>). The comp bar has none of the second row. Plus the VS Code **menubar ("Application Menu")** sits above everything. `shots/06`. |
 | **G3** — Left rail matches the comp | **FAIL** | Today = VS Code **activity bar** (~48px, unlabeled) with containers **Documents / Home / Context / Templates / Knowledge / Agents**, each a stub side-view. No 76px labeled icon-nav, no 264px **Files/Context/Outline/Search** tree-rail, **no folder tree** (Documents is a flat list). `shots/01,06`. |
 | **G4** — No VS Code optionality leaks | **FAIL** | Menubar, activity bar, draggable sashes, **editor groups + split**, editor tabs + close, "open to the side" all reachable. Pure IDE grammar. `shots/01,07`. |
@@ -51,8 +51,8 @@ Target: overall **>= 95%** + every hard gate passing.
 
 | Surface | Exists today (verified live) | Design intends | Score | Top gaps |
 |---------|------------------------------|----------------|:----:|----------|
-| **Source-peek / "Sync across"** | "⇆ Source" opens `metrics.csv` as a **plain text editor in a 2nd editor group**; doc pane goes **blank**; no styled source table, no in-surface pane, no sync circle on this path | In-surface LEFT pane inside the editor + floating ⟳ "Sync across" circle; never a 2nd group | **18** | **G1** — rip out `SIDE_GROUP`; build in-surface panel/overlay (backlog #1) |
-| **Interaction grammar** | Menubar + activity bar + editor groups + split + drag + tabs/close all present | Opinionated Word/Docs/Notion grammar; optionality **removed** | **25** | **G4** — remove (not hide) menubar/split/drag/group affordances |
+| **Source-peek / "Sync across"** | **iter 2:** "⇆ Source" / provenance dot opens an **in-surface left pane** (styled source table, "REFERENCED BY", floating ⟳ "Sync across" circle, close ✕) inside the one webview — no 2nd group, no blank pane | In-surface LEFT pane inside the editor + floating ⟳ "Sync across" circle; never a 2nd group | **78** ↑ | _Remaining:_ pane shows bound key→value rows, not the comp's raw CSV grid w/ latest row highlighted; no in-pane CSV edit yet |
+| **Interaction grammar** | Menubar + activity bar + editor groups + drag + tabs/close present; **iter 2 removed** the source "open-beside" split path | Opinionated Word/Docs/Notion grammar; optionality **removed** | **30** ↑ | **G4** — remove (not hide) menubar/split/drag/group affordances |
 | **Left rail / nav** | VS Code activity bar (unlabeled) + per-view stub panels; flat "Documents" list, no folders/tabs | 76px labeled icon-nav + 264px **Files/Context/Outline/Search** tree-rail + folder tree | **35** | **G3** — build the icon-nav + tree-rail; consolidate the activity-bar containers |
 | **Global header** | No shell header; calm brand bar lives *inside* each webview; doc editor adds a heavy 2nd toolbar row; menubar leaks above | Single calm 48px bar (brand/crumb/synced/Present/avatar) | **48** | **G2** — one 48px bar; strip the formatting toolbar + Download/Refresh from the doc header |
 | **Context panel** | Separate activity-bar view reading the active editor; empty-state when active editor isn't a living doc; v1 typed kinds + Add context exist | A **tab inside the tree-rail**: Linked sources / Referenced files / Pasted text / Images / Company knowledge + Add context | **50** | Move into tree-rail tab; render groups even off a doc |
@@ -66,18 +66,19 @@ Target: overall **>= 95%** + every hard gate passing.
 
 \* Present scored from comp + v1 evidence; not re-driven live in iteration 1 (flagged for iter-2+).
 
-**Overall alignment (iter-1 baseline): ~56%** (mean of the 12 rows above). The distribution is the
-story: **content surfaces 65-78**, **shell/IA surfaces 18-50**. Closing the gap is almost entirely
-shell work — not redrawing the webviews.
+**Overall alignment: iter-1 baseline ~56% → iter-2 ~61%** (mean of the 12 rows; source-peek 18→78,
+interaction grammar 25→30 after killing the split-pane abrasion). The distribution is still the story:
+**content surfaces 65-78**, **shell/IA surfaces now 30-78**. The remaining gap is shell work — the
+tree-rail (G3), the calm header (G2), and removing the rest of the IDE optionality (G4).
 
 ## Ranked gap backlog (most abrasive × most central)
 
-1. **Kill the split/blank-pane abrasion (G1)** — redesign source-peek + "Sync across" as an in-surface
-   panel; remove every `SIDE_GROUP` open; ensure no surface ever renders beside a blank/leftover group.
-   *(First code iteration — backlog #1.)*
-2. **Build the icon-nav + tree-rail (G3)** — the 76px labeled nav + 264px Files/Context/Outline/Search
-   rail + folder tree; fold the activity-bar containers into it. *(Also the cure for the squeeze, since
-   surfaces stop being editor-groups.)*
+1. ~~**Kill the split/blank-pane abrasion (G1)** — source-peek + "Sync across" as an in-surface panel.~~
+   **DONE (iter 2).** Source-peek now renders in-surface; no `SIDE_GROUP` on that path; no blank pane.
+   _(Residual: the export/Download artifact still opens in a side group — separate flow, lower priority.)_
+2. **Build the icon-nav + tree-rail (G3) — now the top unmet gap.** The 76px labeled nav + 264px
+   Files/Context/Outline/Search rail + folder tree; fold the activity-bar containers into it. *(Also the
+   cure for the squeeze, since surfaces stop being editor-groups beside blank panes.)*
 3. **Remove IDE optionality (G4)** — menubar, split, drag, editor groups, tabs/close. Remove, not hide.
 4. **Calm the header (G2)** — collapse to one 48px bar; strip the doc editor's formatting toolbar +
    Download/Refresh (relocate the needed actions).

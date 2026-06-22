@@ -34,6 +34,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 14 (v1 #4) | **functional focus** | **Context kinds (criterion 5).** A context-kind data-model extension (`IAddedContext` in the lock): the Context panel now renders the comp's **Images** (image-extension files), **Pasted text** and **Company knowledge** groups from real data, plus a working **"Add context"** form (`addContext` persists a typed item to the lock). Verified live: Add context -> "Company knowledge" note -> a new COMPANY KNOWLEDGE group appears, persisted. 2 new TDD tests. |
 | 15 (v1 #5) | **v1 bar reached** | **Doc subtitle tracks the resolved week (criterion 6).** `_resolveSubtitle` refreshes a "Week N" subtitle from the primary source's latest `week` on load + sync. Verified live: sync to week 25 -> subtitle "Week 24..." -> "Week 25 - bound to metrics.csv". 1 new TDD test (71/71 suite green). **Remaining (deferred, infra):** the dev-build extension-activation toast (emmet/git-base/merge-conflict 404 in @vscode/test-web) is an upstream dev-web artifact, not a product dead-end - out of scope for the livingDocs contrib. |
 | **v2-1 (audit)** | **~56%** (experience-weighted) | **v2 shell audit — no code.** Re-scored every surface weighting UX/UI/IA/visual (not behaviour). Content surfaces are 65-78 (Home 78, doc body 70, Templates/Knowledge/Agents 70); shell/IA surfaces are 18-50 (source-peek 18, interaction grammar 25, left rail 35, header 48, Context 50). **All 6 hard gates FAIL/PARTIAL** (see `v2-inventory.md`). The ~86 -> ~56 drop is the re-weighting, not a regression: v1 measured "does it work", v2 measures "does it feel like the comp". |
+| **v2-2 (G1 fix)** | **~61%** | **Killed the #1 abrasion: split/blank panes.** Source-peek + "Sync across" now render **in-surface** (a styled source pane + floating ⟳ circle inside the one webview) instead of opening a `SIDE_GROUP` editor. Removed `revealSource`/`openSourceBeside`; added a pure `getSourcePeek` (TDD, 71/71 green). **0 core patches.** Verified live: open Source -> in-surface pane (no 2nd group, no blank pane) -> Sync (green confirmation) -> close. **G1 PASS** for source-peek (export-open still SIDE_GROUP, tracked). source-peek 18->78, interaction 25->30. |
 
 ---
 
@@ -644,3 +645,42 @@ Backlog #1 — **kill the split/blank-pane abrasion (G1)**: redesign source-peek
 in-surface panel, remove every `SIDE_GROUP` open, ensure no surface renders beside a blank group.
 Fixing the editor-group model is also the lever that un-squeezes Templates/Knowledge/Agents and opens
 the door to the tree-rail (G3).
+
+---
+
+## v2 Iteration 2 — kill the split/blank-pane abrasion (G1) · ~56% → ~61%
+
+The first code iteration. Closed the #1 abrasion: source-peek + "Sync across" no longer open a VS Code
+`SIDE_GROUP` editor (which left a blank pane and read as an IDE); they now render **in-surface** inside
+the one document webview. Screenshots: [`shots/v2-iter2/`](shots/v2-iter2/).
+
+### What changed (0 core patches — all inside the `livingDocs` contrib)
+- **Service** (`livingDocsService.ts`): removed `revealSource` + `openSourceBeside` (both `SIDE_GROUP`
+  `openEditor` calls) and the dead `_renderSourceMarkdown`; added a pure **`getSourcePeek(resource,
+  cells)`** returning `{ source, rows:[{key,value,selected}], referencedBy }`. Interface updated in
+  `common/livingDocs.ts` (new `ISourcePeek`/`ISourcePeekRow`).
+- **Editor** (`livingDocEditor.ts`): holds editor-local `_sourcePeek` state; `reveal`/`openSource`
+  open it, `closeSource` clears it, `sync` re-derives + marks it synced — **no service editor-opening**.
+- **Render** (`livingDocRender.ts`): when peek is open, lays out the source pane LEFT + a floating ⟳
+  "Sync across" circle on the divider + the doc RIGHT, all in one webview; added the close ✕ handler.
+
+### TDD
+Replaced the old "revealSource opens a side editor" test with **`getSourcePeek returns in-surface
+source data (no side editor)`** — asserts `openedEditors === 0` plus the styled data (selected cells,
+referencing docs). `typecheck-client` clean; **71/71 tests green**.
+
+### Live verification + gate re-check (chrome-devtools MCP)
+- **G1 — PASS (source-peek).** Open Source → in-surface pane, `main` holds exactly **one** iframe (no
+  Editor Group 2, no blank pane); Sync → green "N changes synced" on the divider; ✕ → full doc back.
+  `shots/v2-iter2/01-source-peek-insurface.png`, `02-synced-state.png`, `03-after-close.png`.
+- **Bug found & fixed live:** the floating Sync circle (`top:16px`) overlapped and intercepted clicks on
+  the close ✕ in the pane header; moved it to `top:64px` (below the header, per the comp) — ✕ now works.
+- **No regressions** in the other gates: G2 (header), G3 (tree-rail), G5 (gutter) unchanged; G4 slightly
+  improved (the source "open-beside" optionality is gone); G6 toasts still fire (untouched this iter).
+- **Residual (tracked, not the named abrasion):** the export/Download flow still opens its generated
+  artifact (`*.export.html` / `*.export.md`) in a `SIDE_GROUP` — a separate flow; fold into a later iter.
+
+### Next
+Backlog #2 — **the left tree-rail (G3)**: the comp's 76px labeled icon-nav + 264px
+Files/Context/Outline/Search rail + folder tree, replacing the activity-bar-per-view containers. This is
+also what un-squeezes Templates/Knowledge/Agents (they stop being editors beside leftover panes).

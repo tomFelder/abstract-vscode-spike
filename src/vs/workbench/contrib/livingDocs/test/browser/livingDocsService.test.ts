@@ -818,18 +818,29 @@ suite('LivingDocsService', () => {
 		assert.ok(service.getFreshness(WEEKLY).dirty, 'on-open recompute flags the changed source');
 	});
 
-	test('revealSource opens a styled source view listing bound keys and the referencing document', async () => {
+	test('getSourcePeek returns in-surface source data (no side editor): bound keys, selected cells, referencing docs', async () => {
 		const opened: IOpenedEditor[] = [];
-		const service = createService(opened);
+		const service = createService(opened, { boardNote: true });
 		await service.loadDocument(WEEKLY);
+		await service.loadDocument(BOARD); // a second living doc that shares metrics.csv
 		opened.length = 0;
 
-		await service.revealSource(WEEKLY, ['metrics.mrr']);
+		const peek = service.getSourcePeek(WEEKLY, ['metrics.mrr']);
 
-		assert.strictEqual(opened.length, 1, 'opened the source view once');
-		assert.ok(opened[0].resource!.path.endsWith('metrics.source.md'), `styled source view: ${opened[0].resource!.path}`);
-		const md = lastFiles!.get(opened[0].resource!.toString()) ?? '';
-		assert.ok(md.includes('**metrics.mrr**'), 'emphasizes the selected bound key');
-		assert.ok(md.includes('Weekly Operating Summary'), 'lists the referencing document');
+		assert.ok(peek, 'returns in-surface peek data for a living doc');
+		const projection = {
+			openedEditors: opened.length, // the abrasion: source-peek must NOT open a 2nd editor group
+			source: peek!.source,
+			selectedKeys: peek!.rows.filter(r => r.selected).map(r => r.key),
+			hasOtherBoundKeys: peek!.rows.some(r => !r.selected),
+			referencesBoard: peek!.referencedBy.includes('Board Note'),
+		};
+		assert.deepStrictEqual(projection, {
+			openedEditors: 0,
+			source: 'metrics.csv',
+			selectedKeys: ['metrics.mrr'],
+			hasOtherBoundKeys: true,
+			referencesBoard: true,
+		});
 	});
 });
