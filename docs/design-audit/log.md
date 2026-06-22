@@ -37,6 +37,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | **v2-2 (G1 fix)** | **~61%** | **Killed the #1 abrasion: split/blank panes.** Source-peek + "Sync across" now render **in-surface** (a styled source pane + floating ⟳ circle inside the one webview) instead of opening a `SIDE_GROUP` editor. Removed `revealSource`/`openSourceBeside`; added a pure `getSourcePeek` (TDD, 71/71 green). **0 core patches.** Verified live: open Source -> in-surface pane (no 2nd group, no blank pane) -> Sync (green confirmation) -> close. **G1 PASS** for source-peek (export-open still SIDE_GROUP, tracked). source-peek 18->78, interaction 25->30. |
 | **v2-3 (tree-rail, G3)** | **~67%** | **Built the left tree-rail.** One `TreeRailView` with **Files / Context / Outline / Search** tabs + a folder tree (REPORTS + SOURCES), replacing the separate Documents + Context activity-bar containers (both deleted). Pure helpers `buildFileTree`/`buildOutline`/`searchTreeRail` in `common/treeRail.ts` (TDD, 74/74 green); `ILivingDocSummary` gained `sources`. **0 core patches.** Verified live: all 4 tabs + folder tree + doc-open from Files (opens clean, no split). **G3 MOSTLY PASS** (residual: the 76px labeled icon-nav restyle). left rail 35->75, Context 50->78. |
 | **v2-4 (calm header, G2)** | **~70%** | **Calmed the doc header to the comp's single bar.** Removed Download (Present covers it) + the standalone Refresh button (the **sync pill is now the refresh**) + the persistent formatting-toolbar row (now a **floating selection toolbar**); Ask-AI/Source header buttons dropped (Chat rail + provenance dots are the comp's entries); raw-Markdown toggle moved to the footer hint. **0 core patches** (webview only). TDD: a render assertion for the calm bar (75/75 green). Verified live: single calm bar; **G1 still holds** — a provenance dot opens the in-surface source pane (one iframe, no split). **G2 PASS** (residual: the VS Code menubar still leaks above — a G4 item). header 48->85, interaction 30->35. |
+| **v2-5 (remove IDE chrome, G4)** | **~73%** | **Removed the residual IDE chrome.** Three `studio.css` rules hide the modernUI **menubar** ("Application Menu" hamburger, which ignored `menuBarVisibility:hidden`) + the **Accounts** and **Manage(gear)** global activity-bar actions (Manage was the command-palette surface). With tabs/status/command-center/group-title already off, the shell now reads as a calm app, not an IDE. Tier: **styleOverrides-CSS**, 0 core patches. Verified live: chrome gone, doc opens clean (G1-G3 hold, G2 calm bar intact). **G4 MOSTLY PASS** (residual: raw `Ctrl+Shift+P` keybinding + pane-resize sashes — core-owned). interaction 35->70. |
 
 ---
 
@@ -762,3 +763,33 @@ sits above the webview — folded into the next target.
 ### Next
 **G4 — remove the remaining IDE optionality** (the menubar, editor-group split/drag/close affordances),
 and the **provenance-gutter detach (G5/D1)**; then the icon-nav restyle + per-surface pixel alignment.
+
+---
+
+## v2 Iteration 5 — remove the residual IDE chrome (G4) · ~70% → ~73%
+
+The interaction-grammar score (35) was the single lowest; G4 the highest-impact gate. Removed the
+visible IDE-chrome tells the settings couldn't reach. Screenshots: [`shots/v2-iter5/`](shots/v2-iter5/).
+
+### What changed (decision log 25; merge-tax tier: styleOverrides-CSS, 0 core patches)
+Three rules in `styleOverrides/browser/media/studio.css` (the existing `.style-override-studio` sheet):
+- hide the modernUI **menubar** (`.part.activitybar .menubar`) — the "Application Menu" hamburger that
+  ignores `window.menuBarVisibility:hidden` because modernUI renders it inside the activity bar;
+- hide the **Accounts** (`:has(> .codicon-accounts-view-bar-icon)`) and **Manage**
+  (`:has(> .codicon-settings-view-bar-icon)`) global activity-bar actions — pure IDE tells, and Manage
+  is the menu that surfaces the command palette / extensions / updates.
+
+### Verification + gate re-check (chrome-devtools MCP)
+- **Before:** menubar hamburger top-left + Accounts/Manage at the activity-bar bottom
+  (`shots/v2-iter5/00-before-fullwindow.png`). **After:** all three gone; the activity bar is just the
+  nav icons (`01-after-chrome-removed.png`).
+- **G4 MOSTLY PASS:** with tabs/status/command-center/editor-group-title already off (settings +
+  studio.css) and the palette no longer surfaced, the shell reads as a calm app. _Residual:_ the raw
+  `Ctrl+Shift+P` keybinding (UI surface removed) + pane-resize sashes are core-owned — a later iteration.
+- **No regressions:** opened a doc live — single iframe, calm header (G2), tree-rail (G3), no split
+  (G1). The click-through is clean.
+
+### Next
+**G5 — detach the provenance gutter** (D1: a 30px gutter column, dot per bound line, vertical bar for
+multi-line edits) + pixel-align the doc column; then per-surface pixel polish (right rail, Present) and
+the dev-build ext-activation toasts (G6).

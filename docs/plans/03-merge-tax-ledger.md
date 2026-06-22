@@ -102,7 +102,15 @@ sync pill the refresh affordance, moved formatting to a floating selection toolb
 raw-Markdown toggle to the footer. Tier reached: **additive-contribution** (webview HTML/CSS/JS only; no
 core file, no `styleOverrides`). The doc header is our own surface, so calming it never approached core.
 
-## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round + v2 iter 2 source-peek + v2 iter 3 tree-rail + v2 iter 4 header) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
+**v2 iter 5 — remove IDE chrome (the fourth expected candidate above): 0 core patches.**
+Added three rules to `styleOverrides/browser/media/studio.css` (the existing `.style-override-studio`
+chrome-removal sheet) to hide the modernUI menubar hamburger ("Application Menu") and the Accounts +
+Manage global activity-bar actions. Tier reached: **styleOverrides-CSS** — one tier above
+additive-contribution, still no core file touched. **Residual** (a full G4 pass): the raw command-palette
+keybinding and pane-resize sashes are core-owned; removing those (not just their UI surface) is the one
+place G4 may finally need a `core-patch` — deferred and re-evaluated when tackled.
+
+## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round + v2 iter 2 source-peek + v2 iter 3 tree-rail + v2 iter 4 header + v2 iter 5 chrome-removal) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
