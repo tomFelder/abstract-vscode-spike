@@ -18,13 +18,13 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AgentPolicy, emptyLock, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
 interface IGradeResult {
@@ -138,6 +138,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _modelProbe: Promise<boolean> | undefined;
 	// The latest model-backed Strategy verdict per document, surfaced in the Skills rail after a Run.
 	private readonly _strategyGrades = new Map<string, IGradeResult>();
+	// The Chat conversation per document (the right-panel Chat tab) and the in-flight set for the
+	// "working" indicator. Kept in the service so the rail survives re-renders and tab switches.
+	private readonly _chats = new Map<string, IChatMessage[]>();
+	private readonly _chatBusy = new Set<string>();
+	// The figure diff from each document's last "Sync across", for the editor's synced banner.
+	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
 
 	constructor(
 		@IFileService private readonly _files: IFileService,
@@ -216,7 +222,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const fixes = state.doc.blocks.filter(b => b.type === 'heading' && (b.level ?? 0) >= 2 && !LivingDocsService._isTitleCase(b.text)).length;
 		const formatting: ISkillCheck = fixes === 0
 			? { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'pass', detail: 'All headings follow house style.', canRun: true }
-			: { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'flag', detail: `${fixes} heading-case fix${fixes === 1 ? '' : 'es'} suggested.`, canRun: true };
+			: { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'flag', detail: `${fixes} heading-case fix${fixes === 1 ? '' : 'es'} suggested.`, canRun: true, fixable: true };
 
 		// Strategy is model-backed: NO MODEL when the proxy is unreachable; otherwise READY until run,
 		// then the cached PASS/FLAG verdict from runSkillCheck.
@@ -250,6 +256,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	// Apply a Skill's deterministic fix to the document (spec 5, the Apply-fix half of criterion 3).
+	// Formatting title-cases every flagged heading in place, audits each, and persists once; the grader
+	// then re-derives to PASS. A no-op for skills with no deterministic fix or nothing to fix.
+	async applySkillFix(resource: URI, id: ISkillCheck['id']): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state || !state.doc.isLiving) { return; }
+		let fixed = 0;
+		if (id === 'formatting') {
+			for (const block of state.doc.blocks) {
+				if (block.type !== 'heading' || (block.level ?? 0) < 2 || LivingDocsService._isTitleCase(block.text)) { continue; }
+				const next = LivingDocsService._toTitleCase(block.text);
+				if (next === block.text) { continue; }
+				state.lock.audit.push(this._entry(block.id, 'approved', block.text, next, 'heuristic'));
+				block.text = next;
+				state.recent.add(block.id);
+				fixed++;
+			}
+		}
+		if (!fixed) { return; }
+		state.status = `Formatting fix applied - ${fixed} heading${fixed === 1 ? '' : 's'} title-cased`;
+		await this._persist(state);
+		this._onDidChange.fire();
+	}
+
 	// House style: title-case headings. A heading passes when every significant word (the first word,
 	// and any word that is not a minor word) is capitalized. Deterministic - no model.
 	private static readonly _MINOR_WORDS = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'nor', 'for', 'of', 'to', 'by', 'in', 'on', 'at', 'as', 'is', 'with']);
@@ -261,6 +291,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (i !== 0 && LivingDocsService._MINOR_WORDS.has(letters.toLowerCase())) { return true; }
 			return letters[0] === letters[0].toUpperCase();
 		});
+	}
+
+	// Rewrite a heading to house style: capitalize the first letter of every significant word, lower-case
+	// minor words (except the first). Only the leading letter is touched, so acronyms (MRR, OKRs) survive.
+	private static _toTitleCase(text: string): string {
+		return text.trim().split(/\s+/).map((word, i) => {
+			const letters = word.replace(/[^A-Za-z].*$/, '');
+			if (i !== 0 && letters && LivingDocsService._MINOR_WORDS.has(letters.toLowerCase())) { return word.toLowerCase(); }
+			return word.replace(/[A-Za-z]/, c => c.toUpperCase());
+		}).join(' ');
 	}
 
 	// --- workspace-wide views ---
@@ -430,6 +470,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 		};
 		this._docs.set(resource.toString(), state);
+		if (doc.isLiving) { await this._resolveSubtitle(state); }
 		return state;
 	}
 
@@ -572,6 +613,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		return resolved;
+	}
+
+	// The doc subtitle tracks the resolved period: when it reads "Week N", N is refreshed from the
+	// primary source's latest `week` value, so a sync that advances the source advances the subtitle too.
+	private async _resolveSubtitle(state: IDocState): Promise<void> {
+		const m = /^Week\s+(\d+)(.*)$/i.exec(state.doc.subtitle);
+		if (!m || !state.doc.sources.length) { return; }
+		let week: string | undefined;
+		try {
+			const resolution = await this._resolveCurrent(state);
+			for (const [key, r] of resolution) {
+				if (/(^|\.)week$/.test(key)) { week = r.value.trim(); break; }
+			}
+		} catch {
+			return;
+		}
+		if (week && /^\d+$/.test(week) && week !== m[1]) {
+			state.doc.subtitle = `Week ${week}${m[2]}`;
+		}
 	}
 
 	private _resolveCsv(text: string, source: string, alias: string, resolved: Map<string, IResolution>): void {
@@ -910,8 +970,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			let state = this._docs.get(uri.toString());
 			if (!state) { state = await this._loadState(uri); }
 			if (!state || !state.doc.isLiving) { continue; }
-			state.recent = new Set<string>();
-			await this._syncLock(state);
+			await this._syncLockWithDiff(state);
 			await this._persist(state);
 			// The value bindings are now in sync, so their dirty bits clear (context stays stale until
 			// a Review-impact pass, Item 5).
@@ -1214,6 +1273,131 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return blockId;
 	}
 
+	// --- Chat agent (the right-panel Chat tab) ---
+
+	getChatMessages(resource: URI): readonly IChatMessage[] {
+		return this._chats.get(resource.toString()) ?? [];
+	}
+
+	getMentionableFiles(resource: URI): readonly string[] {
+		const doc = this._docs.get(resource.toString())?.doc;
+		if (!doc) { return []; }
+		const out: string[] = [];
+		for (const f of [...doc.sources, ...doc.context]) { if (!out.includes(f)) { out.push(f); } }
+		return out;
+	}
+
+	isChatBusy(resource: URI): boolean {
+		return this._chatBusy.has(resource.toString());
+	}
+
+	async sendChatMessage(resource: URI, text: string): Promise<void> {
+		const trimmed = text.trim();
+		if (!trimmed) { return; }
+		const id = resource.toString();
+		const history = this._chats.get(id) ?? [];
+		this._chats.set(id, history);
+
+		const mentions = this._parseMentions(resource, trimmed);
+		history.push({ role: 'user', content: trimmed, mentions: mentions.length ? mentions : undefined });
+		this._chatBusy.add(id);
+		this._onDidChange.fire();
+
+		try {
+			const state = this._docs.get(id);
+			if (!state || !state.doc.isLiving) {
+				history.push({ role: 'assistant', via: 'fallback', content: 'Open a Living Document in the editor to chat about it - I answer using the document and its sources.' });
+				return;
+			}
+			if (!await this._hasModel()) {
+				history.push({ role: 'assistant', via: 'fallback', content: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this document and its sources.' });
+				return;
+			}
+			const reply = await this._chatRespond(state, trimmed, mentions);
+			history.push(reply);
+		} catch (e) {
+			this._log.info('[livingDocs] chat failed, honest fallback', e instanceof Error ? e.message : String(e));
+			history.push({ role: 'assistant', via: 'fallback', content: 'I could not complete that just now (the agent model errored). The proxy may be down - try again once it is back.' });
+		} finally {
+			this._chatBusy.delete(id);
+			this._onDidChange.fire();
+		}
+	}
+
+	// Build the model prompt from the document (figures resolved) + the @mentioned and context sources,
+	// ask for a reply plus optional prose edits, render tool-steps, and queue any edits into the rail.
+	private async _chatRespond(state: IDocState, text: string, mentions: string[]): Promise<IChatMessage> {
+		const docText = this._serializeDocForChat(state);
+		const sourceFiles = mentions.length ? mentions : [...state.doc.sources, ...state.doc.context];
+		const sources = await this._readContext(state, sourceFiles);
+		const system = 'You are the agent inside a Living Document editor. Answer the user using the document and its sources. '
+			+ 'You may propose edits to existing prose paragraphs (never to bound figures). Reply with ONLY a JSON object: '
+			+ '{"reply": string, "edits": [{"heading": string, "oldText": string, "newText": string, "rationale": string}]}. '
+			+ 'Use edits only for genuine wording or meaning improvements grounded in the sources; otherwise return an empty edits array. Keep reply concise.';
+		const user = `Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\nUser: ${text}`;
+		const raw = await this._callModel(system, user);
+		const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { reply?: string; edits?: { heading?: string; oldText?: string; newText?: string; rationale?: string }[] };
+
+		const steps: IChatStep[] = [];
+		if (sourceFiles.length) { steps.push({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
+		const edits = Array.isArray(json.edits) ? json.edits : [];
+		for (const edit of edits) {
+			const queued = this._queueChatEdit(state, edit);
+			if (queued) { steps.push({ label: `Proposed: ${queued}`, status: 'queued' }); }
+		}
+		return { role: 'assistant', via: 'model', content: String(json.reply ?? raw).trim(), steps: steps.length ? steps : undefined };
+	}
+
+	// Locate the prose block an edit targets (best token-overlap match under the named heading) and queue
+	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the
+	// block label when queued, else undefined.
+	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string }): string | undefined {
+		const newText = String(edit.newText ?? '').trim();
+		const oldText = String(edit.oldText ?? '').trim();
+		if (!newText || !oldText) { return undefined; }
+		let best: ILivingDocBlock | undefined;
+		let bestScore = 0.5;
+		for (const block of state.doc.blocks) {
+			if (block.type === 'heading' || block.binds.length) { continue; }
+			const score = similarity(block.text, oldText);
+			if (score > bestScore) { bestScore = score; best = block; }
+		}
+		if (!best || best.text.trim() === newText) { return undefined; }
+		const label = this._blockLabel(state.doc, best.id);
+		this._pending.push({
+			id: generateUuid(),
+			docId: state.uri.toString(),
+			docTitle: state.doc.title,
+			blockId: best.id,
+			blockLabel: label,
+			oldText: best.text,
+			newText,
+			kind: 'meaning',
+			confidence: 0.85,
+			rationale: String(edit.rationale ?? 'Proposed by the Chat agent.'),
+			sourceCells: [],
+			via: 'model',
+		});
+		return label;
+	}
+
+	private _parseMentions(resource: URI, text: string): string[] {
+		if (!text.includes('@')) { return []; }
+		return this.getMentionableFiles(resource).filter(f => text.includes(`@${f}`));
+	}
+
+	// The document as clean prose for the model: title + headings + paragraphs with bind links resolved
+	// to their live values (so the agent reasons over the figures the reader sees, not the raw markup).
+	private _serializeDocForChat(state: IDocState): string {
+		const resolved = this.getResolved(state.uri);
+		const resolve = (s: string) => s.replace(/\[([^\]]*)\]\(bind:([^)]+)\)/g, (_m, label: string, key: string) => resolved.get(key) ?? label);
+		const lines: string[] = [];
+		for (const block of state.doc.blocks) {
+			lines.push(block.type === 'heading' ? `${'#'.repeat(block.level ?? 1)} ${resolve(block.text)}` : resolve(block.text));
+		}
+		return lines.join('\n');
+	}
+
 	// --- approve / reject (the review rail) ---
 
 	async approve(changeId: string): Promise<void> {
@@ -1283,6 +1467,82 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		} catch (e) {
 			this._log.warn('[livingDocs] reveal source failed', e);
 		}
+	}
+
+	// Source-peek: open the document's primary file source (its CSV) beside it, editable. The "Sync
+	// across" loop is then: edit the source here -> the watcher flips the dirty bit -> Sync re-derives.
+	async openSourceBeside(resource: URI): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const fileSource = state.doc.sources.find(s => sourceKind(s) === 'file') ?? state.doc.sources[0];
+		if (!fileSource) { return; }
+		const target = joinPath(dirname(resource), fileSource);
+		try {
+			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
+		} catch (e) {
+			this._log.warn('[livingDocs] open source beside failed', e);
+		}
+	}
+
+	// "Sync across": re-derive this one document's bound figures from its current sources and return the
+	// old -> new diff (the visible result of a source edit). Figures auto-apply (low risk); the diff is
+	// recorded for the editor's synced banner. Meaning-changes still go through Review-impact, not here.
+	async syncFromSources(resource: URI): Promise<readonly IFigureChange[]> {
+		const id = resource.toString();
+		const state = this._docs.get(id);
+		if (!state || !state.doc.isLiving) { return []; }
+		const changes = await this._syncLockWithDiff(state);
+		await this._persist(state);
+		await this._recomputeFreshness(state);
+		state.status = changes.length
+			? `Synced - ${changes.length} figure${changes.length === 1 ? '' : 's'} updated`
+			: 'Synced - figures already up to date';
+		this._onDidChange.fire();
+		return changes;
+	}
+
+	// Re-derive a document's figures (the existing _syncLock) while capturing the old -> new diff of the
+	// resolved values, recorded per document for the editor's "Sync across" banner. Shared by the focused
+	// per-document sync and the workspace-wide refresh.
+	private async _syncLockWithDiff(state: IDocState): Promise<IFigureChange[]> {
+		const before = new Map(this.getResolved(state.uri));
+		state.recent = new Set<string>();
+		await this._syncLock(state);
+		await this._resolveSubtitle(state);
+		const after = this.getResolved(state.uri);
+		const changes: IFigureChange[] = [];
+		for (const [key, next] of after) {
+			const old = before.get(key);
+			if (old !== undefined && old !== next) { changes.push({ key, old, next }); }
+		}
+		this._lastSyncDiff.set(state.uri.toString(), changes);
+		return changes;
+	}
+
+	getLastSyncDiff(resource: URI): readonly IFigureChange[] {
+		return this._lastSyncDiff.get(resource.toString()) ?? [];
+	}
+
+	// --- typed context (Pasted text / Images / Company knowledge + Add context) ---
+
+	getAddedContext(resource: URI): readonly IAddedContext[] {
+		return this._docs.get(resource.toString())?.lock.contextItems ?? [];
+	}
+
+	// Add a typed context item from the Context panel. Pasted notes and knowledge keep their full text in
+	// `detail` with a truncated `label`; an image keeps its path/URL as the label. Persisted in the lock.
+	async addContext(resource: URI, kind: AddedContextKind, text: string): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		const trimmed = text.trim();
+		if (!state || !trimmed) { return; }
+		if (!state.lock.contextItems) { state.lock.contextItems = []; }
+		const oneLine = trimmed.replace(/\s+/g, ' ');
+		const label = kind === 'image' ? oneLine : (oneLine.length > 48 ? `${oneLine.slice(0, 47)}\u2026` : oneLine);
+		const detail = kind === 'image' ? 'image' : (kind === 'knowledge' ? 'company knowledge' : 'pasted note');
+		state.lock.contextItems.push({ kind, label, detail });
+		state.status = 'Context added';
+		await this._persist(state);
+		this._onDidChange.fire();
 	}
 
 	private _renderSourceMarkdown(state: IDocState, cells: readonly string[]): string {

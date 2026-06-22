@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { AddedContextKind, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -52,6 +52,41 @@ export interface ISkillCheck {
 	readonly detail: string;
 	/** True when the check can be (re-)run: deterministic locally, or model-backed via the proxy. */
 	readonly canRun: boolean;
+	/** True when a flagged check has a deterministic one-tap fix that edits the document (e.g. Formatting heading-case). */
+	readonly fixable?: boolean;
+}
+
+/**
+ * One bound figure that moved in a sync: its bind key and the old -> new resolved values. Powers the
+ * editor's "Sync across" diff banner (source-peek: edit a source, sync, see which figures changed).
+ */
+export interface IFigureChange {
+	readonly key: string;
+	readonly old: string;
+	readonly next: string;
+}
+
+/**
+ * One step the Chat agent took while answering, rendered as a tool-call row in the conversation
+ * (e.g. "Read metrics.csv", "Proposed: Commentary rewrite"). `done` steps already happened
+ * (a read/analysis); `queued` steps produced a pending change waiting in the Review rail.
+ */
+export interface IChatStep {
+	readonly label: string;
+	readonly status: 'done' | 'queued';
+}
+
+/**
+ * One turn in a document's Chat conversation. User turns carry the parsed `@mention` file names;
+ * assistant turns carry the model reply, the tool-call `steps`, and whether the reply was a real
+ * model answer or the honest no-model fallback.
+ */
+export interface IChatMessage {
+	readonly role: 'user' | 'assistant';
+	readonly content: string;
+	readonly mentions?: readonly string[];
+	readonly steps?: readonly IChatStep[];
+	readonly via?: 'model' | 'fallback';
 }
 
 /**
@@ -90,6 +125,8 @@ export interface ILivingDocsService {
 	getSkillReport(resource: URI): readonly ISkillCheck[];
 	/** Run a single Skill on demand (e.g. the model-backed Strategy grader); caches the verdict. */
 	runSkillCheck(resource: URI, id: ISkillCheck['id']): Promise<void>;
+	/** Apply a Skill's deterministic fix to the document (e.g. Formatting title-cases the flagged headings). */
+	applySkillFix(resource: URI, id: ISkillCheck['id']): Promise<void>;
 	/** Re-hash the document's sources and recompute its dirty bits (what the source watcher triggers). */
 	checkSources(resource: URI): Promise<void>;
 	getStatus(resource: URI): string;
@@ -152,9 +189,38 @@ export interface ILivingDocsService {
 	/** Publish a document: snapshot (pin) its sources to current versions for reproducibility. */
 	publishDocument(resource: URI): Promise<void>;
 
+	// --- Chat agent (the right-panel Chat tab) ---
+	/** The conversation so far for a document (empty until the first message). */
+	getChatMessages(resource: URI): readonly IChatMessage[];
+	/** The files a `@mention` can attach for a document: its linked sources + context files. */
+	getMentionableFiles(resource: URI): readonly string[];
+	/** True while a chat reply is in flight for a document (renders the "working" indicator). */
+	isChatBusy(resource: URI): boolean;
+	/**
+	 * Send one user message to the document's Chat agent. Parses `@mentions`, gathers the document
+	 * (with resolved figures) plus the mentioned/context sources, and asks the model for a reply that
+	 * may also propose prose edits - those queue into the Review rail like any other pending change.
+	 * With no model reachable it appends an honest fallback turn and proposes nothing (never fakes a reply).
+	 */
+	sendChatMessage(resource: URI, text: string): Promise<void>;
+
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;
 
 	/** Reveal the source cells behind a block (provenance) for a given document. */
 	revealSource(resource: URI, cells: readonly string[]): Promise<void>;
+
+	// --- source-peek + "Sync across" (the comp's signature editing interaction) ---
+	/** Open the document's primary file source (e.g. its CSV) beside it, so it can be peeked and edited. */
+	openSourceBeside(resource: URI): Promise<void>;
+	/** Re-derive this document's bound figures from its current sources, apply them, and return the old -> new diff. */
+	syncFromSources(resource: URI): Promise<readonly IFigureChange[]>;
+	/** The figure diff from the last syncFromSources for a document (for the editor's "synced" banner). */
+	getLastSyncDiff(resource: URI): readonly IFigureChange[];
+
+	// --- typed context (the Context panel's Pasted text / Images / Company knowledge groups) ---
+	/** The context the user added by hand (pasted text / images / company knowledge), persisted in the lock. */
+	getAddedContext(resource: URI): readonly IAddedContext[];
+	/** Add a typed context item to a document (from the Context panel's "Add context") and persist it. */
+	addContext(resource: URI, kind: AddedContextKind, text: string): Promise<void>;
 }

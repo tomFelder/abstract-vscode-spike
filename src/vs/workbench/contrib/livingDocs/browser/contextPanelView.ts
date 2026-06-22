@@ -83,7 +83,7 @@ export class ContextPanelView extends ViewPane {
 		const sub = append(section, $('div.ldc-sub'));
 		sub.textContent = 'Everything the agent can see when working on this document.';
 
-		const groups = buildContextGroups(doc, this._livingDocs.getFreshness(resource));
+		const groups = buildContextGroups(doc, this._livingDocs.getFreshness(resource), this._livingDocs.getAddedContext(resource));
 		if (!groups.length) {
 			const none = append(body, $('div.ldc-empty'));
 			none.textContent = 'No sources or references yet.';
@@ -112,6 +112,8 @@ export class ContextPanelView extends ViewPane {
 			}
 		}
 
+		this._renderAddContext(body, resource);
+
 		// "Review impact" runs the expensive on-demand pass; emphasized when a source has changed.
 		const review = append(body, $('button.ldc-review')) as HTMLButtonElement;
 		review.textContent = anyChanged ? 'Review impact' : 'Review impact (up to date)';
@@ -119,13 +121,48 @@ export class ContextPanelView extends ViewPane {
 		this._renderDisposables.add(addDisposableListener(review, 'click', () => void this._livingDocs.reviewImpact(resource)));
 	}
 
+	// "Add context": a collapsed control that, when opened, takes free text and adds it as a typed
+	// context item (pasted note / image path-URL / company knowledge) via the service. The added item is
+	// persisted in the lock and appears in its group on the next render.
+	private _renderAddContext(body: HTMLElement, resource: URI): void {
+		const wrap = append(body, $('div.ldc-add'));
+		const toggle = append(wrap, $('button.ldc-add-toggle')) as HTMLButtonElement;
+		toggle.textContent = '\uFF0B Add context';
+		const form = append(wrap, $('div.ldc-add-form'));
+		form.style.display = 'none';
+		const input = append(form, $('textarea.ldc-add-input')) as HTMLTextAreaElement;
+		input.placeholder = 'Paste text, an image path or URL, or a company-knowledge note...';
+		input.rows = 3;
+		const btns = append(form, $('div.ldc-add-btns'));
+		const kindBtn = (kind: 'pasted' | 'image' | 'knowledge', label: string) => {
+			const b = append(btns, $('button.ldc-add-kind')) as HTMLButtonElement;
+			b.textContent = label;
+			this._renderDisposables.add(addDisposableListener(b, 'click', () => {
+				const text = input.value.trim();
+				if (text) { void this._livingDocs.addContext(resource, kind, text); }
+			}));
+		};
+		kindBtn('pasted', 'Pasted text');
+		kindBtn('image', 'Image');
+		kindBtn('knowledge', 'Company knowledge');
+		this._renderDisposables.add(addDisposableListener(toggle, 'click', () => {
+			const open = form.style.display === 'none';
+			form.style.display = open ? 'flex' : 'none';
+			if (open) { input.focus(); }
+		}));
+	}
+
 	// Kind glyphs (ASCII-only via Unicode escapes): file U+229E squared-plus, api U+21C4 arrows,
-	// mcp U+25F7 quadrant arc, reference U+25A2 white square.
+	// mcp U+25F7 quadrant arc, reference U+25A2 white square, image U+25A3 square-with-dot,
+	// pasted U+270E pencil, knowledge U+25C8 diamond-in-square.
 	private _iconFor(kind: ContextItemKind): string {
 		switch (kind) {
 			case 'api': return '\u21C4';
 			case 'mcp': return '\u25F7';
 			case 'reference': return '\u25A2';
+			case 'image': return '\u25A3';
+			case 'pasted': return '\u270E';
+			case 'knowledge': return '\u25C8';
 			default: return '\u229E';
 		}
 	}
@@ -153,6 +190,14 @@ export class ContextPanelView extends ViewPane {
 		.living-docs-context .ldc-review{width:100%;margin-top:14px;border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:8px;padding:9px 11px;background:var(--vscode-editorWidget-background);color:var(--vscode-foreground);font:600 12px/1 system-ui;cursor:pointer}
 		.living-docs-context .ldc-review:hover{background:var(--vscode-list-hoverBackground)}
 		.living-docs-context .ldc-review-warn{border-color:oklch(0.66 0.16 45);color:#9a6b16;background:#fdf2dc}
+		.living-docs-context .ldc-add{margin-top:14px}
+		.living-docs-context .ldc-add-toggle{width:100%;border:1px dashed var(--vscode-widget-border,#d4d7de);border-radius:8px;padding:9px;background:transparent;color:var(--vscode-descriptionForeground);font:500 12px/1 system-ui;cursor:pointer}
+		.living-docs-context .ldc-add-toggle:hover{background:var(--vscode-list-hoverBackground)}
+		.living-docs-context .ldc-add-form{display:flex;flex-direction:column;gap:7px;margin-top:8px}
+		.living-docs-context .ldc-add-input{width:100%;box-sizing:border-box;resize:vertical;border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:8px;padding:8px 10px;background:var(--vscode-editorWidget-background);color:var(--vscode-foreground);font:400 12px/1.4 system-ui}
+		.living-docs-context .ldc-add-btns{display:flex;flex-wrap:wrap;gap:6px}
+		.living-docs-context .ldc-add-kind{border:1px solid var(--vscode-widget-border,#e9eaee);border-radius:7px;padding:6px 10px;background:var(--vscode-editorWidget-background);color:var(--vscode-foreground);font:500 11px/1 system-ui;cursor:pointer}
+		.living-docs-context .ldc-add-kind:hover{background:var(--vscode-list-hoverBackground)}
 		`;
 		container.appendChild(style);
 	}

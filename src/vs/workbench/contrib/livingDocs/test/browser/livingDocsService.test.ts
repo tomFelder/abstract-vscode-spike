@@ -16,7 +16,7 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
-import { AgentPolicy, IAgentDef } from '../../common/livingDocsModel.js';
+import { AgentPolicy, IAgentDef, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
 
 const METRICS_CSV = [
@@ -120,6 +120,7 @@ suite('LivingDocsService', () => {
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
 
 	let lastFiles: Map<string, string> | undefined;
+	let lastModelBody: string | undefined;
 
 	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[]; model?: object } = {}): LivingDocsService {
 		const files = new Map<string, string>();
@@ -160,12 +161,12 @@ suite('LivingDocsService', () => {
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
 		const requestService = {
-			request: async (options: { url?: string }) => {
+			request: async (options: { url?: string; data?: string }) => {
 				const url = options.url ?? '';
 				let payload: object = API_PAYLOAD;
 				if (opts.model) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
-					else if (url.includes('/v1/messages')) { payload = opts.model; }
+					else if (url.includes('/v1/messages')) { payload = opts.model; lastModelBody = options.data; }
 				}
 				return {
 					res: { statusCode: 200, headers: {} },
@@ -309,6 +310,47 @@ suite('LivingDocsService', () => {
 		]);
 	});
 
+	test('the doc subtitle tracks the resolved week from its source (on load and on sync)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // fixture subtitle "Week 23"; CSV latest week is 24
+		assert.strictEqual(service.getDoc(WEEKLY)!.subtitle, 'Week 24', 'subtitle resolves to the latest source week on load');
+
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.syncFromSources(WEEKLY);
+		assert.strictEqual(service.getDoc(WEEKLY)!.subtitle, 'Week 25', 'syncing advances the subtitle to the new week');
+	});
+
+	test('buildContextGroups splits image references into Images and surfaces added pasted/knowledge groups', () => {
+		const doc: ILivingDoc = { title: 't', subtitle: '', sources: [], context: ['market-research.md', 'chart.png'], blocks: [], isLiving: true, body: '' };
+		const fresh: IFreshness = { staleBindings: [], staleContext: [], dirty: false };
+		const groups = buildContextGroups(doc, fresh, [
+			{ kind: 'pasted', label: 'Q3 plan notes', detail: 'pasted note' },
+			{ kind: 'knowledge', label: 'North Star metric', detail: 'company knowledge' },
+		]);
+		assert.deepStrictEqual(groups.map(g => [g.label, g.items.map(i => `${i.kind}:${i.name}`)]), [
+			['Referenced files', ['reference:market-research.md']],
+			['Images', ['image:chart.png']],
+			['Pasted text', ['pasted:Q3 plan notes']],
+			['Company knowledge', ['knowledge:North Star metric']],
+		]);
+	});
+
+	test('addContext persists a typed context item to the lock; getAddedContext + the Context panel surface it', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		await service.addContext(WEEKLY, 'pasted', 'Customer interview: pricing is the blocker.');
+
+		assert.deepStrictEqual(
+			service.getAddedContext(WEEKLY).map(a => ({ kind: a.kind, label: a.label, detail: a.detail })),
+			[{ kind: 'pasted', label: 'Customer interview: pricing is the blocker.', detail: 'pasted note' }],
+		);
+		const groups = buildContextGroups(service.getDoc(WEEKLY)!, service.getFreshness(WEEKLY), service.getAddedContext(WEEKLY));
+		assert.ok(groups.some(g => g.label === 'Pasted text'), 'the Pasted text group now renders');
+		const lockOnDisk = JSON.parse(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!);
+		assert.strictEqual(lockOnDisk.contextItems[0].kind, 'pasted', 'persisted to the lock sidecar');
+	});
+
 	test('an api source is grouped as a linked source with its kind', async () => {
 		const service = createService([], { api: true });
 		await service.loadDocument(API);
@@ -329,6 +371,50 @@ suite('LivingDocsService', () => {
 			{ id: 'financial', status: 'pass', detail: 'All 3 linked figures reconcile with sources.', canRun: true },
 			{ id: 'formatting', status: 'flag', detail: '1 heading-case fix suggested.', canRun: true },
 		]);
+	});
+
+	test('syncFromSources re-derives the figures, returns the old->new diff, and records the last sync diff', async () => {
+		const service = createService();
+		// Seed a stale MRR in the lock so a sync produces a visible figure change.
+		lastFiles!.set(URI.file('/ws/Weekly Summary.lock.json').toString(), JSON.stringify({
+			version: 1,
+			bindings: { 'metrics.mrr': { resolved: '$99.9k', source: 'metrics.csv#mrr', sourceHash: 'stale', syncedAt: 't', appliedBy: 'agent', kind: 'figure' } },
+			context: {}, claims: {}, pins: [], audit: [],
+		}));
+		await service.loadDocument(WEEKLY);
+
+		const diff = await service.syncFromSources(WEEKLY);
+
+		assert.ok(diff.some(c => c.key === 'metrics.mrr' && c.old === '$99.9k' && c.next === '$48.6k'), `mrr diff present: ${JSON.stringify(diff)}`);
+		assert.deepStrictEqual(service.getLastSyncDiff(WEEKLY), diff, 'the last sync diff is recorded for the editor banner');
+		assert.strictEqual(service.getLock(WEEKLY)!.bindings['metrics.mrr'].resolved, '$48.6k', 'the figure is applied to the lock');
+	});
+
+	test('syncFromSources records no diff when the figures already match their source', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // the seeded lock already resolves to the latest week
+		await service.syncFromSources(WEEKLY);
+		assert.deepStrictEqual(service.getLastSyncDiff(WEEKLY), [], 'a no-op sync reports an empty diff');
+	});
+
+	test('the Formatting flag is fixable; applySkillFix title-cases the headings in place and the grader then passes', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		const before = service.getSkillReport(WEEKLY).find(s => s.id === 'formatting')!;
+		const financial = service.getSkillReport(WEEKLY).find(s => s.id === 'financial')!;
+		assert.deepStrictEqual(
+			{ formattingFlag: before.status, formattingFixable: before.fixable, financialFixable: !!financial.fixable },
+			{ formattingFlag: 'flag', formattingFixable: true, financialFixable: false },
+		);
+
+		await service.applySkillFix(WEEKLY, 'formatting');
+
+		const heading = service.getDoc(WEEKLY)!.blocks.find(b => b.type === 'heading' && /watch/i.test(b.text))!;
+		assert.strictEqual(heading.text, 'What to Watch', 'the flagged heading is title-cased in place (minor word stays lower)');
+		assert.strictEqual(service.getSkillReport(WEEKLY).find(s => s.id === 'formatting')!.status, 'pass', 'the grader now passes');
+		assert.ok((lastFiles!.get(WEEKLY.toString()) ?? '').includes('## What to Watch'), 'the fix is persisted to disk');
+		assert.ok(service.getAudit().some(e => e.newText === 'What to Watch'), 'the fix is audited');
 	});
 
 	test('the Financial skill flags a bound figure that does not reconcile to its source', async () => {
@@ -469,6 +555,85 @@ suite('LivingDocsService', () => {
 		await service.reviewImpact(WEEKLY);
 
 		assert.strictEqual(service.getPendingForDoc(WEEKLY)[0].via, 'heuristic', 'a refusal degrades to the heuristic candidate');
+	});
+
+	// --- Chat agent (criterion 2): a real model-backed conversation over the document + sources ---
+
+	// One Claude reply carrying the Chat agent's JSON contract: a prose reply plus optional edits.
+	function chatReply(reply: string, edits: object[] = []): object {
+		return modelMessage({ reply, edits });
+	}
+
+	test('sendChatMessage records the user turn (with parsed @mentions) and a model-backed assistant reply', async () => {
+		const service = createService([], { model: chatReply('metrics.csv shows MRR up 18% to $48.6k this week.') });
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Summarise this week @metrics.csv');
+
+		const msgs = service.getChatMessages(WEEKLY);
+		assert.deepStrictEqual(
+			msgs.map(m => ({ role: m.role, via: m.via, content: m.content, mentions: m.mentions })),
+			[
+				{ role: 'user', via: undefined, content: 'Summarise this week @metrics.csv', mentions: ['metrics.csv'] },
+				{ role: 'assistant', via: 'model', content: 'metrics.csv shows MRR up 18% to $48.6k this week.', mentions: undefined },
+			],
+		);
+		assert.strictEqual(service.isChatBusy(WEEKLY), false, 'no longer busy once the reply lands');
+	});
+
+	test('the chat prompt carries the document, its resolved figures, and the @mentioned source', async () => {
+		const service = createService([], { model: chatReply('Done.') });
+		await service.loadDocument(WEEKLY);
+		lastModelBody = undefined;
+
+		await service.sendChatMessage(WEEKLY, 'Check the numbers @metrics.csv');
+
+		const body = lastModelBody ?? '';
+		assert.ok(body.includes('Weekly Operating Summary'), 'prompt includes the document title');
+		assert.ok(body.includes('$48.6k'), 'prompt includes the resolved figure value');
+		assert.ok(body.includes('week,mrr') || body.includes('metrics.csv'), `prompt includes the mentioned source: ${body.slice(0, 120)}`);
+	});
+
+	test('a chat reply that proposes an edit queues it to the Review rail; approve applies it to the prose', async () => {
+		const newText = 'Growth accelerated this week.';
+		const service = createService([], {
+			model: chatReply('I drafted a sharper commentary line for your approval.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText, rationale: 'The +18% MRR delta crosses the accelerating threshold.' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.strictEqual(pending.length, 1, 'one proposed edit queued from chat');
+		assert.deepStrictEqual(
+			{ via: pending[0].via, kind: pending[0].kind, newText: pending[0].newText },
+			{ via: 'model', kind: 'meaning', newText },
+		);
+		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok((assistant.steps ?? []).some(s => s.status === 'queued'), 'the assistant turn renders a queued tool-step');
+
+		await service.approve(pending[0].id);
+		assert.strictEqual(blockText(service, WEEKLY, 'h-commentary'), newText, 'approving the chat-proposed edit rewrites the block');
+	});
+
+	test('with no model reachable, chat is honest (fallback turn, no faked reply, nothing queued)', async () => {
+		const service = createService(); // no opts.model -> /healthz is unhealthy -> no model
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Summarise this week');
+
+		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.strictEqual(assistant.via, 'fallback', 'the no-model turn is marked as a fallback');
+		assert.ok(/proxy|model/i.test(assistant.content), `the fallback names the missing model: ${assistant.content}`);
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'no edits queued without a model');
+	});
+
+	test('getMentionableFiles lists the document\'s linked sources and context files', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.deepStrictEqual([...service.getMentionableFiles(WEEKLY)].sort(), ['market-research.md', 'metrics.csv']);
 	});
 
 	test('runSkillCheck strategy surfaces a model verdict against the decision stack', async () => {
