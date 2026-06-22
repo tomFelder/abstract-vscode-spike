@@ -58,7 +58,27 @@ Tiers, cheapest first: `settings` -> `theme` -> `styleOverrides-CSS` -> `additiv
 
 No framework was added (spec 09 section 8): the inner loop reuses `ILanguageModelsService` + the heuristic fallback, triggers reuse `fileService.createWatcher` + `IRequestService` + a thin clock, and durable state is the lock + `agents.json`. The orchestration logic (graph event-bus, policy, verify gate, review rail) is our own product code.
 
-## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round) (1 pre-existing, from the engine phase)
+### v1 functionality round (plan 09, PR #13) - still 0 added core patches
+
+| Item | Change | Tier | File(s) | Note |
+|------|--------|------|---------|------|
+| V1 | Chat agent (composer, @mention, model reply, tool-steps, proposed edits -> Review) | our-surface | `livingDocs/browser/reviewRailView.ts`, `livingDocsService.ts`, `common/livingDocs.ts` | Built on `_callModel`; edits route through the existing approve loop |
+| V2 | Apply-fix (Formatting title-cases flagged headings in place) | our-surface | `livingDocs/browser/livingDocsService.ts`, `reviewRailView.ts` | `applySkillFix`; deterministic |
+| V3 | Source-peek + "Sync across" figure diff | **our-surface, but used `SIDE_GROUP`** | `livingDocs/browser/livingDocsService.ts`, `livingDocEditor.ts`, `livingDocRender.ts` | **Regression:** opens a VS Code editor group beside the doc -> split/blank pane. **To be reversed in v2 (in-surface panel).** |
+| V4 | Context kinds (Images/Pasted text/Company knowledge) + Add context | our-surface | `livingDocs/common/livingDocsModel.ts` (`IAddedContext` on the lock), `contextGroups.ts`, `contextPanelView.ts`, `livingDocsService.ts` | Typed context persisted in the lock |
+| V5 | Doc subtitle tracks the resolved week | our-surface | `livingDocs/browser/livingDocsService.ts` | `_resolveSubtitle` on load + sync |
+
+### v2 design-alignment loop (plan 11) - core-patch policy CHANGE
+
+The v2 shell pass ([11-design-alignment-loop.md](11-design-alignment-loop.md)) **permits added core
+patches where the design genuinely requires them** (decision log 22), reversing the strict 0-core rule
+for the shell only. Each must be logged here with its tier + justification, and counts as **evidence
+toward greenfield (Q3)**. Always prefer the cheapest tier that works; reach for `core-patch` last.
+Expected candidates: the single-surface layout (no editor groups / source-peek as an in-surface panel,
+reversing V3's `SIDE_GROUP`), the bespoke left tree-rail, removing IDE optionality (drag/split/
+reopen-with/palette/group-close), and excluding the unused first-party builtins that 404 in the dev run.
+
+## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
