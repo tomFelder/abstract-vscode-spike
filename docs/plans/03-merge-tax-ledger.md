@@ -126,13 +126,24 @@ dev run (the "Activating extension failed" toasts). Tier: **core-patch** — the
 Entirely in `livingDocRender.ts`: bound prose wraps each resolved figure in a `.bound` span (tokenize
 before the Markdown renderer, swap after). Tier: **additive-contribution** (webview only).
 
+**v2 iter 9 — the 76px labeled icon-nav (G3): the SECOND v2 CORE PATCH (1 added).**
+`src/vs/workbench/browser/parts/activitybar/activitybarPart.ts` — `ACTIVITYBAR_WIDTH 48 -> 76` so the
+grid allocates the comp's wider rail; the label under each icon is then added by `studio.css`
+(styleOverrides-CSS, `::after { content: attr(aria-label) }`). The guard test
+(`activitybarPart.test.ts`, "default constants...") was updated 48 -> 76 (it asserts the constant value).
+Tier: **core-patch**. Low fragility (one constant + its guard test); re-pin check: the constant is 76 and
+the test expects 76.
+- **Greenfield evidence (Q3):** two tiny core constants/seams (builtin denylist + activity-bar width)
+  were the *only* core patches needed for the whole v2 calm shell — the de-IDE is overwhelmingly
+  reachable via contributions + styleOverrides.
+
 **v2 iter 7 — pin the shell widths (right-rail pixel-align): 0 core patches.**
 `StudioStartupContribution` calls `IWorkbenchLayoutService.setSize` (a public service) after revealing
 the rail + a layout tick, to pin the tree-rail to 264px and the right rail to 392px (the comp). Tier:
 **additive-contribution** — no core file touched. (The grid redistributes to ~252/374, near- not
 exact-pixel, but well toward the comp from the cramped 246/282 defaults.)
 
-## Core-patch count: **1 added in v2** (iter 6, builtin exclusion) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1 + v2 iters 2-5,7) (1 pre-existing, from the engine phase). v2 (plan 11) permits this - logged above.
+## Core-patch count: **2 added in v2** (iter 6 builtin exclusion + iter 9 activity-bar width) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1 + v2 iters 2-5,7,8) (1 pre-existing, from the engine phase). v2 (plan 11) permits this - both are one-line/one-constant, low-fragility, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be

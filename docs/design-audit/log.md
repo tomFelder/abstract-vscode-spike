@@ -41,6 +41,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | **v2-6 (kill ext toasts, G6)** | **~73%** | **Killed the dev-build ext-activation toasts.** Excluded the IDE-only builtins (`emmet`/`git-base`/`merge-conflict`) from the product via a 3-id denylist in the web `BuiltinExtensionsScannerService` — the **first v2 core patch** (tiny, surgical, product-correct: a word processor doesn't want them, and they were the ones whose web bundle 404s in the dev run). Verified live: **zero toasts on launch; the click-through is now clean** end-to-end. 75/75 green. **G6 PASS.** Mean holds (toasts aren't a per-surface score) but a hard gate flips + the stop-condition's "clean click-through" is satisfied. |
 | **v2-7 (pin rail widths)** | **~74%** | **Pinned the shell to the comp's rail widths.** `StudioStartupContribution` now sets the tree-rail to 264px and the right rail to 392px via `IWorkbenchLayoutService.setSize` (after the rail is revealed + a layout tick, so the size restore doesn't clobber it). Verified live: right rail 282 -> 374px (the grid redistributes, so near- not exact-pixel), sidebar -> 252px, editor 718px (the 720px doc column still fits). 0 core patches (additive-contribution); 75/75 green; no gate regressions. right rail 65->75, left rail 75->77. The extra Skills tab is kept as a deliberate verification-feature departure. |
 | **v2-8 (inline figures, G5)** | **~76%** | **Inline bound-figure highlighting** — the comp's "living figure" treatment. Bound prose now wraps each resolved figure in a faint-blue `.bound` span (underline + bg); the KPI table stays plain (as the comp). Technique: tokenize each `[value](bind:key)` before the sanitizing Markdown renderer, swap the token for the span after — formatting survives, no raw HTML injected; each span carries `data-cells` (click a figure -> peek its source). 0 core patches (webview). TDD: a render assertion (76/76 green). Verified live: "+18% / $48.6k / 427 / 2.4%" highlighted in the Highlights prose, single iframe, calm header. **Completes G5** (gutter detached + figures highlighted + doc aligned). doc editor 70->88. |
+| **v2-9 (labeled icon-nav, G3)** | **~77%** | **The 76px labeled icon-nav.** `ACTIVITYBAR_WIDTH 48 -> 76` (second v2 core patch) so the grid allocates the comp's wider rail, + `studio.css` renders a text label under each icon (`::after { content: attr(aria-label) }`). Verified live: 76px rail with Workspace/Home/Templates/Knowledge/Agents labels, sidebar reflows with **no overlap**, doc/Home click-through clean. **Completes G3** (tree-rail iter 3 + icon-nav now). The guard test (activitybarPart.test) updated 48->76; activitybar 14/14 + livingDocs 76/76 green. left rail 77->90. **Gates now: only G4 is "mostly"** (palette keybinding + sashes residual). |
 
 ---
 
@@ -887,3 +888,35 @@ the 76px labeled icon-nav; the raw palette keybinding + pane sashes).
 ### Next
 The **70-cluster** secondary surfaces (Templates / Knowledge / Agents / Present) — now un-squeezed since
 the shell fixes — and the **icon-nav restyle** (G3 residual). Iteration 10 = final re-score + summary.
+
+---
+
+## v2 Iteration 9 — the 76px labeled icon-nav (completes G3) · ~76% → ~77%
+
+The tree-rail (iter 3) closed most of G3, but the icon-nav was still VS Code's 48px icon-only activity
+bar, not the comp's 76px labeled rail. Screenshots: [`shots/v2-iter9/`](shots/v2-iter9/).
+
+### What changed (decision log 29; SECOND v2 core patch)
+- **Core patch:** `ActivitybarPart.ACTIVITYBAR_WIDTH 48 -> 76` so the workbench grid allocates the comp's
+  wider rail (a CSS-only width override overlapped the sidebar by 22px — the grid still reserved 48px —
+  so the constant is required). Its guard test (`activitybarPart.test.ts`) updated 48 -> 76.
+- **studio.css (styleOverrides):** stack each nav item as icon-over-label and render the label via
+  `::after { content: attr(aria-label) }` (the container name lives on the action-label's aria-label).
+
+### Verification + gate re-check (chrome-devtools MCP)
+- A CSS-only test first proved the labels render (`shots/v2-iter9/00-iconnav-csstest.png`) but measured a
+  22px sidebar overlap -> hence the core constant. After the patch: rail **76px**, sidebar starts at 88px
+  (**no overlap**), labels Workspace/Home/Templates/Knowledge/Agents (`01-labeled-icon-nav.png`).
+- **G3 PASS** (tree-rail + labeled icon-nav). Doc click-through clean at the new layout
+  (`02-doc-with-labeled-nav.png`) — single iframe (G1), calm header (G2), no toasts (G6).
+- `typecheck-client` clean; **activitybar 14/14 + livingDocs 76/76 green**.
+
+### Gate status after iter 9
+G1 ✅ · G2 ✅ · **G3 ✅** · G4 mostly ✅ · G5 ✅ · G6 ✅. **Only G4 remains "mostly"** (the surfaced
+optionality is gone; the raw `Ctrl+Shift+P` keybinding + pane-resize sashes are the core-owned residual).
+
+### Next (iteration 10 — final)
+Final re-score across all surfaces + a v2 readiness summary (before -> after per surface, each gate's
+status, deferred items, and the keep-fork-vs-greenfield read given the 2 tiny core patches). The mean
+won't reach 95% in one more iteration, so iteration 10 is the honest landing + PR readiness, not a new
+build.

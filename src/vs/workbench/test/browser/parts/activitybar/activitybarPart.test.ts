@@ -118,7 +118,8 @@ suite('ActivitybarPart', () => {
 				iconSize: ActivitybarPart.ICON_SIZE,
 			},
 			{
-				width: 48,
+				// Living Documents widens the rail to 76px for the comp's labeled icon-nav (v2 iter 9; upstream 48).
+				width: 76,
 				actionHeight: 48,
 				iconSize: 24,
 			}
