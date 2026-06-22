@@ -18,11 +18,21 @@
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
 const { execFile } = require('child_process');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.LWD_PROXY_PORT || 8090);
 const UPSTREAM = 'https://api.anthropic.com/v1/messages';
+
+// Backend selection. Default 'anthropic' = the production OAuth path (token via `ant`). 'openrouter'
+// is a TEST-ONLY backend: it translates the Anthropic Messages request to OpenRouter's OpenAI-style
+// chat API and the response back, so the unchanged renderer/service can be exercised against a cheap
+// model without Anthropic Console credits. The OpenRouter key is read from env / a key file at
+// runtime and is NEVER committed.
+const BACKEND = (process.env.LWD_BACKEND || 'anthropic').toLowerCase();
+const OPENROUTER_URL = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
 // Tokens are short-lived; print-credentials refreshes on demand. A small cache avoids spawning
 // `ant` on every keystroke-driven call without ever holding a stale token for long.
 const TOKEN_TTL_MS = 60 * 1000;
@@ -91,11 +101,11 @@ function readBody(req) {
 	});
 }
 
-async function forwardMessages(req, res) {
-	const body = await readBody(req);
+// Production path: forward verbatim to the Anthropic Messages API with the OAuth token. OAuth tokens
+// go on Authorization: Bearer (NOT x-api-key) and /v1/messages requires the oauth beta header;
+// anthropic-version is always required.
+async function forwardToAnthropic(body) {
 	const token = await getAccessToken();
-	// OAuth tokens go on Authorization: Bearer (NOT x-api-key) and /v1/messages requires the
-	// oauth beta header; anthropic-version is always required.
 	const upstream = await fetch(UPSTREAM, {
 		method: 'POST',
 		headers: {
@@ -107,9 +117,77 @@ async function forwardMessages(req, res) {
 		body,
 	});
 	const text = await upstream.text();
+	return { status: upstream.status, contentType: upstream.headers.get('content-type') || 'application/json', text };
+}
+
+function openRouterKey() {
+	if (process.env.OPENROUTER_API_KEY) { return process.env.OPENROUTER_API_KEY.trim(); }
+	const file = process.env.OPENROUTER_API_KEY_FILE;
+	if (file) {
+		try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; }
+	}
+	return '';
+}
+
+function proxyError(message) {
+	return { status: 502, contentType: 'application/json', text: JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }) };
+}
+
+// TEST backend: Anthropic Messages request -> OpenRouter chat request, and the response back into the
+// Anthropic Messages shape the service parses (content[].text + stop_reason). Lets the renderer/service
+// be exercised against a cheap model with no Anthropic credits.
+async function forwardToOpenRouter(body) {
+	const key = openRouterKey();
+	if (!key) { return proxyError('OPENROUTER_API_KEY (or OPENROUTER_API_KEY_FILE) is not set'); }
+	const req = JSON.parse(body);
+	const messages = [];
+	if (typeof req.system === 'string' && req.system) { messages.push({ role: 'system', content: req.system }); }
+	for (const m of req.messages || []) {
+		const content = typeof m.content === 'string'
+			? m.content
+			: (Array.isArray(m.content) ? m.content.map(p => (p && p.text) ? p.text : '').join('') : String(m.content ?? ''));
+		const role = m.role === 'assistant' ? 'assistant' : (m.role === 'system' ? 'system' : 'user');
+		messages.push({ role, content });
+	}
+	const orBody = JSON.stringify({ model: OPENROUTER_MODEL, max_tokens: req.max_tokens || 1024, messages });
+	const upstream = await fetch(OPENROUTER_URL, {
+		method: 'POST',
+		headers: {
+			'authorization': `Bearer ${key}`,
+			'content-type': 'application/json',
+			'HTTP-Referer': 'http://localhost:8080',
+			'X-OpenRouter-Title': 'Living Documents (dev proxy)',
+		},
+		body: orBody,
+	});
+	const orText = await upstream.text();
+	let orJson;
+	try { orJson = JSON.parse(orText); } catch { orJson = undefined; }
+	if (!upstream.ok || !orJson || orJson.error) {
+		const message = (orJson && orJson.error) ? (orJson.error.message || 'openrouter error') : `openrouter http ${upstream.status}`;
+		return proxyError(message);
+	}
+	const choice = (orJson.choices && orJson.choices[0]) || {};
+	const text = (choice.message && choice.message.content) || '';
+	const finish = choice.finish_reason || 'stop';
+	const stopReason = finish === 'length' ? 'max_tokens' : (finish === 'content_filter' ? 'refusal' : 'end_turn');
+	const anthropic = {
+		id: orJson.id || 'or-msg',
+		type: 'message',
+		role: 'assistant',
+		model: orJson.model || OPENROUTER_MODEL,
+		stop_reason: stopReason,
+		content: [{ type: 'text', text: String(text) }],
+	};
+	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic) };
+}
+
+async function forwardMessages(req, res) {
+	const body = await readBody(req);
+	const result = BACKEND === 'openrouter' ? await forwardToOpenRouter(body) : await forwardToAnthropic(body);
 	setCors(res);
-	res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
-	res.end(text);
+	res.writeHead(result.status, { 'content-type': result.contentType });
+	res.end(result.text);
 }
 
 const server = http.createServer((req, res) => {
@@ -122,7 +200,7 @@ const server = http.createServer((req, res) => {
 	}
 	if (req.method === 'GET' && url.startsWith('/healthz')) {
 		setCors(res);
-		sendJson(res, 200, { ok: true });
+		sendJson(res, 200, { ok: true, backend: BACKEND });
 		return;
 	}
 	if (req.method === 'POST' && url.startsWith('/v1/messages')) {
@@ -139,6 +217,11 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-	console.log(`[lwd-proxy] listening on http://${HOST}:${PORT} -> ${UPSTREAM}`);
-	console.log('[lwd-proxy] token source: ant auth print-credentials --access-token (run `ant auth login` first)');
+	if (BACKEND === 'openrouter') {
+		console.log(`[lwd-proxy] listening on http://${HOST}:${PORT} -> ${OPENROUTER_URL} (TEST backend, model ${OPENROUTER_MODEL})`);
+		console.log('[lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE');
+	} else {
+		console.log(`[lwd-proxy] listening on http://${HOST}:${PORT} -> ${UPSTREAM}`);
+		console.log('[lwd-proxy] token source: ant auth print-credentials --access-token (run `ant auth login` first)');
+	}
 });
