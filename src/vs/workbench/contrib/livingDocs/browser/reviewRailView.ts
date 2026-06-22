@@ -178,11 +178,16 @@ export class ReviewRailView extends ViewPane {
 		const report = resource ? this._livingDocs.getSkillReport(resource) : [];
 		const title = resource ? this._livingDocs.getDoc(resource)?.title : undefined;
 		content.innerHTML = skillsHtml(report, title);
-		// "Run" / "Re-run" re-grade the live document and re-render with the fresh verdict.
+		// "Run" / "Re-run" re-grade the live document (Strategy calls the model via the proxy) and
+		// re-render with the fresh verdict; the service fires onDidChange when the verdict lands.
 		this._renderDisposables.add(addDisposableListener(content, 'click', e => {
 			let el = e.target as HTMLElement | null;
 			while (el && el !== content) {
-				if (el.hasAttribute('data-skill-run')) { this._render(); return; }
+				const id = el.getAttribute('data-skill-run');
+				if (id) {
+					if (resource) { this._livingDocs.runSkillCheck(resource, id as ISkillCheck['id']); }
+					return;
+				}
 				el = el.parentElement;
 			}
 		}));
@@ -347,6 +352,7 @@ function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined
 			pass: { label: 'PASS', color: '#1f7a44', bg: '#e7f6ec' },
 			flag: { label: 'FLAG', color: '#9a6b16', bg: '#fdf2dc' },
 			'needs-model': { label: 'NO MODEL', color: '#868b95', bg: '#eef1f6' },
+			ready: { label: 'READY', color: 'oklch(0.55 0.13 255)', bg: '#eef2fb' },
 		};
 		const b = m[s.status];
 		return `<span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:${b.color};background:${b.bg};border-radius:999px;padding:4px 7px;flex:none">${b.label}</span>`;

@@ -11,10 +11,14 @@ These are the canonical copies; mirrors live in `~/.claude/plans/` for clean-ses
 | [03-merge-tax-ledger.md](03-merge-tax-ledger.md) | Not a handoff — the running ledger of every change by tier (settings/theme/CSS/additive/core-patch). **0 added core patches** through the build-out round; the keep-the-fork recommendation. |
 | [04-file-format-options.md](04-file-format-options.md) | The interim file-format options memo (Item G). **Superseded** by [`../08-living-documents-format-spec.md`](../08-living-documents-format-spec.md), which resolved the decision (Option 10). |
 | [05-next-phase-handoff.md](05-next-phase-handoff.md) | The design-match + build-out handoff (what shipped this round) plus the **P0/P1/P2 backlog** toward a design-partner pilot. **Done (this branch).** |
-| [06-format-implementation-handoff.md](06-format-implementation-handoff.md) | **The live one to run next:** implement the clean-file + lock-file format and the dependency graph per the approved spec (`docs/08`). Foundational — everything else builds on it. |
-| [07-orchestration-handoff.md](07-orchestration-handoff.md) | **Runs after 06:** build the orchestration layer per spec (`docs/09`) — triggers (event/cron/heartbeat/manual), the cross-document graph event-bus, per-edge policy, and the verify gate (Skills as graders). Hard-depends on 06's graph. |
+| [06-format-implementation-handoff.md](06-format-implementation-handoff.md) | Implement the clean-file + lock-file format and the dependency graph per the approved spec (`docs/08`). Foundational. **Done (`living-docs-format`).** |
+| [07-orchestration-handoff.md](07-orchestration-handoff.md) | Build the orchestration layer per spec (`docs/09`) — triggers (event/cron/heartbeat/manual), the cross-document graph event-bus, per-edge policy, and the verify gate (Skills as graders). **Done (`living-docs-orchestration`).** |
+| [08-design-audit-handoff.md](08-design-audit-handoff.md) | The design-audit loop: drive the web build, diff against the DesignSync source, score and close gaps. **Done (`living-docs-design-audit`, PR #9).** |
+| [10-anthropic-oauth-handoff.md](10-anthropic-oauth-handoff.md) | Wire Claude into the agentic features via a localhost Anthropic OAuth proxy (credential server-side). **Done (`living-docs-model`, PR #11).** See [`../10-model-integration.md`](../10-model-integration.md). |
+| [09-v1-functionality-handoff.md](09-v1-functionality-handoff.md) | **The live one to run next:** take every core surface from "looks like the comp" to "works like a v1" — Chat agent, Apply-fix, editor source-peek/Sync-across, context kinds, polish. Model is already wired (plan 10), so it starts at the Chat agent. |
 
 ## How to use a handoff
 Paste the relevant file into a fresh Claude Code session. The handoffs are self-contained: repo /
-branch / build / conventions / design source / ordered work items / verification. **[06](06-format-implementation-handoff.md)
-is the live one to run next**, then **[07](07-orchestration-handoff.md)** builds the orchestration layer on top.
+branch / build / conventions / design source / ordered work items / verification. Plans 06, 07, 08,
+and 10 are **done** (branches/PRs noted above); **[09](09-v1-functionality-handoff.md) is the live one
+to run next** (the model is already wired, so it starts at the Chat agent).

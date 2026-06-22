@@ -23,6 +23,7 @@ what is likely to become problematic, the open decisions, and the design intent.
 | [07-decision-log.md](07-decision-log.md) | Decisions made during the spike, with rationale (ADR-style) |
 | [08-living-documents-format-spec.md](08-living-documents-format-spec.md) | The raw-Markdown format + dependency model design spec (clean file + lock file); resolves Q1, with full decision log. Companion visual: [option-10-living-docs-format.html](option-10-living-docs-format.html) |
 | [09-orchestration-and-automation.md](09-orchestration-and-automation.md) | How agents/skills run: trigger taxonomy, the graph-propagation rule, policy model, verify gate, and the LangChain/LangGraph-vs-built-in tech-stack call. Companion visual: [orchestration-automations.html](orchestration-automations.html) |
+| [10-model-integration.md](10-model-integration.md) | How the agentic features became model-backed: the localhost Anthropic OAuth proxy (credential server-side, no CSP changes), the service wiring, request shape, config, the no-model fallback, and the OpenRouter dev test backend. Live captures: [model-verify/](model-verify/) |
 | [plans/](plans/) | The handoff prompts that drove (and will drive) the work |
 
 ## Status at a glance (2026-06-21)
@@ -37,6 +38,12 @@ what is likely to become problematic, the open decisions, and the design intent.
   shell is reachable with **0 added core patches** (see [plans/03-merge-tax-ledger.md](plans/03-merge-tax-ledger.md)).
 - **Decided:** the document format (Q1) — clean `<doc>.md` + generated `<doc>.lock.json` with a
   dependency graph; see [08-living-documents-format-spec.md](08-living-documents-format-spec.md).
+- **Also built:** the clean-file + lock format and dependency graph (`living-docs-format`); the
+  orchestration layer — triggers, graph event-bus, policy, verify gate (`living-docs-orchestration`);
+  a design-audit round (`living-docs-design-audit`, PR #9); and **model-backed agentic features via a
+  localhost Anthropic OAuth proxy** (`living-docs-model`, PR #11) — Review-impact rewrites and the
+  Strategy grader now call Claude, with the no-model heuristic fallback intact. See
+  [10-model-integration.md](10-model-integration.md).
 - **Next phase (foundational):** implement that format + dependency graph — handoff
   [plans/06-format-implementation-handoff.md](plans/06-format-implementation-handoff.md).
 - **Still open:** editor depth (Q2) and **fork vs greenfield** (Q3) — see

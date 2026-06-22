@@ -1,5 +1,12 @@
 # Wire Claude into Living Documents via Anthropic OAuth (clean session)
 
+> **Status: DONE — implemented on `living-docs-model`, PR #11 (off `living-docs-design-match`).**
+> Localhost OAuth proxy + `_hasModel`/`_modelImpact`/`_gradeStrategy` wired; no-model fallback intact;
+> 45 unit tests green; all acceptance criteria verified live (screenshots in `docs/model-verify/`).
+> Live model proof used the proxy's optional OpenRouter test backend because the Anthropic Console
+> org had no credits — the production OAuth path authenticates and only stops at the billing balance.
+> See decision-log entry 14 and [`../10-model-integration.md`](../10-model-integration.md).
+
 Goal: make the agentic features in the Living Documents spike **model-backed** by calling Claude,
 authenticated with the developer's **OAuth login** (no static API key in the repo). This unblocks the
 real versions of: Review-impact meaning rewrites, the Chat agent, and the Strategy skill grader. Today
@@ -12,7 +19,7 @@ those run on an honest no-model fallback (heuristic suggestions / "NO MODEL" sta
 
 ## How the OAuth auth works (accurate, from the Anthropic CLI docs)
 
-- **Install the CLI:** `brew install anthropics/tap/ant` then `xattr -d com.apple.quarantine "$(brew --prefix)/bin/ant"`.
+- **Install the CLI:** `brew install --cask anthropics/tap/ant` then `xattr -d com.apple.quarantine "$(brew --prefix)/bin/ant"`. (`ant` ships as a Homebrew **cask**, not a formula — `brew install anthropics/tap/ant` without `--cask` fails to resolve it.)
 - **Log in (interactive, the developer runs this):** `ant auth login` opens a browser, signs in, and
   stores a short-lived **auto-refreshing** token as a profile under `~/.config/anthropic/`
   (`configs/<profile>.json` + `credentials/<profile>.json`). `ant auth status` shows which credential

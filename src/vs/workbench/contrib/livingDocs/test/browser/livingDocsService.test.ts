@@ -13,7 +13,6 @@ import { INotificationService } from '../../../../../platform/notification/commo
 import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
-import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
@@ -122,7 +121,7 @@ suite('LivingDocsService', () => {
 
 	let lastFiles: Map<string, string> | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[] } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[]; model?: object } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -156,18 +155,27 @@ suite('LivingDocsService', () => {
 
 		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; } } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
-		const languageModelsService = { selectLanguageModels: async () => [] } as unknown as ILanguageModelsService;
 		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
+		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
+		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
 		const requestService = {
-			request: async () => ({
-				res: { statusCode: 200, headers: {} },
-				stream: bufferToStream(VSBuffer.fromString(JSON.stringify(API_PAYLOAD))),
-			}),
+			request: async (options: { url?: string }) => {
+				const url = options.url ?? '';
+				let payload: object = API_PAYLOAD;
+				if (opts.model) {
+					if (url.includes('/healthz')) { payload = { ok: true }; }
+					else if (url.includes('/v1/messages')) { payload = opts.model; }
+				}
+				return {
+					res: { statusCode: 200, headers: {} },
+					stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))),
+				};
+			},
 		} as unknown as IRequestService;
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: URI.file('/ws') }] }) } as unknown as IWorkspaceContextService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, languageModelsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService);
 		store.add(service);
 		return service;
 	}
@@ -421,6 +429,60 @@ suite('LivingDocsService', () => {
 
 		assert.ok(/no model/i.test(service.getStatus(WEEKLY)), `surfaces the no-model state: ${service.getStatus(WEEKLY)}`);
 		assert.strictEqual(service.getPendingForDoc(WEEKLY)[0].via, 'heuristic', 'candidate marked as the heuristic fallback');
+	});
+
+	// Shape one Claude /v1/messages reply carrying a single JSON text block (what the proxy returns).
+	function modelMessage(json: object): object {
+		return { content: [{ type: 'text', text: JSON.stringify(json) }], stop_reason: 'end_turn' };
+	}
+
+	test('Review impact with the model proxy reachable produces a real model rewrite (via: model)', async () => {
+		const rewrite = 'Growth held steady, though a new competitor now warrants watching.';
+		const service = createService([], { model: modelMessage({ newText: rewrite, kind: 'meaning', confidence: 0.9, rationale: 'A new competitor entered the market.' }) });
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'commentary-tone': { anchor: 'Growth remained steady this week.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+
+		await service.reviewImpact(WEEKLY);
+
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.strictEqual(pending.length, 1, 'one impact candidate queued');
+		assert.deepStrictEqual({ via: pending[0].via, newText: pending[0].newText }, { via: 'model', newText: rewrite });
+	});
+
+	test('Review impact falls back to the heuristic when the model refuses', async () => {
+		const service = createService([], { model: { stop_reason: 'refusal', content: [] } });
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'commentary-tone': { anchor: 'Growth remained steady this week.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+
+		await service.reviewImpact(WEEKLY);
+
+		assert.strictEqual(service.getPendingForDoc(WEEKLY)[0].via, 'heuristic', 'a refusal degrades to the heuristic candidate');
+	});
+
+	test('runSkillCheck strategy surfaces a model verdict against the decision stack', async () => {
+		const flag = 'Strategy: the "steady growth" framing ignores the new competitor noted in market-research.md.';
+		const service = createService([], { model: modelMessage({ pass: false, flag }) });
+		await service.loadDocument(WEEKLY);
+
+		await service.runSkillCheck(WEEKLY, 'strategy');
+
+		const strategy = service.getSkillReport(WEEKLY).find(s => s.id === 'strategy')!;
+		assert.deepStrictEqual(
+			{ status: strategy.status, detail: strategy.detail, canRun: strategy.canRun },
+			{ status: 'flag', detail: flag, canRun: true },
+		);
 	});
 
 	test('a clean Markdown table with bind links in cells resolves each cell on refresh', async () => {
