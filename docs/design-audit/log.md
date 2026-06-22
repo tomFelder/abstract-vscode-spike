@@ -33,6 +33,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | 13 (v1 #3) | **functional focus** | **Source-peek + "Sync across" (criterion 4's signature interaction).** A "&#8646; Source" toolbar button opens the real source file (the CSV) beside the doc; `syncFromSources` re-derives this doc's figures and returns the old->new diff, surfaced as a "Synced N figures" banner (also recorded on the existing Refresh). Verified live: edit the CSV beside the doc -> Sync -> banner "metrics.mrr $61.0k->$90.0k, signups 540->720, ..." + the doc figures update. 2 new TDD tests. |
 | 14 (v1 #4) | **functional focus** | **Context kinds (criterion 5).** A context-kind data-model extension (`IAddedContext` in the lock): the Context panel now renders the comp's **Images** (image-extension files), **Pasted text** and **Company knowledge** groups from real data, plus a working **"Add context"** form (`addContext` persists a typed item to the lock). Verified live: Add context -> "Company knowledge" note -> a new COMPANY KNOWLEDGE group appears, persisted. 2 new TDD tests. |
 | 15 (v1 #5) | **v1 bar reached** | **Doc subtitle tracks the resolved week (criterion 6).** `_resolveSubtitle` refreshes a "Week N" subtitle from the primary source's latest `week` on load + sync. Verified live: sync to week 25 -> subtitle "Week 24..." -> "Week 25 - bound to metrics.csv". 1 new TDD test (71/71 suite green). **Remaining (deferred, infra):** the dev-build extension-activation toast (emmet/git-base/merge-conflict 404 in @vscode/test-web) is an upstream dev-web artifact, not a product dead-end - out of scope for the livingDocs contrib. |
+| **v2-1 (audit)** | **~56%** (experience-weighted) | **v2 shell audit — no code.** Re-scored every surface weighting UX/UI/IA/visual (not behaviour). Content surfaces are 65-78 (Home 78, doc body 70, Templates/Knowledge/Agents 70); shell/IA surfaces are 18-50 (source-peek 18, interaction grammar 25, left rail 35, header 48, Context 50). **All 6 hard gates FAIL/PARTIAL** (see `v2-inventory.md`). The ~86 -> ~56 drop is the re-weighting, not a regression: v1 measured "does it work", v2 measures "does it feel like the comp". |
 
 ---
 
@@ -594,3 +595,52 @@ iter 6 · context grouping — iter 2 · raw-Markdown editing — iter 8 · Skil
 - Do **not** `pkill` the chrome-devtools Chrome (drops the MCP for the session). Close pages via MCP.
 - The Context panel reads the **active editor** — open the doc from the Documents list first.
 - Web build caches builtin-extension scan + theme in IndexedDB and `product.json` at server start.
+
+---
+
+## v2 Iteration 1 — shell audit (live, no code) · ~56% baseline
+
+The opening iteration of the **v2 design-alignment loop** (plan 11). Audit-only: re-baseline every
+surface against the "Agentic Workbench" comp **weighting the experience (UX/UI/IA/visual)**, not
+behaviour (behaviour is held at the v1 bar). Full per-surface table + comp pixel spec + ranked gaps
+live in [`v2-inventory.md`](v2-inventory.md). Screenshots: [`shots/v2-iter1/`](shots/v2-iter1/).
+
+### Method
+- Branch `living-docs-design-v2` off `main`. `code-web` on :8080, driven via chrome-devtools MCP;
+  proxy healthy (`{"ok":true,"backend":"openrouter"}`). Cleared IndexedDB once to get a pristine
+  first-run (the stale split groups otherwise persist — itself a finding).
+- Pulled the comp `.dc.html` via DesignSync and extracted the pixel spec (48px bar / 76px icon-nav /
+  264px tree-rail / 720px doc column + 30px gutter / 392px right rail).
+- Walked Home → Editor (doc) → Source-peek → Context → Templates → Knowledge → Agents live.
+
+### Headline
+**The webview content of every surface is high-fidelity to the comp.** The entire gap is the
+**shell**: VS Code's IA leaks through. Each surface is an *editor* in *editor groups*, behind an
+*activity bar* (not the comp's icon-nav + tree-rail), under a leaking *menubar*; opening a source
+*splits into a 2nd group and blanks a pane*. This is design-notes **D3** ("calm by construction, not
+subtraction") stated as a measurement.
+
+### Hard gates (live)
+- **G1 (split/blank) — FAIL.** "⇆ Source" → `metrics.csv` in **Editor Group 2**, Group 1 **blank**
+  (`shots/07`). Reload restored **3 stacked metrics.csv groups** (`shots/01`). #1 abrasion, confirmed.
+- **G2 (calm header) — FAIL.** Doc editor has a **2-row header** (brand+synced+Present+Download+Refresh,
+  then a formatting toolbar Heading/B/I/U/list/quote/Ask-AI/Source/`</>`); comp has only row 1's
+  essentials. Menubar leaks above (`shots/06`).
+- **G3 (tree-rail) — FAIL.** Activity-bar containers (Documents/Home/Context/Templates/Knowledge/
+  Agents); no 76px labeled nav, no Files/Context/Outline/Search tree-rail, no folder tree.
+- **G4 (no optionality) — FAIL.** Menubar, activity bar, split, drag, groups, tabs/close all live.
+- **G5 (gutter detach + pixel-align) — PARTIAL/FAIL.** Dots in a thin margin, not the 30px detached
+  column; no multi-line bar; doc not pixel-aligned.
+- **G6 (no nav-blank + toast gone) — PARTIAL/FAIL.** Nav no longer blanks (iter-6 fix holds), **but**
+  the `merge-conflict`/`emmet`/`git-base` activation toasts fire every load (`shots/01,05`).
+
+### Scores (mean of Layout/Styling/Components/IA/Interaction-UX)
+Source-peek **18** · Interaction grammar **25** · Left rail/nav **35** · Header **48** · Context **50**
+· Right rail **65** · Doc editor **70** · Templates **70** · Knowledge **70** · Agents **70** · Present
+**70\*** · Home **78**. **Overall ~56%** (\*Present not re-driven live this iter).
+
+### Next (first code iteration)
+Backlog #1 — **kill the split/blank-pane abrasion (G1)**: redesign source-peek + "Sync across" as an
+in-surface panel, remove every `SIDE_GROUP` open, ensure no surface renders beside a blank group.
+Fixing the editor-group model is also the lever that un-squeezes Templates/Knowledge/Agents and opens
+the door to the tree-rail (G3).
