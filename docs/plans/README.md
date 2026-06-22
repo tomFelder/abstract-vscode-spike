@@ -15,10 +15,12 @@ These are the canonical copies; mirrors live in `~/.claude/plans/` for clean-ses
 | [07-orchestration-handoff.md](07-orchestration-handoff.md) | Build the orchestration layer per spec (`docs/09`) — triggers (event/cron/heartbeat/manual), the cross-document graph event-bus, per-edge policy, and the verify gate (Skills as graders). **Done (`living-docs-orchestration`).** |
 | [08-design-audit-handoff.md](08-design-audit-handoff.md) | The design-audit loop: drive the web build, diff against the DesignSync source, score and close gaps. **Done (`living-docs-design-audit`, PR #9).** |
 | [10-anthropic-oauth-handoff.md](10-anthropic-oauth-handoff.md) | Wire Claude into the agentic features via a localhost Anthropic OAuth proxy (credential server-side). **Done (`living-docs-model`, PR #11).** See [`../10-model-integration.md`](../10-model-integration.md). |
-| [09-v1-functionality-handoff.md](09-v1-functionality-handoff.md) | **The live one to run next:** take every core surface from "looks like the comp" to "works like a v1" — Chat agent, Apply-fix, editor source-peek/Sync-across, context kinds, polish. Model is already wired (plan 10), so it starts at the Chat agent. |
+| [09-v1-functionality-handoff.md](09-v1-functionality-handoff.md) | Take every core surface from "looks like the comp" to "works like a v1" — Chat agent, Apply-fix, editor source-peek/Sync-across, context kinds, polish. **Done (`living-docs-v1`, PR #13)** — all 7 v1 criteria >= 85. |
+| [11-design-alignment-loop.md](11-design-alignment-loop.md) | **The live one to run next:** the v2 shell pass — align the running app to the comp at >= 95% (UX/UI/IA/visual). Kill the split-pane/blank-pane abrasion (in-surface panels, no editor splits), build the design's left tree-rail, calm the header, detach the provenance gutter, remove VS Code optionality. **Core patches now allowed where the design needs them**, logged in [03](03-merge-tax-ledger.md). |
 
 ## How to use a handoff
 Paste the relevant file into a fresh Claude Code session. The handoffs are self-contained: repo /
-branch / build / conventions / design source / ordered work items / verification. Plans 06, 07, 08,
-and 10 are **done** (branches/PRs noted above); **[09](09-v1-functionality-handoff.md) is the live one
-to run next** (the model is already wired, so it starts at the Chat agent).
+branch / build / conventions / design source / ordered work items / verification. Plans 06–10 are
+**done** (branches/PRs noted above); **[11](11-design-alignment-loop.md) is the live one to run next**
+(the v2 design-alignment loop — iteration 1 is the audit, the first code iteration is the split-pane
+redesign).

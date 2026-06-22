@@ -84,3 +84,30 @@ itself** already reads like a word processor. The gap is entirely the surroundin
 file tree, view-pane chrome, header, group/close affordances). The next pass should bring the
 *surrounding* shell up to the document's level — and pixel-align the document + review rail to the
 hi-fi (ITEM D of the next plan).
+
+---
+
+## D5 — Post-v1 status: functionality is done; the shell still diverges (the v2 design loop)
+
+The v1 functionality loop (plan 09, PR #13) made every surface *work* — Chat agent, Apply-fix,
+source-peek + "Sync across", Context kinds, dynamic subtitle — all live-verified. Tom's review:
+**functionally good; the UX/UI/IA has drifted from the intended design.** The named abrasions:
+
+- **Split panes / blank panes (the #1 abrasion).** v1's source-peek + "Sync across" open the source
+  in a VS Code `SIDE_GROUP` *editor group*, so opening a source spawns a second pane — frequently
+  leaving one pane **entirely blank**. This is exactly the "no split editors" violation of D3.
+  **v2 fix:** redesign source-peek + Sync-across as an **in-surface panel/overlay** in the document
+  surface; remove every `SIDE_GROUP` open; never show an empty editor group. (Decision log 19 -> 20.)
+- **The header is heavy and messy** — too many controls, not the comp's calm single 48px bar.
+- **The left rail has nowhere near the design's IA.** The comp is a single tree-rail
+  (Files / Context / Outline / Search + a folder tree); today it's split across activity-bar
+  containers. **v2 fix:** build the design's tree-rail (Decision log 21).
+- Still standing from D1–D4: detach the provenance gutter; remove VS Code optionality (no drag/split/
+  reopen-with/palette/group-close); pixel-align each surface.
+
+**The v2 loop** ([plans/11-design-alignment-loop.md](plans/11-design-alignment-loop.md)) is a
+UX/UI/IA/visual pass to **>= 95% alignment** with explicit "hard UX gates" for each abrasion above,
+and — newly — **core patches are permitted where the design needs them** (logged in the merge-tax
+ledger; decision log 22), since "calm by construction" (D3) can't always be reached contrib-only.
+The per-surface **Exists-today vs Design-intends** inventory the loop builds lives in
+`design-audit/v2-inventory.md`.
