@@ -47,10 +47,10 @@ export interface ISkillCheck {
 	readonly id: 'financial' | 'strategy' | 'formatting';
 	readonly name: string;
 	readonly blurb: string;
-	readonly status: 'pass' | 'flag' | 'needs-model';
+	readonly status: 'pass' | 'flag' | 'needs-model' | 'ready';
 	/** Human summary, e.g. "All 6 linked figures reconcile with sources." */
 	readonly detail: string;
-	/** True when the check is deterministic and can be (re-)run locally (drives the Run button). */
+	/** True when the check can be (re-)run: deterministic locally, or model-backed via the proxy. */
 	readonly canRun: boolean;
 }
 
@@ -86,8 +86,10 @@ export interface ILivingDocsService {
 	getLock(resource: URI): ILivingDocLock | undefined;
 	/** The cheap always-on staleness signal: which bindings/context changed since last sync/review. */
 	getFreshness(resource: URI): IFreshness;
-	/** Run the document's Skills as graders over its current state (for the Skills rail). Deterministic. */
+	/** Run the document's Skills as graders over its current state (for the Skills rail). */
 	getSkillReport(resource: URI): readonly ISkillCheck[];
+	/** Run a single Skill on demand (e.g. the model-backed Strategy grader); caches the verdict. */
+	runSkillCheck(resource: URI, id: ISkillCheck['id']): Promise<void>;
 	/** Re-hash the document's sources and recompute its dirty bits (what the source watcher triggers). */
 	checkSources(resource: URI): Promise<void>;
 	getStatus(resource: URI): string;

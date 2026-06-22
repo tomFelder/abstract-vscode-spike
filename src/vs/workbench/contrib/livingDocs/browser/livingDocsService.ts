@@ -14,9 +14,8 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
-import { asJson, IRequestService } from '../../../../platform/request/common/request.js';
+import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
-import { ChatMessageRole, IChatMessage, ILanguageModelsService } from '../../chat/common/languageModels.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { ILivingDocsService, ILivingDocSummary, ISkillCheck, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
@@ -70,6 +69,16 @@ function sourceKind(source: string): SourceKind {
 	return /^https?:\/\//.test(source) ? 'api' : 'file';
 }
 
+// Model-backed features (Review-impact rewrites, the Strategy grader) call Claude through a local
+// OAuth proxy (scripts/lwd-anthropic-proxy.js) so no credential ever reaches the renderer. These are
+// the request defaults; the proxy base URL is configurable via livingDocs.modelProxyUrl.
+const DEFAULT_PROXY_URL = 'http://localhost:8090';
+const DEFAULT_MODEL = 'claude-opus-4-8';
+const MODEL_MAX_TOKENS = 1024;
+// How long a model-availability probe result is trusted before re-checking (so starting the proxy
+// mid-session is picked up without re-probing on every render).
+const MODEL_PROBE_TTL_MS = 30_000;
+
 // The alias a bind key uses for a source file: "metrics.csv" -> "metrics", "market-research.md" ->
 // "market-research". Bind keys are "<alias>.<field>" (with an optional ".<qualifier>").
 function sourceAlias(source: string): string {
@@ -122,11 +131,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// all torn down when the service is disposed.
 	private readonly _watchers = new Map<string, IDisposable>();
 
+	// Cached "is the model proxy reachable?" so the synchronous Skills report can show the right
+	// Strategy state; refreshed on a short TTL and reused while a probe is in flight.
+	private _modelAvailable = false;
+	private _modelProbedAt = 0;
+	private _modelProbe: Promise<boolean> | undefined;
+	// The latest model-backed Strategy verdict per document, surfaced in the Skills rail after a Run.
+	private readonly _strategyGrades = new Map<string, IGradeResult>();
+
 	constructor(
 		@IFileService private readonly _files: IFileService,
 		@IEditorService private readonly _editors: IEditorService,
 		@IViewsService private readonly _views: IViewsService,
-		@ILanguageModelsService private readonly _lm: ILanguageModelsService,
 		@IConfigurationService private readonly _config: IConfigurationService,
 		@INotificationService private readonly _notify: INotificationService,
 		@ILogService private readonly _log: ILogService,
@@ -146,6 +162,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			for (const w of this._watchers.values()) { w.dispose(); }
 			this._watchers.clear();
 		}));
+		// Probe the model proxy once at startup so the Skills rail reflects model availability without
+		// waiting for the first model call. Failures are swallowed (the no-model fallback stays intact).
+		void this._probeModel();
 	}
 
 	/** The orchestration engine (agent registry, graph event-bus, triggers, policy, verify gate). */
@@ -199,9 +218,36 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			? { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'pass', detail: 'All headings follow house style.', canRun: true }
 			: { id: 'formatting', name: 'Formatting agent', blurb: 'Checks house style before export', status: 'flag', detail: `${fixes} heading-case fix${fixes === 1 ? '' : 'es'} suggested.`, canRun: true };
 
-		const strategy: ISkillCheck = { id: 'strategy', name: 'Strategy agent', blurb: 'Tests claims against strategy & OKRs', status: 'needs-model', detail: 'Connect a model to test claims against the decision stack.', canRun: false };
+		// Strategy is model-backed: NO MODEL when the proxy is unreachable; otherwise READY until run,
+		// then the cached PASS/FLAG verdict from runSkillCheck.
+		const blurb = 'Tests claims against strategy & OKRs';
+		const grade = this._strategyGrades.get(resource.toString());
+		let strategy: ISkillCheck;
+		if (!this._modelAvailable) {
+			strategy = { id: 'strategy', name: 'Strategy agent', blurb, status: 'needs-model', detail: 'Connect a model to test claims against the decision stack.', canRun: false };
+		} else if (!grade) {
+			strategy = { id: 'strategy', name: 'Strategy agent', blurb, status: 'ready', detail: 'Run to test this document\'s claims against the decision stack.', canRun: true };
+		} else if (grade.pass) {
+			strategy = { id: 'strategy', name: 'Strategy agent', blurb, status: 'pass', detail: 'Claims are consistent with the decision stack.', canRun: true };
+		} else {
+			strategy = { id: 'strategy', name: 'Strategy agent', blurb, status: 'flag', detail: grade.flag ?? 'A claim conflicts with the decision stack.', canRun: true };
+		}
 
 		return [strategy, financial, formatting];
+	}
+
+	// Run a Skill on demand from the rail. The model-backed Strategy grader runs against the document's
+	// claims + decision stack and caches its verdict; Financial/Formatting are deterministic and simply
+	// recompute on the next render (the fired event triggers it).
+	async runSkillCheck(resource: URI, id: ISkillCheck['id']): Promise<void> {
+		if (id === 'strategy') {
+			const state = this._docs.get(resource.toString());
+			if (state) {
+				const grade = await this._gradeStrategy(state, []);
+				this._strategyGrades.set(resource.toString(), grade);
+			}
+		}
+		this._onDidChange.fire();
 	}
 
 	// House style: title-case headings. A heading passes when every significant word (the first word,
@@ -648,11 +694,39 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return { pass: true };
 	}
 
-	// Strategy / Formatting may consult the model; the no-model spike passes them (a hook for the model
-	// path, kept here so the gate ordering and maker != checker structure are real).
-	private async _gradeStrategy(_state: IDocState, _changes: { blockId: string }[]): Promise<IGradeResult> {
-		return { pass: true };
+	// Model-backed strategy grader (spec 5, maker != checker): do the claims being asserted contradict
+	// the document's Knowledge/decision-stack context (its `context` sources)? Returns the honest pass
+	// when no model is reachable, on error, or on a refusal, so the verify gate never blocks on the
+	// proxy being down. With changes, it grades those; without, the document's current prose claims.
+	private async _gradeStrategy(state: IDocState, changes: { blockId: string; newText?: string }[]): Promise<IGradeResult> {
+		if (!await this._hasModel()) { return { pass: true }; }
+		const claims = changes.length
+			? changes.map(c => (c.newText ?? '').trim()).filter(t => t.length > 0)
+			: this._strategyClaims(state);
+		const decisionStack = (await this._readContext(state, state.doc.context)).trim();
+		if (!claims.length || !decisionStack) { return { pass: true }; }
+		try {
+			const system = 'You are a strategy reviewer. Decide whether any of the document\'s claims contradict or are clearly unsupported by the decision stack (the team\'s strategy, OKRs, and market context). '
+				+ 'Reply with ONLY a JSON object: {"pass": boolean, "flag": string}. Set pass=false ONLY for a clear contradiction, with a one-sentence reason starting with "Strategy: " in flag. When in doubt, pass.';
+			const user = `Decision stack:\n"""${decisionStack}"""\n\nClaims:\n${claims.map(c => `- ${c}`).join('\n')}`;
+			const text = await this._callModel(system, user);
+			const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) as { pass?: boolean; flag?: string };
+			if (json.pass === false) {
+				const flag = (typeof json.flag === 'string' && json.flag.trim()) ? json.flag.trim() : 'Strategy: a claim conflicts with the decision stack.';
+				return { pass: false, flag };
+			}
+			return { pass: true };
+		} catch (e) {
+			this._log.info('[livingDocs] strategy grade failed, passing', e instanceof Error ? e.message : String(e));
+			return { pass: true };
+		}
 	}
+
+	// The prose claims the Strategy grader checks: the document's non-empty paragraph text.
+	private _strategyClaims(state: IDocState): string[] {
+		return state.doc.blocks.filter(b => b.type === 'paragraph' && b.text.trim().length > 0).map(b => b.text.trim());
+	}
+
 	private _gradeFormatting(_state: IDocState, _changes: { blockId: string }[]): IGradeResult {
 		return { pass: true };
 	}
@@ -1005,15 +1079,76 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		};
 	}
 
+	// The local OAuth proxy base URL (coerced - config stubs may return non-strings), trailing slash trimmed.
+	private _proxyUrl(): string {
+		const raw = this._config.getValue<string>('livingDocs.modelProxyUrl');
+		const url = (typeof raw === 'string' && raw.length > 0) ? raw : DEFAULT_PROXY_URL;
+		return url.replace(/\/+$/, '');
+	}
+
+	private _modelName(): string {
+		const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
+		return (typeof preferred === 'string' && preferred.length > 0) ? preferred : DEFAULT_MODEL;
+	}
+
 	private async _hasModel(): Promise<boolean> {
 		if (this._config.getValue<boolean>('livingDocs.useModel') === false) { return false; }
-		try {
-			const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
-			const models = await this._lm.selectLanguageModels(preferred ? { id: preferred } : {});
-			return models.length > 0;
-		} catch {
-			return false;
+		return this._probeModel();
+	}
+
+	// Probe the proxy's /healthz once per TTL (reusing an in-flight probe) and cache the result so the
+	// synchronous Skills report can read it. A change in availability fires onDidChange to refresh the UI.
+	private async _probeModel(): Promise<boolean> {
+		const now = Date.now();
+		if (this._modelProbe && (now - this._modelProbedAt) < MODEL_PROBE_TTL_MS) {
+			return this._modelProbe;
 		}
+		this._modelProbedAt = now;
+		this._modelProbe = (async () => {
+			let ok = false;
+			try {
+				const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/healthz`, callSite: 'livingDocs.modelProbe', disableCache: true }, CancellationToken.None);
+				const json = await asJson<{ ok?: boolean }>(context);
+				ok = !!json && json.ok === true;
+			} catch {
+				ok = false;
+			}
+			if (ok !== this._modelAvailable) {
+				this._modelAvailable = ok;
+				this._onDidChange.fire();
+			}
+			return ok;
+		})();
+		return this._modelProbe;
+	}
+
+	// POST one short request to the proxy and return the assistant text. Throws on a refusal or any
+	// transport/parse error so the caller falls back to the deterministic path. Opus 4.8 request shape:
+	// adaptive thinking, low effort, no sampling params (those 400). The credential stays in the proxy.
+	private async _callModel(system: string, user: string): Promise<string> {
+		const body = JSON.stringify({
+			model: this._modelName(),
+			max_tokens: MODEL_MAX_TOKENS,
+			thinking: { type: 'adaptive' },
+			output_config: { effort: 'low' },
+			system,
+			messages: [{ role: 'user', content: user }],
+		});
+		const context = await this._request.request({
+			type: 'POST',
+			url: `${this._proxyUrl()}/v1/messages`,
+			headers: { 'content-type': 'application/json' },
+			data: body,
+			callSite: 'livingDocs.model',
+		}, CancellationToken.None);
+		const raw = await asText(context);
+		if (!raw) { throw new Error('empty model response'); }
+		const json = JSON.parse(raw) as { stop_reason?: string; content?: { type: string; text?: string }[]; error?: { message?: string } };
+		if (json.error) { throw new Error(json.error.message ?? 'model proxy error'); }
+		if (json.stop_reason === 'refusal') { throw new Error('model refused the request'); }
+		const text = (json.content ?? []).filter(b => b.type === 'text').map(b => b.text ?? '').join('');
+		if (!text.trim()) { throw new Error('model returned no text'); }
+		return text;
 	}
 
 	private async _proposeImpact(diff: string, contextFiles: string[], oldText: string, modelAvailable: boolean): Promise<{ newText: string; kind: 'figure' | 'meaning'; confidence: number; rationale: string; via: 'model' | 'heuristic' }> {
@@ -1028,27 +1163,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	private async _modelImpact(diff: string, contextFiles: string[], oldText: string): Promise<{ newText: string; kind: 'figure' | 'meaning'; confidence: number; rationale: string; via: 'model' }> {
-		const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
-		const models = await this._lm.selectLanguageModels(preferred ? { id: preferred } : {});
-		if (!models.length) { throw new Error('no language models available'); }
 		const system = 'You revise one sentence of business commentary so it stays consistent with a changed source. '
 			+ 'Reply with ONLY a JSON object: {"newText": string, "kind": "figure" | "meaning", "confidence": number, "rationale": string}. '
 			+ 'Use kind="meaning" when the qualitative framing should change; otherwise kind="figure" and return newText unchanged.';
 		const user = `The source(s) ${contextFiles.join(', ')} now read:\n"""${diff}"""\nCurrent commentary: "${oldText}". Revise it if the framing should change.`;
-		const messages: IChatMessage[] = [
-			{ role: ChatMessageRole.System, content: [{ type: 'text', value: system }] },
-			{ role: ChatMessageRole.User, content: [{ type: 'text', value: user }] },
-		];
-		const response = await this._lm.sendChatRequest(models[0], undefined, messages, {}, CancellationToken.None);
-		let text = '';
-		for await (const part of response.stream) {
-			if (Array.isArray(part)) {
-				for (const p of part) { if (p.type === 'text') { text += p.value; } }
-			} else if (part.type === 'text') {
-				text += part.value;
-			}
-		}
-		await response.result;
+		const text = await this._callModel(system, user);
 		const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
 		return {
 			newText: String(json.newText ?? oldText),
