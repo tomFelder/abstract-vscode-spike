@@ -47,4 +47,29 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 		assert.ok(html({ open: true, choice: 'gdoc', scope: 'link' }).includes('opportunity-os.live'), 'URL shown for anyone-with-link');
 		assert.ok(html({ open: true, choice: 'gdoc', scope: 'public' }).includes('opportunity-os.live'), 'URL shown for public');
 	});
+
+	test('the header is the comp calm bar: pill refreshes, no Download/Refresh buttons, formatting is a floating selection toolbar', () => {
+		const input: ILivingDocRenderInput = {
+			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',
+			recent: new Set(), mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
+		};
+		const h = renderLivingDocHtml(input);
+		assert.deepStrictEqual({
+			pillIsRefresh: h.includes('class="pill ') && h.includes('data-refresh'),
+			noDownloadButton: !h.includes('data-export-md'),
+			noStandaloneRefreshButton: !h.includes('class="btn" data-refresh'),
+			noPersistentFormattingRow: !h.includes('class="etoolbar"'),
+			hasFloatingSelectionToolbar: h.includes('class="seltoolbar"') && h.includes('data-fmt="bold"'),
+			rawEditMovedToHint: h.includes('class="hint-raw" data-to-raw'),
+			present: h.includes('data-present-open'),
+		}, {
+			pillIsRefresh: true,
+			noDownloadButton: true,
+			noStandaloneRefreshButton: true,
+			noPersistentFormattingRow: true,
+			hasFloatingSelectionToolbar: true,
+			rawEditMovedToHint: true,
+			present: true,
+		});
+	});
 });

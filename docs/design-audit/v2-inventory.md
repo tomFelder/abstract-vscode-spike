@@ -41,7 +41,7 @@ Target: overall **>= 95%** + every hard gate passing.
 | Gate | Live status (iter 1) | Evidence |
 |------|----------------------|----------|
 | **G1** — No split editor groups / no blank panes | **PASS (source-peek) — iter 2** | "⇆ Source" now opens an **in-surface pane inside the one webview** (source table + floating "Sync across" circle + close ✕) — verified live: NO 2nd editor group, NO blank pane (`shots/v2-iter2/01,03`). Provenance-dot reveal shares the same in-surface path. _Remaining:_ the **export/Download** flow still opens its generated artifact in a `SIDE_GROUP` (separate flow, not the named abrasion) — tracked for a later iteration. Before: `shots/v2-iter1/07`. |
-| **G2** — Calm, light 48px header | **FAIL** | No unified shell header. The doc editor webview carries a **heavy 2-row header**: brand + synced pill + **↗ Present + ⇣ Download + ↻ Refresh from sources** + avatar, then a **formatting toolbar** (Heading / B / I / U / list / quote / ✦ Ask AI / ⇆ Source / </>). The comp bar has none of the second row. Plus the VS Code **menubar ("Application Menu")** sits above everything. `shots/06`. |
+| **G2** — Calm, light 48px header | **PASS (doc header) — iter 4** | The doc header is now the comp's **single calm bar**: brand/crumb + "All sources synced" pill + ↗ Present + avatar — verified live, nothing else (`shots/v2-iter4/01`). Removed Download (Present modal covers it) + the standalone Refresh (the **pill is the refresh**) + the whole formatting-toolbar row (now a **floating selection toolbar**); raw-Markdown moved to the footer. _Residual:_ the VS Code **menubar ("Application Menu")** still sits above the webview (a G4 optionality item). Before: `shots/v2-iter1/06`. |
 | **G3** — Left rail matches the comp | **MOSTLY PASS (tree-rail) — iter 3** | The sidebar is now one **`TreeRailView`** with the comp's **Files / Context / Outline / Search** tab strip + a **folder tree** (REPORTS + SOURCES), replacing the separate Documents + Context containers — verified live across all 4 tabs + doc-open (`shots/v2-iter3/01-04`). _Residual:_ the **76px labeled icon-nav** (VS Code's activity bar is still ~48px unlabeled) + making Home/Templates/etc. pure nav — a follow-up slice. Before: `shots/v2-iter1/01,06`. |
 | **G4** — No VS Code optionality leaks | **FAIL** | Menubar, activity bar, draggable sashes, **editor groups + split**, editor tabs + close, "open to the side" all reachable. Pure IDE grammar. `shots/01,07`. |
 | **G5** — Provenance gutter detached (D1) + doc/rail pixel-aligned (D4) | **PARTIAL → FAIL** | Dots render in a **thin left margin**, not the comp's clean **30px detached gutter column**; no multi-line "vertical bar" marker; doc column not pixel-aligned (width/centering differ). `shots/06`. |
@@ -52,9 +52,9 @@ Target: overall **>= 95%** + every hard gate passing.
 | Surface | Exists today (verified live) | Design intends | Score | Top gaps |
 |---------|------------------------------|----------------|:----:|----------|
 | **Source-peek / "Sync across"** | **iter 2:** "⇆ Source" / provenance dot opens an **in-surface left pane** (styled source table, "REFERENCED BY", floating ⟳ "Sync across" circle, close ✕) inside the one webview — no 2nd group, no blank pane | In-surface LEFT pane inside the editor + floating ⟳ "Sync across" circle; never a 2nd group | **78** ↑ | _Remaining:_ pane shows bound key→value rows, not the comp's raw CSV grid w/ latest row highlighted; no in-pane CSV edit yet |
-| **Interaction grammar** | Menubar + activity bar + editor groups + drag + tabs/close present; **iter 2 removed** the source "open-beside" split path | Opinionated Word/Docs/Notion grammar; optionality **removed** | **30** ↑ | **G4** — remove (not hide) menubar/split/drag/group affordances |
+| **Interaction grammar** | Menubar + activity bar + editor groups + drag + tabs/close present; iter 2 removed the source open-beside split; **iter 4 removed** Download/Refresh/Ask-AI/Source header buttons | Opinionated Word/Docs/Notion grammar; optionality **removed** | **35** ↑ | **G4** — remove (not hide) menubar/split/drag/group affordances |
 | **Left rail / nav** | **iter 3:** one `TreeRailView` with **Files/Context/Outline/Search** tabs + folder tree (REPORTS + SOURCES); Documents + Context containers folded in | 76px labeled icon-nav + 264px **Files/Context/Outline/Search** tree-rail + folder tree | **75** ↑ | _Residual:_ the 76px labeled icon-nav restyle (activity bar still ~48px); make Home/Templates/etc. pure nav |
-| **Global header** | No shell header; calm brand bar lives *inside* each webview; doc editor adds a heavy 2nd toolbar row; menubar leaks above | Single calm 48px bar (brand/crumb/synced/Present/avatar) | **48** | **G2** — one 48px bar; strip the formatting toolbar + Download/Refresh from the doc header |
+| **Global header** | **iter 4:** the doc header is the comp's single calm bar (brand/crumb + pill + Present + avatar); pill refreshes, formatting is a floating selection toolbar, Download/Refresh removed | Single calm 48px bar (brand/crumb/synced/Present/avatar) | **85** ↑ | _Residual:_ VS Code menubar leaks above (G4); the bar is per-webview, not one unified shell header |
 | **Context panel** | **iter 3:** now a **tab inside the tree-rail** (verified: Linked sources / Referenced files groups for the active doc), reusing `buildContextGroups` | A **tab inside the tree-rail**: Linked sources / Referenced files / Pasted text / Images / Company knowledge + Add context | **78** ↑ | Surface Pasted/Images/Knowledge groups + Add-context inside the rail tab (data model already supports) |
 | **Right rail (Chat/Review/History)** | 4 tabs — **Chat / Review / History / Skills** (one extra); functional; empty-state shown | 392px rail, **Chat / Review / History** (3 only) | **65** | Reconcile the extra "Skills" tab; pixel-align width/typography |
 | **Document editor (body + gutter)** | Body reads like Word — h1, subtitle, sections, KPI table, dotted-underline bindings (high fidelity); gutter dots in thin margin | hi-fi doc + **30px detached gutter** + 720px centered column | **70** | **G5/D1** — detach gutter to 30px column; pixel-align column |
@@ -66,10 +66,10 @@ Target: overall **>= 95%** + every hard gate passing.
 
 \* Present scored from comp + v1 evidence; not re-driven live in iteration 1 (flagged for iter-2+).
 
-**Overall alignment: iter-1 ~56% → iter-2 ~61% → iter-3 ~67%** (mean of the 12 rows; iter-3 lifted left
-rail 35→75 and Context 50→78 by building the tabbed tree-rail). Remaining gap is concentrated in the
-**header (G2, 48)**, the **icon-nav restyle** (the tree-rail's residual), **right rail polish (65)**, and
-**removing IDE optionality (G4, 30)** — plus per-surface pixel alignment.
+**Overall alignment: iter-1 ~56% → iter-2 ~61% → iter-3 ~67% → iter-4 ~70%** (mean of the 12 rows;
+iter-4 lifted the header 48→85 and interaction 30→35 by calming the header). Remaining gap is now
+**removing IDE optionality (G4, 35** — menubar/groups/drag), the **icon-nav restyle** + **provenance
+gutter detach (G5)**, **right rail polish (65)**, and per-surface pixel alignment.
 
 ## Ranked gap backlog (most abrasive × most central)
 

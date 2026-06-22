@@ -95,7 +95,14 @@ the tabbed rail was reachable as one DOM-rendered view without touching the acti
 **residual** 76px labeled icon-nav (vs VS Code's ~48px activity bar) + making Home/Templates/etc. pure
 nav may need a `styleOverrides`-CSS or core seam; deferred to a later iteration and re-evaluated then.
 
-## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round + v2 iter 2 source-peek + v2 iter 3 tree-rail) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
+**v2 iter 4 — calm the header (the third expected candidate above): 0 core patches.**
+Entirely inside the doc webview (`livingDocRender.ts`): collapsed the 2-row header to the comp's single
+bar (removed Download + the standalone Refresh button + the persistent formatting-toolbar row), made the
+sync pill the refresh affordance, moved formatting to a floating selection toolbar, and relocated the
+raw-Markdown toggle to the footer. Tier reached: **additive-contribution** (webview HTML/CSS/JS only; no
+core file, no `styleOverrides`). The doc header is our own surface, so calming it never approached core.
+
+## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round + v2 iter 2 source-peek + v2 iter 3 tree-rail + v2 iter 4 header) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be

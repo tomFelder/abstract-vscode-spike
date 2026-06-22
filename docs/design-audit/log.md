@@ -36,6 +36,7 @@ Viewport for all shots: **1440x900**, system Chrome via chrome-devtools MCP.
 | **v2-1 (audit)** | **~56%** (experience-weighted) | **v2 shell audit — no code.** Re-scored every surface weighting UX/UI/IA/visual (not behaviour). Content surfaces are 65-78 (Home 78, doc body 70, Templates/Knowledge/Agents 70); shell/IA surfaces are 18-50 (source-peek 18, interaction grammar 25, left rail 35, header 48, Context 50). **All 6 hard gates FAIL/PARTIAL** (see `v2-inventory.md`). The ~86 -> ~56 drop is the re-weighting, not a regression: v1 measured "does it work", v2 measures "does it feel like the comp". |
 | **v2-2 (G1 fix)** | **~61%** | **Killed the #1 abrasion: split/blank panes.** Source-peek + "Sync across" now render **in-surface** (a styled source pane + floating ⟳ circle inside the one webview) instead of opening a `SIDE_GROUP` editor. Removed `revealSource`/`openSourceBeside`; added a pure `getSourcePeek` (TDD, 71/71 green). **0 core patches.** Verified live: open Source -> in-surface pane (no 2nd group, no blank pane) -> Sync (green confirmation) -> close. **G1 PASS** for source-peek (export-open still SIDE_GROUP, tracked). source-peek 18->78, interaction 25->30. |
 | **v2-3 (tree-rail, G3)** | **~67%** | **Built the left tree-rail.** One `TreeRailView` with **Files / Context / Outline / Search** tabs + a folder tree (REPORTS + SOURCES), replacing the separate Documents + Context activity-bar containers (both deleted). Pure helpers `buildFileTree`/`buildOutline`/`searchTreeRail` in `common/treeRail.ts` (TDD, 74/74 green); `ILivingDocSummary` gained `sources`. **0 core patches.** Verified live: all 4 tabs + folder tree + doc-open from Files (opens clean, no split). **G3 MOSTLY PASS** (residual: the 76px labeled icon-nav restyle). left rail 35->75, Context 50->78. |
+| **v2-4 (calm header, G2)** | **~70%** | **Calmed the doc header to the comp's single bar.** Removed Download (Present covers it) + the standalone Refresh button (the **sync pill is now the refresh**) + the persistent formatting-toolbar row (now a **floating selection toolbar**); Ask-AI/Source header buttons dropped (Chat rail + provenance dots are the comp's entries); raw-Markdown toggle moved to the footer hint. **0 core patches** (webview only). TDD: a render assertion for the calm bar (75/75 green). Verified live: single calm bar; **G1 still holds** — a provenance dot opens the in-surface source pane (one iframe, no split). **G2 PASS** (residual: the VS Code menubar still leaks above — a G4 item). header 48->85, interaction 30->35. |
 
 ---
 
@@ -725,3 +726,39 @@ The remaining shell gaps are **the calm header (G2, score 48)** and **removing I
 (G4, 30)**; then the icon-nav restyle and per-surface pixel alignment. Next iteration: **G2 — calm the
 header** (strip the doc editor's second formatting-toolbar row + Download/Refresh, unify to the comp's
 single 48px bar).
+
+---
+
+## v2 Iteration 4 — calm the header (G2) · ~67% → ~70%
+
+Collapsed the doc editor's heavy 2-row header to the comp's single calm bar. All inside the doc webview
+(`livingDocRender.ts`); 0 core patches. Screenshots: [`shots/v2-iter4/`](shots/v2-iter4/).
+
+### What changed (decision log 24)
+- **Top bar = the comp's bar:** brand/crumb + "All sources synced" pill + ↗ Present + avatar. **Removed**
+  the ⇣ Download button (the Present/export modal already downloads) and the standalone ↻ Refresh button.
+- **The sync pill IS the refresh** (`data-refresh` on the pill, "Refresh from sources" tooltip) — the
+  comp shows the pill, so refresh stays reachable without a separate button.
+- **The persistent formatting toolbar row is gone**, replaced by a **floating selection toolbar**
+  (Heading/B/I/U/List/Quote) that appears only on a text selection inside editable prose
+  (`selectionchange` positions it above the selection) — Notion-like, holds the formatting without the
+  persistent chrome.
+- **Ask-AI and Source header buttons dropped** — the right-rail **Chat** tab and the **provenance dots**
+  are the comp's entry points (both still work). The **raw-Markdown** toggle moved to a quiet link in
+  the footer hint. Removed the now-dead export-button script handlers.
+
+### TDD + verification
+A render assertion that the header is the calm bar (pill refreshes, no Download/Refresh buttons, no
+persistent toolbar, floating selection toolbar present, raw-edit in the hint). `typecheck-client` clean;
+**75/75 green.** Live (chrome-devtools): the doc header shows only brand/pill/Present/avatar
+(`shots/v2-iter4/01-calm-header.png`); **G1 re-verified — a provenance dot opens the in-surface source
+pane in the one iframe, no split** (`02-calm-header-with-source-peek.png`).
+
+### Gate re-check — no regressions
+**G2 PASS** (doc header is the comp's calm bar). **G1 still PASS** (dot → in-surface pane). G3 unchanged
+(mostly pass). G5 unchanged. **Residual on G2/G4:** the VS Code **menubar ("Application Menu")** still
+sits above the webview — folded into the next target.
+
+### Next
+**G4 — remove the remaining IDE optionality** (the menubar, editor-group split/drag/close affordances),
+and the **provenance-gutter detach (G5/D1)**; then the icon-nav restyle + per-surface pixel alignment.

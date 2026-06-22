@@ -82,7 +82,7 @@ html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-
 .sep{color:#c8cbd2}
 .crumb{color:#868b95;font-weight:400}
 .right{display:flex;align-items:center;gap:10px}
-.pill{display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px}
+.pill{display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px;cursor:pointer}
 .pill .dot{width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)}
 .pill.warn{color:#9a6b16;background:#fdf2dc;border-color:#f0e2c0}
 .pill.warn .dot{background:oklch(0.66 0.16 45)}
@@ -141,19 +141,15 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .hint{max-width:720px;margin:0 auto;padding:0 40px 30px;font:400 12px/1.6 system-ui;color:#a3a8b2}
 .toggle{border:1px solid #d9dae0;border-radius:8px;padding:7px 12px;background:#fff;color:#4a4c54;font:600 12px/1 system-ui;cursor:pointer}
 .toggle:hover{background:#f4f4f6}
-/* Editor toolbar (formatting + Ask AI), matching the hi-fi editor header. */
-.etoolbar{position:sticky;top:48px;z-index:4;display:flex;align-items:center;gap:3px;height:46px;padding:0 16px;border-bottom:1px solid #eef0f3;background:#fff}
-.etoolbar .fmt{display:flex;align-items:center;gap:2px}
-.etoolbar .fdiv{width:1px;height:18px;background:#e6e8ed;margin:0 6px}
-.etoolbar .fbtn{border:none;background:transparent;border-radius:7px;padding:6px 9px;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer}
-.etoolbar .fbtn.ic{width:30px;height:30px;padding:0;font-size:13px}
-.etoolbar .fbtn.b{font-weight:700}.etoolbar .fbtn.i{font-style:italic}.etoolbar .fbtn.u{text-decoration:underline}
-.etoolbar .fbtn:hover{background:#f4f5f7;color:#23262c}
-.etoolbar .askai{display:flex;align-items:center;gap:6px;margin-left:8px;border:1px solid #d8e0fb;background:#f4f6ff;border-radius:7px;padding:6px 12px;font:600 12px/1 system-ui;color:oklch(0.5 0.13 255);cursor:pointer}
-.etoolbar .askai:hover{background:#e0e6ff}
-.etoolbar .espacer{flex:1}
-.etoolbar .rawmini{border:1px solid #e6e8ed;background:#fff;border-radius:7px;padding:6px 9px;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;cursor:pointer}
-.etoolbar .rawmini:hover{background:#f4f5f7;color:#52575f}
+/* Floating selection toolbar: formatting appears only on a text selection (the comp has no persistent toolbar) - keeps the header calm while holding inline-formatting functionality. */
+.seltoolbar{position:absolute;display:none;align-items:center;gap:2px;background:#fff;border:1px solid #e6e8ed;border-radius:9px;box-shadow:0 6px 20px rgba(20,30,60,.16);padding:4px 6px;z-index:30}
+.seltoolbar .fdiv{width:1px;height:18px;background:#e6e8ed;margin:0 5px}
+.seltoolbar .fbtn{border:none;background:transparent;border-radius:7px;padding:6px 9px;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer}
+.seltoolbar .fbtn.ic{width:30px;height:30px;padding:0;font-size:13px}
+.seltoolbar .fbtn.b{font-weight:700}.seltoolbar .fbtn.i{font-style:italic}.seltoolbar .fbtn.u{text-decoration:underline}
+.seltoolbar .fbtn:hover{background:#f4f5f7;color:#23262c}
+.hint-raw{border:none;background:none;padding:0;margin-left:5px;color:#8a93c4;font:500 12px/1.6 system-ui;cursor:pointer;text-decoration:underline}
+.hint-raw:hover{color:oklch(0.5 0.13 255)}
 /* Source-peek / Sync-across banner. */
 .syncbar{display:flex;align-items:center;gap:8px;margin:14px 16px 0;padding:9px 13px;border:1px solid #f0e2c4;background:#fdf6e9;border-radius:9px;font:500 12px/1.4 system-ui;color:#9a6b16}
 .syncbar.done{border-color:#d7ecdc;background:#eef7f0;color:#1f5a36}
@@ -221,16 +217,8 @@ for (const b of document.querySelectorAll('[data-refresh]')) { b.addEventListene
 for (const d of document.querySelectorAll('[data-cells]')) { d.addEventListener('click', () => vscode.postMessage({ type: 'reveal', cells: d.getAttribute('data-cells').split(',') })); }
 const toRaw = document.querySelector('[data-to-raw]');
 if (toRaw) { toRaw.addEventListener('click', () => vscode.postMessage({ type: 'setMode', mode: 'raw' })); }
-const exportBtn = document.querySelector('[data-export]');
-if (exportBtn) { exportBtn.addEventListener('click', () => vscode.postMessage({ type: 'export' })); }
-const exportMdBtn = document.querySelector('[data-export-md]');
-if (exportMdBtn) { exportMdBtn.addEventListener('click', () => vscode.postMessage({ type: 'exportMd' })); }
 for (const b of document.querySelectorAll('[data-approve]')) { b.addEventListener('click', e => { e.stopPropagation(); vscode.postMessage({ type: 'approve', id: b.getAttribute('data-approve') }); }); }
 for (const b of document.querySelectorAll('[data-reject]')) { b.addEventListener('click', e => { e.stopPropagation(); vscode.postMessage({ type: 'reject', id: b.getAttribute('data-reject') }); }); }
-const askAi = document.querySelector('[data-ask-ai]');
-if (askAi) { askAi.addEventListener('click', () => vscode.postMessage({ type: 'askAi' })); }
-const sourceOpen = document.querySelector('[data-source-open]');
-if (sourceOpen) { sourceOpen.addEventListener('click', () => vscode.postMessage({ type: 'openSource' })); }
 for (const c of document.querySelectorAll('[data-source-close]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'closeSource' })); }
 for (const b of document.querySelectorAll('[data-sync]')) { b.addEventListener('click', () => vscode.postMessage({ type: 'sync' })); }
 const presentOpen = document.querySelector('[data-present-open]');
@@ -243,6 +231,21 @@ for (const s of document.querySelectorAll('[data-present-scope]')) { s.addEventL
 const presentCta = document.querySelector('[data-present-cta]');
 if (presentCta) { presentCta.addEventListener('click', () => vscode.postMessage({ type: 'presentCta' })); }
 for (const f of document.querySelectorAll('[data-fmt]')) { f.addEventListener('mousedown', e => { e.preventDefault(); document.execCommand(f.getAttribute('data-fmt'), false); }); }
+const seltb = document.querySelector('.seltoolbar');
+function placeSelToolbar() {
+	if (!seltb) { return; }
+	const sel = window.getSelection();
+	if (!sel || sel.isCollapsed || sel.rangeCount === 0) { seltb.style.display = 'none'; return; }
+	const range = sel.getRangeAt(0);
+	const node = range.commonAncestorContainer;
+	const host = (node.nodeType === 1 ? node : node.parentElement);
+	if (!host || !host.closest('[data-block]')) { seltb.style.display = 'none'; return; }
+	const rect = range.getBoundingClientRect();
+	seltb.style.display = 'flex';
+	seltb.style.top = Math.max(8, rect.top + window.scrollY - seltb.offsetHeight - 8) + 'px';
+	seltb.style.left = Math.max(8, rect.left + window.scrollX + rect.width / 2 - seltb.offsetWidth / 2) + 'px';
+}
+document.addEventListener('selectionchange', placeSelToolbar);
 const toRendered = document.querySelector('[data-to-rendered]');
 const rawArea = document.querySelector('textarea.raw');
 if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }
@@ -261,30 +264,28 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 
 	const isRendered = mode === 'rendered';
 
-	// Status pill + "Refresh from sources" are only meaningful for bound Living Documents.
+	// The comp's calm 48px bar carries only: brand/crumb + the sync pill + Present + avatar. The status
+	// pill IS the refresh affordance (click to re-derive from sources) - no separate Refresh/Download
+	// buttons (Download is covered by the Present & export modal; per-doc sync by the Sync-across pane).
 	const warn = (pending.length || dirty) ? 'warn' : '';
 	const livingControls = isLiving
-		? `<span class="pill ${warn}"><span class="dot"></span>${esc(status)}</span>`
+		? `<span class="pill ${warn}" data-refresh title="Refresh from sources"><span class="dot"></span>${esc(status)}</span>`
 		: '';
-	// Calm top-bar actions: Share + Download (the dev-format chrome -- Raw Markdown / HTML export --
-	// is demoted to the editor toolbar). In raw mode, offer the way back to the rendered view.
+	// In raw mode, offer the way back to the rendered view.
 	const rawToggleTop = mode === 'raw'
 		? `<button class="toggle" data-to-rendered>&#10003; Done editing source</button>`
 		: '';
 	const presentBtn = (doc && isRendered) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
-	const downloadBtn = (doc && isRendered) ? `<button class="toggle" data-export-md>&#8675; Download</button>` : '';
-	const refresh = isLiving && isRendered
-		? `<button class="btn" data-refresh>&#8635; Refresh from sources</button>`
-		: '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}${downloadBtn}${refresh}<span class="av">TS</span></div></div>`;
+		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 
-	// The editor toolbar (formatting + Ask AI), shown when reading/editing a Living Document.
-	const etoolbar = (isLiving && isRendered)
-		? `<div class="etoolbar"><div class="fmt">`
+	// Formatting lives in a floating toolbar shown only on a text selection (built below; positioned by
+	// the webview script). It is always in the DOM for a living doc but hidden until text is selected.
+	const selToolbar = (isLiving && isRendered)
+		? `<div class="seltoolbar">`
 		+ `<button class="fbtn" data-fmt="formatBlock" data-fmt-arg="&lt;h2&gt;">Heading</button>`
 		+ `<span class="fdiv"></span>`
 		+ `<button class="fbtn ic b" data-fmt="bold" title="Bold">B</button>`
@@ -292,11 +293,6 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		+ `<button class="fbtn ic u" data-fmt="underline" title="Underline">U</button>`
 		+ `<button class="fbtn ic" data-fmt="insertUnorderedList" title="List">&#9679;&#8202;&#9679;</button>`
 		+ `<button class="fbtn ic" data-fmt="formatBlock" data-fmt-arg="&lt;blockquote&gt;" title="Quote">&#10078;</button>`
-		+ `</div>`
-		+ `<button class="askai" data-ask-ai>&#10022; Ask AI</button>`
-		+ `<button class="fbtn" data-source-open title="Peek the source in this document">&#8646; Source</button>`
-		+ `<span class="espacer"></span>`
-		+ `<button class="rawmini" data-to-raw title="Edit raw Markdown">&lt;/&gt;</button>`
 		+ `</div>`
 		: '';
 
@@ -318,7 +314,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		body = `<div class="empty">No document loaded.</div>`;
 	} else if (isLiving) {
 		const docHtml = renderDoc(doc, pending, recent, resolved);
-		body = etoolbar + syncBar + (input.sourcePeek
+		body = syncBar + (input.sourcePeek
 			? renderSourcePeekLayout(input.sourcePeek, docHtml)
 			: docHtml);
 	} else {
@@ -327,9 +323,10 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 
 	const hint = (mode === 'rendered' && isLiving)
 		? `<div class="hint">Bound text is dotted-underlined &mdash; click a provenance dot to trace it back to the source. `
-		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar).</div>`
+		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
+		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
-	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}${modal}<script>${SCRIPT}</script></body></html>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}${selToolbar}${modal}<script>${SCRIPT}</script></body></html>`;
 }
 
 // The in-surface source-peek layout: the styled source pane to the LEFT, a floating "Sync across"
