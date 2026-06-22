@@ -310,6 +310,16 @@ suite('LivingDocsService', () => {
 		]);
 	});
 
+	test('the doc subtitle tracks the resolved week from its source (on load and on sync)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // fixture subtitle "Week 23"; CSV latest week is 24
+		assert.strictEqual(service.getDoc(WEEKLY)!.subtitle, 'Week 24', 'subtitle resolves to the latest source week on load');
+
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.syncFromSources(WEEKLY);
+		assert.strictEqual(service.getDoc(WEEKLY)!.subtitle, 'Week 25', 'syncing advances the subtitle to the new week');
+	});
+
 	test('buildContextGroups splits image references into Images and surfaces added pasted/knowledge groups', () => {
 		const doc: ILivingDoc = { title: 't', subtitle: '', sources: [], context: ['market-research.md', 'chart.png'], blocks: [], isLiving: true, body: '' };
 		const fresh: IFreshness = { staleBindings: [], staleContext: [], dirty: false };

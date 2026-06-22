@@ -470,6 +470,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 		};
 		this._docs.set(resource.toString(), state);
+		if (doc.isLiving) { await this._resolveSubtitle(state); }
 		return state;
 	}
 
@@ -612,6 +613,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		return resolved;
+	}
+
+	// The doc subtitle tracks the resolved period: when it reads "Week N", N is refreshed from the
+	// primary source's latest `week` value, so a sync that advances the source advances the subtitle too.
+	private async _resolveSubtitle(state: IDocState): Promise<void> {
+		const m = /^Week\s+(\d+)(.*)$/i.exec(state.doc.subtitle);
+		if (!m || !state.doc.sources.length) { return; }
+		let week: string | undefined;
+		try {
+			const resolution = await this._resolveCurrent(state);
+			for (const [key, r] of resolution) {
+				if (/(^|\.)week$/.test(key)) { week = r.value.trim(); break; }
+			}
+		} catch {
+			return;
+		}
+		if (week && /^\d+$/.test(week) && week !== m[1]) {
+			state.doc.subtitle = `Week ${week}${m[2]}`;
+		}
 	}
 
 	private _resolveCsv(text: string, source: string, alias: string, resolved: Map<string, IResolution>): void {
@@ -1488,6 +1508,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const before = new Map(this.getResolved(state.uri));
 		state.recent = new Set<string>();
 		await this._syncLock(state);
+		await this._resolveSubtitle(state);
 		const after = this.getResolved(state.uri);
 		const changes: IFigureChange[] = [];
 		for (const [key, next] of after) {
