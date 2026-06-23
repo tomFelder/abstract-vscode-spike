@@ -14,6 +14,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | 2 (G4 closure) | ~84% | **6/6** | palette keybindings dead + sashes locked; **G4 ✅ — all gates pass**; interaction 70→90 |
 | 3 (right rail) | ~85% | 6/6 | folded Skills → comp's exact 3-tab strip (Chat/Review/History); right rail 75→85 |
 | 4 (Context) | ~86% | 6/6 | all 5 context group kinds + working "＋ Add context" composer; Context 78→90 |
+| 5 (Home + header) | ~88% | 6/6 | verified Home + header pixel-exact to the extracted comp spec; Home 80→94, header 85→92 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -26,6 +27,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | iter 2 | ✅ | ✅ | ✅ | **✅ closed** | ✅ | ✅ |
 | iter 3 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 4 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| iter 5 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -90,3 +92,22 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
   Overall ~85% → **~86%**. 0 core patches.
 - **Next (iter 5):** Home (80 → 95) pixel pass, or the activity-bar stub-launcher wrinkle (#5).
 - **Shots:** `shots/v3-iter4/` (01 context-groups, 02 add-context-composer).
+
+### Iter 5 — Home + global header pixel-verification (vs the extracted comp spec)
+- **Did:** extracted the comp's exact pixel spec for the global header + Home (via a sub-agent reading the
+  `.dc.html`), then diffed it against `screenRender.ts`. Both were **already near-exact** (the v2 webview
+  surfaces were built faithfully from the comp). The header is pixel-perfect (topbar/brand/logo/sep/crumb/
+  pill/present/avatar all match). Home matched except the first Quick-Start card's icon size — fixed
+  (16→17px per the spec).
+- **Verified live:** Home renders matching the comp; header exact. No gate regression (nav 76, 1 editor
+  group, 0 draggable sashes).
+- **Scores (evidence-based, against the spec):** Home 80 → 94, global header 85 → 92. Overall ~86% → **~88%**.
+  0 core patches.
+- **Finding:** the conservative v2 webview scores predate the shell fix; with the comp spec in hand, each
+  webview surface can be verified and corrected upward as it's checked (not just "polished blindly").
+- **Stub-launcher wrinkle (#5):** assessed and **deferred** — the comp keeps the active screen highlighted
+  while showing a full surface; VS Code has no clean seam for "activity-bar icon as pure command that
+  doesn't swap the sidebar container", so a faithful fix is a deep container-model change with janky
+  tradeoffs (v2 deferred it for the same reason). Not worth the regression risk vs the alignment gain.
+- **Next (iter 6):** verify + pixel-pass Templates / Knowledge / Agents (85/88/85) against the comp spec.
+- **Shots:** `shots/v3-iter5/` (01 home-header).
