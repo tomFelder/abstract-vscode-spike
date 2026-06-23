@@ -15,6 +15,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | 3 (right rail) | ~85% | 6/6 | folded Skills → comp's exact 3-tab strip (Chat/Review/History); right rail 75→85 |
 | 4 (Context) | ~86% | 6/6 | all 5 context group kinds + working "＋ Add context" composer; Context 78→90 |
 | 5 (Home + header) | ~88% | 6/6 | verified Home + header pixel-exact to the extracted comp spec; Home 80→94, header 85→92 |
+| 6 (screens) | ~90% | 6/6 | verified Templates/Knowledge vs spec; Agents table → comp's 5 columns (drop POLICY) + relative LAST RUN; Templates 85→95, Knowledge 88→95, Agents 85→92 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -28,6 +29,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | iter 3 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 4 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 5 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| iter 6 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -111,3 +113,18 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
   tradeoffs (v2 deferred it for the same reason). Not worth the regression risk vs the alignment gain.
 - **Next (iter 6):** verify + pixel-pass Templates / Knowledge / Agents (85/88/85) against the comp spec.
 - **Shots:** `shots/v3-iter5/` (01 home-header).
+
+### Iter 6 — Templates / Knowledge / Agents vs the comp spec
+- **Did:** extracted the comp spec for the three screens (sub-agent) and diffed `screenRender.ts`.
+  Templates + Knowledge were **already pixel-faithful** (980/1040px columns, step cards, source chips,
+  Generate-draft button, Draft-preview green slots; decision cards, Values chips, Principles, the
+  "How this is used" + decision-stack diagram) — verified, no change needed. **Agents** had one real
+  deviation: an extra **POLICY column** the comp lacks, and a "ran"/"never" LAST RUN vs the comp's
+  relative times. Fixed: removed POLICY (comp columns AGENT/TRIGGER/FLOW/LAST RUN/STATUS), matched the
+  flex proportions, added `relTime()` to format LAST RUN from the real `lastRun` timestamp.
+- **Verified live:** Agents = 5-column comp table (decision 32); Knowledge matches the comp. No gate
+  regression (nav 76, 1 editor group, 0 draggable sashes). Tests green (2217).
+- **Scores:** Templates 85→95, Knowledge 88→95, Agents 85→92. Overall ~88% → **~90%**. 0 core patches.
+- **Next (iter 7):** doc editor (88) + Present (85) verification/pixel-pass against the comp spec; then
+  source-peek (78, structural verification since it is webview-internal) and right rail (85) typography.
+- **Shots:** `shots/v3-iter6/` (01 agents-table, 02 knowledge).

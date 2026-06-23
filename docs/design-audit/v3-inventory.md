@@ -47,11 +47,11 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 | Surface | Exists today (re-verified live) | Design intends | v2 | v3-1 | Top gap to >= 95 |
 |---------|----------------------------------|----------------|:--:|:----:|------------------|
 | **Left rail / nav** | 76px labeled icon-nav + 264px tree-rail (Files/Context/Outline/Search) verified live | 76px labeled icon-nav + tree-rail | 90 | **90** | nav label set (Home/Editor/Review); active-item treatment |
-| **Knowledge** | full-width decision stack (carry from v2; not re-driven this iter) | full-width surface | 88 | **88** | typography/spacing pixel pass |
+| **Knowledge** | **iter 6:** verified against the comp spec (Org/Project toggle, Mission/Vision/Strategy/OKR decision cards, Values chips, Principles, "How this is used" + decision-stack diagram) — matches | full-width surface | 88 | **95** | minor micro-spacing |
 | **Document editor** | 30px gutter dots + inline blue figures + 720px column + calm header — verified live | hi-fi doc + gutter + figures | 88 | **88** | preserve bold/italic in bound paras; spacing/type pixel pass |
 | **Global header** | **iter 5:** verified **pixel-exact** to the comp spec — topbar 48px/`#fbfbfc`/`#e9eaee`; brand 20px `oklch(.55 .13 255)` logo + 600 13px `#2a2c32` wordmark + `#c8cbd2` sep + `#868b95` crumb; pill `#eef7f0`/`#d7ecdc`/`#5d8a66`; 27px avatar | single 48px bar | 85 | **92** | residual: per-webview vs one unified shell bar (architectural, not visible) |
-| **Templates** | full-width 3-step (Template/Prompt/Sources/Generate) + live Draft preview — verified live | full-width surface | 85 | **85** | pixel pass; **tree-rail swaps to a stub launcher when active (wrinkle)** |
-| **Agents** | full-width agent table (carry from v2) | full-width + per-agent canvas | 85 | **85** | per-agent canvas pixel pass |
+| **Templates** | **iter 6:** verified against the comp spec (980px column, 380px config col, step circles, source chips, Generate-draft button, Draft-preview panel + green filled-slots) — matches | full-width surface | 85 | **95** | residual: tree-rail swaps to a stub launcher when active (deferred wrinkle) |
+| **Agents** | **iter 6:** table matched to the comp's exact columns — removed the extra POLICY column (now AGENT/TRIGGER/FLOW/LAST RUN/STATUS), relative-time LAST RUN; filter tabs + New-agent button match | full-width + per-agent canvas | 85 | **92** | per-agent canvas pixel pass; last-run unpopulated until agents run |
 | **Present / export modal** | centered modal (carry from v2) | 740px centered modal | 85 | **85** | pixel pass |
 | **Home** | **iter 5:** verified against the comp spec — 1080px column, 40/36/80 padding, greeting 600 26px `#15171c`, Quick-Start cards (`#f7f9ff`/12px/34px icons), 2x2 project cards (13px radius, 26px chips, `1 TO APPROVE` `#fdf2dc`, primary/secondary buttons) all match; fixed the first card's 17px icon | 1080px Home | 80 | **94** | minor: exact since-line micro-spacing |
 | **Context panel** | **iter 4:** renders all 5 group kinds (Linked sources / Referenced files / Images / Pasted text / Company knowledge) + a working "＋ Add context" composer (kind chips + input wired to `addContext`) | 5 groups + "＋ Add context" | 78 | **90** | content typography pixel-pass |
@@ -59,13 +59,13 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 | **Right rail (Chat/Review/History)** | **iter 3:** the comp's exact **3 tabs** (Skills folded into Review as a "Document agents" checks section — feature preserved); ~374px | 392px, 3 tabs | 75 | **85** | content typography pixel-pass; pin 374→392 (grid redistributes) |
 | **Interaction grammar** | **iter 2:** calm app shell with the optionality **removed** — no command palette (keybindings dead), no user-resizable panes (sashes locked); reads as an opinionated document app | optionality removed | 70 | **90** | minor: nav label set vs comp; finish per-surface interaction polish |
 
-**Overall alignment (mean of the 12 rows): ~88%** (v2 final ~82%; **iter 2** G4 → interaction 70→90;
-**iter 3** right rail 75→85; **iter 4** Context 78→90; **iter 5** Home 80→94 + header 85→92, verified
-pixel-exact against the now-extracted comp spec). **Gate status: G1 ✅, G2 ✅, G3 ✅, G4 ✅, G5 ✅, G6 ✅
-— all six pass.** Live click-through clean. Remaining lift to >= 97%: source-peek 78, Templates/Agents/
-Present 85, doc editor 88, Knowledge 88, right rail 85 (typography pixel-pass each). **Finding:** the
-webview surfaces were built faithfully — Home/header matched the comp spec almost exactly on inspection,
-so several conservative v2 scores are being corrected upward as each is verified against the spec.
+**Overall alignment (mean of the 12 rows): ~90%** (v2 final ~82%; **iter 2** G4 → interaction 70→90;
+**iter 3** right rail 75→85; **iter 4** Context 78→90; **iter 5** Home 80→94 + header 85→92; **iter 6**
+Templates 85→95, Knowledge 88→95, Agents 85→92 — verified against the comp spec). **Gate status: G1 ✅,
+G2 ✅, G3 ✅, G4 ✅, G5 ✅, G6 ✅ — all six pass.** Live click-through clean. Remaining lift to >= 97%:
+source-peek 78, right rail 85, Present 85, doc editor 88 (+ small bumps on the 90-92 surfaces). **Finding:**
+the webview surfaces were built faithfully — Home/header/Templates/Knowledge matched the comp spec almost
+exactly on inspection, so conservative v2 scores are corrected upward as each is verified against the spec.
 
 ## Ranked v3 gap backlog (most impact = lowest score × most central)
 
