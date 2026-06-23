@@ -54,16 +54,16 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 | **Agents** | full-width agent table (carry from v2) | full-width + per-agent canvas | 85 | **85** | per-agent canvas pixel pass |
 | **Present / export modal** | centered modal (carry from v2) | 740px centered modal | 85 | **85** | pixel pass |
 | **Home** | hi-fi: greeting/summary/Quick-Start 3 cards/2x2 projects — verified live | 1080px Home | 80 | **80** | column width + card spacing/type pixel pass |
-| **Context panel** | tab in the tree-rail (Linked sources / Referenced files) — carry | 5 groups + "＋ Add context" | 78 | **78** | surface Pasted/Images/Knowledge groups + Add-context |
+| **Context panel** | **iter 4:** renders all 5 group kinds (Linked sources / Referenced files / Images / Pasted text / Company knowledge) + a working "＋ Add context" composer (kind chips + input wired to `addContext`) | 5 groups + "＋ Add context" | 78 | **90** | content typography pixel-pass |
 | **Source-peek / "Sync across"** | in-surface left pane (bound key→value rows) — carry | in-surface pane + raw CSV grid | 78 | **78** | render the comp's raw CSV grid w/ latest row highlighted |
 | **Right rail (Chat/Review/History)** | **iter 3:** the comp's exact **3 tabs** (Skills folded into Review as a "Document agents" checks section — feature preserved); ~374px | 392px, 3 tabs | 75 | **85** | content typography pixel-pass; pin 374→392 (grid redistributes) |
 | **Interaction grammar** | **iter 2:** calm app shell with the optionality **removed** — no command palette (keybindings dead), no user-resizable panes (sashes locked); reads as an opinionated document app | optionality removed | 70 | **90** | minor: nav label set vs comp; finish per-surface interaction polish |
 
-**Overall alignment (mean of the 12 rows): ~85%** (v2 final ~82%; iter-1 confirmed it; **iter 2 closed
-G4** → interaction 70→90; **iter 3** right rail 75→85 via the 3-tab fold). **Gate status: G1 ✅, G2 ✅,
-G3 ✅, G4 ✅ (closed iter 2), G5 ✅, G6 ✅ — all six pass.** Live click-through clean. Remaining lift to
->= 97% is honest per-surface pixel-polish: every surface must reach >= 95 (lowest now: source-peek 78,
-Context 78, Home 80, right rail 85).
+**Overall alignment (mean of the 12 rows): ~86%** (v2 final ~82%; iter-1 confirmed it; **iter 2 closed
+G4** → interaction 70→90; **iter 3** right rail 75→85; **iter 4** Context 78→90 via the 5-group +
+Add-context composer). **Gate status: G1 ✅, G2 ✅, G3 ✅, G4 ✅ (closed iter 2), G5 ✅, G6 ✅ — all six
+pass.** Live click-through clean. Remaining lift to >= 97% is per-surface pixel-polish: every surface
+must reach >= 95 (lowest now: source-peek 78, Home 80, right rail 85, header 85, Templates/Agents/Present 85).
 
 ## Ranked v3 gap backlog (most impact = lowest score × most central)
 
@@ -76,8 +76,8 @@ Context 78, Home 80, right rail 85).
    type, colors; widen 374 → 392; decide the **Skills** 4th tab (keep as a justified departure or fold).
 3. **Source-peek content (78 → 95).** Render the comp's raw CSV grid (week/date/mrr/signups/churn/active,
    latest row highlighted) in the in-surface pane, not just bound-key rows.
-4. **Context panel (78 → 95).** Surface all 5 groups (Linked sources / Referenced files / Pasted text /
-   Images / Company knowledge) + "＋ Add context" inside the rail tab.
+4. **Context panel (78 → 90, iter 4 — DONE).** All 5 group kinds render + a working "＋ Add context"
+   composer (kind chips + input → `addContext`). _Remaining to 95:_ content typography pixel-pass.
 5. **Activity-bar stub-launcher wrinkle.** Templates/Knowledge/Agents nav swaps the sidebar to a stub
    launcher (confirmed live: heading "Templates", "Open Templates" button) — the comp keeps the
    tree-rail. Make the tree-rail persist; nav opens the screen in the main area only.

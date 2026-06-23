@@ -13,6 +13,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | 1 (re-audit) | ~82% | 5/6 (**G4 open**) | live re-audit; confirmed v2 holds; G4 leaks (palette + 2 sashes) verified live |
 | 2 (G4 closure) | ~84% | **6/6** | palette keybindings dead + sashes locked; **G4 ✅ — all gates pass**; interaction 70→90 |
 | 3 (right rail) | ~85% | 6/6 | folded Skills → comp's exact 3-tab strip (Chat/Review/History); right rail 75→85 |
+| 4 (Context) | ~86% | 6/6 | all 5 context group kinds + working "＋ Add context" composer; Context 78→90 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -24,6 +25,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | iter 1 | ✅ | ✅ | ✅ | ❌ open | ✅ | ✅ |
 | iter 2 | ✅ | ✅ | ✅ | **✅ closed** | ✅ | ✅ |
 | iter 3 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| iter 4 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -70,3 +72,21 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
   owed for 95). Overall ~84% → **~85%**. 0 core patches.
 - **Next (iter 4):** source-peek (78 → 95) — render the comp's raw CSV grid in the in-surface pane.
 - **Shots:** `shots/v3-iter3/` (01 review-with-checks).
+
+### Iter 4 — Context tab: 5 group kinds + "＋ Add context"
+- **Note on ordering:** source-peek (backlog #3) renders *inside the webview iframe*, which chrome-devtools
+  cannot drive or screenshot (cross-origin). It needs a structural/unit verification approach, so it's
+  reordered later; picked Context (equally low at 78, and live-screenshottable in the DOM tree-rail).
+- **Did:** `treeRailView.ts` — the Context tab already renders all 5 group kinds via `buildContextGroups`
+  (Linked sources / Referenced files / Images / Pasted text / Company knowledge); they just never showed
+  because the sample had only the first two and there was **no way to add context**. Added the comp's
+  **"＋ Add context"** affordance: a collapsed button that expands to a kind picker (Pasted text / Image /
+  Company knowledge) + an input wired to `ILivingDocsService.addContext` (the data model + lock already
+  supported all three). New `.rail-addctx*` styles.
+- **Verified live:** opened the doc → Context shows Linked sources + Referenced files + "＋ Add context";
+  added a "Company knowledge" item → a new **COMPANY KNOWLEDGE** group appeared with the item (persisted
+  in the lock). No gate regression (nav 76, 1 editor group, 0 draggable sashes, 3 rail tabs). Tests green (313).
+- **Scores:** Context 78 → 90 (IA/components now match the comp; typography pixel-pass owed for 95).
+  Overall ~85% → **~86%**. 0 core patches.
+- **Next (iter 5):** Home (80 → 95) pixel pass, or the activity-bar stub-launcher wrinkle (#5).
+- **Shots:** `shots/v3-iter4/` (01 context-groups, 02 add-context-composer).
