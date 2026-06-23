@@ -1,0 +1,85 @@
+# Living Documents v3 — Exists-today vs Design-intends inventory
+
+The map the **v3 design-alignment loop** ([../plans/12-design-alignment-v3-loop.md](../plans/12-design-alignment-v3-loop.md))
+closes: take the shell from **"feels like the comp (~82%)"** to **"indistinguishable (>= 97%)"** and
+**fully close the one open gate (G4)**. **Iteration 1 (this doc) is the live re-audit** — the running
+web build (`code-web` on :8080, driven via the chrome-devtools MCP, pristine after an IndexedDB clear)
+verified surface-by-surface against the "Agentic Workbench" comp (DesignSync
+`d198ca07-9eef-4d05-96e1-b383e6c19c03`, file `Living Documents - Workbench.dc.html`). Each surface is
+scored 0-100 (mean of **Layout / Styling / Components / IA / Interaction-UX**) on the **same rubric as
+v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.md`) and re-verified.
+
+> **Audited live 2026-06-23** (branch `living-docs-design-v3`, off `main` = merged PR #15 v2 shell).
+> Screenshots: `shots/v3-iter1/`.
+> **Headline finding:** the v2 shell **holds in full** — calm 48px header, 76px labeled icon-nav,
+> tabbed tree-rail, single editor group (no split / no blank pane), detached gutter + inline blue
+> bound figures, no dev toasts. **Five of six gates pass live.** The remaining gap is honest
+> pixel-polish across surfaces **plus the one open gate, G4**: the command palette still opens on
+> `Cmd+Shift+P` and two layout sashes are still user-draggable. Both confirmed live this iteration.
+
+## Comp spec (the pixel target, extracted from the .dc.html — unchanged from v2)
+
+- **Top bar — 48px**, `#fbfbfc`, 1px `#e9eaee` bottom border: 20px blue brand `L` + "Opportunity OS" +
+  `/` + crumb; right: green "All sources synced" pill + ghost "↗ Present" + 27px "TS" avatar. Nothing else.
+- **Icon-nav — 76px**, `#f6f7f9`: labeled Home / Editor / Review (badge) / Templates / Knowledge /
+  Agents + Settings pinned bottom; icon over a 10px label.
+- **Tree-rail — 264px**, `#fafbfc`, hidden on Home: 38px tab strip Files / Context / Outline / Search;
+  Files = folder tree, Context = 5 grouped kinds + "＋ Add context", Outline = headings, Search = results.
+- **Editor** = doc-tab bar (40px) over a centered **720px** column with a **30px detached gutter**;
+  bound text = blue dotted underline + faint highlight; source-peek = in-surface LEFT pane + floating
+  ⟳ "Sync across" circle; **never a 2nd editor group**. Right panel **392px**, tabs **Chat / Review / History**.
+- **Home** = `#f8f9fb`, 1080px column (greeting + date + summary + QUICK START 3 cards + 2x2 projects).
+- **Templates / Knowledge / Agents** = dedicated full-width surfaces; **Present** = 740px centered modal.
+
+## Hard UX gates — live status (all six must FULLY pass for v3)
+
+| Gate | Live status (v3 iter 1) | Evidence |
+|------|-------------------------|----------|
+| **G1** — No split editor groups / no blank panes | **PASS (hold)** | `.editor-group-container` count = **1** on Home, the doc, and Templates. Source-peek is in-surface (v2). `shots/v3-iter1/01,03,04`. |
+| **G2** — Calm single 48px header | **PASS (hold)** | Header = brand `L` + "Opportunity OS / <crumb>" + "All sources synced" pill + "↗ Present" + "TS" avatar; nothing else, on both Home and the doc. `shots/v3-iter1/01,03`. _Pixel pass still owed (85)._ |
+| **G3** — Tree-rail + 76px labeled icon-nav | **PASS (hold)** | Activity-bar width measured **76px**; labels Workspace/Home/Templates/Knowledge/Agents; tree-rail tabs Files/Context/Outline/Search + folder tree. `shots/v3-iter1/01`. _Residual: nav label set differs from the comp's literal Home/Editor/Review._ |
+| **G4** — FULLY remove IDE optionality | **FAIL (the one open gate)** | **`Cmd+Shift+P` opens the command palette live** (input placeholder "Type the name of a command to run.", `shots/v3-iter1/02`). **2 of 7 sashes are draggable** (vertical, `pointer-events:auto`, not `.disabled` — the sidebar + aux-bar dividers). Accounts/Manage are in the DOM but `display:none` (surfaced chrome gone — acceptable). **This is the iteration-2 target.** |
+| **G5** — Detached gutter + inline figures + pixel-aligned | **PASS (hold)** | Doc shows the 30px gutter dots + blue dotted-underline bound figures (+18% / $48.6k / 427 / 2.4%) in prose; footer hint present. `shots/v3-iter1/03`. _Pixel pass still owed (88)._ |
+| **G6** — Nav never blanks + no dev toast | **PASS (hold)** | Pristine launch + full click-through (Home → doc → Templates) showed zero ext-activation toasts; nav switching never blanked. `shots/v3-iter1/01,03,04`. |
+
+## Per-surface inventory + live scores (v2 final → v3 iter-1 re-verify)
+
+| Surface | Exists today (re-verified live) | Design intends | v2 | v3-1 | Top gap to >= 95 |
+|---------|----------------------------------|----------------|:--:|:----:|------------------|
+| **Left rail / nav** | 76px labeled icon-nav + 264px tree-rail (Files/Context/Outline/Search) verified live | 76px labeled icon-nav + tree-rail | 90 | **90** | nav label set (Home/Editor/Review); active-item treatment |
+| **Knowledge** | full-width decision stack (carry from v2; not re-driven this iter) | full-width surface | 88 | **88** | typography/spacing pixel pass |
+| **Document editor** | 30px gutter dots + inline blue figures + 720px column + calm header — verified live | hi-fi doc + gutter + figures | 88 | **88** | preserve bold/italic in bound paras; spacing/type pixel pass |
+| **Global header** | single calm bar (brand/crumb/pill/Present/avatar) — verified on Home + doc | single 48px bar | 85 | **85** | exact pill/avatar/crumb metrics; per-webview vs one shell bar |
+| **Templates** | full-width 3-step (Template/Prompt/Sources/Generate) + live Draft preview — verified live | full-width surface | 85 | **85** | pixel pass; **tree-rail swaps to a stub launcher when active (wrinkle)** |
+| **Agents** | full-width agent table (carry from v2) | full-width + per-agent canvas | 85 | **85** | per-agent canvas pixel pass |
+| **Present / export modal** | centered modal (carry from v2) | 740px centered modal | 85 | **85** | pixel pass |
+| **Home** | hi-fi: greeting/summary/Quick-Start 3 cards/2x2 projects — verified live | 1080px Home | 80 | **80** | column width + card spacing/type pixel pass |
+| **Context panel** | tab in the tree-rail (Linked sources / Referenced files) — carry | 5 groups + "＋ Add context" | 78 | **78** | surface Pasted/Images/Knowledge groups + Add-context |
+| **Source-peek / "Sync across"** | in-surface left pane (bound key→value rows) — carry | in-surface pane + raw CSV grid | 78 | **78** | render the comp's raw CSV grid w/ latest row highlighted |
+| **Right rail (Chat/Review/History)** | pinned ~374px; 4 tabs (Chat/Review/History/**Skills**) — verified live | 392px, 3 tabs | 75 | **75** | content typography pixel-pass; Skills 4th-tab decision; 374→392 |
+| **Interaction grammar** | calm app shell; **but palette opens on `Cmd+Shift+P` + 2 sashes draggable** | optionality removed | 70 | **70** | **G4 closure** — remove palette keybinding + make sashes non-draggable |
+
+**Overall alignment (mean of the 12 rows): ~82%** (v2 final = ~82%; iter-1 re-audit confirms it, no code).
+**Gate status:** G1 ✅, G2 ✅, G3 ✅, **G4 ❌ (open)**, G5 ✅, G6 ✅. Live click-through clean apart from the
+G4 leaks. To hit v3 (>= 97% + all six gates) every surface must reach >= 95 and G4 must flip to full.
+
+## Ranked v3 gap backlog (most impact = lowest score × most central)
+
+1. **G4 closure (interaction grammar 70 → 95; flips the last gate).** Remove the command-palette
+   keybinding (`Cmd/Ctrl+Shift+P`, `F1`, Quick Open `>` command mode) and make the layout sashes
+   non-draggable (sidebar / editor / aux-bar dividers). Sweep for other leaks (reopen-with, editor
+   context menu, view drag-drop). **Remove, don't hide.** Core patches allowed + logged (ledger 03).
+   **→ iteration 2.**
+2. **Right rail content (75 → 95).** Chat thread / Review cards / History to the comp's exact spacing,
+   type, colors; widen 374 → 392; decide the **Skills** 4th tab (keep as a justified departure or fold).
+3. **Source-peek content (78 → 95).** Render the comp's raw CSV grid (week/date/mrr/signups/churn/active,
+   latest row highlighted) in the in-surface pane, not just bound-key rows.
+4. **Context panel (78 → 95).** Surface all 5 groups (Linked sources / Referenced files / Pasted text /
+   Images / Company knowledge) + "＋ Add context" inside the rail tab.
+5. **Activity-bar stub-launcher wrinkle.** Templates/Knowledge/Agents nav swaps the sidebar to a stub
+   launcher (confirmed live: heading "Templates", "Open Templates" button) — the comp keeps the
+   tree-rail. Make the tree-rail persist; nav opens the screen in the main area only.
+6. **Home (80 → 95)** + per-surface pixel finish: header (85), Templates/Agents/Present (85), doc
+   editor (88), Knowledge (88) — typography, spacing, colors, exact components.
+7. **Minor:** preserve bold/italic in bound paragraphs; reconcile the nav label set vs the comp's
+   Home/Editor/Review; per-agent canvas pixel pass.
