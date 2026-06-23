@@ -174,6 +174,10 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .srcpane th{text-align:left;padding:7px 9px;font-weight:600;color:#a3a8b2;border-bottom:1px solid #e9eaee}
 .srcpane td{padding:6px 9px;border-bottom:1px solid #f4f5f7;color:#2c2f36}
 .srcpane tr.sel td{background:#fef6e9;box-shadow:inset 2px 0 0 oklch(0.66 0.16 45);font-weight:600}
+.srcpane .sp-sec{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;text-transform:uppercase;margin:2px 0 7px}
+.srcpane .sp-sec:not(:first-child){margin-top:16px}
+.srcpane table.sp-grid{font-size:11.5px}
+.srcpane table.sp-grid th,.srcpane table.sp-grid td{padding:5px 7px;white-space:nowrap}
 .srcpane .sp-refs{margin-top:18px;border-top:1px solid #eef0f3;padding-top:14px}
 .srcpane .sp-refs-h{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:10px}
 .srcpane .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
@@ -337,6 +341,15 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): string {
 	const rows = peek.rows.map(r =>
 		`<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td></tr>`).join('');
+	// The comp shows the source's raw CSV grid with the latest row (the one the document binds to)
+	// highlighted - rendered above the resolved bound-figure list.
+	const grid = peek.grid;
+	const gridHtml = grid
+		? `<div class="sp-sec">${esc(peek.source)} &middot; latest row applies</div>`
+		+ `<table class="sp-grid"><thead><tr>${grid.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>`
+		+ grid.rows.map((r, i) => `<tr class="${i === grid.latestIndex ? 'sel' : ''}">${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')
+		+ `</tbody></table>`
+		: '';
 	const refs = peek.referencedBy.length
 		? `<div class="sp-refs"><div class="sp-refs-h">REFERENCED BY &middot; ${peek.referencedBy.length} DOCUMENT${peek.referencedBy.length === 1 ? '' : 'S'}</div>`
 		+ peek.referencedBy.map(t => `<div class="sp-ref">&#9636; ${esc(t)}</div>`).join('') + `</div>`
@@ -347,7 +360,7 @@ function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): strin
 	const pane = `<div class="srcpane"><div class="sp-head"><span class="sp-name">&#8862; ${esc(peek.source)}</span>`
 		+ `<span class="sp-meta">source &middot; ${peek.rows.length} bound</span>`
 		+ `<button class="sp-x" data-source-close title="Close source">&#10005;</button></div>`
-		+ `<div class="sp-body"><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
+		+ `<div class="sp-body">${gridHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
 	return `<div class="peekwrap">${pane}${circle}<div class="docside">${docHtml}</div></div>`;
 }
 

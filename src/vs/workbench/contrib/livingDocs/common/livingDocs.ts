@@ -7,6 +7,7 @@ import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { AddedContextKind, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { ISourceGrid } from './sourceGrid.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -86,6 +87,8 @@ export interface ISourcePeek {
 	readonly rows: readonly ISourcePeekRow[];
 	/** Titles of living documents that also reference this source. */
 	readonly referencedBy: readonly string[];
+	/** The source's raw CSV grid (the comp shows the actual rows, latest highlighted), when available. */
+	readonly grid?: ISourceGrid;
 }
 
 /**

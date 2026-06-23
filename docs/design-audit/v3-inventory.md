@@ -55,16 +55,15 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 | **Present / export modal** | **iter 7:** verified vs the comp spec (code) — 740px card, 16px radius, `0 24px 70px` shadow, `rgba(20,26,40,.34)` scrim, 300px destination list w/ brand-tinted icons, preview chip, WHO-CAN-ACCESS scopes, full-width Export CTA — all match | 740px centered modal | 85 | **93** | webview-internal (can't drive the modal open from the top frame to screenshot) |
 | **Home** | **iter 5:** verified against the comp spec — 1080px column, 40/36/80 padding, greeting 600 26px `#15171c`, Quick-Start cards (`#f7f9ff`/12px/34px icons), 2x2 project cards (13px radius, 26px chips, `1 TO APPROVE` `#fdf2dc`, primary/secondary buttons) all match; fixed the first card's 17px icon | 1080px Home | 80 | **94** | minor: exact since-line micro-spacing |
 | **Context panel** | **iter 4:** renders all 5 group kinds (Linked sources / Referenced files / Images / Pasted text / Company knowledge) + a working "＋ Add context" composer (kind chips + input wired to `addContext`) | 5 groups + "＋ Add context" | 78 | **90** | content typography pixel-pass |
-| **Source-peek / "Sync across"** | in-surface left pane (bound key→value rows) — carry | in-surface pane + raw CSV grid | 78 | **78** | render the comp's raw CSV grid w/ latest row highlighted |
+| **Source-peek / "Sync across"** | **iter 9:** the pane now renders the comp's **raw CSV grid** (all source rows, the **latest row highlighted**) above the bound-figure list; `buildSourceGrid` (TDD) + a raw-source cache feed `getSourcePeek` | in-surface pane + raw CSV grid | 78 | **92** | webview-internal — verified by unit test + structural render assertion (can't drive a figure-click from the top frame) |
 | **Right rail (Chat/Review/History)** | **iter 8:** verified vs the comp spec — tab strip + count badge, Chat bubbles/composer/@mention chips, Review diff colors (`#fdecec`/`#e7f6ec`), History timeline all match; aligned the Why-box + Approve/Reject to exact spec | 392px, 3 tabs | 75 | **93** | populated Review-diff card needs a model refresh to screenshot; pin 374→392 (grid redistributes) |
 | **Interaction grammar** | **iter 2:** calm app shell with the optionality **removed** — no command palette (keybindings dead), no user-resizable panes (sashes locked); reads as an opinionated document app | optionality removed | 70 | **90** | minor: nav label set vs comp; finish per-surface interaction polish |
 
-**Overall alignment (mean of the 12 rows): ~92%** (v2 ~82%; iters 2-7 brought G4 + interaction/right-rail/
-Context/Home/header/Templates/Knowledge/Agents/doc/Present up; **iter 8** right rail 85→93). **Gate status:
-G1 ✅, G2 ✅, G3 ✅, G4 ✅, G5 ✅, G6 ✅ — all six pass.** Live click-through clean. The one real remaining
-drag is **source-peek 78** (the raw CSV grid — webview-internal, structural verification); after that, a
-final verification sweep nudges the 90-92 surfaces. **Finding:** the webview surfaces were built faithfully
-to the comp; conservative v2 scores are corrected upward as each is verified against the spec.
+**Overall alignment (mean of the 12 rows): ~93%** (v2 ~82%; iters 2-8 brought every surface to 90-95;
+**iter 9** source-peek 78→92 via the raw CSV grid). **Gate status: G1 ✅, G2 ✅, G3 ✅, G4 ✅, G5 ✅, G6
+✅ — all six pass.** Live click-through clean; **every surface is now 90-95.** Remaining lift to >= 97%
+is a final verification sweep of the sub-95 surfaces (left rail 90, Context 90, interaction 90, Agents 92,
+header 92, Present 93, right rail 93, Home 94) against the comp spec + the icon-nav label set.
 
 ## Ranked v3 gap backlog (most impact = lowest score × most central)
 

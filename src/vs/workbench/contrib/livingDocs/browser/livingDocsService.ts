@@ -25,6 +25,7 @@ import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
 import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { buildSourceGrid } from '../common/sourceGrid.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
 interface IGradeResult {
@@ -123,6 +124,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
 
 	private readonly _docs = new Map<string, IDocState>();
+	// Raw source text by `${docUri}::${source}`, cached during resolution so getSourcePeek (sync) can
+	// build the comp's raw CSV grid for the in-surface source-peek pane.
+	private readonly _rawSourceCache = new Map<string, string>();
 	private _pending: IProposedChange[] = [];
 	private readonly _lockStore: ILockStore;
 	// The orchestration engine: agent registry + dependency-graph event-bus (+ triggers/policy/verify).
@@ -609,6 +613,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				this._log.warn('[livingDocs] source unreadable', source, e instanceof Error ? e.message : String(e));
 				continue;
 			}
+			// Cache the raw source text so the in-surface source-peek pane can show the comp's actual
+			// CSV grid (built synchronously in getSourcePeek, which runs during a webview render).
+			this._rawSourceCache.set(`${state.uri.toString()}::${source}`, text);
 			if (source.endsWith('.csv')) {
 				this._resolveCsv(text, source, alias, resolved);
 			}
@@ -1469,7 +1476,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const referencedBy = [...this._docs.values()]
 			.filter(s => s.doc.isLiving && s.doc.sources.some(src => state.doc.sources.includes(src)))
 			.map(s => s.doc.title);
-		return { source, rows, referencedBy };
+		const raw = this._rawSourceCache.get(`${resource.toString()}::${source}`);
+		const grid = raw && source.endsWith('.csv') ? buildSourceGrid(raw) : undefined;
+		return { source, rows, referencedBy, grid };
 	}
 
 	// "Sync across": re-derive this one document's bound figures from its current sources and return the

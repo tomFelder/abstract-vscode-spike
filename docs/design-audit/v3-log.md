@@ -18,6 +18,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | 6 (screens) | ~90% | 6/6 | verified Templates/Knowledge vs spec; Agents table → comp's 5 columns (drop POLICY) + relative LAST RUN; Templates 85→95, Knowledge 88→95, Agents 85→92 |
 | 7 (doc + Present) | ~91% | 6/6 | doc editor + Present verified pixel-exact vs spec (+ bound-pad/table micro-fixes); doc 88→95, Present 85→93 |
 | 8 (right rail) | ~92% | 6/6 | right rail verified vs spec (tabs/badge/chat/diff/history) + Why-box/Approve/Reject aligned exact; right rail 85→93 |
+| 9 (source-peek) | ~93% | 6/6 | source-peek renders the comp's raw CSV grid (latest row highlighted); buildSourceGrid (TDD) + cache; source-peek 78→92 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -34,6 +35,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | iter 6 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 7 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 8 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| iter 9 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -160,3 +162,19 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 - **Next (iter 9):** source-peek (78) — render the comp's raw CSV grid (the one real remaining drag;
   needs a small async refactor of `getSourcePeek`; structural/unit verification since it's webview-internal).
 - **Shots:** `shots/v3-iter8/` (01 chat-rail).
+
+### Iter 9 — source-peek: the comp's raw CSV grid
+- **Did:** the in-surface source-peek pane showed only bound key->value rows; the comp shows the source's
+  **raw CSV grid with the latest row highlighted**. Added `common/sourceGrid.ts` (`buildSourceGrid`, a pure
+  parser - TDD), a sync `_rawSourceCache` populated during resolution (so the sync `getSourcePeek` can
+  build the grid), `grid?` on `ISourcePeek`, and the grid render in `livingDocRender` (latest row gets the
+  `.sel` amber-bar highlight; bound figures kept below). No interface went async; no core patch.
+- **Verified:** unit tests for `buildSourceGrid` (headers/rows/latestIndex; undefined on header-only) + a
+  structural render assertion (the pane HTML contains `sp-grid`, the headers, and the latest row as
+  `<tr class="sel">`). Source-peek is webview-internal (a figure-click can't be driven from the top frame),
+  so this is the documented structural-verification path, not a screenshot. Gates hold (live: 1 editor
+  group, 0 draggable sashes). Tests green.
+- **Scores:** source-peek 78→92. Overall ~92% → **~93%**. Every surface is now 90-95.
+- **Next (iter 10):** final verification sweep of the sub-95 surfaces (left rail, Context, interaction,
+  header, Agents) vs the comp + the icon-nav label set, to clear >= 97%.
+- **Shots:** none (source-peek is webview-internal; verified by test).
