@@ -11,6 +11,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 |:----:|:-------:|:-------------:|----------|
 | v2 final | ~82% | 5/6 (G4 mostly) | calm shell shipped (PR #15, merged) |
 | 1 (re-audit) | ~82% | 5/6 (**G4 open**) | live re-audit; confirmed v2 holds; G4 leaks (palette + 2 sashes) verified live |
+| 2 (G4 closure) | ~84% | **6/6** | palette keybindings dead + sashes locked; **G4 ✅ — all gates pass**; interaction 70→90 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -20,6 +21,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 |--|:--:|:--:|:--:|:--:|:--:|:--:|
 | v2 final | ✅ | ✅ | ✅ | ◑ mostly | ✅ | ✅ |
 | iter 1 | ✅ | ✅ | ✅ | ❌ open | ✅ | ✅ |
+| iter 2 | ✅ | ✅ | ✅ | **✅ closed** | ✅ | ✅ |
 
 ## Iterations
 
@@ -36,3 +38,19 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 - **Next (iter 2):** **close G4** — remove the command-palette keybinding + make the sashes non-draggable
   (core patches, logged in ledger 03), re-check every gate for regressions.
 - **Shots:** `shots/v3-iter1/` (01 launch, 02 G4 palette leak, 03 doc editor, 04 Templates stub-rail).
+
+### Iter 2 — close G4 (3 core patches)
+- **Did:** removed the last reachable IDE optionality at the source. (1) `ShowAllCommandsAction`: dropped
+  the `Cmd/Ctrl+Shift+P` / `F1` keybinding + `f1:false`. (2) `workbench.action.quickOpen`: dropped the
+  `Cmd/Ctrl+P` / `Cmd/Ctrl+E` keybinding (so Quick Open — and its `>` command mode — can't open) + `f1:false`.
+  (3) `base/.../sash.ts`: a global `lockAllSashes()` that coerces every `Sash` to `Disabled`, called once
+  from a `BlockRestore` workbench contribution → no user-draggable layout dividers.
+- **Verified live (pristine reload):** `Cmd+Shift+P`, `F1`, `Cmd+P` all no-op (quick-input never opens);
+  **0 of 7 sashes draggable** (was 2). Re-checked every gate: no regression — 1 editor group on Home + doc
+  (G1), calm header (G2), 76px nav + tree-rail (G3), gutter + blue figures (G5), no toasts (G6). Layout
+  sizing intact (nav 76 / sidebar 246 / aux 374).
+- **Gate flip:** **G4 ❌ → ✅. All six hard gates now pass.**
+- **Scores:** interaction grammar 70 → 90; overall ~82% → **~84%**.
+- **Core patches:** +3 (total 5; all fail-soft, logged in [ledger 03](../plans/03-merge-tax-ledger.md)).
+- **Next (iter 3):** right rail content (75 → 95) — Chat/Review/History pixel-pass + Skills tab decision.
+- **Shots:** `shots/v3-iter2/` (01 after-shell, 02 after-doc).

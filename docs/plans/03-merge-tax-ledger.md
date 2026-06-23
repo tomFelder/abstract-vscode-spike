@@ -143,7 +143,23 @@ the rail + a layout tick, to pin the tree-rail to 264px and the right rail to 39
 **additive-contribution** — no core file touched. (The grid redistributes to ~252/374, near- not
 exact-pixel, but well toward the comp from the cramped 246/282 defaults.)
 
-## Core-patch count: **2 added in v2** (iter 6 builtin exclusion + iter 9 activity-bar width) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1 + v2 iters 2-5,7,8) (1 pre-existing, from the engine phase). v2 (plan 11) permits this - both are one-line/one-constant, low-fragility, product-correct.
+### v3 design-alignment loop (plan 12) - G4 closure: 3 added core patches (all sanctioned by the plan)
+
+**v3 iter 2 - fully close G4 (remove the last reachable IDE optionality): 3 CORE PATCHES.** The plan
+explicitly sanctions core patches for G4 ("Remove, don't just hide. These are core-owned"). All three are
+small, additive-in-spirit (remove a default, add an opt-in lock), and product-correct for a calm shell.
+
+| # | Change | File | Tier | Fragility / re-pin check |
+|---|--------|------|------|--------------------------|
+| 1 | Remove the command-palette keybinding + palette listing (`ShowAllCommandsAction`: drop `keybinding` Cmd/Ctrl+Shift+P/F1, set `f1:false`; drop 3 now-unused imports) | `src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts` | **core-patch** | LOW / fails *soft* (a rebase that restores the field just re-adds a keybinding - cosmetic regression, re-drop it). The command still exists for programmatic callers. |
+| 2 | Remove the Quick Open (Go to File) keybinding (`workbench.action.quickOpen`: drop `keybinding` Cmd/Ctrl+P, Cmd/Ctrl+E, set `f1:false`) so command mode (the `>` prefix) is unreachable | `src/vs/workbench/browser/actions/quickAccessActions.ts` | **core-patch** | LOW / fails *soft*. `globalQuickAccessKeybinding` is retained (still used by the in-picker navigate rules). |
+| 3 | Global sash lock: `lockAllSashes()` coerces every `Sash` to `SashState.Disabled` (no user-draggable layout dividers); called once from a `BlockRestore` workbench contribution | `src/vs/base/browser/ui/sash/sash.ts` (+ call site in `livingDocs.contribution.ts`, additive) | **core-patch** | LOW / fails *soft* (a rebase dropping the flag just re-enables dragging - cosmetic). Sticky + global by design; never unlocked. NOTE: do not call `lockAllSashes()` from a unit test - it would leak into splitview/grid tests in the same VM. Verified live (0 of 7 sashes draggable), not by unit test. |
+
+All three remove/neutralise an *affordance* rather than re-architecting core; each fails toward *showing
+IDE optionality* on a bad rebase, so re-pin them in the G4 checklist. **G4 now FULLY passes** (palette
+keybindings dead: Cmd+Shift+P / F1 / Cmd+P all no-op; 0 draggable sashes) - verified live, iter 2.
+
+## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be

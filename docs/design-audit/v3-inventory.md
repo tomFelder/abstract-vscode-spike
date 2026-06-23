@@ -38,7 +38,7 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 | **G1** — No split editor groups / no blank panes | **PASS (hold)** | `.editor-group-container` count = **1** on Home, the doc, and Templates. Source-peek is in-surface (v2). `shots/v3-iter1/01,03,04`. |
 | **G2** — Calm single 48px header | **PASS (hold)** | Header = brand `L` + "Opportunity OS / <crumb>" + "All sources synced" pill + "↗ Present" + "TS" avatar; nothing else, on both Home and the doc. `shots/v3-iter1/01,03`. _Pixel pass still owed (85)._ |
 | **G3** — Tree-rail + 76px labeled icon-nav | **PASS (hold)** | Activity-bar width measured **76px**; labels Workspace/Home/Templates/Knowledge/Agents; tree-rail tabs Files/Context/Outline/Search + folder tree. `shots/v3-iter1/01`. _Residual: nav label set differs from the comp's literal Home/Editor/Review._ |
-| **G4** — FULLY remove IDE optionality | **FAIL (the one open gate)** | **`Cmd+Shift+P` opens the command palette live** (input placeholder "Type the name of a command to run.", `shots/v3-iter1/02`). **2 of 7 sashes are draggable** (vertical, `pointer-events:auto`, not `.disabled` — the sidebar + aux-bar dividers). Accounts/Manage are in the DOM but `display:none` (surfaced chrome gone — acceptable). **This is the iteration-2 target.** |
+| **G4** — FULLY remove IDE optionality | **PASS — iter 2** | The palette keybindings are dead: `Cmd+Shift+P`, `F1`, and `Cmd+P` (Quick Open, the `>` command-mode entry) all no-op live; verified the quick-input widget never opens. **0 of 7 sashes draggable** (all `.disabled` / `pointer-events:none` via the global sash lock) — no user-resizable panes. Accounts/Manage stay `display:none`. 3 core patches (ledger 03). `shots/v3-iter2/01,02`. Before: `shots/v3-iter1/02`. |
 | **G5** — Detached gutter + inline figures + pixel-aligned | **PASS (hold)** | Doc shows the 30px gutter dots + blue dotted-underline bound figures (+18% / $48.6k / 427 / 2.4%) in prose; footer hint present. `shots/v3-iter1/03`. _Pixel pass still owed (88)._ |
 | **G6** — Nav never blanks + no dev toast | **PASS (hold)** | Pristine launch + full click-through (Home → doc → Templates) showed zero ext-activation toasts; nav switching never blanked. `shots/v3-iter1/01,03,04`. |
 
@@ -57,20 +57,20 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 | **Context panel** | tab in the tree-rail (Linked sources / Referenced files) — carry | 5 groups + "＋ Add context" | 78 | **78** | surface Pasted/Images/Knowledge groups + Add-context |
 | **Source-peek / "Sync across"** | in-surface left pane (bound key→value rows) — carry | in-surface pane + raw CSV grid | 78 | **78** | render the comp's raw CSV grid w/ latest row highlighted |
 | **Right rail (Chat/Review/History)** | pinned ~374px; 4 tabs (Chat/Review/History/**Skills**) — verified live | 392px, 3 tabs | 75 | **75** | content typography pixel-pass; Skills 4th-tab decision; 374→392 |
-| **Interaction grammar** | calm app shell; **but palette opens on `Cmd+Shift+P` + 2 sashes draggable** | optionality removed | 70 | **70** | **G4 closure** — remove palette keybinding + make sashes non-draggable |
+| **Interaction grammar** | **iter 2:** calm app shell with the optionality **removed** — no command palette (keybindings dead), no user-resizable panes (sashes locked); reads as an opinionated document app | optionality removed | 70 | **90** | minor: nav label set vs comp; finish per-surface interaction polish |
 
-**Overall alignment (mean of the 12 rows): ~82%** (v2 final = ~82%; iter-1 re-audit confirms it, no code).
-**Gate status:** G1 ✅, G2 ✅, G3 ✅, **G4 ❌ (open)**, G5 ✅, G6 ✅. Live click-through clean apart from the
-G4 leaks. To hit v3 (>= 97% + all six gates) every surface must reach >= 95 and G4 must flip to full.
+**Overall alignment (mean of the 12 rows): ~84%** (v2 final ~82%; iter-1 re-audit confirmed it; **iter 2
+closed G4** → interaction grammar 70→90). **Gate status: G1 ✅, G2 ✅, G3 ✅, G4 ✅ (closed iter 2), G5 ✅,
+G6 ✅ — all six pass.** Live click-through clean. The remaining lift to >= 97% is honest per-surface
+pixel-polish: every surface must reach >= 95 (lowest now: right rail 75, source-peek 78, Context 78, Home 80).
 
 ## Ranked v3 gap backlog (most impact = lowest score × most central)
 
-1. **G4 closure (interaction grammar 70 → 95; flips the last gate).** Remove the command-palette
-   keybinding (`Cmd/Ctrl+Shift+P`, `F1`, Quick Open `>` command mode) and make the layout sashes
-   non-draggable (sidebar / editor / aux-bar dividers). Sweep for other leaks (reopen-with, editor
-   context menu, view drag-drop). **Remove, don't hide.** Core patches allowed + logged (ledger 03).
-   **→ iteration 2.**
-2. **Right rail content (75 → 95).** Chat thread / Review cards / History to the comp's exact spacing,
+1. ~~**G4 closure (flips the last gate).**~~ **DONE (iter 2).** Removed the command-palette keybinding
+   (`Cmd/Ctrl+Shift+P`, `F1`) + the Quick Open keybinding (`Cmd/Ctrl+P` → `>` command mode unreachable),
+   and a global sash lock makes every layout divider non-draggable. 3 core patches (ledger 03), all
+   fail-soft. Verified live; **all six gates now pass.** Interaction grammar 70→90.
+2. **Right rail content (75 → 95).** ← next highest-impact. Chat thread / Review cards / History to the comp's exact spacing,
    type, colors; widen 374 → 392; decide the **Skills** 4th tab (keep as a justified departure or fold).
 3. **Source-peek content (78 → 95).** Render the comp's raw CSV grid (week/date/mrr/signups/churn/active,
    latest row highlighted) in the in-surface pane, not just bound-key rows.
