@@ -107,7 +107,7 @@ h2.section{margin:26px 0 12px;font:600 19px/1.3 system-ui;color:#23262c}
 p.block{margin:0 0 22px;font:400 16px/1.78 system-ui;color:#2c2f36}
 /* A source-bound figure inline in the prose: the comp's faint-blue highlight + underline, so the reader
  * sees exactly which words are live. Clicking one peeks its source. */
-.bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 1px;cursor:pointer}
+.bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px;cursor:pointer}
 .bound:hover{background:rgba(80,110,235,.16)}
 .editable{border-radius:4px;transition:background .1s,box-shadow .1s;cursor:text}
 .editable:hover{background:rgba(80,90,160,.06)}
@@ -134,7 +134,7 @@ h2.section.editable{margin-left:-6px;padding-left:6px}
 .ctrl .approve:hover{background:oklch(0.5 0.13 255)}
 .ctrl .reject{border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer}
 .ctrl .reject:hover{background:#f4f5f7}
-table.kpi{flex:1;border:1px solid #ececf0;border-radius:8px;border-collapse:separate;border-spacing:0;overflow:hidden;font:400 13.5px/1 system-ui;margin-bottom:22px}
+table.kpi{flex:1;border:1px solid #eceef2;border-radius:10px;border-collapse:separate;border-spacing:0;overflow:hidden;font:400 13.5px/1 system-ui;margin-bottom:22px}
 table.kpi th{background:#f8f9fb;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;letter-spacing:.04em;text-align:right;padding:10px 14px}
 table.kpi th:first-child{text-align:left}
 table.kpi td{border-top:1px solid #f1f2f5;padding:10px 14px;text-align:right}

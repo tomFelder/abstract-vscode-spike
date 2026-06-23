@@ -16,6 +16,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | 4 (Context) | ~86% | 6/6 | all 5 context group kinds + working "＋ Add context" composer; Context 78→90 |
 | 5 (Home + header) | ~88% | 6/6 | verified Home + header pixel-exact to the extracted comp spec; Home 80→94, header 85→92 |
 | 6 (screens) | ~90% | 6/6 | verified Templates/Knowledge vs spec; Agents table → comp's 5 columns (drop POLICY) + relative LAST RUN; Templates 85→95, Knowledge 88→95, Agents 85→92 |
+| 7 (doc + Present) | ~91% | 6/6 | doc editor + Present verified pixel-exact vs spec (+ bound-pad/table micro-fixes); doc 88→95, Present 85→93 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -30,6 +31,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | iter 4 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 5 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 6 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| iter 7 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -128,3 +130,17 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 - **Next (iter 7):** doc editor (88) + Present (85) verification/pixel-pass against the comp spec; then
   source-peek (78, structural verification since it is webview-internal) and right rail (85) typography.
 - **Shots:** `shots/v3-iter6/` (01 agents-table, 02 knowledge).
+
+### Iter 7 — doc editor + Present modal vs the comp spec
+- **Did:** extracted the comp spec for the doc editor + Present modal and diffed `livingDocRender.ts`.
+  Both were pixel-faithful: doc title 600 30px/`-.015em`, H2 600 19px, body 400 16px/1.78, bound figures
+  `rgba(80,110,235,.08)` + `1.5px oklch(.6 .1 255)`, the 30px detached gutter; Present 740px / 16px radius
+  / `0 24px 70px` shadow / `rgba(20,26,40,.34)` scrim / 300px destination list / WHO-CAN-ACCESS / Export
+  CTA. Micro-fixes to hit exact: bound-figure padding `0 1px`→`0 2px`; KPI table border `#ececf0`→`#eceef2`
+  and radius `8px`→`10px`.
+- **Verified:** doc editor live (bound figures + gutter + KPI table render correctly; gates hold).
+  Present verified by spec-diff in code — it's webview-internal and can't be driven open from the top
+  frame to screenshot (the documented cross-origin limit).
+- **Scores:** doc editor 88→95, Present 85→93. Overall ~90% → **~91%**. 0 core patches.
+- **Next (iter 8):** source-peek (78 → CSV grid, structural verification) + right-rail typography (85).
+- **Shots:** `shots/v3-iter7/` (01 doc-editor).
