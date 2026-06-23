@@ -12,6 +12,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | v2 final | ~82% | 5/6 (G4 mostly) | calm shell shipped (PR #15, merged) |
 | 1 (re-audit) | ~82% | 5/6 (**G4 open**) | live re-audit; confirmed v2 holds; G4 leaks (palette + 2 sashes) verified live |
 | 2 (G4 closure) | ~84% | **6/6** | palette keybindings dead + sashes locked; **G4 ✅ — all gates pass**; interaction 70→90 |
+| 3 (right rail) | ~85% | 6/6 | folded Skills → comp's exact 3-tab strip (Chat/Review/History); right rail 75→85 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -22,6 +23,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | v2 final | ✅ | ✅ | ✅ | ◑ mostly | ✅ | ✅ |
 | iter 1 | ✅ | ✅ | ✅ | ❌ open | ✅ | ✅ |
 | iter 2 | ✅ | ✅ | ✅ | **✅ closed** | ✅ | ✅ |
+| iter 3 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -54,3 +56,17 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 - **Core patches:** +3 (total 5; all fail-soft, logged in [ledger 03](../plans/03-merge-tax-ledger.md)).
 - **Next (iter 3):** right rail content (75 → 95) — Chat/Review/History pixel-pass + Skills tab decision.
 - **Shots:** `shots/v3-iter2/` (01 after-shell, 02 after-doc).
+
+### Iter 3 — right rail → the comp's exact 3-tab strip
+- **Did:** **folded the "Skills" tab into Review** (decision 31, reverses v2 decision 27). The rail strip is
+  now exactly **Chat / Review / History** (the comp). Skill graders render as a "Document agents" checks
+  section below the pending changes in Review — feature fully preserved (Run / Re-run / Apply fix wired).
+  `reviewRailView.ts`: `PanelTab` 4→3, `_renderSkills` → `_appendChecks(parent)` (appends a `.ldr-checks`
+  section instead of replacing content), editor-change re-render now keys on `review`/`chat`.
+- **Verified live (pristine reload):** rail shows exactly 3 tabs; opening a doc populates the checks
+  (Strategy READY/Run, Financial PASS/Re-run, Formatting FLAG/Apply-fix). No gate regression (nav 76,
+  1 editor group, 0 draggable sashes). Tests green (66, incl. the Skills-report service test).
+- **Scores:** right rail 75 → 85 (IA/Components now match the comp; content typography pixel-pass still
+  owed for 95). Overall ~84% → **~85%**. 0 core patches.
+- **Next (iter 4):** source-peek (78 → 95) — render the comp's raw CSV grid in the in-surface pane.
+- **Shots:** `shots/v3-iter3/` (01 review-with-checks).

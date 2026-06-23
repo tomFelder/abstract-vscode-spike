@@ -56,13 +56,14 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 | **Home** | hi-fi: greeting/summary/Quick-Start 3 cards/2x2 projects — verified live | 1080px Home | 80 | **80** | column width + card spacing/type pixel pass |
 | **Context panel** | tab in the tree-rail (Linked sources / Referenced files) — carry | 5 groups + "＋ Add context" | 78 | **78** | surface Pasted/Images/Knowledge groups + Add-context |
 | **Source-peek / "Sync across"** | in-surface left pane (bound key→value rows) — carry | in-surface pane + raw CSV grid | 78 | **78** | render the comp's raw CSV grid w/ latest row highlighted |
-| **Right rail (Chat/Review/History)** | pinned ~374px; 4 tabs (Chat/Review/History/**Skills**) — verified live | 392px, 3 tabs | 75 | **75** | content typography pixel-pass; Skills 4th-tab decision; 374→392 |
+| **Right rail (Chat/Review/History)** | **iter 3:** the comp's exact **3 tabs** (Skills folded into Review as a "Document agents" checks section — feature preserved); ~374px | 392px, 3 tabs | 75 | **85** | content typography pixel-pass; pin 374→392 (grid redistributes) |
 | **Interaction grammar** | **iter 2:** calm app shell with the optionality **removed** — no command palette (keybindings dead), no user-resizable panes (sashes locked); reads as an opinionated document app | optionality removed | 70 | **90** | minor: nav label set vs comp; finish per-surface interaction polish |
 
-**Overall alignment (mean of the 12 rows): ~84%** (v2 final ~82%; iter-1 re-audit confirmed it; **iter 2
-closed G4** → interaction grammar 70→90). **Gate status: G1 ✅, G2 ✅, G3 ✅, G4 ✅ (closed iter 2), G5 ✅,
-G6 ✅ — all six pass.** Live click-through clean. The remaining lift to >= 97% is honest per-surface
-pixel-polish: every surface must reach >= 95 (lowest now: right rail 75, source-peek 78, Context 78, Home 80).
+**Overall alignment (mean of the 12 rows): ~85%** (v2 final ~82%; iter-1 confirmed it; **iter 2 closed
+G4** → interaction 70→90; **iter 3** right rail 75→85 via the 3-tab fold). **Gate status: G1 ✅, G2 ✅,
+G3 ✅, G4 ✅ (closed iter 2), G5 ✅, G6 ✅ — all six pass.** Live click-through clean. Remaining lift to
+>= 97% is honest per-surface pixel-polish: every surface must reach >= 95 (lowest now: source-peek 78,
+Context 78, Home 80, right rail 85).
 
 ## Ranked v3 gap backlog (most impact = lowest score × most central)
 
@@ -70,7 +71,8 @@ pixel-polish: every surface must reach >= 95 (lowest now: right rail 75, source-
    (`Cmd/Ctrl+Shift+P`, `F1`) + the Quick Open keybinding (`Cmd/Ctrl+P` → `>` command mode unreachable),
    and a global sash lock makes every layout divider non-draggable. 3 core patches (ledger 03), all
    fail-soft. Verified live; **all six gates now pass.** Interaction grammar 70→90.
-2. **Right rail content (75 → 95).** ← next highest-impact. Chat thread / Review cards / History to the comp's exact spacing,
+2. **Right rail (75 → 85, iter 3 — DONE the IA half).** Folded Skills → the comp's exact 3-tab strip
+   (Chat/Review/History); checks live in Review. _Remaining to 95:_ content typography pixel-pass. Chat thread / Review cards / History to the comp's exact spacing,
    type, colors; widen 374 → 392; decide the **Skills** 4th tab (keep as a justified departure or fold).
 3. **Source-peek content (78 → 95).** Render the comp's raw CSV grid (week/date/mrr/signups/churn/active,
    latest row highlighted) in the in-surface pane, not just bound-key rows.
