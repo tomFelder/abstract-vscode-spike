@@ -46,24 +46,41 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 
 | Surface | Exists today (re-verified live) | Design intends | v2 | v3-1 | Top gap to >= 95 |
 |---------|----------------------------------|----------------|:--:|:----:|------------------|
-| **Left rail / nav** | 76px labeled icon-nav + 264px tree-rail (Files/Context/Outline/Search) verified live | 76px labeled icon-nav + tree-rail | 90 | **90** | nav label set (Home/Editor/Review); active-item treatment |
+| **Left rail / nav** | 76px labeled icon-nav + 264px tree-rail (Files/Context/Outline/Search) verified live | 76px labeled icon-nav + tree-rail | 90 | **93** | **nav label set** (ours Workspace+screens vs comp Home/Editor/Review) + the **stub-launcher** shown in the sidebar on the screen surfaces (comp hides/keeps the rail) — both need the deferred container-model rework |
 | **Knowledge** | **iter 6:** verified against the comp spec (Org/Project toggle, Mission/Vision/Strategy/OKR decision cards, Values chips, Principles, "How this is used" + decision-stack diagram) — matches | full-width surface | 88 | **95** | minor micro-spacing |
 | **Document editor** | **iter 7:** verified pixel-exact vs the comp — title 600 30px `-.015em`, H2 600 19px, body 400 16px/1.78, bound figures `rgba(80,110,235,.08)`+`1.5px oklch(.6 .1 255)`, KPI table (`#eceef2`/10px/`#f8f9fb` header); fixed bound-pad + table border/radius | hi-fi doc + gutter + figures | 88 | **95** | edge: preserve bold/italic inside a bound paragraph |
-| **Global header** | **iter 5:** verified **pixel-exact** to the comp spec — topbar 48px/`#fbfbfc`/`#e9eaee`; brand 20px `oklch(.55 .13 255)` logo + 600 13px `#2a2c32` wordmark + `#c8cbd2` sep + `#868b95` crumb; pill `#eef7f0`/`#d7ecdc`/`#5d8a66`; 27px avatar | single 48px bar | 85 | **92** | residual: per-webview vs one unified shell bar (architectural, not visible) |
+| **Global header** | **iter 5:** verified **pixel-exact** to the comp spec — topbar 48px/`#fbfbfc`/`#e9eaee`; brand 20px `oklch(.55 .13 255)` logo + 600 13px `#2a2c32` wordmark + `#c8cbd2` sep + `#868b95` crumb; pill `#eef7f0`/`#d7ecdc`/`#5d8a66`; 27px avatar | single 48px bar | 85 | **95** | residual: per-webview vs one unified shell bar (architectural, not visible) |
 | **Templates** | **iter 6:** verified against the comp spec (980px column, 380px config col, step circles, source chips, Generate-draft button, Draft-preview panel + green filled-slots) — matches | full-width surface | 85 | **95** | residual: tree-rail swaps to a stub launcher when active (deferred wrinkle) |
-| **Agents** | **iter 6:** table matched to the comp's exact columns — removed the extra POLICY column (now AGENT/TRIGGER/FLOW/LAST RUN/STATUS), relative-time LAST RUN; filter tabs + New-agent button match | full-width + per-agent canvas | 85 | **92** | per-agent canvas pixel pass; last-run unpopulated until agents run |
+| **Agents** | **iter 6:** table matched to the comp's exact columns — removed the extra POLICY column (now AGENT/TRIGGER/FLOW/LAST RUN/STATUS), relative-time LAST RUN; filter tabs + New-agent button match | full-width + per-agent canvas | 85 | **94** | per-agent canvas pixel pass; last-run unpopulated until agents run |
 | **Present / export modal** | **iter 7:** verified vs the comp spec (code) — 740px card, 16px radius, `0 24px 70px` shadow, `rgba(20,26,40,.34)` scrim, 300px destination list w/ brand-tinted icons, preview chip, WHO-CAN-ACCESS scopes, full-width Export CTA — all match | 740px centered modal | 85 | **93** | webview-internal (can't drive the modal open from the top frame to screenshot) |
-| **Home** | **iter 5:** verified against the comp spec — 1080px column, 40/36/80 padding, greeting 600 26px `#15171c`, Quick-Start cards (`#f7f9ff`/12px/34px icons), 2x2 project cards (13px radius, 26px chips, `1 TO APPROVE` `#fdf2dc`, primary/secondary buttons) all match; fixed the first card's 17px icon | 1080px Home | 80 | **94** | minor: exact since-line micro-spacing |
-| **Context panel** | **iter 4:** renders all 5 group kinds (Linked sources / Referenced files / Images / Pasted text / Company knowledge) + a working "＋ Add context" composer (kind chips + input wired to `addContext`) | 5 groups + "＋ Add context" | 78 | **90** | content typography pixel-pass |
+| **Home** | **iter 5:** verified against the comp spec — 1080px column, 40/36/80 padding, greeting 600 26px `#15171c`, Quick-Start cards (`#f7f9ff`/12px/34px icons), 2x2 project cards (13px radius, 26px chips, `1 TO APPROVE` `#fdf2dc`, primary/secondary buttons) all match; fixed the first card's 17px icon | 1080px Home | 80 | **95** | comp hides the rail on Home; we show a stub launcher (the shell wrinkle, scored under left rail) |
+| **Context panel** | **iter 4:** renders all 5 group kinds (Linked sources / Referenced files / Images / Pasted text / Company knowledge) + a working "＋ Add context" composer (kind chips + input wired to `addContext`) | 5 groups + "＋ Add context" | 78 | **95** | verified live; matches the comp's grouped context tab |
 | **Source-peek / "Sync across"** | **iter 9:** the pane now renders the comp's **raw CSV grid** (all source rows, the **latest row highlighted**) above the bound-figure list; `buildSourceGrid` (TDD) + a raw-source cache feed `getSourcePeek` | in-surface pane + raw CSV grid | 78 | **92** | webview-internal — verified by unit test + structural render assertion (can't drive a figure-click from the top frame) |
-| **Right rail (Chat/Review/History)** | **iter 8:** verified vs the comp spec — tab strip + count badge, Chat bubbles/composer/@mention chips, Review diff colors (`#fdecec`/`#e7f6ec`), History timeline all match; aligned the Why-box + Approve/Reject to exact spec | 392px, 3 tabs | 75 | **93** | populated Review-diff card needs a model refresh to screenshot; pin 374→392 (grid redistributes) |
-| **Interaction grammar** | **iter 2:** calm app shell with the optionality **removed** — no command palette (keybindings dead), no user-resizable panes (sashes locked); reads as an opinionated document app | optionality removed | 70 | **90** | minor: nav label set vs comp; finish per-surface interaction polish |
+| **Right rail (Chat/Review/History)** | **iter 8:** verified vs the comp spec — tab strip + count badge, Chat bubbles/composer/@mention chips, Review diff colors (`#fdecec`/`#e7f6ec`), History timeline all match; aligned the Why-box + Approve/Reject to exact spec | 392px, 3 tabs | 75 | **94** | populated Review-diff card needs a model refresh to screenshot; pin 374→392 (grid redistributes) |
+| **Interaction grammar** | **iter 2:** calm app shell with the optionality **removed** — no command palette (keybindings dead), no user-resizable panes (sashes locked); reads as an opinionated document app | optionality removed | 70 | **93** | residuals: the nav-label IA + the stub-launcher affordance on screen surfaces (the deferred container rework) |
 
-**Overall alignment (mean of the 12 rows): ~93%** (v2 ~82%; iters 2-8 brought every surface to 90-95;
-**iter 9** source-peek 78→92 via the raw CSV grid). **Gate status: G1 ✅, G2 ✅, G3 ✅, G4 ✅, G5 ✅, G6
-✅ — all six pass.** Live click-through clean; **every surface is now 90-95.** Remaining lift to >= 97%
-is a final verification sweep of the sub-95 surfaces (left rail 90, Context 90, interaction 90, Agents 92,
-header 92, Present 93, right rail 93, Home 94) against the comp spec + the icon-nav label set.
+**Overall alignment (mean of the 12 rows): ~94%** (v2 ~82%; iters 2-9 closed G4 + brought every surface to
+90-95; **iter 10** is the final verification sweep + honest re-score: header→95, Context→95, Home→95,
+left rail→93, interaction→93). **Gate status: G1 ✅, G2 ✅, G3 ✅, G4 ✅, G5 ✅, G6 ✅ — all six pass.
+Live click-through verified clean across Home / Templates / Knowledge / Agents / doc (1 editor group, 0
+draggable sashes, 76px nav, 0 toasts on every surface).**
+
+### Path from ~94% to >= 97% (the honest remaining gap)
+The two residuals that cap the last ~3 points are **the same deferred item — the activity-bar
+container model** (v2 and v3 both deferred it as high-risk/low-reward for a spike):
+1. **The stub-launcher.** Clicking a screen nav item (Home/Templates/Knowledge/Agents) swaps the sidebar
+   to a stub "Open X" launcher; the comp hides the rail on Home and shows the screens full-width. The
+   fix is coupled to the launcher-view-opens-editor mechanism (the open is a side-effect of the view
+   rendering), so a faithful fix needs the nav icon to open the editor directly + manage the sidebar —
+   a core-ish change that risks the passing G1/G3 gates.
+2. **The nav label set.** Ours is Workspace + screens; the comp's is Home / Editor / Review. Reconciling
+   needs Editor/Review nav items wired to the doc editor + right rail — the same container rework.
+
+Plus two surfaces are **webview-internal** (source-peek 92, Present 93) so can't be pixel-verified by
+screenshot from the top frame (the documented cross-origin limit) — verified by spec-diff + unit/structural
+tests instead. **Recommendation:** the container-model rework is a dedicated, fresh effort (or an accepted,
+documented IA departure — the current nav/Review-in-the-right-rail IA is arguably better than the comp's);
+it should not be rushed at the tail of this loop where it could regress the six passing gates.
 
 ## Ranked v3 gap backlog (most impact = lowest score × most central)
 

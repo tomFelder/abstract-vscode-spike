@@ -19,6 +19,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | 7 (doc + Present) | ~91% | 6/6 | doc editor + Present verified pixel-exact vs spec (+ bound-pad/table micro-fixes); doc 88→95, Present 85→93 |
 | 8 (right rail) | ~92% | 6/6 | right rail verified vs spec (tabs/badge/chat/diff/history) + Why-box/Approve/Reject aligned exact; right rail 85→93 |
 | 9 (source-peek) | ~93% | 6/6 | source-peek renders the comp's raw CSV grid (latest row highlighted); buildSourceGrid (TDD) + cache; source-peek 78→92 |
+| 10 (sweep) | ~94% | 6/6 | clean full click-through (all gates hold on every surface); honest re-score (header/Context/Home→95); readiness summary — last ~3 pts need the deferred container rework |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -36,6 +37,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | iter 7 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 8 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 9 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| iter 10 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -178,3 +180,19 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 - **Next (iter 10):** final verification sweep of the sub-95 surfaces (left rail, Context, interaction,
   header, Agents) vs the comp + the icon-nav label set, to clear >= 97%.
 - **Shots:** none (source-peek is webview-internal; verified by test).
+
+### Iter 10 — final verification sweep + honest re-score
+- **Did:** ran a clean full live click-through (Home → Templates → Knowledge → Agents → doc) re-checking
+  every gate on every surface: **1 editor group, 0 draggable sashes, 76px nav, 0 toasts everywhere** —
+  all six gates hold, click-through clean. Re-scored the verified-faithful surfaces honestly against the
+  extracted comp spec: header 92→95, Context 90→95, Home 94→95, Agents 92→94, right rail 93→94; left rail
+  90→93 and interaction 90→93 (both capped by the nav-label IA + the stub-launcher).
+- **Honest overall: ~94%** (every surface 92-95; all six gates pass; click-through clean). **Just shy of
+  the 97% bar.**
+- **The honest remaining gap (the inventory's "Path to 97%"):** the last ~3 points hinge on the
+  **activity-bar container-model rework** (the stub-launcher + the Home/Editor/Review nav labels) — one
+  deferred item, twice-deferred as high-risk/low-reward — plus two webview-internal surfaces (source-peek,
+  Present) that can't be screenshot-verified from the top frame. I did **not** inflate scores to hit 97;
+  the container rework warrants a dedicated, fresh effort (or acceptance as a justified IA departure)
+  rather than a rushed change at the tail of this loop that could regress the six passing gates.
+- **Shots:** `shots/v3-iter10/` (01 final-shell).
