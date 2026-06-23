@@ -20,6 +20,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | 8 (right rail) | ~92% | 6/6 | right rail verified vs spec (tabs/badge/chat/diff/history) + Why-box/Approve/Reject aligned exact; right rail 85→93 |
 | 9 (source-peek) | ~93% | 6/6 | source-peek renders the comp's raw CSV grid (latest row highlighted); buildSourceGrid (TDD) + cache; source-peek 78→92 |
 | 10 (sweep) | ~94% | 6/6 | clean full click-through (all gates hold on every surface); honest re-score (header/Context/Home→95); readiness summary — last ~3 pts need the deferred container rework |
+| 11 (stub-launcher) | ~95% | 6/6 | closed the stub-launcher: tree-rail now persists on every screen (comp behavior); left rail 93→95, interaction 93→95 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -38,6 +39,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | iter 8 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 9 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 10 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| iter 11 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -196,3 +198,18 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
   the container rework warrants a dedicated, fresh effort (or acceptance as a justified IA departure)
   rather than a rushed change at the tail of this loop that could regress the six passing gates.
 - **Shots:** `shots/v3-iter10/` (01 final-shell).
+
+### Iter 11 — close the stub-launcher (tree-rail persists)
+- **Did:** the twice-deferred wrinkle. `ScreenLauncherView` opens the screen editor when its container is
+  revealed; it now also re-opens the `DOCUMENTS_CONTAINER_ID` (tree-rail) container a tick later, so the
+  screen lands full-width in the editor area and the **tree-rail stays put** (comp behavior, plan 12 #5)
+  instead of the stub "Open X" launcher. Added `IViewsService`; 0 core patches (decision 33).
+- **Verified live:** clicked Home / Templates / Knowledge / Agents — every one keeps the 4-tab tree-rail,
+  **no stub**, screen full-width in the main area; then opened a doc — rail still there. **No gate
+  regression** (1 editor group, 0 draggable sashes everywhere). Compare `shots/v3-iter1/04-templates-stub-rail`
+  (stub) vs `shots/v3-iter11/01-templates-rail-persists` (rail).
+- **Scores:** left rail 93→95, interaction 93→95. Overall ~94% → **~95%**.
+- **Honest standing:** all six gates pass, click-through clean, every surface 93-95, **~95% overall**. The
+  remaining ~2 points are verification-tooling limits (two webview-internal surfaces can't be pixel-screenshotted
+  from the top frame) + a deliberate nav-label IA departure — not missing work. Did not inflate to 97%.
+- **Shots:** `shots/v3-iter11/` (01 templates-rail-persists).
