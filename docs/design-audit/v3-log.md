@@ -17,6 +17,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | 5 (Home + header) | ~88% | 6/6 | verified Home + header pixel-exact to the extracted comp spec; Home 80→94, header 85→92 |
 | 6 (screens) | ~90% | 6/6 | verified Templates/Knowledge vs spec; Agents table → comp's 5 columns (drop POLICY) + relative LAST RUN; Templates 85→95, Knowledge 88→95, Agents 85→92 |
 | 7 (doc + Present) | ~91% | 6/6 | doc editor + Present verified pixel-exact vs spec (+ bound-pad/table micro-fixes); doc 88→95, Present 85→93 |
+| 8 (right rail) | ~92% | 6/6 | right rail verified vs spec (tabs/badge/chat/diff/history) + Why-box/Approve/Reject aligned exact; right rail 85→93 |
 
 **Target:** >= 97% overall, **all 6 gates full**, clean click-through, or 15 iterations.
 
@@ -32,6 +33,7 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 | iter 5 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 6 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | iter 7 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| iter 8 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Iterations
 
@@ -144,3 +146,17 @@ pixel-finish every surface to >= 95 and **fully close G4**. v2 history is archiv
 - **Scores:** doc editor 88→95, Present 85→93. Overall ~90% → **~91%**. 0 core patches.
 - **Next (iter 8):** source-peek (78 → CSV grid, structural verification) + right-rail typography (85).
 - **Shots:** `shots/v3-iter7/` (01 doc-editor).
+
+### Iter 8 — right rail vs the comp spec
+- **Did:** extracted the comp's right-panel spec and diffed `reviewRailView.ts`. The tab strip + count
+  badge (`oklch(.66 .16 45)`), Chat bubbles (`#eef1f6`, asymmetric `13 13 4 13` radius) + composer +
+  @mention chips, the Review diff colors (`#fdecec`/`#7a3a38` old, `#e7f6ec`/`#1f5a36` new), and the
+  History timeline (10px dot, 2px `#e6e8ed` connector) all matched. Aligned the Review-card Why-box
+  (radius/padding/color/size) and the Approve/Reject buttons (padding 9→11, font 12→13) to exact spec.
+- **Verified:** Chat tab live (composer + @mention attach chips + agent selector; gates hold). The
+  populated Review diff card needs a model refresh to surface a pending change, so its button tweaks
+  are code-verified.
+- **Scores:** right rail 85→93. Overall ~91% → **~92%**. 0 core patches.
+- **Next (iter 9):** source-peek (78) — render the comp's raw CSV grid (the one real remaining drag;
+  needs a small async refactor of `getSourcePeek`; structural/unit verification since it's webview-internal).
+- **Shots:** `shots/v3-iter8/` (01 chat-rail).

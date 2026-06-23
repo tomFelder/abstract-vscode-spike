@@ -399,12 +399,12 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldr-diff{border:1px solid #eceef2;border-radius:7px;overflow:hidden;margin-bottom:10px}
 		.living-docs-panel .ldr-o{background:#fdecec;color:#7a3a38;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.4);padding:8px 10px;font:400 12.5px/1.45 system-ui}
 		.living-docs-panel .ldr-n{background:#e7f6ec;color:#1f5a36;padding:8px 10px;font:400 12.5px/1.45 system-ui}
-		.living-docs-panel .ldr-why{font:400 11.5px/1.5 system-ui;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:7px;padding:8px 10px;margin-bottom:10px}
+		.living-docs-panel .ldr-why{font:400 12.5px/1.55 system-ui;color:#4a4f6a;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:9px;padding:11px 12px;margin-bottom:16px}
 		.living-docs-panel .ldr-meta{display:flex;flex-wrap:wrap;gap:12px;font:600 10px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#868b95;margin-bottom:12px}
 		.living-docs-panel .ldr-actions{display:flex;gap:8px}
-		.living-docs-panel .ldr-approve{flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+		.living-docs-panel .ldr-approve{flex:1;border:none;border-radius:8px;padding:11px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1 system-ui;cursor:pointer}
 		.living-docs-panel .ldr-approve:hover{background:oklch(0.5 0.13 255)}
-		.living-docs-panel .ldr-reject{border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer}
+		.living-docs-panel .ldr-reject{border:1px solid #e0e2e8;border-radius:8px;padding:11px 16px;background:#fff;color:#696e78;font:500 13px/1 system-ui;cursor:pointer}
 		.living-docs-panel .ldr-reject:hover{background:#f4f5f7}
 		.living-docs-panel .ldr-checks{margin-top:6px;padding-top:16px;border-top:1px solid #eef0f3}
 		`;

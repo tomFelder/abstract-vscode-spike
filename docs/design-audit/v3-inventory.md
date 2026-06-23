@@ -56,16 +56,15 @@ v2** so the trajectory is comparable. Seeded from the v2 finals (`v2-inventory.m
 | **Home** | **iter 5:** verified against the comp spec — 1080px column, 40/36/80 padding, greeting 600 26px `#15171c`, Quick-Start cards (`#f7f9ff`/12px/34px icons), 2x2 project cards (13px radius, 26px chips, `1 TO APPROVE` `#fdf2dc`, primary/secondary buttons) all match; fixed the first card's 17px icon | 1080px Home | 80 | **94** | minor: exact since-line micro-spacing |
 | **Context panel** | **iter 4:** renders all 5 group kinds (Linked sources / Referenced files / Images / Pasted text / Company knowledge) + a working "＋ Add context" composer (kind chips + input wired to `addContext`) | 5 groups + "＋ Add context" | 78 | **90** | content typography pixel-pass |
 | **Source-peek / "Sync across"** | in-surface left pane (bound key→value rows) — carry | in-surface pane + raw CSV grid | 78 | **78** | render the comp's raw CSV grid w/ latest row highlighted |
-| **Right rail (Chat/Review/History)** | **iter 3:** the comp's exact **3 tabs** (Skills folded into Review as a "Document agents" checks section — feature preserved); ~374px | 392px, 3 tabs | 75 | **85** | content typography pixel-pass; pin 374→392 (grid redistributes) |
+| **Right rail (Chat/Review/History)** | **iter 8:** verified vs the comp spec — tab strip + count badge, Chat bubbles/composer/@mention chips, Review diff colors (`#fdecec`/`#e7f6ec`), History timeline all match; aligned the Why-box + Approve/Reject to exact spec | 392px, 3 tabs | 75 | **93** | populated Review-diff card needs a model refresh to screenshot; pin 374→392 (grid redistributes) |
 | **Interaction grammar** | **iter 2:** calm app shell with the optionality **removed** — no command palette (keybindings dead), no user-resizable panes (sashes locked); reads as an opinionated document app | optionality removed | 70 | **90** | minor: nav label set vs comp; finish per-surface interaction polish |
 
-**Overall alignment (mean of the 12 rows): ~91%** (v2 ~82%; **iter 2** G4/interaction→90; **iter 3** right
-rail→85; **iter 4** Context→90; **iter 5** Home→94/header→92; **iter 6** Templates→95/Knowledge→95/Agents→92;
-**iter 7** doc editor 88→95 + Present 85→93 — all verified against the comp spec). **Gate status: G1 ✅,
-G2 ✅, G3 ✅, G4 ✅, G5 ✅, G6 ✅ — all six pass.** Live click-through clean. Remaining lift to >= 97%:
-**source-peek 78** (the CSV grid — webview-internal, structural verification) and **right rail 85**
-(typography), then small bumps across the 90-92 surfaces. **Finding:** the webview surfaces were built
-faithfully to the comp; conservative v2 scores are corrected upward as each is verified against the spec.
+**Overall alignment (mean of the 12 rows): ~92%** (v2 ~82%; iters 2-7 brought G4 + interaction/right-rail/
+Context/Home/header/Templates/Knowledge/Agents/doc/Present up; **iter 8** right rail 85→93). **Gate status:
+G1 ✅, G2 ✅, G3 ✅, G4 ✅, G5 ✅, G6 ✅ — all six pass.** Live click-through clean. The one real remaining
+drag is **source-peek 78** (the raw CSV grid — webview-internal, structural verification); after that, a
+final verification sweep nudges the 90-92 surfaces. **Finding:** the webview surfaces were built faithfully
+to the comp; conservative v2 scores are corrected upward as each is verified against the spec.
 
 ## Ranked v3 gap backlog (most impact = lowest score × most central)
 
