@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { disposableTimeout } from '../../../../base/common/async.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -21,15 +22,15 @@ import { EditorExtensions } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
+import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { CONTEXT_CONTAINER_ID, CONTEXT_VIEW_ID, DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { ContextPanelView } from './contextPanelView.js';
-import { DocumentsView } from './documentsView.js';
+import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
 import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
+import { TreeRailView } from './treeRailView.js';
 import { ScreenEditor } from './screenEditor.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenLauncherView } from './screenLauncherView.js';
@@ -120,52 +121,30 @@ class LivingDocsEditorResolverContribution extends Disposable implements IWorkbe
 }
 registerWorkbenchContribution2(LivingDocsEditorResolverContribution.ID, LivingDocsEditorResolverContribution, WorkbenchPhase.BlockRestore);
 
-// --- "Documents" home in the primary sidebar (replaces the file Explorer) ---
-const documentsIcon = registerIcon('living-docs-documents', Codicon.book, localize('livingDocs.documentsIcon', "Living Documents home"));
+// --- the left tree-rail in the primary sidebar (one rail: Files / Context / Outline / Search + a
+// folder tree, replacing the file Explorer AND the spike-era separate Documents + Context containers).
+// The single TreeRailView holds the tabbed rail (decision log 23). ADDITIVE-CONTRIBUTION (merge-tax ledger).
+const workspaceIcon = registerIcon('living-docs-workspace', Codicon.listTree, localize('livingDocs.workspaceIcon', "Workspace tree-rail"));
 
-const documentsContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+const workspaceContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
 	id: DOCUMENTS_CONTAINER_ID,
-	title: localize2('livingDocs.documents', "Documents"),
-	icon: documentsIcon,
+	title: localize2('livingDocs.workspace', "Workspace"),
+	icon: workspaceIcon,
 	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [DOCUMENTS_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
 	storageId: DOCUMENTS_CONTAINER_ID,
 	hideIfEmpty: false,
 	order: 0,
 }, ViewContainerLocation.Sidebar, { isDefault: true });
 
-const documentsViewDescriptor: IViewDescriptor = {
+const treeRailViewDescriptor: IViewDescriptor = {
 	id: DOCUMENTS_VIEW_ID,
-	name: localize2('livingDocs.documentsView', "Documents"),
-	containerIcon: documentsIcon,
-	ctorDescriptor: new SyncDescriptor(DocumentsView),
+	name: localize2('livingDocs.workspaceView', "Workspace"),
+	containerIcon: workspaceIcon,
+	ctorDescriptor: new SyncDescriptor(TreeRailView),
 	canToggleVisibility: false,
 	canMoveView: false,
 };
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([documentsViewDescriptor], documentsContainer);
-
-// --- "Context" panel in the primary sidebar: the influence sources of the active document ---
-// ADDITIVE-CONTRIBUTION (merge-tax ledger).
-const contextIcon = registerIcon('living-docs-context', Codicon.references, localize('livingDocs.contextIcon', "Document context sources"));
-
-const contextContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
-	id: CONTEXT_CONTAINER_ID,
-	title: localize2('livingDocs.context', "Context"),
-	icon: contextIcon,
-	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [CONTEXT_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
-	storageId: CONTEXT_CONTAINER_ID,
-	hideIfEmpty: false,
-	order: 1,
-}, ViewContainerLocation.Sidebar);
-
-const contextViewDescriptor: IViewDescriptor = {
-	id: CONTEXT_VIEW_ID,
-	name: localize2('livingDocs.contextView', "Context"),
-	containerIcon: contextIcon,
-	ctorDescriptor: new SyncDescriptor(ContextPanelView),
-	canToggleVisibility: false,
-	canMoveView: true,
-};
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([contextViewDescriptor], contextContainer);
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([treeRailViewDescriptor], workspaceContainer);
 
 // Hide the built-in IDE view containers additively: deregister them once registries are populated,
 // rather than patching each contribution. ADDITIVE-CONTRIBUTION (merge-tax ledger). NOTE: this leans
@@ -280,6 +259,7 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
 		@IEditorService private readonly _editorService: IEditorService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
+		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -296,8 +276,27 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		if (this._editorService.editors.length === 0) {
 			void this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'home'), { pinned: true });
 		}
-		// Reveal the Studio right panel (Chat / Review / History / Skills) without stealing focus.
-		void viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
+		// Reveal the Studio right panel (Chat / Review / History / Skills) without stealing focus, then
+		// pin the shell to the comp's pixel widths: a 264px tree-rail and a 392px right rail. Sizing
+		// happens AFTER the rail is revealed (setSize is a no-op on a hidden part) and after a layout
+		// tick so it isn't overwritten by the workbench's own size restore. The product is an opinionated
+		// single surface, so the layout is set rather than left at the IDE defaults.
+		void viewsService.openView(REVIEW_RAIL_VIEW_ID, false).then(() => {
+			this._pinShellWidths(layoutService);
+		});
+	}
+
+	private _pinShellWidths(layoutService: IWorkbenchLayoutService): void {
+		const apply = () => {
+			try {
+				layoutService.setSize(Parts.SIDEBAR_PART, { width: 264, height: layoutService.getSize(Parts.SIDEBAR_PART).height });
+				layoutService.setSize(Parts.AUXILIARYBAR_PART, { width: 392, height: layoutService.getSize(Parts.AUXILIARYBAR_PART).height });
+			} catch (e) { /* layout not ready in some hosts; the default widths still apply */ }
+		};
+		// Run after the current layout pass and once more on the next animation frame, so the sizes win
+		// over the workbench's restore (which can land a tick later).
+		this._register(disposableTimeout(apply, 0));
+		apply();
 	}
 
 	private _closeWelcomeEditors(): void {

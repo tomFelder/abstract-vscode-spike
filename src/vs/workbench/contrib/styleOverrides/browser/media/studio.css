@@ -33,3 +33,38 @@
 .style-override-studio .part.auxiliarybar > .composite.title {
 	display: none !important;
 }
+
+/* The compact menu ("Application Menu" hamburger). In modernUI the menubar renders inside the
+ * activity bar and ignores `window.menuBarVisibility`, so remove it here -- the product is a word
+ * processor with no application menu (decision log 25, G4: remove IDE optionality). */
+.style-override-studio .part.activitybar .menubar {
+	display: none !important;
+}
+
+/* The global "Accounts" (sign-in-to-sync) and "Manage" (gear -> Settings / Command Palette / Check for
+ * Updates / Extensions) activity-bar actions are pure IDE tells and surface the command palette, which
+ * the Studio shell does not expose. The comp's icon-nav carries neither. */
+.style-override-studio .action-item.icon:has(> .action-label.codicon-accounts-view-bar-icon),
+.style-override-studio .action-item.icon:has(> .action-label.codicon-settings-view-bar-icon) {
+	display: none !important;
+}
+
+/* The comp's icon-nav: a 76px rail (allocated by the core ACTIVITYBAR_WIDTH patch) with a text label
+ * under each icon. The container name is on each action-label's aria-label, so render it via ::after.
+ * (decision log 29, G3 icon-nav.) */
+.style-override-studio .part.activitybar .monaco-action-bar .action-item.icon {
+	height: auto !important;
+}
+.style-override-studio .part.activitybar .action-label.codicon {
+	display: flex !important;
+	flex-direction: column;
+	align-items: center;
+	gap: 5px;
+	height: auto !important;
+	padding: 9px 0 7px;
+}
+.style-override-studio .part.activitybar .action-label.codicon::after {
+	content: attr(aria-label);
+	font: 500 10px/1 system-ui;
+	letter-spacing: .005em;
+}

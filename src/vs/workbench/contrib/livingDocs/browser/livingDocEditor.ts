@@ -28,6 +28,9 @@ export class LivingDocEditor extends EditorPane {
 	private _mode: LivingDocViewMode = 'rendered';
 	private _resource: URI | undefined;
 	private _present: IPresentState = { open: false, choice: 'gdoc', scope: 'internal' };
+	// In-surface source-peek state (the comp's "Sync across" pane). Held on the editor, NOT opened as a
+	// second editor group - this is the v2 fix for the split-pane / blank-pane abrasion.
+	private _sourcePeek: { cells: readonly string[]; synced: boolean; syncedCount: number } | undefined;
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -53,6 +56,7 @@ export class LivingDocEditor extends EditorPane {
 		this._ensureWebview();
 		this._mode = 'rendered';
 		this._present = { open: false, choice: 'gdoc', scope: 'internal' };
+		this._sourcePeek = undefined;
 		this._resource = input.resource;
 		this._inputDisposables.clear();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
@@ -121,13 +125,21 @@ export class LivingDocEditor extends EditorPane {
 				if (this._resource) { this._livingDocs.shareDocument(this._resource); }
 				break;
 			case 'reveal':
-				if (this._resource && Array.isArray(message.cells)) { void this._livingDocs.revealSource(this._resource, message.cells); }
+				// Clicking a provenance dot opens the in-surface source pane focused on those cells.
+				this._sourcePeek = { cells: Array.isArray(message.cells) ? message.cells : [], synced: false, syncedCount: 0 };
+				this._render();
 				break;
 			case 'openSource':
-				if (this._resource) { void this._livingDocs.openSourceBeside(this._resource); }
+				// The "Source" toolbar button opens the in-surface source pane (no cell focus).
+				this._sourcePeek = { cells: [], synced: false, syncedCount: 0 };
+				this._render();
+				break;
+			case 'closeSource':
+				this._sourcePeek = undefined;
+				this._render();
 				break;
 			case 'sync':
-				if (this._resource) { void this._livingDocs.syncFromSources(this._resource); }
+				if (this._resource) { void this._sync(); }
 				break;
 			case 'edit':
 				if (this._resource && typeof message.blockId === 'string' && typeof message.text === 'string') {
@@ -160,6 +172,17 @@ export class LivingDocEditor extends EditorPane {
 		this._render();
 	}
 
+	// "Sync across": re-derive the doc's figures, then mark the in-surface pane as synced so it shows
+	// the green confirmation (the comp's "N changes synced" state on the divider circle).
+	private async _sync(): Promise<void> {
+		if (!this._resource) { return; }
+		const changes = await this._livingDocs.syncFromSources(this._resource);
+		if (this._sourcePeek) {
+			this._sourcePeek = { ...this._sourcePeek, synced: true, syncedCount: changes.length };
+		}
+		this._render();
+	}
+
 	private async _applyRaw(text: string): Promise<void> {
 		if (!this._resource) { return; }
 		this._mode = 'rendered';
@@ -171,6 +194,13 @@ export class LivingDocEditor extends EditorPane {
 	private _render(): void {
 		const resource = this._resource;
 		if (!resource) { return; }
+		const peek = this._sourcePeek;
+		const sourcePeek = peek
+			? (() => {
+				const data = this._livingDocs.getSourcePeek(resource, peek.cells);
+				return data ? { ...data, synced: peek.synced, syncedCount: peek.syncedCount } : undefined;
+			})()
+			: undefined;
 		this._webview?.setHtml(renderLivingDocHtml({
 			doc: this._livingDocs.getDoc(resource),
 			pending: this._livingDocs.getPendingForDoc(resource),
@@ -182,6 +212,7 @@ export class LivingDocEditor extends EditorPane {
 			rawText: this._livingDocs.getRawText(resource),
 			present: this._present,
 			syncDiff: this._livingDocs.getLastSyncDiff(resource),
+			sourcePeek,
 		}));
 	}
 

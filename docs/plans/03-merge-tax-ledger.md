@@ -78,7 +78,72 @@ Expected candidates: the single-surface layout (no editor groups / source-peek a
 reversing V3's `SIDE_GROUP`), the bespoke left tree-rail, removing IDE optionality (drag/split/
 reopen-with/palette/group-close), and excluding the unused first-party builtins that 404 in the dev run.
 
-## Core-patch count: 0 added (this phase + build-out round + format round + orchestration round + v1 functionality round) (1 pre-existing, from the engine phase). v2 (plan 11) relaxes this - logged above.
+**v2 iter 2 — kill the split-pane abrasion (the first expected candidate above): 0 core patches.**
+Source-peek + Sync-across moved fully in-surface entirely inside the `livingDocs` contrib: removed the
+two `SIDE_GROUP` `openEditor` calls (`revealSource`/`openSourceBeside`) in `livingDocsService.ts`,
+replaced them with a pure `getSourcePeek` data method, and rendered the pane + floating Sync circle in
+the existing `livingDocEditor` webview (`livingDocRender.ts`). Tier reached: **additive-contribution**
+(no `styleOverrides`, no theme, no core file touched). The single biggest expected core-patch candidate
+turned out contrib-only — mild evidence the fork can still de-IDE without core forks (Q3).
+
+**v2 iter 3 — the left tree-rail (the second expected candidate above): 0 core patches.**
+Built one `TreeRailView` (a standard `ViewPane`, like the old DocumentsView) with internal Files /
+Context / Outline / Search tabs + a folder tree, registered as the single default sidebar container;
+folded the separate Documents + Context containers into it (deleted `documentsView.ts` +
+`contextPanelView.ts`). Pure helpers in `common/treeRail.ts`. Tier reached: **additive-contribution** —
+the tabbed rail was reachable as one DOM-rendered view without touching the activity-bar/part core. The
+**residual** 76px labeled icon-nav (vs VS Code's ~48px activity bar) + making Home/Templates/etc. pure
+nav may need a `styleOverrides`-CSS or core seam; deferred to a later iteration and re-evaluated then.
+
+**v2 iter 4 — calm the header (the third expected candidate above): 0 core patches.**
+Entirely inside the doc webview (`livingDocRender.ts`): collapsed the 2-row header to the comp's single
+bar (removed Download + the standalone Refresh button + the persistent formatting-toolbar row), made the
+sync pill the refresh affordance, moved formatting to a floating selection toolbar, and relocated the
+raw-Markdown toggle to the footer. Tier reached: **additive-contribution** (webview HTML/CSS/JS only; no
+core file, no `styleOverrides`). The doc header is our own surface, so calming it never approached core.
+
+**v2 iter 5 — remove IDE chrome (the fourth expected candidate above): 0 core patches.**
+Added three rules to `styleOverrides/browser/media/studio.css` (the existing `.style-override-studio`
+chrome-removal sheet) to hide the modernUI menubar hamburger ("Application Menu") and the Accounts +
+Manage global activity-bar actions. Tier reached: **styleOverrides-CSS** — one tier above
+additive-contribution, still no core file touched. **Residual** (a full G4 pass): the raw command-palette
+keybinding and pane-resize sashes are core-owned; removing those (not just their UI surface) is the one
+place G4 may finally need a `core-patch` — deferred and re-evaluated when tackled.
+
+**v2 iter 6 — exclude IDE-only builtins (gate G6): the FIRST v2 CORE PATCH (1 added).**
+`src/vs/workbench/services/extensionManagement/browser/builtinExtensionsScannerService.ts` — a 3-id
+denylist (`vscode.emmet`, `vscode.git-base`, `vscode.merge-conflict`) filtered out of the scanned web
+builtins. These IDE-only builtins are irrelevant to a word processor AND their web bundle 404s in the
+dev run (the "Activating extension failed" toasts). Tier: **core-patch** — the builtin set is injected
+(dev DOM / prod build) and read only here, so the scanner is the single clean exclusion point.
+- **Merge-tax cost:** minimal/low-fragility. One small filter guarded by a named const; survives rebases
+  unless the scanner is rewritten. Re-pin check: confirm the const + `.filter(...)` line still sit before
+  `this.builtinExtensionsPromises = bundledExtensions.map(...)`.
+- **Greenfield evidence (Q3):** the entire v2 calm shell (source-peek in-surface, tree-rail, calm header,
+  chrome removal, builtin exclusion) needed exactly **one** tiny core seam — the fork de-IDEs cheaply.
+
+**v2 iter 8 — inline bound-figure highlighting (doc G5 pixel-align): 0 core patches.**
+Entirely in `livingDocRender.ts`: bound prose wraps each resolved figure in a `.bound` span (tokenize
+before the Markdown renderer, swap after). Tier: **additive-contribution** (webview only).
+
+**v2 iter 9 — the 76px labeled icon-nav (G3): the SECOND v2 CORE PATCH (1 added).**
+`src/vs/workbench/browser/parts/activitybar/activitybarPart.ts` — `ACTIVITYBAR_WIDTH 48 -> 76` so the
+grid allocates the comp's wider rail; the label under each icon is then added by `studio.css`
+(styleOverrides-CSS, `::after { content: attr(aria-label) }`). The guard test
+(`activitybarPart.test.ts`, "default constants...") was updated 48 -> 76 (it asserts the constant value).
+Tier: **core-patch**. Low fragility (one constant + its guard test); re-pin check: the constant is 76 and
+the test expects 76.
+- **Greenfield evidence (Q3):** two tiny core constants/seams (builtin denylist + activity-bar width)
+  were the *only* core patches needed for the whole v2 calm shell — the de-IDE is overwhelmingly
+  reachable via contributions + styleOverrides.
+
+**v2 iter 7 — pin the shell widths (right-rail pixel-align): 0 core patches.**
+`StudioStartupContribution` calls `IWorkbenchLayoutService.setSize` (a public service) after revealing
+the rail + a layout tick, to pin the tree-rail to 264px and the right rail to 392px (the comp). Tier:
+**additive-contribution** — no core file touched. (The grid redistributes to ~252/374, near- not
+exact-pixel, but well toward the comp from the cramped 246/282 defaults.)
+
+## Core-patch count: **2 added in v2** (iter 6 builtin exclusion + iter 9 activity-bar width) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1 + v2 iters 2-5,7,8) (1 pre-existing, from the engine phase). v2 (plan 11) permits this - both are one-line/one-constant, low-fragility, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be

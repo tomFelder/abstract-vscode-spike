@@ -111,3 +111,36 @@ and — newly — **core patches are permitted where the design needs them** (lo
 ledger; decision log 22), since "calm by construction" (D3) can't always be reached contrib-only.
 The per-surface **Exists-today vs Design-intends** inventory the loop builds lives in
 `design-audit/v2-inventory.md`.
+
+---
+
+## D6 — Comp-confirmed clarifications (from the v2 iter-1 live audit, 2026-06-22)
+
+The iteration-1 audit (read the comp `.dc.html` pixel-by-pixel + drove the live app) resolved three
+open questions and pinned the header clutter. Recorded here so later iterations build to the comp, not
+to a guess:
+
+- **The provenance gutter is a subtle marker rail, NOT line-numbered (resolves D1's open question).**
+  D1 floated line numbers but flagged "check the hi-fi whether numbers or a subtler marker rail is
+  wanted." The comp answers it: a **30px `flex:none` gutter column** to the left of the 720px doc
+  column, holding a centered **9px dot** beside a bound line (a **vertical bar** for a multi-line
+  edit) — **no line numbers at all**. Build the detached dot/bar rail; drop the line-number idea.
+- **The right rail is Chat / Review / History — three tabs (new gap).** The comp's 392px right panel
+  has exactly three tabs. The running app has a fourth, **Skills**. v2 must reconcile: either drop
+  Skills or justify it as a deliberate departure (decide in the decision log when touched).
+- **The header clutter is specific (sharpens D2/G2).** The doc editor's heavy header is a **second
+  toolbar row** the comp does not have: `Heading / B / I / U / list / quote / ✦ Ask AI / ⇆ Source /
+  </>`, plus **↓ Download** and **↻ Refresh from sources** buttons in row 1. The comp's bar is row 1
+  minus those: brand/crumb + synced pill + ↗ Present + avatar only. Calming G2 = stripping/relocating
+  that whole second row and the Download/Refresh buttons, not just restyling.
+- **The squeeze is a symptom of the editor-group model.** Every surface (Home/Templates/Knowledge/
+  Agents) is a webview *editor*; with a leftover/blank group open they render in a narrow column. So
+  G1 (kill split/blank groups) and G3 (replace activity-bar-of-editors with a real shell) are the same
+  root cause — fixing the hosting model un-squeezes the secondary surfaces for free.
+- **(iter 3) G3 splits cleanly into two slices.** The **tree-rail** (Files/Context/Outline/Search +
+  folder tree) is a single DOM-rendered `ViewPane` and was buildable contrib-only (done, decision 23).
+  The remaining slice — the comp's **76px labeled icon-nav** (vs VS Code's ~48px unlabeled activity
+  bar) and making Home/Templates/Knowledge/Agents *pure nav actions* that keep the tree-rail visible
+  rather than activity-bar containers that swap the sidebar — fights VS Code's one-icon-per-container
+  model and likely needs a `styleOverrides`-CSS pass and/or a small core seam. Treat it as its own
+  iteration, not part of the tree-rail build.

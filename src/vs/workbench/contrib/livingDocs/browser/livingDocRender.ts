@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
-import { IFigureChange } from '../common/livingDocs.js';
+import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { ILivingDoc, ILivingDocBlock, IProposedChange } from '../common/livingDocsModel.js';
 
@@ -42,6 +42,17 @@ export interface ILivingDocRenderInput {
 	readonly present: IPresentState;
 	/** The figure diff from the last "Sync across" (drives the synced banner). */
 	readonly syncDiff: readonly IFigureChange[];
+	/**
+	 * When set, the in-surface source-peek pane is open (the comp's "Sync across" source panel): it
+	 * renders to the LEFT of the document inside the one surface - never a second editor group.
+	 */
+	readonly sourcePeek?: ISourcePeekRender;
+}
+
+/** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
+export interface ISourcePeekRender extends ISourcePeek {
+	readonly synced: boolean;
+	readonly syncedCount: number;
 }
 
 function esc(s: string): string {
@@ -71,7 +82,7 @@ html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-
 .sep{color:#c8cbd2}
 .crumb{color:#868b95;font-weight:400}
 .right{display:flex;align-items:center;gap:10px}
-.pill{display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px}
+.pill{display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px;cursor:pointer}
 .pill .dot{width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)}
 .pill.warn{color:#9a6b16;background:#fdf2dc;border-color:#f0e2c0}
 .pill.warn .dot{background:oklch(0.66 0.16 45)}
@@ -94,7 +105,10 @@ h2.section{margin:26px 0 12px;font:600 19px/1.3 system-ui;color:#23262c}
 .gbar{width:3px;flex:1;min-height:16px;border-radius:2px;background:${ACCENT};cursor:pointer}
 .gbar.warn{background:oklch(0.66 0.16 45)}
 p.block{margin:0 0 22px;font:400 16px/1.78 system-ui;color:#2c2f36}
-.bound{border-bottom:1.5px dotted #c2c9f0}
+/* A source-bound figure inline in the prose: the comp's faint-blue highlight + underline, so the reader
+ * sees exactly which words are live. Clicking one peeks its source. */
+.bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 1px;cursor:pointer}
+.bound:hover{background:rgba(80,110,235,.16)}
 .editable{border-radius:4px;transition:background .1s,box-shadow .1s;cursor:text}
 .editable:hover{background:rgba(80,90,160,.06)}
 .editable:focus{outline:none;background:rgba(80,90,160,.08);box-shadow:0 0 0 1px #c2c9f0}
@@ -130,19 +144,15 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .hint{max-width:720px;margin:0 auto;padding:0 40px 30px;font:400 12px/1.6 system-ui;color:#a3a8b2}
 .toggle{border:1px solid #d9dae0;border-radius:8px;padding:7px 12px;background:#fff;color:#4a4c54;font:600 12px/1 system-ui;cursor:pointer}
 .toggle:hover{background:#f4f4f6}
-/* Editor toolbar (formatting + Ask AI), matching the hi-fi editor header. */
-.etoolbar{position:sticky;top:48px;z-index:4;display:flex;align-items:center;gap:3px;height:46px;padding:0 16px;border-bottom:1px solid #eef0f3;background:#fff}
-.etoolbar .fmt{display:flex;align-items:center;gap:2px}
-.etoolbar .fdiv{width:1px;height:18px;background:#e6e8ed;margin:0 6px}
-.etoolbar .fbtn{border:none;background:transparent;border-radius:7px;padding:6px 9px;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer}
-.etoolbar .fbtn.ic{width:30px;height:30px;padding:0;font-size:13px}
-.etoolbar .fbtn.b{font-weight:700}.etoolbar .fbtn.i{font-style:italic}.etoolbar .fbtn.u{text-decoration:underline}
-.etoolbar .fbtn:hover{background:#f4f5f7;color:#23262c}
-.etoolbar .askai{display:flex;align-items:center;gap:6px;margin-left:8px;border:1px solid #d8e0fb;background:#f4f6ff;border-radius:7px;padding:6px 12px;font:600 12px/1 system-ui;color:oklch(0.5 0.13 255);cursor:pointer}
-.etoolbar .askai:hover{background:#e0e6ff}
-.etoolbar .espacer{flex:1}
-.etoolbar .rawmini{border:1px solid #e6e8ed;background:#fff;border-radius:7px;padding:6px 9px;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;cursor:pointer}
-.etoolbar .rawmini:hover{background:#f4f5f7;color:#52575f}
+/* Floating selection toolbar: formatting appears only on a text selection (the comp has no persistent toolbar) - keeps the header calm while holding inline-formatting functionality. */
+.seltoolbar{position:absolute;display:none;align-items:center;gap:2px;background:#fff;border:1px solid #e6e8ed;border-radius:9px;box-shadow:0 6px 20px rgba(20,30,60,.16);padding:4px 6px;z-index:30}
+.seltoolbar .fdiv{width:1px;height:18px;background:#e6e8ed;margin:0 5px}
+.seltoolbar .fbtn{border:none;background:transparent;border-radius:7px;padding:6px 9px;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer}
+.seltoolbar .fbtn.ic{width:30px;height:30px;padding:0;font-size:13px}
+.seltoolbar .fbtn.b{font-weight:700}.seltoolbar .fbtn.i{font-style:italic}.seltoolbar .fbtn.u{text-decoration:underline}
+.seltoolbar .fbtn:hover{background:#f4f5f7;color:#23262c}
+.hint-raw{border:none;background:none;padding:0;margin-left:5px;color:#8a93c4;font:500 12px/1.6 system-ui;cursor:pointer;text-decoration:underline}
+.hint-raw:hover{color:oklch(0.5 0.13 255)}
 /* Source-peek / Sync-across banner. */
 .syncbar{display:flex;align-items:center;gap:8px;margin:14px 16px 0;padding:9px 13px;border:1px solid #f0e2c4;background:#fdf6e9;border-radius:9px;font:500 12px/1.4 system-ui;color:#9a6b16}
 .syncbar.done{border-color:#d7ecdc;background:#eef7f0;color:#1f5a36}
@@ -150,6 +160,30 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .syncbar .sb-btn{border:none;border-radius:7px;padding:7px 12px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer}
 .syncbar .sb-btn:hover{background:oklch(0.5 0.13 255)}
 .syncbar .sb-diff{font:500 11px/1.5 'JetBrains Mono',ui-monospace,monospace}
+/* In-surface source-peek pane (the comp's "Sync across" source panel) - LEFT of the doc, one surface. */
+.peekwrap{display:flex;align-items:stretch;position:relative;min-height:0}
+.peekwrap .docside{flex:1;min-width:0;overflow-y:auto}
+.srcpane{width:46%;flex:none;border-right:1px solid #e9eaee;background:#fcfcfd;display:flex;flex-direction:column;min-width:0;overflow-y:auto}
+.srcpane .sp-head{flex:none;display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid #eef0f3;background:#f6f7f9}
+.srcpane .sp-name{font:500 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f}
+.srcpane .sp-meta{font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2}
+.srcpane .sp-x{margin-left:auto;border:none;background:none;color:#9aa0aa;font-size:14px;cursor:pointer;padding:4px 6px}
+.srcpane .sp-x:hover{color:#52575f}
+.srcpane .sp-body{flex:1;overflow:auto;padding:14px 16px}
+.srcpane table{width:100%;border-collapse:collapse;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace}
+.srcpane th{text-align:left;padding:7px 9px;font-weight:600;color:#a3a8b2;border-bottom:1px solid #e9eaee}
+.srcpane td{padding:6px 9px;border-bottom:1px solid #f4f5f7;color:#2c2f36}
+.srcpane tr.sel td{background:#fef6e9;box-shadow:inset 2px 0 0 oklch(0.66 0.16 45);font-weight:600}
+.srcpane .sp-refs{margin-top:18px;border-top:1px solid #eef0f3;padding-top:14px}
+.srcpane .sp-refs-h{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:10px}
+.srcpane .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
+/* Sits on the divider, but BELOW the source-pane header so it never overlaps the close button. */
+.synccircle{position:absolute;top:64px;left:46%;transform:translateX(-50%);z-index:20;display:flex;flex-direction:column;align-items:center;gap:6px}
+.synccircle .sc-btn{width:42px;height:42px;border-radius:50%;border:1px solid #d8e0fb;background:#fff;box-shadow:0 4px 14px rgba(40,70,160,.18);color:oklch(0.5 0.13 255);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.synccircle .sc-btn:hover{background:#f4f6ff}
+.synccircle .sc-lbl{font:600 10px/1 system-ui;color:#5b6dc4;background:#fff;border:1px solid #e0e6ff;border-radius:999px;padding:4px 8px;box-shadow:0 2px 6px rgba(40,70,160,.1);white-space:nowrap}
+.synccircle.done .sc-btn{border-color:#c5e7d0;background:#e7f6ec;color:#1f7a44;cursor:default}
+.synccircle.done .sc-lbl{color:#1f7a44;border-color:#c5e7d0}
 .prose{max-width:720px;margin:0 auto;padding:24px 40px 80px;font:400 15px/1.7 system-ui;color:#2a2a31}
 .prose h1{font:600 27px/1.25 system-ui;letter-spacing:-.01em;color:#15151a;margin:24px 0 12px}
 .prose h2{font:600 20px/1.3 system-ui;color:#26262d;margin:26px 0 10px}
@@ -186,18 +220,10 @@ for (const b of document.querySelectorAll('[data-refresh]')) { b.addEventListene
 for (const d of document.querySelectorAll('[data-cells]')) { d.addEventListener('click', () => vscode.postMessage({ type: 'reveal', cells: d.getAttribute('data-cells').split(',') })); }
 const toRaw = document.querySelector('[data-to-raw]');
 if (toRaw) { toRaw.addEventListener('click', () => vscode.postMessage({ type: 'setMode', mode: 'raw' })); }
-const exportBtn = document.querySelector('[data-export]');
-if (exportBtn) { exportBtn.addEventListener('click', () => vscode.postMessage({ type: 'export' })); }
-const exportMdBtn = document.querySelector('[data-export-md]');
-if (exportMdBtn) { exportMdBtn.addEventListener('click', () => vscode.postMessage({ type: 'exportMd' })); }
 for (const b of document.querySelectorAll('[data-approve]')) { b.addEventListener('click', e => { e.stopPropagation(); vscode.postMessage({ type: 'approve', id: b.getAttribute('data-approve') }); }); }
 for (const b of document.querySelectorAll('[data-reject]')) { b.addEventListener('click', e => { e.stopPropagation(); vscode.postMessage({ type: 'reject', id: b.getAttribute('data-reject') }); }); }
-const askAi = document.querySelector('[data-ask-ai]');
-if (askAi) { askAi.addEventListener('click', () => vscode.postMessage({ type: 'askAi' })); }
-const sourceOpen = document.querySelector('[data-source-open]');
-if (sourceOpen) { sourceOpen.addEventListener('click', () => vscode.postMessage({ type: 'openSource' })); }
-const syncBtn = document.querySelector('[data-sync]');
-if (syncBtn) { syncBtn.addEventListener('click', () => vscode.postMessage({ type: 'sync' })); }
+for (const c of document.querySelectorAll('[data-source-close]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'closeSource' })); }
+for (const b of document.querySelectorAll('[data-sync]')) { b.addEventListener('click', () => vscode.postMessage({ type: 'sync' })); }
 const presentOpen = document.querySelector('[data-present-open]');
 if (presentOpen) { presentOpen.addEventListener('click', () => vscode.postMessage({ type: 'presentOpen' })); }
 for (const c of document.querySelectorAll('[data-present-close]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'presentClose' })); }
@@ -208,6 +234,21 @@ for (const s of document.querySelectorAll('[data-present-scope]')) { s.addEventL
 const presentCta = document.querySelector('[data-present-cta]');
 if (presentCta) { presentCta.addEventListener('click', () => vscode.postMessage({ type: 'presentCta' })); }
 for (const f of document.querySelectorAll('[data-fmt]')) { f.addEventListener('mousedown', e => { e.preventDefault(); document.execCommand(f.getAttribute('data-fmt'), false); }); }
+const seltb = document.querySelector('.seltoolbar');
+function placeSelToolbar() {
+	if (!seltb) { return; }
+	const sel = window.getSelection();
+	if (!sel || sel.isCollapsed || sel.rangeCount === 0) { seltb.style.display = 'none'; return; }
+	const range = sel.getRangeAt(0);
+	const node = range.commonAncestorContainer;
+	const host = (node.nodeType === 1 ? node : node.parentElement);
+	if (!host || !host.closest('[data-block]')) { seltb.style.display = 'none'; return; }
+	const rect = range.getBoundingClientRect();
+	seltb.style.display = 'flex';
+	seltb.style.top = Math.max(8, rect.top + window.scrollY - seltb.offsetHeight - 8) + 'px';
+	seltb.style.left = Math.max(8, rect.left + window.scrollX + rect.width / 2 - seltb.offsetWidth / 2) + 'px';
+}
+document.addEventListener('selectionchange', placeSelToolbar);
 const toRendered = document.querySelector('[data-to-rendered]');
 const rawArea = document.querySelector('textarea.raw');
 if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }
@@ -226,30 +267,28 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 
 	const isRendered = mode === 'rendered';
 
-	// Status pill + "Refresh from sources" are only meaningful for bound Living Documents.
+	// The comp's calm 48px bar carries only: brand/crumb + the sync pill + Present + avatar. The status
+	// pill IS the refresh affordance (click to re-derive from sources) - no separate Refresh/Download
+	// buttons (Download is covered by the Present & export modal; per-doc sync by the Sync-across pane).
 	const warn = (pending.length || dirty) ? 'warn' : '';
 	const livingControls = isLiving
-		? `<span class="pill ${warn}"><span class="dot"></span>${esc(status)}</span>`
+		? `<span class="pill ${warn}" data-refresh title="Refresh from sources"><span class="dot"></span>${esc(status)}</span>`
 		: '';
-	// Calm top-bar actions: Share + Download (the dev-format chrome -- Raw Markdown / HTML export --
-	// is demoted to the editor toolbar). In raw mode, offer the way back to the rendered view.
+	// In raw mode, offer the way back to the rendered view.
 	const rawToggleTop = mode === 'raw'
 		? `<button class="toggle" data-to-rendered>&#10003; Done editing source</button>`
 		: '';
 	const presentBtn = (doc && isRendered) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
-	const downloadBtn = (doc && isRendered) ? `<button class="toggle" data-export-md>&#8675; Download</button>` : '';
-	const refresh = isLiving && isRendered
-		? `<button class="btn" data-refresh>&#8635; Refresh from sources</button>`
-		: '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}${downloadBtn}${refresh}<span class="av">TS</span></div></div>`;
+		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 
-	// The editor toolbar (formatting + Ask AI), shown when reading/editing a Living Document.
-	const etoolbar = (isLiving && isRendered)
-		? `<div class="etoolbar"><div class="fmt">`
+	// Formatting lives in a floating toolbar shown only on a text selection (built below; positioned by
+	// the webview script). It is always in the DOM for a living doc but hidden until text is selected.
+	const selToolbar = (isLiving && isRendered)
+		? `<div class="seltoolbar">`
 		+ `<button class="fbtn" data-fmt="formatBlock" data-fmt-arg="&lt;h2&gt;">Heading</button>`
 		+ `<span class="fdiv"></span>`
 		+ `<button class="fbtn ic b" data-fmt="bold" title="Bold">B</button>`
@@ -257,11 +296,6 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		+ `<button class="fbtn ic u" data-fmt="underline" title="Underline">U</button>`
 		+ `<button class="fbtn ic" data-fmt="insertUnorderedList" title="List">&#9679;&#8202;&#9679;</button>`
 		+ `<button class="fbtn ic" data-fmt="formatBlock" data-fmt-arg="&lt;blockquote&gt;" title="Quote">&#10078;</button>`
-		+ `</div>`
-		+ `<button class="askai" data-ask-ai>&#10022; Ask AI</button>`
-		+ `<button class="fbtn" data-source-open title="Open the source beside this document">&#8646; Source</button>`
-		+ `<span class="espacer"></span>`
-		+ `<button class="rawmini" data-to-raw title="Edit raw Markdown">&lt;/&gt;</button>`
 		+ `</div>`
 		: '';
 
@@ -282,16 +316,39 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	} else if (!doc) {
 		body = `<div class="empty">No document loaded.</div>`;
 	} else if (isLiving) {
-		body = etoolbar + syncBar + renderDoc(doc, pending, recent, resolved);
+		const docHtml = renderDoc(doc, pending, recent, resolved);
+		body = syncBar + (input.sourcePeek
+			? renderSourcePeekLayout(input.sourcePeek, docHtml)
+			: docHtml);
 	} else {
 		body = `<div class="doc prose">${renderGenericMarkdown(doc.body)}</div>`;
 	}
 
 	const hint = (mode === 'rendered' && isLiving)
-		? `<div class="hint">Bound text is dotted-underlined &mdash; click a provenance dot to trace it back to the source. `
-		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar).</div>`
+		? `<div class="hint">Bound figures are highlighted in blue &mdash; click one (or a gutter dot) to trace it back to the source. `
+		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
+		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
-	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}${modal}<script>${SCRIPT}</script></body></html>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}${selToolbar}${modal}<script>${SCRIPT}</script></body></html>`;
+}
+
+// The in-surface source-peek layout: the styled source pane to the LEFT, a floating "Sync across"
+// circle on the divider, and the document to the RIGHT - all inside the one surface (no editor split).
+function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): string {
+	const rows = peek.rows.map(r =>
+		`<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td></tr>`).join('');
+	const refs = peek.referencedBy.length
+		? `<div class="sp-refs"><div class="sp-refs-h">REFERENCED BY &middot; ${peek.referencedBy.length} DOCUMENT${peek.referencedBy.length === 1 ? '' : 'S'}</div>`
+		+ peek.referencedBy.map(t => `<div class="sp-ref">&#9636; ${esc(t)}</div>`).join('') + `</div>`
+		: '';
+	const circle = peek.synced
+		? `<div class="synccircle done"><div class="sc-btn">&#10003;</div><span class="sc-lbl">${peek.syncedCount} change${peek.syncedCount === 1 ? '' : 's'} synced</span></div>`
+		: `<div class="synccircle"><button class="sc-btn" data-sync title="Apply your source edits to the report">&#10227;</button><span class="sc-lbl">Sync across &rarr;</span></div>`;
+	const pane = `<div class="srcpane"><div class="sp-head"><span class="sp-name">&#8862; ${esc(peek.source)}</span>`
+		+ `<span class="sp-meta">source &middot; ${peek.rows.length} bound</span>`
+		+ `<button class="sp-x" data-source-close title="Close source">&#10005;</button></div>`
+		+ `<div class="sp-body"><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
+	return `<div class="peekwrap">${pane}${circle}<div class="docside">${docHtml}</div></div>`;
 }
 
 // The Present & export modal: a destination list (Google Docs / Sheets / Word / Excel / hosted page)
@@ -406,6 +463,24 @@ function renderBlockMarkdown(block: ILivingDocBlock, resolved: ReadonlyMap<strin
 	}
 }
 
+// A bound paragraph: render its Markdown, but wrap each resolved figure in a `.bound` span (the comp's
+// blue dotted-underline highlight) so the reader can see exactly which words are source-bound. Each
+// figure is tokenized BEFORE Markdown rendering (so any formatting around it survives) and the token is
+// swapped for the highlighted span afterwards -- safe against the sanitizing Markdown renderer.
+function renderBoundParagraph(block: ILivingDocBlock, resolved: ReadonlyMap<string, string>): string {
+	const SEP = '\u0001';
+	const tokenized = reconcileBindLinks(block.text, resolved).replace(BIND_LINK_RE, (_m, value, key) => `${SEP}${key}${SEP}${value}${SEP}`);
+	const rendered = renderMarkdown({ value: tokenized });
+	let html: string;
+	try {
+		html = rendered.element.innerHTML;
+	} finally {
+		rendered.dispose();
+	}
+	const tokenRe = new RegExp(`${SEP}([^${SEP}]+)${SEP}([^${SEP}]*)${SEP}`, 'g');
+	return html.replace(tokenRe, (_m, key, value) => `<span class="bound" data-cells="${key}" data-prov>${value}</span>`);
+}
+
 function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>, resolved: ReadonlyMap<string, string>): string {
 	const parts: string[] = [`<div class="docwrap">`,
 		`<div class="docfull"><h1 class="title">${esc(doc.title)}</h1><div class="subtitle">${esc(doc.subtitle)}</div></div>`];
@@ -439,9 +514,13 @@ function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], recent:
 
 		if (bound) {
 			// A bound block is driven by its sources: a blue gutter dot, rendered Markdown with the
-			// resolved values inline, and hover/click reveals provenance. Not hand-editable.
+			// resolved values inline, and hover/click reveals provenance. Not hand-editable. Bound prose
+			// additionally highlights each figure inline (the comp's blue underline); tables stay plain.
+			const inner = block.type === 'paragraph'
+				? renderBoundParagraph(block, resolved)
+				: renderBlockMarkdown(block, resolved);
 			parts.push(gutterCell(`<span class="pdot${isRecent ? ' warn' : ''}" data-cells="${cells}" data-prov title="Bound to source"></span>`, false),
-				`<div class="pcell${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${renderBlockMarkdown(block, resolved)}</div>`);
+				`<div class="pcell${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${inner}</div>`);
 			continue;
 		}
 

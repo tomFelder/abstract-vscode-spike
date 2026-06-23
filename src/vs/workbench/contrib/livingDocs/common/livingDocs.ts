@@ -32,6 +32,8 @@ export interface ILivingDocSummary {
 	readonly isLiving: boolean;
 	/** The distinct source kinds (file | api | mcp) the document binds to, for the row chips. */
 	readonly sourceKinds: readonly SourceKind[];
+	/** The document's binding sources (e.g. "metrics.csv", "crm.api"), for the tree-rail Sources folder. */
+	readonly sources: readonly string[];
 	/** Human label for when the document was last synced, e.g. "Week 24" (empty for plain Markdown). */
 	readonly lastSynced: string;
 	/** Pending meaning-changes for this document (mirrors the Review rail count). */
@@ -64,6 +66,26 @@ export interface IFigureChange {
 	readonly key: string;
 	readonly old: string;
 	readonly next: string;
+}
+
+/** One bound key shown in the in-surface source-peek pane (the comp's "Sync across" source panel). */
+export interface ISourcePeekRow {
+	readonly key: string;
+	readonly value: string;
+	/** True when this key is the one the clicked provenance dot points at (highlighted in the pane). */
+	readonly selected: boolean;
+}
+
+/**
+ * The data behind the in-surface source-peek pane. The pane renders inside the one document surface
+ * (never a second editor group) - this is the v2 replacement for the SIDE_GROUP source open.
+ */
+export interface ISourcePeek {
+	/** The primary file source's name (e.g. "metrics.csv"). */
+	readonly source: string;
+	readonly rows: readonly ISourcePeekRow[];
+	/** Titles of living documents that also reference this source. */
+	readonly referencedBy: readonly string[];
 }
 
 /**
@@ -207,12 +229,14 @@ export interface ILivingDocsService {
 	approve(changeId: string): Promise<void>;
 	reject(changeId: string): void;
 
-	/** Reveal the source cells behind a block (provenance) for a given document. */
-	revealSource(resource: URI, cells: readonly string[]): Promise<void>;
-
 	// --- source-peek + "Sync across" (the comp's signature editing interaction) ---
-	/** Open the document's primary file source (e.g. its CSV) beside it, so it can be peeked and edited. */
-	openSourceBeside(resource: URI): Promise<void>;
+	/**
+	 * The in-surface source-peek data for a document: the bound keys + resolved values, with the cells
+	 * behind the clicked provenance dot marked `selected`, plus the documents that reference the source.
+	 * Returns `undefined` for a non-living / unloaded document. Pure read - opens NO editor group (the v2
+	 * replacement for the abrasive SIDE_GROUP source open; the pane renders inside the one document surface).
+	 */
+	getSourcePeek(resource: URI, cells: readonly string[]): ISourcePeek | undefined;
 	/** Re-derive this document's bound figures from its current sources, apply them, and return the old -> new diff. */
 	syncFromSources(resource: URI): Promise<readonly IFigureChange[]>;
 	/** The figure diff from the last syncFromSources for a document (for the editor's "synced" banner). */
