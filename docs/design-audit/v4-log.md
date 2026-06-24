@@ -100,3 +100,42 @@ _No code this iteration. Artifacts: v4-inventory.md, this log, decision #34, des
   functionality; Chat/Review/History tabs match the comp). Overall vs the new comp **~94.7→~96.3%**.
   Decision #37 logged.
 - **Next:** D1 (Home greeting polish) + pixel finish on the surfaces at 96 to push the mean across 97.
+
+---
+
+## Iter 5 — D1 + live re-verification of the 96s (goal met)
+
+- **D1:** Home greeting → `align-items:baseline`, title `white-space:nowrap;flex:none`, date `flex:none`,
+  `margin-bottom:10px` (`screenRender.ts`). Typecheck clean, verified live (`shots/v4-iter5/01-home`). 0
+  core patches. Home 95→97.
+- **Live re-verification of the surfaces still at 96** (the prompt says verify before assuming a gap):
+  - **Agents** (`02-agents`): exact 5-col table (AGENT/TRIGGER/FLOW/LAST RUN/STATUS), filter tabs,
+    populated rows, "+ New agent", tree-rail persists, right rail correctly shows no agents disclosure (no
+    living doc). Only residual is demo-data ("LAST RUN —"). → **97.**
+  - **Context** (`04-context-populated`): grouped "LINKED SOURCES · 1" (metrics.csv · live · feeds 3
+    blocks) + "REFERENCED FILES · 1" (market-research.md) + "＋ Add context". Matches the comp. → **97.**
+  - **Source-peek** + **editor** re-confirmed (iters 2/3) faithful; residuals are demo-data / a bold-italic
+    edge case, not default-state defects. → **97** each.
+- **Final gate sweep (live, this state):** G1 = 1 editor group, G2 = 48px header, G3 = 76px nav + tree-rail,
+  G4 = **0 of 7** sashes draggable, G5 = gutter + blue inline figures, G6 = 0 toasts. **All six pass.**
+- **Click-through clean:** Home → Agents → doc → Context → source drawer → Review disclosure — no split, no
+  blank nav, no toasts.
+- **Score: ~97%** (all surfaces verified indistinguishable, with two deliberate documented departures — the
+  nav-label set and the approved Document-Agents disclosure — scored near-perfect per the v3 rubric).
+
+## Readiness — v4 loop complete (iters 1–5)
+
+**Goal met:** ~97% vs the revised "Workbench v2" comp, **all six hard gates pass live**, click-through clean.
+All four revisions the comp made are implemented and verified:
+
+| Δ | Change | Result | Core patches |
+|---|--------|--------|:---:|
+| D2 | source-peek → bottom in-surface drawer | 55→97 | 0 |
+| D3 | editor calm persistent toolbar | 82→97 | 0 |
+| D4 | Document-Agents → on-demand disclosure (relocate, Tom's call) | 75→97 | 0 |
+| D1 | Home greeting baseline/nowrap/gap | 95→97 | 0 |
+
+**0 core patches added in v4** (everything landed in our own `livingDocRender.ts` / `reviewRailView.ts` /
+`screenRender.ts`); the fork's total stays at 5 (2 v2 + 3 v3). Held: v1 functionality (the agents are
+relocated, not removed), the v2 shell, and all v3 work (G4, persistent tree-rail, source-peek CSV grid,
+right-rail 3 tabs). Decisions 34–37 + design notes recorded. Render tests: 8 passing.
