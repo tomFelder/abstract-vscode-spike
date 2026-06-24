@@ -102,6 +102,34 @@ Each later iteration: build → verify live on a real folder (chrome-devtools; *
 write**) → re-check G1–G6 → update `07-decision-log` + `06-design-notes` + this doc + `docs/design-audit/r5-log.md`
 → commit ONE change → post before/after screenshots as a PR comment.
 
+## R1 build notes (de-risked iter 1)
+
+**Product semantics (Decision #39):** the open folder *is* the project — Home reflects this one folder
+(no multi-project dashboard); "New project" becomes **"Open folder…"**; the tree/Home show **all `.md`**
+with living docs **badged**.
+
+**The open-folder seam (likely 0 core patches).** The de-IDE work removed the palette/menu surfaces but not
+the commands. In the **web** build the plain `pickFolderAndOpen` (behind "Open Folder…") *throws* unless a
+simplified provider is mounted — so don't use it. Instead, from our own contrib (inject `IFileDialogService`
++ `IHostService`):
+```
+const uris = await fileDialogService.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
+if (uris && uris[0]) { await hostService.openWindow([{ folderUri: uris[0] }], { forceReuseWindow: true }); }
+```
+`showOpenDialog` (browser) calls `showDirectoryPicker()` → `htmlFileSystemProvider.registerDirectoryHandle`
+→ a real-disk-backed URI; `openWindow` reloads the workbench with it as the workspace. Same code path works
+on desktop (native dialog + native folder open). Surface it as a Home button + an empty-state button +
+rename the "New project" quick-start tile; folder-switch = the same action again.
+
+**Verification wrinkle:** the open action triggers a **native picker** automation cannot complete on either
+surface. So R1 verifies in two parts: (a) the **empty state** + the button existing/triggering the picker is
+fully drivable via chrome-devtools; (b) the actual folder *selection* + reload is the one **manual** step
+(click the picker), after which discovery/edit are drivable again. R2's folder-reflecting Home is fully
+drivable once a folder is open.
+
+**R2 service change (TDD):** broaden `listDocuments` to return **all `.md`** with a `isLiving` flag (today it
+filters to living-only) so the tree/Home can show plain docs badged. Unit-test the flag like the existing loop.
+
 ## Build / run (per [abstract-vscode-spike-build] memory)
 - `nvm use 24.15.0` → `npm run watch` (background) → `./scripts/code-web.sh <folder>` (http://localhost:8080).
 - Desktop parity / disk-proof: `./scripts/code.sh <folder>`.
