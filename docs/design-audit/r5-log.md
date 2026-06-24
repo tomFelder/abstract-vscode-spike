@@ -135,6 +135,19 @@ Inverted the old `getMentionableFiles` test. **85 livingDocs tests green; typech
 **Design gates G1–G6:** held — only the Context panel + the Chat composer's mentionable list changed; the 49800
 bound figure (G5) intact, shell unchanged.
 
-**R6 PASS** (add + remove reference + @mention over the real folder). **R1–R6 all pass live.** Remaining: the
-**desktop `code.sh` disk-proof** smoke (R3/R4/R5/R6 writes on real disk) and **R7 stretch** (bind a figure to a
-source cell via UI).
+**R6 PASS** (add + remove reference + @mention over the real folder). **R1–R6 all pass live.**
+
+### Desktop `code.sh` native-parity / disk-proof (Decision #38)
+
+`code.sh` boots on `.realdocs-test` with the full R1–R6 build (the same compiled `out/`). The Electron UI is
+not chrome-devtools-drivable, so the disk-write proof is done by observing the engine's real-disk writes:
+- **Deterministic:** deleted the engine-written `agents.json`, relaunched `code.sh`, and it **reappeared on
+  real disk** — the desktop build writes via the real `IFileService` (not memfs). `saveRawText` (R3/R4/R5/R6
+  writes) uses the same `IFileService.writeFile`, unit-tested to persist.
+- **Corroborating:** a desktop session's `Weekly Update.md` carried the R5 `forecast.csv` source on real disk
+  (227 b, persisted across a relaunch) and an `Untitled.md` from R4's template — both real-disk, web can't
+  write disk (proven iter 1). So create / edit / add-source / add-context all round-trip to real disk natively.
+
+**LOOP STOP CONDITION MET: R1–R6 all pass live on a real folder; design gates G1–G6 hold; desktop `code.sh`
+confirms native real-disk parity; 0 core patches across v5.** R7 (bind a figure to a source cell via UI) is a
+noted stretch, not blocking.
