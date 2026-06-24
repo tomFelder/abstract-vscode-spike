@@ -177,3 +177,12 @@ to a guess:
   the whole toolbar until selection. The persistent toolbar reads as a familiar document app; the floating
   one read as a novelty. Wiring stayed `execCommand` via the generic `[data-fmt]` handler (now honouring
   `data-fmt-arg`).
+- **(v5 iter 1) The engine was already "real"; the missing piece is the *on-ramp*, not the plumbing.** Live
+  on a real folder, the tree-rail listed the real docs/sources and a bound figure resolved to the real CSV
+  value — discovery, source-read, create and save all run through `IFileService` already. What's absent is a
+  way *into* a folder from the calm shell: the de-IDE work (G4) stripped the menubar/Explorer/palette that
+  normally carry "Open Folder", so there is no on-ramp at all. The Home screen meanwhile still shows
+  hardcoded demo projects. So v5 is mostly **surfacing existing real capability** (an Open-folder action, a
+  Home that reflects the folder, add-source/add-context affordances) rather than building a data layer — the
+  inverse of the usual "UI exists, wire it up" shape. The one true plumbing gap is verification: `code-web`
+  writes to memfs, so disk-persistence is proven on the desktop `code.sh` build (Decision #38).
