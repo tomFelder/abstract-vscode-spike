@@ -637,10 +637,38 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'no edits queued without a model');
 	});
 
-	test('getMentionableFiles lists the document\'s linked sources and context files', async () => {
+	test('getMentionableFiles resolves real folder files (md/csv/json), not just frontmatter-declared ones', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);
-		assert.deepStrictEqual([...service.getMentionableFiles(WEEKLY)].sort(), ['market-research.md', 'metrics.csv']);
+		// Team Notes.md is a real folder file but NOT a declared source/context of WEEKLY - it must still be
+		// mentionable (R6). Lock sidecars are excluded.
+		assert.deepStrictEqual(
+			[...service.getMentionableFiles(WEEKLY)].sort(),
+			['Team Notes.md', 'market-research.md', 'metrics.csv'],
+			'declared sources/context PLUS the other real folder documents',
+		);
+	});
+
+	test('addContextFile references a real folder file in the context frontmatter (prose + sources untouched), and removeContextFile clears it', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		await service.addContextFile(WEEKLY, 'Team Notes.md');
+		assert.ok(service.getDoc(WEEKLY)!.context.includes('Team Notes.md'), 'reference added to the in-memory doc');
+		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
+		assert.ok(/context:[\s\S]*Team Notes\.md/.test(onDisk), 'persisted into the context frontmatter on disk');
+		assert.deepStrictEqual(service.getDoc(WEEKLY)!.sources, ['metrics.csv'], 'sources list untouched');
+		assert.ok(onDisk.includes('Growth remained steady this week.'), 'prose untouched');
+
+		await service.removeContextFile(WEEKLY, 'market-research.md');
+		assert.ok(!service.getDoc(WEEKLY)!.context.includes('market-research.md'), 'reference removed');
+	});
+
+	test('getContextCandidates lists folder files not already referenced or bound (and excludes the doc + system files)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // sources: metrics.csv, context: market-research.md; bootstraps a lock
+		// Team Notes.md is the only other real document not already bound/referenced.
+		assert.deepStrictEqual([...await service.getContextCandidates(WEEKLY)].sort(), ['Team Notes.md'], 'folder files minus self, bound source, referenced context, and lock sidecars');
 	});
 
 	test('runSkillCheck strategy surfaces a model verdict against the decision stack', async () => {

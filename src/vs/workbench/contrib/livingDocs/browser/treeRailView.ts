@@ -43,8 +43,10 @@ export class TreeRailView extends ViewPane {
 	private _query = '';
 	// Context-tab "Add context" composer state, kept across re-renders (onDidChange re-renders the rail).
 	private _ctxAdding = false;
-	private _ctxKind: AddedContextKind = 'pasted';
+	// 'file' references a real folder file (frontmatter context, R6); the others are lock context items.
+	private _ctxKind: 'file' | AddedContextKind = 'file';
 	private _ctxDraft = '';
+	private _ctxFileCandidates: readonly string[] = [];
 	// Context-tab "Add source" picker state (R5): folder data files offered when the picker is open.
 	private _srcAdding = false;
 	private _srcCandidates: readonly string[] = [];
@@ -164,13 +166,17 @@ export class TreeRailView extends ViewPane {
 				const row = append(panel, $('div.rail-item'));
 				append(row, $('span.rail-item-label')).textContent = ci.name;
 				if (ci.detail) { append(row, $('span.rail-item-detail')).textContent = ci.detail; }
-				// Each linked source carries an unbind (x) - removing it rewrites the frontmatter (R5).
-				if (isLinkedSources) {
+				// Linked sources (R5) and referenced files (R6) carry an unbind (x) - it rewrites the frontmatter.
+				const unbind = isLinkedSources ? 'source' : (ci.kind === 'reference' ? 'reference' : undefined);
+				if (unbind) {
 					const name = ci.name;
 					const remove = append(row, $('button.rail-srcremove')) as HTMLButtonElement;
 					remove.textContent = '\u00D7';
-					remove.title = 'Remove source';
-					this._renderDisposables.add(addDisposableListener(remove, 'click', e => { e.stopPropagation(); void this._livingDocs.removeSource(resource, name); }));
+					remove.title = unbind === 'source' ? 'Remove source' : 'Remove reference';
+					this._renderDisposables.add(addDisposableListener(remove, 'click', e => {
+						e.stopPropagation();
+						void (unbind === 'source' ? this._livingDocs.removeSource(resource, name) : this._livingDocs.removeContextFile(resource, name));
+					}));
 				}
 			}
 			// The "+ Add source" picker sits under the Linked sources group (or stands alone if there are none yet).
@@ -220,12 +226,17 @@ export class TreeRailView extends ViewPane {
 		if (!this._ctxAdding) {
 			const add = append(panel, $('button.rail-addctx')) as HTMLButtonElement;
 			add.textContent = '\uFF0B Add context';
-			this._renderDisposables.add(addDisposableListener(add, 'click', () => { this._ctxAdding = true; void this._render(); }));
+			this._renderDisposables.add(addDisposableListener(add, 'click', async () => {
+				this._ctxAdding = true;
+				this._ctxFileCandidates = await this._livingDocs.getContextCandidates(resource);
+				await this._render();
+			}));
 			return;
 		}
 
 		const form = append(panel, $('div.rail-addctx-form'));
-		const kinds: { kind: AddedContextKind; label: string }[] = [
+		const kinds: { kind: 'file' | AddedContextKind; label: string }[] = [
+			{ kind: 'file', label: 'File' },
 			{ kind: 'pasted', label: 'Pasted text' },
 			{ kind: 'image', label: 'Image' },
 			{ kind: 'knowledge', label: 'Company knowledge' },
@@ -234,7 +245,32 @@ export class TreeRailView extends ViewPane {
 		for (const k of kinds) {
 			const chip = append(chips, $(`button.rail-addctx-chip${this._ctxKind === k.kind ? '.active' : ''}`)) as HTMLButtonElement;
 			chip.textContent = k.label;
-			this._renderDisposables.add(addDisposableListener(chip, 'click', () => { this._ctxKind = k.kind; void this._render(); }));
+			this._renderDisposables.add(addDisposableListener(chip, 'click', async () => {
+				this._ctxKind = k.kind;
+				if (k.kind === 'file') { this._ctxFileCandidates = await this._livingDocs.getContextCandidates(resource); }
+				await this._render();
+			}));
+		}
+
+		// File kind (R6): reference a real folder file - a picker of candidates writes the context frontmatter.
+		if (this._ctxKind === 'file') {
+			if (!this._ctxFileCandidates.length) {
+				append(form, $('div.rail-empty')).textContent = 'No more files in this folder to reference.';
+			}
+			for (const cand of this._ctxFileCandidates) {
+				const pick = append(form, $('button.rail-srccand')) as HTMLButtonElement;
+				append(pick, $('span.rail-item-glyph')).textContent = '\u25A3';
+				append(pick, $('span')).textContent = cand;
+				this._renderDisposables.add(addDisposableListener(pick, 'click', async () => {
+					this._ctxAdding = false;
+					await this._livingDocs.addContextFile(resource, cand);
+				}));
+			}
+			const cancelFile = append(form, $('button.rail-addctx-cancel')) as HTMLButtonElement;
+			cancelFile.textContent = 'Cancel';
+			cancelFile.style.marginTop = '8px';
+			this._renderDisposables.add(addDisposableListener(cancelFile, 'click', () => { this._ctxAdding = false; void this._render(); }));
+			return;
 		}
 
 		const input = append(form, $('textarea.rail-addctx-input')) as HTMLTextAreaElement;
@@ -247,10 +283,11 @@ export class TreeRailView extends ViewPane {
 		submit.textContent = 'Add';
 		const doAdd = async () => {
 			const text = this._ctxDraft.trim();
-			if (!text) { return; }
+			if (!text || this._ctxKind === 'file') { return; }
+			const kind = this._ctxKind;
 			this._ctxAdding = false;
 			this._ctxDraft = '';
-			await this._livingDocs.addContext(resource, this._ctxKind, text);
+			await this._livingDocs.addContext(resource, kind, text);
 		};
 		this._renderDisposables.add(addDisposableListener(submit, 'click', () => void doAdd()));
 		const cancel = append(actions, $('button.rail-addctx-cancel')) as HTMLButtonElement;

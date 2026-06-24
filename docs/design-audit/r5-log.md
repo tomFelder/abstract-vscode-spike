@@ -105,3 +105,36 @@ bound figure (G5) intact, shell unchanged, no toasts.
 
 **R5 PASS** (add + remove live). **Next:** R6 — add a context *file* via UI + @mention resolving real folder
 files (the Add-context form is currently text-only; @mention resolves only frontmatter-declared files today).
+
+## Iteration 4 — R6 (reference a file via UI + @mention over the folder)
+
+**Decision #41:** (a) reference-a-file = a **File** kind in the existing "＋ Add context" form (picker of folder
+md/csv/json → writes `context:` frontmatter); (b) `@mention` broadened from frontmatter-declared to **all real
+folder docs** (cached on the doc state at load; `_readContext` already reads any relative path).
+
+**Built (TDD; 0 core patches):**
+- Generalized `withFrontmatterSource` → `withFrontmatterList(text, 'sources'|'context', value, add)` (wrapper kept).
+- Service: `addContextFile`/`removeContextFile` (→ `_rewriteList` → `saveRawText`), `getContextCandidates`
+  (folder files minus bound/referenced), `IDocState.folderFiles` (via `_scanFolderDocs`, excludes
+  self/lock/agents/generated), and `getMentionableFiles` now unions declared sources/context + folder files.
+- UI: `treeRailView` Add-context form gains a **File** kind with a candidate picker; × unbind on Referenced files.
+
+**TDD:** 1 markdown test (`withFrontmatterList` context key) + 3 service tests (mentionables include folder
+files / addContextFile persists context frontmatter & leaves prose+sources / getContextCandidates filtering).
+Inverted the old `getMentionableFiles` test. **85 livingDocs tests green; typecheck clean.**
+
+**Verified live** (`code-web` + chrome-devtools, `.realdocs-test` with `metrics.csv`+`forecast.csv`+`Team Notes.md`):
+
+| Check | Result |
+|---|---|
+| ＋ Add context → File kind picker | ✅ lists `forecast.csv` + `Team Notes.md` (metrics.csv excluded as bound source). |
+| Reference a real file | ✅ picking `Team Notes.md` → "REFERENCED FILES · 1: Team Notes.md (current)" (context frontmatter, no hand-editing). |
+| Remove reference | ✅ × → Referenced files group cleared. |
+| @mention resolves real folder files | ✅ the Chat composer's @-chips show `@forecast.csv` / `@metrics.csv` / `@Team Notes.md` — `forecast.csv` is a folder file NOT declared in WEEKLY's frontmatter, yet mentionable (was declared-only before R6). |
+
+**Design gates G1–G6:** held — only the Context panel + the Chat composer's mentionable list changed; the 49800
+bound figure (G5) intact, shell unchanged.
+
+**R6 PASS** (add + remove reference + @mention over the real folder). **R1–R6 all pass live.** Remaining: the
+**desktop `code.sh` disk-proof** smoke (R3/R4/R5/R6 writes on real disk) and **R7 stretch** (bind a figure to a
+source cell via UI).
