@@ -56,10 +56,16 @@ an IndexedDB clear; webview-internal surfaces reached via the chrome-devtools a1
 | **Home** | 97 | **95** | D1 greeting align/nowrap/gap (rest of Home unchanged) |
 | **Document editor** | 97 | **82** | D3 — calm formatting toolbar absent (doc body itself still pixel-exact) |
 | **Right rail (Chat/Review/History)** | 96 | **75** | D4 — Document-Agents panel still in Review; comp drops it |
-| **Source-peek** | 96 | **55** | D2 — left split pane + floating circle; comp wants a bottom drawer |
+| **Source-peek** | 96 | ~~55~~ **96** | **D2 DONE (iter 2)** — now a bottom in-surface drawer (drag handle, 46px header, primary "Sync to report"); doc full-width, never split |
 
-**Overall vs the NEW comp: ~90% (90.1 mean).** Four surfaces dropped vs the new comp; the other eight are
-unchanged at their v3 scores. Target: **>=97%** with all six gates green and a clean live click-through.
+**Overall vs the NEW comp: ~93.5% (was 90.1 at iter 1).** D2 closed; the two open surfaces are the editor
+toolbar (82, D3) and the right-rail Document-Agents panel (75, D4 — gated on decision #34). Target:
+**>=97%** with all six gates green and a clean live click-through.
+
+> _Source-peek residuals (both demo-data, not fidelity defects, consistent with v3's stance): the header
+> meta shows "source · N rows" without the comp's mock "changed 2m ago" (no real source-change timestamp);
+> the synced chip shows the real applied count ("✓ 0 synced" when already up to date) vs the comp's mock
+> "✓ 3 synced". Chip styling + swap behaviour match the comp._
 
 ## Hard gates — live status (pristine merged-v3 state, v4 iter 1)
 
@@ -74,12 +80,12 @@ unchanged at their v3 scores. Target: **>=97%** with all six gates green and a c
 
 ## Ranked v4 gap backlog (impact = score-gap × visual centrality; do one per iteration)
 
-1. **D2 — Source-peek → bottom in-surface drawer (55).** *Highest impact, no functional tension.* Re-host
-   the source-peek surface (CSV grid + bound figures + referenced-by — all already built and correct) inside
-   a bottom drawer overlay (52% height, 34×4 drag handle, 46px header with `⊞ metrics.csv` + "source · 12
-   rows · changed 2m ago" + filled primary **"⟳ Sync to report"** / "✓ 3 synced" chip + ✕). Remove the
-   floating ⟳ circle and the left-split layout; the document stays full-width centered beneath. Keeps G1/G5
-   honest ("never splits the editor"). **→ Iteration 2.**
+1. ~~**D2 — Source-peek → bottom in-surface drawer (55).**~~ **DONE (iter 2).** Re-hosted the source surface
+   (CSV grid + bound figures + referenced-by) as a fixed bottom drawer overlay (52% height, 34×4 drag
+   handle, 46px header with `⊞ metrics.csv` + "source · N rows" + filled primary **"⟳ Sync to report"** /
+   "✓ N synced" chip + ✕). Removed the floating ⟳ circle and the left-split (`.peekwrap`/`.srcpane`); the
+   document stays full-width centered beneath — "never splits the editor". **0 core patches** (own
+   `livingDocRender.ts`). Verified live + all six gates re-checked green. Source-peek **55→96**.
 2. **D3 — Editor calm toolbar (82).** Add the comp's calm formatting toolbar above the doc column (`Heading
    2 ▾` borderless + B/I/list + 18px dividers + right-aligned green-dot "● Saved · v14"; **no**
    Link-to-source / Run-skill / History). Confirm first whether the toolbar omission was deliberate (note in

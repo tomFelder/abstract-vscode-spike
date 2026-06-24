@@ -160,34 +160,33 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .syncbar .sb-btn{border:none;border-radius:7px;padding:7px 12px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer}
 .syncbar .sb-btn:hover{background:oklch(0.5 0.13 255)}
 .syncbar .sb-diff{font:500 11px/1.5 'JetBrains Mono',ui-monospace,monospace}
-/* In-surface source-peek pane (the comp's "Sync across" source panel) - LEFT of the doc, one surface. */
-.peekwrap{display:flex;align-items:stretch;position:relative;min-height:0}
-.peekwrap .docside{flex:1;min-width:0;overflow-y:auto}
-.srcpane{width:46%;flex:none;border-right:1px solid #e9eaee;background:#fcfcfd;display:flex;flex-direction:column;min-width:0;overflow-y:auto}
-.srcpane .sp-head{flex:none;display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid #eef0f3;background:#f6f7f9}
-.srcpane .sp-name{font:500 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f}
-.srcpane .sp-meta{font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2}
-.srcpane .sp-x{margin-left:auto;border:none;background:none;color:#9aa0aa;font-size:14px;cursor:pointer;padding:4px 6px}
-.srcpane .sp-x:hover{color:#52575f}
-.srcpane .sp-body{flex:1;overflow:auto;padding:14px 16px}
-.srcpane table{width:100%;border-collapse:collapse;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace}
-.srcpane th{text-align:left;padding:7px 9px;font-weight:600;color:#a3a8b2;border-bottom:1px solid #e9eaee}
-.srcpane td{padding:6px 9px;border-bottom:1px solid #f4f5f7;color:#2c2f36}
-.srcpane tr.sel td{background:#fef6e9;box-shadow:inset 2px 0 0 oklch(0.66 0.16 45);font-weight:600}
-.srcpane .sp-sec{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;text-transform:uppercase;margin:2px 0 7px}
-.srcpane .sp-sec:not(:first-child){margin-top:16px}
-.srcpane table.sp-grid{font-size:11.5px}
-.srcpane table.sp-grid th,.srcpane table.sp-grid td{padding:5px 7px;white-space:nowrap}
-.srcpane .sp-refs{margin-top:18px;border-top:1px solid #eef0f3;padding-top:14px}
-.srcpane .sp-refs-h{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:10px}
-.srcpane .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
-/* Sits on the divider, but BELOW the source-pane header so it never overlaps the close button. */
-.synccircle{position:absolute;top:64px;left:46%;transform:translateX(-50%);z-index:20;display:flex;flex-direction:column;align-items:center;gap:6px}
-.synccircle .sc-btn{width:42px;height:42px;border-radius:50%;border:1px solid #d8e0fb;background:#fff;box-shadow:0 4px 14px rgba(40,70,160,.18);color:oklch(0.5 0.13 255);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center}
-.synccircle .sc-btn:hover{background:#f4f6ff}
-.synccircle .sc-lbl{font:600 10px/1 system-ui;color:#5b6dc4;background:#fff;border:1px solid #e0e6ff;border-radius:999px;padding:4px 8px;box-shadow:0 2px 6px rgba(40,70,160,.1);white-space:nowrap}
-.synccircle.done .sc-btn{border-color:#c5e7d0;background:#e7f6ec;color:#1f7a44;cursor:default}
-.synccircle.done .sc-lbl{color:#1f7a44;border-color:#c5e7d0}
+/* In-surface source drawer (the comp's "Workbench v2" bottom overlay): slides up over the bottom of the
+ * doc, full-width, so the document is NEVER split into a side-by-side pane. The sync action is the drawer
+ * header's primary button (no floating divider circle). Fixed to the webview viewport so it overlays. */
+.srcdrawer{position:fixed;left:0;right:0;bottom:0;height:52%;z-index:25;display:flex;flex-direction:column;background:#fff;border-top:1px solid #e6e8ed;box-shadow:0 -14px 36px rgba(20,30,60,.12)}
+.srcdrawer .sd-grip{flex:none;display:flex;justify-content:center;padding:7px 0 0}
+.srcdrawer .sd-grip span{width:34px;height:4px;border-radius:999px;background:#e1e4ea}
+.srcdrawer .sd-head{height:46px;flex:none;display:flex;align-items:center;gap:10px;padding:0 18px;border-bottom:1px solid #f1f2f5}
+.srcdrawer .sd-name{font:600 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f;flex:none}
+.srcdrawer .sd-meta{font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srcdrawer .sd-actions{flex:none;display:flex;align-items:center;gap:8px}
+.srcdrawer .sd-sync{display:flex;align-items:center;gap:6px;border:none;border-radius:8px;padding:8px 12px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer;white-space:nowrap}
+.srcdrawer .sd-sync:hover{background:oklch(0.5 0.13 255)}
+.srcdrawer .sd-synced{display:flex;align-items:center;gap:6px;border:1px solid #c5e7d0;background:#e7f6ec;border-radius:8px;padding:8px 12px;font:600 12px/1 system-ui;color:#1f7a44;white-space:nowrap}
+.srcdrawer .sd-x{border:none;background:none;color:#9aa0aa;font-size:15px;cursor:pointer;padding:4px 6px}
+.srcdrawer .sd-x:hover{color:#52575f}
+.srcdrawer .sd-body{flex:1;overflow:auto;padding:16px 18px}
+.srcdrawer table{width:100%;border-collapse:collapse;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace}
+.srcdrawer th{text-align:left;padding:7px 9px;font-weight:600;color:#a3a8b2;border-bottom:1px solid #e9eaee}
+.srcdrawer td{padding:6px 9px;border-bottom:1px solid #f4f5f7;color:#2c2f36}
+.srcdrawer tr.sel td{background:#fef6e9;box-shadow:inset 2px 0 0 oklch(0.66 0.16 45);font-weight:600}
+.srcdrawer .sp-sec{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;text-transform:uppercase;margin:2px 0 7px}
+.srcdrawer .sp-sec:not(:first-child){margin-top:16px}
+.srcdrawer table.sp-grid{font-size:11.5px}
+.srcdrawer table.sp-grid th,.srcdrawer table.sp-grid td{padding:5px 7px;white-space:nowrap}
+.srcdrawer .sp-refs{margin-top:18px;border-top:1px solid #eef0f3;padding-top:14px}
+.srcdrawer .sp-refs-h{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:10px}
+.srcdrawer .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
 .prose{max-width:720px;margin:0 auto;padding:24px 40px 80px;font:400 15px/1.7 system-ui;color:#2a2a31}
 .prose h1{font:600 27px/1.25 system-ui;letter-spacing:-.01em;color:#15151a;margin:24px 0 12px}
 .prose h2{font:600 20px/1.3 system-ui;color:#26262d;margin:26px 0 10px}
@@ -336,8 +335,9 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}${selToolbar}${modal}<script>${SCRIPT}</script></body></html>`;
 }
 
-// The in-surface source-peek layout: the styled source pane to the LEFT, a floating "Sync across"
-// circle on the divider, and the document to the RIGHT - all inside the one surface (no editor split).
+// The in-surface source-peek layout (comp "Workbench v2"): the document stays FULL-WIDTH and centred, and
+// the source slides up as a bottom drawer overlay - it never splits the editor into a side-by-side pane.
+// The sync action is the drawer header's primary button (no floating "Sync across" circle on a divider).
 function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): string {
 	const rows = peek.rows.map(r =>
 		`<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td></tr>`).join('');
@@ -354,14 +354,18 @@ function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): strin
 		? `<div class="sp-refs"><div class="sp-refs-h">REFERENCED BY &middot; ${peek.referencedBy.length} DOCUMENT${peek.referencedBy.length === 1 ? '' : 'S'}</div>`
 		+ peek.referencedBy.map(t => `<div class="sp-ref">&#9636; ${esc(t)}</div>`).join('') + `</div>`
 		: '';
-	const circle = peek.synced
-		? `<div class="synccircle done"><div class="sc-btn">&#10003;</div><span class="sc-lbl">${peek.syncedCount} change${peek.syncedCount === 1 ? '' : 's'} synced</span></div>`
-		: `<div class="synccircle"><button class="sc-btn" data-sync title="Apply your source edits to the report">&#10227;</button><span class="sc-lbl">Sync across &rarr;</span></div>`;
-	const pane = `<div class="srcpane"><div class="sp-head"><span class="sp-name">&#8862; ${esc(peek.source)}</span>`
-		+ `<span class="sp-meta">source &middot; ${peek.rows.length} bound</span>`
-		+ `<button class="sp-x" data-source-close title="Close source">&#10005;</button></div>`
-		+ `<div class="sp-body">${gridHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
-	return `<div class="peekwrap">${pane}${circle}<div class="docside">${docHtml}</div></div>`;
+	// Header action: the primary "Sync to report" button, swapped for a "N synced" chip after a sync.
+	const action = peek.synced
+		? `<span class="sd-synced">&#10003; ${peek.syncedCount} synced</span>`
+		: `<button class="sd-sync" data-sync title="Apply the changed cells to the report and show the diff"><span>&#10227;</span>Sync to report</button>`;
+	const rowCount = grid ? grid.rows.length : peek.rows.length;
+	const drawer = `<div class="srcdrawer">`
+		+ `<div class="sd-grip"><span></span></div>`
+		+ `<div class="sd-head"><span class="sd-name">&#8862; ${esc(peek.source)}</span>`
+		+ `<span class="sd-meta">source &middot; ${rowCount} row${rowCount === 1 ? '' : 's'}</span>`
+		+ `<span class="sd-actions">${action}<button class="sd-x" data-source-close title="Close source">&#10005;</button></span></div>`
+		+ `<div class="sd-body">${gridHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
+	return docHtml + drawer;
 }
 
 // The Present & export modal: a destination list (Google Docs / Sheets / Word / Excel / hosted page)

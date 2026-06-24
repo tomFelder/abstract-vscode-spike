@@ -28,3 +28,27 @@ Target: **>=97% vs the NEW comp** "Living Documents - Workbench v2.dc.html" (Des
   source-peek 55). Ranked backlog set; **iter 2 = D2 (source-peek bottom drawer)**.
 
 _No code this iteration. Artifacts: v4-inventory.md, this log, decision #34, design note, comp snapshots._
+
+---
+
+## Iter 2 — D2: source-peek → bottom in-surface drawer
+
+- **Built** the comp's bottom source drawer in `livingDocRender.ts` (CSS `.srcdrawer` + rewritten
+  `renderSourcePeekLayout`): document stays **full-width centred**; the source slides up as a fixed bottom
+  overlay (52% height, 34×4 drag-handle pill, 46px header) — **never splits the editor**. The sync action
+  moved into the header as the filled primary **"⟳ Sync to report"** button, swapping to a green **"✓ N
+  synced"** chip after a sync. Removed the old left split pane (`.peekwrap`/`.srcpane`) and the floating
+  "Sync across" circle (`.synccircle`). CSV grid + latest-row highlight + bound-figure list + referenced-by
+  all preserved.
+- **TDD:** rewrote the render test to spec the drawer (grip + header sync button + close, no left pane, no
+  circle) and added a synced-chip test; both pass. Full render suite **7 passing**, no regressions.
+  `typecheck-client` clean. (Pure presentation — no service/logic change, so `buildSourceGrid`/`getSourcePeek`
+  untouched.)
+- **Verified live** (chrome-devtools, a11y-click on the `+18%` bound figure): drawer renders to spec
+  (`shots/v4-iter2/01-drawer`); clicking "Sync to report" swaps to the "✓ synced" chip + the top-bar pill
+  reads "Synced" (`shots/v4-iter2/02-synced`).
+- **All six gates re-checked with the drawer open:** G1 = 1 editor group (the drawer is in-webview, not a
+  2nd group), G2 = calm 48px header intact, G3 = 76px nav + tree-rail, G4 = 0/7 sashes draggable, G5 =
+  gutter dots + blue inline figures, G6 = 0 toasts. **No regressions; 0 core patches.**
+- **Score:** source-peek **55→96**; overall vs the new comp **~90→~93.5%**. Decision #35 logged.
+- **Next:** iter 3 = D3 (editor calm toolbar).

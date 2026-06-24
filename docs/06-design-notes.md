@@ -162,3 +162,10 @@ to a guess:
   de-emphasised out of the always-on rail. (4) the **Home greeting** aligns to the baseline. Read together:
   the editor should feel like one quiet writing surface — source and agents are *traced to on demand*, not
   parked open beside the prose. That is the bar for v4 (>=97% vs this comp).
+- **(v4 iter 2) The source drawer is `position:fixed` to the webview viewport, not an in-flow pane.** The
+  v3 layout flexed a left pane and the document side-by-side (`.peekwrap`), so opening source visibly
+  squeezed the prose. The v2 comp wants the document to stay put and the source to *overlay* the bottom. The
+  clean implementation is a fixed-position drawer (`left:0;right:0;bottom:0;height:52%;z-index:25`) pinned
+  to the bottom of the webview viewport — the document renders full-width exactly as it does with no source
+  open, and the drawer floats above it. The sync affordance lives in the drawer header (one filled primary
+  button), not as a floating circle on a divider that no longer exists. Same data, calmer hosting.
