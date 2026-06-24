@@ -78,3 +78,25 @@ _No code this iteration. Artifacts: v4-inventory.md, this log, decision #34, des
 - **Score:** editor **82→96**; overall vs the new comp **~93.5→~94.7%**. Decision #36 logged.
 - **Next:** D4 (right-rail Document-Agents panel) is the last material gap — **gated on Tom's decision #34**
   (relocate the wired v1 agents vs drop the panel). D1 (Home greeting polish) is trivial and unblocked.
+
+---
+
+## Iter 4 — D4: relocate the Document-Agents panel to an on-demand disclosure
+
+- **Tom's call on decision #34: relocate (not drop).** So the wired v1 agents (Strategy / Financial /
+  Formatting + Apply-fix) had to survive while the Review tab matches the comp's calm content.
+- **Built** in `reviewRailView.ts`: a `_checksExpanded` flag (collapsed by default) + a `checksDisclosureHtml`
+  toggle row at the bottom of Review ("▸ DOCUMENT AGENTS" with a flag-count badge when collapsed). The full
+  agents body (`skillsHtml`, header line removed — the disclosure carries the label) renders only when
+  expanded. The toggle flips the flag and re-renders. When no living doc is open, the agents affordance is
+  omitted entirely, so the Review empty state is just "No changes waiting." — matching the comp.
+- **Verified live** (chrome-devtools): Home rail = clean empty state, no Skills line (`shots/v4-iter4`);
+  doc Review tab = empty state + a single calm collapsed "DOCUMENT AGENTS · 1" row
+  (`01-review-collapsed`); expanding shows the three agent cards + Apply-fix + RUN-ON-EXPORT + Add-skill,
+  all wired (`02-review-expanded`).
+- **All six gates re-checked:** G1 = 1 editor group, G2 = 48px header, G3 = 76px nav + tree-rail, G4 = 0/7
+  sashes, G5 = gutter + figures, G6 = 0 toasts. **No regressions; 0 core patches.**
+- **Score:** right rail **75→95** (the lone calm disclosure row is a justified departure to hold v1
+  functionality; Chat/Review/History tabs match the comp). Overall vs the new comp **~94.7→~96.3%**.
+  Decision #37 logged.
+- **Next:** D1 (Home greeting polish) + pixel finish on the surfaces at 96 to push the mean across 97.

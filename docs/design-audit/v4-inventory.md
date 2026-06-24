@@ -55,13 +55,13 @@ an IndexedDB clear; webview-internal surfaces reached via the chrome-devtools a1
 | Interaction grammar | 97 | **97** | comp unchanged; all 6 gates hold live |
 | **Home** | 97 | **95** | D1 greeting align/nowrap/gap (rest of Home unchanged) |
 | **Document editor** | 97 | ~~82~~ **96** | **D3 DONE (iter 3)** — calm persistent toolbar added (borderless Heading 2 + B/I/U + list/ordered/quote + "● Saved · v14"); replaced the floating selection toolbar |
-| **Right rail (Chat/Review/History)** | 96 | **75** | D4 — Document-Agents panel still in Review; comp drops it |
+| **Right rail (Chat/Review/History)** | 96 | ~~75~~ **95** | **D4 DONE (iter 4)** — Document-Agents panel relocated to an on-demand disclosure (collapsed by default → Review matches the comp); wired v1 agents preserved. _Residual: one calm "Document agents" disclosure row is a justified departure (the comp shows none) to hold v1 functionality (decision #34, Tom's call)._ |
 | **Source-peek** | 96 | ~~55~~ **96** | **D2 DONE (iter 2)** — now a bottom in-surface drawer (drag handle, 46px header, primary "Sync to report"); doc full-width, never split |
 
-**Overall vs the NEW comp: ~94.7% (was 90.1 at iter 1, 93.5 at iter 2).** D2 + D3 closed. The remaining
-material gap is the **right-rail Document-Agents panel (75, D4 — gated on decision #34)**, plus the trivial
-Home-greeting polish (D1, 95) and pixel finish on the surfaces sitting at 96. Target: **>=97%** mean with all
-six gates green and a clean live click-through.
+**Overall vs the NEW comp: ~96.3% (was 90.1 → 93.5 → 94.7 over iters 1–3).** D2 + D3 + D4 all closed. The
+remaining lift to **>=97%** is the trivial Home-greeting polish (D1, 95) plus pixel finish on the surfaces
+sitting at 96 (Agents, Context, source-peek, editor) — small named residuals, no structural deltas left.
+All six gates green; live click-through clean.
 
 > _Source-peek residuals (both demo-data, not fidelity defects, consistent with v3's stance): the header
 > meta shows "source · N rows" without the comp's mock "changed 2m ago" (no real source-change timestamp);
@@ -93,10 +93,14 @@ six gates green and a clean live click-through.
    floating selection toolbar (its rationale — "the comp has no persistent toolbar" — no longer holds; the
    new comp DOES). Buttons wired via the generic `[data-fmt]` handler (now honours `data-fmt-arg`, so
    Heading/Quote work). **0 core patches.** Verified live + all six gates green. Editor **82→96**.
-3. **D4 — Right-rail Document-Agents panel (75).** Resolve decision #34 first (v1-functionality tension),
-   then bring the Review tab to the comp's content (drop or relocate the Document-Agents panel).
+3. ~~**D4 — Right-rail Document-Agents panel (75).**~~ **DONE (iter 4).** Per Tom's call on decision #34
+   (relocate, not drop), moved the panel to an on-demand disclosure at the bottom of Review — collapsed by
+   default so the Review tab matches the comp, expandable to the wired v1 agents (Run / Re-run / Apply fix;
+   a flag-count rides the collapsed row). **0 core patches** (own `reviewRailView.ts`). Verified live + all
+   six gates green. Right rail **75→95**.
 4. **D1 — Home greeting polish (95).** `align-items:baseline`, title `white-space:nowrap;flex:none`, date
-   `flex:none`, `margin-bottom:10px`. Trivial; fold in with a nearby change or do last.
+   `flex:none`, `margin-bottom:10px`. Trivial. **→ next.**
+5. **Pixel finish on the 96s** (Agents / Context / source-peek / editor) to push the mean across 97.
 
 _Audited live 2026-06-24, branch `living-docs-design-v4` (off `main` = merged PR #16 v3). Comp pulled via
 DesignSync `d198ca07-9eef-4d05-96e1-b383e6c19c03` (auth already granted on the claude.ai login — no
