@@ -21,7 +21,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../common/livingDocMarkdown.js';
+import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterSource } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
@@ -349,6 +349,44 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getWorkspaceFolderName(): string | undefined {
 		return this._workspace.getWorkspace().folders[0]?.name;
+	}
+
+	// The data files (csv/json) sitting alongside the document that are not already bound and are not lock
+	// sidecars - the choices the Add-source picker offers (sources are scoped to the folder; decision #40).
+	async getSourceCandidates(resource: URI): Promise<readonly string[]> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return []; }
+		const bound = new Set(state.doc.sources);
+		let children;
+		try {
+			children = (await this._files.resolve(dirname(resource))).children ?? [];
+		} catch {
+			return [];
+		}
+		return children
+			.filter(c => !c.isDirectory)
+			.map(c => basename(c.resource))
+			// Exclude system json (lock sidecars + the agents registry) - they are not user data sources.
+			.filter(name => /\.(csv|json)$/i.test(name) && !/\.lock\.json$/i.test(name) && name !== 'agents.json' && !bound.has(name))
+			.sort((a, b) => a.localeCompare(b));
+	}
+
+	async addSource(resource: URI, source: string): Promise<void> {
+		await this._rewriteSources(resource, source, true);
+	}
+
+	async removeSource(resource: URI, source: string): Promise<void> {
+		await this._rewriteSources(resource, source, false);
+	}
+
+	// Add/remove a source by rewriting only the frontmatter `sources:` list; saveRawText persists, reparses,
+	// and re-resolves (so the binding is live and source-peek shows the grid) and fires the change event.
+	private async _rewriteSources(resource: URI, source: string, add: boolean): Promise<void> {
+		const raw = this.getRawText(resource);
+		if (!raw) { return; }
+		const next = withFrontmatterSource(raw, source, add);
+		if (next === raw) { return; }
+		await this.saveRawText(resource, next);
 	}
 
 	// The on-ramp: prompt for a local folder and open it as the workspace. `showOpenDialog` uses the
