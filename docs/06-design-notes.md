@@ -169,3 +169,11 @@ to a guess:
   to the bottom of the webview viewport — the document renders full-width exactly as it does with no source
   open, and the drawer floats above it. The sync affordance lives in the drawer header (one filled primary
   button), not as a floating circle on a divider that no longer exists. Same data, calmer hosting.
+- **(v4 iter 3) "Calm" no longer means "no toolbar" — it means a *pared* toolbar.** v3 read the old comp as
+  having no persistent toolbar and used a floating selection popover. The revised comp settles the question:
+  there IS a persistent word-processor toolbar, just a quiet one (borderless heading dropdown, B/I/U,
+  list/ordered/quote, and a muted "● Saved · v14" status) with the heavy controls — Link-to-source, Run
+  skill, History — removed. The lesson: calm is achieved by *dropping the noisy affordances*, not by hiding
+  the whole toolbar until selection. The persistent toolbar reads as a familiar document app; the floating
+  one read as a novelty. Wiring stayed `execCommand` via the generic `[data-fmt]` handler (now honouring
+  `data-fmt-arg`).

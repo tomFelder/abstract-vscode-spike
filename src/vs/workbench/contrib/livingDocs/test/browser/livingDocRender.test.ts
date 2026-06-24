@@ -118,7 +118,7 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 		}, { showsSyncedChip: true, noSyncButton: true });
 	});
 
-	test('the header is the comp calm bar: pill refreshes, no Download/Refresh buttons, formatting is a floating selection toolbar', () => {
+	test('the header is the comp calm bar; formatting is a persistent calm toolbar (no Link-to-source / Run-skill / History)', () => {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',
 			recent: new Set(), mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
@@ -128,16 +128,25 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 			pillIsRefresh: h.includes('class="pill ') && h.includes('data-refresh'),
 			noDownloadButton: !h.includes('data-export-md'),
 			noStandaloneRefreshButton: !h.includes('class="btn" data-refresh'),
-			noPersistentFormattingRow: !h.includes('class="etoolbar"'),
-			hasFloatingSelectionToolbar: h.includes('class="seltoolbar"') && h.includes('data-fmt="bold"'),
+			// the new "Workbench v2" comp DOES carry a calm persistent toolbar (was a floating selection
+			// toolbar before; the comp now shows the persistent one, which is authoritative)
+			hasCalmToolbar: h.includes('class="etoolbar"') && h.includes('Saved &middot; v14'),
+			toolbarHasFormatting: h.includes('data-fmt="bold"') && h.includes('data-fmt="italic"'),
+			// the comp pares the toolbar to essentials - none of the old heavy controls
+			noLinkToSource: !h.includes('Link to source'),
+			noRunSkill: !h.includes('Run skill'),
+			noHistoryButton: !h.includes('>History<'),
 			rawEditMovedToHint: h.includes('class="hint-raw" data-to-raw'),
 			present: h.includes('data-present-open'),
 		}, {
 			pillIsRefresh: true,
 			noDownloadButton: true,
 			noStandaloneRefreshButton: true,
-			noPersistentFormattingRow: true,
-			hasFloatingSelectionToolbar: true,
+			hasCalmToolbar: true,
+			toolbarHasFormatting: true,
+			noLinkToSource: true,
+			noRunSkill: true,
+			noHistoryButton: true,
 			rawEditMovedToHint: true,
 			present: true,
 		});

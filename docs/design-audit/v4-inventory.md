@@ -54,13 +54,14 @@ an IndexedDB clear; webview-internal surfaces reached via the chrome-devtools a1
 | Context panel | 96 | **96** | comp unchanged |
 | Interaction grammar | 97 | **97** | comp unchanged; all 6 gates hold live |
 | **Home** | 97 | **95** | D1 greeting align/nowrap/gap (rest of Home unchanged) |
-| **Document editor** | 97 | **82** | D3 — calm formatting toolbar absent (doc body itself still pixel-exact) |
+| **Document editor** | 97 | ~~82~~ **96** | **D3 DONE (iter 3)** — calm persistent toolbar added (borderless Heading 2 + B/I/U + list/ordered/quote + "● Saved · v14"); replaced the floating selection toolbar |
 | **Right rail (Chat/Review/History)** | 96 | **75** | D4 — Document-Agents panel still in Review; comp drops it |
 | **Source-peek** | 96 | ~~55~~ **96** | **D2 DONE (iter 2)** — now a bottom in-surface drawer (drag handle, 46px header, primary "Sync to report"); doc full-width, never split |
 
-**Overall vs the NEW comp: ~93.5% (was 90.1 at iter 1).** D2 closed; the two open surfaces are the editor
-toolbar (82, D3) and the right-rail Document-Agents panel (75, D4 — gated on decision #34). Target:
-**>=97%** with all six gates green and a clean live click-through.
+**Overall vs the NEW comp: ~94.7% (was 90.1 at iter 1, 93.5 at iter 2).** D2 + D3 closed. The remaining
+material gap is the **right-rail Document-Agents panel (75, D4 — gated on decision #34)**, plus the trivial
+Home-greeting polish (D1, 95) and pixel finish on the surfaces sitting at 96. Target: **>=97%** mean with all
+six gates green and a clean live click-through.
 
 > _Source-peek residuals (both demo-data, not fidelity defects, consistent with v3's stance): the header
 > meta shows "source · N rows" without the comp's mock "changed 2m ago" (no real source-change timestamp);
@@ -86,10 +87,12 @@ toolbar (82, D3) and the right-rail Document-Agents panel (75, D4 — gated on d
    "✓ N synced" chip + ✕). Removed the floating ⟳ circle and the left-split (`.peekwrap`/`.srcpane`); the
    document stays full-width centered beneath — "never splits the editor". **0 core patches** (own
    `livingDocRender.ts`). Verified live + all six gates re-checked green. Source-peek **55→96**.
-2. **D3 — Editor calm toolbar (82).** Add the comp's calm formatting toolbar above the doc column (`Heading
-   2 ▾` borderless + B/I/list + 18px dividers + right-aligned green-dot "● Saved · v14"; **no**
-   Link-to-source / Run-skill / History). Confirm first whether the toolbar omission was deliberate (note in
-   D3 above).
+2. ~~**D3 — Editor calm toolbar (82).**~~ **DONE (iter 3).** Added the comp's persistent calm toolbar
+   (sticky under the 48px header): borderless `Heading 2 ▾` + B/I/U + list/ordered/quote (18px dividers) +
+   right-aligned green-dot "● Saved · v14"; **no** Link-to-source / Run-skill / History. Replaced the v3
+   floating selection toolbar (its rationale — "the comp has no persistent toolbar" — no longer holds; the
+   new comp DOES). Buttons wired via the generic `[data-fmt]` handler (now honours `data-fmt-arg`, so
+   Heading/Quote work). **0 core patches.** Verified live + all six gates green. Editor **82→96**.
 3. **D4 — Right-rail Document-Agents panel (75).** Resolve decision #34 first (v1-functionality tension),
    then bring the Review tab to the comp's content (drop or relocate the Document-Agents panel).
 4. **D1 — Home greeting polish (95).** `align-items:baseline`, title `white-space:nowrap;flex:none`, date

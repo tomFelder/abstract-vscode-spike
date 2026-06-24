@@ -52,3 +52,29 @@ _No code this iteration. Artifacts: v4-inventory.md, this log, decision #34, des
   gutter dots + blue inline figures, G6 = 0 toasts. **No regressions; 0 core patches.**
 - **Score:** source-peek **55→96**; overall vs the new comp **~90→~93.5%**. Decision #35 logged.
 - **Next:** iter 3 = D3 (editor calm toolbar).
+
+---
+
+## Iter 3 — D3: editor calm formatting toolbar
+
+- **Built** the comp's persistent calm toolbar in `livingDocRender.ts` (CSS `.etoolbar` + a `docToolbar`
+  built only for living + rendered docs, inserted right after the top bar, `position:sticky;top:48px`):
+  borderless `Heading 2 ▾`, divider, B/I/U, divider, list/ordered/quote, and a right-aligned green-dot
+  **"● Saved · v14"** status. **No** Link-to-source / Run-skill / History (the comp dropped them).
+- **Replaced** the v3 floating selection toolbar (`.seltoolbar` + `placeSelToolbar` + the `selectionchange`
+  listener removed). Its rationale ("the comp has no persistent toolbar") no longer holds — the new comp
+  DOES carry a calm persistent toolbar, which is authoritative (decision #36). The generic `[data-fmt]`
+  handler now honours `data-fmt-arg`, so Heading-2 and Quote (which need a `formatBlock` arg) work, not just
+  bold/italic/underline/lists.
+- **TDD:** the header test was re-spec'd from "formatting is a floating selection toolbar" to "formatting is
+  a persistent calm toolbar" (asserts `.etoolbar` + "Saved · v14" + B/I wiring, and the *absence* of
+  Link-to-source / Run-skill / History). Render suite **7 passing**; `typecheck-client` clean.
+- **Verified live** (chrome-devtools): toolbar renders to spec between the 48px header and the doc title
+  (`shots/v4-iter3/01-toolbar`); confirmed it coexists cleanly with the source drawer
+  (`shots/v4-iter3/02-toolbar-drawer`) — toolbar pinned at top, doc full-width, drawer overlaying the bottom.
+- **All six gates re-checked:** G1 = 1 editor group, G2 = the 48px header is intact (the toolbar is a
+  separate 46px row below it), G3 = 76px nav + tree-rail, G4 = 0/7 sashes, G5 = gutter + blue figures, G6 =
+  0 toasts. **No regressions; 0 core patches.**
+- **Score:** editor **82→96**; overall vs the new comp **~93.5→~94.7%**. Decision #36 logged.
+- **Next:** D4 (right-rail Document-Agents panel) is the last material gap — **gated on Tom's decision #34**
+  (relocate the wired v1 agents vs drop the panel). D1 (Home greeting polish) is trivial and unblocked.

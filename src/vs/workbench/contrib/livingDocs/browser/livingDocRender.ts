@@ -144,13 +144,23 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .hint{max-width:720px;margin:0 auto;padding:0 40px 30px;font:400 12px/1.6 system-ui;color:#a3a8b2}
 .toggle{border:1px solid #d9dae0;border-radius:8px;padding:7px 12px;background:#fff;color:#4a4c54;font:600 12px/1 system-ui;cursor:pointer}
 .toggle:hover{background:#f4f4f6}
-/* Floating selection toolbar: formatting appears only on a text selection (the comp has no persistent toolbar) - keeps the header calm while holding inline-formatting functionality. */
-.seltoolbar{position:absolute;display:none;align-items:center;gap:2px;background:#fff;border:1px solid #e6e8ed;border-radius:9px;box-shadow:0 6px 20px rgba(20,30,60,.16);padding:4px 6px;z-index:30}
-.seltoolbar .fdiv{width:1px;height:18px;background:#e6e8ed;margin:0 5px}
-.seltoolbar .fbtn{border:none;background:transparent;border-radius:7px;padding:6px 9px;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer}
-.seltoolbar .fbtn.ic{width:30px;height:30px;padding:0;font-size:13px}
-.seltoolbar .fbtn.b{font-weight:700}.seltoolbar .fbtn.i{font-style:italic}.seltoolbar .fbtn.u{text-decoration:underline}
-.seltoolbar .fbtn:hover{background:#f4f5f7;color:#23262c}
+/* Persistent calm formatting toolbar (the comp's "Workbench v2" word-processor toolbar - formatting
+ * essentials only): borderless heading dropdown + B/I/U + list/ordered/quote, with a quiet "Saved" status
+ * on the right. Sticks just below the 48px top bar. No Link-to-source / Run-skill / History (the comp
+ * dropped them to keep the editor calm). */
+.etoolbar{position:sticky;top:48px;z-index:4;height:46px;flex:none;display:flex;align-items:center;gap:2px;padding:0 16px;border-bottom:1px solid #eef0f3;background:#fff}
+.etoolbar .tb-h{display:flex;align-items:center;gap:6px;border:none;background:transparent;border-radius:7px;padding:7px 9px;font:500 12.5px/1 system-ui;color:#3a3f49;cursor:pointer}
+.etoolbar .tb-h:hover{background:#f4f5f7}
+.etoolbar .tb-h .caret{color:#bcc0c8}
+.etoolbar .tb-div{width:1px;height:18px;background:#eceef2;margin:0 8px}
+.etoolbar .tb-b{width:30px;height:30px;border:none;background:transparent;border-radius:7px;color:#52575f;cursor:pointer}
+.etoolbar .tb-b:hover{background:#f4f5f7}
+.etoolbar .tb-b.bold{font:700 13px/1 system-ui}
+.etoolbar .tb-b.ital{font:400 13px/1 system-ui;font-style:italic}
+.etoolbar .tb-b.und{font:400 13px/1 system-ui;text-decoration:underline}
+.etoolbar .tb-b.ic{font:400 14px/1 system-ui}
+.etoolbar .tb-saved{margin-left:auto;display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8}
+.etoolbar .tb-saved .sdot{width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)}
 .hint-raw{border:none;background:none;padding:0;margin-left:5px;color:#8a93c4;font:500 12px/1.6 system-ui;cursor:pointer;text-decoration:underline}
 .hint-raw:hover{color:oklch(0.5 0.13 255)}
 /* Source-peek / Sync-across banner. */
@@ -236,22 +246,7 @@ for (const c of document.querySelectorAll('[data-present-choice]')) { c.addEvent
 for (const s of document.querySelectorAll('[data-present-scope]')) { s.addEventListener('click', () => vscode.postMessage({ type: 'presentScope', scope: s.getAttribute('data-present-scope') })); }
 const presentCta = document.querySelector('[data-present-cta]');
 if (presentCta) { presentCta.addEventListener('click', () => vscode.postMessage({ type: 'presentCta' })); }
-for (const f of document.querySelectorAll('[data-fmt]')) { f.addEventListener('mousedown', e => { e.preventDefault(); document.execCommand(f.getAttribute('data-fmt'), false); }); }
-const seltb = document.querySelector('.seltoolbar');
-function placeSelToolbar() {
-	if (!seltb) { return; }
-	const sel = window.getSelection();
-	if (!sel || sel.isCollapsed || sel.rangeCount === 0) { seltb.style.display = 'none'; return; }
-	const range = sel.getRangeAt(0);
-	const node = range.commonAncestorContainer;
-	const host = (node.nodeType === 1 ? node : node.parentElement);
-	if (!host || !host.closest('[data-block]')) { seltb.style.display = 'none'; return; }
-	const rect = range.getBoundingClientRect();
-	seltb.style.display = 'flex';
-	seltb.style.top = Math.max(8, rect.top + window.scrollY - seltb.offsetHeight - 8) + 'px';
-	seltb.style.left = Math.max(8, rect.left + window.scrollX + rect.width / 2 - seltb.offsetWidth / 2) + 'px';
-}
-document.addEventListener('selectionchange', placeSelToolbar);
+for (const f of document.querySelectorAll('[data-fmt]')) { f.addEventListener('mousedown', e => { e.preventDefault(); document.execCommand(f.getAttribute('data-fmt'), false, f.getAttribute('data-fmt-arg') || undefined); }); }
 const toRendered = document.querySelector('[data-to-rendered]');
 const rawArea = document.querySelector('textarea.raw');
 if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }
@@ -288,17 +283,22 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 
-	// Formatting lives in a floating toolbar shown only on a text selection (built below; positioned by
-	// the webview script). It is always in the DOM for a living doc but hidden until text is selected.
-	const selToolbar = (isLiving && isRendered)
-		? `<div class="seltoolbar">`
-		+ `<button class="fbtn" data-fmt="formatBlock" data-fmt-arg="&lt;h2&gt;">Heading</button>`
-		+ `<span class="fdiv"></span>`
-		+ `<button class="fbtn ic b" data-fmt="bold" title="Bold">B</button>`
-		+ `<button class="fbtn ic i" data-fmt="italic" title="Italic">I</button>`
-		+ `<button class="fbtn ic u" data-fmt="underline" title="Underline">U</button>`
-		+ `<button class="fbtn ic" data-fmt="insertUnorderedList" title="List">&#9679;&#8202;&#9679;</button>`
-		+ `<button class="fbtn ic" data-fmt="formatBlock" data-fmt-arg="&lt;blockquote&gt;" title="Quote">&#10078;</button>`
+	// The comp's persistent calm formatting toolbar (sticks under the 48px top bar). Formatting essentials
+	// only - a borderless heading dropdown, B/I/U, list/ordered/quote - and a quiet "Saved" status. The
+	// buttons are wired by the generic [data-fmt] handler (execCommand, honouring data-fmt-arg). The comp
+	// deliberately dropped Link-to-source / Run-skill / History to keep the editor calm.
+	const docToolbar = (isLiving && isRendered)
+		? `<div class="etoolbar">`
+		+ `<button class="tb-h" data-fmt="formatBlock" data-fmt-arg="&lt;h2&gt;">Heading 2 <span class="caret">&#9662;</span></button>`
+		+ `<span class="tb-div"></span>`
+		+ `<button class="tb-b bold" data-fmt="bold" title="Bold">B</button>`
+		+ `<button class="tb-b ital" data-fmt="italic" title="Italic">I</button>`
+		+ `<button class="tb-b und" data-fmt="underline" title="Underline">U</button>`
+		+ `<span class="tb-div"></span>`
+		+ `<button class="tb-b ic" data-fmt="insertUnorderedList" title="Bulleted list">&#8803;</button>`
+		+ `<button class="tb-b ic" data-fmt="insertOrderedList" title="Numbered list">&#8862;</button>`
+		+ `<button class="tb-b ic" data-fmt="formatBlock" data-fmt-arg="&lt;blockquote&gt;" title="Quote">&#10077;</button>`
+		+ `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`
 		+ `</div>`
 		: '';
 
@@ -332,7 +332,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
-	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${body}${hint}${selToolbar}${modal}<script>${SCRIPT}</script></body></html>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${docToolbar}${body}${hint}${modal}<script>${SCRIPT}</script></body></html>`;
 }
 
 // The in-surface source-peek layout (comp "Workbench v2"): the document stays FULL-WIDTH and centred, and
