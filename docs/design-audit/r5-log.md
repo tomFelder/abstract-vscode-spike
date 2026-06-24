@@ -105,3 +105,49 @@ bound figure (G5) intact, shell unchanged, no toasts.
 
 **R5 PASS** (add + remove live). **Next:** R6 — add a context *file* via UI + @mention resolving real folder
 files (the Add-context form is currently text-only; @mention resolves only frontmatter-declared files today).
+
+## Iteration 4 — R6 (reference a file via UI + @mention over the folder)
+
+**Decision #41:** (a) reference-a-file = a **File** kind in the existing "＋ Add context" form (picker of folder
+md/csv/json → writes `context:` frontmatter); (b) `@mention` broadened from frontmatter-declared to **all real
+folder docs** (cached on the doc state at load; `_readContext` already reads any relative path).
+
+**Built (TDD; 0 core patches):**
+- Generalized `withFrontmatterSource` → `withFrontmatterList(text, 'sources'|'context', value, add)` (wrapper kept).
+- Service: `addContextFile`/`removeContextFile` (→ `_rewriteList` → `saveRawText`), `getContextCandidates`
+  (folder files minus bound/referenced), `IDocState.folderFiles` (via `_scanFolderDocs`, excludes
+  self/lock/agents/generated), and `getMentionableFiles` now unions declared sources/context + folder files.
+- UI: `treeRailView` Add-context form gains a **File** kind with a candidate picker; × unbind on Referenced files.
+
+**TDD:** 1 markdown test (`withFrontmatterList` context key) + 3 service tests (mentionables include folder
+files / addContextFile persists context frontmatter & leaves prose+sources / getContextCandidates filtering).
+Inverted the old `getMentionableFiles` test. **85 livingDocs tests green; typecheck clean.**
+
+**Verified live** (`code-web` + chrome-devtools, `.realdocs-test` with `metrics.csv`+`forecast.csv`+`Team Notes.md`):
+
+| Check | Result |
+|---|---|
+| ＋ Add context → File kind picker | ✅ lists `forecast.csv` + `Team Notes.md` (metrics.csv excluded as bound source). |
+| Reference a real file | ✅ picking `Team Notes.md` → "REFERENCED FILES · 1: Team Notes.md (current)" (context frontmatter, no hand-editing). |
+| Remove reference | ✅ × → Referenced files group cleared. |
+| @mention resolves real folder files | ✅ the Chat composer's @-chips show `@forecast.csv` / `@metrics.csv` / `@Team Notes.md` — `forecast.csv` is a folder file NOT declared in WEEKLY's frontmatter, yet mentionable (was declared-only before R6). |
+
+**Design gates G1–G6:** held — only the Context panel + the Chat composer's mentionable list changed; the 49800
+bound figure (G5) intact, shell unchanged.
+
+**R6 PASS** (add + remove reference + @mention over the real folder). **R1–R6 all pass live.**
+
+### Desktop `code.sh` native-parity / disk-proof (Decision #38)
+
+`code.sh` boots on `.realdocs-test` with the full R1–R6 build (the same compiled `out/`). The Electron UI is
+not chrome-devtools-drivable, so the disk-write proof is done by observing the engine's real-disk writes:
+- **Deterministic:** deleted the engine-written `agents.json`, relaunched `code.sh`, and it **reappeared on
+  real disk** — the desktop build writes via the real `IFileService` (not memfs). `saveRawText` (R3/R4/R5/R6
+  writes) uses the same `IFileService.writeFile`, unit-tested to persist.
+- **Corroborating:** a desktop session's `Weekly Update.md` carried the R5 `forecast.csv` source on real disk
+  (227 b, persisted across a relaunch) and an `Untitled.md` from R4's template — both real-disk, web can't
+  write disk (proven iter 1). So create / edit / add-source / add-context all round-trip to real disk natively.
+
+**LOOP STOP CONDITION MET: R1–R6 all pass live on a real folder; design gates G1–G6 hold; desktop `code.sh`
+confirms native real-disk parity; 0 core patches across v5.** R7 (bind a figure to a source cell via UI) is a
+noted stretch, not blocking.

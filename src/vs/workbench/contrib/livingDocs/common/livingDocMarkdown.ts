@@ -138,34 +138,34 @@ function serializeBlock(block: ILivingDocBlock): string {
 	return block.text;
 }
 
-// Add or remove a single `source` in the document's frontmatter `sources:` list, returning the new raw
-// text with the body left verbatim. Creates a frontmatter block if the doc has none; drops the `sources:`
-// key when the last source is removed. Idempotent (adding an existing / removing an absent source is a no-op).
-export function withFrontmatterSource(text: string, source: string, add: boolean): string {
+// Add or remove a single `value` in a frontmatter block list (`sources:` or `context:`), returning the new
+// raw text with the body left verbatim. Creates a frontmatter block if the doc has none; drops the key when
+// its last item is removed. Idempotent (adding an existing / removing an absent value is a no-op).
+export function withFrontmatterList(text: string, key: 'sources' | 'context', value: string, add: boolean): string {
 	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
 	if (!match) {
-		// A plain doc gains its first source: prepend a minimal frontmatter block (no-op on remove).
-		return add ? `---\nsources:\n  - ${source}\n---\n\n${text}` : text;
+		// A plain doc gains its first entry: prepend a minimal frontmatter block (no-op on remove).
+		return add ? `---\n${key}:\n  - ${value}\n---\n\n${text}` : text;
 	}
 
-	// Walk the frontmatter lines, lifting out the existing `sources:` block (key + its `- ` items) and
-	// keeping everything else (title/subtitle, the context block) in place.
+	// Walk the frontmatter lines, lifting out the existing `<key>:` block (key + its `- ` items) and
+	// keeping everything else (title/subtitle, the other list) in place.
 	const kept: string[] = [];
 	const existing: string[] = [];
-	let sourcesAt = -1;
-	let inSources = false;
+	let keyAt = -1;
+	let inList = false;
 	for (const line of match[1].split(/\r?\n/)) {
 		const item = /^\s+-\s+(.*)$/.exec(line);
-		if (inSources && item) {
+		if (inList && item) {
 			existing.push(item[1].trim().replace(/^["']|["']$/g, ''));
 			continue;
 		}
-		inSources = false;
+		inList = false;
 		const colon = line.indexOf(':');
-		const key = colon >= 0 ? line.slice(0, colon).trim() : '';
-		if (key === 'sources') {
-			inSources = true;
-			sourcesAt = kept.length;
+		const lineKey = colon >= 0 ? line.slice(0, colon).trim() : '';
+		if (lineKey === key) {
+			inList = true;
+			keyAt = kept.length;
 			const inline = line.slice(colon + 1).trim().replace(/^["']|["']$/g, '');
 			if (inline) { existing.push(inline); }
 			continue;
@@ -173,19 +173,24 @@ export function withFrontmatterSource(text: string, source: string, add: boolean
 		kept.push(line);
 	}
 
-	const changed = add ? !existing.includes(source) : existing.includes(source);
+	const changed = add ? !existing.includes(value) : existing.includes(value);
 	if (!changed) { return text; }
 
-	const next = add ? [...existing, source] : existing.filter(s => s !== source);
-	const block = next.length ? ['sources:', ...next.map(s => `  - ${s}`)] : [];
-	// Re-insert where `sources:` was; if the doc had none, place it before `context:` (or at the end).
-	let insertAt = sourcesAt;
+	const next = add ? [...existing, value] : existing.filter(v => v !== value);
+	const block = next.length ? [`${key}:`, ...next.map(v => `  - ${v}`)] : [];
+	// Re-insert where the key was; a new `sources:` goes before `context:`, a new `context:` at the end.
+	let insertAt = keyAt;
 	if (insertAt < 0) {
-		const ctxIdx = kept.findIndex(l => l.trim().startsWith('context:'));
+		const ctxIdx = key === 'sources' ? kept.findIndex(l => l.trim().startsWith('context:')) : -1;
 		insertAt = ctxIdx >= 0 ? ctxIdx : kept.length;
 	}
 	const fmLines = [...kept.slice(0, insertAt), ...block, ...kept.slice(insertAt)];
 	return `---\n${fmLines.join('\n')}\n---\n${text.slice(match[0].length)}`;
+}
+
+// Convenience wrapper for the document's value sources (`sources:` frontmatter list).
+export function withFrontmatterSource(text: string, source: string, add: boolean): string {
+	return withFrontmatterList(text, 'sources', source, add);
 }
 
 export function serializeLivingDoc(doc: ILivingDoc): string {

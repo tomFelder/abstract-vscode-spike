@@ -21,7 +21,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterSource } from '../common/livingDocMarkdown.js';
+import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
@@ -52,6 +52,7 @@ interface IDocState {
 	staleBindings: Set<string>;     // dirty bits: bind keys whose source changed since last sync
 	staleContext: Set<string>;      // dirty bits: context files changed since last review
 	status: string;
+	folderFiles: readonly string[]; // real md/csv/json siblings in the doc's folder (for @mention + pickers)
 }
 
 const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
@@ -379,12 +380,51 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		await this._rewriteSources(resource, source, false);
 	}
 
+	// The real folder documents not already referenced (context) or bound (sources) - the Add-context-file
+	// picker's choices (referencing a real file in the project; R6).
+	async getContextCandidates(resource: URI): Promise<readonly string[]> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return []; }
+		const taken = new Set([...state.doc.sources, ...state.doc.context]);
+		return state.folderFiles.filter(name => !taken.has(name));
+	}
+
+	async addContextFile(resource: URI, file: string): Promise<void> {
+		await this._rewriteList(resource, 'context', file, true);
+	}
+
+	async removeContextFile(resource: URI, file: string): Promise<void> {
+		await this._rewriteList(resource, 'context', file, false);
+	}
+
+	// The md/csv/json siblings of a document, excluding itself, lock/agents system files and generated views.
+	private async _scanFolderDocs(uri: URI): Promise<string[]> {
+		let children;
+		try {
+			children = (await this._files.resolve(dirname(uri))).children ?? [];
+		} catch {
+			return [];
+		}
+		const self = basename(uri);
+		return children
+			.filter(c => !c.isDirectory)
+			.map(c => basename(c.resource))
+			.filter(name => /\.(md|csv|json)$/i.test(name) && !/\.lock\.json$/i.test(name) && name !== 'agents.json' && !/\.(export|source)\.md$/i.test(name) && name !== self)
+			.sort((a, b) => a.localeCompare(b));
+	}
+
 	// Add/remove a source by rewriting only the frontmatter `sources:` list; saveRawText persists, reparses,
 	// and re-resolves (so the binding is live and source-peek shows the grid) and fires the change event.
 	private async _rewriteSources(resource: URI, source: string, add: boolean): Promise<void> {
+		await this._rewriteList(resource, 'sources', source, add);
+	}
+
+	// Add/remove a value in a frontmatter list (sources or context) by rewriting only the frontmatter;
+	// saveRawText persists, reparses, and re-resolves (live binding + source-peek) and fires the change.
+	private async _rewriteList(resource: URI, key: 'sources' | 'context', value: string, add: boolean): Promise<void> {
 		const raw = this.getRawText(resource);
 		if (!raw) { return; }
-		const next = withFrontmatterSource(raw, source, add);
+		const next = withFrontmatterList(raw, key, value, add);
 		if (next === raw) { return; }
 		await this.saveRawText(resource, next);
 	}
@@ -536,8 +576,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			staleBindings: new Set<string>(),
 			staleContext: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
+			folderFiles: [],
 		};
 		this._docs.set(resource.toString(), state);
+		state.folderFiles = await this._scanFolderDocs(resource);
 		if (doc.isLiving) { await this._resolveSubtitle(state); }
 		return state;
 	}
@@ -921,6 +963,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			staleBindings: new Set<string>(),
 			staleContext: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
+			folderFiles: this._docs.get(id)?.folderFiles ?? [],
 		};
 		try {
 			await this._files.writeFile(resource, VSBuffer.fromString(text));
@@ -1351,11 +1394,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	getMentionableFiles(resource: URI): readonly string[] {
-		const doc = this._docs.get(resource.toString())?.doc;
-		if (!doc) { return []; }
-		const out: string[] = [];
-		for (const f of [...doc.sources, ...doc.context]) { if (!out.includes(f)) { out.push(f); } }
-		return out;
+		const state = this._docs.get(resource.toString());
+		if (!state) { return []; }
+		// Declared sources/context PLUS the real folder documents - so @mention can reference any folder file,
+		// not only frontmatter-declared ones (R6).
+		const out = new Set<string>([...state.doc.sources, ...state.doc.context, ...state.folderFiles]);
+		return [...out].sort((a, b) => a.localeCompare(b));
 	}
 
 	isChatBusy(resource: URI): boolean {

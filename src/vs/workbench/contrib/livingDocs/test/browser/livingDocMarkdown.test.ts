@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterSource } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -156,6 +156,18 @@ suite('LivingDoc bind-link format', () => {
 		const doc = parseLivingDoc(next);
 		assert.deepStrictEqual({ sources: doc.sources, context: doc.context }, { sources: [], context: ['market-research.md'] }, 'source removed, context kept');
 		assert.ok(!next.includes('sources:'), 'the now-empty sources key is dropped');
+	});
+
+	// The same frontmatter editor drives the `context:` list (referenced files, R6) - add/remove a real file
+	// reference without touching prose or the sources list.
+	test('withFrontmatterList edits the context list for referenced files, leaving sources and prose intact', () => {
+		const added = withFrontmatterList(WEEKLY_MD, 'context', 'appendix.md', true);
+		assert.deepStrictEqual(parseLivingDoc(added).context, ['market-research.md', 'appendix.md'], 'reference appended to the context list');
+		assert.deepStrictEqual(parseLivingDoc(added).sources, ['metrics.csv'], 'sources untouched');
+		assert.ok(added.includes('Growth accelerated sharply this week.'), 'prose untouched');
+
+		const removed = withFrontmatterList(WEEKLY_MD, 'context', 'market-research.md', false);
+		assert.deepStrictEqual({ context: parseLivingDoc(removed).context, sources: parseLivingDoc(removed).sources }, { context: [], sources: ['metrics.csv'] }, 'context reference removed, sources kept');
 	});
 
 	test('withFrontmatterSource creates a frontmatter block when a plain doc gains its first source', () => {

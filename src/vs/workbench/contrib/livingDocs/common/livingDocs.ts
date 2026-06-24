@@ -191,6 +191,15 @@ export interface ILivingDocsService {
 	/** Unbind a source from a document by removing it from the frontmatter `sources:` list. */
 	removeSource(resource: URI, source: string): Promise<void>;
 
+	/** Folder files (md/csv/json) not already referenced or bound, for the Add-context-file picker. */
+	getContextCandidates(resource: URI): Promise<readonly string[]>;
+
+	/** Reference a real folder file from a document by adding it to the frontmatter `context:` list. */
+	addContextFile(resource: URI, file: string): Promise<void>;
+
+	/** Remove a referenced file from a document's frontmatter `context:` list. */
+	removeContextFile(resource: URI, file: string): Promise<void>;
+
 	/** Load a document; for a Living Document its bound source is read alongside. */
 	loadDocument(resource: URI): Promise<void>;
 
