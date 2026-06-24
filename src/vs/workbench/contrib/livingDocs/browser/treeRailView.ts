@@ -45,6 +45,9 @@ export class TreeRailView extends ViewPane {
 	private _ctxAdding = false;
 	private _ctxKind: AddedContextKind = 'pasted';
 	private _ctxDraft = '';
+	// Context-tab "Add source" picker state (R5): folder data files offered when the picker is open.
+	private _srcAdding = false;
+	private _srcCandidates: readonly string[] = [];
 	private readonly _renderDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -156,13 +159,57 @@ export class TreeRailView extends ViewPane {
 		}
 		for (const group of groups) {
 			append(panel, $('div.rail-folder')).textContent = `${group.label.toUpperCase()} \u00B7 ${group.items.length}`;
+			const isLinkedSources = group.label === 'Linked sources';
 			for (const ci of group.items) {
 				const row = append(panel, $('div.rail-item'));
 				append(row, $('span.rail-item-label')).textContent = ci.name;
 				if (ci.detail) { append(row, $('span.rail-item-detail')).textContent = ci.detail; }
+				// Each linked source carries an unbind (x) - removing it rewrites the frontmatter (R5).
+				if (isLinkedSources) {
+					const name = ci.name;
+					const remove = append(row, $('button.rail-srcremove')) as HTMLButtonElement;
+					remove.textContent = '\u00D7';
+					remove.title = 'Remove source';
+					this._renderDisposables.add(addDisposableListener(remove, 'click', e => { e.stopPropagation(); void this._livingDocs.removeSource(resource, name); }));
+				}
 			}
+			// The "+ Add source" picker sits under the Linked sources group (or stands alone if there are none yet).
+			if (isLinkedSources) { this._renderAddSource(panel, resource); }
 		}
+		if (!groups.some(g => g.label === 'Linked sources')) { this._renderAddSource(panel, resource); }
 		this._renderAddContext(panel, resource);
+	}
+
+	// The "+ Add source" affordance (R5): a button that, when opened, lists the folder's data files (csv/json)
+	// not already bound; picking one writes the frontmatter `sources:` list via the service (no hand-editing).
+	private _renderAddSource(panel: HTMLElement, resource: URI): void {
+		if (!this._srcAdding) {
+			const add = append(panel, $('button.rail-addctx.rail-addsrc')) as HTMLButtonElement;
+			add.textContent = '\uFF0B Add source';
+			this._renderDisposables.add(addDisposableListener(add, 'click', async () => {
+				this._srcCandidates = await this._livingDocs.getSourceCandidates(resource);
+				this._srcAdding = true;
+				await this._render();
+			}));
+			return;
+		}
+		const form = append(panel, $('div.rail-addctx-form'));
+		if (!this._srcCandidates.length) {
+			append(form, $('div.rail-empty')).textContent = 'No more data files in this folder.';
+		}
+		for (const cand of this._srcCandidates) {
+			const chip = append(form, $('button.rail-srccand')) as HTMLButtonElement;
+			append(chip, $('span.rail-item-glyph')).textContent = '\u229E';
+			append(chip, $('span')).textContent = cand;
+			this._renderDisposables.add(addDisposableListener(chip, 'click', async () => {
+				this._srcAdding = false;
+				await this._livingDocs.addSource(resource, cand);
+			}));
+		}
+		const cancel = append(form, $('button.rail-addctx-cancel')) as HTMLButtonElement;
+		cancel.textContent = 'Cancel';
+		cancel.style.marginTop = '8px';
+		this._renderDisposables.add(addDisposableListener(cancel, 'click', () => { this._srcAdding = false; void this._render(); }));
 	}
 
 	// The comp's "+ Add context" affordance at the foot of the Context tab. Collapsed to a single button;
@@ -299,6 +346,11 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-addctx-actions{display:flex;gap:6px;margin-top:8px}
 		.living-docs-rail .rail-addctx-add{flex:1;border:none;border-radius:7px;padding:7px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer}
 		.living-docs-rail .rail-addctx-cancel{border:1px solid var(--vscode-input-border,#e0e2e8);border-radius:7px;padding:7px 12px;background:none;color:var(--vscode-descriptionForeground);font:500 12px/1 system-ui;cursor:pointer}
+		.living-docs-rail .rail-srcremove{margin-left:6px;flex:none;border:none;background:none;color:var(--vscode-descriptionForeground);font:500 14px/1 system-ui;cursor:pointer;padding:0 3px;border-radius:4px;opacity:.5}
+		.living-docs-rail .rail-item:hover .rail-srcremove{opacity:1}
+		.living-docs-rail .rail-srcremove:hover{color:oklch(0.55 0.2 25);background:var(--vscode-list-hoverBackground)}
+		.living-docs-rail .rail-srccand{display:flex;align-items:center;gap:7px;width:100%;box-sizing:border-box;border:1px solid var(--vscode-input-border,#e0e6ff);background:var(--vscode-input-background,#fff);color:var(--vscode-foreground);border-radius:7px;padding:7px 9px;margin-bottom:5px;font:500 12.5px/1 system-ui;cursor:pointer;text-align:left}
+		.living-docs-rail .rail-srccand:hover{background:#eef2fb;border-color:oklch(0.55 0.13 255)}
 		`;
 		container.appendChild(style);
 	}

@@ -745,6 +745,39 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(lastOpenedFolder, undefined, 'cancelling the picker opens no window');
 	});
 
+	test('addSource adds a source to the doc frontmatter (no prose touched), persists to disk, and resolves it', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/forecast.csv').toString(), 'week,arr\n24,500000\n');
+		await service.loadDocument(WEEKLY);
+
+		await service.addSource(WEEKLY, 'forecast.csv');
+
+		assert.ok(service.getDoc(WEEKLY)!.sources.includes('forecast.csv'), 'source added to the in-memory doc');
+		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
+		assert.ok(/sources:[\s\S]*forecast\.csv/.test(onDisk), `persisted into the frontmatter on disk: ${onDisk.slice(0, 80)}`);
+		assert.ok(onDisk.includes('Growth remained steady this week.'), 'prose left untouched');
+	});
+
+	test('removeSource drops a source from the doc frontmatter and persists', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		await service.removeSource(WEEKLY, 'metrics.csv');
+
+		assert.deepStrictEqual(service.getDoc(WEEKLY)!.sources, [], 'source removed from the in-memory doc');
+		assert.ok(!(lastFiles!.get(WEEKLY.toString()) ?? '').includes('metrics.csv'), 'removed from the on-disk frontmatter');
+	});
+
+	test('getSourceCandidates lists the folder data files not already bound (excludes lock sidecars + the bound source)', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/forecast.csv').toString(), 'week,arr\n');
+		lastFiles!.set(URI.file('/ws/crm.json').toString(), '{}');
+		await service.loadDocument(WEEKLY); // bootstraps Weekly Summary.lock.json, which must NOT be offered
+
+		const candidates = await service.getSourceCandidates(WEEKLY);
+		assert.deepStrictEqual([...candidates].sort(), ['crm.json', 'forecast.csv'], 'folder csv/json minus the bound metrics.csv and the lock sidecar');
+	});
+
 	test('exportMarkdown writes a clean static .md with resolved values and no bind syntax', async () => {
 		const opened: IOpenedEditor[] = [];
 		const service = createService(opened);

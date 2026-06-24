@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterSource } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -134,5 +134,36 @@ suite('LivingDoc bind-link format', () => {
 		assert.strictEqual(doc.isLiving, false);
 		assert.strictEqual(doc.title, 'Project Readme');
 		assert.ok(doc.body.includes('- first item'), 'body retains the raw Markdown for generic rendering');
+	});
+
+	// withFrontmatterSource edits only the frontmatter `sources:` list, leaving the body verbatim - so adding
+	// a source via the UI never touches the prose (the add-source affordance, R5).
+	test('withFrontmatterSource adds a source to an existing sources list and the body is untouched', () => {
+		const next = withFrontmatterSource(WEEKLY_MD, 'crm.json', true);
+		const doc = parseLivingDoc(next);
+		assert.deepStrictEqual(doc.sources, ['metrics.csv', 'crm.json'], 'appended to the sources list');
+		assert.ok(next.includes('Revenue grew [18%](bind:metrics.mrr.delta)'), 'prose is byte-identical');
+		assert.strictEqual(doc.context.length, 1, 'context list untouched');
+	});
+
+	test('withFrontmatterSource is idempotent on add and a no-op removing a source that is not bound', () => {
+		assert.strictEqual(withFrontmatterSource(WEEKLY_MD, 'metrics.csv', true), WEEKLY_MD, 'adding an existing source is a no-op');
+		assert.strictEqual(withFrontmatterSource(WEEKLY_MD, 'absent.csv', false), WEEKLY_MD, 'removing an absent source is a no-op');
+	});
+
+	test('withFrontmatterSource removes a source, dropping the empty sources key but keeping context', () => {
+		const next = withFrontmatterSource(WEEKLY_MD, 'metrics.csv', false);
+		const doc = parseLivingDoc(next);
+		assert.deepStrictEqual({ sources: doc.sources, context: doc.context }, { sources: [], context: ['market-research.md'] }, 'source removed, context kept');
+		assert.ok(!next.includes('sources:'), 'the now-empty sources key is dropped');
+	});
+
+	test('withFrontmatterSource creates a frontmatter block when a plain doc gains its first source', () => {
+		const next = withFrontmatterSource(PLAIN_MD, 'metrics.csv', true);
+		const doc = parseLivingDoc(next);
+		assert.deepStrictEqual(doc.sources, ['metrics.csv'], 'first source recorded');
+		assert.strictEqual(doc.isLiving, true, 'the doc is now living');
+		assert.ok(doc.body.includes('- first item'), 'original body preserved');
+		assert.ok(doc.title === 'Project Readme', 'title still derives from the H1');
 	});
 });

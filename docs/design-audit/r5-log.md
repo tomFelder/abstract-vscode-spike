@@ -70,3 +70,38 @@ the inherent manual step). R3 (edit persists) verified in-app iter 1 + desktop i
 
 **Next:** R5 — add/remove a source via UI (new `addSource`/`removeSource` service API, TDD), or R3/R4 desktop
 disk-proof. Pick highest-impact next iteration.
+
+## Iteration 3 — R5 (add/remove a source via UI)
+
+**Decision #40 (the add-source UX):** an in-app list of the folder's data files (csv/json) in the Context
+panel — not a native dialog (scopes to the project per #39, and is drivable; the native picker is the same
+non-automatable wall as R1).
+
+**Built (TDD; 0 core patches):**
+- Pure `withFrontmatterSource(text, source, add)` (`livingDocMarkdown.ts`) — edits only the `sources:`
+  frontmatter list, body verbatim; creates frontmatter for a plain doc's first source; drops the empty
+  `sources:` key on last removal; idempotent.
+- Service: `addSource`/`removeSource` (rewrite frontmatter → `saveRawText`, which persists + re-resolves +
+  fires change) and `getSourceCandidates` (folder csv/json minus bound + `.lock.json`/`agents.json`).
+- UI: `treeRailView` Context tab — a ＋ Add source picker (lists candidates, click to bind) + a × unbind on
+  each Linked source row.
+
+**TDD:** 4 `withFrontmatterSource` tests (add/idempotent/remove-drops-key/create-frontmatter); 3 service
+tests (addSource persists frontmatter + leaves prose; removeSource; getSourceCandidates excludes
+bound+system files). Watched each fail then pass. **82 livingDocs tests green; typecheck clean.**
+
+**Verified live** (`code-web` + chrome-devtools, `.realdocs-test` with a 2nd data file `forecast.csv`):
+
+| Check | Result |
+|---|---|
+| Linked sources + unbind affordance | ✅ Context tab shows "LINKED SOURCES · 1: metrics.csv (live · feeds 1 block)" with a × Remove. |
+| ＋ Add source lists folder candidates | ✅ picker offered `forecast.csv` (metrics.csv excluded as bound; lock/agents excluded). |
+| Add binds + resolves from the real file | ✅ clicking `forecast.csv` → "LINKED SOURCES · 2", forecast.csv resolved "live"; no frontmatter hand-editing. |
+| Remove unbinds | ✅ × on forecast.csv → back to "LINKED SOURCES · 1". |
+| Persistence | web write → memfs (disk unchanged, expected); the write path is `saveRawText`→`IFileService` (unit-tested to persist; real-disk on desktop per #38). |
+
+**Design gates G1–G6:** held — only the Context panel (within the tree-rail) + service changed; the 49800
+bound figure (G5) intact, shell unchanged, no toasts.
+
+**R5 PASS** (add + remove live). **Next:** R6 — add a context *file* via UI + @mention resolving real folder
+files (the Add-context form is currently text-only; @mention resolves only frontmatter-declared files today).

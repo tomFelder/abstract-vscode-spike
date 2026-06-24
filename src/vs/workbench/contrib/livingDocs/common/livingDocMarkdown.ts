@@ -138,6 +138,56 @@ function serializeBlock(block: ILivingDocBlock): string {
 	return block.text;
 }
 
+// Add or remove a single `source` in the document's frontmatter `sources:` list, returning the new raw
+// text with the body left verbatim. Creates a frontmatter block if the doc has none; drops the `sources:`
+// key when the last source is removed. Idempotent (adding an existing / removing an absent source is a no-op).
+export function withFrontmatterSource(text: string, source: string, add: boolean): string {
+	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+	if (!match) {
+		// A plain doc gains its first source: prepend a minimal frontmatter block (no-op on remove).
+		return add ? `---\nsources:\n  - ${source}\n---\n\n${text}` : text;
+	}
+
+	// Walk the frontmatter lines, lifting out the existing `sources:` block (key + its `- ` items) and
+	// keeping everything else (title/subtitle, the context block) in place.
+	const kept: string[] = [];
+	const existing: string[] = [];
+	let sourcesAt = -1;
+	let inSources = false;
+	for (const line of match[1].split(/\r?\n/)) {
+		const item = /^\s+-\s+(.*)$/.exec(line);
+		if (inSources && item) {
+			existing.push(item[1].trim().replace(/^["']|["']$/g, ''));
+			continue;
+		}
+		inSources = false;
+		const colon = line.indexOf(':');
+		const key = colon >= 0 ? line.slice(0, colon).trim() : '';
+		if (key === 'sources') {
+			inSources = true;
+			sourcesAt = kept.length;
+			const inline = line.slice(colon + 1).trim().replace(/^["']|["']$/g, '');
+			if (inline) { existing.push(inline); }
+			continue;
+		}
+		kept.push(line);
+	}
+
+	const changed = add ? !existing.includes(source) : existing.includes(source);
+	if (!changed) { return text; }
+
+	const next = add ? [...existing, source] : existing.filter(s => s !== source);
+	const block = next.length ? ['sources:', ...next.map(s => `  - ${s}`)] : [];
+	// Re-insert where `sources:` was; if the doc had none, place it before `context:` (or at the end).
+	let insertAt = sourcesAt;
+	if (insertAt < 0) {
+		const ctxIdx = kept.findIndex(l => l.trim().startsWith('context:'));
+		insertAt = ctxIdx >= 0 ? ctxIdx : kept.length;
+	}
+	const fmLines = [...kept.slice(0, insertAt), ...block, ...kept.slice(insertAt)];
+	return `---\n${fmLines.join('\n')}\n---\n${text.slice(match[0].length)}`;
+}
+
 export function serializeLivingDoc(doc: ILivingDoc): string {
 	const fm: string[] = ['---'];
 	if (doc.title) { fm.push(`title: ${doc.title}`); }

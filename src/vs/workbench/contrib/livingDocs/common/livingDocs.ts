@@ -182,6 +182,15 @@ export interface ILivingDocsService {
 	/** Create a new blank Living Document from a template in the workspace and return its resource. */
 	createDocument(): Promise<URI | undefined>;
 
+	/** The folder's data files (csv/json) not already bound to the document, for the Add-source picker. */
+	getSourceCandidates(resource: URI): Promise<readonly string[]>;
+
+	/** Bind a source file to a document by writing its frontmatter `sources:` list (no hand-editing). */
+	addSource(resource: URI, source: string): Promise<void>;
+
+	/** Unbind a source from a document by removing it from the frontmatter `sources:` list. */
+	removeSource(resource: URI, source: string): Promise<void>;
+
 	/** Load a document; for a Living Document its bound source is read alongside. */
 	loadDocument(resource: URI): Promise<void>;
 
