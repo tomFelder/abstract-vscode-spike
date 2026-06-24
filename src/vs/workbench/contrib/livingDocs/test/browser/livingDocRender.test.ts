@@ -69,6 +69,29 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 		}, { hasBoundSpan: true, showsResolvedValue: true, noRawBindSyntax: true });
 	});
 
+	test('the in-surface source-peek pane renders the raw CSV grid with the latest row highlighted', () => {
+		const h = renderLivingDocHtml({
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
+			sourcePeek: {
+				source: 'metrics.csv', referencedBy: [], synced: false, syncedCount: 0,
+				rows: [{ key: 'metrics.mrr', value: '$48.6k', selected: true }],
+				grid: {
+					headers: ['week', 'mrr', 'signups'],
+					rows: [['23', '44.9', '389'], ['24', '48.6', '427']],
+					latestIndex: 1,
+				},
+			},
+		});
+		assert.deepStrictEqual({
+			hasGridTable: h.includes('class="sp-grid"'),
+			hasHeaders: h.includes('<th>week</th>') && h.includes('<th>signups</th>'),
+			hasLatestRow: h.includes('<tr class="sel"><td>24</td><td>48.6</td><td>427</td></tr>'),
+			priorRowNotHighlighted: h.includes('<tr class=""><td>23</td>'),
+			stillHasBoundFigures: h.includes('BOUND FIGURES'),
+		}, { hasGridTable: true, hasHeaders: true, hasLatestRow: true, priorRowNotHighlighted: true, stillHasBoundFigures: true });
+	});
+
 	test('the header is the comp calm bar: pill refreshes, no Download/Refresh buttons, formatting is a floating selection toolbar', () => {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',

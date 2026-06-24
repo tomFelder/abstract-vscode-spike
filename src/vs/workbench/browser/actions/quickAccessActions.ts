@@ -135,13 +135,11 @@ registerAction2(class QuickAccessAction extends Action2 {
 					}
 				}]
 			},
-			keybinding: {
-				weight: KeybindingWeight.WorkbenchContrib,
-				primary: globalQuickAccessKeybinding.primary,
-				secondary: globalQuickAccessKeybinding.secondary,
-				mac: globalQuickAccessKeybinding.mac
-			},
-			f1: true
+			// LIVING DOCS (G4 - remove IDE optionality): Quick Open (Go to File) is removed from
+			// the calm shell. No keybinding (no Cmd/Ctrl+P, no Cmd/Ctrl+E) so command mode (the
+			// ">" prefix) is unreachable, and not listed in any palette (f1: false). The command
+			// is kept for programmatic callers. CORE-PATCH (merge-tax ledger).
+			f1: false
 		});
 	}
 

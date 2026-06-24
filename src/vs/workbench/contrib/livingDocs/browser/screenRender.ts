@@ -101,7 +101,7 @@ export function renderScreenHtml(screen: ScreenId, state: IScreenState): string 
 
 // ---- Home: the landing dashboard -- greeting, quick start, and the projects grid. ----
 function renderHome(): string {
-	const quick = (msg: string, iconBg: string, iconFg: string, icon: string, title: string, sub: string, primary: boolean) => `<button ${msg ? `data-msg="${msg}" ` : ''}style="flex:1;min-width:200px;text-align:left;border:1px solid ${primary ? '#e0e6ff' : '#e9eaee'};background:${primary ? '#f7f9ff' : '#fff'};border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:${iconBg};color:${iconFg};font-size:16px;display:flex;align-items:center;justify-content:center">${icon}</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">${title}</span><span style="font:400 12px/1.3 system-ui;color:#868b95">${sub}</span></span></button>`;
+	const quick = (msg: string, iconBg: string, iconFg: string, icon: string, title: string, sub: string, primary: boolean) => `<button ${msg ? `data-msg="${msg}" ` : ''}style="flex:1;min-width:200px;text-align:left;border:1px solid ${primary ? '#e0e6ff' : '#e9eaee'};background:${primary ? '#f7f9ff' : '#fff'};border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:${iconBg};color:${iconFg};font-size:${primary ? '17px' : '16px'};display:flex;align-items:center;justify-content:center">${icon}</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">${title}</span><span style="font:400 12px/1.3 system-ui;color:#868b95">${sub}</span></span></button>`;
 	const since = (dot: string, html: string) => `<div style="display:flex;gap:9px;margin-bottom:9px"><span style="width:7px;height:7px;border-radius:50%;background:${dot};margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#3a3f49">${html}</span></div>`;
 	const project = (mono: string, monoBg: string, name: string, badge: string, stats: string, since1: string, since2: string, actions: string) => `<div style="background:#fff;border:1px solid #e9eaee;border-radius:13px;overflow:hidden;display:flex;flex-direction:column">
 		<div style="padding:16px 17px 14px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:3px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:${monoBg};color:#fff;font:600 12px/1 system-ui;display:flex;align-items:center;justify-content:center">${mono}</span><span style="font:600 15px/1.2 system-ui;color:#15171c">${name}</span>${badge}</div><div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;padding-left:36px">${stats}</div></div>
@@ -257,6 +257,22 @@ function flowLabel(f: IAgentFlow): string {
 	return `${s} &#8594; ${d}`;
 }
 
+// Format the agent's last-run ISO timestamp as the comp's relative label ("2m ago" / "1h ago" /
+// "yesterday"); an em dash when the agent has never run. (lastRun is a real timestamp - the
+// orchestrator parses it for due-checks - so it is formatted here, not stored as a label.)
+function relTime(iso: string | undefined): string {
+	if (!iso) { return '\u2014'; }
+	const ms = Date.now() - Date.parse(iso);
+	if (!isFinite(ms) || ms < 0) { return 'just now'; }
+	const mins = Math.floor(ms / 60000);
+	if (mins < 1) { return 'just now'; }
+	if (mins < 60) { return `${mins}m ago`; }
+	const hrs = Math.floor(mins / 60);
+	if (hrs < 24) { return `${hrs}h ago`; }
+	const days = Math.floor(hrs / 24);
+	return days === 1 ? 'yesterday' : `${days}d ago`;
+}
+
 function statusBadge(status: string): string {
 	const dot = (color: string, label: string, fg = '#52575f') => `<span style="display:inline-flex;align-items:center;gap:6px;font:600 11px/1 system-ui;color:${fg}"><span style="width:7px;height:7px;border-radius:50%;background:${color}"></span>${label}</span>`;
 	switch (status) {
@@ -288,12 +304,11 @@ function renderAgentList(state: IScreenState): string {
 		|| (state.filter === 'event' && isEvent(a))
 		|| (state.filter === 'needs-approval' && a.status === 'needs-approval'));
 	const rows = shown.map(a => `<div data-msg="openAgent" data-arg="${esc(a.id)}" style="display:flex;align-items:center;padding:15px 18px;border-bottom:1px solid #f1f2f5;font:400 13px/1.4 system-ui;cursor:pointer">
-		<div style="flex:2.2;display:flex;align-items:center;gap:9px"><span style="color:${ACCENT}">${AGENT_ICON[a.trigger.kind] ?? '&#9679;'}</span><span style="font-weight:500">${esc(a.name)}</span><span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#aeb6e0">open &#8599;</span></div>
-		<div style="flex:1.6;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#696e78">${triggerLabel(a.trigger)}</div>
-		<div style="flex:1.3;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#5b6dc4">${esc(a.policy)}</div>
-		<div style="flex:2.4;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#868b95">${flowLabel(a.flow)}</div>
-		<div style="flex:1.1;color:#969ba4;font:400 12px/1 system-ui">${a.lastRun ? 'ran' : 'never'}</div>
-		<div style="flex:1.3">${statusBadge(a.status)}</div>
+		<div style="flex:2.4;display:flex;align-items:center;gap:9px"><span style="color:${ACCENT}">${AGENT_ICON[a.trigger.kind] ?? '&#9679;'}</span><span style="font-weight:500">${esc(a.name)}</span><span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#aeb6e0">open &#8599;</span></div>
+		<div style="flex:1.4;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#696e78">${triggerLabel(a.trigger)}</div>
+		<div style="flex:2.6;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#868b95">${flowLabel(a.flow)}</div>
+		<div style="flex:1.3;color:#969ba4;font:400 12px/1 system-ui">${relTime(a.lastRun)}</div>
+		<div style="flex:1.4">${statusBadge(a.status)}</div>
 	</div>`).join('');
 	const empty = `<div style="padding:24px 18px;font:400 12.5px/1.5 system-ui;color:#969ba4">No agents match this filter.</div>`;
 	return `<div class="screen">
@@ -302,7 +317,7 @@ function renderAgentList(state: IScreenState): string {
 		<div style="max-width:1040px;margin:0 auto;padding:24px 28px 80px">
 			<div style="display:flex;gap:6px;margin-bottom:16px">${chip('all', `All &middot; ${counts.all}`)}${chip('scheduled', `Scheduled &middot; ${counts.scheduled}`)}${chip('event', `Event &middot; ${counts.event}`)}${chip('needs-approval', `Needs approval &middot; ${counts.needs}`, true)}</div>
 			<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden">
-				<div style="display:flex;align-items:center;padding:11px 18px;background:#f8f9fb;border-bottom:1px solid #eef0f3;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2"><div style="flex:2.2">AGENT</div><div style="flex:1.6">TRIGGER</div><div style="flex:1.3">POLICY</div><div style="flex:2.4">FLOW</div><div style="flex:1.1">LAST RUN</div><div style="flex:1.3">STATUS</div></div>
+				<div style="display:flex;align-items:center;padding:11px 18px;background:#f8f9fb;border-bottom:1px solid #eef0f3;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2"><div style="flex:2.4">AGENT</div><div style="flex:1.4">TRIGGER</div><div style="flex:2.6">FLOW</div><div style="flex:1.3">LAST RUN</div><div style="flex:1.4">STATUS</div></div>
 				${rows || empty}
 			</div>
 			<div style="margin-top:14px;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8">Tip: open an agent to see its flow on the canvas, then Run now.</div>

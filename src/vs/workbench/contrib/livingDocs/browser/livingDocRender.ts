@@ -107,7 +107,7 @@ h2.section{margin:26px 0 12px;font:600 19px/1.3 system-ui;color:#23262c}
 p.block{margin:0 0 22px;font:400 16px/1.78 system-ui;color:#2c2f36}
 /* A source-bound figure inline in the prose: the comp's faint-blue highlight + underline, so the reader
  * sees exactly which words are live. Clicking one peeks its source. */
-.bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 1px;cursor:pointer}
+.bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px;cursor:pointer}
 .bound:hover{background:rgba(80,110,235,.16)}
 .editable{border-radius:4px;transition:background .1s,box-shadow .1s;cursor:text}
 .editable:hover{background:rgba(80,90,160,.06)}
@@ -134,7 +134,7 @@ h2.section.editable{margin-left:-6px;padding-left:6px}
 .ctrl .approve:hover{background:oklch(0.5 0.13 255)}
 .ctrl .reject{border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer}
 .ctrl .reject:hover{background:#f4f5f7}
-table.kpi{flex:1;border:1px solid #ececf0;border-radius:8px;border-collapse:separate;border-spacing:0;overflow:hidden;font:400 13.5px/1 system-ui;margin-bottom:22px}
+table.kpi{flex:1;border:1px solid #eceef2;border-radius:10px;border-collapse:separate;border-spacing:0;overflow:hidden;font:400 13.5px/1 system-ui;margin-bottom:22px}
 table.kpi th{background:#f8f9fb;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;letter-spacing:.04em;text-align:right;padding:10px 14px}
 table.kpi th:first-child{text-align:left}
 table.kpi td{border-top:1px solid #f1f2f5;padding:10px 14px;text-align:right}
@@ -174,6 +174,10 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .srcpane th{text-align:left;padding:7px 9px;font-weight:600;color:#a3a8b2;border-bottom:1px solid #e9eaee}
 .srcpane td{padding:6px 9px;border-bottom:1px solid #f4f5f7;color:#2c2f36}
 .srcpane tr.sel td{background:#fef6e9;box-shadow:inset 2px 0 0 oklch(0.66 0.16 45);font-weight:600}
+.srcpane .sp-sec{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;text-transform:uppercase;margin:2px 0 7px}
+.srcpane .sp-sec:not(:first-child){margin-top:16px}
+.srcpane table.sp-grid{font-size:11.5px}
+.srcpane table.sp-grid th,.srcpane table.sp-grid td{padding:5px 7px;white-space:nowrap}
 .srcpane .sp-refs{margin-top:18px;border-top:1px solid #eef0f3;padding-top:14px}
 .srcpane .sp-refs-h{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:10px}
 .srcpane .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
@@ -337,6 +341,15 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): string {
 	const rows = peek.rows.map(r =>
 		`<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td></tr>`).join('');
+	// The comp shows the source's raw CSV grid with the latest row (the one the document binds to)
+	// highlighted - rendered above the resolved bound-figure list.
+	const grid = peek.grid;
+	const gridHtml = grid
+		? `<div class="sp-sec">${esc(peek.source)} &middot; latest row applies</div>`
+		+ `<table class="sp-grid"><thead><tr>${grid.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>`
+		+ grid.rows.map((r, i) => `<tr class="${i === grid.latestIndex ? 'sel' : ''}">${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')
+		+ `</tbody></table>`
+		: '';
 	const refs = peek.referencedBy.length
 		? `<div class="sp-refs"><div class="sp-refs-h">REFERENCED BY &middot; ${peek.referencedBy.length} DOCUMENT${peek.referencedBy.length === 1 ? '' : 'S'}</div>`
 		+ peek.referencedBy.map(t => `<div class="sp-ref">&#9636; ${esc(t)}</div>`).join('') + `</div>`
@@ -347,7 +360,7 @@ function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): strin
 	const pane = `<div class="srcpane"><div class="sp-head"><span class="sp-name">&#8862; ${esc(peek.source)}</span>`
 		+ `<span class="sp-meta">source &middot; ${peek.rows.length} bound</span>`
 		+ `<button class="sp-x" data-source-close title="Close source">&#10005;</button></div>`
-		+ `<div class="sp-body"><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
+		+ `<div class="sp-body">${gridHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
 	return `<div class="peekwrap">${pane}${circle}<div class="docside">${docHtml}</div></div>`;
 }
 

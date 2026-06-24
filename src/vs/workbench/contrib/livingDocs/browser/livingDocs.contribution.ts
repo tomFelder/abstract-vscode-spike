@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { disposableTimeout } from '../../../../base/common/async.js';
+import { lockAllSashes } from '../../../../base/browser/ui/sash/sash.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -164,6 +165,19 @@ class HideIdeContainersContribution extends Disposable implements IWorkbenchCont
 	}
 }
 registerWorkbenchContribution2(HideIdeContainersContribution.ID, HideIdeContainersContribution, WorkbenchPhase.BlockRestore);
+
+// G4 (remove IDE optionality): the calm shell has no user-resizable panes. Lock every layout
+// sash into a non-draggable state at startup. The lock is global + sticky, so sashes created
+// later (and re-evaluated on every layout) stay non-interactive. CORE-PATCH (merge-tax ledger).
+class LockLayoutSashesContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.lockLayoutSashes';
+
+	constructor() {
+		super();
+		lockAllSashes();
+	}
+}
+registerWorkbenchContribution2(LockLayoutSashesContribution.ID, LockLayoutSashesContribution, WorkbenchPhase.BlockRestore);
 
 // --- Studio right panel (Chat / Review / History) in the auxiliary bar ---
 const reviewIcon = registerIcon('living-docs-review', Codicon.checklist, localize('livingDocs.reviewIcon', "Living Documents review rail"));

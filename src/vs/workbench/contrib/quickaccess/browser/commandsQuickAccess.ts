@@ -3,12 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { isFirefox } from '../../../../base/browser/browser.js';
 import { raceTimeout, timeout } from '../../../../base/common/async.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { stripIcons } from '../../../../base/common/iconLabels.js';
-import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { Language } from '../../../../base/common/platform.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { IEditor } from '../../../../editor/common/editorCommon.js';
@@ -21,7 +19,6 @@ import { IConfigurationChangeEvent, IConfigurationService } from '../../../../pl
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
-import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { CommandsHistory, ICommandQuickPick } from '../../../../platform/quickinput/browser/commandsQuickAccess.js';
 import { TriggerAction } from '../../../../platform/quickinput/browser/pickerQuickAccess.js';
@@ -275,16 +272,13 @@ export class ShowAllCommandsAction extends Action2 {
 	static readonly ID = 'workbench.action.showCommands';
 
 	constructor() {
+		// LIVING DOCS (G4 - remove IDE optionality): the command palette is removed from the
+		// calm shell. No keybinding (no Cmd/Ctrl+Shift+P, no F1) and not listed in any palette
+		// (f1: false). CORE-PATCH (merge-tax ledger).
 		super({
 			id: ShowAllCommandsAction.ID,
 			title: localize2('showTriggerActions', 'Show All Commands'),
-			keybinding: {
-				weight: KeybindingWeight.WorkbenchContrib,
-				when: undefined,
-				primary: !isFirefox ? (KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyP) : undefined,
-				secondary: [KeyCode.F1]
-			},
-			f1: true
+			f1: false
 		});
 	}
 

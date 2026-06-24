@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { disposableTimeout } from '../../../../base/common/async.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -15,6 +16,8 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IViewsService } from '../../../services/views/common/viewsService.js';
+import { DOCUMENTS_CONTAINER_ID } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenId } from './screenRender.js';
 
@@ -47,6 +50,7 @@ export class ScreenLauncherView extends ViewPane {
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@IEditorService private readonly _editors: IEditorService,
+		@IViewsService private readonly _viewsService: IViewsService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -61,10 +65,14 @@ export class ScreenLauncherView extends ViewPane {
 		this._injectStyles(container);
 		this._renderContent();
 		// Selecting the activity-bar icon reveals this view; open the screen in the main area so the
-		// icon-nav behaves like the comp (icon -> full screen), without stealing focus from the panel.
+		// icon-nav behaves like the comp (icon -> full screen). Then bounce the sidebar back to the
+		// tree-rail (Workspace) container so the comp's persistent left rail stays put rather than this
+		// stub launcher (v3 iter 11 - closes the stub-launcher wrinkle). The bounce is deferred a tick so
+		// it runs after the activity bar finishes revealing this container.
 		this._register(this.onDidChangeBodyVisibility(visible => {
 			if (visible) {
 				this._open(false);
+				this._register(disposableTimeout(() => void this._viewsService.openViewContainer(DOCUMENTS_CONTAINER_ID, false), 0));
 			}
 		}));
 	}

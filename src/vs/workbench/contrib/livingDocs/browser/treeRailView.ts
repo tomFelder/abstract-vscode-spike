@@ -18,6 +18,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { buildContextGroups } from '../common/contextGroups.js';
+import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
 import { buildFileTree, buildOutline, ITreeRailItem, searchTreeRail } from '../common/treeRail.js';
 
@@ -40,6 +41,10 @@ export class TreeRailView extends ViewPane {
 	private _renderToken = 0;
 	private _tab: TreeRailTab = 'files';
 	private _query = '';
+	// Context-tab "Add context" composer state, kept across re-renders (onDidChange re-renders the rail).
+	private _ctxAdding = false;
+	private _ctxKind: AddedContextKind = 'pasted';
+	private _ctxDraft = '';
 	private readonly _renderDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -147,8 +152,7 @@ export class TreeRailView extends ViewPane {
 		}
 		const groups = buildContextGroups(doc, this._livingDocs.getFreshness(resource), this._livingDocs.getAddedContext(resource));
 		if (!groups.length) {
-			append(panel, $('div.rail-empty')).textContent = 'No linked context.';
-			return;
+			append(panel, $('div.rail-empty')).textContent = 'No linked context yet.';
 		}
 		for (const group of groups) {
 			append(panel, $('div.rail-folder')).textContent = `${group.label.toUpperCase()} \u00B7 ${group.items.length}`;
@@ -158,6 +162,57 @@ export class TreeRailView extends ViewPane {
 				if (ci.detail) { append(row, $('span.rail-item-detail')).textContent = ci.detail; }
 			}
 		}
+		this._renderAddContext(panel, resource);
+	}
+
+	// The comp's "+ Add context" affordance at the foot of the Context tab. Collapsed to a single button;
+	// expands to a kind picker (Pasted text / Image / Company knowledge) + an input that calls the
+	// service's addContext (data model already supports all three kinds) - so the user can populate the
+	// Pasted text / Images / Company knowledge groups the data model defines.
+	private _renderAddContext(panel: HTMLElement, resource: URI): void {
+		if (!this._ctxAdding) {
+			const add = append(panel, $('button.rail-addctx')) as HTMLButtonElement;
+			add.textContent = '\uFF0B Add context';
+			this._renderDisposables.add(addDisposableListener(add, 'click', () => { this._ctxAdding = true; void this._render(); }));
+			return;
+		}
+
+		const form = append(panel, $('div.rail-addctx-form'));
+		const kinds: { kind: AddedContextKind; label: string }[] = [
+			{ kind: 'pasted', label: 'Pasted text' },
+			{ kind: 'image', label: 'Image' },
+			{ kind: 'knowledge', label: 'Company knowledge' },
+		];
+		const chips = append(form, $('div.rail-addctx-kinds'));
+		for (const k of kinds) {
+			const chip = append(chips, $(`button.rail-addctx-chip${this._ctxKind === k.kind ? '.active' : ''}`)) as HTMLButtonElement;
+			chip.textContent = k.label;
+			this._renderDisposables.add(addDisposableListener(chip, 'click', () => { this._ctxKind = k.kind; void this._render(); }));
+		}
+
+		const input = append(form, $('textarea.rail-addctx-input')) as HTMLTextAreaElement;
+		input.placeholder = this._ctxKind === 'image' ? 'Image path or URL\u2026' : this._ctxKind === 'knowledge' ? 'A company fact the agent should know\u2026' : 'Paste a note for the agent\u2026';
+		input.value = this._ctxDraft;
+		this._renderDisposables.add(addDisposableListener(input, 'input', () => { this._ctxDraft = input.value; }));
+
+		const actions = append(form, $('div.rail-addctx-actions'));
+		const submit = append(actions, $('button.rail-addctx-add')) as HTMLButtonElement;
+		submit.textContent = 'Add';
+		const doAdd = async () => {
+			const text = this._ctxDraft.trim();
+			if (!text) { return; }
+			this._ctxAdding = false;
+			this._ctxDraft = '';
+			await this._livingDocs.addContext(resource, this._ctxKind, text);
+		};
+		this._renderDisposables.add(addDisposableListener(submit, 'click', () => void doAdd()));
+		const cancel = append(actions, $('button.rail-addctx-cancel')) as HTMLButtonElement;
+		cancel.textContent = 'Cancel';
+		this._renderDisposables.add(addDisposableListener(cancel, 'click', () => { this._ctxAdding = false; this._ctxDraft = ''; void this._render(); }));
+
+		// Keep focus on the input so a background re-render does not interrupt typing.
+		input.focus();
+		input.setSelectionRange(this._ctxDraft.length, this._ctxDraft.length);
 	}
 
 	private _renderOutline(panel: HTMLElement): void {
@@ -234,6 +289,16 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-outline.lvl-3{padding-left:30px;color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-search{width:100%;box-sizing:border-box;border:1px solid var(--vscode-input-border,#d8e0fb);background:var(--vscode-input-background,#fff);color:var(--vscode-input-foreground);border-radius:8px;padding:8px 10px;font:400 12.5px/1 system-ui;outline:none;margin-bottom:6px}
 		.living-docs-rail .rail-results-count{font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground);padding:4px 6px 8px}
+		.living-docs-rail .rail-addctx{display:block;width:100%;box-sizing:border-box;margin:12px 0 4px;border:1px dashed var(--vscode-input-border,#d3d8e0);background:none;color:oklch(0.55 0.13 255);border-radius:8px;padding:9px;font:500 12px/1 system-ui;cursor:pointer;text-align:left}
+		.living-docs-rail .rail-addctx:hover{background:var(--vscode-list-hoverBackground);border-style:solid}
+		.living-docs-rail .rail-addctx-form{margin:12px 0 4px;border:1px solid var(--vscode-input-border,#e0e6ff);background:var(--vscode-editorWidget-background,#fff);border-radius:9px;padding:9px}
+		.living-docs-rail .rail-addctx-kinds{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
+		.living-docs-rail .rail-addctx-chip{border:1px solid var(--vscode-input-border,#e0e6ff);background:none;color:var(--vscode-descriptionForeground);border-radius:6px;padding:5px 8px;font:500 11px/1 system-ui;cursor:pointer}
+		.living-docs-rail .rail-addctx-chip.active{background:#eef2fb;border-color:oklch(0.55 0.13 255);color:oklch(0.45 0.13 255)}
+		.living-docs-rail .rail-addctx-input{width:100%;box-sizing:border-box;resize:vertical;min-height:48px;border:1px solid var(--vscode-input-border,#d8e0fb);background:var(--vscode-input-background,#fff);color:var(--vscode-input-foreground);border-radius:7px;padding:7px 9px;font:400 12px/1.45 system-ui;outline:none}
+		.living-docs-rail .rail-addctx-actions{display:flex;gap:6px;margin-top:8px}
+		.living-docs-rail .rail-addctx-add{flex:1;border:none;border-radius:7px;padding:7px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+		.living-docs-rail .rail-addctx-cancel{border:1px solid var(--vscode-input-border,#e0e2e8);border-radius:7px;padding:7px 12px;background:none;color:var(--vscode-descriptionForeground);font:500 12px/1 system-ui;cursor:pointer}
 		`;
 		container.appendChild(style);
 	}

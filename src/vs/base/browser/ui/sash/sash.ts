@@ -158,6 +158,19 @@ export function setGlobalHoverDelay(size: number): void {
 	onDidChangeHoverDelay.fire(size);
 }
 
+// LIVING DOCS (G4 - remove IDE optionality): a global lock that forces every {@link Sash}
+// into a non-interactive Disabled state so the calm shell has no user-draggable layout
+// dividers (no resizable panes). When locked, the state setter coerces any requested state
+// to Disabled and all existing sashes are disabled immediately. CORE-PATCH (merge-tax ledger).
+let globalSashesLocked = false;
+const liveSashes = new Set<Sash>();
+export function lockAllSashes(): void {
+	globalSashesLocked = true;
+	for (const sash of liveSashes) {
+		sash.state = SashState.Disabled;
+	}
+}
+
 interface PointerEvent extends EventLike {
 	readonly pageX: number;
 	readonly pageY: number;
@@ -281,6 +294,10 @@ export class Sash extends Disposable {
 	 * as well as what mouse cursor to use, when hovered.
 	 */
 	set state(state: SashState) {
+		if (globalSashesLocked) {
+			state = SashState.Disabled;
+		}
+
 		if (this._state === state) {
 			return;
 		}
@@ -415,6 +432,9 @@ export class Sash extends Disposable {
 
 		this.el = append(container, $('.monaco-sash'));
 
+		liveSashes.add(this);
+		this._register(toDisposable(() => liveSashes.delete(this)));
+
 		if (options.orthogonalEdge) {
 			this.el.classList.add(`orthogonal-edge-${options.orthogonalEdge}`);
 		}
@@ -479,6 +499,10 @@ export class Sash extends Disposable {
 		}
 
 		this.el.classList.toggle('debug', DEBUG);
+
+		if (globalSashesLocked) {
+			this.state = SashState.Disabled;
+		}
 
 		this.layout();
 	}

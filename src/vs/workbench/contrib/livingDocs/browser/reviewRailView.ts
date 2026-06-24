@@ -20,16 +20,16 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { ILivingDocsService, ISkillCheck } from '../common/livingDocs.js';
 import { IAuditEntry, IProposedChange } from '../common/livingDocsModel.js';
 
-type PanelTab = 'chat' | 'review' | 'history' | 'skills';
+type PanelTab = 'chat' | 'review' | 'history';
 
 function esc(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// The Studio right panel: a Chat / Review / History / Skills tabbed surface matching the Workbench
-// hi-fi. Review shows the real pending meaning-changes (wired to approve/reject); Chat is the agent
-// front door; History is the version timeline (seeded from the real audit when present); Skills lists
-// the document agents that run on the file. Our own surface -- no core patch.
+// The Studio right panel: the comp's exact Chat / Review / History 3-tab surface. Chat is the agent
+// front door; Review shows the real pending meaning-changes (wired to approve/reject) AND the document
+// checks (the skill graders, folded in here so the tab strip matches the comp - v3 iter 3); History is
+// the version timeline (seeded from the real audit when present). Our own surface -- no core patch.
 export class ReviewRailView extends ViewPane {
 
 	private _root: HTMLElement | undefined;
@@ -56,7 +56,8 @@ export class ReviewRailView extends ViewPane {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
 
-	// The Skills tab grades the active document, so re-render when the active editor changes.
+	// The Review tab grades the active document (the checks section), so re-render when the active
+	// editor changes.
 	private _activeDoc(): URI | undefined {
 		const resource = this._editors.activeEditor?.resource;
 		return resource && this._livingDocs.getDoc(resource)?.isLiving ? resource : undefined;
@@ -69,7 +70,7 @@ export class ReviewRailView extends ViewPane {
 		this._injectStyles(container);
 		this._register(this._livingDocs.onDidChange(() => this._render()));
 		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
-		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'skills' || this._activeTab === 'chat') { this._render(); } }));
+		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'review' || this._activeTab === 'chat') { this._render(); } }));
 		this._render();
 	}
 
@@ -98,7 +99,6 @@ export class ReviewRailView extends ViewPane {
 		addTab('chat', 'Chat');
 		addTab('review', 'Review', pending.length);
 		addTab('history', 'History');
-		addTab('skills', 'Skills');
 
 		// --- content ---
 		const content = append(root, $('div.ldp-content'));
@@ -106,8 +106,6 @@ export class ReviewRailView extends ViewPane {
 			this._renderChat(content, pending.length);
 		} else if (this._activeTab === 'history') {
 			this._renderHistory(content, audit);
-		} else if (this._activeTab === 'skills') {
-			this._renderSkills(content);
 		} else {
 			this._renderReview(content, pending);
 		}
@@ -169,23 +167,28 @@ export class ReviewRailView extends ViewPane {
 				this._renderDisposables.add(addDisposableListener(reject, 'click', () => this._livingDocs.reject(change.id)));
 			}
 		}
+
+		// Document checks (the skill graders) live inside Review now, so the tab strip matches the comp's
+		// 3 tabs (v3 iter 3). They sit below the pending changes as a "what else to look at" section.
+		this._appendChecks(content);
 	}
 
 	private _renderHistory(content: HTMLElement, audit: readonly IAuditEntry[]): void {
 		content.innerHTML = historyHtml(audit);
 	}
 
-	private _renderSkills(content: HTMLElement): void {
+	private _appendChecks(parent: HTMLElement): void {
 		const resource = this._activeDoc();
 		const report = resource ? this._livingDocs.getSkillReport(resource) : [];
 		const title = resource ? this._livingDocs.getDoc(resource)?.title : undefined;
-		content.innerHTML = skillsHtml(report, title);
+		const section = append(parent, $('div.ldr-checks'));
+		section.innerHTML = skillsHtml(report, title);
 		// "Run" / "Re-run" re-grade the live document (Strategy calls the model via the proxy); "Apply fix"
 		// applies a skill's deterministic edit (Formatting title-cases the flagged headings). Both re-render
 		// when the service fires onDidChange.
-		this._renderDisposables.add(addDisposableListener(content, 'click', e => {
+		this._renderDisposables.add(addDisposableListener(section, 'click', e => {
 			let el = e.target as HTMLElement | null;
-			while (el && el !== content) {
+			while (el && el !== section) {
 				const fixId = el.getAttribute('data-skill-fix');
 				if (fixId) {
 					if (resource) { void this._livingDocs.applySkillFix(resource, fixId as ISkillCheck['id']); }
@@ -396,13 +399,14 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldr-diff{border:1px solid #eceef2;border-radius:7px;overflow:hidden;margin-bottom:10px}
 		.living-docs-panel .ldr-o{background:#fdecec;color:#7a3a38;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.4);padding:8px 10px;font:400 12.5px/1.45 system-ui}
 		.living-docs-panel .ldr-n{background:#e7f6ec;color:#1f5a36;padding:8px 10px;font:400 12.5px/1.45 system-ui}
-		.living-docs-panel .ldr-why{font:400 11.5px/1.5 system-ui;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:7px;padding:8px 10px;margin-bottom:10px}
+		.living-docs-panel .ldr-why{font:400 12.5px/1.55 system-ui;color:#4a4f6a;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:9px;padding:11px 12px;margin-bottom:16px}
 		.living-docs-panel .ldr-meta{display:flex;flex-wrap:wrap;gap:12px;font:600 10px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#868b95;margin-bottom:12px}
 		.living-docs-panel .ldr-actions{display:flex;gap:8px}
-		.living-docs-panel .ldr-approve{flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+		.living-docs-panel .ldr-approve{flex:1;border:none;border-radius:8px;padding:11px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1 system-ui;cursor:pointer}
 		.living-docs-panel .ldr-approve:hover{background:oklch(0.5 0.13 255)}
-		.living-docs-panel .ldr-reject{border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer}
+		.living-docs-panel .ldr-reject{border:1px solid #e0e2e8;border-radius:8px;padding:11px 16px;background:#fff;color:#696e78;font:500 13px/1 system-ui;cursor:pointer}
 		.living-docs-panel .ldr-reject:hover{background:#f4f5f7}
+		.living-docs-panel .ldr-checks{margin-top:6px;padding-top:16px;border-top:1px solid #eef0f3}
 		`;
 		container.appendChild(style);
 	}
@@ -415,9 +419,9 @@ export class ReviewRailView extends ViewPane {
 	}
 }
 
-// ---- Static comp-faithful tab bodies (History / Skills). Light colours match the registered
-// "Opportunity OS" theme, so hardcoding them here reproduces the comp exactly. (Chat is now a live
-// DOM surface in _renderChat, not a static string.) ----
+// ---- Static comp-faithful bodies (History, and the document-checks section folded into Review).
+// Light colours match the registered "Opportunity OS" theme, so hardcoding them here reproduces the
+// comp exactly. (Chat is now a live DOM surface in _renderChat, not a static string.) ----
 
 function timelineRow(dot: string, title: string, badge: string, body: string, meta: string, last: boolean): string {
 	const connector = last ? '' : `<span style="flex:1;width:2px;background:#e6e8ed"></span>`;

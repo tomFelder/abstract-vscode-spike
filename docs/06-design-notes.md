@@ -144,3 +144,11 @@ to a guess:
   rather than activity-bar containers that swap the sidebar — fights VS Code's one-icon-per-container
   model and likely needs a `styleOverrides`-CSS pass and/or a small core seam. Treat it as its own
   iteration, not part of the tree-rail build.
+- **(v3 iter 2) "Calm by construction" means no optionality, not just no chrome (closes G4).** A
+  document app has **no command palette** and **no user-resizable panes** - those are IDE affordances
+  that say "this is a tool you configure," the opposite of the comp's opinionated single surface. v2
+  removed the *visible* chrome; v3 removes the last two *reachable* affordances at the source: the
+  palette/Quick-Open keybindings (so `Cmd+Shift+P` / `F1` / `Cmd+P` and the `>` command mode do
+  nothing) and a global lock that makes every layout sash non-draggable. Design intent going forward:
+  **the shell layout is set, not negotiated** - widths/positions are product decisions (decision 27),
+  and the user resizes nothing. This is the design rule, not a one-off fix.
