@@ -173,6 +173,12 @@ export interface ILivingDocsService {
 	/** Run an agent now over its flow documents (or the whole workspace if it scopes none). */
 	runAgent(agentId: string): Promise<IAgentRun | undefined>;
 
+	/** The name of the currently open workspace folder (the "project"), or undefined when none is open. */
+	getWorkspaceFolderName(): string | undefined;
+
+	/** Prompt for and open a local folder as the workspace (the on-ramp; FSA on web, native dialog on desktop). */
+	openFolder(): Promise<void>;
+
 	/** Create a new blank Living Document from a template in the workspace and return its resource. */
 	createDocument(): Promise<URI | undefined>;
 

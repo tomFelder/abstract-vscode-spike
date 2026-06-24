@@ -186,3 +186,12 @@ to a guess:
   Home that reflects the folder, add-source/add-context affordances) rather than building a data layer — the
   inverse of the usual "UI exists, wire it up" shape. The one true plumbing gap is verification: `code-web`
   writes to memfs, so disk-persistence is proven on the desktop `code.sh` build (Decision #38).
+- **(v5 iter 2) The Home dashboard is the on-ramp, not a demo.** The comp's Home showed a multi-project
+  dashboard with hardcoded cards ("Opportunity OS", "Acme Co", a "New project" tile). With real folders
+  (decision #39 — the folder IS the project), Home is reframed: when no folder is open it is a single calm
+  invitation ("Open a folder to begin" + one button); when a folder is open it shows that folder's name and
+  a grid of its real documents (living ones carry a small "Living" badge, plain `.md` read "Markdown"), each
+  card opening the doc. The greeting stays, but the four fictional project cards and the no-op "New project"
+  button are gone — "New project" becomes "Open another folder" / "New document". The lesson: the comp's
+  dashboard was a *mock of a populated state*; the real product needs the empty/on-ramp state first, and the
+  populated state must read from the open folder, not from fixtures.

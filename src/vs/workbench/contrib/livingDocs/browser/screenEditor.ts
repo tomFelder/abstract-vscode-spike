@@ -5,6 +5,7 @@
 
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { IAgentRun } from '../common/livingDocsModel.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
@@ -17,7 +18,7 @@ import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ILivingDocsService } from '../common/livingDocs.js';
+import { ILivingDocSummary, ILivingDocsService } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { AgentFilter, renderScreenHtml, ScreenId } from './screenRender.js';
 
@@ -27,6 +28,8 @@ interface IScreenEditorState {
 	openAgentId?: string;
 	filter: AgentFilter;
 	lastRun?: IAgentRun;
+	// Home: the documents discovered in the open folder (fetched async; the folder name is read live at render).
+	docs?: readonly ILivingDocSummary[];
 }
 
 // Webview editor that hosts one Opportunity OS screen (Templates / Knowledge / Agents) in the
@@ -72,10 +75,28 @@ export class ScreenEditor extends EditorPane {
 		this._screen = input.screen;
 		// Reset per-screen state on (re)open so each visit starts from the default view.
 		this._state = { knScope: 'org', filter: 'all' };
+		// Home reflects the open folder: fetch its documents before the first render so there is no flash.
+		if (this._screen === 'home') {
+			this._state = { ...this._state, docs: await this._livingDocs.listDocuments() };
+		}
 		this._inputDisposables.clear();
-		// Re-render when agent status / the registry changes (e.g. a run completes or a trigger fires).
-		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
+		// Re-render when agent status / the document set changes (e.g. a run completes, a doc is created).
+		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._onDidChange()));
 		this._mountWebview();
+	}
+
+	// A document or agent changed: re-fetch the Home document list (so a new/removed doc shows), else re-render.
+	private _onDidChange(): void {
+		if (this._screen === 'home') {
+			void this._refreshHome();
+		} else {
+			this._render();
+		}
+	}
+
+	private async _refreshHome(): Promise<void> {
+		this._state = { ...this._state, docs: await this._livingDocs.listDocuments() };
+		this._render();
 	}
 
 	// Recreate the webview fresh and render the current screen into it. Called on setInput and whenever
@@ -141,6 +162,15 @@ export class ScreenEditor extends EditorPane {
 			case 'goTemplates':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'templates'), { pinned: true });
 				break;
+			case 'openFolder':
+				void this._livingDocs.openFolder();
+				break;
+			case 'newDocument':
+				void this._livingDocs.createDocument();
+				break;
+			case 'openDoc':
+				if (message.arg) { void this._editors.openEditor({ resource: URI.parse(message.arg), options: { pinned: true } }); }
+				break;
 		}
 	}
 
@@ -163,8 +193,9 @@ export class ScreenEditor extends EditorPane {
 	}
 
 	private _render(): void {
-		// Inject the live agent registry at render time so the Agents view always reflects current state.
-		this._webview?.setHtml(renderScreenHtml(this._screen, { ...this._state, agents: this._livingDocs.getAgents() }));
+		// Inject the live agent registry + the open-folder state at render time so Home/Agents reflect current state.
+		const folderName = this._livingDocs.getWorkspaceFolderName();
+		this._webview?.setHtml(renderScreenHtml(this._screen, { ...this._state, agents: this._livingDocs.getAgents(), hasFolder: !!folderName, folderName }));
 	}
 
 	layout(dimension: Dimension): void {

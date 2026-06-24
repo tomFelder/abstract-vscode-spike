@@ -12,6 +12,8 @@ import { basename, dirname, joinPath } from '../../../../base/common/resources.j
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
+import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IHostService } from '../../../services/host/browser/host.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
@@ -158,6 +160,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@ILogService private readonly _log: ILogService,
 		@IRequestService private readonly _request: IRequestService,
 		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
+		@IFileDialogService private readonly _fileDialog: IFileDialogService,
+		@IHostService private readonly _host: IHostService,
 	) {
 		super();
 		this._lockStore = new SidecarLockStore(this._files);
@@ -327,11 +331,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const found = new Map<string, URI>();
 		// Always include documents already loaded (e.g. the open editor), even if discovery misses them.
 		for (const state of this._docs.values()) {
-			if (state.doc.isLiving) { found.set(state.uri.toString(), state.uri); }
+			found.set(state.uri.toString(), state.uri);
 		}
-		// Scan each workspace folder for Living Documents so the home renders before anything is opened.
+		// Scan each workspace folder for every Markdown document so the home reflects the real folder
+		// (the folder IS the project); living vs plain is carried per-summary for the badge.
 		for (const folder of this._workspace.getWorkspace().folders) {
-			await this._collectLivingDocs(folder.uri, found, 0);
+			await this._collectDocs(folder.uri, found, 0);
 		}
 		const summaries: ILivingDocSummary[] = [];
 		for (const uri of found.values()) {
@@ -340,6 +345,20 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		summaries.sort((a, b) => a.title.localeCompare(b.title));
 		return summaries;
+	}
+
+	getWorkspaceFolderName(): string | undefined {
+		return this._workspace.getWorkspace().folders[0]?.name;
+	}
+
+	// The on-ramp: prompt for a local folder and open it as the workspace. `showOpenDialog` uses the
+	// browser File System Access picker on web (real-disk, via the html file-system provider) and the
+	// native dialog on desktop; `openWindow` reloads the workbench with the picked folder as the workspace.
+	async openFolder(): Promise<void> {
+		const picked = await this._fileDialog.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, title: 'Open Folder' });
+		if (picked && picked.length) {
+			await this._host.openWindow([{ folderUri: picked[0] }], { forceReuseWindow: true });
+		}
 	}
 
 	async createDocument(): Promise<URI | undefined> {
@@ -360,10 +379,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// Recursively collect Living Documents (clean `.md` with bind links / dependency frontmatter, or a
-	// sibling lock) under a folder, skipping hidden and dependency directories. Bounded in depth so a
-	// large workspace can never make the home hang.
-	private async _collectLivingDocs(dir: URI, found: Map<string, URI>, depth: number): Promise<void> {
+	// Recursively collect every Markdown document under a folder (the folder is the project), skipping
+	// hidden and dependency directories. Bounded in depth so a large workspace can never make the home hang.
+	private async _collectDocs(dir: URI, found: Map<string, URI>, depth: number): Promise<void> {
 		if (depth > 4) { return; }
 		let children;
 		try {
@@ -376,11 +394,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const name = basename(child.resource);
 			if (child.isDirectory) {
 				if (name.startsWith('.') || name === 'node_modules' || name === 'out') { continue; }
-				await this._collectLivingDocs(child.resource, found, depth + 1);
-			} else if (await this._isLivingDocFile(child.resource)) {
+				await this._collectDocs(child.resource, found, depth + 1);
+			} else if (this._isDocFile(child.resource)) {
 				found.set(child.resource.toString(), child.resource);
 			}
 		}
+	}
+
+	// A document is any `.md` file; generated `.export.md` / `.source.md` views are skipped. Whether it is
+	// "living" (declares sources/context or carries bind links) is resolved per-summary for the badge.
+	private _isDocFile(resource: URI): boolean {
+		const path = resource.path;
+		return path.endsWith('.md') && !path.endsWith('.export.md') && !path.endsWith('.source.md');
 	}
 
 	// A `.md` is a Living Document when its content declares sources/context or carries bind links.

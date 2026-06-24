@@ -10,6 +10,7 @@
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
 import { IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger } from '../common/livingDocsModel.js';
+import { ILivingDocSummary } from '../common/livingDocs.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents';
 
@@ -26,6 +27,12 @@ export interface IScreenState {
 	readonly filter: AgentFilter;
 	/** Agents: the result of the most recent Run now, for the canvas banner. */
 	readonly lastRun?: IAgentRun;
+	/** Home: whether a workspace folder (the "project") is open. */
+	readonly hasFolder?: boolean;
+	/** Home: the open folder's name, shown as the project. */
+	readonly folderName?: string;
+	/** Home: the documents discovered in the open folder (all Markdown, living flagged for the badge). */
+	readonly docs?: readonly ILivingDocSummary[];
 }
 
 function esc(s: string): string {
@@ -92,46 +99,63 @@ function withTopBar(html: string, crumb: string): string {
 
 export function renderScreenHtml(screen: ScreenId, state: IScreenState): string {
 	switch (screen) {
-		case 'home': return page(withTopBar(renderHome(), 'Home'));
+		case 'home': return page(withTopBar(renderHome(state), 'Home'));
 		case 'templates': return page(withTopBar(renderTemplates(), 'Templates'));
 		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge'));
 		case 'agents': return page(withTopBar(renderAgents(state), 'Agents'));
 	}
 }
 
-// ---- Home: the landing dashboard -- greeting, quick start, and the projects grid. ----
-function renderHome(): string {
-	const quick = (msg: string, iconBg: string, iconFg: string, icon: string, title: string, sub: string, primary: boolean) => `<button ${msg ? `data-msg="${msg}" ` : ''}style="flex:1;min-width:200px;text-align:left;border:1px solid ${primary ? '#e0e6ff' : '#e9eaee'};background:${primary ? '#f7f9ff' : '#fff'};border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:${iconBg};color:${iconFg};font-size:${primary ? '17px' : '16px'};display:flex;align-items:center;justify-content:center">${icon}</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">${title}</span><span style="font:400 12px/1.3 system-ui;color:#868b95">${sub}</span></span></button>`;
-	const since = (dot: string, html: string) => `<div style="display:flex;gap:9px;margin-bottom:9px"><span style="width:7px;height:7px;border-radius:50%;background:${dot};margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#3a3f49">${html}</span></div>`;
-	const project = (mono: string, monoBg: string, name: string, badge: string, stats: string, since1: string, since2: string, actions: string) => `<div style="background:#fff;border:1px solid #e9eaee;border-radius:13px;overflow:hidden;display:flex;flex-direction:column">
-		<div style="padding:16px 17px 14px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:3px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:${monoBg};color:#fff;font:600 12px/1 system-ui;display:flex;align-items:center;justify-content:center">${mono}</span><span style="font:600 15px/1.2 system-ui;color:#15171c">${name}</span>${badge}</div><div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;padding-left:36px">${stats}</div></div>
-		<div style="margin:0 17px;border-top:1px solid #f1f2f5;padding:13px 0 4px"><div style="font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#bcc0c8;margin-bottom:9px">SINCE YOUR LAST VISIT</div>${since1}${since2}</div>
-		<div style="margin-top:auto;display:flex;gap:8px;padding:14px 17px;border-top:1px solid #f1f2f5">${actions}</div></div>`;
-	const toApprove = `<span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 9px">1 TO APPROVE</span>`;
-	const healthy = `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font:600 10px/1 system-ui;color:#1f7a44"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Healthy</span>`;
-	const reviewBtn = `<button data-msg="goReview" style="border:none;border-radius:8px;padding:9px 14px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Review change</button>`;
-	const openBtn = `<button data-msg="present" style="border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer">Open project</button>`;
-	const grey = '#cfd3da', amber = 'oklch(0.66 0.16 45)', green = 'oklch(0.6 0.13 150)';
+// ---- Home: the landing dashboard. The open folder IS the project (decision #39): an empty state when no
+// folder is open, otherwise the folder's name + every Markdown document (living ones badged). ----
+function renderHome(state: IScreenState): string {
+	const quick = (msg: string, iconBg: string, iconFg: string, icon: string, title: string, sub: string, primary: boolean) => `<button data-msg="${msg}" style="flex:1;min-width:200px;text-align:left;border:1px solid ${primary ? '#e0e6ff' : '#e9eaee'};background:${primary ? '#f7f9ff' : '#fff'};border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:${iconBg};color:${iconFg};font-size:${primary ? '17px' : '16px'};display:flex;align-items:center;justify-content:center">${icon}</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">${title}</span><span style="font:400 12px/1.3 system-ui;color:#868b95">${sub}</span></span></button>`;
+	const scroll = (inner: string) => `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">${inner}</div></div>`;
 
-	return `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">
-		<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
-			<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:10px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;font:400 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">Saturday, Jun 20</div></div>
-			<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#696e78">Across <strong style="font-weight:600;color:#3a3f49">4 projects</strong> &mdash; <strong style="font-weight:600;color:#9a6b16">2 changes need your approval</strong>, and 3 agents ran since you were last here.</p>
-			<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">QUICK START</div>
-			<div style="display:flex;gap:12px;margin-bottom:34px;flex-wrap:wrap">
-				${quick('', ACCENT, '#fff', '&#65291;', 'New project', 'Bind sources, set agents', true)}
-				${quick('goTemplates', '#eef1f6', '#52575f', '&#9636;', 'New doc from template', 'Weekly report, Quote, SOP&hellip;', false)}
-				${quick('goEditor', '#eef1f6', '#52575f', '&#9998;', 'Blank document', 'Start writing, link later', false)}
+	// No folder open: a single calm invitation to open one (the on-ramp).
+	if (!state.hasFolder) {
+		return `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb;display:flex;align-items:center;justify-content:center">
+			<div style="text-align:center;max-width:430px;padding:40px">
+				<div style="font-size:42px;line-height:1;margin-bottom:16px">&#128193;</div>
+				<h1 style="margin:0 0 10px;font:600 23px/1.25 system-ui;color:#15171c;letter-spacing:-.01em">Open a folder to begin</h1>
+				<p style="margin:0 0 24px;font:400 14px/1.6 system-ui;color:#696e78">Living Documents works on a folder of Markdown files on your computer. Open one to see its documents, sources and agents &mdash; everything stays on disk.</p>
+				<button data-msg="openFolder" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">Open folder&hellip;</button>
 			</div>
-			<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2">YOUR PROJECTS</div><div style="display:flex;gap:5px"><span style="font:500 11.5px/1 system-ui;color:#15181f;background:#fff;border:1px solid #e6e8ed;border-radius:7px;padding:6px 10px">All &middot; 4</span><span style="font:500 11.5px/1 system-ui;color:#9a6b16;padding:6px 10px">Needs approval &middot; 2</span></div></div>
-			<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-				${project('OS', ACCENT, 'Opportunity OS', toApprove, '6 docs &middot; 4 sources &middot; 3 agents', since(amber, '<strong style="font-weight:600">Weekly refresh</strong> ran 2m ago &mdash; 3 figures applied to Weekly Summary, <strong style="font-weight:600;color:#9a6b16">1 narrative change awaiting approval</strong>.'), since(grey, 'Board Note auto-updated from kpi.webhook &middot; no review needed.'), reviewBtn + openBtn)}
-				${project('AC', '#0e7c66', 'Acme Co &mdash; Client', healthy, '3 docs &middot; 1 source &middot; 1 agent', since(green, '<strong style="font-weight:600">Quote &rarr; tracker</strong> extracted 2 new line items from <em>Acme SOW.pdf</em> into the pipeline.'), since(grey, 'Client Update draft regenerated &middot; ready to send.'), openBtn)}
-				${project('F3', '#5a3ea8', 'Fund III &mdash; LP Reporting', toApprove, '4 docs &middot; 2 sources &middot; 2 agents', since(amber, 'Portfolio markdown detected &mdash; <strong style="font-weight:600;color:#9a6b16">a TVPI figure dropped</strong>, so the LP letter&#39;s tone change needs sign-off.'), since(grey, 'Capital-account tables refreshed for all 12 LPs.'), reviewBtn + openBtn)}
-				${project('JS', '#b5642a', 'Job Search 2026', healthy, '2 docs &middot; 1 source &middot; 1 agent', since(grey, '<strong style="font-weight:600;color:#3a3f49">Weekly tracker</strong> compiled 4 new applications from the inbox &middot; status synced.'), '', openBtn)}
-			</div>
+		</div></div>`;
+	}
+
+	const docs = state.docs ?? [];
+	const folderName = state.folderName ?? 'Workspace';
+	const livingCount = docs.filter(d => d.isLiving).length;
+	const countLabel = `${docs.length} document${docs.length === 1 ? '' : 's'}${livingCount ? ` &middot; ${livingCount} living` : ''}`;
+
+	const livingBadge = `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;color:${ACCENT_DK};background:#eef2ff;border-radius:999px;padding:5px 9px"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT}"></span>Living</span>`;
+	const docCard = (d: ILivingDocSummary) => {
+		const sub = d.isLiving
+			? (d.sources.length ? `${d.sources.length} source${d.sources.length === 1 ? '' : 's'}: ${esc(d.sources.join(', '))}` : 'Living document')
+			: 'Markdown';
+		return `<button data-msg="openDoc" data-arg="${esc(d.resource.toString())}" style="text-align:left;background:#fff;border:1px solid #e9eaee;border-radius:13px;padding:16px 17px;cursor:pointer;display:flex;flex-direction:column;gap:6px">
+			<div style="display:flex;align-items:center;gap:10px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:${d.isLiving ? '#eef2ff' : '#f1f2f5'};color:${d.isLiving ? ACCENT_DK : '#868b95'};font-size:13px;display:flex;align-items:center;justify-content:center">&#9636;</span><span style="font:600 14.5px/1.2 system-ui;color:#15171c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.title)}</span>${d.isLiving ? livingBadge : ''}</div>
+			<div style="font:400 11.5px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;padding-left:36px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sub}</div>
+		</button>`;
+	};
+
+	const grid = docs.length
+		? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${docs.map(docCard).join('')}</div>`
+		: `<div style="background:#fff;border:1px dashed #d7dae1;border-radius:13px;padding:34px;text-align:center"><div style="font:600 14.5px/1.3 system-ui;color:#3a3f49;margin-bottom:6px">No documents yet</div><div style="font:400 13px/1.5 system-ui;color:#868b95;margin-bottom:16px">This folder has no Markdown documents. Create one to get started.</div><button data-msg="newDocument" style="border:none;border-radius:9px;padding:10px 18px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer">New document</button></div>`;
+
+	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
+		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><button data-msg="openFolder" style="flex:none;border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div>
+		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#696e78"><strong style="font-weight:600;color:#3a3f49">${esc(folderName)}</strong> &mdash; ${countLabel}.</p>
+		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">QUICK START</div>
+		<div style="display:flex;gap:12px;margin-bottom:34px;flex-wrap:wrap">
+			${quick('newDocument', ACCENT, '#fff', '&#65291;', 'New document', 'Start writing, link sources later', true)}
+			${quick('goTemplates', '#eef1f6', '#52575f', '&#9636;', 'New doc from template', 'Weekly report, Quote, SOP&hellip;', false)}
+			${quick('openFolder', '#eef1f6', '#52575f', '&#128193;', 'Open another folder', 'Switch the project', false)}
 		</div>
-	</div></div>`;
+		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">DOCUMENTS</div>
+		${grid}
+	</div>`);
 }
 
 // ---- Templates: run a template -> fill from sources -> review the diff. ----
