@@ -152,3 +152,28 @@ to a guess:
   nothing) and a global lock that makes every layout sash non-draggable. Design intent going forward:
   **the shell layout is set, not negotiated** - widths/positions are product decisions (decision 27),
   and the user resizes nothing. This is the design rule, not a one-off fix.
+- **(v4 iter 1) The "Workbench v2" comp re-states the calm rule for the editor + source surfaces.** The
+  revised comp keeps the same shell and changes only four things, all reinforcing "calm document app over
+  IDE/tool": (1) **source no longer splits the editor** — it slides up as a **bottom in-surface drawer**
+  (52% height, drag-handle, one filled "Sync to report" action) instead of a left pane with a floating
+  sync circle; the doc stays full-width centered. (2) the **formatting toolbar is pared to essentials** —
+  the heading dropdown goes borderless, and "Link to source" / "Run skill" / "History" are dropped, leaving
+  just a quiet "● Saved · v14". (3) the **right rail loses the Document-Agents panel** — document agents are
+  de-emphasised out of the always-on rail. (4) the **Home greeting** aligns to the baseline. Read together:
+  the editor should feel like one quiet writing surface — source and agents are *traced to on demand*, not
+  parked open beside the prose. That is the bar for v4 (>=97% vs this comp).
+- **(v4 iter 2) The source drawer is `position:fixed` to the webview viewport, not an in-flow pane.** The
+  v3 layout flexed a left pane and the document side-by-side (`.peekwrap`), so opening source visibly
+  squeezed the prose. The v2 comp wants the document to stay put and the source to *overlay* the bottom. The
+  clean implementation is a fixed-position drawer (`left:0;right:0;bottom:0;height:52%;z-index:25`) pinned
+  to the bottom of the webview viewport — the document renders full-width exactly as it does with no source
+  open, and the drawer floats above it. The sync affordance lives in the drawer header (one filled primary
+  button), not as a floating circle on a divider that no longer exists. Same data, calmer hosting.
+- **(v4 iter 3) "Calm" no longer means "no toolbar" — it means a *pared* toolbar.** v3 read the old comp as
+  having no persistent toolbar and used a floating selection popover. The revised comp settles the question:
+  there IS a persistent word-processor toolbar, just a quiet one (borderless heading dropdown, B/I/U,
+  list/ordered/quote, and a muted "● Saved · v14" status) with the heavy controls — Link-to-source, Run
+  skill, History — removed. The lesson: calm is achieved by *dropping the noisy affordances*, not by hiding
+  the whole toolbar until selection. The persistent toolbar reads as a familiar document app; the floating
+  one read as a novelty. Wiring stayed `execCommand` via the generic `[data-fmt]` handler (now honouring
+  `data-fmt-arg`).

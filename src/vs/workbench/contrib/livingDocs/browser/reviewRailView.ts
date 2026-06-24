@@ -37,6 +37,10 @@ export class ReviewRailView extends ViewPane {
 	private _stylesInjected = false;
 	// The unsent composer text, kept across re-renders so a background refresh never eats a draft.
 	private _chatDraft = '';
+	// The Document-Agents section is relocated to an on-demand disclosure at the bottom of Review (the
+	// "Workbench v2" comp drops the always-on panel; the agents stay reachable). Collapsed by default so the
+	// Review tab matches the comp; this remembers the open/closed state across re-renders this session.
+	private _checksExpanded = false;
 	private readonly _renderDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -168,8 +172,9 @@ export class ReviewRailView extends ViewPane {
 			}
 		}
 
-		// Document checks (the skill graders) live inside Review now, so the tab strip matches the comp's
-		// 3 tabs (v3 iter 3). They sit below the pending changes as a "what else to look at" section.
+		// Document agents (the skill graders) are relocated to an on-demand disclosure at the bottom of
+		// Review (v4 iter 4): collapsed by default so the Review tab matches the comp, expandable to reach
+		// the wired v1 agents (Run / Re-run / Apply fix). The disclosure only shows for a living document.
 		this._appendChecks(content);
 	}
 
@@ -179,24 +184,33 @@ export class ReviewRailView extends ViewPane {
 
 	private _appendChecks(parent: HTMLElement): void {
 		const resource = this._activeDoc();
-		const report = resource ? this._livingDocs.getSkillReport(resource) : [];
-		const title = resource ? this._livingDocs.getDoc(resource)?.title : undefined;
+		// No living document open -> no agents affordance (the comp's Review tab shows only review content).
+		if (!resource) { return; }
+		const report = this._livingDocs.getSkillReport(resource);
+		if (!report.length) { return; }
+		const title = this._livingDocs.getDoc(resource)?.title;
+		const flags = report.filter(s => s.status === 'flag').length;
 		const section = append(parent, $('div.ldr-checks'));
-		section.innerHTML = skillsHtml(report, title);
-		// "Run" / "Re-run" re-grade the live document (Strategy calls the model via the proxy); "Apply fix"
-		// applies a skill's deterministic edit (Formatting title-cases the flagged headings). Both re-render
-		// when the service fires onDidChange.
+		section.innerHTML = checksDisclosureHtml(this._checksExpanded, flags, report, title);
+		// The disclosure toggle relocates the agents off the always-on rail. "Run" / "Re-run" re-grade the
+		// live document (Strategy calls the model via the proxy); "Apply fix" applies a skill's deterministic
+		// edit (Formatting title-cases the flagged headings). All re-render when the service fires onDidChange.
 		this._renderDisposables.add(addDisposableListener(section, 'click', e => {
 			let el = e.target as HTMLElement | null;
 			while (el && el !== section) {
+				if (el.getAttribute('data-checks-toggle') !== null) {
+					this._checksExpanded = !this._checksExpanded;
+					this._render();
+					return;
+				}
 				const fixId = el.getAttribute('data-skill-fix');
 				if (fixId) {
-					if (resource) { void this._livingDocs.applySkillFix(resource, fixId as ISkillCheck['id']); }
+					void this._livingDocs.applySkillFix(resource, fixId as ISkillCheck['id']);
 					return;
 				}
 				const id = el.getAttribute('data-skill-run');
 				if (id) {
-					if (resource) { this._livingDocs.runSkillCheck(resource, id as ISkillCheck['id']); }
+					this._livingDocs.runSkillCheck(resource, id as ISkillCheck['id']);
 					return;
 				}
 				el = el.parentElement;
@@ -449,10 +463,23 @@ function historyHtml(audit: readonly IAuditEntry[]): string {
 	return head + (real || sample);
 }
 
-// Skills (document agents) tab -- the agents that run on this document, on demand or before export.
-// The Skills tab, data-driven from the live grader report (spec 5). Financial + Formatting are
-// deterministic verdicts on the active document; Strategy reports a needs-model state. "Run"/"Re-run"
-// re-grade. The decorative RUN ON EXPORT toggle + Add-skill row match the comp.
+// The on-demand "Document agents" disclosure at the bottom of Review (v4 iter 4): a single calm toggle row
+// (so the Review tab matches the "Workbench v2" comp, which dropped the always-on panel) that expands to
+// the wired agents. A small flag count rides on the row so an outstanding fix is not hidden.
+function checksDisclosureHtml(expanded: boolean, flags: number, report: readonly ISkillCheck[], docTitle: string | undefined): string {
+	const chevron = expanded ? '&#9662;' : '&#9656;';
+	const flagBadge = (flags > 0 && !expanded)
+		? `<span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:4px 7px">${flags}</span>`
+		: '';
+	const toggle = `<button data-checks-toggle style="display:flex;align-items:center;gap:8px;width:100%;border:none;background:transparent;border-top:1px solid #eef0f3;margin-top:8px;padding:13px 2px 11px;cursor:pointer;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;text-transform:uppercase">`
+		+ `<span style="color:#bcc0c8;font-size:11px">${chevron}</span>DOCUMENT AGENTS${flagBadge}</button>`;
+	return toggle + (expanded ? skillsHtml(report, docTitle) : '');
+}
+
+// Skills (document agents) -- the agents that run on this document, on demand or before export.
+// Data-driven from the live grader report (spec 5). Financial + Formatting are deterministic verdicts on
+// the active document; Strategy reports a needs-model state. "Run"/"Re-run" re-grade. The decorative RUN
+// ON EXPORT toggle + Add-skill row match the comp. Rendered only when the disclosure above is expanded.
 function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined): string {
 	if (!report.length) {
 		return `<div style="font:400 12.5px/1.6 system-ui;color:#868b95;padding:8px 2px">Open a Living Document to see the Skills that run on it.</div>`;
@@ -489,8 +516,9 @@ function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined
 			+ `<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="flex:1;font:400 12px/1.4 system-ui;color:${detailColor}">${esc(s.detail)}</span>${fixBtn(s)}${runBtn(s)}</div></div>`;
 	};
 	const sub = docTitle ? `Skills that run on ${esc(docTitle)} &mdash; on demand or before export.` : 'Skills that run on this document.';
-	return `<div style="display:flex;flex-direction:column">
-	<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;padding:0 2px 4px">DOCUMENT AGENTS</div>
+	// The "DOCUMENT AGENTS" label lives on the disclosure toggle (checksDisclosureHtml) now, so this body
+	// starts straight at the sub-line. The whole body only renders when the disclosure is expanded.
+	return `<div style="display:flex;flex-direction:column;padding-top:11px">
 	<div style="font:400 11px/1.45 system-ui;color:#a3a8b2;padding:0 2px 14px">${sub}</div>
 	${report.map(card).join('')}
 	<div style="font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 2px 8px">RUN ON EXPORT</div>

@@ -115,7 +115,7 @@ function renderHome(): string {
 
 	return `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">
 		<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
-			<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:8px"><h1 style="margin:0;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="font:400 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">Saturday, Jun 20</div></div>
+			<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:10px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;font:400 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">Saturday, Jun 20</div></div>
 			<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#696e78">Across <strong style="font-weight:600;color:#3a3f49">4 projects</strong> &mdash; <strong style="font-weight:600;color:#9a6b16">2 changes need your approval</strong>, and 3 agents ran since you were last here.</p>
 			<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">QUICK START</div>
 			<div style="display:flex;gap:12px;margin-bottom:34px;flex-wrap:wrap">
