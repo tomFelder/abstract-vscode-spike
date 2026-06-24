@@ -152,3 +152,13 @@ to a guess:
   nothing) and a global lock that makes every layout sash non-draggable. Design intent going forward:
   **the shell layout is set, not negotiated** - widths/positions are product decisions (decision 27),
   and the user resizes nothing. This is the design rule, not a one-off fix.
+- **(v4 iter 1) The "Workbench v2" comp re-states the calm rule for the editor + source surfaces.** The
+  revised comp keeps the same shell and changes only four things, all reinforcing "calm document app over
+  IDE/tool": (1) **source no longer splits the editor** — it slides up as a **bottom in-surface drawer**
+  (52% height, drag-handle, one filled "Sync to report" action) instead of a left pane with a floating
+  sync circle; the doc stays full-width centered. (2) the **formatting toolbar is pared to essentials** —
+  the heading dropdown goes borderless, and "Link to source" / "Run skill" / "History" are dropped, leaving
+  just a quiet "● Saved · v14". (3) the **right rail loses the Document-Agents panel** — document agents are
+  de-emphasised out of the always-on rail. (4) the **Home greeting** aligns to the baseline. Read together:
+  the editor should feel like one quiet writing surface — source and agents are *traced to on demand*, not
+  parked open beside the prose. That is the bar for v4 (>=97% vs this comp).

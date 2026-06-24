@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  ::selection{background:rgba(80,110,235,.18)}
+  ::-webkit-scrollbar{width:11px;height:11px}
+  ::-webkit-scrollbar-thumb{background:#d7d9df;border:3px solid transparent;background-clip:content-box;border-radius:8px}
+  ::-webkit-scrollbar-thumb:hover{background:#c2c5cd;background-clip:content-box}
+  @keyframes lwdPulse{0%,100%{opacity:1}50%{opacity:.35}}
+</style>
+</helmet>
+
+<div style="height:100vh;display:flex;flex-direction:column;background:#fff;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;overflow:hidden">
+
+  <!-- ===== TOP BAR ===== -->
+  <div style="height:48px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="width:20px;height:20px;border-radius:6px;background:oklch(0.55 0.13 255);display:flex;align-items:center;justify-content:center;color:#fff;font:600 11px/1 system-ui">L</span>
+      <span style="font:600 13px/1 system-ui;color:#2a2c32">Opportunity OS</span>
+      <span style="color:#c8cbd2">/</span>
+      <span style="font:400 13px/1 system-ui;color:#868b95">{{ crumb }}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="display:flex;align-items:center;gap:7px;font:500 12px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>All sources synced</div>
+      <button onClick="{{ openPresent }}" style="border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer;display:flex;align-items:center;gap:6px"><span style="font-size:12px">↗</span>Present</button>
+      <span style="width:27px;height:27px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 11px/27px system-ui;text-align:center">TS</span>
+    </div>
+  </div>
+
+  <!-- ===== BODY ===== -->
+  <div style="flex:1;display:flex;min-height:0">
+
+    <!-- ICON NAV -->
+    <div style="width:76px;flex:none;background:#f6f7f9;border-right:1px solid #e9eaee;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:4px">
+      <button onClick="{{ goHome }}" style="width:60px;border:none;background:{{ navHome.bg }};color:{{ navHome.fg }};border-radius:10px;padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
+        <span style="font-size:17px;line-height:1">▦</span><span style="font:500 10px/1 system-ui">Home</span>
+      </button>
+      <div style="width:34px;height:1px;background:#e4e6ea;margin:5px 0"></div>
+      <button onClick="{{ goEditor }}" style="width:60px;border:none;background:{{ navEditor.bg }};color:{{ navEditor.fg }};border-radius:10px;padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
+        <span style="font-size:17px;line-height:1">✎</span><span style="font:500 10px/1 system-ui">Editor</span>
+      </button>
+      <button onClick="{{ goReview }}" style="width:60px;border:none;background:{{ navReview.bg }};color:{{ navReview.fg }};border-radius:10px;padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;position:relative">
+        <span style="font-size:17px;line-height:1">⊟</span><span style="font:500 10px/1 system-ui">Review</span>
+        <span style="position:absolute;top:5px;right:9px;min-width:15px;height:15px;border-radius:8px;background:oklch(0.65 0.16 45);color:#fff;font:600 9px/15px 'JetBrains Mono',monospace;text-align:center;padding:0 3px">3</span>
+      </button>
+      <button onClick="{{ goTemplates }}" style="width:60px;border:none;background:{{ navTemplates.bg }};color:{{ navTemplates.fg }};border-radius:10px;padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
+        <span style="font-size:17px;line-height:1">▤</span><span style="font:500 10px/1 system-ui">Templates</span>
+      </button>
+      <button onClick="{{ goKnowledge }}" style="width:60px;border:none;background:{{ navKnowledge.bg }};color:{{ navKnowledge.fg }};border-radius:10px;padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
+        <span style="font-size:17px;line-height:1">◈</span><span style="font:500 10px/1 system-ui">Knowledge</span>
+      </button>
+      <button onClick="{{ goWorkflows }}" style="width:60px;border:none;background:{{ navWorkflows.bg }};color:{{ navWorkflows.fg }};border-radius:10px;padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
+        <span style="font-size:17px;line-height:1">⟳</span><span style="font:500 10px/1 system-ui">Agents</span>
+      </button>
+      <button style="margin-top:auto;width:60px;border:none;background:transparent;color:#9aa0aa;border-radius:10px;padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
+        <span style="font-size:17px;line-height:1">⚙</span><span style="font:500 10px/1 system-ui">Settings</span>
+      </button>
+    </div>
+
+    <!-- TREE RAIL (tabbed: Files / Search / Outline) -->
+    <sc-if value="{{ notHome }}" hint-placeholder-val="{{ false }}">
+    <div style="width:264px;flex:none;background:#fafbfc;border-right:1px solid #e9eaee;display:flex;flex-direction:column;min-height:0">
+      <div style="height:38px;flex:none;display:flex;align-items:stretch;border-bottom:1px solid #eef0f3;padding:0 2px">
+        <button onClick="{{ setLeftFiles }}" style="border:none;background:none;cursor:pointer;padding:0 9px;display:flex;align-items:center;gap:5px;font:500 11.5px/1 system-ui;{{ leftFilesStyle }}"><span style="font-size:12px">🗂</span>Files</button>
+        <button onClick="{{ setLeftContext }}" style="border:none;background:none;cursor:pointer;padding:0 9px;display:flex;align-items:center;gap:5px;font:500 11.5px/1 system-ui;{{ leftContextStyle }}"><span style="font-size:12px">◉</span>Context</button>
+        <button onClick="{{ setLeftOutline }}" style="border:none;background:none;cursor:pointer;padding:0 9px;display:flex;align-items:center;gap:5px;font:500 11.5px/1 system-ui;{{ leftOutlineStyle }}"><span style="font-size:12px">☰</span>Outline</button>
+        <button onClick="{{ setLeftSearch }}" style="border:none;background:none;cursor:pointer;padding:0 9px;display:flex;align-items:center;gap:5px;font:500 11.5px/1 system-ui;{{ leftSearchStyle }}"><span style="font-size:12px">⌕</span>Search</button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:10px 8px">
+
+        <!-- FILES -->
+        <sc-if value="{{ leftFiles }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 6px 8px"><span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#a3a8b2">OPPORTUNITY-OS</span><span style="display:flex;gap:8px;color:#bcc0c8;font-size:13px"><span style="cursor:pointer">＋</span><span style="cursor:pointer">⤢</span></span></div>
+          <!-- folder: Reports -->
+          <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;font:500 13px/1 system-ui;color:#3a3f49;cursor:pointer"><span style="color:#a3a8b2">▾</span><span>📁</span>Reports</div>
+          <button onClick="{{ goEditor }}" style="width:100%;text-align:left;border:none;display:flex;align-items:center;gap:7px;padding:6px 8px 6px 30px;border-radius:6px;background:{{ docActiveBg }};font:500 13px/1 system-ui;color:#1a1c20;cursor:pointer"><span style="color:oklch(0.55 0.13 255)">▣</span>Weekly Summary.md<span style="margin-left:auto;width:6px;height:6px;border-radius:50%;background:oklch(0.65 0.16 45)" title="1 pending update"></span></button>
+          <div style="display:flex;align-items:center;gap:7px;padding:6px 8px 6px 30px;font:400 13px/1 system-ui;color:#696e78;cursor:pointer">▢ Q2 Strategy.md</div>
+          <div style="display:flex;align-items:center;gap:7px;padding:6px 8px 6px 30px;font:400 13px/1 system-ui;color:#696e78;cursor:pointer">▢ Board Note.md</div>
+          <!-- folder: Clients -->
+          <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;font:500 13px/1 system-ui;color:#3a3f49;cursor:pointer"><span style="color:#a3a8b2">▸</span><span>📁</span>Clients<span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#bcc0c8">3</span></div>
+          <!-- folder: Sources -->
+          <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;font:500 13px/1 system-ui;color:#3a3f49;cursor:pointer"><span style="color:#a3a8b2">▾</span><span>📁</span>Sources</div>
+          <button onClick="{{ peekMetrics }}" style="width:100%;text-align:left;border:none;display:flex;align-items:center;gap:7px;padding:6px 8px 6px 30px;border-radius:6px;background:transparent;font:400 13px/1 'JetBrains Mono',monospace;color:#696e78;cursor:pointer">⊞ metrics.csv<span style="margin-left:auto;width:6px;height:6px;border-radius:50%;background:oklch(0.65 0.16 45);animation:lwdPulse 2s infinite"></span></button>
+          <div style="display:flex;align-items:center;gap:7px;padding:6px 8px 6px 30px;font:400 13px/1 'JetBrains Mono',monospace;color:#696e78;cursor:pointer">⊞ pipeline.csv</div>
+          <div style="display:flex;align-items:center;gap:7px;padding:6px 8px 6px 30px;font:400 13px/1 'JetBrains Mono',monospace;color:#696e78;cursor:pointer">⇄ crm.api</div>
+          <div style="display:flex;align-items:center;gap:7px;padding:6px 8px 6px 30px;font:400 13px/1 'JetBrains Mono',monospace;color:#696e78;cursor:pointer">◷ kpi.webhook</div>
+          <!-- folder: Templates -->
+          <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;font:500 13px/1 system-ui;color:#3a3f49;cursor:pointer"><span style="color:#a3a8b2">▸</span><span>📁</span>Templates<span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#bcc0c8">2</span></div>
+        </sc-if>
+
+        <!-- SEARCH -->
+        <sc-if value="{{ leftSearch }}" hint-placeholder-val="{{ false }}">
+          <input value="accelerat" style="width:100%;border:1px solid #d8e0fb;background:#fff;border-radius:8px;padding:8px 10px;font:400 12.5px/1 system-ui;color:#2c2f36;outline:none;margin-bottom:6px" />
+          <div style="font:400 11px/1 'JetBrains Mono',monospace;color:#a3a8b2;padding:4px 6px 10px">3 results · 2 files</div>
+          <div style="padding:6px 6px;border-radius:6px"><div style="display:flex;align-items:center;gap:7px;font:500 12.5px/1 system-ui;color:#1a1c20;margin-bottom:6px"><span style="color:oklch(0.55 0.13 255)">▣</span>Weekly Summary.md</div><div style="font:400 12px/1.5 system-ui;color:#696e78;padding-left:20px">Growth <span style="background:#fdf2dc;border-radius:3px;padding:0 2px">accelerat</span>ed sharply this week…</div></div>
+          <div style="padding:6px 6px;border-radius:6px"><div style="display:flex;align-items:center;gap:7px;font:500 12.5px/1 system-ui;color:#3a3f49;margin-bottom:6px">▢ Q2 Strategy.md</div><div style="font:400 12px/1.5 system-ui;color:#696e78;padding-left:20px">…demand <span style="background:#fdf2dc;border-radius:3px;padding:0 2px">accelerat</span>ing into Q3 as…</div></div>
+        </sc-if>
+
+        <!-- OUTLINE -->
+        <sc-if value="{{ leftOutline }}" hint-placeholder-val="{{ false }}">
+          <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#a3a8b2;padding:2px 6px 10px">WEEKLY SUMMARY.MD</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;font:600 13px/1 system-ui;color:#1a1c20;cursor:pointer">Weekly Operating Summary</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 8px 6px 18px;font:400 13px/1 system-ui;color:#696e78;cursor:pointer"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.55 0.13 255)"></span>Highlights</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 8px 6px 18px;font:400 13px/1 system-ui;color:#696e78;cursor:pointer"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.55 0.13 255)"></span>KPI table</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 8px 6px 18px;font:400 13px/1 system-ui;color:#696e78;cursor:pointer"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45)" title="pending change"></span>Commentary</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 8px 6px 18px;font:400 13px/1 system-ui;color:#696e78;cursor:pointer">What to watch</div>
+          <div style="margin-top:14px;padding:10px 11px;background:#fff;border:1px solid #eceef2;border-radius:8px;font:400 11.5px/1.5 system-ui;color:#868b95"><span style="color:oklch(0.55 0.13 255)">●</span> 4 linked blocks · <span style="color:oklch(0.66 0.16 45)">●</span> 1 pending</div>
+        </sc-if>
+
+        <!-- CONTEXT -->
+        <sc-if value="{{ leftContext }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 6px 4px"><span style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#a3a8b2">CONTEXT IN THIS FILE</span></div>
+          <div style="font:400 11px/1.4 system-ui;color:#a3a8b2;padding:0 6px 12px">Everything the agent can see when working on Weekly&nbsp;Summary.md.</div>
+
+          <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 6px 7px">LINKED SOURCES · 3</div>
+          <button onClick="{{ peekMetrics }}" style="width:100%;text-align:left;border:1px solid #e0e6ff;background:#f7f9ff;border-radius:8px;padding:8px 10px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:8px"><span style="font-size:13px;color:#5b6dc4">⊞</span><span style="min-width:0"><span style="display:block;font:500 12.5px/1.3 system-ui;color:#1a1c20">metrics.csv</span><span style="font:400 10px/1.3 'JetBrains Mono',monospace;color:#8a93c4">live · 3 cells feed 4 blocks</span></span><span style="margin-left:auto;width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150);flex:none"></span></button>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid #eceef2;background:#fff;border-radius:8px;padding:8px 10px;margin-bottom:6px"><span style="font-size:13px;color:#5b6dc4">⇄</span><span style="min-width:0"><span style="display:block;font:500 12.5px/1.3 system-ui;color:#1a1c20">crm.api</span><span style="font:400 10px/1.3 'JetBrains Mono',monospace;color:#a3a8b2">win-rate · polled hourly</span></span></div>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid #eceef2;background:#fff;border-radius:8px;padding:8px 10px;margin-bottom:14px"><span style="font-size:13px;color:#5b6dc4">◷</span><span style="min-width:0"><span style="display:block;font:500 12.5px/1.3 system-ui;color:#1a1c20">kpi.webhook</span><span style="font:400 10px/1.3 'JetBrains Mono',monospace;color:#a3a8b2">activation · on event</span></span></div>
+
+          <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 6px 7px">REFERENCED FILES · 2</div>
+          <button onClick="{{ setQ2 }}" style="width:100%;text-align:left;border:1px solid #eceef2;background:#fff;border-radius:8px;padding:8px 10px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:8px">▢<span style="min-width:0"><span style="display:block;font:500 12.5px/1.3 system-ui;color:#1a1c20">Q2 Strategy.md</span><span style="font:400 10px/1.3 system-ui;color:#a3a8b2">cited in Commentary</span></span></button>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid #eceef2;background:#fff;border-radius:8px;padding:8px 10px;margin-bottom:14px">▢<span style="min-width:0"><span style="display:block;font:500 12.5px/1.3 system-ui;color:#1a1c20">Board Note.md</span><span style="font:400 10px/1.3 system-ui;color:#a3a8b2">shares KPI section</span></span></div>
+
+          <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 6px 7px">PASTED TEXT · 1</div>
+          <div style="border:1px solid #eceef2;background:#fff;border-radius:8px;padding:8px 10px;margin-bottom:14px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:4px"><span style="font-size:12px">¶</span><span style="font:500 12px/1.3 system-ui;color:#1a1c20">Founder notes — Jun 18</span></div><div style="font:400 11px/1.45 system-ui;color:#868b95">"Lead with the signup spike, keep churn caveat short…"</div></div>
+
+          <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 6px 7px">IMAGES · 2</div>
+          <div style="display:flex;gap:7px;margin-bottom:14px;padding:0 2px">
+            <div style="flex:1;border:1px solid #eceef2;border-radius:8px;overflow:hidden;background:#fff"><div style="height:46px;background:linear-gradient(135deg,#eef1ff,#dfe6ff);display:flex;align-items:flex-end;padding:6px;gap:2px"><span style="flex:1;height:40%;background:oklch(0.6 0.1 255);border-radius:1px"></span><span style="flex:1;height:65%;background:oklch(0.6 0.1 255);border-radius:1px"></span><span style="flex:1;height:90%;background:oklch(0.55 0.13 255);border-radius:1px"></span></div><div style="font:400 9.5px/1.3 'JetBrains Mono',monospace;color:#868b95;padding:5px 6px">mrr-chart.png</div></div>
+            <div style="flex:1;border:1px solid #eceef2;border-radius:8px;overflow:hidden;background:#fff"><div style="height:46px;background:linear-gradient(135deg,#f0ece4,#e6ddcf)"></div><div style="font:400 9.5px/1.3 'JetBrains Mono',monospace;color:#868b95;padding:5px 6px">team.jpg</div></div>
+          </div>
+
+          <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 6px 7px">COMPANY KNOWLEDGE · 3</div>
+          <button onClick="{{ goKnowledge }}" style="width:100%;text-align:left;border:1px solid #e4dccb;background:#fdfaf2;border-radius:8px;padding:8px 10px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:8px"><span style="color:oklch(0.6 0.13 60)">◈</span><span style="min-width:0"><span style="display:block;font:500 12.5px/1.3 system-ui;color:#1a1c20">Product Strategy</span><span style="font:400 10px/1.3 system-ui;color:#a99b78">org · auto-attached</span></span><span style="margin-left:auto;font:400 11px/1 system-ui;color:#bcb199">→</span></button>
+          <button onClick="{{ goKnowledge }}" style="width:100%;text-align:left;border:1px solid #e4dccb;background:#fdfaf2;border-radius:8px;padding:8px 10px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:8px"><span style="color:oklch(0.6 0.13 60)">◈</span><span style="min-width:0"><span style="display:block;font:500 12.5px/1.3 system-ui;color:#1a1c20">Q3 OKRs</span><span style="font:400 10px/1.3 system-ui;color:#a99b78">project · auto-attached</span></span><span style="margin-left:auto;font:400 11px/1 system-ui;color:#bcb199">→</span></button>
+          <button onClick="{{ goKnowledge }}" style="width:100%;text-align:left;border:1px solid #e4dccb;background:#fdfaf2;border-radius:8px;padding:8px 10px;margin-bottom:14px;cursor:pointer;display:flex;align-items:center;gap:8px"><span style="color:oklch(0.6 0.13 60)">◈</span><span style="min-width:0"><span style="display:block;font:500 12.5px/1.3 system-ui;color:#1a1c20">Brand voice</span><span style="font:400 10px/1.3 system-ui;color:#a99b78">org · auto-attached</span></span><span style="margin-left:auto;font:400 11px/1 system-ui;color:#bcb199">→</span></button>
+
+          <button style="width:100%;border:1px dashed #d4d7de;background:#fff;border-radius:8px;padding:9px;font:500 12px/1 system-ui;color:#868b95;cursor:pointer">＋ Add context</button>
+        </sc-if>
+
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ===== MAIN ===== -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#fff">
+
+      <!-- ============ HOME ============ -->
+      <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;overflow-y:auto;background:#f8f9fb">
+          <div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
+            <!-- greeting + summary strip -->
+            <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:8px">
+              <h1 style="margin:0;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1>
+              <div style="font:400 12.5px/1 'JetBrains Mono',monospace;color:#a3a8b2">Saturday, Jun 20</div>
+            </div>
+            <p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#696e78">Across <strong style="font-weight:600;color:#3a3f49">4 projects</strong> — <strong style="font-weight:600;color:#9a6b16">2 changes need your approval</strong>, and 3 agents ran since you were last here.</p>
+
+            <!-- QUICK START -->
+            <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">QUICK START</div>
+            <div style="display:flex;gap:12px;margin-bottom:34px;flex-wrap:wrap">
+              <button style="flex:1;min-width:200px;text-align:left;border:1px solid #e0e6ff;background:#f7f9ff;border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:oklch(0.55 0.13 255);color:#fff;font-size:17px;display:flex;align-items:center;justify-content:center">＋</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">New project</span><span style="font:400 12px/1.3 system-ui;color:#868b95">Bind sources, set agents</span></span></button>
+              <button onClick="{{ goTemplates }}" style="flex:1;min-width:200px;text-align:left;border:1px solid #e9eaee;background:#fff;border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:#eef1f6;color:#52575f;font-size:16px;display:flex;align-items:center;justify-content:center">▤</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">New doc from template</span><span style="font:400 12px/1.3 system-ui;color:#868b95">Weekly report, Quote, SOP…</span></span></button>
+              <button onClick="{{ goEditor }}" style="flex:1;min-width:200px;text-align:left;border:1px solid #e9eaee;background:#fff;border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:#eef1f6;color:#52575f;font-size:16px;display:flex;align-items:center;justify-content:center">✎</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">Blank document</span><span style="font:400 12px/1.3 system-ui;color:#868b95">Start writing, link later</span></span></button>
+            </div>
+
+            <!-- PROJECTS -->
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+              <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#a3a8b2">YOUR PROJECTS</div>
+              <div style="display:flex;gap:5px"><span style="font:500 11.5px/1 system-ui;color:#15181f;background:#fff;border:1px solid #e6e8ed;border-radius:7px;padding:6px 10px">All · 4</span><span style="font:500 11.5px/1 system-ui;color:#9a6b16;padding:6px 10px">Needs approval · 2</span></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+
+              <!-- project 1: active, needs approval -->
+              <div style="background:#fff;border:1px solid #e9eaee;border-radius:13px;overflow:hidden;display:flex;flex-direction:column">
+                <div style="padding:16px 17px 14px">
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;display:flex;align-items:center;justify-content:center">OS</span><span style="font:600 15px/1.2 system-ui;color:#15171c">Opportunity OS</span><span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 9px">1 TO APPROVE</span></div>
+                  <div style="font:400 11.5px/1 'JetBrains Mono',monospace;color:#a3a8b2;padding-left:36px">6 docs · 4 sources · 3 agents</div>
+                </div>
+                <div style="margin:0 17px;border-top:1px solid #f1f2f5;padding:13px 0 4px">
+                  <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;margin-bottom:9px">SINCE YOUR LAST VISIT</div>
+                  <div style="display:flex;gap:9px;margin-bottom:9px"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.66 0.16 45);margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#3a3f49"><strong style="font-weight:600">Weekly refresh</strong> ran 2m ago — 3 figures applied to Weekly Summary, <strong style="font-weight:600;color:#9a6b16">1 narrative change awaiting approval</strong>.</span></div>
+                  <div style="display:flex;gap:9px"><span style="width:7px;height:7px;border-radius:50%;background:#cfd3da;margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#696e78">Board Note auto-updated from kpi.webhook · no review needed.</span></div>
+                </div>
+                <div style="margin-top:auto;display:flex;gap:8px;padding:14px 17px;border-top:1px solid #f1f2f5">
+                  <button onClick="{{ goReview }}" style="border:none;border-radius:8px;padding:9px 14px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Review change</button>
+                  <button onClick="{{ goEditor }}" style="border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer">Open project</button>
+                </div>
+              </div>
+
+              <!-- project 2: client, healthy -->
+              <div style="background:#fff;border:1px solid #e9eaee;border-radius:13px;overflow:hidden;display:flex;flex-direction:column">
+                <div style="padding:16px 17px 14px">
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:#0e7c66;color:#fff;font:600 12px/1 system-ui;display:flex;align-items:center;justify-content:center">AC</span><span style="font:600 15px/1.2 system-ui;color:#15171c">Acme Co — Client</span><span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font:600 10px/1 system-ui;color:#1f7a44"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Healthy</span></div>
+                  <div style="font:400 11.5px/1 'JetBrains Mono',monospace;color:#a3a8b2;padding-left:36px">3 docs · 1 source · 1 agent</div>
+                </div>
+                <div style="margin:0 17px;border-top:1px solid #f1f2f5;padding:13px 0 4px">
+                  <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;margin-bottom:9px">SINCE YOUR LAST VISIT</div>
+                  <div style="display:flex;gap:9px;margin-bottom:9px"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150);margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#3a3f49"><strong style="font-weight:600">Quote → tracker</strong> extracted 2 new line items from <em>Acme SOW.pdf</em> into the pipeline.</span></div>
+                  <div style="display:flex;gap:9px"><span style="width:7px;height:7px;border-radius:50%;background:#cfd3da;margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#696e78">Client Update draft regenerated · ready to send.</span></div>
+                </div>
+                <div style="margin-top:auto;display:flex;gap:8px;padding:14px 17px;border-top:1px solid #f1f2f5">
+                  <button onClick="{{ goEditor }}" style="border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer">Open project</button>
+                </div>
+              </div>
+
+              <!-- project 3: LP reporting, needs approval -->
+              <div style="background:#fff;border:1px solid #e9eaee;border-radius:13px;overflow:hidden;display:flex;flex-direction:column">
+                <div style="padding:16px 17px 14px">
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:#5a3ea8;color:#fff;font:600 12px/1 system-ui;display:flex;align-items:center;justify-content:center">F3</span><span style="font:600 15px/1.2 system-ui;color:#15171c">Fund III — LP Reporting</span><span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 9px">1 TO APPROVE</span></div>
+                  <div style="font:400 11.5px/1 'JetBrains Mono',monospace;color:#a3a8b2;padding-left:36px">4 docs · 2 sources · 2 agents</div>
+                </div>
+                <div style="margin:0 17px;border-top:1px solid #f1f2f5;padding:13px 0 4px">
+                  <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;margin-bottom:9px">SINCE YOUR LAST VISIT</div>
+                  <div style="display:flex;gap:9px;margin-bottom:9px"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.66 0.16 45);margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#3a3f49">Portfolio markdown detected — <strong style="font-weight:600;color:#9a6b16">a TVPI figure dropped</strong>, so the LP letter's tone change needs sign-off.</span></div>
+                  <div style="display:flex;gap:9px"><span style="width:7px;height:7px;border-radius:50%;background:#cfd3da;margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#696e78">Capital-account tables refreshed for all 12 LPs.</span></div>
+                </div>
+                <div style="margin-top:auto;display:flex;gap:8px;padding:14px 17px;border-top:1px solid #f1f2f5">
+                  <button onClick="{{ goReview }}" style="border:none;border-radius:8px;padding:9px 14px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Review change</button>
+                  <button onClick="{{ goEditor }}" style="border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer">Open project</button>
+                </div>
+              </div>
+
+              <!-- project 4: personal, healthy -->
+              <div style="background:#fff;border:1px solid #e9eaee;border-radius:13px;overflow:hidden;display:flex;flex-direction:column">
+                <div style="padding:16px 17px 14px">
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:#b5642a;color:#fff;font:600 12px/1 system-ui;display:flex;align-items:center;justify-content:center">JS</span><span style="font:600 15px/1.2 system-ui;color:#15171c">Job Search 2026</span><span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font:600 10px/1 system-ui;color:#1f7a44"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Healthy</span></div>
+                  <div style="font:400 11.5px/1 'JetBrains Mono',monospace;color:#a3a8b2;padding-left:36px">2 docs · 1 source · 1 agent</div>
+                </div>
+                <div style="margin:0 17px;border-top:1px solid #f1f2f5;padding:13px 0 4px">
+                  <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;margin-bottom:9px">SINCE YOUR LAST VISIT</div>
+                  <div style="display:flex;gap:9px;margin-bottom:9px"><span style="width:7px;height:7px;border-radius:50%;background:#cfd3da;margin-top:5px;flex:none"></span><span style="font:400 12.5px/1.5 system-ui;color:#696e78"><strong style="font-weight:600;color:#3a3f49">Weekly tracker</strong> compiled 4 new applications from the inbox · status synced.</span></div>
+                </div>
+                <div style="margin-top:auto;display:flex;gap:8px;padding:14px 17px;border-top:1px solid #f1f2f5">
+                  <button onClick="{{ goEditor }}" style="border:1px solid #e0e2e8;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer">Open project</button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ EDITOR ============ -->
+      <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;display:flex;min-height:0">
+          <!-- CENTER (doc tabs + editor panes) -->
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+            <!-- DOC TAB BAR -->
+            <div style="height:40px;flex:none;display:flex;align-items:stretch;border-bottom:1px solid #eef0f3;background:#f6f7f9">
+              <button onClick="{{ setWeekly }}" style="border:none;display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid #eef0f3;font:500 12.5px/1 system-ui;cursor:pointer;{{ weeklyTabStyle }}"><span style="color:oklch(0.55 0.13 255)">▣</span>Weekly Summary.md<span style="width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45)"></span></button>
+              <button onClick="{{ setQ2 }}" style="border:none;display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid #eef0f3;font:500 12.5px/1 system-ui;cursor:pointer;{{ q2TabStyle }}">▢ Q2 Strategy.md</button>
+              <button onClick="{{ peekMetrics }}" title="Open source to the left" style="border:none;display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid #eef0f3;font:400 12.5px/1 'JetBrains Mono',monospace;color:#868b95;background:#f6f7f9;cursor:pointer">⊞ metrics.csv</button>
+              <button style="border:none;background:none;color:#a3a8b2;font-size:16px;padding:0 12px;cursor:pointer">＋</button>
+            </div>
+            <!-- EDITOR PANES -->
+            <div style="flex:1;display:flex;min-height:0;position:relative">
+              <!-- SYNC-ACROSS circle (sits on the divider when a source is open) -->
+              <sc-if value="{{ sourceOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;top:72px;left:50%;transform:translateX(-50%);z-index:20;display:flex;flex-direction:column;align-items:center;gap:6px">
+                  <sc-if value="{{ notSynced }}" hint-placeholder-val="{{ true }}">
+                    <button onClick="{{ doSync }}" title="Apply your CSV edits to the report and show the diff" style="width:42px;height:42px;border-radius:50%;border:1px solid #d8e0fb;background:#fff;box-shadow:0 4px 14px rgba(40,70,160,.18);color:oklch(0.5 0.13 255);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center">⟳</button>
+                    <span style="font:600 10px/1 system-ui;color:#5b6dc4;background:#fff;border:1px solid #e0e6ff;border-radius:999px;padding:4px 8px;box-shadow:0 2px 6px rgba(40,70,160,.1);white-space:nowrap">Sync across →</span>
+                  </sc-if>
+                  <sc-if value="{{ synced }}" hint-placeholder-val="{{ false }}">
+                    <div style="width:42px;height:42px;border-radius:50%;border:1px solid #c5e7d0;background:#e7f6ec;color:#1f7a44;font-size:18px;display:flex;align-items:center;justify-content:center">✓</div>
+                    <span style="font:600 10px/1 system-ui;color:#1f7a44;background:#fff;border:1px solid #c5e7d0;border-radius:999px;padding:4px 8px;box-shadow:0 2px 6px rgba(31,122,68,.1);white-space:nowrap">3 changes synced</span>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <!-- SOURCE PEEK PANE (opens to the LEFT when a source dot/tab is clicked) -->
+              <sc-if value="{{ sourceOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid #e9eaee;background:#fcfcfd">
+                  <div style="height:40px;flex:none;display:flex;align-items:center;gap:9px;padding:0 14px;border-bottom:1px solid #eef0f3;background:#f6f7f9"><span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#52575f">⊞ metrics.csv</span><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:#a3a8b2">source · 12 rows · 2m ago</span><span style="margin-left:auto;display:flex;align-items:center;gap:6px"><button style="border:1px solid #e0e2e8;background:#fff;border-radius:6px;padding:5px 9px;font:500 11px/1 system-ui;color:#52575f;cursor:pointer">Edit</button><button onClick="{{ closeSource }}" title="Close source" style="border:none;background:none;color:#9aa0aa;font-size:14px;cursor:pointer;padding:4px 6px">✕</button></span></div>
+                  <div style="flex:1;overflow:auto;padding:14px 16px">
+                    <table style="width:100%;border-collapse:collapse;font:400 12px/1 'JetBrains Mono',monospace">
+                      <thead><tr style="color:#a3a8b2"><th style="text-align:left;padding:7px 9px;font-weight:600;border-bottom:1px solid #e9eaee">week</th><th style="text-align:right;padding:7px 9px;font-weight:600;border-bottom:1px solid #e9eaee">date</th><th style="text-align:right;padding:7px 9px;font-weight:600;border-bottom:1px solid #e9eaee">mrr</th><th style="text-align:right;padding:7px 9px;font-weight:600;border-bottom:1px solid #e9eaee">signups</th><th style="text-align:right;padding:7px 9px;font-weight:600;border-bottom:1px solid #e9eaee">churn%</th><th style="text-align:right;padding:7px 9px;font-weight:600;border-bottom:1px solid #e9eaee">active</th></tr></thead>
+                      <tbody style="color:#2c2f36">
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">13</td><td style="text-align:right;padding:6px 9px;color:#969ba4">Apr 06</td><td style="text-align:right;padding:6px 9px">28.4k</td><td style="text-align:right;padding:6px 9px">180</td><td style="text-align:right;padding:6px 9px">4.2</td><td style="text-align:right;padding:6px 9px">120</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">14</td><td style="text-align:right;padding:6px 9px;color:#969ba4">Apr 13</td><td style="text-align:right;padding:6px 9px">30.1k</td><td style="text-align:right;padding:6px 9px">195</td><td style="text-align:right;padding:6px 9px">4.0</td><td style="text-align:right;padding:6px 9px">128</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">15</td><td style="text-align:right;padding:6px 9px;color:#969ba4">Apr 20</td><td style="text-align:right;padding:6px 9px">31.8k</td><td style="text-align:right;padding:6px 9px">210</td><td style="text-align:right;padding:6px 9px">3.9</td><td style="text-align:right;padding:6px 9px">134</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">16</td><td style="text-align:right;padding:6px 9px;color:#969ba4">Apr 27</td><td style="text-align:right;padding:6px 9px">33.0k</td><td style="text-align:right;padding:6px 9px">198</td><td style="text-align:right;padding:6px 9px">3.8</td><td style="text-align:right;padding:6px 9px">139</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">17</td><td style="text-align:right;padding:6px 9px;color:#969ba4">May 04</td><td style="text-align:right;padding:6px 9px">34.6k</td><td style="text-align:right;padding:6px 9px">225</td><td style="text-align:right;padding:6px 9px">3.6</td><td style="text-align:right;padding:6px 9px">146</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">18</td><td style="text-align:right;padding:6px 9px;color:#969ba4">May 11</td><td style="text-align:right;padding:6px 9px">35.9k</td><td style="text-align:right;padding:6px 9px">240</td><td style="text-align:right;padding:6px 9px">3.5</td><td style="text-align:right;padding:6px 9px">152</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">19</td><td style="text-align:right;padding:6px 9px;color:#969ba4">May 18</td><td style="text-align:right;padding:6px 9px">37.2k</td><td style="text-align:right;padding:6px 9px">233</td><td style="text-align:right;padding:6px 9px">3.4</td><td style="text-align:right;padding:6px 9px">158</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">20</td><td style="text-align:right;padding:6px 9px;color:#969ba4">May 25</td><td style="text-align:right;padding:6px 9px">38.5k</td><td style="text-align:right;padding:6px 9px">251</td><td style="text-align:right;padding:6px 9px">3.3</td><td style="text-align:right;padding:6px 9px">165</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">21</td><td style="text-align:right;padding:6px 9px;color:#969ba4">Jun 01</td><td style="text-align:right;padding:6px 9px">39.4k</td><td style="text-align:right;padding:6px 9px">268</td><td style="text-align:right;padding:6px 9px">3.2</td><td style="text-align:right;padding:6px 9px">171</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">22</td><td style="text-align:right;padding:6px 9px;color:#969ba4">Jun 08</td><td style="text-align:right;padding:6px 9px">40.3k</td><td style="text-align:right;padding:6px 9px">290</td><td style="text-align:right;padding:6px 9px">3.1</td><td style="text-align:right;padding:6px 9px">179</td></tr>
+                        <tr style="border-bottom:1px solid #f4f5f7"><td style="padding:6px 9px">23</td><td style="text-align:right;padding:6px 9px;color:#969ba4">Jun 15</td><td style="text-align:right;padding:6px 9px">41.2k</td><td style="text-align:right;padding:6px 9px">312</td><td style="text-align:right;padding:6px 9px">3.1</td><td style="text-align:right;padding:6px 9px">188</td></tr>
+                        <tr style="background:#fef6e9;box-shadow:inset 2px 0 0 oklch(0.66 0.16 45)"><td style="padding:7px 9px;font-weight:600">24</td><td style="text-align:right;padding:7px 9px;color:#7a6a45">Jun 19</td><td style="text-align:right;padding:7px 9px;color:#1f7a44;font-weight:600">48.6k</td><td style="text-align:right;padding:7px 9px;color:#1f7a44;font-weight:600">427</td><td style="text-align:right;padding:7px 9px;color:#1f7a44;font-weight:600">2.4</td><td style="text-align:right;padding:7px 9px">205</td></tr>
+                      </tbody>
+                    </table>
+                    <div style="margin-top:18px;border-top:1px solid #eef0f3;padding-top:14px">
+                      <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:10px">REFERENCED BY · 3 DOCUMENTS</div>
+                      <div style="display:flex;flex-direction:column;gap:7px">
+                        <button onClick="{{ setWeekly }}" title="Load Weekly Summary.md" style="text-align:left;border:1px solid #e0e6ff;background:#f4f6ff;border-radius:8px;padding:9px 11px;font:500 12.5px/1.3 system-ui;color:#3a3f49;cursor:pointer;display:flex;align-items:center;gap:8px"><span style="color:oklch(0.55 0.13 255)">▣</span>Weekly Summary.md<span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#8a93c4">Highlights, KPI →</span></button>
+                        <button onClick="{{ setQ2 }}" title="Load Q2 Strategy.md" style="text-align:left;border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:9px 11px;font:500 12.5px/1.3 system-ui;color:#3a3f49;cursor:pointer;display:flex;align-items:center;gap:8px">▢ Q2 Strategy.md<span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#a3a8b2">Traction →</span></button>
+                        <div style="border:1px solid #f1f2f5;background:#fff;border-radius:8px;padding:9px 11px;font:400 12.5px/1.3 system-ui;color:#969ba4;display:flex;align-items:center;gap:8px">▢ Board Note.md<span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#bcc0c8">KPI section</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+              <!-- pane A -->
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+            <!-- word-processor toolbar -->
+            <div style="height:46px;flex:none;display:flex;align-items:center;gap:3px;padding:0 14px;border-bottom:1px solid #eef0f3;background:#fff">
+              <button style="display:flex;align-items:center;gap:5px;border:1px solid #e6e8ed;background:#fff;border-radius:7px;padding:6px 9px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Heading 2 <span style="color:#a3a8b2">▾</span></button>
+              <span style="width:1px;height:20px;background:#eceef2;margin:0 6px"></span>
+              <button style="width:30px;height:30px;border:none;background:transparent;border-radius:7px;font:700 13px/1 system-ui;color:#52575f;cursor:pointer">B</button>
+              <button style="width:30px;height:30px;border:none;background:transparent;border-radius:7px;font:400 13px/1 system-ui;font-style:italic;color:#52575f;cursor:pointer">I</button>
+              <button style="width:30px;height:30px;border:none;background:transparent;border-radius:7px;font:400 13px/1 system-ui;text-decoration:underline;color:#52575f;cursor:pointer">U</button>
+              <span style="width:1px;height:20px;background:#eceef2;margin:0 6px"></span>
+              <button style="width:30px;height:30px;border:none;background:transparent;border-radius:7px;font:400 14px/1 system-ui;color:#52575f;cursor:pointer">≣</button>
+              <button style="width:30px;height:30px;border:none;background:transparent;border-radius:7px;font:400 14px/1 system-ui;color:#52575f;cursor:pointer">⊞</button>
+              <button style="width:30px;height:30px;border:none;background:transparent;border-radius:7px;font:400 14px/1 system-ui;color:#52575f;cursor:pointer">❝</button>
+              <span style="width:1px;height:20px;background:#eceef2;margin:0 6px"></span>
+              <button style="display:flex;align-items:center;gap:6px;border:1px solid #d8e0fb;background:#f4f6ff;border-radius:7px;padding:6px 10px;font:500 12px/1 system-ui;color:oklch(0.5 0.13 255);cursor:pointer"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.55 0.13 255)"></span>Link to source</button>
+              <button onClick="{{ setRightSkills }}" style="display:flex;align-items:center;gap:6px;border:1px solid #e6e8ed;background:#fff;border-radius:7px;padding:6px 10px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">◈ Run skill <span style="color:#a3a8b2">▾</span></button>
+              <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+                <span style="font:400 11px/1 'JetBrains Mono',monospace;color:#a3a8b2">v14 · saved</span>
+                <button style="border:1px solid #e6e8ed;background:#fff;border-radius:7px;padding:6px 10px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">History</button>
+              </div>
+            </div>
+            <!-- scroll doc -->
+            <div style="flex:1;overflow-y:auto;background:#fff">
+              <sc-if value="{{ weeklyActive }}" hint-placeholder-val="{{ true }}">
+              <div style="max-width:720px;margin:0 auto;padding:48px 40px 80px">
+                <div style="display:flex"><div style="width:30px;flex:none"></div><div style="flex:1">
+                  <h1 style="margin:0 0 6px;font:600 30px/1.2 system-ui;color:#15171c;letter-spacing:-.015em">Weekly Operating Summary</h1>
+                  <div style="font:400 12.5px/1 'JetBrains Mono',monospace;color:#a3a8b2;margin-bottom:34px">Week 24 · Jun 15–19, 2026 · owner Tom</div>
+                </div></div>
+
+                <div style="display:flex"><div style="width:30px;flex:none"></div><div style="flex:1"><h2 style="margin:0 0 12px;font:600 19px/1.3 system-ui;color:#23262c">Highlights</h2></div></div>
+                <div style="display:flex">
+                  <div style="width:30px;flex:none;display:flex;justify-content:center;padding-top:7px"><span onMouseEnter="{{ enterRevDot }}" onMouseLeave="{{ leaveDot }}" style="position:relative;display:flex"><span style="width:9px;height:9px;border-radius:50%;background:oklch(0.55 0.13 255);cursor:pointer"></span><sc-if value="{{ dotRevHover }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:-10px;left:20px;z-index:30;width:236px;background:#fff;border:1px solid #e6e8ed;border-radius:11px;box-shadow:0 10px 30px rgba(20,30,60,.17);padding:13px 14px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px"><span style="font:600 11px/1 'JetBrains Mono',monospace;color:#5b6dc4">⊞ metrics.csv</span><span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#a3a8b2">2m ago</span></div><div style="font:400 12px/1.55 system-ui;color:#52575f;margin-bottom:11px">Bound to <strong style="font-weight:600">MRR</strong>, <strong style="font-weight:600">new_signups</strong> &amp; <strong style="font-weight:600">churn</strong> · week 24 row. Auto-refreshes on change.</div><div style="display:flex;gap:7px"><button onClick="{{ openMetrics }}" style="flex:1;border:none;border-radius:7px;padding:8px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer">Open source ↗</button><button onClick="{{ openMetrics }}" style="border:1px solid #e0e2e8;border-radius:7px;padding:8px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">View</button></div></div></sc-if></span></div>
+                  <p style="flex:1;margin:0 0 22px;font:400 16px/1.78 system-ui;color:#2c2f36">Revenue grew <span style="background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px">{{ revFig }}</span> week-on-week to <span style="background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px">$48.6k</span> MRR, carried by <span style="background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px">427</span> new signups — the strongest week of the quarter. Churn eased to <span style="background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px">2.4%</span>.</p>
+                </div>
+
+                <div style="display:flex">
+                  <div style="width:30px;flex:none;display:flex;justify-content:center;padding-top:7px"><span style="width:9px;height:9px;border-radius:50%;background:oklch(0.55 0.13 255)"></span></div>
+                  <div style="flex:1;border:1px solid #eceef2;border-radius:10px;overflow:hidden;margin-bottom:26px">
+                    <div style="display:flex;background:#f8f9fb;font:600 11px/1 'JetBrains Mono',monospace;color:#a3a8b2;letter-spacing:.04em"><div style="flex:2;padding:10px 14px">METRIC</div><div style="flex:1;padding:10px 14px;text-align:right">W23</div><div style="flex:1;padding:10px 14px;text-align:right">W24</div><div style="flex:1;padding:10px 14px;text-align:right">Δ</div></div>
+                    <div style="display:flex;border-top:1px solid #f1f2f5;font:400 13.5px/1 system-ui"><div style="flex:2;padding:10px 14px;font-weight:500">MRR</div><div style="flex:1;padding:10px 14px;text-align:right;color:#969ba4">$41.2k</div><div style="flex:1;padding:10px 14px;text-align:right">$48.6k</div><div style="flex:1;padding:10px 14px;text-align:right;color:#1f7a44;font-weight:500">+18%</div></div>
+                    <div style="display:flex;border-top:1px solid #f1f2f5;font:400 13.5px/1 system-ui"><div style="flex:2;padding:10px 14px;font-weight:500">New signups</div><div style="flex:1;padding:10px 14px;text-align:right;color:#969ba4">312</div><div style="flex:1;padding:10px 14px;text-align:right">427</div><div style="flex:1;padding:10px 14px;text-align:right;color:#1f7a44;font-weight:500">+37%</div></div>
+                    <div style="display:flex;border-top:1px solid #f1f2f5;font:400 13.5px/1 system-ui"><div style="flex:2;padding:10px 14px;font-weight:500">Churn</div><div style="flex:1;padding:10px 14px;text-align:right;color:#969ba4">3.1%</div><div style="flex:1;padding:10px 14px;text-align:right">2.4%</div><div style="flex:1;padding:10px 14px;text-align:right;color:#1f7a44;font-weight:500">−0.7pt</div></div>
+                  </div>
+                </div>
+
+                <div style="display:flex"><div style="width:30px;flex:none"></div><div style="flex:1"><h2 style="margin:0 0 12px;font:600 19px/1.3 system-ui;color:#23262c">Commentary</h2></div></div>
+                <div style="display:flex">
+                  <div style="width:30px;flex:none;display:flex;justify-content:center;padding-top:7px"><span onMouseEnter="{{ enterCommDot }}" onMouseLeave="{{ leaveDot }}" style="position:relative;display:flex"><span style="width:9px;height:9px;border-radius:50%;background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(225,150,60,.14);cursor:pointer"></span><sc-if value="{{ dotCommHover }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:-10px;left:20px;z-index:30;width:240px;background:#fff;border:1px solid #f0e2c4;border-radius:11px;box-shadow:0 10px 30px rgba(20,30,60,.17);padding:13px 14px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px"><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:3px 7px">PENDING REWRITE</span><span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#a3a8b2">⊞ metrics.csv</span></div><div style="font:400 12px/1.55 system-ui;color:#52575f;margin-bottom:11px">Tone change proposed because MRR crossed the +15% “accelerating” threshold.</div><div style="display:flex;gap:7px"><button onClick="{{ setRightReview }}" style="flex:1;border:none;border-radius:7px;padding:8px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer">Review change</button><button onClick="{{ openMetrics }}" style="border:1px solid #e0e2e8;border-radius:7px;padding:8px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">Source</button></div></div></sc-if></span></div>
+                  <div style="flex:1;margin-bottom:22px">
+                    <!-- PENDING: active inline diff -->
+                    <sc-if value="{{ isPending }}" hint-placeholder-val="{{ true }}">
+                      <div style="border-radius:7px;margin-left:-10px;padding:7px 10px;background:rgba(225,150,60,.05);box-shadow:inset 2px 0 0 oklch(0.66 0.16 45)">
+                        <p style="margin:0 0 12px;font:400 16px/1.78 system-ui;color:#2c2f36">Growth <span style="background:#fdecec;color:#b4332f;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.5);border-radius:2px;padding:0 2px">remained steady</span> <span style="background:#e7f6ec;color:#1f7a44;border-radius:2px;padding:0 2px">accelerated sharply</span> this week<span style="background:#fdecec;color:#b4332f;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.5);border-radius:2px;padding:0 2px">, continuing the gradual climb seen since early Q2</span>. <span style="background:#e7f6ec;color:#1f7a44;border-radius:2px;padding:0 2px">At +18% week-on-week it is the fastest pace of the quarter, and the signup spike is the clearest single driver.</span></p>
+                        <p style="margin:0;font:400 16px/1.78 system-ui;color:#2c2f36"><span style="background:#e7f6ec;color:#1f7a44;border-radius:2px;padding:0 2px">If this rate holds we will revisit the Q3 target at next week's review — though one strong week is not yet a trend.</span></p>
+                        <div style="display:flex;align-items:center;gap:10px;margin-top:13px;background:#fff;border:1px solid #eceef2;border-radius:9px;padding:9px 11px">
+                          <span style="width:7px;height:7px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none"></span>
+                          <span style="font:500 12px/1.4 system-ui;color:#52575f">Tone rewrite from <span style="font-family:'JetBrains Mono',monospace;color:#5b6dc4">metrics.csv</span> · <span style="color:#1f7a44">+2 added</span> · <span style="color:#b4332f">2 removed</span></span>
+                          <span style="margin-left:auto;display:flex;gap:7px">
+                            <button onClick="{{ approve }}" style="border:none;border-radius:7px;padding:8px 14px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer">Approve changes</button>
+                            <button onClick="{{ reject }}" style="border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer">Reject</button>
+                          </span>
+                        </div>
+                      </div>
+                    </sc-if>
+                    <!-- APPLIED -->
+                    <sc-if value="{{ isApplied }}" hint-placeholder-val="{{ false }}">
+                      <div style="margin-left:-10px;padding:7px 10px;border-radius:7px;background:rgba(31,122,68,.06)">
+                        <p style="margin:0 0 12px;font:400 16px/1.78 system-ui;color:#2c2f36">Growth accelerated sharply this week. At +18% week-on-week it is the fastest pace of the quarter, and the signup spike is the clearest single driver.</p>
+                        <p style="margin:0 0 8px;font:400 16px/1.78 system-ui;color:#2c2f36">If this rate holds we will revisit the Q3 target at next week's review — though one strong week is not yet a trend.</p>
+                        <div style="display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#1f7a44"><span>✓ Approved · applied to document</span><button onClick="{{ reset }}" style="border:none;background:none;font:500 11.5px/1 system-ui;color:#5d8a66;cursor:pointer;text-decoration:underline">undo</button></div>
+                      </div>
+                    </sc-if>
+                    <!-- REJECTED -->
+                    <sc-if value="{{ isRejected }}" hint-placeholder-val="{{ false }}">
+                      <p style="margin:0;font:400 16px/1.78 system-ui;color:#2c2f36">Growth remained steady this week, continuing the gradual climb seen since early Q2. <button onClick="{{ reset }}" style="border:none;background:none;font:500 12px/1 system-ui;color:#868b95;cursor:pointer;text-decoration:underline">restore suggestion</button></p>
+                    </sc-if>
+                  </div>
+                </div>
+
+                <div style="display:flex"><div style="width:30px;flex:none"></div><div style="flex:1"><h2 style="margin:0 0 12px;font:600 19px/1.3 system-ui;color:#23262c">What to watch</h2></div></div>
+                <div style="display:flex"><div style="width:30px;flex:none"></div><p style="flex:1;margin:0;font:400 16px/1.78 system-ui;color:#2c2f36">Activation on the new onboarding flow, and whether the signup spike sustains into next week.</p></div>
+              </div>
+              </sc-if>
+              <sc-if value="{{ q2Active }}" hint-placeholder-val="{{ false }}">
+              <div style="max-width:720px;margin:0 auto;padding:48px 40px 80px">
+                <div style="display:flex"><div style="width:30px;flex:none"></div><div style="flex:1"><h1 style="margin:0 0 6px;font:600 30px/1.2 system-ui;color:#15171c;letter-spacing:-.015em">Q2 Strategy — Living Documents</h1><div style="font:400 12.5px/1 'JetBrains Mono',monospace;color:#a3a8b2;margin-bottom:34px">Updated weekly · owner Tom</div></div></div>
+                <div style="display:flex"><div style="width:30px;flex:none"></div><div style="flex:1"><h2 style="margin:0 0 12px;font:600 19px/1.3 system-ui;color:#23262c">Thesis</h2></div></div>
+                <div style="display:flex"><div style="width:30px;flex:none"></div><p style="flex:1;margin:0 0 22px;font:400 16px/1.78 system-ui;color:#2c2f36">As generation gets cheap, the scarce layer is truth maintenance. We win by making every AI edit reviewable and every document traceable to its source.</p></div>
+                <div style="display:flex"><div style="width:30px;flex:none"></div><div style="flex:1"><h2 style="margin:0 0 12px;font:600 19px/1.3 system-ui;color:#23262c">Traction</h2></div></div>
+                <div style="display:flex"><div style="width:30px;flex:none;display:flex;justify-content:center;padding-top:7px"><span style="width:9px;height:9px;border-radius:50%;background:oklch(0.55 0.13 255)" title="Bound to crm.api"></span></div><p style="flex:1;margin:0;font:400 16px/1.78 system-ui;color:#2c2f36">Win rate climbed to <span style="background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px">31%</span> this quarter, with <span style="background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px">12</span> active design partners.</p></div>
+              </div>
+              </sc-if>
+            </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== RIGHT PANEL (tabbed: Chat / Review / History) ===== -->
+          <div style="width:392px;flex:none;border-left:1px solid #e9eaee;background:#fbfbfc;display:flex;flex-direction:column;min-height:0">
+            <div style="height:40px;flex:none;display:flex;align-items:stretch;border-bottom:1px solid #eef0f3;padding:0 4px">
+              <button onClick="{{ setRightChat }}" style="border:none;background:none;cursor:pointer;padding:0 11px;display:flex;align-items:center;gap:6px;font:500 12.5px/1 system-ui;{{ chatTabStyle }}"><span>✦</span>Chat</button>
+              <button onClick="{{ setRightReview }}" style="border:none;background:none;cursor:pointer;padding:0 11px;display:flex;align-items:center;gap:6px;font:500 12.5px/1 system-ui;{{ reviewTabStyle }}">Review<span style="font:600 9px/1 'JetBrains Mono',monospace;color:#fff;background:oklch(0.66 0.16 45);border-radius:999px;padding:3px 5px">1</span></button>
+              <button onClick="{{ setRightHistory }}" style="border:none;background:none;cursor:pointer;padding:0 11px;display:flex;align-items:center;gap:6px;font:500 12.5px/1 system-ui;{{ historyTabStyle }}">History</button>
+              <button onClick="{{ setRightSkills }}" style="border:none;background:none;cursor:pointer;padding:0 11px;display:flex;align-items:center;gap:6px;font:500 12.5px/1 system-ui;{{ skillsTabStyle }}">Skills</button>
+            </div>
+
+            <!-- CHAT -->
+            <sc-if value="{{ rightChat }}" hint-placeholder-val="{{ true }}">
+              <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+                <!-- chat session tabs (multiple concurrent views) -->
+                <div style="flex:none;display:flex;align-items:center;gap:5px;padding:7px 10px;border-bottom:1px solid #f1f2f5;background:#fbfbfc">
+                  <button onClick="{{ setSessRefresh }}" style="display:flex;align-items:center;gap:6px;border-radius:7px;padding:6px 9px;font:500 11.5px/1 system-ui;cursor:pointer;{{ sessRefreshStyle }}"><span style="color:oklch(0.55 0.13 255)">✦</span>Weekly refresh</button>
+                  <button onClick="{{ setSessTone }}" style="border-radius:7px;padding:6px 9px;font:500 11.5px/1 system-ui;cursor:pointer;{{ sessToneStyle }}">Commentary edit</button>
+                  <button style="border:none;background:none;color:#a3a8b2;font-size:15px;cursor:pointer;padding:0 5px">＋</button>
+                  <span style="margin-left:auto;font:400 10px/1 'JetBrains Mono',monospace;color:#bcc0c8">2 open</span>
+                </div>
+                <div style="flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:16px">
+                  <div style="text-align:center;font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8">TODAY · 9:02</div>
+                  <div style="align-self:flex-end;max-width:88%;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+                    <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px">@Weekly Summary.md</span><span style="font:500 10.5px/1 'JetBrains Mono',monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px">@metrics.csv</span></div>
+                    <div style="background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36">metrics.csv just refreshed — update this week's summary and tighten the commentary.</div>
+                  </div>
+                  <div style="display:flex;gap:9px">
+                    <span style="flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center">✦</span>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:10px">
+                      <div style="border:1px solid #eceef2;border-radius:10px;overflow:hidden;background:#fff">
+                        <div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',monospace;color:#5d8a66;border-bottom:1px solid #f4f5f7"><span>✓</span>Read metrics.csv · 12 rows</div>
+                        <div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',monospace;color:#5d8a66;border-bottom:1px solid #f4f5f7"><span>✓</span>Diffed against last sync (v13)</div>
+                        <div style="display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 'JetBrains Mono',monospace;color:#5d8a66"><span>✓</span>Found 3 changed values</div>
+                      </div>
+                      <p style="margin:0;font:400 13.5px/1.6 system-ui;color:#2c2f36">I applied two low-risk figure updates and drafted one tone change that needs your call:</p>
+                      <div style="display:flex;flex-direction:column;gap:7px">
+                        <div style="display:flex;align-items:center;gap:8px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#1f5a36">✓ MRR <span style="text-decoration:line-through;opacity:.7">12%</span> → 18% <span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',monospace;color:#5d8a66">applied</span></div>
+                        <div style="display:flex;align-items:center;gap:8px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#1f5a36">✓ Signups 312 → 427 <span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',monospace;color:#5d8a66">applied</span></div>
+                        <button onClick="{{ setRightReview }}" style="text-align:left;display:flex;align-items:center;gap:8px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:8px;padding:8px 11px;font:500 12.5px/1.4 system-ui;color:#9a6b16;cursor:pointer">⚠ Commentary rewrite <span style="margin-left:auto;font:600 11px/1 system-ui;color:oklch(0.5 0.13 255)">Review →</span></button>
+                      </div>
+                      <!-- session summary + approve all -->
+                      <div style="border:1px solid #e0e6ff;background:#f7f9ff;border-radius:10px;padding:11px 12px">
+                        <div style="display:flex;align-items:center;gap:7px;margin-bottom:9px"><span style="font:600 11.5px/1 system-ui;color:#3a3f49">Summary of this run</span><span style="margin-left:auto;font:400 10.5px/1 'JetBrains Mono',monospace;color:#8a93c4">3 changes</span></div>
+                        <div style="font:400 12px/1.55 system-ui;color:#52575f;margin-bottom:11px">2 figure updates applied automatically; 1 commentary tone rewrite is waiting on you.</div>
+                        <sc-if value="{{ isPending }}" hint-placeholder-val="{{ true }}">
+                          <div style="display:flex;gap:7px"><button onClick="{{ approveAll }}" style="flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Approve all</button><button onClick="{{ setRightReview }}" style="border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer">Review each</button></div>
+                        </sc-if>
+                        <sc-if value="{{ isApplied }}" hint-placeholder-val="{{ false }}">
+                          <div style="display:flex;align-items:center;gap:7px;font:600 12px/1 system-ui;color:#1f7a44"><span>✓ All 3 changes approved</span><button onClick="{{ reset }}" style="margin-left:auto;border:none;background:none;font:500 11.5px/1 system-ui;color:#5d8a66;cursor:pointer;text-decoration:underline">undo</button></div>
+                        </sc-if>
+                        <sc-if value="{{ isRejected }}" hint-placeholder-val="{{ false }}">
+                          <div style="display:flex;align-items:center;gap:7px;font:600 12px/1 system-ui;color:#868b95"><span>Rewrite rejected · figures kept</span><button onClick="{{ reset }}" style="margin-left:auto;border:none;background:none;font:500 11.5px/1 system-ui;color:#868b95;cursor:pointer;text-decoration:underline">restore</button></div>
+                        </sc-if>
+                      </div>
+                    </div>
+                  </div>
+                  <div style="align-self:flex-end;max-width:88%;background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36">Why "accelerated" and not just "strong"?</div>
+                  <div style="display:flex;gap:9px">
+                    <span style="flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center">✦</span>
+                    <p style="flex:1;margin:0;font:400 13.5px/1.6 system-ui;color:#2c2f36">The +18% MRR delta crosses this report's "accelerating" threshold (set at &gt;15%). "Strong" describes size; "accelerated" captures the change in trajectory — which is what actually moved this week. No new facts were added.</p>
+                  </div>
+                </div>
+                <div style="flex:none;padding:12px 14px;border-top:1px solid #eef0f3">
+                  <div style="border:1px solid #e0e2e8;border-radius:11px;background:#fff;padding:10px 11px">
+                    <div style="display:flex;gap:5px;margin-bottom:9px"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px;display:inline-flex;gap:5px">@metrics.csv <span style="color:#aeb6e0;cursor:pointer">✕</span></span></div>
+                    <div style="font:400 13px/1.4 system-ui;color:#a3a8b2;padding:2px 2px 12px">Ask the agent, or @mention a file…</div>
+                    <div style="display:flex;align-items:center;gap:7px">
+                      <span style="font:500 11px/1 system-ui;color:#52575f;background:#f4f5f7;border-radius:7px;padding:6px 9px;display:inline-flex;gap:5px;align-items:center">✦ Sonnet 4.5 <span style="color:#a3a8b2">▾</span></span>
+                      <span style="font:500 11px/1 system-ui;color:#52575f;background:#f4f5f7;border-radius:7px;padding:6px 9px;display:inline-flex;gap:5px;align-items:center">Agent <span style="color:#a3a8b2">▾</span></span>
+                      <span title="Context window · 40% used" style="margin-left:auto;display:flex;align-items:center;gap:6px"><span style="width:18px;height:18px;border-radius:50%;background:{{ ctxRing }};display:flex;align-items:center;justify-content:center"><span style="width:10px;height:10px;border-radius:50%;background:#fff"></span></span><span style="font:500 10.5px/1 'JetBrains Mono',monospace;color:#868b95">40%</span></span>
+                      <button style="width:30px;height:30px;border:none;border-radius:8px;background:oklch(0.55 0.13 255);color:#fff;font-size:15px;cursor:pointer">↑</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- REVIEW -->
+            <sc-if value="{{ rightReview }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;overflow-y:auto;padding:16px">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="font:600 12px/1 system-ui;color:#1a1c20">Pending review</span><button onClick="{{ goReview }}" style="margin-left:auto;border:none;background:none;font:500 12px/1 system-ui;color:oklch(0.5 0.13 255);cursor:pointer">Open all →</button></div>
+                <div style="display:flex;align-items:center;gap:8px;font:400 11px/1.4 'JetBrains Mono',monospace;color:#868b95;background:#fff;border:1px solid #eceef2;border-radius:8px;padding:9px 11px;margin-bottom:16px"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45)"></span>metrics.csv changed · 3 cells · 2m ago</div>
+                <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.05em;color:#a3a8b2;margin-bottom:8px">COMMENTARY · REWRITE</div>
+                <div style="border:1px solid #eceef2;border-radius:9px;overflow:hidden;margin-bottom:12px">
+                  <div style="padding:10px 12px;background:#fdecec;font:400 13.5px/1.5 system-ui;color:#7a3a38;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.4)">Growth remained steady this week…</div>
+                  <div style="padding:10px 12px;background:#e7f6ec;font:400 13.5px/1.5 system-ui;color:#1f5a36">Growth <strong style="font-weight:600">accelerated sharply</strong> this week — the fastest pace this quarter.</div>
+                </div>
+                <div style="display:flex;gap:9px;align-items:flex-start;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:9px;padding:11px 12px;margin-bottom:16px"><span style="color:oklch(0.5 0.13 255);font:600 12px/1.4 system-ui">✦</span><p style="margin:0;font:400 12.5px/1.55 system-ui;color:#4a4f6a">MRR delta rose +12% → +18%, crossing the "accelerating" threshold for this report. Only tone changed — no new facts.</p></div>
+                <div style="display:flex;gap:18px;margin-bottom:16px"><div><div style="font:600 10px/1 'JetBrains Mono',monospace;color:#a3a8b2;margin-bottom:5px">CONFIDENCE</div><div style="font:600 13px/1 system-ui;color:#1f7a44">High · 0.93</div></div><div><div style="font:600 10px/1 'JetBrains Mono',monospace;color:#a3a8b2;margin-bottom:5px">RISK</div><div style="font:600 13px/1 system-ui;color:#9a6b16">Medium</div></div></div>
+                <sc-if value="{{ isPending }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:8px">
+                    <button onClick="{{ approve }}" style="flex:1;border:none;border-radius:8px;padding:11px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1 system-ui;cursor:pointer">Approve change</button>
+                    <button onClick="{{ reject }}" style="border:1px solid #e0e2e8;border-radius:8px;padding:11px 16px;background:#fff;color:#696e78;font:500 13px/1 system-ui;cursor:pointer">Reject</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ isApplied }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;justify-content:space-between;background:#e7f6ec;border:1px solid #c5e7d0;border-radius:8px;padding:11px 13px"><span style="font:600 13px/1 system-ui;color:#1f7a44">✓ Applied to document</span><button onClick="{{ reset }}" style="border:none;background:none;font:500 12px/1 system-ui;color:#5d8a66;cursor:pointer;text-decoration:underline">undo</button></div>
+                </sc-if>
+                <sc-if value="{{ isRejected }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;justify-content:space-between;background:#f4f5f7;border:1px solid #e6e8ed;border-radius:8px;padding:11px 13px"><span style="font:600 13px/1 system-ui;color:#868b95">Change rejected</span><button onClick="{{ reset }}" style="border:none;background:none;font:500 12px/1 system-ui;color:#868b95;cursor:pointer;text-decoration:underline">restore</button></div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <!-- HISTORY -->
+            <sc-if value="{{ rightHistory }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;overflow-y:auto;padding:16px 14px">
+                <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#a3a8b2;padding:0 2px 14px">VERSION HISTORY · WEEKLY SUMMARY.MD</div>
+                <div style="display:flex;gap:11px"><div style="flex:none;display:flex;flex-direction:column;align-items:center"><span style="width:10px;height:10px;border-radius:50%;background:oklch(0.55 0.13 255)"></span><span style="flex:1;width:2px;background:#e6e8ed"></span></div><div style="flex:1;padding-bottom:18px"><div style="display:flex;align-items:center;gap:7px"><span style="font:600 12.5px/1 system-ui;color:#1a1c20">v14</span><span style="font:600 9px/1 'JetBrains Mono',monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:3px 6px">CURRENT</span></div><div style="font:400 12.5px/1.5 system-ui;color:#52575f;margin:5px 0 3px">Approved commentary rewrite</div><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#a3a8b2">just now · Tom</div></div></div>
+                <div style="display:flex;gap:11px"><div style="flex:none;display:flex;flex-direction:column;align-items:center"><span style="width:10px;height:10px;border-radius:50%;background:#cfd3da"></span><span style="flex:1;width:2px;background:#e6e8ed"></span></div><div style="flex:1;padding-bottom:18px"><div style="font:600 12.5px/1 system-ui;color:#1a1c20">v13</div><div style="font:400 12.5px/1.5 system-ui;color:#52575f;margin:5px 0 3px">Auto-refresh: MRR, signups updated</div><div style="display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',monospace;color:#a3a8b2"><span style="color:oklch(0.55 0.13 255)">⟳</span>2m ago · Weekly refresh</div></div></div>
+                <div style="display:flex;gap:11px"><div style="flex:none;display:flex;flex-direction:column;align-items:center"><span style="width:10px;height:10px;border-radius:50%;background:#cfd3da"></span><span style="flex:1;width:2px;background:#e6e8ed"></span></div><div style="flex:1;padding-bottom:18px"><div style="font:600 12.5px/1 system-ui;color:#1a1c20">v12</div><div style="font:400 12.5px/1.5 system-ui;color:#52575f;margin:5px 0 3px">Edited "What to watch"</div><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#a3a8b2">yesterday 18:00 · Tom</div></div></div>
+                <div style="display:flex;gap:11px"><div style="flex:none;display:flex;flex-direction:column;align-items:center"><span style="font-size:12px;color:oklch(0.66 0.16 45)">★</span><span style="flex:1;width:2px;background:#e6e8ed"></span></div><div style="flex:1"><div style="display:flex;align-items:center;gap:7px"><span style="font:600 12.5px/1 system-ui;color:#1a1c20">v11</span><span style="font:500 9px/1 'JetBrains Mono',monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:3px 6px">SNAPSHOT</span></div><div style="font:400 12.5px/1.5 system-ui;color:#52575f;margin:5px 0 3px">Created from Weekly report template</div><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#a3a8b2">Jun 12 · Tom</div></div></div>
+              </div>
+            </sc-if>
+
+            <!-- SKILLS (document agents) -->
+            <sc-if value="{{ rightSkills }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;overflow-y:auto;padding:16px 14px">
+                <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#a3a8b2;padding:0 2px 4px">DOCUMENT AGENTS</div>
+                <div style="font:400 11px/1.45 system-ui;color:#a3a8b2;padding:0 2px 14px">Skills that run on Weekly&nbsp;Summary.md — on demand or before export.</div>
+
+                <!-- Strategy agent (active flag) -->
+                <div style="border:1.5px solid oklch(0.78 0.1 70);border-radius:11px;overflow:hidden;margin-bottom:11px;box-shadow:0 2px 10px rgba(180,130,40,.07)">
+                  <div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#fdf2dc;color:#9a6b16;font-size:14px;display:flex;align-items:center;justify-content:center">◈</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Strategy agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Tests claims against strategy &amp; OKRs</div></div></div>
+                  <div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:11px 0"><div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px"><span style="color:#9a6b16;font:600 12px/1.4 system-ui">⚠</span><p style="margin:0;font:400 12px/1.5 system-ui;color:#52575f"><strong style="font-weight:600">1 flag.</strong> "Revisit the Q3 target" isn't grounded in <span style="color:#9a6b16">Objective&nbsp;2</span> — restate against the +20% MRR key result?</p></div><div style="display:flex;gap:7px"><button style="border:none;border-radius:7px;padding:7px 12px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer">Apply fix</button><button onClick="{{ goKnowledge }}" style="border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">View in Knowledge →</button></div></div>
+                </div>
+
+                <!-- Financial agent -->
+                <div style="border:1px solid #eceef2;border-radius:11px;overflow:hidden;margin-bottom:11px">
+                  <div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#e7f3ec;color:#217346;font-size:14px;display:flex;align-items:center;justify-content:center">∑</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Financial agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Validates figures in reports &amp; quotes</div></div><span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:4px 7px;flex:none">PASS</span></div>
+                  <div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="font:400 12px/1.4 system-ui;color:#52575f">All 4 linked figures reconcile with sources.</span><button style="margin-left:auto;border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">Re-run</button></div>
+                </div>
+
+                <!-- Formatting agent -->
+                <div style="border:1px solid #eceef2;border-radius:11px;overflow:hidden;margin-bottom:14px">
+                  <div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:#eef1f6;color:#52575f;font-size:14px;display:flex;align-items:center;justify-content:center">¶</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">Formatting agent</div><div style="font:400 11px/1.3 system-ui;color:#868b95">Checks house style before export</div></div></div>
+                  <div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="font:400 12px/1.4 system-ui;color:#868b95">2 heading-case fixes suggested.</span><button style="margin-left:auto;border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">Run</button></div>
+                </div>
+
+                <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 2px 8px">RUN ON EXPORT</div>
+                <div style="display:flex;align-items:center;gap:9px;border:1px solid #eceef2;background:#fff;border-radius:9px;padding:10px 12px;margin-bottom:14px"><span style="font:400 12px/1.4 system-ui;color:#52575f">Formatting + Financial</span><span style="margin-left:auto;width:34px;height:20px;border-radius:999px;background:oklch(0.55 0.13 255);position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;background:#fff"></span></span></div>
+
+                <button style="width:100%;border:1px dashed #d4d7de;background:#fff;border-radius:8px;padding:9px;font:500 12px/1 system-ui;color:#868b95;cursor:pointer">＋ Add skill from library</button>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ REVIEW (focused) ============ -->
+      <sc-if value="{{ isReview }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:18px 28px;border-bottom:1px solid #eef0f3">
+            <div>
+              <h2 style="margin:0 0 4px;font:600 18px/1.2 system-ui;color:#15171c">Refresh review — Weekly Summary.md</h2>
+              <div style="font:400 12px/1 'JetBrains Mono',monospace;color:#a3a8b2">Triggered by metrics.csv · 3 proposed changes · 2m ago</div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button onClick="{{ approve }}" style="border:none;border-radius:8px;padding:10px 16px;background:oklch(0.55 0.14 150);color:#fff;font:600 13px/1 system-ui;cursor:pointer">✓ Approve all</button>
+              <button onClick="{{ reject }}" style="border:1px solid #e0e2e8;border-radius:8px;padding:10px 16px;background:#fff;color:#696e78;font:500 13px/1 system-ui;cursor:pointer">Reject all</button>
+            </div>
+          </div>
+          <div style="flex:1;overflow-y:auto;background:#f8f9fb">
+            <div style="max-width:840px;margin:0 auto;padding:26px 28px 80px;display:flex;flex-direction:column;gap:16px">
+
+              <!-- change card 1: figure (auto-applied) -->
+              <div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden">
+                <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid #f1f2f5"><span style="font:600 11px/1 'JetBrains Mono',monospace;color:#a3a8b2;letter-spacing:.05em">HIGHLIGHTS · FIGURE</span><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:4px 8px">LOW RISK · AUTO-APPLIED</span><span style="margin-left:auto;font:400 11px/1 'JetBrains Mono',monospace;color:#bcc0c8">confidence 0.99</span></div>
+                <div style="display:flex;gap:10px;padding:11px 16px;font:400 14px/1.5 system-ui;background:#fdecec"><span style="font:600 12px/1.5 'JetBrains Mono',monospace;color:#b4332f">−</span><span style="color:#7a3a38">Revenue grew <span style="text-decoration:line-through">12%</span> week-on-week to $48.6k MRR</span></div>
+                <div style="display:flex;gap:10px;padding:11px 16px;font:400 14px/1.5 system-ui;background:#e7f6ec"><span style="font:600 12px/1.5 'JetBrains Mono',monospace;color:#1f7a44">+</span><span style="color:#1f5a36">Revenue grew <strong style="font-weight:600">18%</strong> week-on-week to $48.6k MRR</span></div>
+              </div>
+
+              <!-- change card 2: signups -->
+              <div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden">
+                <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid #f1f2f5"><span style="font:600 11px/1 'JetBrains Mono',monospace;color:#a3a8b2;letter-spacing:.05em">HIGHLIGHTS · FIGURE</span><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:4px 8px">LOW RISK · AUTO-APPLIED</span><span style="margin-left:auto;font:400 11px/1 'JetBrains Mono',monospace;color:#bcc0c8">confidence 0.99</span></div>
+                <div style="display:flex;gap:10px;padding:11px 16px;font:400 14px/1.5 system-ui;background:#fdecec"><span style="font:600 12px/1.5 'JetBrains Mono',monospace;color:#b4332f">−</span><span style="color:#7a3a38">carried by <span style="text-decoration:line-through">312</span> new signups</span></div>
+                <div style="display:flex;gap:10px;padding:11px 16px;font:400 14px/1.5 system-ui;background:#e7f6ec"><span style="font:600 12px/1.5 'JetBrains Mono',monospace;color:#1f7a44">+</span><span style="color:#1f5a36">carried by <strong style="font-weight:600">427</strong> new signups</span></div>
+              </div>
+
+              <!-- change card 3: semantic rewrite (needs approval) -->
+              <div style="background:#fff;border:1.5px solid oklch(0.78 0.1 70);border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(180,130,40,.08)">
+                <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid #f1f2f5"><span style="font:600 11px/1 'JetBrains Mono',monospace;color:#a3a8b2;letter-spacing:.05em">COMMENTARY · SEMANTIC REWRITE</span><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:4px 8px">NEEDS APPROVAL · MEANING CHANGE</span><span style="margin-left:auto;font:400 11px/1 'JetBrains Mono',monospace;color:#bcc0c8">confidence 0.93</span></div>
+                <div style="padding:12px 16px;font:400 14px/1.55 system-ui;background:#fdecec;color:#7a3a38;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.4)">Growth remained steady this week, continuing the gradual climb seen since early Q2.</div>
+                <div style="padding:12px 16px;font:400 14px/1.55 system-ui;background:#e7f6ec;color:#1f5a36">Growth <strong style="font-weight:600">accelerated sharply</strong> this week — the fastest pace this quarter.</div>
+                <div style="display:flex;gap:10px;align-items:flex-start;padding:13px 16px;background:#f4f6ff;border-top:1px solid #f1f2f5"><span style="color:oklch(0.5 0.13 255);font:600 13px/1.4 system-ui">✦</span><p style="margin:0;font:400 13px/1.55 system-ui;color:#4a4f6a">The +18% delta crosses the report's "accelerating" threshold, so "steady" is no longer accurate. The model changed tone only and introduced no new claims.</p></div>
+                <div style="padding:13px 16px;border-top:1px solid #f1f2f5">
+                  <sc-if value="{{ isPending }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;gap:8px"><button onClick="{{ approve }}" style="border:none;border-radius:8px;padding:10px 18px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1 system-ui;cursor:pointer">Approve &amp; apply</button><button onClick="{{ reject }}" style="border:1px solid #e0e2e8;border-radius:8px;padding:10px 16px;background:#fff;color:#696e78;font:500 13px/1 system-ui;cursor:pointer">Reject</button><button style="border:1px solid #e0e2e8;border-radius:8px;padding:10px 16px;background:#fff;color:#696e78;font:500 13px/1 system-ui;cursor:pointer">Edit first</button></div>
+                  </sc-if>
+                  <sc-if value="{{ isApplied }}" hint-placeholder-val="{{ false }}">
+                    <div style="font:600 13px/1 system-ui;color:#1f7a44">✓ Approved by Tom · applied to Weekly Summary.md</div>
+                  </sc-if>
+                  <sc-if value="{{ isRejected }}" hint-placeholder-val="{{ false }}">
+                    <div style="font:600 13px/1 system-ui;color:#868b95">Rejected · original sentence kept</div>
+                  </sc-if>
+                </div>
+              </div>
+
+              <div style="font:400 12px/1.6 'JetBrains Mono',monospace;color:#bcc0c8;text-align:center;padding-top:6px">Audit trail · every accept/reject is timestamped and reversible</div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ SPLIT ============ -->
+      <sc-if value="{{ isSplit }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div style="height:54px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 22px;border-bottom:1px solid #eef0f3">
+            <div style="display:flex;align-items:center;gap:10px;font:500 14px/1 system-ui"><span style="font:400 12.5px/1 'JetBrains Mono',monospace;color:#868b95">metrics.csv</span><span style="color:#c8cbd2">↔</span><span>Weekly Summary.md</span></div>
+            <button onClick="{{ approve }}" style="display:flex;align-items:center;gap:8px;border:none;border-radius:8px;padding:10px 16px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1 system-ui;cursor:pointer">⟳ Sync changes → report</button>
+          </div>
+          <div style="flex:1;display:flex;min-height:0">
+            <div onMouseLeave="{{ clearHover }}" style="width:46%;flex:none;border-right:1px solid #eef0f3;background:#fcfcfd;overflow-y:auto">
+              <div style="padding:18px 24px 10px;font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#a3a8b2">SOURCE · METRICS.CSV</div>
+              <div style="padding:0 18px 18px">
+                <div style="display:flex;font:600 11px/1 'JetBrains Mono',monospace;color:#a3a8b2;letter-spacing:.04em;padding:0 10px 8px"><div style="flex:2;padding:6px 10px">METRIC</div><div style="flex:1;padding:6px 10px;text-align:right">W23</div><div style="flex:1;padding:6px 10px;text-align:right">W24</div><div style="flex:1;padding:6px 10px;text-align:right">Δ</div></div>
+                <sc-for list="{{ rows }}" as="row" hint-placeholder-count="4">
+                  <div onMouseEnter="{{ row.onEnter }}" style="display:flex;align-items:center;border-radius:8px;font:400 13.5px/1 system-ui;transition:background .12s;background:{{ row.bg }}">
+                    <div style="flex:2;padding:12px 10px;font-weight:500">{{ row.metric }}</div>
+                    <div style="flex:1;padding:12px 10px;text-align:right;color:#969ba4">{{ row.w23 }}</div>
+                    <div style="flex:1;padding:12px 10px;text-align:right">{{ row.w24 }}</div>
+                    <div style="flex:1;padding:12px 10px;text-align:right;color:#1f7a44;font-weight:500">{{ row.d }}</div>
+                  </div>
+                </sc-for>
+                <div style="margin-top:16px;padding:12px 14px;background:#fff;border:1px solid #eceef2;border-radius:9px;font:400 12.5px/1.5 system-ui;color:#7a818c"><span style="color:#1f7a44;font-weight:600">3 cells changed.</span> Hover a metric to highlight the sentences that depend on it.</div>
+              </div>
+            </div>
+            <div style="flex:1;min-width:0;overflow-y:auto;background:#fff">
+              <div style="max-width:600px;padding:32px 44px 60px">
+                <h1 style="margin:0 0 4px;font:600 25px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Weekly Operating Summary</h1>
+                <div style="font:400 12px/1 'JetBrains Mono',monospace;color:#a3a8b2;margin-bottom:30px">Week 24 · linked to metrics.csv</div>
+                <h2 style="margin:0 0 10px;font:600 13px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2">REVENUE</h2>
+                <p onMouseEnter="{{ enterRevenue }}" style="margin:0 0 22px;font:400 16px/1.75 system-ui;color:#2c2f36;border-radius:7px;padding:9px 11px;margin-left:-11px;transition:background .12s;cursor:default;background:{{ revBg }}">Revenue grew <span style="color:#b4332f;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.5)">12%</span> <span style="background:#e7f6ec;color:#1f5a36;padding:0 4px;border-radius:3px;font-weight:600">18%</span> week-on-week to $48.6k MRR, the strongest week of the quarter, carried by 427 new signups.</p>
+                <h2 style="margin:0 0 10px;font:600 13px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2">RETENTION</h2>
+                <p onMouseEnter="{{ enterChurn }}" style="margin:0 0 22px;font:400 16px/1.75 system-ui;color:#2c2f36;border-radius:7px;padding:9px 11px;margin-left:-11px;transition:background .12s;cursor:default;background:{{ churnBg }}">Churn eased to 2.4%, down 0.7 points, holding the gains from last month's onboarding work.</p>
+                <h2 style="margin:0 0 10px;font:600 13px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2">COMMENTARY</h2>
+                <p style="margin:0;font:400 16px/1.75 system-ui;color:#2c2f36">Growth <span style="background:#e7f6ec;color:#1f5a36;padding:0 4px;border-radius:3px;font-weight:600">accelerated sharply</span> this week. Recommend flagging support and infra capacity into next sprint.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ TEMPLATES ============ -->
+      <sc-if value="{{ isTemplates }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div style="flex:none;padding:18px 28px;border-bottom:1px solid #eef0f3"><h2 style="margin:0 0 4px;font:600 18px/1.2 system-ui;color:#15171c">Run template — Weekly report</h2><div style="font:400 12px/1 'JetBrains Mono',monospace;color:#a3a8b2">Fill from sources, generate a draft, review the diff before it lands.</div></div>
+          <div style="flex:1;overflow-y:auto;background:#f8f9fb">
+            <div style="max-width:980px;margin:0 auto;padding:26px 28px 80px;display:flex;gap:20px;align-items:flex-start">
+              <!-- config -->
+              <div style="width:380px;flex:none;display:flex;flex-direction:column;gap:14px">
+                <div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="width:20px;height:20px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 11px/20px system-ui;text-align:center">1</span><span style="font:600 13px/1 system-ui">Template</span></div>
+                  <div style="border:1px solid #e6e8ed;border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;font:500 13px/1 system-ui;color:#2c2f36">▤ Weekly report<span style="margin-left:auto;color:#a3a8b2">▾</span></div>
+                </div>
+                <div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="width:20px;height:20px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 11px/20px system-ui;text-align:center">2</span><span style="font:600 13px/1 system-ui">Prompt</span><button style="margin-left:auto;display:flex;align-items:center;gap:6px;border:1px solid #e6e8ed;background:#fff;border-radius:7px;padding:5px 9px;font:500 11px/1 system-ui;color:#52575f;cursor:pointer">🎙 Voice</button></div>
+                  <div style="border:1px solid #e6e8ed;border-radius:8px;padding:11px 12px;font:400 13.5px/1.55 system-ui;color:#2c2f36;background:#fcfcfd">Summarise week 24. Flag the signup spike and call out that growth accelerated.</div>
+                </div>
+                <div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="width:20px;height:20px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 11px/20px system-ui;text-align:center">3</span><span style="font:600 13px/1 system-ui">Sources</span></div>
+                  <div style="display:flex;flex-wrap:wrap;gap:7px">
+                    <span style="display:flex;align-items:center;gap:6px;font:500 12px/1 'JetBrains Mono',monospace;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:999px;padding:6px 10px"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.55 0.13 255)"></span>metrics.csv</span>
+                    <span style="display:flex;align-items:center;gap:6px;font:500 12px/1 'JetBrains Mono',monospace;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:999px;padding:6px 10px"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.55 0.13 255)"></span>crm · api</span>
+                    <span style="display:flex;align-items:center;gap:6px;font:500 12px/1 'JetBrains Mono',monospace;color:#868b95;background:#fff;border:1px dashed #d4d7de;border-radius:999px;padding:6px 10px">＋ add source</span>
+                  </div>
+                </div>
+                <button onClick="{{ generate }}" style="border:none;border-radius:10px;padding:13px;background:oklch(0.55 0.13 255);color:#fff;font:600 14px/1 system-ui;cursor:pointer">Generate draft</button>
+              </div>
+              <!-- preview -->
+              <div style="flex:1;min-width:0;background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden">
+                <div style="display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid #f1f2f5"><span style="font:600 12px/1 system-ui;color:#2c2f36">Draft preview</span><span style="font:600 10px/1 'JetBrains Mono',monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:4px 8px">{{ draftBadge }}</span><div style="margin-left:auto;display:flex;gap:7px"><button onClick="{{ goReview }}" style="border:1px solid #e0e2e8;background:#fff;border-radius:7px;padding:6px 11px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Review diff →</button><button style="border:1px solid #e0e2e8;background:#fff;border-radius:7px;padding:6px 11px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Export</button></div></div>
+                <div style="padding:28px 32px">
+                  <h1 style="margin:0 0 4px;font:600 23px/1.2 system-ui;color:#15171c">Weekly Operating Summary</h1>
+                  <div style="font:400 12px/1 'JetBrains Mono',monospace;color:#a3a8b2;margin-bottom:24px">Week <span style="background:#e7f6ec;color:#1f5a36;padding:0 4px;border-radius:3px">24</span> · Jun 15–19</div>
+                  <h2 style="margin:0 0 10px;font:600 16px/1.3 system-ui;color:#23262c">Highlights</h2>
+                  <p style="margin:0 0 20px;font:400 15px/1.7 system-ui;color:#2c2f36">Revenue grew <span style="background:#e7f6ec;color:#1f5a36;padding:0 4px;border-radius:3px;font-weight:600">18%</span> to <span style="background:#e7f6ec;color:#1f5a36;padding:0 4px;border-radius:3px;font-weight:600">$48.6k</span> MRR on <span style="background:#e7f6ec;color:#1f5a36;padding:0 4px;border-radius:3px;font-weight:600">427</span> new signups.</p>
+                  <h2 style="margin:0 0 10px;font:600 16px/1.3 system-ui;color:#23262c">Commentary</h2>
+                  <p style="margin:0;font:400 15px/1.7 system-ui;color:#2c2f36">Growth <span style="background:#e7f6ec;color:#1f5a36;padding:0 4px;border-radius:3px;font-weight:600">accelerated sharply</span> — fastest pace this quarter. The signup spike is the headline; watch activation next week.</p>
+                  <div style="margin-top:22px;padding-top:16px;border-top:1px dashed #e6e8ed;font:400 11.5px/1.6 'JetBrains Mono',monospace;color:#bcc0c8"><span style="color:#1f7a44">green</span> = filled from source · grey template slots all resolved</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ WORKFLOWS ============ -->
+      <sc-if value="{{ isWorkflows }}" hint-placeholder-val="{{ false }}">
+        <sc-if value="{{ agentsList }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:18px 28px;border-bottom:1px solid #eef0f3">
+            <div><h2 style="margin:0 0 4px;font:600 18px/1.2 system-ui;color:#15171c">Agents</h2><div style="font:400 12px/1 'JetBrains Mono',monospace;color:#a3a8b2">Documents talking to documents — running quietly in the background.</div></div>
+            <button style="border:none;border-radius:8px;padding:10px 16px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1 system-ui;cursor:pointer">＋ New agent</button>
+          </div>
+          <div style="flex:1;overflow-y:auto;background:#f8f9fb">
+            <div style="max-width:1040px;margin:0 auto;padding:24px 28px 80px">
+              <div style="display:flex;gap:6px;margin-bottom:16px"><span style="font:500 12px/1 system-ui;color:#15181f;background:#fff;border:1px solid #e6e8ed;box-shadow:0 1px 2px rgba(0,0,0,.04);border-radius:8px;padding:7px 12px">All · 4</span><span style="font:500 12px/1 system-ui;color:#868b95;padding:7px 12px">Scheduled</span><span style="font:500 12px/1 system-ui;color:#868b95;padding:7px 12px">Triggered</span><span style="font:500 12px/1 system-ui;color:#9a6b16;padding:7px 12px">Needs approval · 1</span></div>
+              <div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden">
+                <div style="display:flex;align-items:center;padding:11px 18px;background:#f8f9fb;border-bottom:1px solid #eef0f3;font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2"><div style="flex:2.4">AGENT</div><div style="flex:1.4">TRIGGER</div><div style="flex:2.6">FLOW</div><div style="flex:1.3">LAST RUN</div><div style="flex:1.4">STATUS</div></div>
+
+                <div onClick="{{ openWeeklyAgent }}" style="display:flex;align-items:center;padding:15px 18px;border-bottom:1px solid #f1f2f5;font:400 13px/1.4 system-ui;cursor:pointer;background:#fcfdff">
+                  <div style="flex:2.4;display:flex;align-items:center;gap:9px"><span style="color:oklch(0.55 0.13 255)">⟳</span><span style="font-weight:500">Weekly refresh</span><span style="font:400 10px/1 'JetBrains Mono',monospace;color:#aeb6e0">open ↗</span></div>
+                  <div style="flex:1.4;font:400 12px/1 'JetBrains Mono',monospace;color:#696e78">cron · Mon 9:00</div>
+                  <div style="flex:2.6;font:400 12px/1.5 'JetBrains Mono',monospace;color:#868b95">metrics.csv → Weekly Summary.md</div>
+                  <div style="flex:1.3;color:#969ba4">2m ago</div>
+                  <div style="flex:1.4"><span style="font:600 11px/1 system-ui;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 10px">1 approval</span></div>
+                </div>
+                <div style="display:flex;align-items:center;padding:15px 18px;border-bottom:1px solid #f1f2f5;font:400 13px/1.4 system-ui">
+                  <div style="flex:2.4;display:flex;align-items:center;gap:9px"><span style="color:oklch(0.55 0.13 255)">⊕</span><span style="font-weight:500">Quote → tracker</span></div>
+                  <div style="flex:1.4;font:400 12px/1 'JetBrains Mono',monospace;color:#696e78">folder watch</div>
+                  <div style="flex:2.6;font:400 12px/1.5 'JetBrains Mono',monospace;color:#868b95">/quotes → pipeline.csv</div>
+                  <div style="flex:1.3;color:#969ba4">9m ago</div>
+                  <div style="flex:1.4"><span style="display:inline-flex;align-items:center;gap:6px;font:600 11px/1 system-ui;color:#1f7a44"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Healthy</span></div>
+                </div>
+                <div style="display:flex;align-items:center;padding:15px 18px;border-bottom:1px solid #f1f2f5;font:400 13px/1.4 system-ui">
+                  <div style="flex:2.4;display:flex;align-items:center;gap:9px"><span style="color:oklch(0.55 0.13 255)">◷</span><span style="font-weight:500">KPI → commentary</span></div>
+                  <div style="flex:1.4;font:400 12px/1 'JetBrains Mono',monospace;color:#696e78">webhook</div>
+                  <div style="flex:2.6;font:400 12px/1.5 'JetBrains Mono',monospace;color:#868b95">kpi.api → Board Note.md</div>
+                  <div style="flex:1.3;color:#969ba4">1h ago</div>
+                  <div style="flex:1.4"><span style="display:inline-flex;align-items:center;gap:6px;font:600 11px/1 system-ui;color:#1f7a44"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Healthy</span></div>
+                </div>
+                <div style="display:flex;align-items:center;padding:15px 18px;font:400 13px/1.4 system-ui">
+                  <div style="flex:2.4;display:flex;align-items:center;gap:9px"><span style="color:oklch(0.55 0.13 255)">▦</span><span style="font-weight:500">SOP → policy index</span></div>
+                  <div style="flex:1.4;font:400 12px/1 'JetBrains Mono',monospace;color:#696e78">cron · daily</div>
+                  <div style="flex:2.6;font:400 12px/1.5 'JetBrains Mono',monospace;color:#868b95">/sops → Policy Index.md</div>
+                  <div style="flex:1.3;color:#969ba4">yesterday</div>
+                  <div style="flex:1.4"><span style="display:inline-flex;align-items:center;gap:6px;font:600 11px/1 system-ui;color:#868b95"><span style="width:7px;height:7px;border-radius:50%;background:#cdd1d8"></span>Idle</span></div>
+                </div>
+              </div>
+              <div style="margin-top:14px;font:400 12px/1.5 'JetBrains Mono',monospace;color:#bcc0c8">Tip: open an agent to see and edit its flow on the canvas.</div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== WORKFLOW CANVAS ===== -->
+        <sc-if value="{{ agentOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+            <div style="flex:none;display:flex;align-items:center;gap:14px;padding:13px 24px;border-bottom:1px solid #eef0f3">
+              <button onClick="{{ closeAgent }}" style="border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:8px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">← Agents</button>
+              <div><div style="display:flex;align-items:center;gap:8px"><span style="color:oklch(0.55 0.13 255)">⟳</span><h2 style="margin:0;font:600 16px/1.2 system-ui;color:#15171c">Weekly refresh</h2></div><div style="font:400 11.5px/1 'JetBrains Mono',monospace;color:#a3a8b2;margin-top:4px">cron · Mon 9:00 · 2 sources → 3 documents</div></div>
+              <div style="margin-left:auto;display:flex;align-items:center;gap:12px"><sc-if value="{{ notRanWf }}" hint-placeholder-val="{{ true }}"><span style="font:400 11.5px/1 'JetBrains Mono',monospace;color:#a3a8b2">last run 2m ago</span></sc-if><button onClick="{{ runWf }}" style="border:none;border-radius:8px;padding:9px 16px;background:oklch(0.55 0.14 150);color:#fff;font:600 13px/1 system-ui;cursor:pointer">▶ Run now</button></div>
+            </div>
+            <sc-if value="{{ ranWf }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:none;display:flex;align-items:center;gap:10px;padding:11px 24px;background:#fdf6e9;border-bottom:1px solid #f0e2c4;font:500 12.5px/1.4 system-ui;color:#9a6b16"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.66 0.16 45)"></span>Run complete · 3 figure updates applied · 1 narrative change needs approval<button onClick="{{ goReview }}" style="margin-left:auto;border:none;background:none;font:600 12.5px/1 system-ui;color:oklch(0.5 0.13 255);cursor:pointer">Review →</button></div>
+            </sc-if>
+            <div style="flex:1;overflow:auto;background:#f8f9fb;background-image:radial-gradient(#e2e6ee 1px,transparent 1px);background-size:22px 22px">
+              <div style="position:relative;width:980px;height:520px;margin:28px auto">
+                <svg width="980" height="520" style="position:absolute;top:0;left:0;pointer-events:none">
+                  <path d="M208,120 C300,120 300,250 380,250" stroke="#cdd5e2" strokeWidth="2" fill="none"></path>
+                  <path d="M208,330 C300,330 300,250 380,250" stroke="#cdd5e2" strokeWidth="2" fill="none"></path>
+                  <path d="M590,250 C680,250 680,90 740,90" stroke="{{ wsStroke }}" strokeWidth="2" fill="none"></path>
+                  <path d="M590,250 C680,250 680,262 740,262" stroke="{{ bnStroke }}" strokeWidth="2" fill="none"></path>
+                  <path d="M590,250 C680,250 680,422 740,422" stroke="#cdd5e2" strokeWidth="2" fill="none"></path>
+                  <circle cx="380" cy="250" r="3.5" fill="#cdd5e2"></circle>
+                  <circle cx="740" cy="90" r="3.5" fill="{{ wsStroke }}"></circle>
+                  <circle cx="740" cy="262" r="3.5" fill="{{ bnStroke }}"></circle>
+                  <circle cx="740" cy="422" r="3.5" fill="#cdd5e2"></circle>
+                </svg>
+                <div style="position:absolute;left:18px;top:160px;font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#bcc0c8">SOURCES</div>
+                <div style="position:absolute;left:20px;top:92px;width:188px;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 'JetBrains Mono',monospace;color:#52575f"><span style="color:#5b6dc4">⊞</span>metrics.csv</div><div style="font:400 10.5px/1.3 'JetBrains Mono',monospace;color:#a3a8b2;margin-top:6px">12 rows · changed 2m ago</div></div>
+                <div style="position:absolute;left:20px;top:302px;width:188px;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 'JetBrains Mono',monospace;color:#52575f"><span style="color:#5b6dc4">⇄</span>crm.api</div><div style="font:400 10.5px/1.3 'JetBrains Mono',monospace;color:#a3a8b2;margin-top:6px">win-rate · polled hourly</div></div>
+                <div style="position:absolute;left:380px;top:212px;width:210px;background:#1a1c20;border-radius:11px;padding:13px 15px;box-shadow:0 6px 18px rgba(20,30,60,.2)"><div style="display:flex;align-items:center;gap:8px;font:600 13px/1 system-ui;color:#fff"><span style="color:#9db4ff">⟳</span>Weekly refresh<sc-if value="{{ ranWf }}" hint-placeholder-val="{{ false }}"><span style="margin-left:auto;width:8px;height:8px;border-radius:50%;background:oklch(0.7 0.15 150);animation:lwdPulse 1.4s infinite"></span></sc-if></div><div style="font:400 10.5px/1.4 'JetBrains Mono',monospace;color:#9aa0b4;margin-top:8px">read · diff · rewrite<br>policy: ask before apply</div></div>
+                <div style="position:absolute;left:740px;top:160px;font:600 9px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#bcc0c8">DOCUMENTS</div>
+                <div style="position:absolute;left:740px;top:58px;width:222px;background:#fff;border:1.5px solid {{ wsNodeBorder }};border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#1a1c20"><span style="color:oklch(0.55 0.13 255)">▣</span>Weekly Summary.md</div><sc-if value="{{ notRanWf }}" hint-placeholder-val="{{ true }}"><div style="font:400 10.5px/1.3 'JetBrains Mono',monospace;color:#a3a8b2;margin-top:7px">awaiting run</div></sc-if><sc-if value="{{ ranWf }}" hint-placeholder-val="{{ false }}"><button onClick="{{ goReview }}" style="margin-top:9px;width:100%;text-align:left;border:1px solid #f0e2c4;background:#fdf6e9;border-radius:7px;padding:7px 9px;font:600 11px/1.3 system-ui;color:#9a6b16;cursor:pointer">2 applied · 1 to review →</button></sc-if></div>
+                <div style="position:absolute;left:740px;top:230px;width:222px;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#1a1c20">▢ Board Note.md</div><sc-if value="{{ notRanWf }}" hint-placeholder-val="{{ true }}"><div style="font:400 10.5px/1.3 'JetBrains Mono',monospace;color:#a3a8b2;margin-top:7px">awaiting run</div></sc-if><sc-if value="{{ ranWf }}" hint-placeholder-val="{{ false }}"><div style="display:inline-flex;align-items:center;gap:6px;margin-top:9px;font:600 11px/1 system-ui;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:5px 9px">✓ 1 figure applied</div></sc-if></div>
+                <div style="position:absolute;left:740px;top:392px;width:222px;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="display:flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#1a1c20">▢ Q2 Strategy.md</div><sc-if value="{{ notRanWf }}" hint-placeholder-val="{{ true }}"><div style="font:400 10.5px/1.3 'JetBrains Mono',monospace;color:#a3a8b2;margin-top:7px">awaiting run</div></sc-if><sc-if value="{{ ranWf }}" hint-placeholder-val="{{ false }}"><div style="font:400 11px/1.3 'JetBrains Mono',monospace;color:#969ba4;margin-top:9px">no change · source stable</div></sc-if></div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+      </sc-if>
+
+      <!-- ============ KNOWLEDGE ============ -->
+      <sc-if value="{{ isKnowledge }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div style="flex:none;display:flex;align-items:center;gap:16px;padding:16px 28px;border-bottom:1px solid #eef0f3">
+            <div><h2 style="margin:0 0 4px;font:600 18px/1.2 system-ui;color:#15171c">Knowledge</h2><div style="font:400 12px/1 'JetBrains Mono',monospace;color:#a3a8b2">The decision stack — what agents and documents align to.</div></div>
+            <div style="margin-left:auto;display:flex;gap:5px;background:#f1f2f5;border-radius:9px;padding:3px">
+              <button onClick="{{ setKnOrg }}" style="border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;{{ knOrgStyle }}">Organization</button>
+              <button onClick="{{ setKnProject }}" style="border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;{{ knProjStyle }}">Project · Opportunity OS</button>
+            </div>
+            <button style="border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Edit</button>
+          </div>
+
+          <div style="flex:1;overflow-y:auto;background:#f8f9fb">
+            <div style="max-width:1040px;margin:0 auto;padding:26px 28px 80px;display:flex;gap:22px;align-items:flex-start">
+              <!-- decision stack -->
+              <div style="flex:1;min-width:0">
+
+                <!-- ORG -->
+                <sc-if value="{{ knOrg }}" hint-placeholder-val="{{ true }}">
+                  <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#bcb199;margin:0 0 12px">ENDURING · WHY WE EXIST</div>
+                  <div style="background:#fff;border:1px solid #e9eaee;border-left:3px solid oklch(0.6 0.13 60);border-radius:11px;padding:18px 20px;margin-bottom:11px">
+                    <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a99b78;margin-bottom:8px">MISSION</div>
+                    <p style="margin:0;font:500 19px/1.4 system-ui;color:#1d1b16;letter-spacing:-.01em">Make every business document trustworthy by default.</p>
+                  </div>
+                  <div style="background:#fff;border:1px solid #e9eaee;border-left:3px solid oklch(0.6 0.13 60);border-radius:11px;padding:18px 20px;margin-bottom:11px">
+                    <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a99b78;margin-bottom:8px">VISION</div>
+                    <p style="margin:0;font:400 16px/1.55 system-ui;color:#2f2c26;text-wrap:pretty">A world where teams act on the documents in front of them without ever having to re-check the numbers or the wording.</p>
+                  </div>
+
+                  <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#bcb199;margin:20px 0 12px">HOW WE OPERATE</div>
+                  <div style="display:flex;gap:11px;margin-bottom:11px">
+                    <div style="flex:1;background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:16px 18px">
+                      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:11px">VALUES</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:7px">
+                        <span style="font:500 12px/1 system-ui;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:999px;padding:6px 11px">Truth over polish</span>
+                        <span style="font:500 12px/1 system-ui;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:999px;padding:6px 11px">Auditability</span>
+                        <span style="font:500 12px/1 system-ui;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:999px;padding:6px 11px">Calm software</span>
+                        <span style="font:500 12px/1 system-ui;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:999px;padding:6px 11px">Customer proximity</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div style="background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:16px 18px">
+                    <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:11px">PRINCIPLES</div>
+                    <div style="display:flex;flex-direction:column;gap:10px">
+                      <div style="display:flex;gap:10px"><span style="font:600 12px/1.5 system-ui;color:oklch(0.6 0.13 60)">01</span><span style="font:400 14px/1.5 system-ui;color:#2f2c26">Never ship a change a human can't trace back to its source.</span></div>
+                      <div style="display:flex;gap:10px"><span style="font:600 12px/1.5 system-ui;color:oklch(0.6 0.13 60)">02</span><span style="font:400 14px/1.5 system-ui;color:#2f2c26">Automate the safe, escalate the meaningful.</span></div>
+                      <div style="display:flex;gap:10px"><span style="font:600 12px/1.5 system-ui;color:oklch(0.6 0.13 60)">03</span><span style="font:400 14px/1.5 system-ui;color:#2f2c26">Default to the calm path: fewer surfaces, clearer diffs.</span></div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <!-- PROJECT -->
+                <sc-if value="{{ knProject }}" hint-placeholder-val="{{ false }}">
+                  <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#bcb199;margin:0 0 12px">DIRECTIONAL · HOW WE WIN</div>
+                  <div style="background:#fff;border:1px solid #e9eaee;border-left:3px solid oklch(0.55 0.13 255);border-radius:11px;padding:18px 20px;margin-bottom:11px">
+                    <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#8a93c4;margin-bottom:11px">PRODUCT STRATEGY</div>
+                    <div style="display:flex;flex-direction:column;gap:10px">
+                      <div style="display:flex;gap:10px"><span style="color:oklch(0.55 0.13 255);font:600 13px/1.5 system-ui">→</span><span style="font:400 14px/1.5 system-ui;color:#2f2c26"><strong style="font-weight:600">Wedge:</strong> land on recurring, data-linked reports — the painful work that repeats.</span></div>
+                      <div style="display:flex;gap:10px"><span style="color:oklch(0.55 0.13 255);font:600 13px/1.5 system-ui">→</span><span style="font:400 14px/1.5 system-ui;color:#2f2c26"><strong style="font-weight:600">Moat:</strong> provenance + approval trail nobody can retrofit onto a chatbot.</span></div>
+                      <div style="display:flex;gap:10px"><span style="color:oklch(0.55 0.13 255);font:600 13px/1.5 system-ui">→</span><span style="font:400 14px/1.5 system-ui;color:#2f2c26"><strong style="font-weight:600">Expand:</strong> from one bound report outward to quotes, SOPs and trackers.</span></div>
+                    </div>
+                  </div>
+
+                  <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.1em;color:#bcb199;margin:20px 0 12px">MEASURABLE · WHAT WE TRACK</div>
+                  <div style="background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:16px 18px;margin-bottom:11px">
+                    <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px"><span style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2">Q3 OKRs</span><span style="font:600 10px/1 system-ui;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:4px 8px">OBJECTIVE 2</span></div>
+                    <p style="margin:0 0 14px;font:500 15px/1.4 system-ui;color:#1d1b16">Prove the report wedge with real recurring usage.</p>
+                    <div style="display:flex;flex-direction:column;gap:12px">
+                      <div><div style="display:flex;justify-content:space-between;font:400 12.5px/1.4 system-ui;color:#52575f;margin-bottom:5px"><span>KR1 · 25 weekly reports live</span><span style="font-weight:600;color:#1f7a44">18 / 25</span></div><div style="height:6px;border-radius:999px;background:#eef0f3;overflow:hidden"><div style="width:72%;height:100%;background:oklch(0.55 0.14 150)"></div></div></div>
+                      <div><div style="display:flex;justify-content:space-between;font:400 12.5px/1.4 system-ui;color:#52575f;margin-bottom:5px"><span>KR2 · +20% MRR from reporting tier</span><span style="font-weight:600;color:#9a6b16">+13%</span></div><div style="height:6px;border-radius:999px;background:#eef0f3;overflow:hidden"><div style="width:65%;height:100%;background:oklch(0.7 0.14 70)"></div></div></div>
+                      <div><div style="display:flex;justify-content:space-between;font:400 12.5px/1.4 system-ui;color:#52575f;margin-bottom:5px"><span>KR3 · 90% changes reviewed in &lt;1 day</span><span style="font-weight:600;color:#1f7a44">94%</span></div><div style="height:6px;border-radius:999px;background:#eef0f3;overflow:hidden"><div style="width:94%;height:100%;background:oklch(0.55 0.14 150)"></div></div></div>
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:11px">
+                    <div style="flex:1;background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:15px 16px"><div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">ACTIVATION</div><div style="font:600 22px/1 system-ui;color:#1d1b16;margin-bottom:4px">61%</div><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#1f7a44">target 55% ✓</div></div>
+                    <div style="flex:1;background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:15px 16px"><div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">NET RETENTION</div><div style="font:600 22px/1 system-ui;color:#1d1b16;margin-bottom:4px">118%</div><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#1f7a44">target 110% ✓</div></div>
+                    <div style="flex:1;background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:15px 16px"><div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">TIME-TO-TRUST</div><div style="font:600 22px/1 system-ui;color:#1d1b16;margin-bottom:4px">2.1d</div><div style="font:400 11px/1 'JetBrains Mono',monospace;color:#9a6b16">target 1d</div></div>
+                  </div>
+                </sc-if>
+              </div>
+
+              <!-- sidebar: how it's used -->
+              <div style="width:288px;flex:none">
+                <div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px 17px;margin-bottom:14px">
+                  <div style="font:600 11px/1 system-ui;color:#1a1c20;margin-bottom:10px">How this is used</div>
+                  <p style="margin:0 0 14px;font:400 12.5px/1.55 system-ui;color:#696e78">This is the decision stack teams align to. Agents read it; documents inherit it; reviews check against it.</p>
+                  <div style="display:flex;flex-direction:column;gap:9px">
+                    <div style="display:flex;gap:9px;align-items:flex-start"><span style="width:24px;height:24px;flex:none;border-radius:7px;background:#fdf2dc;color:#9a6b16;font-size:12px;display:flex;align-items:center;justify-content:center">◈</span><span style="font:400 12px/1.45 system-ui;color:#52575f"><strong style="font-weight:600">Strategy agent</strong> tests document claims against this.</span></div>
+                    <div style="display:flex;gap:9px;align-items:flex-start"><span style="width:24px;height:24px;flex:none;border-radius:7px;background:#eef1ff;color:oklch(0.5 0.13 255);font-size:12px;display:flex;align-items:center;justify-content:center">▣</span><span style="font:400 12px/1.45 system-ui;color:#52575f">Auto-attached to <strong style="font-weight:600">6 documents</strong> as context.</span></div>
+                    <div style="display:flex;gap:9px;align-items:flex-start"><span style="width:24px;height:24px;flex:none;border-radius:7px;background:#e7f6ec;color:#1f7a44;font-size:12px;display:flex;align-items:center;justify-content:center">✓</span><span style="font:400 12px/1.45 system-ui;color:#52575f">Last reviewed <strong style="font-weight:600">2 weeks ago</strong> by Tom.</span></div>
+                  </div>
+                </div>
+                <div style="background:#fdfaf2;border:1px solid #e4dccb;border-radius:12px;padding:14px 16px">
+                  <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a99b78;margin-bottom:9px">DECISION STACK</div>
+                  <div style="display:flex;flex-direction:column;gap:6px;font:500 12px/1.4 system-ui">
+                    <div style="background:#fff;border:1px solid #efe7d6;border-radius:7px;padding:8px 10px;color:#1d1b16">Mission &amp; Vision <span style="font-weight:400;color:#a99b78">— enduring</span></div>
+                    <div style="text-align:center;color:#cdbf9f;font-size:11px">↓</div>
+                    <div style="background:#fff;border:1px solid #efe7d6;border-radius:7px;padding:8px 10px;color:#1d1b16">Strategy <span style="font-weight:400;color:#a99b78">— directional</span></div>
+                    <div style="text-align:center;color:#cdbf9f;font-size:11px">↓</div>
+                    <div style="background:#fff;border:1px solid #efe7d6;border-radius:7px;padding:8px 10px;color:#1d1b16">OKRs &amp; KPIs <span style="font-weight:400;color:#a99b78">— measurable</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+
+  <!-- ===== PRESENT / EXPORT MODAL ===== -->
+  <sc-if value="{{ presentOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closePresent }}" style="position:fixed;inset:0;z-index:60;background:rgba(20,26,40,.34);display:flex;align-items:center;justify-content:center;padding:32px">
+      <div onClick="{{ stopProp }}" style="width:740px;max-width:100%;max-height:100%;background:#fff;border-radius:16px;box-shadow:0 24px 70px rgba(15,22,40,.32);overflow:hidden;display:flex;flex-direction:column">
+        <div style="flex:none;display:flex;align-items:center;gap:11px;padding:18px 22px;border-bottom:1px solid #eef0f3">
+          <div><h2 style="margin:0 0 3px;font:600 16px/1.2 system-ui;color:#15171c">Present &amp; export</h2><div style="font:400 12px/1 'JetBrains Mono',monospace;color:#a3a8b2">Weekly Summary.md · 4 linked blocks</div></div>
+          <button onClick="{{ closePresent }}" style="margin-left:auto;border:none;background:none;color:#9aa0aa;font-size:18px;cursor:pointer;padding:4px 8px">✕</button>
+        </div>
+        <div style="flex:1;display:flex;min-height:0">
+          <!-- destinations list -->
+          <div style="width:300px;flex:none;border-right:1px solid #eef0f3;background:#fbfbfc;overflow-y:auto;padding:14px">
+            <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:9px">SEND A COPY TO</div>
+            <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px">
+              <sc-for list="{{ presentItems }}" as="it" hint-placeholder-count="5">
+                <button onClick="{{ it.onClick }}" style="text-align:left;border-radius:10px;padding:11px 12px;cursor:pointer;display:flex;align-items:center;gap:11px;{{ it.rowStyle }}">
+                  <span style="width:30px;height:30px;flex:none;border-radius:7px;background:{{ it.iconBg }};color:{{ it.iconFg }};font:700 13px/1 system-ui;display:flex;align-items:center;justify-content:center">{{ it.icon }}</span>
+                  <span style="min-width:0"><span style="display:block;font:600 13px/1.2 system-ui;color:#1a1c20">{{ it.label }}</span></span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+          <!-- detail -->
+          <div style="flex:1;min-width:0;overflow-y:auto;padding:22px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><h3 style="margin:0;font:600 17px/1.2 system-ui;color:#15171c">{{ presentLabel }}</h3></div>
+            <p style="margin:0 0 18px;font:400 13.5px/1.55 system-ui;color:#696e78">{{ presentLive }}</p>
+
+            <!-- doc preview chip -->
+            <div style="border:1px solid #eceef2;border-radius:10px;overflow:hidden;margin-bottom:18px">
+              <div style="padding:13px 15px;border-bottom:1px solid #f4f5f7"><div style="font:600 13px/1.3 system-ui;color:#23262c;margin-bottom:5px">Weekly Operating Summary</div><div style="font:400 11px/1.5 system-ui;color:#969ba4">Highlights · KPI table · Commentary · What to watch</div></div>
+              <div style="display:flex;align-items:center;gap:8px;padding:10px 15px;background:#fafbfc;font:400 11.5px/1.4 system-ui;color:#52575f"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.55 0.13 255)"></span>4 source-linked blocks included</div>
+            </div>
+
+            <!-- hosted-site share scope -->
+            <sc-if value="{{ presentIsSite }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-bottom:18px">
+                <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">WHO CAN ACCESS</div>
+                <div style="display:flex;gap:7px;margin-bottom:12px">
+                  <button onClick="{{ setScopeInternal }}" style="border-radius:8px;padding:9px 12px;font:500 12px/1 system-ui;cursor:pointer;{{ scopeInternal }}">🔒 Workspace only</button>
+                  <button onClick="{{ setScopeLink }}" style="border-radius:8px;padding:9px 12px;font:500 12px/1 system-ui;cursor:pointer;{{ scopeLink }}">🔗 Anyone with link</button>
+                  <button onClick="{{ setScopePublic }}" style="border-radius:8px;padding:9px 12px;font:500 12px/1 system-ui;cursor:pointer;{{ scopePublic }}">🌐 Public</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;border:1px solid #e6e8ed;border-radius:8px;padding:9px 11px;background:#fcfcfd"><span style="font:400 12px/1 'JetBrains Mono',monospace;color:#52575f;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">opportunity-os.live/weekly-summary</span><button style="border:1px solid #e0e2e8;background:#fff;border-radius:6px;padding:6px 10px;font:500 11px/1 system-ui;color:#52575f;cursor:pointer">Copy</button></div>
+              </div>
+            </sc-if>
+
+            <button style="width:100%;border:none;border-radius:9px;padding:12px;background:oklch(0.55 0.13 255);color:#fff;font:600 13.5px/1 system-ui;cursor:pointer">{{ presentCta }}</button>
+            <div style="margin-top:11px;font:400 11px/1.5 system-ui;color:#bcc0c8;text-align:center">Provenance &amp; approval history are retained on export.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;}}">
+class Component extends DCLogic {
+  state = { screen: 'home', status: 'pending', hover: null, leftTab: 'files', rightTab: 'chat', splitOn: false, openSource: null, activeDoc: 'weekly', hoveredDot: null, openAgent: null, ranWf: false, presentOpen: false, presentChoice: 'gdoc', shareScope: 'internal', chatSession: 'refresh', synced: false, knowledgeScope: 'org' };
+
+  renderVals() {
+    const s = this.state;
+    const applied = s.status === 'applied';
+    const tab = (a) => a
+      ? 'color:#1a1c20;box-shadow:inset 0 -2px 0 oklch(0.55 0.13 255);font-weight:600'
+      : 'color:#868b95;font-weight:500';
+    const tint = 'rgba(214,168,90,.20)';
+    const baseRows = [
+      { metric: 'MRR',               w23: '$41.2k', w24: '$48.6k', d: '+18%',        group: 'revenue' },
+      { metric: 'New signups',       w23: '312',    w24: '427',    d: '+37%',        group: 'revenue' },
+      { metric: 'Churn',             w23: '3.1%',   w24: '2.4%',   d: '\u22120.7pt', group: 'churn' },
+      { metric: 'Active workspaces', w23: '188',    w24: '205',    d: '+17',         group: 'other' },
+    ];
+    const rows = baseRows.map((r) => ({
+      ...r,
+      bg: s.hover === r.group ? tint : 'transparent',
+      onEnter: () => this.setState({ hover: r.group }),
+    }));
+
+    const mk = (key) => (s.screen === key
+      ? { bg: 'oklch(0.55 0.13 255)', fg: '#fff' }
+      : { bg: 'transparent', fg: '#8b909a' });
+
+    const crumbs = { home: 'All projects', editor: 'Weekly Summary.md', review: 'Review', split: 'metrics.csv ↔ Weekly Summary', templates: 'Templates', workflows: 'Agents', knowledge: 'Knowledge' };
+
+    // present / export destinations
+    const presentDefs = {
+      gdoc:  { label: 'Google Docs', accent: '#2a6fdb', cta: 'Export to Google Docs', live: 'Editable copy · text & tables formatted natively', icon: 'G', tint: '#eaf1fd' },
+      gsheet:{ label: 'Google Sheets', accent: '#1f8a5b', cta: 'Export to Google Sheets', live: 'Tables become live sheets · links to source kept as a snapshot', icon: 'G', tint: '#e7f5ee' },
+      docx:  { label: 'Microsoft Word', accent: '#2b579a', cta: 'Download .docx', live: 'Offline file · styles preserved, data values frozen at export', icon: 'W', tint: '#eaf0fa' },
+      xlsx:  { label: 'Microsoft Excel', accent: '#217346', cta: 'Download .xlsx', live: 'Tables only · one sheet per linked table', icon: 'X', tint: '#e7f3ec' },
+      site:  { label: 'Hosted web page', accent: 'oklch(0.55 0.13 255)', cta: 'Publish web page', live: 'Live page that re-renders when the source updates', icon: '◉', tint: '#eef1ff' },
+    };
+    const pc = presentDefs[s.presentChoice] || presentDefs.gdoc;
+    const presentItems = ['gdoc','gsheet','docx','xlsx','site'].map((k) => ({
+      key: k,
+      label: presentDefs[k].label,
+      sub: presentDefs[k].live,
+      icon: presentDefs[k].icon,
+      iconBg: presentDefs[k].tint,
+      iconFg: presentDefs[k].accent,
+      onClick: () => this.setState({ presentChoice: k }),
+      rowStyle: s.presentChoice === k
+        ? 'border:1.5px solid oklch(0.55 0.13 255);background:#f7f9ff'
+        : 'border:1px solid #e9eaee;background:#fff',
+    }));
+    const scopeStyle = (on) => on
+      ? 'border:1.5px solid oklch(0.55 0.13 255);background:#f4f6ff;color:oklch(0.45 0.13 255)'
+      : 'border:1px solid #e0e2e8;background:#fff;color:#696e78';
+
+    return {
+      // screen flags
+      isHome: s.screen === 'home',
+      notHome: s.screen !== 'home',
+      isEditor: s.screen === 'editor',
+      isReview: s.screen === 'review',
+      isSplit: s.screen === 'split',
+      isTemplates: s.screen === 'templates',
+      isWorkflows: s.screen === 'workflows',
+      isKnowledge: s.screen === 'knowledge',
+      crumb: crumbs[s.screen] || '',
+      // nav styles
+      navHome: mk('home'),
+      navEditor: mk('editor'), navReview: mk('review'), navSplit: mk('split'),
+      navTemplates: mk('templates'), navWorkflows: mk('workflows'), navKnowledge: mk('knowledge'),
+      docActiveBg: s.screen === 'editor' ? '#fff' : 'transparent',
+      // nav handlers
+      goHome: () => this.setState({ screen: 'home' }),
+      goEditor: () => this.setState({ screen: 'editor' }),
+      goReview: () => this.setState({ screen: 'review' }),
+      goSplit: () => this.setState({ screen: 'split' }),
+      goTemplates: () => this.setState({ screen: 'templates' }),
+      goWorkflows: () => this.setState({ screen: 'workflows' }),
+      goKnowledge: () => this.setState({ screen: 'knowledge' }),
+      // knowledge scope
+      knOrg: s.knowledgeScope === 'org',
+      knProject: s.knowledgeScope === 'project',
+      knOrgStyle: s.knowledgeScope === 'org'
+        ? 'background:#fff;color:#1a1c20;box-shadow:0 1px 2px rgba(0,0,0,.05);border:1px solid #e6e8ed'
+        : 'background:transparent;color:#868b95;border:1px solid transparent',
+      knProjStyle: s.knowledgeScope === 'project'
+        ? 'background:#fff;color:#1a1c20;box-shadow:0 1px 2px rgba(0,0,0,.05);border:1px solid #e6e8ed'
+        : 'background:transparent;color:#868b95;border:1px solid transparent',
+      setKnOrg: () => this.setState({ knowledgeScope: 'org' }),
+      setKnProject: () => this.setState({ knowledgeScope: 'project' }),
+      // review state
+      isPending: s.status === 'pending',
+      isApplied: applied,
+      isRejected: s.status === 'rejected',
+      approve: () => this.setState({ status: 'applied' }),
+      approveAll: () => this.setState({ status: 'applied' }),
+      reject: () => this.setState({ status: 'rejected' }),
+      reset: () => this.setState({ status: 'pending' }),
+      // chat session tabs (multiple concurrent views)
+      sessRefresh: s.chatSession === 'refresh',
+      sessTone: s.chatSession === 'tone',
+      sessRefreshStyle: s.chatSession === 'refresh'
+        ? 'background:#fff;border:1px solid #e0e6ff;color:#1a1c20;box-shadow:0 1px 2px rgba(0,0,0,.04)'
+        : 'background:transparent;border:1px solid transparent;color:#868b95',
+      sessToneStyle: s.chatSession === 'tone'
+        ? 'background:#fff;border:1px solid #e0e6ff;color:#1a1c20;box-shadow:0 1px 2px rgba(0,0,0,.04)'
+        : 'background:transparent;border:1px solid transparent;color:#868b95',
+      setSessRefresh: () => this.setState({ chatSession: 'refresh' }),
+      setSessTone: () => this.setState({ chatSession: 'tone' }),
+      // context window meter
+      ctxRing: 'conic-gradient(oklch(0.55 0.13 255) 0% 40%, #e2e5ec 40% 100%)',
+      // split-view sync-across
+      synced: s.synced,
+      notSynced: !s.synced,
+      doSync: () => this.setState({ synced: true, status: 'pending' }),
+      // editor doc derived
+      revFig: applied ? '18%' : '12%',
+      commentText: applied
+        ? 'Growth accelerated sharply this week — the fastest pace this quarter.'
+        : 'Growth remained steady this week, continuing the gradual climb seen since early Q2.',
+      commentBg: applied ? 'rgba(31,122,68,.07)' : 'rgba(225,150,60,.08)',
+      // split hover
+      revBg: s.hover === 'revenue' ? tint : 'transparent',
+      churnBg: s.hover === 'churn' ? tint : 'transparent',
+      enterRevenue: () => this.setState({ hover: 'revenue' }),
+      enterChurn: () => this.setState({ hover: 'churn' }),
+      clearHover: () => this.setState({ hover: null }),
+      peek: () => {},
+      // templates
+      generate: () => this.setState({ status: 'applied' }),
+      draftBadge: applied ? 'GENERATED' : 'READY',
+      // left panel tabs
+      leftFiles: s.leftTab === 'files',
+      leftSearch: s.leftTab === 'search',
+      leftOutline: s.leftTab === 'outline',
+      leftContext: s.leftTab === 'context',
+      leftFilesStyle: tab(s.leftTab === 'files'),
+      leftSearchStyle: tab(s.leftTab === 'search'),
+      leftOutlineStyle: tab(s.leftTab === 'outline'),
+      leftContextStyle: tab(s.leftTab === 'context'),
+      setLeftFiles: () => this.setState({ leftTab: 'files' }),
+      setLeftSearch: () => this.setState({ leftTab: 'search' }),
+      setLeftOutline: () => this.setState({ leftTab: 'outline' }),
+      setLeftContext: () => this.setState({ leftTab: 'context' }),
+      // right panel tabs
+      rightChat: s.rightTab === 'chat',
+      rightReview: s.rightTab === 'review',
+      rightHistory: s.rightTab === 'history',
+      chatTabStyle: tab(s.rightTab === 'chat'),
+      reviewTabStyle: tab(s.rightTab === 'review'),
+      historyTabStyle: tab(s.rightTab === 'history'),
+      rightSkills: s.rightTab === 'skills',
+      skillsTabStyle: tab(s.rightTab === 'skills'),
+      setRightChat: () => this.setState({ rightTab: 'chat' }),
+      setRightReview: () => this.setState({ rightTab: 'review' }),
+      setRightHistory: () => this.setState({ rightTab: 'history' }),
+      setRightSkills: () => this.setState({ rightTab: 'skills' }),
+      // active document (traversal)
+      weeklyActive: s.activeDoc === 'weekly',
+      q2Active: s.activeDoc === 'q2',
+      weeklyTabStyle: s.activeDoc === 'weekly'
+        ? 'background:#fff;color:#1a1c20;box-shadow:inset 0 -2px 0 oklch(0.55 0.13 255)'
+        : 'background:#f6f7f9;color:#868b95',
+      q2TabStyle: s.activeDoc === 'q2'
+        ? 'background:#fff;color:#1a1c20;box-shadow:inset 0 -2px 0 oklch(0.55 0.13 255)'
+        : 'background:#f6f7f9;color:#868b95',
+      setWeekly: () => this.setState({ activeDoc: 'weekly' }),
+      setQ2: () => this.setState({ activeDoc: 'q2' }),
+      // source peek panel
+      sourceOpen: !!s.openSource,
+      openMetrics: () => this.setState({ openSource: 'metrics' }),
+      peekMetrics: () => this.setState({ screen: 'editor', openSource: 'metrics' }),
+      closeSource: () => this.setState({ openSource: null }),
+      // gutter-dot hover popovers
+      dotRevHover: s.hoveredDot === 'rev',
+      dotCommHover: s.hoveredDot === 'comm',
+      enterRevDot: () => this.setState({ hoveredDot: 'rev' }),
+      enterCommDot: () => this.setState({ hoveredDot: 'comm' }),
+      leaveDot: () => this.setState({ hoveredDot: null }),
+      // agents / workflow canvas
+      agentsList: !s.openAgent,
+      agentOpen: !!s.openAgent,
+      openWeeklyAgent: () => this.setState({ openAgent: 'weekly' }),
+      closeAgent: () => this.setState({ openAgent: null, ranWf: false }),
+      ranWf: s.ranWf,
+      notRanWf: !s.ranWf,
+      runWf: () => this.setState({ ranWf: true }),
+      wsStroke: s.ranWf ? 'oklch(0.66 0.16 45)' : '#cdd5e2',
+      bnStroke: s.ranWf ? 'oklch(0.6 0.13 150)' : '#cdd5e2',
+      wsNodeBorder: s.ranWf ? 'oklch(0.78 0.1 70)' : '#e6e8ed',
+      // present / export modal
+      presentOpen: s.presentOpen,
+      openPresent: () => this.setState({ presentOpen: true }),
+      closePresent: () => this.setState({ presentOpen: false }),
+      stopProp: (e) => { if (e && e.stopPropagation) e.stopPropagation(); },
+      presentItems,
+      presentCta: pc.cta,
+      presentLive: pc.live,
+      presentLabel: pc.label,
+      presentAccent: pc.accent,
+      presentIsSite: s.presentChoice === 'site',
+      scopeInternal: scopeStyle(s.shareScope === 'internal'),
+      scopeLink: scopeStyle(s.shareScope === 'link'),
+      scopePublic: scopeStyle(s.shareScope === 'public'),
+      setScopeInternal: () => this.setState({ shareScope: 'internal' }),
+      setScopeLink: () => this.setState({ shareScope: 'link' }),
+      setScopePublic: () => this.setState({ shareScope: 'public' }),
+    };
+  }
+}
+</script>
+</body>
+</html>
