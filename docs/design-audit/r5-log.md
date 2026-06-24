@@ -28,3 +28,45 @@ surface-gated, R5/R6 missing UI, R7 missing (stretch). Full map + ranked build o
 iteration).
 
 **Next:** R1 + R2 — the open-folder on-ramp + folder-reflecting Home + empty state, which unblock everything.
+
+## Iteration 2 — R1 (open-folder on-ramp) + R2 (folder-reflecting Home)
+
+**Built (TDD for the service logic; 0 core patches — all in our own contrib):**
+- Service (`livingDocsService.ts`): broadened discovery (`_collectDocs`/`_isDocFile`) so `listDocuments`
+  returns **every `.md`** with the existing `isLiving` flag (was living-only); added `openFolder()`
+  (`IFileDialogService.showOpenDialog({canSelectFolders})` → `IHostService.openWindow`) and
+  `getWorkspaceFolderName()`. Injected `IFileDialogService` + `IHostService`.
+- Home (`screenRender.ts`): rewrote `renderHome` — empty state ("Open a folder to begin" + Open-folder
+  button) when no folder; otherwise the folder name + a DOCUMENTS grid of the real docs (living badged,
+  plain shown as "Markdown"), each an `openDoc` action. "New project" no-op → "Open another folder"/"New
+  document"; "Switch folder…" in the header.
+- Glue (`screenEditor.ts`): fetch docs before first render; re-fetch on `onDidChange`; handle
+  `openFolder` / `newDocument` / `openDoc`.
+
+**TDD:** inverted the `listDocuments` test (now includes plain Team Notes + the reference note, with the
+flag); added `getWorkspaceFolderName` + `openFolder` service tests; added 3 Home render tests (empty /
+populated / no-docs). Watched each fail, then pass. **68 livingDocs tests green; typecheck clean.**
+
+**Verified live on the real folder** (`code-web` + chrome-devtools, served `.realdocs-test`):
+
+| Gate | Result |
+|---|---|
+| R2 Home reflects the real folder | ✅ "mount — 2 documents · 1 living"; demo project cards gone; "Switch folder…" + "Open another folder" present. |
+| R2 all `.md` shown, living badged | ✅ **Team Notes** (Markdown, no badge) + **Weekly Update** (• Living, "1 source: metrics.csv"); tree-rail REPORTS now lists both (Team Notes was previously hidden). |
+| R2 "New project" resolved | ✅ replaced by "Open another folder"; no `newProject` action anywhere. |
+| openDoc wiring | ✅ clicking the Team Notes card opens the plain doc (previously unlistable). |
+| R4-precursor: New document | ✅ "New document" created **Untitled document** (appears in tree + opened); web write → memfs (real disk on desktop per Decision #38). |
+| R1 open-folder action | ⚠️ buttons present + wired (`openFolder`); the actual folder *pick* is a native dialog (the one manual step) — `openFolder`→`openWindow` wiring is unit-tested; cancel opens nothing. |
+| R1 empty state | unit-tested (renders "Open a folder to begin" + button); `code-web` always mounts a folder, so the no-folder state shows on desktop / a no-folder window. |
+
+**Design gates G1–G6:** held — only the Home webview content + service discovery changed, not the shell
+(single editor pane, calm 48px header, 76px labeled tree-rail nav, no Explorer/menubar/palette surfaced,
+no dev toasts). The de-IDE contributions run at every workbench startup, so a folder-switch reload re-applies
+them (G4 holds across a switch).
+
+**R-gate status after iter 2:** **R2 PASS** (live), **R1 PASS** for the on-ramp UI + wiring (folder-pick is
+the inherent manual step). R3 (edit persists) verified in-app iter 1 + desktop is the disk surface; R4
+(create) wired + in-app verified, desktop disk-proof pending; R5/R6 next; R7 stretch.
+
+**Next:** R5 — add/remove a source via UI (new `addSource`/`removeSource` service API, TDD), or R3/R4 desktop
+disk-proof. Pick highest-impact next iteration.

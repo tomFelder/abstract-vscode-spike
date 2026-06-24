@@ -13,6 +13,8 @@ import { INotificationService } from '../../../../../platform/notification/commo
 import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IFileDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
+import { IHostService } from '../../../../services/host/browser/host.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
@@ -121,8 +123,9 @@ suite('LivingDocsService', () => {
 
 	let lastFiles: Map<string, string> | undefined;
 	let lastModelBody: string | undefined;
+	let lastOpenedFolder: URI | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[]; model?: object } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[]; model?: object; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -174,9 +177,13 @@ suite('LivingDocsService', () => {
 				};
 			},
 		} as unknown as IRequestService;
-		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: URI.file('/ws') }] }) } as unknown as IWorkspaceContextService;
+		const workspaceService = { getWorkspace: () => ({ folders: opts.noFolder ? [] : [{ uri: URI.file('/ws'), name: 'ws' }] }) } as unknown as IWorkspaceContextService;
+		// Folder open: the picker returns the configured folder (or nothing when cancelled); openWindow records it.
+		const fileDialogService = { showOpenDialog: async () => opts.pickFolder ? [opts.pickFolder] : undefined } as unknown as IFileDialogService;
+		lastOpenedFolder = undefined;
+		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
 		store.add(service);
 		return service;
 	}
@@ -702,13 +709,40 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.find(b => b.id === bound.id)!.text, before, 'bound block left unchanged');
 	});
 
-	test('listDocuments discovers Living Documents, excludes plain Markdown, and sorts by title', async () => {
+	test('listDocuments lists every Markdown document in the folder, flags living vs plain, and sorts by title', async () => {
 		const service = createService([], { boardNote: true, api: true });
 
 		const docs = await service.listDocuments();
-		assert.deepStrictEqual(docs.map(d => d.title), ['Board Note', 'Ecosystem Signal', 'Weekly Operating Summary'], 'living docs listed (Team Notes excluded), sorted by title');
-		assert.ok(docs.every(d => d.isLiving), 'all discovered documents are living');
-		assert.deepStrictEqual(docs.find(d => d.title === 'Ecosystem Signal')!.sourceKinds, ['api'], 'api source kind surfaced for the chip');
+		// All `.md` are listed now (the folder is the project), with an isLiving flag for the badge - plain
+		// docs (Team Notes, the market-research reference note) included, generated `.export`/`.source` views excluded.
+		assert.deepStrictEqual(
+			docs.map(d => ({ title: d.title, isLiving: d.isLiving })),
+			[
+				{ title: 'Board Note', isLiving: true },
+				{ title: 'Ecosystem Signal', isLiving: true },
+				{ title: 'Market research', isLiving: false },
+				{ title: 'Team Notes', isLiving: false },
+				{ title: 'Weekly Operating Summary', isLiving: true },
+			],
+			'all .md listed with a living/plain flag, sorted by title',
+		);
+		assert.deepStrictEqual(docs.find(d => d.title === 'Ecosystem Signal')!.sourceKinds, ['api'], 'api source kind still surfaced for the chip');
+	});
+
+	test('getWorkspaceFolderName returns the open folder name, or undefined when no folder is open', async () => {
+		assert.strictEqual(createService().getWorkspaceFolderName(), 'ws', 'reports the open folder name');
+		assert.strictEqual(createService([], { noFolder: true }).getWorkspaceFolderName(), undefined, 'undefined when no folder is open');
+	});
+
+	test('openFolder opens the picked folder in the same window; cancelling opens nothing', async () => {
+		const picked = URI.file('/picked-folder');
+		const service = createService([], { pickFolder: picked });
+		await service.openFolder();
+		assert.deepStrictEqual(lastOpenedFolder?.toString(), picked.toString(), 'the picked folder is opened as the workspace');
+
+		const cancelled = createService(); // no pickFolder -> the picker returns nothing
+		await cancelled.openFolder();
+		assert.strictEqual(lastOpenedFolder, undefined, 'cancelling the picker opens no window');
 	});
 
 	test('exportMarkdown writes a clean static .md with resolved values and no bind syntax', async () => {
