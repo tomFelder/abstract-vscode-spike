@@ -157,6 +157,12 @@ h2.section.editable{margin-left:-6px;padding-left:6px}
 .editp{margin:0 0 12px;font:400 16px/1.78 system-ui;color:#2c2f36}
 .d-o{background:#fdecec;color:#b4332f;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.5);border-radius:2px;padding:0 2px}
 .d-n{background:#e7f6ec;color:#1f7a44;border-radius:2px;padding:0 2px}
+/* A generative insertion proposed by Chat: all-additions (green left accent + green-tinted body). */
+.insertblock{box-shadow:inset 2px 0 0 #1f7a44;padding-left:14px}
+.insertbody{background:#f1faf4;border:1px solid #d7ecdc;border-radius:8px;padding:6px 14px;margin:0 0 2px}
+.insertbody>:first-child{margin-top:6px}.insertbody>:last-child{margin-bottom:6px}
+.gbar.add{background:#1f7a44}
+.cdot.add{background:#1f7a44}
 .ctrl{display:flex;align-items:center;gap:10px;margin-top:13px;background:#fff;border:1px solid #eceef2;border-radius:9px;padding:9px 11px;flex-wrap:wrap}
 .ctrl .cdot{width:7px;height:7px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}
 .ctrl .lbl{font:500 12px/1.4 system-ui;color:#52575f}
@@ -546,58 +552,92 @@ function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], recent:
 		`<div class="docfull"><h1 class="title">${esc(doc.title)}</h1><div class="subtitle">${esc(doc.subtitle)}</div></div>`];
 
 	for (const block of doc.blocks) {
-		const change = pending.find(c => c.blockId === block.id);
-		const cells = block.binds.map(b => b.key).join(',');
-		const isRecent = recent.has(block.id);
-		const bound = block.binds.length > 0;
+		// Render the block itself (arrow so the existing branch logic can `return` early), then append any
+		// generative insertions anchored after this block (Chat "make me a list" lands inline, in place).
+		(() => {
+			const change = pending.find(c => c.blockId === block.id && !c.insert);
+			const cells = block.binds.map(b => b.key).join(',');
+			const isRecent = recent.has(block.id);
+			const bound = block.binds.length > 0;
 
-		if (change) {
-			// Render the meaning-change as an inline word-diff with an amber accent and a control row.
-			const d = inlineDiff(bindToValue(change.oldText), bindToValue(change.newText));
-			const src = esc(doc.sources.concat(doc.context).join(', '));
-			parts.push(gutterCell(`<span class="gbar warn" data-cells="${cells}" data-prov title="Pending change"></span>`, true),
-				`<div class="pcell editblock">`
-				+ `<p class="editp">${d.html}</p>`
-				+ `<div class="ctrl"><span class="cdot"></span>`
-				+ `<span class="lbl">Tone rewrite from <span class="src">${src}</span> &middot; <span class="add">+${d.added} added</span> &middot; <span class="rem">${d.removed} removed</span> &middot; ${Math.round(change.confidence * 100)}% confidence</span>`
-				+ `<span class="acts"><button class="approve" data-approve="${esc(change.id)}">Approve changes</button>`
-				+ `<button class="reject" data-reject="${esc(change.id)}">Reject</button></span></div></div>`);
-			continue;
+			if (change) {
+				// Render the meaning-change as an inline word-diff with an amber accent and a control row.
+				const d = inlineDiff(bindToValue(change.oldText), bindToValue(change.newText));
+				const src = esc(doc.sources.concat(doc.context).join(', '));
+				parts.push(gutterCell(`<span class="gbar warn" data-cells="${cells}" data-prov title="Pending change"></span>`, true),
+					`<div class="pcell editblock">`
+					+ `<p class="editp">${d.html}</p>`
+					+ `<div class="ctrl"><span class="cdot"></span>`
+					+ `<span class="lbl">Tone rewrite from <span class="src">${src}</span> &middot; <span class="add">+${d.added} added</span> &middot; <span class="rem">${d.removed} removed</span> &middot; ${Math.round(change.confidence * 100)}% confidence</span>`
+					+ `<span class="acts"><button class="approve" data-approve="${esc(change.id)}">Approve changes</button>`
+					+ `<button class="reject" data-reject="${esc(change.id)}">Reject</button></span></div></div>`);
+				return;
+			}
+
+			if (block.type === 'heading' && !bound) {
+				// Headings are hand-editable in place (plain text, not rendered Markdown).
+				parts.push(gutterCell('', false),
+					`<div class="pcell"><h2 class="section editable" contenteditable="true" data-block="${esc(block.id)}" data-orig="${esc(block.text)}">${esc(block.text)}</h2></div>`);
+				return;
+			}
+
+			if (bound) {
+				// A bound block is driven by its sources: a blue gutter dot, rendered Markdown with the
+				// resolved values inline, and hover/click reveals provenance. Not hand-editable. Bound prose
+				// additionally highlights each figure inline (the comp's blue underline); tables stay plain.
+				const inner = block.type === 'paragraph'
+					? renderBoundParagraph(block, resolved)
+					: renderBlockMarkdown(block, resolved);
+				parts.push(gutterCell(`<span class="pdot${isRecent ? ' warn' : ''}" data-cells="${cells}" data-prov title="Bound to source"></span>`, false),
+					`<div class="pcell${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${inner}</div>`);
+				return;
+			}
+
+			if (block.type === 'paragraph') {
+				// Rich content (a list, an embedded heading, or multi-line Markdown - e.g. a Chat-inserted
+				// section) renders as rendered Markdown, read-only, so it reads as a real list/section rather
+				// than raw `1.`/`**` text. Plain single-line prose stays hand-editable in place.
+				const looksRich = /^[ \t]*([-*+]|\d+\.|#{1,6})\s/m.test(block.text) || block.text.includes('\n');
+				if (looksRich) {
+					parts.push(gutterCell('', false),
+						`<div class="pcell${isRecent ? ' applied' : ''}">${renderBlockMarkdown(block, resolved)}</div>`);
+					return;
+				}
+				const text = esc(block.text);
+				parts.push(gutterCell('', false),
+					`<div class="pcell"><p class="block editable${isRecent ? ' applied' : ''}" contenteditable="true" data-block="${esc(block.id)}" data-orig="${text}">${text}</p></div>`);
+				return;
+			}
+
+			// Non-bound tables (and other rich blocks): render as Markdown, no inline editing.
+			parts.push(gutterCell('', false), `<div class="pcell">${renderBlockMarkdown(block, resolved)}</div>`);
+		})();
+
+		for (const ins of pending) {
+			if (ins.insert && ins.afterBlockId === block.id) { parts.push(renderInsertProposal(ins)); }
 		}
+	}
 
-		if (block.type === 'heading' && !bound) {
-			// Headings are hand-editable in place (plain text, not rendered Markdown).
-			parts.push(gutterCell('', false),
-				`<div class="pcell"><h2 class="section editable" contenteditable="true" data-block="${esc(block.id)}" data-orig="${esc(block.text)}">${esc(block.text)}</h2></div>`);
-			continue;
-		}
-
-		if (bound) {
-			// A bound block is driven by its sources: a blue gutter dot, rendered Markdown with the
-			// resolved values inline, and hover/click reveals provenance. Not hand-editable. Bound prose
-			// additionally highlights each figure inline (the comp's blue underline); tables stay plain.
-			const inner = block.type === 'paragraph'
-				? renderBoundParagraph(block, resolved)
-				: renderBlockMarkdown(block, resolved);
-			parts.push(gutterCell(`<span class="pdot${isRecent ? ' warn' : ''}" data-cells="${cells}" data-prov title="Bound to source"></span>`, false),
-				`<div class="pcell${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${inner}</div>`);
-			continue;
-		}
-
-		if (block.type === 'paragraph') {
-			// Non-bound prose is hand-editable in place.
-			const text = esc(block.text);
-			parts.push(gutterCell('', false),
-				`<div class="pcell"><p class="block editable${isRecent ? ' applied' : ''}" contenteditable="true" data-block="${esc(block.id)}" data-orig="${text}">${text}</p></div>`);
-			continue;
-		}
-
-		// Non-bound tables (and other rich blocks): render as Markdown, no inline editing.
-		parts.push(gutterCell('', false), `<div class="pcell">${renderBlockMarkdown(block, resolved)}</div>`);
+	// Insertions anchored at the end of the document (no/!unknown heading) render after the last block.
+	for (const ins of pending) {
+		if (ins.insert && !ins.afterBlockId) { parts.push(renderInsertProposal(ins)); }
 	}
 
 	parts.push(`</div>`);
 	return parts.join('\n');
+}
+
+// A generative insertion proposed by Chat: brand-new content rendered all-additions (green), with a
+// control row to accept/reject. Shown inline at its anchor so the writer sees exactly what lands where.
+function renderInsertProposal(change: IProposedChange): string {
+	const inner = renderGenericMarkdown(change.newText);
+	return gutterCell(`<span class="gbar add" title="Proposed new content"></span>`, true)
+		+ `<div class="pcell insertblock">`
+		+ `<div class="insertbody">${inner}</div>`
+		+ `<div class="ctrl"><span class="cdot add"></span>`
+		+ `<span class="lbl">New content from <span class="src">Chat</span> &middot; <span class="add">inserted after ${esc(change.blockLabel)}</span> &middot; ${Math.round(change.confidence * 100)}% confidence</span>`
+		+ `<span class="acts"><button class="approve" data-approve="${esc(change.id)}">Approve</button>`
+		+ `<button class="reject" data-reject="${esc(change.id)}">Reject</button></span></div></div>`;
 }
 
 // Clean, self-contained export: no IDE chrome, no provenance dots, no diff UI -- just the

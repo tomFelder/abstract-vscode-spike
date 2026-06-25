@@ -625,6 +625,67 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(blockText(service, WEEKLY, 'h-commentary'), newText, 'approving the chat-proposed edit rewrites the block');
 	});
 
+	test('chat is multi-turn: a follow-up carries the prior turns to the model (F3 over current state)', async () => {
+		const service = createService([], { model: chatReply('Done.') });
+		await service.loadDocument(WEEKLY);
+		await service.sendChatMessage(WEEKLY, 'Give me three growth levers');
+		lastModelBody = undefined;
+
+		await service.sendChatMessage(WEEKLY, 'Change a couple of them');
+
+		const body = lastModelBody ?? '';
+		assert.ok(body.includes('Conversation so far'), 'the follow-up prompt includes the transcript');
+		assert.ok(body.includes('Give me three growth levers'), 'the follow-up prompt carries the earlier user turn');
+	});
+
+	test('a chat reply that GENERATES content queues an insertion; approve splices a new block into the doc (F3)', async () => {
+		const newText = '1. Expand the trial\n2. Win back churned accounts\n3. Add an annual plan';
+		const service = createService([], {
+			model: modelMessage({
+				reply: 'Here is a starting top-3 list.', edits: [], inserts: [
+					{ afterHeading: 'Commentary', newText, rationale: 'Drafted the list you asked for.' },
+				]
+			}),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Generate me a top-3 list of growth levers');
+
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.strictEqual(pending.length, 1, 'one insertion queued');
+		assert.deepStrictEqual(
+			{ insert: pending[0].insert, oldText: pending[0].oldText, newText: pending[0].newText },
+			{ insert: true, oldText: '', newText },
+		);
+
+		await service.approve(pending[0].id);
+		const blocks = service.getDoc(WEEKLY)!.blocks;
+		assert.ok(blocks.some(b => b.text === newText), 'approving the insertion adds the new content as a block');
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'cleared from the rail after approve');
+	});
+
+	test('approveAll accepts every pending change for a document at once (F6 accept-all)', async () => {
+		const service = createService([], {
+			model: modelMessage({
+				reply: 'Edited and added.', edits: [
+					{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+				], inserts: [
+					{ afterHeading: 'Commentary', newText: 'A new closing note.', rationale: 'r' },
+				]
+			}),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary and add a closing note');
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 2, 'an edit and an insertion are queued');
+
+		await service.approveAll(WEEKLY.toString());
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'accept-all clears the whole rail');
+		const blocks = service.getDoc(WEEKLY)!.blocks;
+		assert.ok(blocks.some(b => b.text === 'A new closing note.'), 'the insertion landed');
+		assert.ok(blocks.some(b => b.text === 'Growth accelerated this week.'), 'the edit landed');
+	});
+
 	test('with no model reachable, chat is honest (fallback turn, no faked reply, nothing queued)', async () => {
 		const service = createService(); // no opts.model -> /healthz is unhealthy -> no model
 		await service.loadDocument(WEEKLY);

@@ -263,7 +263,10 @@ export class ReviewRailView extends ViewPane {
 			approveAll.style.cssText = 'flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer';
 			approveAll.textContent = 'Approve all';
 			this._renderDisposables.add(addDisposableListener(approveAll, 'click', () => {
-				for (const change of this._livingDocs.getAllPending()) { void this._livingDocs.approve(change.id); }
+				// Scope accept-all to the document in view; fall back to every pending change when no doc is active.
+				const doc = this._activeDoc();
+				if (doc) { void this._livingDocs.approveAll(doc.toString()); }
+				else { for (const change of this._livingDocs.getAllPending()) { void this._livingDocs.approve(change.id); } }
 			}));
 			const reviewEach = append(actions, $('button')) as HTMLButtonElement;
 			reviewEach.style.cssText = 'border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer';
@@ -280,7 +283,7 @@ export class ReviewRailView extends ViewPane {
 		empty.textContent = text;
 	}
 
-	private _renderChatMessage(scroll: HTMLElement, m: { role: 'user' | 'assistant'; content: string; mentions?: readonly string[]; steps?: readonly { label: string; status: 'done' | 'queued' }[]; via?: 'model' | 'fallback' }): void {
+	private _renderChatMessage(scroll: HTMLElement, m: { role: 'user' | 'assistant'; content: string; mentions?: readonly string[]; steps?: readonly { label: string; status: 'done' | 'queued' }[]; via?: 'model' | 'fallback'; proposedIds?: readonly string[] }): void {
 		if (m.role === 'user') {
 			const wrap = append(scroll, $('div'));
 			wrap.style.cssText = 'align-self:flex-end;max-width:88%;display:flex;flex-direction:column;align-items:flex-end;gap:6px';
@@ -325,6 +328,37 @@ export class ReviewRailView extends ViewPane {
 		const fallback = m.via === 'fallback';
 		body.style.cssText = `margin:0;font:400 13.5px/1.6 system-ui;white-space:pre-wrap;color:${fallback ? '#9a6b16' : '#2c2f36'}${fallback ? ';background:#fdf6e9;border:1px solid #f0e2c4;border-radius:9px;padding:9px 11px' : ''}`;
 		body.textContent = m.content;
+
+		// F5: a Copilot/Cursor-style review card per proposal this turn produced. Read the LIVE pending
+		// change by id so the card naturally disappears once accepted/rejected (here or in the document).
+		if (m.proposedIds && m.proposedIds.length) {
+			const live = this._livingDocs.getAllPending().filter(c => m.proposedIds!.includes(c.id));
+			for (const change of live) {
+				const isInsert = !!change.insert;
+				const card = append(col, $('div'));
+				card.style.cssText = 'border:1px solid #e4e7ee;border-radius:10px;overflow:hidden;background:#fbfcff';
+				const head = append(card, $('div'));
+				head.style.cssText = `display:flex;align-items:center;gap:7px;padding:9px 12px 7px;font:600 10.5px/1 ui-monospace,monospace;letter-spacing:.04em;color:${isInsert ? '#1f7a44' : '#9a6b16'}`;
+				const tag = append(head, $('span'));
+				tag.textContent = isInsert ? '+ NEW CONTENT' : '\u270E EDIT';
+				const where = append(head, $('span'));
+				where.style.cssText = 'color:#868b95;font-weight:400';
+				where.textContent = isInsert ? `after ${change.blockLabel}` : change.blockLabel;
+				const preview = append(card, $('div'));
+				preview.style.cssText = 'padding:2px 12px 9px;font:400 12.5px/1.5 system-ui;color:#52575f;white-space:pre-wrap;max-height:96px;overflow:hidden';
+				preview.textContent = change.newText.length > 240 ? change.newText.slice(0, 240) + '\u2026' : change.newText;
+				const actions = append(card, $('div'));
+				actions.style.cssText = 'display:flex;gap:7px;padding:9px 12px;border-top:1px solid #eef0f3';
+				const approve = append(actions, $('button')) as HTMLButtonElement;
+				approve.style.cssText = 'flex:1;border:none;border-radius:7px;padding:8px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer';
+				approve.textContent = isInsert ? 'Insert' : 'Apply';
+				this._renderDisposables.add(addDisposableListener(approve, 'click', () => void this._livingDocs.approve(change.id)));
+				const reject = append(actions, $('button')) as HTMLButtonElement;
+				reject.style.cssText = 'border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer';
+				reject.textContent = 'Reject';
+				this._renderDisposables.add(addDisposableListener(reject, 'click', () => this._livingDocs.reject(change.id)));
+			}
+		}
 	}
 
 	private _renderChatComposer(content: HTMLElement, doc: URI | undefined): void {

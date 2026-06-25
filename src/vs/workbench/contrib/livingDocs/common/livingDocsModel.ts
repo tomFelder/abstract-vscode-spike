@@ -214,6 +214,11 @@ export interface IProposedChange {
 	// A draft prepared proactively by a `draft-only` agent (e.g. the Freshness sweep): it waits in the
 	// rail like any pending change but is flagged as never-auto-landed.
 	readonly draft?: boolean;
+	// A generative insertion (Chat "make me a list"): `newText` is brand-new content (no `oldText` to
+	// diff against) inserted after `afterBlockId` (empty = end of document). Approve splices a new block
+	// into the document rather than rewriting an existing one; the inline diff renders it all-additions.
+	readonly insert?: boolean;
+	readonly afterBlockId?: string;
 }
 
 export interface IAuditEntry {

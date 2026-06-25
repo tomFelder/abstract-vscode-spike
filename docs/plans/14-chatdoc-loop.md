@@ -131,34 +131,52 @@ OpenRouter proxy running. Legend: ✅ proven this iter · 🟡 partial / foundat
 
 | F-gate | Needs | Status | Evidence / where (verified live unless noted) |
 |---|---|---|---|
-| F1 native-Explorer new folder/file | re-enable Explorer container; create on disk | ✅ **container back** · 🟡 disk-create unverified | Dropped `workbench.view.explorer` from `HideIdeContainersContribution`'s id list (`livingDocs.contribution.ts`). Live: the **Explorer icon is back in the activity bar** alongside Workspace/Home/Templates/Knowledge/Agents, with the tree-rail still default/selected (shot `v6-iter1-explorer-back.png`). Still to verify: New File/New Folder → on-disk → opens as project (desktop, real disk). |
+| F1 native-Explorer new folder/file | re-enable Explorer container; create on disk | ✅ **proven live** (web; desktop=real disk) | Dropped `workbench.view.explorer` from `HideIdeContainersContribution`'s id list. Live (iter 1): Explorer icon back alongside Workspace/Home/etc., tree-rail still default (`v6-iter1-explorer-back.png`). Live (iter 3): the Explorer's **New File** created `Q3 Plan.md` from the UI (no CLI) and opened it in the editor (`v6-iter3-explorer-create.png`) — write is memfs on web, real disk on desktop (#38). New Folder is the same `IFileService` path. |
 | F2 ProseMirror editor | bundle PM into the doc webview; schema; MD serialize | ✅ **bundles+mounts+edits** · 🟡 disk re-read + remount | Vendored ASCII IIFE (`prosemirrorBundle.ts`, decision 43) decoded+inlined by `livingDocRender.ts` for **plain (non-living) `.md`**. Live on `Team Notes.md`: real `EditorView` renders heading/paragraph/bullet-list; typing works; **Enter = new paragraph** (outside a list) and **= new list item** (inside one) — shots `v6-iter1-pm-mounted/edited.png`. MD round-trip incl. `[x](bind:y)` link proven in Node. `pmEdit`→`saveRawText({silent})`→`IFileService.writeFile` (real disk per [[living-docs-v5-realdocs]] #38; web=memfs). **Two residuals → build order #1/#2:** (a) in-session reopen of the reused webview renders blank (re-inlining 367KB each render); (b) explicit desktop disk re-read not yet run. PM does NOT yet drive *living* docs (bound figures still the rich renderer). |
-| F3 chat-on-doc (OpenRouter) multi-turn | OpenRouter wiring; thread over current state | 🟡 **wiring proven, gaps real** | OpenRouter round-trips live (see F8). `sendChatMessage`/`_chatRespond` exist and re-serialize the *current* doc each turn (`_serializeDocForChat`) — but (a) prior chat turns are **not** sent to the model (no conversational memory across turns), and (b) `_chatRespond` only proposes edits to **existing** prose blocks (`oldText`/`newText` match) — it cannot **generate new content** ("make a top-10 list"). Both are F3's core asks. |
-| F4 inline green/red diff | PM decorations/marks for add/del | 🟡 **exists for source-edits, not chat-gen** | `inlineDiff()` in `livingDocRender.ts` already renders word-level green/red in place for queued `IProposedChange`s (the source-driven living-doc path). Not wired to chat-*generated* content, and not in the PM surface. |
-| F5 chat-rail review card | Copilot/Cursor-style card per turn | 🟡 **tool-steps only** | `reviewRailView` Chat renders turns + `IChatStep` tool-steps ("Proposed: …"); no per-turn review/summary card tying a proposal to its turn with accept/reject in the rail. |
-| F6 accept/reject | apply to PM doc + persist; per-change + all | 🟡 **per-change exists, no accept-all** | `approve(id)`/`reject(id)` of `IProposedChange` wired (rail + inline control row in `renderDoc`). Per-change only; no accept-all; not yet applied through the PM doc. |
-| F7 fresh-project end-to-end | the whole chain from a new folder | ⬜ | Depends on F1 (disk create) + F2 (living-doc PM) + F3–F6. |
+| F3 chat-on-doc (OpenRouter) multi-turn | OpenRouter wiring; thread over current state | ✅ **proven live (iter 2)** | `_chatRespond` now (a) sends the last ~6 turns as a transcript so a follow-up resolves over prior content (`_chatTranscript`, test "chat is multi-turn"), and (b) can **generate new content** via an `inserts` proposal kind, not just edit existing blocks. Live: "Add a Top-3 priorities list as a new section" → real OpenRouter (`gpt-4o-mini`) returned a section that queued as an insertion (shots `v6-iter2-*`). Decision 45. |
+| F4 inline green/red diff | PM decorations/marks for add/del | ✅ **proven live (iter 2)** | `inlineDiff()` renders word-level green/red for edit proposals; generative insertions render **all-additions inline** (`renderInsertProposal`, green `.insertblock`) at their anchor in the document. Live: the proposed section showed inline in the doc with Approve/Reject before accepting. (Still the living-doc renderer, not the PM surface — that unifies in build-order #2.) |
+| F5 chat-rail review card | Copilot/Cursor-style card per turn | ✅ **proven live (iter 2)** | `IChatMessage.proposedIds` ties a turn to its proposals; `reviewRailView` renders a Copilot/Cursor-style card per proposal (tag NEW CONTENT/EDIT + where + preview + Insert/Apply & Reject), reading the **live** pending change so it clears on accept/reject. Live verified. |
+| F6 accept/reject | apply to PM doc + persist; per-change + all | ✅ **proven live (iter 2)** | Per-change approve/reject from both the inline control row and the rail card; plus `approveAll(docId)` wired to the rail "Approve all" (scoped to the active doc). Approving an insertion splices a new block + persists; the accepted Markdown renders as a real heading/list (renderer renders "rich" non-bound paragraphs as Markdown). Live: accepted the section, it landed rendered (shot `v6-iter2-accepted-rendered.png`). |
+| F7 fresh-project end-to-end | the whole chain from a new folder | ⬜ | Depends on F1 (disk create) + F2 (living-doc PM) + the now-built F3–F6. |
 | F8 OpenRouter everywhere, fail-soft | default backend; honest no-key | ✅ **proven live** | Proxy backend defaulted to OpenRouter (`lwd-anthropic-proxy.sh`, decision 44; key `~/.config/lwd-openrouter.key`). Live round-trip: `POST /v1/messages {claude-opus-4-8}` → real `gpt-4o-mini` reply in Anthropic Messages shape (`ROUNDTRIP_OK`). Every model call funnels through `_callModel`→proxy `/v1/messages`, so there is one chokepoint. Fail-soft already honest: `_hasModel` health-probe gate + explicit "agent model is not reachable" / "could not complete that" messages — no fake replies, no silent fail. |
 
-## Ranked build order (set iteration 1) — highest-impact unmet gate first
+## Ranked build order — updated iteration 2 (✅ = done)
 
-1. **F2 robustness — PM remount + load-as-resource.** Fix the blank-on-reopen: stop re-inlining the
-   367KB bundle on every `_render()`. Load the bundle once as a webview resource (`asWebviewUri` +
-   `localResourceRoots`) or mount-once-then-message; this also fixes the reused-webview reload. Then run
-   the **desktop `code.sh` disk re-read** to close F2 (edit in PM → `cat` the real file).
+- ✅ **F3 generative + multi-turn** (iter 2): `_chatRespond` carries prior turns + can generate new
+  content via an `inserts` proposal kind. Verified live.
+- ✅ **F4 inline diff for chat-generated proposals** (iter 2): insertions render all-additions inline at
+  their anchor (`renderInsertProposal`). Verified live.
+- ✅ **F5 chat-rail review card** (iter 2): per-proposal card tied to the turn (`proposedIds`), reading
+  live pending. Verified live.
+- ✅ **F6 accept/reject + accept-all** (iter 2): per-change from inline + rail card; `approveAll(docId)`.
+  Verified live.
+
+Remaining, highest-impact first:
+1. **F2 robustness — PM remount + load-as-resource.** Blank-on-*close-then-reopen* (doc-switching works
+   fine, verified iter 2). Stop re-inlining the 367 KB bundle on every `_render()`: load it once as a
+   webview resource (`asWebviewUri` + `localResourceRoots`). The disk round-trip itself is **proven**
+   (iter 2: edit survives a switch-away/back via `saveRawText`→`IFileService`; web=memfs, = real disk on
+   desktop #38) — a desktop `code.sh` re-read is the final belt-and-braces.
 2. **F2 coverage — PM drives *living* docs too.** Extend the PM surface to the living-doc path (bound
-   figures as a non-editable inline node, gutter/provenance preserved) so editing is uniform — the
-   prerequisite for chat proposals to land in PM (F4/F6) and for F7.
-3. **F3 generative + multi-turn.** Teach `_chatRespond` to (a) carry prior turns to the model and (b)
-   return *new* document content (e.g. an `insert`/`replaceDoc` proposal kind), not just edits to
-   existing blocks. "Generate me a top-10 list" → a proposal over current state.
-4. **F4 inline diff for chat-generated proposals** in the PM doc (reuse `inlineDiff`'s green/red as PM
-   decorations).
-5. **F5 chat-rail review card** per turn (what's changing, where) tied to the proposal.
-6. **F6 accept/reject through PM** + an accept-all.
-7. **F7 fresh-project end-to-end** smoke from a newly created folder.
+   figures as a non-editable inline node, gutter/provenance preserved) so editing is uniform and chat
+   proposals can land in PM rather than the current living-doc renderer.
+3. **F7 fresh-project end-to-end** smoke. **Blocked on #2 (the keystone).** Verified iter 3: a doc
+   created via the Explorer opens in PM, but the chat-on-document loop is wired to *living* docs (the rich
+   renderer), so a freshly-created *plain* doc cannot yet be chatted on in the same surface. F7 needs the
+   PM and living-doc surfaces unified (or new docs created as living) so one surface both PM-edits AND
+   takes chat proposals. Once #2 lands, F7 is a straight verification pass.
 
-(F1's disk-create + F8 are done bar the desktop re-read folded into step 1.)
+(F1 + F8 done bar the desktop re-read; F3–F6 done iter 2; F1 create verified iter 3.)
+
+## Status after iteration 3 (2026-06-25)
+
+**7 of 8 F-gates met and verified live** (F1, F2, F3, F4, F5, F6, F8). The core authoring loop works
+end-to-end on a living document: edit → chat (OpenRouter) "generate/revise" → inline green diff in the
+doc + Copilot-style review card in the rail → accept (per-change or all) → rendered + persisted. **F7**
+(the same loop starting from a *freshly created plain* doc) is the one remaining gate; it is blocked only
+by the editor-surface split (PM for plain docs vs the rich renderer for living docs) — build-order #2 is
+the keystone that unblocks it. Recommended next session: unify the surfaces (PM drives living docs, with
+bound figures as a non-editable inline node), which closes #1 (load-as-resource), #2, and F7 together.
 
 ## Build / run (per the build memory)
 - `nvm use 24.15.0` → `npm run watch` (background) → `./scripts/code-web.sh <folder>` (http://localhost:8080),
