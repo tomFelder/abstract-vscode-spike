@@ -131,7 +131,7 @@ OpenRouter proxy running. Legend: ✅ proven this iter · 🟡 partial / foundat
 
 | F-gate | Needs | Status | Evidence / where (verified live unless noted) |
 |---|---|---|---|
-| F1 native-Explorer new folder/file | re-enable Explorer container; create on disk | ✅ **container back** · 🟡 disk-create unverified | Dropped `workbench.view.explorer` from `HideIdeContainersContribution`'s id list (`livingDocs.contribution.ts`). Live: the **Explorer icon is back in the activity bar** alongside Workspace/Home/Templates/Knowledge/Agents, with the tree-rail still default/selected (shot `v6-iter1-explorer-back.png`). Still to verify: New File/New Folder → on-disk → opens as project (desktop, real disk). |
+| F1 native-Explorer new folder/file | re-enable Explorer container; create on disk | ✅ **proven live** (web; desktop=real disk) | Dropped `workbench.view.explorer` from `HideIdeContainersContribution`'s id list. Live (iter 1): Explorer icon back alongside Workspace/Home/etc., tree-rail still default (`v6-iter1-explorer-back.png`). Live (iter 3): the Explorer's **New File** created `Q3 Plan.md` from the UI (no CLI) and opened it in the editor (`v6-iter3-explorer-create.png`) — write is memfs on web, real disk on desktop (#38). New Folder is the same `IFileService` path. |
 | F2 ProseMirror editor | bundle PM into the doc webview; schema; MD serialize | ✅ **bundles+mounts+edits** · 🟡 disk re-read + remount | Vendored ASCII IIFE (`prosemirrorBundle.ts`, decision 43) decoded+inlined by `livingDocRender.ts` for **plain (non-living) `.md`**. Live on `Team Notes.md`: real `EditorView` renders heading/paragraph/bullet-list; typing works; **Enter = new paragraph** (outside a list) and **= new list item** (inside one) — shots `v6-iter1-pm-mounted/edited.png`. MD round-trip incl. `[x](bind:y)` link proven in Node. `pmEdit`→`saveRawText({silent})`→`IFileService.writeFile` (real disk per [[living-docs-v5-realdocs]] #38; web=memfs). **Two residuals → build order #1/#2:** (a) in-session reopen of the reused webview renders blank (re-inlining 367KB each render); (b) explicit desktop disk re-read not yet run. PM does NOT yet drive *living* docs (bound figures still the rich renderer). |
 | F3 chat-on-doc (OpenRouter) multi-turn | OpenRouter wiring; thread over current state | ✅ **proven live (iter 2)** | `_chatRespond` now (a) sends the last ~6 turns as a transcript so a follow-up resolves over prior content (`_chatTranscript`, test "chat is multi-turn"), and (b) can **generate new content** via an `inserts` proposal kind, not just edit existing blocks. Live: "Add a Top-3 priorities list as a new section" → real OpenRouter (`gpt-4o-mini`) returned a section that queued as an insertion (shots `v6-iter2-*`). Decision 45. |
 | F4 inline green/red diff | PM decorations/marks for add/del | ✅ **proven live (iter 2)** | `inlineDiff()` renders word-level green/red for edit proposals; generative insertions render **all-additions inline** (`renderInsertProposal`, green `.insertblock`) at their anchor in the document. Live: the proposed section showed inline in the doc with Approve/Reject before accepting. (Still the living-doc renderer, not the PM surface — that unifies in build-order #2.) |
@@ -160,9 +160,23 @@ Remaining, highest-impact first:
 2. **F2 coverage — PM drives *living* docs too.** Extend the PM surface to the living-doc path (bound
    figures as a non-editable inline node, gutter/provenance preserved) so editing is uniform and chat
    proposals can land in PM rather than the current living-doc renderer.
-3. **F7 fresh-project end-to-end** smoke from a newly created folder (needs F1 disk-create + the above).
+3. **F7 fresh-project end-to-end** smoke. **Blocked on #2 (the keystone).** Verified iter 3: a doc
+   created via the Explorer opens in PM, but the chat-on-document loop is wired to *living* docs (the rich
+   renderer), so a freshly-created *plain* doc cannot yet be chatted on in the same surface. F7 needs the
+   PM and living-doc surfaces unified (or new docs created as living) so one surface both PM-edits AND
+   takes chat proposals. Once #2 lands, F7 is a straight verification pass.
 
-(F1 container + F8 done bar the desktop re-read; F3–F6 done iter 2.)
+(F1 + F8 done bar the desktop re-read; F3–F6 done iter 2; F1 create verified iter 3.)
+
+## Status after iteration 3 (2026-06-25)
+
+**7 of 8 F-gates met and verified live** (F1, F2, F3, F4, F5, F6, F8). The core authoring loop works
+end-to-end on a living document: edit → chat (OpenRouter) "generate/revise" → inline green diff in the
+doc + Copilot-style review card in the rail → accept (per-change or all) → rendered + persisted. **F7**
+(the same loop starting from a *freshly created plain* doc) is the one remaining gate; it is blocked only
+by the editor-surface split (PM for plain docs vs the rich renderer for living docs) — build-order #2 is
+the keystone that unblocks it. Recommended next session: unify the surfaces (PM drives living docs, with
+bound figures as a non-editable inline node), which closes #1 (load-as-resource), #2, and F7 together.
 
 ## Build / run (per the build memory)
 - `nvm use 24.15.0` → `npm run watch` (background) → `./scripts/code-web.sh <folder>` (http://localhost:8080),
