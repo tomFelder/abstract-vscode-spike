@@ -203,8 +203,12 @@ export interface ILivingDocsService {
 	/** Load a document; for a Living Document its bound source is read alongside. */
 	loadDocument(resource: URI): Promise<void>;
 
-	/** Persist edited raw Markdown verbatim and reparse the document. */
-	saveRawText(resource: URI, text: string): Promise<void>;
+	/**
+	 * Persist edited raw Markdown verbatim and reparse the document. Pass `{ silent: true }` to skip
+	 * the change event so a live editing surface (e.g. the ProseMirror editor) is not forced to
+	 * re-render and lose its cursor while the user is still typing.
+	 */
+	saveRawText(resource: URI, text: string, options?: { readonly silent?: boolean }): Promise<void>;
 
 	/**
 	 * Edit a non-bound prose block in place (WYSIWYG) and persist it. Bound blocks are

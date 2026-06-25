@@ -159,7 +159,21 @@ All three remove/neutralise an *affordance* rather than re-architecting core; ea
 IDE optionality* on a bad rebase, so re-pin them in the G4 checklist. **G4 now FULLY passes** (palette
 keybindings dead: Cmd+Shift+P / F1 / Cmd+P all no-op; 0 draggable sashes) - verified live, iter 2.
 
-## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
+### v6 chat-on-document loop (plan 14) iter 1 — settle + prove: still 0 added core patches
+
+The three foundations (OpenRouter, native Explorer, ProseMirror) all landed **additively / in our own
+surfaces** — no core patch. Notably the de-IDE work is *relaxed* (G4, decision 42) by *removing one id from
+our own deregister list*, not by patching core.
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| V6-1 | Re-enable the native File Explorer (drop `workbench.view.explorer` from the hide-list) | additive-contribution | `livingDocs/browser/livingDocs.contribution.ts` | Our own `HideIdeContainersContribution`; Search/SCM/Debug/Extensions stay hidden. Relaxes G4 (decision 42). No core edit. |
+| V6-2 | Vendored ProseMirror IIFE bundle (base64 in a `.ts`) + decode/inline into the doc webview; `pmEdit` message → silent persist | our-surface | `livingDocs/browser/prosemirrorBundle.ts` (generated), `livingDocRender.ts`, `livingDocEditor.ts`, `livingDocsService.ts` (`saveRawText` gains `{silent}`), `common/livingDocs.ts` | All inside our contribution. The bundle is a `.ts` (base64) so it needs **no** `.eslint-allowed-javascript-files` entry and trips no non-ASCII/`querySelector` hygiene gate. Decision 43. |
+| V6-3 | OpenRouter as the default proxy backend | our-surface | `scripts/lwd-anthropic-proxy.sh` | Script-only; app code unchanged (renderer always speaks the Anthropic Messages shape to the proxy). Decision 44. |
+
+_Residual to retire in build-order #1:_ the 367KB bundle is re-inlined on every webview render (blank-on-reopen); moving it to a webview resource (`asWebviewUri`) removes the re-inline and is still our-surface.
+
+## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be

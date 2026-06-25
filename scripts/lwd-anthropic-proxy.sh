@@ -18,4 +18,13 @@ if [ -s "$HOME/.nvm/nvm.sh" ]; then
 	nvm use 24.15.0 >/dev/null 2>&1 || true
 fi
 
+# v6 (plan 14, decision 44): OpenRouter is the default model backend for every call — the Anthropic
+# Console org is out of credits, so the OAuth path 400s on billing. Default the backend + key file here
+# (override by exporting LWD_BACKEND / OPENROUTER_API_KEY_FILE before running). The renderer is unchanged:
+# it always talks to this proxy's /v1/messages in the Anthropic Messages shape; the proxy translates.
+export LWD_BACKEND="${LWD_BACKEND:-openrouter}"
+if [ "$LWD_BACKEND" = "openrouter" ] && [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FILE" ] && [ -f "$HOME/.config/lwd-openrouter.key" ]; then
+	export OPENROUTER_API_KEY_FILE="$HOME/.config/lwd-openrouter.key"
+fi
+
 exec node "$ROOT/scripts/lwd-anthropic-proxy.js" "$@"

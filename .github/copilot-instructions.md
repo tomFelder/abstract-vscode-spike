@@ -1,5 +1,51 @@
 # VS Code Copilot Instructions
 
+## Working With This Repo's Owner (read this first)
+
+This is a **fork of the VS Code (`microsoft/vscode`) codebase**. The repo owner did not
+write this code and is **not yet familiar with how VS Code is built internally**. Treat them
+as a **junior/mid-level engineer who just joined the team**: capable and technical, but new
+to this specific (large, layered, unusually-structured) codebase.
+
+When you explain anything about this codebase, **default to educating, not assuming**:
+
+- **Explain the "why", not just the "what".** Don't just say *where* code lives — say what
+  that layer/service/contribution is responsible for and why it's organized that way.
+- **Define VS Code-specific concepts on first use.** Things like the *contribution model*,
+  *dependency injection / services*, *the workbench vs. the editor*, *the extension host*,
+  *parts/layout*, *disposables*, and *the layering rules* are not common knowledge — briefly
+  define them inline the first time they come up, with a `path:line` pointer to a real example.
+- **Anchor explanations in this repo.** Prefer pointing at actual files/symbols
+  (`file_path:line`) over abstract description, so the owner can read along and learn the
+  patterns by example.
+- **Surface the conventions that aren't obvious.** This codebase has strong, specific rules
+  (tabs not spaces, DI in constructors only, externalized strings, disposable management,
+  layering checks). Call these out when they're relevant to what you're doing rather than
+  silently following them.
+- **Flag forking implications.** When something is a VS Code upstream behavior vs. a local
+  modification in this fork, say so — the owner needs to know what's "stock" and what's been
+  changed here. Use `git log`/`git blame` to distinguish when it matters.
+- **Don't assume prior context.** If a request touches a subsystem, give a one-paragraph
+  orientation to that subsystem before diving into specifics.
+
+### Recommendations for the owner (proactively offer these when relevant)
+
+- **Start from the architecture, top-down.** The fastest way to get oriented is the layering:
+  `base` → `platform` → `editor` → `workbench` (see "Core Architecture" below). When asked to
+  find or change something, explain which layer it belongs in and why.
+- **Use the build watch task, not one-off compiles.** Follow the "Validating TypeScript
+  changes" section exactly — incremental watch + `typecheck-client` is the supported loop;
+  `npm run compile` is explicitly discouraged here.
+- **Lean on the running app to learn.** This fork has tooling to drive the real workbench
+  (the `launch`/`run` skills, `./scripts/code-web.sh`, chrome-devtools MCP). Seeing a feature
+  live alongside its code is the highest-bandwidth way to build a mental model.
+- **Read the `docs/` folder.** The project's design thinking, decision logs, and plans live
+  there (`docs/README.md` is the index). It's the best on-ramp to *this fork's* goals, which
+  the upstream VS Code docs won't cover.
+- **Ask for a walkthrough instead of a one-liner.** When a change is non-trivial, it's fine
+  (encouraged) to ask for the reasoning and the surrounding patterns — the goal is to leave
+  the owner more capable of doing the next change themselves.
+
 ## Project Overview
 
 Visual Studio Code is built with a layered architecture using TypeScript, web APIs and Electron, combining web technologies with native app capabilities. The codebase is organized into key architectural layers:

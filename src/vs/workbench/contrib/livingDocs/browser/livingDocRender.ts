@@ -4,9 +4,42 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
+import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { ILivingDoc, ILivingDocBlock, IProposedChange } from '../common/livingDocsModel.js';
+import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
+
+// The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
+// single-quoted (repo hygiene); decode it once, lazily, and reuse the decoded text on every render.
+let _pmBundleCache: string | undefined;
+function proseMirrorBundle(): string {
+	if (_pmBundleCache === undefined) {
+		_pmBundleCache = decodeBase64(PROSEMIRROR_BUNDLE_BASE64).toString();
+	}
+	return _pmBundleCache;
+}
+
+// Build the two scripts that mount a real ProseMirror EditorView on a plain (non-living) Markdown doc:
+// the vendored bundle (defines window.LWDPM) followed by an init that parses the doc's Markdown, and on
+// every change debounces a 'pmEdit' message carrying the re-serialized Markdown (persisted silently to
+// disk by the editor). `vscode` is the acquireVsCodeApi() handle declared in the main SCRIPT, which runs
+// before these. The initial Markdown is JSON-encoded with `<` escaped so it can never break out of the
+// script, and any literal '</script' in the bundle is defensively split.
+function proseMirrorEditorScripts(markdown: string): string {
+	const bundle = proseMirrorBundle().replace(/<\/script/gi, '<\\/script');
+	const initialMd = JSON.stringify(markdown).replace(/</g, '\\u003c');
+	const init = `(function(){
+var root = document.getElementById('pm-root');
+if (!root || !window.LWDPM) { return; }
+var view = window.LWDPM.mount(root, ${initialMd}, { onChange: function(){
+clearTimeout(window.__pmTimer);
+window.__pmTimer = setTimeout(function(){ vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(view) }); }, 300);
+} });
+window.__pmView = view;
+})();`;
+	return `<script>${bundle}</script><script>${init}</script>`;
+}
 
 // Bind links render as plain text - the resolved value is its own visible text, and the `bind:` URL
 // is never shown to the reader (spec 3.2). A blue gutter dot marks the bound line instead.
@@ -214,6 +247,11 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .prose table{border-collapse:collapse;margin:0 0 14px;font-size:13px}
 .prose th,.prose td{border:1px solid #ececf0;padding:7px 12px;text-align:left}
 .prose img{max-width:100%}
+/* Plain-Markdown ProseMirror editor (F2): the document IS the writing surface (reuses .prose type). */
+.pmwrap{max-width:760px;margin:0 auto;padding:32px 40px 90px}
+.pmwrap .ProseMirror{outline:none;min-height:60vh;white-space:pre-wrap;word-wrap:break-word;-webkit-font-smoothing:antialiased}
+.pmwrap .ProseMirror:focus{outline:none}
+.pmwrap .ProseMirror p.is-editor-empty:first-child::before{color:#bcc0c8;content:attr(data-placeholder);float:left;pointer-events:none;height:0}
 .rawwrap{max-width:860px;margin:0 auto;padding:20px 40px 60px}
 textarea.raw{width:100%;min-height:70vh;box-sizing:border-box;border:1px solid #e1e2e8;border-radius:10px;padding:18px 20px;resize:vertical;background:#fbfbfc;color:#23242a;font:400 13px/1.7 'JetBrains Mono',ui-monospace,monospace;tab-size:2}
 textarea.raw:focus{outline:none;border-color:${ACCENT}}
@@ -324,15 +362,20 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 			? renderSourcePeekLayout(input.sourcePeek, docHtml)
 			: docHtml);
 	} else {
-		body = `<div class="doc prose">${renderGenericMarkdown(doc.body)}</div>`;
+		// A plain (non-living) Markdown doc is edited in a real ProseMirror EditorView (F2): mount point
+		// here, the editor + init script appended after the main SCRIPT below. Reliable Enter/lists/bold,
+		// serialized back to Markdown and persisted to disk on change.
+		body = `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`;
 	}
+	const plainEditable = !!doc && !isLiving && isRendered;
+	const pmScripts = plainEditable ? proseMirrorEditorScripts(doc.body) : '';
 
 	const hint = (mode === 'rendered' && isLiving)
 		? `<div class="hint">Bound figures are highlighted in blue &mdash; click one (or a gutter dot) to trace it back to the source. `
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
-	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${docToolbar}${body}${hint}${modal}<script>${SCRIPT}</script></body></html>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${docToolbar}${body}${hint}${modal}<script>${SCRIPT}</script>${pmScripts}</body></html>`;
 }
 
 // The in-surface source-peek layout (comp "Workbench v2"): the document stays FULL-WIDTH and centred, and
