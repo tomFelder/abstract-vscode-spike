@@ -195,3 +195,25 @@ to a guess:
   button are gone — "New project" becomes "Open another folder" / "New document". The lesson: the comp's
   dashboard was a *mock of a populated state*; the real product needs the empty/on-ramp state first, and the
   populated state must read from the open folder, not from fixtures.
+
+## D7 — (v6) The editor substrate becomes real ProseMirror; the calm shell now also has the native Explorer
+
+The v6 chat-on-document loop (plan 14) makes two design-relevant substrate changes, both deliberate
+reversals of earlier calls now that the *core authoring loop* (not just the visual shell) is the bar:
+
+- **The writing surface is a real ProseMirror `EditorView`, not `contenteditable` + `execCommand`.** D4
+  said "the document surface is the part that already works" — visually true, but the editing *mechanics*
+  were not: blocks were `contenteditable` persisted on blur, and **Enter just blurred the block** rather
+  than making a paragraph. That is the "can't reliably edit" pain. v6 reverses decision 4's "reuse VS Code
+  primitives, no 3rd-party rich-text" (for the fork path) and mounts a vendored ProseMirror bundle, so Enter
+  = a real paragraph, lists/headings/bold work, and the doc serialises back to Markdown. Iter 1 wires it for
+  **plain (non-living) `.md`**; bringing it to the living-doc surface (bound figures as a non-editable inline
+  node, provenance gutter preserved) is the next slice. Design rule going forward: the document is edited in
+  a genuine rich-text engine — the calm look (the `.prose` type ramp) is layered *on top of* PM, not faked.
+- **The native File Explorer is back — and that is OK, because calm ≠ feature-poor.** D6/G4 framed "calm by
+  construction" as removing IDE optionality. v6 (decision 42) re-admits the native Explorer as a *second*
+  activity-bar container so the loop can create folders/files on disk. This is not a regression of the calm
+  intent: the tree-rail stays the **default** surface, and the Explorer is an opt-in power tool, not the
+  primary nav. The refined rule: strip the optionality that makes the app read as "a tool you configure"
+  (palette, resizable panes, IDE chrome — still gone), but keep the *functional* affordances a real document
+  app needs (a file tree you can create in). G4 is consciously relaxed for power, not abandoned.

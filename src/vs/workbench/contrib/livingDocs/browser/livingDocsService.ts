@@ -950,7 +950,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return { applied, queued };
 	}
 
-	async saveRawText(resource: URI, text: string): Promise<void> {
+	async saveRawText(resource: URI, text: string, options?: { readonly silent?: boolean }): Promise<void> {
 		const id = resource.toString();
 		const doc = parseLivingDoc(text);
 		const lock = this._docs.get(id)?.lock ?? (await this._lockStore.read(resource)) ?? emptyLock();
@@ -974,7 +974,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		await this._bootstrapLock(state);
 		await this._recomputeFreshness(state);
 		this._watchSources(state);
-		this._onDidChange.fire();
+		// Silent saves (live ProseMirror typing) persist to disk + refresh state but do NOT fire the
+		// change event, so the editor does not re-render the webview and remount the editor mid-keystroke.
+		if (!options?.silent) {
+			this._onDidChange.fire();
+		}
 	}
 
 	// --- document-lifecycle hooks (spec 3, 7) ---

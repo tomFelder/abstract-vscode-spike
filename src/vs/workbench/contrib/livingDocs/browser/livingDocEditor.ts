@@ -80,6 +80,13 @@ export class LivingDocEditor extends EditorPane {
 
 	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string }): void {
 		switch (message?.type) {
+			case 'pmEdit':
+				// The ProseMirror editing surface (plain Markdown docs) serialized its current state back
+				// to Markdown. Persist it to disk silently so the live editor keeps its cursor (no remount).
+				if (this._resource && typeof message.text === 'string') {
+					void this._livingDocs.saveRawText(this._resource, message.text, { silent: true });
+				}
+				break;
 			case 'refresh':
 				void this._livingDocs.refreshFromSources();
 				break;

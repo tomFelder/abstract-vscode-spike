@@ -124,18 +124,41 @@ blocks; ProseMirror bundling approach), STOP and ask before building it.
 
 ---
 
-## Function-gap map (engine vs F1–F8) — _to be filled in iteration 1, verified live_
+## Function-gap map (engine vs F1–F8) — _filled iteration 1 (2026-06-25), verified live_
 
-| F-gate | Needs | Status | Evidence / where |
+Verified live on `code-web` against the real folder `/Users/tommy/Sites/.realdocs-test` with the
+OpenRouter proxy running. Legend: ✅ proven this iter · 🟡 partial / foundation-only · ⬜ not started.
+
+| F-gate | Needs | Status | Evidence / where (verified live unless noted) |
 |---|---|---|---|
-| F1 native-Explorer new folder/file | re-enable Explorer container; create on disk | _TBD iter 1_ | de-IDE `HideIdeContainersContribution` deregisters Explorer — revert for Explorer |
-| F2 ProseMirror editor | bundle PM into the doc webview; schema; MD serialize | _TBD iter 1_ | today: `livingDocRender.ts` contenteditable + `execCommand`, persist-on-blur (`edit`→`editBlock`) |
-| F3 chat-on-doc (OpenRouter) multi-turn | OpenRouter wiring; thread over current state | _TBD iter 1_ | `sendChatMessage`/`_chatRespond` exist (proxy `_callModel`); v1 chat proposes edits |
-| F4 inline green/red diff | PM decorations/marks for add/del | _TBD_ | none today (edits queue to Review rail only) |
-| F5 chat-rail review card | Copilot/Cursor-style card per turn | _TBD_ | `reviewRailView` Chat renders turns + tool-steps |
-| F6 accept/reject | apply to PM doc + persist; per-change + all | _TBD_ | `approve`/reject of `IProposedChange` exists (rail) |
-| F7 fresh-project end-to-end | the whole chain from a new folder | _TBD_ | — |
-| F8 OpenRouter everywhere, fail-soft | default backend; honest no-key | _TBD iter 1_ | proxy had OpenRouter as a test backend ([[living-docs-model-impl]]) |
+| F1 native-Explorer new folder/file | re-enable Explorer container; create on disk | ✅ **container back** · 🟡 disk-create unverified | Dropped `workbench.view.explorer` from `HideIdeContainersContribution`'s id list (`livingDocs.contribution.ts`). Live: the **Explorer icon is back in the activity bar** alongside Workspace/Home/Templates/Knowledge/Agents, with the tree-rail still default/selected (shot `v6-iter1-explorer-back.png`). Still to verify: New File/New Folder → on-disk → opens as project (desktop, real disk). |
+| F2 ProseMirror editor | bundle PM into the doc webview; schema; MD serialize | ✅ **bundles+mounts+edits** · 🟡 disk re-read + remount | Vendored ASCII IIFE (`prosemirrorBundle.ts`, decision 43) decoded+inlined by `livingDocRender.ts` for **plain (non-living) `.md`**. Live on `Team Notes.md`: real `EditorView` renders heading/paragraph/bullet-list; typing works; **Enter = new paragraph** (outside a list) and **= new list item** (inside one) — shots `v6-iter1-pm-mounted/edited.png`. MD round-trip incl. `[x](bind:y)` link proven in Node. `pmEdit`→`saveRawText({silent})`→`IFileService.writeFile` (real disk per [[living-docs-v5-realdocs]] #38; web=memfs). **Two residuals → build order #1/#2:** (a) in-session reopen of the reused webview renders blank (re-inlining 367KB each render); (b) explicit desktop disk re-read not yet run. PM does NOT yet drive *living* docs (bound figures still the rich renderer). |
+| F3 chat-on-doc (OpenRouter) multi-turn | OpenRouter wiring; thread over current state | 🟡 **wiring proven, gaps real** | OpenRouter round-trips live (see F8). `sendChatMessage`/`_chatRespond` exist and re-serialize the *current* doc each turn (`_serializeDocForChat`) — but (a) prior chat turns are **not** sent to the model (no conversational memory across turns), and (b) `_chatRespond` only proposes edits to **existing** prose blocks (`oldText`/`newText` match) — it cannot **generate new content** ("make a top-10 list"). Both are F3's core asks. |
+| F4 inline green/red diff | PM decorations/marks for add/del | 🟡 **exists for source-edits, not chat-gen** | `inlineDiff()` in `livingDocRender.ts` already renders word-level green/red in place for queued `IProposedChange`s (the source-driven living-doc path). Not wired to chat-*generated* content, and not in the PM surface. |
+| F5 chat-rail review card | Copilot/Cursor-style card per turn | 🟡 **tool-steps only** | `reviewRailView` Chat renders turns + `IChatStep` tool-steps ("Proposed: …"); no per-turn review/summary card tying a proposal to its turn with accept/reject in the rail. |
+| F6 accept/reject | apply to PM doc + persist; per-change + all | 🟡 **per-change exists, no accept-all** | `approve(id)`/`reject(id)` of `IProposedChange` wired (rail + inline control row in `renderDoc`). Per-change only; no accept-all; not yet applied through the PM doc. |
+| F7 fresh-project end-to-end | the whole chain from a new folder | ⬜ | Depends on F1 (disk create) + F2 (living-doc PM) + F3–F6. |
+| F8 OpenRouter everywhere, fail-soft | default backend; honest no-key | ✅ **proven live** | Proxy backend defaulted to OpenRouter (`lwd-anthropic-proxy.sh`, decision 44; key `~/.config/lwd-openrouter.key`). Live round-trip: `POST /v1/messages {claude-opus-4-8}` → real `gpt-4o-mini` reply in Anthropic Messages shape (`ROUNDTRIP_OK`). Every model call funnels through `_callModel`→proxy `/v1/messages`, so there is one chokepoint. Fail-soft already honest: `_hasModel` health-probe gate + explicit "agent model is not reachable" / "could not complete that" messages — no fake replies, no silent fail. |
+
+## Ranked build order (set iteration 1) — highest-impact unmet gate first
+
+1. **F2 robustness — PM remount + load-as-resource.** Fix the blank-on-reopen: stop re-inlining the
+   367KB bundle on every `_render()`. Load the bundle once as a webview resource (`asWebviewUri` +
+   `localResourceRoots`) or mount-once-then-message; this also fixes the reused-webview reload. Then run
+   the **desktop `code.sh` disk re-read** to close F2 (edit in PM → `cat` the real file).
+2. **F2 coverage — PM drives *living* docs too.** Extend the PM surface to the living-doc path (bound
+   figures as a non-editable inline node, gutter/provenance preserved) so editing is uniform — the
+   prerequisite for chat proposals to land in PM (F4/F6) and for F7.
+3. **F3 generative + multi-turn.** Teach `_chatRespond` to (a) carry prior turns to the model and (b)
+   return *new* document content (e.g. an `insert`/`replaceDoc` proposal kind), not just edits to
+   existing blocks. "Generate me a top-10 list" → a proposal over current state.
+4. **F4 inline diff for chat-generated proposals** in the PM doc (reuse `inlineDiff`'s green/red as PM
+   decorations).
+5. **F5 chat-rail review card** per turn (what's changing, where) tied to the proposal.
+6. **F6 accept/reject through PM** + an accept-all.
+7. **F7 fresh-project end-to-end** smoke from a newly created folder.
+
+(F1's disk-create + F8 are done bar the desktop re-read folded into step 1.)
 
 ## Build / run (per the build memory)
 - `nvm use 24.15.0` → `npm run watch` (background) → `./scripts/code-web.sh <folder>` (http://localhost:8080),

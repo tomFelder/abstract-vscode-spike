@@ -37,11 +37,15 @@ import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenLauncherView } from './screenLauncherView.js';
 import { ScreenId } from './screenRender.js';
 
-// The built-in IDE view containers (Explorer, Search, Source Control, Run and Debug, Extensions)
-// are the icon-nav "this is an IDE" tells. The comp's icon nav carries only our document surfaces,
-// so these are deregistered, leaving Documents / Templates / Knowledge / Agents.
+// The built-in IDE view containers (Search, Source Control, Run and Debug, Extensions) are the
+// icon-nav "this is an IDE" tells, so they are deregistered, leaving Documents / Templates /
+// Knowledge / Agents alongside the native Explorer.
+// v6 (decision 42, plan 14): the native File Explorer is DELIBERATELY kept (removed from this list)
+// so the core authoring loop can create folders/files on disk from a real file tree (F1). This
+// REVISES G4 / decisions 25 & 30 (the de-IDE calls) for functional power; the custom tree-rail stays
+// the default sidebar container (registered with isDefault below), and the Explorer is a second
+// activity-bar icon for raw file ops. Logged in 03-merge-tax-ledger.md + 07-decision-log.md.
 const IDE_VIEW_CONTAINER_IDS = [
-	'workbench.view.explorer',
 	'workbench.view.search',
 	'workbench.view.scm',
 	'workbench.view.debug',
