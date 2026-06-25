@@ -1449,28 +1449,55 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const docText = this._serializeDocForChat(state);
 		const sourceFiles = mentions.length ? mentions : [...state.doc.sources, ...state.doc.context];
 		const sources = await this._readContext(state, sourceFiles);
-		const system = 'You are the agent inside a Living Document editor. Answer the user using the document and its sources. '
-			+ 'You may propose edits to existing prose paragraphs (never to bound figures). Reply with ONLY a JSON object: '
-			+ '{"reply": string, "edits": [{"heading": string, "oldText": string, "newText": string, "rationale": string}]}. '
-			+ 'Use edits only for genuine wording or meaning improvements grounded in the sources; otherwise return an empty edits array. Keep reply concise.';
-		const user = `Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\nUser: ${text}`;
+		const headings = state.doc.blocks.filter(b => b.type === 'heading').map(b => b.text);
+		const system = 'You are the agent inside a Living Document editor, holding one continuing conversation about the open document. '
+			+ 'Use the prior turns for context - a follow-up like "change a couple of them" refers to content you proposed earlier, applied over the CURRENT document shown below. '
+			+ 'You can (a) rewrite existing prose paragraphs and (b) GENERATE new content to insert (lists, a new section). Never touch bound figures. '
+			+ 'Reply with ONLY a JSON object: {"reply": string, '
+			+ '"edits": [{"heading": string, "oldText": string, "newText": string, "rationale": string}], '
+			+ '"inserts": [{"afterHeading": string, "newText": string, "rationale": string}]}. '
+			+ 'Use "edits" to rewrite an existing paragraph (oldText must quote the current prose). Use "inserts" to add NEW content: newText is Markdown (e.g. a numbered or bulleted list) placed after the named heading (empty afterHeading = end of the document). '
+			+ 'Propose changes only when the user asks to write, generate or revise; otherwise return empty arrays. Keep reply concise.';
+		const transcript = this._chatTranscript(state.uri);
+		const user = `Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nHeadings: ${headings.join(' | ') || '(none)'}\n\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
 		const raw = await this._callModel(system, user);
-		const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { reply?: string; edits?: { heading?: string; oldText?: string; newText?: string; rationale?: string }[] };
+		const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as {
+			reply?: string;
+			edits?: { heading?: string; oldText?: string; newText?: string; rationale?: string }[];
+			inserts?: { afterHeading?: string; newText?: string; rationale?: string }[];
+		};
 
 		const steps: IChatStep[] = [];
+		const proposedIds: string[] = [];
 		if (sourceFiles.length) { steps.push({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
-		const edits = Array.isArray(json.edits) ? json.edits : [];
-		for (const edit of edits) {
+		for (const edit of Array.isArray(json.edits) ? json.edits : []) {
 			const queued = this._queueChatEdit(state, edit);
-			if (queued) { steps.push({ label: `Proposed: ${queued}`, status: 'queued' }); }
+			if (queued) { steps.push({ label: `Proposed edit: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 		}
-		return { role: 'assistant', via: 'model', content: String(json.reply ?? raw).trim(), steps: steps.length ? steps : undefined };
+		for (const insert of Array.isArray(json.inserts) ? json.inserts : []) {
+			const queued = this._queueChatInsert(state, insert);
+			if (queued) { steps.push({ label: `Proposed new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+		}
+		return {
+			role: 'assistant', via: 'model', content: String(json.reply ?? raw).trim(),
+			steps: steps.length ? steps : undefined,
+			proposedIds: proposedIds.length ? proposedIds : undefined,
+		};
+	}
+
+	// Render the last few turns for the model so a follow-up ("change a couple of them") resolves against
+	// what was already said. The caller has already pushed the current user turn, so drop the last entry.
+	private _chatTranscript(resource: URI): string {
+		const prior = (this._chats.get(resource.toString()) ?? []).slice(0, -1).slice(-6);
+		if (!prior.length) { return ''; }
+		const lines = prior.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
+		return `Conversation so far:\n${lines.join('\n')}\n\n`;
 	}
 
 	// Locate the prose block an edit targets (best token-overlap match under the named heading) and queue
 	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the
 	// block label when queued, else undefined.
-	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string }): string | undefined {
+	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string }): { id: string; label: string } | undefined {
 		const newText = String(edit.newText ?? '').trim();
 		const oldText = String(edit.oldText ?? '').trim();
 		if (!newText || !oldText) { return undefined; }
@@ -1483,8 +1510,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		if (!best || best.text.trim() === newText) { return undefined; }
 		const label = this._blockLabel(state.doc, best.id);
+		const id = generateUuid();
 		this._pending.push({
-			id: generateUuid(),
+			id,
 			docId: state.uri.toString(),
 			docTitle: state.doc.title,
 			blockId: best.id,
@@ -1497,7 +1525,46 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			sourceCells: [],
 			via: 'model',
 		});
-		return label;
+		return { id, label };
+	}
+
+	// Queue a generative insertion: brand-new Markdown content (a list, a section) to be added after the
+	// named heading (best fuzzy match; empty/unknown -> end of document). No oldText - the inline diff
+	// renders it all-additions, and approve splices a new block into the document.
+	private _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string }): { id: string; label: string } | undefined {
+		const newText = String(insert.newText ?? '').trim();
+		if (!newText) { return undefined; }
+		const afterHeading = String(insert.afterHeading ?? '').trim();
+		let afterBlockId = '';
+		let label = 'the end';
+		if (afterHeading) {
+			let best: ILivingDocBlock | undefined;
+			let bestScore = 0.5;
+			for (const block of state.doc.blocks) {
+				if (block.type !== 'heading') { continue; }
+				const score = similarity(block.text, afterHeading);
+				if (score > bestScore) { bestScore = score; best = block; }
+			}
+			if (best) { afterBlockId = best.id; label = best.text; }
+		}
+		const id = generateUuid();
+		this._pending.push({
+			id,
+			docId: state.uri.toString(),
+			docTitle: state.doc.title,
+			blockId: afterBlockId,
+			blockLabel: label,
+			oldText: '',
+			newText,
+			kind: 'meaning',
+			confidence: 0.8,
+			rationale: String(insert.rationale ?? 'New content proposed by the Chat agent.'),
+			sourceCells: [],
+			via: 'model',
+			insert: true,
+			afterBlockId,
+		});
+		return { id, label };
 	}
 
 	private _parseMentions(resource: URI, text: string): string[] {
@@ -1525,9 +1592,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(change.docId);
 		if (!state) { return; }
 		const block = state.doc.blocks.find(b => b.id === change.blockId);
-		// A re-link prompt re-anchors the claim to the current best-match prose without rewriting it;
-		// a normal impact change applies its rewrite to the block.
-		if (block && !change.relink) { block.text = change.newText; block.binds = extractBindLinks(change.newText); state.recent.add(block.id); }
+		if (change.insert) {
+			// A generative insertion: splice the new Markdown content in as a fresh block after its anchor
+			// (or at the end when the anchor is gone/unset), then persist. The block keeps the full Markdown
+			// (heading + list) verbatim; the renderer shows rich content as rendered Markdown. No claim/lock.
+			const newBlock: ILivingDocBlock = { id: generateUuid(), type: 'paragraph', text: change.newText, binds: extractBindLinks(change.newText) };
+			const anchorIndex = change.afterBlockId ? state.doc.blocks.findIndex(b => b.id === change.afterBlockId) : state.doc.blocks.length - 1;
+			state.doc.blocks.splice(anchorIndex + 1, 0, newBlock);
+			state.recent.add(newBlock.id);
+		} else if (block && !change.relink) {
+			// A re-link prompt re-anchors the claim to the current best-match prose without rewriting it;
+			// a normal impact change applies its rewrite to the block.
+			block.text = change.newText; block.binds = extractBindLinks(change.newText); state.recent.add(block.id);
+		}
 		if (change.claimId) {
 			const prior = state.lock.claims[change.claimId];
 			state.lock.claims[change.claimId] = {
@@ -1544,6 +1621,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		await this._persist(state);
 		await this._recomputeFreshness(state);
 		this._onDidChange.fire();
+	}
+
+	// Accept every pending change for a document in one action (the comp's "accept all"). Applied in
+	// order; each approve re-resolves its anchor by stable block id, so insertions stay correctly placed.
+	async approveAll(docId: string): Promise<void> {
+		const ids = this._pending.filter(c => c.docId === docId).map(c => c.id);
+		for (const id of ids) {
+			await this.approve(id);
+		}
 	}
 
 	reject(changeId: string): void {

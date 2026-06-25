@@ -112,6 +112,10 @@ export interface IChatMessage {
 	readonly mentions?: readonly string[];
 	readonly steps?: readonly IChatStep[];
 	readonly via?: 'model' | 'fallback';
+	// Ids of the pending changes this assistant turn proposed (edits and/or insertions), so the Chat
+	// rail can render a Copilot/Cursor-style review card per proposal tied to the turn. The card reads
+	// the live pending change by id, so it disappears once approved/rejected.
+	readonly proposedIds?: readonly string[];
 }
 
 /**
@@ -258,6 +262,8 @@ export interface ILivingDocsService {
 	sendChatMessage(resource: URI, text: string): Promise<void>;
 
 	approve(changeId: string): Promise<void>;
+	/** Accept every pending change for a document at once (the comp's "accept all"). */
+	approveAll(docId: string): Promise<void>;
 	reject(changeId: string): void;
 
 	// --- source-peek + "Sync across" (the comp's signature editing interaction) ---
