@@ -217,3 +217,23 @@ reversals of earlier calls now that the *core authoring loop* (not just the visu
   primary nav. The refined rule: strip the optionality that makes the app read as "a tool you configure"
   (palette, resizable panes, IDE chrome — still gone), but keep the *functional* affordances a real document
   app needs (a file tree you can create in). G4 is consciously relaxed for power, not abandoned.
+- **One editor surface — ProseMirror carries living documents too (plan 15 keystone).** v6 mounted PM for
+  *plain* `.md` only, leaving *living* docs on the bespoke `renderDoc` HTML body — two surfaces, and the
+  seam is exactly what blocked F7 (a freshly-created doc is plain, so it could be PM-edited but not chatted
+  on). Plan 15 settles four calls (decisions 46-49): a bound figure becomes a first-class **`bound_figure`
+  atom inline node** in the vendored bundle (non-editable, renders the resolved value, round-trips to
+  `[label](bind:key)`); proposals become **PM decorations/widgets**; **chat is available on every doc**
+  ("living" is just a data-binding badge); and `renderDoc`'s HTML body is **retired** in favour of one PM
+  render path (net delete > add). Iter 1 lands the foundation: the rebuilt bundle carries the node (proven
+  by a unit test against the real artifact, and live — a living doc temporarily routed through PM showed
+  `49800` as a blue non-editable figure that survived a prose edit back to `[49800](bind:metrics.mrr.latest)`),
+  while the committed surface still routes living docs to `renderDoc` so the v6 HOLD gates stay green. The
+  bound-figure styling rule holds either way: the resolved value carries the comp's faint-blue underline; in
+  PM it is an atom node rather than a `.bound` span, but the look is identical.
+- **A fresh webview per document open (the reopen-blank fix).** The doc editor reused one `IWebviewElement`
+  across opens; reusing it across a hide/show cycle (close a doc, reopen it in the pooled pane) left the
+  reused iframe **blank** when re-fed the ~370 KB inline ProseMirror bundle via `setHtml`. Fix: build a fresh
+  webview for each input (owned by `_inputDisposables`), so it reliably loads its content — verified live
+  (close → reopen now renders the editor, not a blank). The deeper optimization (stop re-inlining the bundle
+  per render by serving it as a webview resource / mount-once-then-message) is the next slice; this iteration
+  fixes the correctness bug with minimal, no-merge-tax code.

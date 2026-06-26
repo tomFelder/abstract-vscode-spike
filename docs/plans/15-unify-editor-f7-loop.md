@@ -142,3 +142,30 @@ every write; final desktop `code.sh` smoke (decision 38). Post before/after scre
 - A bound figure is just a Markdown link with an href `bind:…`, which the stock PM markdown
   parser/serializer already round-trips — the NodeView adds the resolved-value rendering + edit-protection
   on top, it does not need a new link syntax.
+
+---
+
+## Iteration log
+
+### Iter 1 (settle + prove the keystone) — done, 0 core patches, TDD
+- **Settled the four "settle first" decisions with Tom** → decisions **46-49** in `07-decision-log.md`:
+  (46) bound figure = a first-class `bound_figure` atom inline node; (47) proposals = PM decorations/widgets;
+  (48) chat on every doc, "living" is a data-binding badge; (49) retire `renderDoc`, one PM render path.
+- **Keystone proven (a):** rebuilt the vendored PM bundle with a `bound_figure` atom node + a markdown-it
+  core rule + a serializer node, so `[label](bind:key)` parses to a non-editable atom that renders the
+  resolved value and serializes back identically. Proven by `prosemirrorBundle.test.ts` (3 tests, run
+  against the real base64 artifact via headless `LWDPM.roundTrip`/`docJSON`) **and** live: a living doc
+  temporarily routed through PM rendered `49800` as a blue non-editable figure that survived a prose edit
+  back to `[49800](bind:metrics.mrr.latest)` (the temporary route was reverted; committed code keeps living
+  docs on `renderDoc`, so v6 HOLD gates stay green — 56 service/render tests pass).
+- **Bundle-as-resource / reopen-blank (b):** reproduced the close-then-reopen blank live (reused webview +
+  ~370 KB inline bundle → blank), fixed it by creating a **fresh webview per input** (verified live: reopen
+  now renders). The per-render re-inline *cost* optimization (asWebviewUri / mount-once) is deferred to iter 2
+  (later-order #1) — this iter fixes the correctness bug with no merge-tax.
+- **Reproducibility:** the offline bundle build (entry + `build.mjs`) is now documented in
+  `docs/lwd-pm-bundle-build.md` so it can't be lost again.
+- **Build doc note:** rebuild the bundle via `/Users/tommy/Sites/.lwd-pm-build` (`node build.mjs --emit`).
+
+**Next (iter 2, suggested):** render living docs in PM for real (retire the `renderDoc` body behind one path,
+preserving the provenance gutter + source drawer + chat-proposal decorations), starting with the bundle as a
+webview resource so switches/reopens are cheap.

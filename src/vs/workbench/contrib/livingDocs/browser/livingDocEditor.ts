@@ -53,29 +53,38 @@ export class LivingDocEditor extends EditorPane {
 
 	override async setInput(input: LivingDocEditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		this._ensureWebview();
 		this._mode = 'rendered';
 		this._present = { open: false, choice: 'gdoc', scope: 'internal' };
 		this._sourcePeek = undefined;
 		this._resource = input.resource;
+		// Dispose the previous input's webview (registered to `_inputDisposables`) and build a fresh one.
 		this._inputDisposables.clear();
+		this._createWebview();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		await this._livingDocs.loadDocument(input.resource);
 		this._render();
 	}
 
-	private _ensureWebview(): void {
-		if (this._webview || !this._container) {
+	// A fresh webview element is created for every input rather than reused across opens. Reusing one
+	// element across a hide/show cycle (close a doc, then reopen it in the same pooled editor pane) left
+	// the reused iframe blank when re-fed the large inline ProseMirror bundle via setHtml; a brand-new
+	// element reliably loads its content. The per-render re-inline cost is a separate concern, addressed
+	// by loading the bundle as a webview resource (build-order #1). Owned by `_inputDisposables` so the
+	// previous webview is torn down on the next input and on editor disposal.
+	private _createWebview(): void {
+		if (!this._container) {
 			return;
 		}
-		this._webview = this._register(this._webviewService.createWebviewElement({
+		const webview = this._webviewService.createWebviewElement({
 			options: {},
 			contentOptions: { allowScripts: true },
 			title: 'Living Document',
 			extension: undefined,
-		}));
-		this._webview.mountTo(this._container, this.window);
-		this._register(this._webview.onMessage(e => this._onMessage(e.message)));
+		});
+		webview.mountTo(this._container, this.window);
+		this._inputDisposables.add(webview.onMessage(e => this._onMessage(e.message)));
+		this._inputDisposables.add(webview);
+		this._webview = webview;
 	}
 
 	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string }): void {
