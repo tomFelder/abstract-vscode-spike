@@ -17,7 +17,7 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
-import { IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocHtml, ShareScope } from './livingDocRender.js';
+import { ILivingDocContent, ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml, ShareScope } from './livingDocRender.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -31,6 +31,13 @@ export class LivingDocEditor extends EditorPane {
 	// In-surface source-peek state (the comp's "Sync across" pane). Held on the editor, NOT opened as a
 	// second editor group - this is the v2 fix for the split-pane / blank-pane abrasion.
 	private _sourcePeek: { cells: readonly string[]; synced: boolean; syncedCount: number } | undefined;
+	// Mount-once-then-message (plan 15 iter 2): the shell is set via setHtml ONCE; thereafter content goes
+	// over postMessage. `_webviewReady` flips when the webview RUNTIME signals 'lwdReady'; a render that
+	// arrives before then is held in `_pendingContent` and flushed on ready (so updates can't be lost to a
+	// load race).
+	private _webviewInitialized = false;
+	private _webviewReady = false;
+	private _pendingContent: ILivingDocContent | undefined;
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -53,33 +60,54 @@ export class LivingDocEditor extends EditorPane {
 
 	override async setInput(input: LivingDocEditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		this._ensureWebview();
 		this._mode = 'rendered';
 		this._present = { open: false, choice: 'gdoc', scope: 'internal' };
 		this._sourcePeek = undefined;
 		this._resource = input.resource;
+		// Dispose the previous input's webview (registered to `_inputDisposables`) and build a fresh one.
 		this._inputDisposables.clear();
+		this._webviewInitialized = false;
+		this._webviewReady = false;
+		this._pendingContent = undefined;
+		this._createWebview();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		await this._livingDocs.loadDocument(input.resource);
 		this._render();
 	}
 
-	private _ensureWebview(): void {
-		if (this._webview || !this._container) {
+	// A fresh webview element is created for every input rather than reused across opens. Reusing one
+	// element across a hide/show cycle (close a doc, then reopen it in the same pooled editor pane) left
+	// the reused iframe blank when re-fed the large inline ProseMirror bundle via setHtml; a brand-new
+	// element reliably loads its content. Within a single webview the shell (incl. the bundle) is set once
+	// and updated via postMessage (mount-once-then-message), so the bundle is inlined only on this first
+	// setHtml. Owned by `_inputDisposables` so the previous webview is torn down on the next input and on
+	// editor disposal.
+	private _createWebview(): void {
+		if (!this._container) {
 			return;
 		}
-		this._webview = this._register(this._webviewService.createWebviewElement({
+		const webview = this._webviewService.createWebviewElement({
 			options: {},
 			contentOptions: { allowScripts: true },
 			title: 'Living Document',
 			extension: undefined,
-		}));
-		this._webview.mountTo(this._container, this.window);
-		this._register(this._webview.onMessage(e => this._onMessage(e.message)));
+		});
+		webview.mountTo(this._container, this.window);
+		this._inputDisposables.add(webview.onMessage(e => this._onMessage(e.message)));
+		this._inputDisposables.add(webview);
+		this._webview = webview;
 	}
 
 	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string }): void {
 		switch (message?.type) {
+			case 'lwdReady':
+				// The webview RUNTIME has loaded and is listening; flush any update that raced the load.
+				this._webviewReady = true;
+				if (this._pendingContent) {
+					void this._webview?.postMessage({ type: 'lwdRender', html: this._pendingContent.html, pmMd: this._pendingContent.pmMd });
+					this._pendingContent = undefined;
+				}
+				break;
 			case 'pmEdit':
 				// The ProseMirror editing surface (plain Markdown docs) serialized its current state back
 				// to Markdown. Persist it to disk silently so the live editor keeps its cursor (no remount).
@@ -200,7 +228,7 @@ export class LivingDocEditor extends EditorPane {
 
 	private _render(): void {
 		const resource = this._resource;
-		if (!resource) { return; }
+		if (!resource || !this._webview) { return; }
 		const peek = this._sourcePeek;
 		const sourcePeek = peek
 			? (() => {
@@ -208,7 +236,7 @@ export class LivingDocEditor extends EditorPane {
 				return data ? { ...data, synced: peek.synced, syncedCount: peek.syncedCount } : undefined;
 			})()
 			: undefined;
-		this._webview?.setHtml(renderLivingDocHtml({
+		const input: ILivingDocRenderInput = {
 			doc: this._livingDocs.getDoc(resource),
 			pending: this._livingDocs.getPendingForDoc(resource),
 			resolved: this._livingDocs.getResolved(resource),
@@ -220,7 +248,20 @@ export class LivingDocEditor extends EditorPane {
 			present: this._present,
 			syncDiff: this._livingDocs.getLastSyncDiff(resource),
 			sourcePeek,
-		}));
+		};
+		// First render builds the full shell (chrome + bundle + RUNTIME) via setHtml; every later render
+		// pushes just the content as an 'lwdRender' message so the live ProseMirror view is never torn down.
+		if (!this._webviewInitialized) {
+			this._webview.setHtml(renderLivingDocHtml(input));
+			this._webviewInitialized = true;
+			return;
+		}
+		const content = renderLivingDocContent(input);
+		if (this._webviewReady) {
+			void this._webview.postMessage({ type: 'lwdRender', html: content.html, pmMd: content.pmMd });
+		} else {
+			this._pendingContent = content;
+		}
 	}
 
 	layout(dimension: Dimension): void {

@@ -142,3 +142,53 @@ every write; final desktop `code.sh` smoke (decision 38). Post before/after scre
 - A bound figure is just a Markdown link with an href `bind:…`, which the stock PM markdown
   parser/serializer already round-trips — the NodeView adds the resolved-value rendering + edit-protection
   on top, it does not need a new link syntax.
+
+---
+
+## Iteration log
+
+### Iter 1 (settle + prove the keystone) — done, 0 core patches, TDD
+- **Settled the four "settle first" decisions with Tom** → decisions **46-49** in `07-decision-log.md`:
+  (46) bound figure = a first-class `bound_figure` atom inline node; (47) proposals = PM decorations/widgets;
+  (48) chat on every doc, "living" is a data-binding badge; (49) retire `renderDoc`, one PM render path.
+- **Keystone proven (a):** rebuilt the vendored PM bundle with a `bound_figure` atom node + a markdown-it
+  core rule + a serializer node, so `[label](bind:key)` parses to a non-editable atom that renders the
+  resolved value and serializes back identically. Proven by `prosemirrorBundle.test.ts` (3 tests, run
+  against the real base64 artifact via headless `LWDPM.roundTrip`/`docJSON`) **and** live: a living doc
+  temporarily routed through PM rendered `49800` as a blue non-editable figure that survived a prose edit
+  back to `[49800](bind:metrics.mrr.latest)` (the temporary route was reverted; committed code keeps living
+  docs on `renderDoc`, so v6 HOLD gates stay green — 56 service/render tests pass).
+- **Bundle-as-resource / reopen-blank (b):** reproduced the close-then-reopen blank live (reused webview +
+  ~370 KB inline bundle → blank), fixed it by creating a **fresh webview per input** (verified live: reopen
+  now renders). The per-render re-inline *cost* optimization (asWebviewUri / mount-once) is deferred to iter 2
+  (later-order #1) — this iter fixes the correctness bug with no merge-tax.
+- **Reproducibility:** the offline bundle build (entry + `build.mjs`) is now documented in
+  `docs/lwd-pm-bundle-build.md` so it can't be lost again.
+- **Build doc note:** rebuild the bundle via `/Users/tommy/Sites/.lwd-pm-build` (`node build.mjs --emit`).
+
+**Next (iter 2, suggested):** render living docs in PM for real (retire the `renderDoc` body behind one path,
+preserving the provenance gutter + source drawer + chat-proposal decorations), starting with the bundle as a
+webview resource so switches/reopens are cheap.
+
+### Iter 2 (persistent PM surface — mount-once-then-message) — done, 0 core patches, TDD
+- **Scope chosen with Tom:** the persistent-surface foundation first (vs. flipping living docs to PM now),
+  so HOLD stays trivially green while the prerequisite for live in-PM proposals lands. Decision **50**.
+- **What changed:** `renderLivingDocHtml` now emits the shell (STYLE + the vendored bundle + a delegated
+  RUNTIME + a persistent `#lwd-root`) set **once** via `setHtml`; `renderLivingDocContent` returns the
+  dynamic `{ html, pmMd }` payload that `livingDocEditor` pushes as `lwdRender` **messages** thereafter. The
+  RUNTIME delegates every event on `#lwd-root` (so handlers survive innerHTML swaps) and, on each update,
+  detaches the live ProseMirror node, swaps the body, and reattaches it — so PM is never remounted. A
+  `lwdReady` handshake flushes an update that raced the webview load.
+- **Why:** re-`setHtml`-ing per render re-inlined ~370 KB and remounted PM every time — fatal to
+  living-docs-in-PM (iter 3), where figure/proposal changes re-render constantly. `asWebviewUri` was the
+  other option but `IWebviewElement` has no such helper and the bundle is base64-in-TS (not a servable
+  file), so it would have been more merge-tax for less benefit (it still remounts PM).
+- **Verified live** (code-web, real folder): plain doc mounts in PM; opening the Present modal and the
+  source-peek drawer updates the surface **without remounting PM** (same node + webview id); the modal ✕
+  closes; plain-doc edits persist (memfs) and survive close→reopen (no blank); living docs keep rendering
+  via `renderDoc` with the figure highlight + source drawer (F1-F6 / G5 green). 66 service/render/bundle
+  tests pass. Fixed a delegated modal-close bug found live (X is inside the card: close only when the
+  nearest close/stop ancestor is a close).
+- **Next (iter 3):** render living docs in PM on this base — bound figures (node ready) + provenance gutter
+  + inline proposal diff as PM decorations, accept/reject through PM — then flip the default and retire the
+  `renderDoc` body, keeping F1-F6 green via the persistent surface.

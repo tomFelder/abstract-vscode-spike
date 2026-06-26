@@ -24,6 +24,7 @@ what is likely to become problematic, the open decisions, and the design intent.
 | [08-living-documents-format-spec.md](08-living-documents-format-spec.md) | The raw-Markdown format + dependency model design spec (clean file + lock file); resolves Q1, with full decision log. Companion visual: [option-10-living-docs-format.html](option-10-living-docs-format.html) |
 | [09-orchestration-and-automation.md](09-orchestration-and-automation.md) | How agents/skills run: trigger taxonomy, the graph-propagation rule, policy model, verify gate, and the LangChain/LangGraph-vs-built-in tech-stack call. Companion visual: [orchestration-automations.html](orchestration-automations.html) |
 | [10-model-integration.md](10-model-integration.md) | How the agentic features became model-backed: the localhost Anthropic OAuth proxy (credential server-side, no CSP changes), the service wiring, request shape, config, the no-model fallback, and the OpenRouter dev test backend. Live captures: [model-verify/](model-verify/) |
+| [lwd-pm-bundle-build.md](lwd-pm-bundle-build.md) | How to rebuild the vendored ProseMirror editor bundle (`prosemirrorBundle.ts`): the offline esbuild recipe + the full `lwdpm-entry.js` (incl. the `bound_figure` atom node, decision 46) and `build.mjs` sources, so the bundle is always reproducible |
 | [plans/](plans/) | The handoff prompts that drove (and will drive) the work |
 
 ## Status at a glance (2026-06-21)
