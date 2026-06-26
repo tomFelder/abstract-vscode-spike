@@ -207,3 +207,34 @@ webview resource so switches/reopens are cheap.
 - **Deferred to iter 4:** the exact dot/bar provenance gutter as PM decorations; the inline proposal diff
   (F4) + accept/reject (F6) as PM decorations; then flip the default + retire the renderDoc body. After that,
   chat-on-every-doc (decision 48) + the in-PM diff closes U3 and F7.
+
+### Iter 4 (collapse to one surface: F4/F6/G5 in PM) — done, 0 core patches, TDD; **default NOT flipped (deferred to iter 5)**
+- **Scope:** bring the remaining renderDoc-only features onto the persistent PM surface as decorations, reach
+  parity, then decide on the flip. Decision **52**.
+- **What changed:**
+  - New `common/livingDocPmDecorations.ts` — a pure, TDD'd mapping `buildPmDecorationSpec(doc, pending, recent)`
+    -> a serializable spec (edits with word-diff segments, inserts, gutter markers) + shared `wordDiffSegments`
+    (renderDoc's `inlineDiff` refactored onto it). 5 new tests.
+  - The vendored PM bundle gained a **decorations plugin** + `setDecorations(view, spec)` (text-anchored: a
+    pending edit hides its block and renders the diff+controls widget in its place; an insert is an all-additions
+    widget after its anchor; bound blocks get a gutter dot) + `setDoc(view, md)` (reset the doc without
+    remounting the view). Rebuilt offline (ASCII, round-trip test still green).
+  - `livingDocRender` builds the decoration payload (widget HTML in the renderDoc markup for one look), feeds PM
+    from the **reparsed** body, and renders the source drawer over the full-width PM doc; the RUNTIME applies
+    `setDecorations`/`setDoc`, and a bound-figure click posts `reveal`. `livingDocEditor` tracks `_pmBody` and
+    ships a `pmReset` only when the fresh body differs from a **model-driven** change (never the user's silently
+    saved typing). Accept/reject route through the existing `service.approve/reject` (DRY; correct for inserts).
+- **Verified live** (code-web, real folder, OpenRouter proxy): in 'pm' mode a chat edit renders the inline word
+  diff in the doc; **Approve** persists, clears the diff, resets the live body to the accepted text, and the rail
+  card clears (F4/F5/F6); the bound figure is a non-editable node with a provenance gutter dot (U2/G5); clicking
+  it opens the source-peek bottom drawer over the full-width doc (G1); close+reopen shows the change persisted +
+  the doc still living. HOLD green: the renderDoc default is unchanged (calm toolbar + Present + figures intact),
+  108 unit tests pass, typecheck + layer-check clean.
+- **Why the flip is deferred (the plan's explicit fallback):** decoration parity is complete in PM, but the calm
+  CHROME — the persistent formatting toolbar (wired via `execCommand`/`data-fmt`, which PM does not honour) and
+  the Present button — is still renderDoc-only. Flipping now would drop the toolbar/Present for living docs and
+  regress the G2 / v2-v4 calm-toolbar gates. Per the plan ("do not half-flip"), the default stays renderDoc; the
+  write-gate was not touched (accept reuses the proven `approve -> _persist` path), so a desktop disk smoke is not
+  required this iteration (persistence proven live via memfs reopen).
+- **Next (iter 5):** port the formatting toolbar to `LWDPM.cmd` + bring Present into the PM surface, then FLIP the
+  default to 'pm' and retire the `renderDoc` HTML body (decision 49, U1) — closing U3/F7 with the desktop disk smoke.
