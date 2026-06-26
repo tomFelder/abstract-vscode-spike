@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -177,5 +177,23 @@ suite('LivingDoc bind-link format', () => {
 		assert.strictEqual(doc.isLiving, true, 'the doc is now living');
 		assert.ok(doc.body.includes('- first item'), 'original body preserved');
 		assert.ok(doc.title === 'Project Readme', 'title still derives from the H1');
+	});
+
+	test('withReplacedBody swaps the body but keeps the frontmatter (so a PM edit of a living doc keeps its sources)', () => {
+		// Simulates the ProseMirror round-trip: the editor hands back only the body (bind links intact).
+		const editedBody = 'Revenue grew [12%](bind:metrics.mrr.delta) week-on-week to [$48.6k](bind:metrics.mrr) MRR, on [427](bind:metrics.signups) new signups, and the team shipped on time.';
+		const next = withReplacedBody(WEEKLY_MD, editedBody);
+		const doc = parseLivingDoc(next);
+		assert.deepStrictEqual({
+			sources: doc.sources,
+			context: doc.context,
+			isLiving: doc.isLiving,
+			keepsEdit: doc.body.includes('shipped on time'),
+			keepsBind: doc.body.includes('[12%](bind:metrics.mrr.delta)'),
+		}, { sources: ['metrics.csv'], context: ['market-research.md'], isLiving: true, keepsEdit: true, keepsBind: true });
+	});
+
+	test('withReplacedBody on a plain doc (no frontmatter) just returns the new body', () => {
+		assert.strictEqual(withReplacedBody('# Title\n\nold body\n', 'new body').trim(), 'new body');
 	});
 });

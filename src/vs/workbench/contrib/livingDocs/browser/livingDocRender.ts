@@ -36,7 +36,10 @@ function bindToValue(text: string): string {
 
 const EMPTY_RESOLVED: ReadonlyMap<string, string> = new Map<string, string>();
 
-export type LivingDocViewMode = 'rendered' | 'raw';
+// 'rendered' = the calm renderDoc HTML (default for living docs); 'raw' = the Markdown textarea;
+// 'pm' = the unified ProseMirror surface (default for plain docs; opt-in preview for living docs while
+// the renderDoc features are ported across, plan 15 iter 3+).
+export type LivingDocViewMode = 'rendered' | 'raw' | 'pm';
 
 export type PresentChoice = 'gdoc' | 'gsheet' | 'docx' | 'xlsx' | 'site';
 export type ShareScope = 'internal' | 'link' | 'public';
@@ -256,7 +259,11 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pm-x{margin-left:auto;border:none;background:none;color:#9aa0aa;font-size:18px;cursor:pointer;padding:4px 8px}
 .pm-body{flex:1;display:flex;min-height:0}
 .pm-list{width:300px;flex:none;border-right:1px solid #eef0f3;background:#fbfbfc;overflow-y:auto;padding:14px}
-.pm-detail{flex:1;min-width:0;overflow-y:auto;padding:22px}`;
+.pm-detail{flex:1;min-width:0;overflow-y:auto;padding:22px}
+/* Provenance accent in the PM surface (plan 15 iter 3): a block with a bound figure gets a quiet left rail so source-bound prose is visible in the unified editor. The exact dot/bar gutter becomes PM decorations in a later iteration; the figure itself keeps the .bound blue underline. */
+.pmwrap .ProseMirror p:has(span.bound){position:relative;padding-left:14px}
+.pmwrap .ProseMirror p:has(span.bound)::before{content:"";position:absolute;left:0;top:.18em;bottom:.18em;width:2px;border-radius:2px;background:oklch(0.6 0.1 255);opacity:.55}
+.pmwrap .ProseMirror span.bound{cursor:default}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -290,6 +297,7 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-refresh]')) { return vscode.postMessage({ type: 'refresh' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('[data-to-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
+	if (el = e.target.closest('[data-setmode]')) { return vscode.postMessage({ type: 'setMode', mode: el.getAttribute('data-setmode') }); }
 	if (el = e.target.closest('[data-source-close]')) { return vscode.postMessage({ type: 'closeSource' }); }
 	if (el = e.target.closest('[data-sync]')) { return vscode.postMessage({ type: 'sync' }); }
 	if (el = e.target.closest('[data-present-open]')) { return vscode.postMessage({ type: 'presentOpen' }); }
@@ -339,10 +347,18 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	const rawToggleTop = mode === 'raw'
 		? `<button class="toggle" data-to-rendered>&#10003; Done editing source</button>`
 		: '';
+	// Living docs gain an opt-in toggle into the unified ProseMirror surface (plan 15 iter 3): a preview
+	// while the renderDoc features are ported over. renderDoc stays the default, so the HOLD gates are
+	// unaffected. Plain docs are always PM, so they need no toggle.
+	const pmToggleTop = isLiving
+		? (mode === 'pm'
+			? `<button class="toggle" data-setmode="rendered">&#10003; Done editing</button>`
+			: (isRendered ? `<button class="toggle" data-setmode="pm" title="Edit in the unified editor (preview)">&#9998; Edit</button>` : ''))
+		: '';
 	const presentBtn = (doc && isRendered) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
+		+ `<div class="right">${livingControls}${pmToggleTop}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 
@@ -376,30 +392,32 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 				: ''))
 		: '';
 
+	// The body is the unified ProseMirror surface when the doc is plain (always) or when a living doc has
+	// been toggled into 'pm' mode. Otherwise a living doc uses the renderDoc HTML and a plain raw textarea.
+	const pmSurface = !!doc && (mode === 'pm' || (!isLiving && isRendered));
+
 	let body: string;
 	if (mode === 'raw') {
 		body = `<div class="rawwrap"><textarea class="raw" spellcheck="false">${esc(rawText)}</textarea></div>`;
 	} else if (!doc) {
 		body = `<div class="empty">No document loaded.</div>`;
-	} else if (isLiving) {
+	} else if (pmSurface) {
+		// A real ProseMirror EditorView (F2 / plan 15): the document IS the writing surface. Bound figures
+		// render as non-editable atom nodes; the body round-trips to Markdown and persists on change.
+		body = `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`;
+	} else {
 		const docHtml = renderDoc(doc, pending, recent, resolved);
 		body = syncBar + (input.sourcePeek
 			? renderSourcePeekLayout(input.sourcePeek, docHtml)
 			: docHtml);
-	} else {
-		// A plain (non-living) Markdown doc is edited in a real ProseMirror EditorView (F2): mount point
-		// here, the editor + init script appended after the main SCRIPT below. Reliable Enter/lists/bold,
-		// serialized back to Markdown and persisted to disk on change.
-		body = `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`;
 	}
-	const plainEditable = !!doc && !isLiving && isRendered;
 
 	const hint = (mode === 'rendered' && isLiving)
 		? `<div class="hint">Bound figures are highlighted in blue &mdash; click one (or a gutter dot) to trace it back to the source. `
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
-	return { html: `${topbar}${docToolbar}${body}${hint}${modal}`, pmMd: plainEditable ? doc.body : null };
+	return { html: `${topbar}${docToolbar}${body}${hint}${modal}`, pmMd: pmSurface && doc ? doc.body : null };
 }
 
 // The full webview document: the calm chrome + the dynamic content in a persistent #lwd-root, the vendored

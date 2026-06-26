@@ -192,3 +192,18 @@ webview resource so switches/reopens are cheap.
 - **Next (iter 3):** render living docs in PM on this base — bound figures (node ready) + provenance gutter
   + inline proposal diff as PM decorations, accept/reject through PM — then flip the default and retire the
   `renderDoc` body, keeping F1-F6 green via the persistent surface.
+
+### Iter 3 (living docs in PM, opt-in) — done, 0 core patches, TDD
+- **Scope (Tom's call carried over):** render living docs in PM as the recommended sub-step, **gated**
+  behind an opt-in 'pm' mode so renderDoc stays the default and F1-F6/G5 stay green (decision 51).
+- **What changed:** `LivingDocViewMode` gains `'pm'`; an "Edit" toggle in the topbar (living docs only)
+  switches to the PM surface; `renderLivingDocContent` routes the body to PM for `mode==='pm'`. Bound
+  figures render as the atom node; bound blocks get a CSS provenance accent (`p:has(span.bound)`). A
+  living-doc PM edit re-attaches frontmatter via a new pure `withReplacedBody` helper (TDD) so `sources:`/
+  `context:` are never stripped.
+- **Verified live:** a living doc toggles into PM (figures + accent, same webview - no remount), prose edits
+  persist, and toggling back shows it is **still living** (frontmatter survived); renderDoc default +
+  plain-doc PM both unaffected. 80 tests pass (2 new for `withReplacedBody`).
+- **Deferred to iter 4:** the exact dot/bar provenance gutter as PM decorations; the inline proposal diff
+  (F4) + accept/reject (F6) as PM decorations; then flip the default + retire the renderDoc body. After that,
+  chat-on-every-doc (decision 48) + the in-PM diff closes U3 and F7.
