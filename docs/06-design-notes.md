@@ -246,3 +246,12 @@ reversals of earlier calls now that the *core authoring loop* (not just the visu
   detaching and reattaching it. This is the quiet foundation for iter 3 (render living docs in PM with live
   inline diffs) — the editor can now stay alive while its surroundings change. Design rule: the writing
   surface is mounted once and *updated*, never rebuilt; chrome is re-rendered around it, not over it.
+- **Living documents can now be edited in the ProseMirror surface (plan 15 iter 3), behind an opt-in toggle.**
+  On the persistent surface, a living doc gains an "Edit" toggle that switches it into the unified PM editor:
+  bound figures render as the non-editable blue atom node, and source-bound blocks get a quiet left
+  provenance accent. renderDoc stays the default so the HOLD gates (F4 inline diff, F6 accept/reject, G5
+  gutter) keep passing while those features are ported into PM iteration by iteration. The one subtlety:
+  ProseMirror only round-trips the body, so a living-doc edit re-attaches the original frontmatter
+  (`withReplacedBody`) — editing prose in PM must never silently strip what makes the document *living*.
+  Design rule: the unified editor rolls out incrementally and is the *default only when it is at least at
+  parity* with the surface it replaces; until then it's a labelled, opt-in preview, never a silent regression.

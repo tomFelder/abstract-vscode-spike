@@ -193,6 +193,20 @@ export function withFrontmatterSource(text: string, source: string, add: boolean
 	return withFrontmatterList(text, 'sources', source, add);
 }
 
+// Replace a document's body while keeping its frontmatter block verbatim. Used when a living document is
+// edited in ProseMirror (which only round-trips the body): the editor serializes the body back to
+// Markdown, and this re-attaches the original `---` frontmatter so `sources:`/`context:` are never lost.
+// A doc with no frontmatter returns the new body unchanged. The new body is normalized to end in a single
+// trailing newline.
+export function withReplacedBody(text: string, newBody: string): string {
+	const body = newBody.replace(/\s+$/, '') + '\n';
+	const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);
+	if (!match) {
+		return body;
+	}
+	return text.slice(0, match[0].length).replace(/\r?\n*$/, '\n') + '\n' + body;
+}
+
 export function serializeLivingDoc(doc: ILivingDoc): string {
 	const fm: string[] = ['---'];
 	if (doc.title) { fm.push(`title: ${doc.title}`); }

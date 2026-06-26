@@ -16,6 +16,7 @@ import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
+import { withReplacedBody } from '../common/livingDocMarkdown.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { ILivingDocContent, ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml, ShareScope } from './livingDocRender.js';
 
@@ -109,10 +110,16 @@ export class LivingDocEditor extends EditorPane {
 				}
 				break;
 			case 'pmEdit':
-				// The ProseMirror editing surface (plain Markdown docs) serialized its current state back
-				// to Markdown. Persist it to disk silently so the live editor keeps its cursor (no remount).
+				// The ProseMirror editing surface serialized its current state back to Markdown. Persist it
+				// silently so the live editor keeps its cursor (no remount). ProseMirror round-trips only the
+				// BODY, so for a living doc re-attach the existing frontmatter (`sources:`/`context:`) - else a
+				// PM edit would strip what makes it a living document (plan 15 iter 3).
 				if (this._resource && typeof message.text === 'string') {
-					void this._livingDocs.saveRawText(this._resource, message.text, { silent: true });
+					const doc = this._livingDocs.getDoc(this._resource);
+					const text = doc?.isLiving
+						? withReplacedBody(this._livingDocs.getRawText(this._resource), message.text)
+						: message.text;
+					void this._livingDocs.saveRawText(this._resource, text, { silent: true });
 				}
 				break;
 			case 'refresh':
@@ -182,7 +189,7 @@ export class LivingDocEditor extends EditorPane {
 				}
 				break;
 			case 'setMode':
-				if (message.mode === 'raw' || message.mode === 'rendered') {
+				if (message.mode === 'raw' || message.mode === 'rendered' || message.mode === 'pm') {
 					this._mode = message.mode;
 					this._render();
 				}
