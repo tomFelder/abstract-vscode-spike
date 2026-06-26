@@ -237,3 +237,12 @@ reversals of earlier calls now that the *core authoring loop* (not just the visu
   (close → reopen now renders the editor, not a blank). The deeper optimization (stop re-inlining the bundle
   per render by serving it as a webview resource / mount-once-then-message) is the next slice; this iteration
   fixes the correctness bug with minimal, no-merge-tax code.
+- **The document webview is now a persistent surface (mount-once-then-message; plan 15 iter 2).** Previously
+  every re-render called `setHtml` with the whole document HTML, re-inlining the ~370 KB ProseMirror bundle
+  and tearing down the live editor each time. That is invisible for the renderDoc living docs (plain HTML)
+  but would make living-docs-in-PM impossible: every figure/proposal change would remount the editor and
+  drop the cursor. The fix sets the shell (chrome + bundle + a delegated runtime) ONCE, then pushes only the
+  dynamic body as `lwdRender` messages; the runtime preserves the live ProseMirror node across updates by
+  detaching and reattaching it. This is the quiet foundation for iter 3 (render living docs in PM with live
+  inline diffs) — the editor can now stay alive while its surroundings change. Design rule: the writing
+  surface is mounted once and *updated*, never rebuilt; chrome is re-rendered around it, not over it.

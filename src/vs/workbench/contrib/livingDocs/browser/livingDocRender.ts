@@ -20,25 +20,11 @@ function proseMirrorBundle(): string {
 	return _pmBundleCache;
 }
 
-// Build the two scripts that mount a real ProseMirror EditorView on a plain (non-living) Markdown doc:
-// the vendored bundle (defines window.LWDPM) followed by an init that parses the doc's Markdown, and on
-// every change debounces a 'pmEdit' message carrying the re-serialized Markdown (persisted silently to
-// disk by the editor). `vscode` is the acquireVsCodeApi() handle declared in the main SCRIPT, which runs
-// before these. The initial Markdown is JSON-encoded with `<` escaped so it can never break out of the
-// script, and any literal '</script' in the bundle is defensively split.
-function proseMirrorEditorScripts(markdown: string): string {
-	const bundle = proseMirrorBundle().replace(/<\/script/gi, '<\\/script');
-	const initialMd = JSON.stringify(markdown).replace(/</g, '\\u003c');
-	const init = `(function(){
-var root = document.getElementById('pm-root');
-if (!root || !window.LWDPM) { return; }
-var view = window.LWDPM.mount(root, ${initialMd}, { onChange: function(){
-clearTimeout(window.__pmTimer);
-window.__pmTimer = setTimeout(function(){ vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(view) }); }, 300);
-} });
-window.__pmView = view;
-})();`;
-	return `<script>${bundle}</script><script>${init}</script>`;
+// The Markdown for the initial ProseMirror mount is embedded in the shell as a JSON-encoded global
+// (`<` escaped so it can never break out of the script); the RUNTIME reads it on load. Any literal
+// '</script' in the vendored bundle is defensively split when it is inlined into the shell.
+function escapeForScript(text: string): string {
+	return JSON.stringify(text).replace(/</g, '\\u003c');
 }
 
 // Bind links render as plain text - the resolved value is its own visible text, and the `bind:` URL
@@ -272,37 +258,70 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pm-list{width:300px;flex:none;border-right:1px solid #eef0f3;background:#fbfbfc;overflow-y:auto;padding:14px}
 .pm-detail{flex:1;min-width:0;overflow-y:auto;padding:22px}`;
 
-const SCRIPT = `const vscode = acquireVsCodeApi();
-for (const b of document.querySelectorAll('[data-refresh]')) { b.addEventListener('click', () => vscode.postMessage({ type: 'refresh' })); }
-for (const d of document.querySelectorAll('[data-cells]')) { d.addEventListener('click', () => vscode.postMessage({ type: 'reveal', cells: d.getAttribute('data-cells').split(',') })); }
-const toRaw = document.querySelector('[data-to-raw]');
-if (toRaw) { toRaw.addEventListener('click', () => vscode.postMessage({ type: 'setMode', mode: 'raw' })); }
-for (const b of document.querySelectorAll('[data-approve]')) { b.addEventListener('click', e => { e.stopPropagation(); vscode.postMessage({ type: 'approve', id: b.getAttribute('data-approve') }); }); }
-for (const b of document.querySelectorAll('[data-reject]')) { b.addEventListener('click', e => { e.stopPropagation(); vscode.postMessage({ type: 'reject', id: b.getAttribute('data-reject') }); }); }
-for (const c of document.querySelectorAll('[data-source-close]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'closeSource' })); }
-for (const b of document.querySelectorAll('[data-sync]')) { b.addEventListener('click', () => vscode.postMessage({ type: 'sync' })); }
-const presentOpen = document.querySelector('[data-present-open]');
-if (presentOpen) { presentOpen.addEventListener('click', () => vscode.postMessage({ type: 'presentOpen' })); }
-for (const c of document.querySelectorAll('[data-present-close]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'presentClose' })); }
-const presentStop = document.querySelector('[data-present-stop]');
-if (presentStop) { presentStop.addEventListener('click', e => e.stopPropagation()); }
-for (const c of document.querySelectorAll('[data-present-choice]')) { c.addEventListener('click', () => vscode.postMessage({ type: 'presentChoice', choice: c.getAttribute('data-present-choice') })); }
-for (const s of document.querySelectorAll('[data-present-scope]')) { s.addEventListener('click', () => vscode.postMessage({ type: 'presentScope', scope: s.getAttribute('data-present-scope') })); }
-const presentCta = document.querySelector('[data-present-cta]');
-if (presentCta) { presentCta.addEventListener('click', () => vscode.postMessage({ type: 'presentCta' })); }
-for (const f of document.querySelectorAll('[data-fmt]')) { f.addEventListener('mousedown', e => { e.preventDefault(); document.execCommand(f.getAttribute('data-fmt'), false, f.getAttribute('data-fmt-arg') || undefined); }); }
-const toRendered = document.querySelector('[data-to-rendered]');
-const rawArea = document.querySelector('textarea.raw');
-if (toRendered) { toRendered.addEventListener('click', () => vscode.postMessage({ type: 'applyRaw', text: rawArea ? rawArea.value : '' })); }
-for (const el of document.querySelectorAll('[data-block]')) {
-	el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } });
-	el.addEventListener('blur', () => {
-		const text = el.innerText.replace(/\\s+/g, ' ').trim();
-		if (text !== el.getAttribute('data-orig')) { vscode.postMessage({ type: 'edit', blockId: el.getAttribute('data-block'), text: text }); }
-	});
-}`;
+// The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
+// time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
+// so the live editor is never torn down and the ~370KB bundle is inlined only once (mount-once-then-
+// message; plan 15 iter 2). Event handling is DELEGATED on the persistent #lwd-root container, so it keeps
+// working across innerHTML swaps without re-binding. On an update the live ProseMirror node is detached,
+// the body is swapped, and the same node is re-inserted into the new #pm-root (PM survives reparenting).
+const RUNTIME = `const vscode = acquireVsCodeApi();
+const root = document.getElementById('lwd-root');
+let pmView = null, pmTimer = 0;
+function pmOnChange(){ clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
+function mountPm(md){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); } }
+function applyUpdate(htmlStr, pmMd){
+	const live = (pmView && pmMd !== null) ? pmView.dom : null;
+	if (live && live.parentNode) { live.parentNode.removeChild(live); }
+	root.innerHTML = htmlStr;
+	if (pmMd !== null) {
+		const r = root.querySelector('#pm-root');
+		if (live && r) { r.appendChild(live); }
+		else if (r && window.LWDPM) { mountPm(pmMd); }
+	} else if (pmView) { window.LWDPM.destroy(pmView); pmView = null; }
+}
+root.addEventListener('mousedown', e => {
+	const f = e.target.closest('[data-fmt]');
+	if (f) { e.preventDefault(); document.execCommand(f.getAttribute('data-fmt'), false, f.getAttribute('data-fmt-arg') || undefined); }
+});
+root.addEventListener('click', e => {
+	let el;
+	if (el = e.target.closest('[data-approve]')) { e.stopPropagation(); return vscode.postMessage({ type: 'approve', id: el.getAttribute('data-approve') }); }
+	if (el = e.target.closest('[data-reject]')) { e.stopPropagation(); return vscode.postMessage({ type: 'reject', id: el.getAttribute('data-reject') }); }
+	if (el = e.target.closest('[data-refresh]')) { return vscode.postMessage({ type: 'refresh' }); }
+	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
+	if (el = e.target.closest('[data-to-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
+	if (el = e.target.closest('[data-source-close]')) { return vscode.postMessage({ type: 'closeSource' }); }
+	if (el = e.target.closest('[data-sync]')) { return vscode.postMessage({ type: 'sync' }); }
+	if (el = e.target.closest('[data-present-open]')) { return vscode.postMessage({ type: 'presentOpen' }); }
+	if (el = e.target.closest('[data-present-choice]')) { return vscode.postMessage({ type: 'presentChoice', choice: el.getAttribute('data-present-choice') }); }
+	if (el = e.target.closest('[data-present-scope]')) { return vscode.postMessage({ type: 'presentScope', scope: el.getAttribute('data-present-scope') }); }
+	if (el = e.target.closest('[data-present-cta]')) { return vscode.postMessage({ type: 'presentCta' }); }
+	// The modal closes from the backdrop or the X (both data-present-close); a click inside the card
+	// (data-present-stop) does not. Walk to whichever ancestor comes first and close only if it is a close.
+	const modalHit = e.target.closest('[data-present-close],[data-present-stop]');
+	if (modalHit && modalHit.hasAttribute('data-present-close')) { return vscode.postMessage({ type: 'presentClose' }); }
+	if (el = e.target.closest('[data-to-rendered]')) { const ta = root.querySelector('textarea.raw'); return vscode.postMessage({ type: 'applyRaw', text: ta ? ta.value : '' }); }
+});
+root.addEventListener('keydown', e => {
+	const b = e.target.closest('[data-block]');
+	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
+});
+root.addEventListener('focusout', e => {
+	const b = e.target.closest('[data-block]');
+	if (b) { const text = b.innerText.replace(/\\s+/g, ' ').trim(); if (text !== b.getAttribute('data-orig')) { vscode.postMessage({ type: 'edit', blockId: b.getAttribute('data-block'), text: text }); } }
+});
+window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd); } });
+if (typeof window.__LWD_PM_MD === 'string') { mountPm(window.__LWD_PM_MD); }
+vscode.postMessage({ type: 'lwdReady' });`;
 
-export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
+/** The dynamic part of the doc surface: the body HTML, plus the Markdown to mount in ProseMirror (or
+ * null when the surface is not a live PM editor - raw mode, a living doc, or no doc). */
+export interface ILivingDocContent {
+	readonly html: string;
+	readonly pmMd: string | null;
+}
+
+export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
 	const { doc, pending, resolved, dirty, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
 	const crumb = isLiving ? 'Living Document' : 'Markdown';
@@ -374,14 +393,25 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		body = `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`;
 	}
 	const plainEditable = !!doc && !isLiving && isRendered;
-	const pmScripts = plainEditable ? proseMirrorEditorScripts(doc.body) : '';
 
 	const hint = (mode === 'rendered' && isLiving)
 		? `<div class="hint">Bound figures are highlighted in blue &mdash; click one (or a gutter dot) to trace it back to the source. `
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
-	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>${topbar}${docToolbar}${body}${hint}${modal}<script>${SCRIPT}</script>${pmScripts}</body></html>`;
+	return { html: `${topbar}${docToolbar}${body}${hint}${modal}`, pmMd: plainEditable ? doc.body : null };
+}
+
+// The full webview document: the calm chrome + the dynamic content in a persistent #lwd-root, the vendored
+// ProseMirror bundle, and the RUNTIME - all set ONCE via setHtml. Thereafter the editor pushes
+// `renderLivingDocContent` payloads as 'lwdRender' messages (mount-once-then-message, plan 15 iter 2).
+export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
+	const content = renderLivingDocContent(input);
+	const bundle = proseMirrorBundle().replace(/<\/script/gi, '<\\/script');
+	const pmInit = `<script>window.__LWD_PM_MD=${content.pmMd === null ? 'null' : escapeForScript(content.pmMd)};</script>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>`
+		+ `<div id="lwd-root">${content.html}</div>`
+		+ `${pmInit}<script>${bundle}</script><script>${RUNTIME}</script></body></html>`;
 }
 
 // The in-surface source-peek layout (comp "Workbench v2"): the document stays FULL-WIDTH and centred, and
