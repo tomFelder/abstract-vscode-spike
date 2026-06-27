@@ -405,3 +405,50 @@ to $49,800… Churn… now standing at 2.4%…") with the source-read step — n
 
 **Carry-over:** iteration 6 (off `calm-surface-5`) is the calm design-audit polish pass — incl. the
 plain-doc formatting-toolbar gap flagged in iter 3.
+
+### Iteration 6 — Calm polish pass (branch `calm-surface-6`, PR → `calm-surface-5`)
+**What changed (one focused commit):** the calm formatting toolbar was gated `(isLiving && isPm)`, so a plain
+or freshly-created blank doc opened with no way to format. Changed the gate to `(!!doc && isPm)` — the toolbar
+(Paragraph/B/I/lists/quote) now shows for every PM document; the living-only chrome (sync bar, bound-figure
+hint) stays `isLiving`-gated. This closes the gap flagged in iter 3.
+
+**Core patches:** none. Tier **our-surface**.
+
+**TDD:** a render test asserts a plain doc gets the toolbar but NOT the sync bar / figure hint; 9 render tests
+pass.
+
+**Default-and-log decision:** #59 (incl. the calm-document audit assessment).
+
+**Calm-document audit (gate-by-gate):** G1 one quiet PM surface ✓ · G2 calm header + now-universal toolbar ✓ ·
+G3 detached gutter + inline figures ✓ · G4 reduced IDE optionality (activity bar hidden, iter 1) ✓ · G5
+source-peek bottom drawer ✓ · G6 no dev toasts / nav never blanks ✓. Every "IDE in a trench coat" tell from
+Tom's critique is closed (footer, activity bar, tabs, breadcrumb, trust banner, sign-in, ext-failure toasts,
+`.lock.json`/`agents.json`, injected frontmatter, false chat errors). Rubric ~met (≥~90%). Residuals (minor,
+logged): chat streaming deferred (iter 5); "Saved · v14" mock version; plain-doc "Edit raw" affordance is
+living-only; the title bar keeps a minimal command-center + layout toggles by design.
+
+**Final capstone desktop smoke (decision 38, `TMPDIR=/tmp`, fresh `/tmp/calm-iter6`):** cold launch is calm
+(no shell / banner / sign-in / toasts; `agents.json` hidden), New document → blank surface **with toolbar**,
+typing persists clean plain Markdown to real disk (0 `title:`, 0 `---`).
+
+**Screenshots:** `docs/plans/16-verify/iter6-*` — the plain-doc toolbar (web + desktop) and the calm cold launch.
+
+---
+
+## Readiness summary (morning review)
+
+**The PR stack (merge bottom-up; GitHub auto-retargets the next to `main` as each lands):**
+1. **PR #31 `calm-surface-1` → `main`** — strip the workbench shell (status bar, activity bar, tabs, breadcrumb).
+2. **PR #32 `calm-surface-2` → `calm-surface-1`** — kill cold-launch noise (trust banner, onboarding/sign-in, Copilot chrome, ext-failure toasts, title label).
+3. **PR #33 `calm-surface-3` → `calm-surface-2`** — document-first on-ramp (blank writing surface + cursor ready).
+4. **PR #34 `calm-surface-4` → `calm-surface-3`** — hide `.lock.json`/`agents.json` + stop injecting frontmatter (TDD).
+5. **PR #35 `calm-surface-5` → `calm-surface-4`** — chat robustness (tolerant parse + retry + alive indicator; streaming deferred).
+6. **PR #36 `calm-surface-6` → `calm-surface-5`** — calm polish (toolbar for every PM doc) + the audit + this summary.
+
+**Merge tax:** exactly **one core patch** across the whole stack (iter 2, the dev-only activation-toast guard); everything else is additive config-defaults or our-surface. Plan 16 permitted core patches freely.
+
+**HOLD:** green across the stack every iteration — F1–F8/F7 (chat→diff→accept→persist, figures, OpenRouter), U1–U3 (one PM surface, bound figures, in-PM diff), R1–R6 (open/create folder, folder-reflecting Home, edit→disk, sources/context/@mention), G1–G6, decisions 38–53.
+
+**Decisions to sanity-check (default-and-log):** **#54** (hiding the activity bar retires the v3 labelled icon-nav — Home + palette carry the screens; if you want the labelled nav back it should become an in-surface element), **#55** (`chat.disableAIFeatures` hides built-in Copilot; the product's own chat is unaffected), **#56** (new docs are blank + name-on-first-save deferred), **#58** (chat streaming deferred — the bigger redesign).
+
+**Before/after of the cold-launch-to-first-paragraph path:** iter-1 before (`docs/plans/16-verify/iter1-before-web-shell.png`, the IDE-in-a-trench-coat) → iter-6 after (`iter6-desktop-coldlaunch.png` + `iter6-desktop-newdoc-toolbar.png`): cold launch lands on a calm Home with no shell/noise; one click opens a blank writing surface with a formatting toolbar and the caret ready; typing persists as clean plain Markdown.

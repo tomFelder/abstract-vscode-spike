@@ -413,7 +413,12 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	// control drives the live ProseMirror view through LWDPM.cmd via [data-pmcmd] (plan 15 iter 5); the
 	// names map 1:1 onto the bundle's COMMANDS. Underline is dropped (Markdown / the commonmark schema has
 	// no underline mark - calm by subtraction). The comp also dropped Link-to-source / Run-skill / History.
-	const docToolbar = (isLiving && isPm)
+	// plan 16 iter 6 (decision 59): the formatting toolbar shows for EVERY document in PM, plain or living --
+	// PM is the one editing surface (decision 53), and a plain notes doc is just as writable, so it was wrong
+	// to gate the toolbar on `isLiving` (a blank new doc opened with no way to format). The sync bar + the
+	// bound-figure hint stay living-only (a plain doc has no sources/figures), but B/I/headings/lists are
+	// universal.
+	const docToolbar = (!!doc && isPm)
 		? `<div class="etoolbar">`
 		+ `<select class="tb-h" data-pmcmd title="Paragraph style">`
 		+ `<option value="paragraph">Paragraph</option>`
