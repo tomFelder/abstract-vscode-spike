@@ -43,7 +43,14 @@ export interface ILivingDocBlock {
 }
 
 export interface ILivingDoc {
+	// The DERIVED display title: the frontmatter `title:` if authored, else the first H1, else 'Untitled'.
+	// Used for cards/labels. NOT what gets serialized -- see `frontmatterTitle`.
 	title: string;
+	// The AUTHORED frontmatter `title:` ('' if the file had none). Serialization emits only this, never the
+	// derived `title` above, so a plain Markdown file the user wrote never gains an injected `title:` block
+	// when an accepted chat edit re-serializes it (plan 16 iter 4). Optional so hand-built test docs default
+	// to "no authored title".
+	readonly frontmatterTitle?: string;
 	subtitle: string;
 	readonly sources: string[];         // frontmatter `sources:` (value-binding sources)
 	readonly context: string[];         // frontmatter `context:` (influence sources)
