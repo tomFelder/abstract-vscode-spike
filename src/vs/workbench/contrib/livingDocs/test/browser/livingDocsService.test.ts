@@ -686,6 +686,31 @@ suite('LivingDocsService', () => {
 		assert.ok(blocks.some(b => b.text === 'Growth accelerated this week.'), 'the edit landed');
 	});
 
+	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {
+		const newText = '1. First lever\n2. Second lever\n3. Third lever';
+		const service = createService([], {
+			model: modelMessage({
+				reply: 'Here is a starting list.', edits: [], inserts: [
+					{ afterHeading: 'Team Notes', newText, rationale: 'Drafted the list you asked for.' },
+				]
+			}),
+		});
+		await service.loadDocument(README);
+		assert.strictEqual(service.getDoc(README)!.isLiving, false, 'precondition: README is a plain doc');
+
+		await service.sendChatMessage(README, 'Generate me a top-3 list');
+
+		const assistant = service.getChatMessages(README).at(-1)!;
+		assert.strictEqual(assistant.via, 'model', 'chat is model-backed on a plain doc, not the living-doc fallback');
+		const pending = service.getPendingForDoc(README);
+		assert.strictEqual(pending.length, 1, 'the generated insertion is queued for a plain doc');
+
+		await service.approve(pending[0].id);
+		const doc = service.getDoc(README)!;
+		assert.ok(doc.blocks.some(b => b.text === newText), 'approving the insertion adds the new content as a block');
+		assert.strictEqual(doc.isLiving, false, 'accepting chat content does NOT turn a plain doc into a living one (affordances stay tied to real bindings)');
+	});
+
 	test('with no model reachable, chat is honest (fallback turn, no faked reply, nothing queued)', async () => {
 		const service = createService(); // no opts.model -> /healthz is unhealthy -> no model
 		await service.loadDocument(WEEKLY);
