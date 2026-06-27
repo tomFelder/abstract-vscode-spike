@@ -299,4 +299,13 @@ export class LivingDocEditor extends EditorPane {
 			this._container.style.width = `${dimension.width}px`;
 		}
 	}
+
+	// plan 16 iter 3 (decision 56): when the editor pane is focused (e.g. right after `openEditor` for a
+	// freshly-created doc), forward focus into the webview iframe so the in-iframe ProseMirror view's own
+	// `focus()` (called on mount) actually lands the caret -- "one click -> cursor ready". Without this the
+	// base pane focuses its container DOM, the iframe never gets browser focus, and the caret stays out of PM.
+	override focus(): void {
+		super.focus();
+		this._webview?.focus();
+	}
 }

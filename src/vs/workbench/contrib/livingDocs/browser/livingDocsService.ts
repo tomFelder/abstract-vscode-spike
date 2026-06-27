@@ -105,17 +105,13 @@ function similarity(a: string, b: string): number {
 	return inter / (ta.size + tb.size - inter);
 }
 
-// The "New document" starting point: clean Markdown the user owns. It becomes a Living Document once
-// a source is connected (a `sources:`/`context:` entry or a bind link appears). Authored as a single
-// left-aligned template literal so source indentation stays tab-only.
-const NEW_DOCUMENT_TEMPLATE = `---
-title: Untitled document
----
-
-## Overview
-
-Write your document here. Connect a source to start binding live figures.
-`;
+// The "New document" starting point (plan 16 iter 3, decision 56): a BLANK writing surface, not an
+// IDE boilerplate template. A new doc is clean Markdown the user owns -- no injected `title:`
+// frontmatter and no "## Overview / Write your document here" placeholder, so opening it reads as
+// "just start writing" (the editor focuses the first line on mount). It becomes a Living Document the
+// moment a source is connected (a `sources:`/`context:` entry or a bind link). A single trailing
+// newline (not a 0-byte file) gives ProseMirror one empty paragraph to land the caret in.
+const NEW_DOCUMENT_TEMPLATE = `\n`;
 
 export class LivingDocsService extends Disposable implements ILivingDocsService {
 	declare readonly _serviceBrand: undefined;
