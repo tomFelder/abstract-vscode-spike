@@ -234,3 +234,39 @@ export function serializeLivingDoc(doc: ILivingDoc): string {
 	}
 	return `---\n${fmLines.join('\n')}\n---\n\n${body}\n`;
 }
+
+// The chat model is asked for "ONLY a JSON object" of {reply, edits, inserts}, but a real model
+// intermittently wraps it in prose, truncates it, or answers in plain text. The old call-site did a bare
+// `JSON.parse(raw.slice(indexOf('{'), lastIndexOf('}')+1))`, which THREW on any of those and surfaced as a
+// flat "the agent model errored". This pure parser is tolerant (plan 16 iter 5, decision 58): it extracts
+// the JSON object when present, and otherwise degrades to treating the whole reply as a plain chat answer
+// (no proposals) -- never a crash. Unit-tested independently of the model.
+export interface IParsedChatResponse {
+	readonly reply: string;
+	readonly edits: { heading?: string; oldText?: string; newText?: string; rationale?: string }[];
+	readonly inserts: { afterHeading?: string; newText?: string; rationale?: string }[];
+}
+
+export function parseChatResponse(raw: string): IParsedChatResponse {
+	const plain: IParsedChatResponse = { reply: raw.trim(), edits: [], inserts: [] };
+	const start = raw.indexOf('{');
+	const end = raw.lastIndexOf('}');
+	if (start < 0 || end <= start) {
+		return plain; // no JSON object at all -> a plain-text answer
+	}
+	try {
+		const json = JSON.parse(raw.slice(start, end + 1)) as {
+			reply?: unknown;
+			edits?: unknown;
+			inserts?: unknown;
+		};
+		return {
+			// A parsed object with no `reply` leaves reply empty -- the queued proposal cards carry the meaning.
+			reply: typeof json.reply === 'string' ? json.reply.trim() : '',
+			edits: Array.isArray(json.edits) ? json.edits : [],
+			inserts: Array.isArray(json.inserts) ? json.inserts : [],
+		};
+	} catch {
+		return plain; // malformed / truncated JSON -> degrade to a plain answer, never throw
+	}
+}

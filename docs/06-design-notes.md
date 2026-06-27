@@ -378,3 +378,12 @@ our-surface / core-patch) and, for any core patch, the file + why a contrib-only
   when there is no authored frontmatter, so a plain doc round-trips byte-clean. TDD'd red->green (3 tests). No
   core patch. Verified on a **desktop real-disk smoke**: a plain doc + accepted chat insert persists as clean
   plain Markdown (0 `title:`, 0 `---`); `agents.json` + `.lock.json` hidden from the Explorer.
+
+- **Iter 5 — chat robustness (parse + retry + indicator). Tier: our-surface, 0 core patches.** A pure,
+  TDD'd `parseChatResponse` replaces the throwing `JSON.parse` so a non-JSON / truncated / prose-wrapped reply
+  degrades to a plain answer (never "the agent model errored", never a raw-JSON bubble); `_callModel` retries
+  once on a transient failure; the "Working…" indicator becomes a pulsing avatar + animated "Thinking…" dots
+  (pure CSS). **True token-streaming is deferred and logged** (decision 58): the "ONLY JSON" reply format +
+  buffered proxy mean streaming would surface raw JSON; it needs a response-format redesign (prose stream +
+  structured tail) + proxy SSE + a progressive webview render — out of scope for an unattended iteration. The
+  robustness trio removes the felt pain (false errors, dead hang) without it. 91 LivingDoc tests pass.
