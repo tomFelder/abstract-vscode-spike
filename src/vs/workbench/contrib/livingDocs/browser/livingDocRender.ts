@@ -6,8 +6,9 @@
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
-import { reconcileBindLinks } from '../common/livingDocMarkdown.js';
+import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { ILivingDoc, ILivingDocBlock, IProposedChange } from '../common/livingDocsModel.js';
+import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, wordDiffSegments } from '../common/livingDocPmDecorations.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
 // The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
@@ -260,10 +261,18 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pm-body{flex:1;display:flex;min-height:0}
 .pm-list{width:300px;flex:none;border-right:1px solid #eef0f3;background:#fbfbfc;overflow-y:auto;padding:14px}
 .pm-detail{flex:1;min-width:0;overflow-y:auto;padding:22px}
-/* Provenance accent in the PM surface (plan 15 iter 3): a block with a bound figure gets a quiet left rail so source-bound prose is visible in the unified editor. The exact dot/bar gutter becomes PM decorations in a later iteration; the figure itself keeps the .bound blue underline. */
-.pmwrap .ProseMirror p:has(span.bound){position:relative;padding-left:14px}
-.pmwrap .ProseMirror p:has(span.bound)::before{content:"";position:absolute;left:0;top:.18em;bottom:.18em;width:2px;border-radius:2px;background:oklch(0.6 0.1 255);opacity:.55}
-.pmwrap .ProseMirror span.bound{cursor:default}`;
+.pmwrap .ProseMirror span.bound{cursor:pointer}
+/* Provenance gutter in the PM surface as real ProseMirror node decorations (plan 15 iter 4, G5 - replaces
+ * the iter-3 CSS accent): a source-bound block gets a detached dot in the left margin; a recently-applied
+ * block flashes amber. The dot sits in the pmwrap's left padding so it never indents the prose. */
+.pmwrap .ProseMirror .pm-gutter{position:relative}
+.pmwrap .ProseMirror .pm-gutter::before{content:"";position:absolute;left:-20px;top:.6em;width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.1 255);cursor:pointer}
+.pmwrap .ProseMirror .pm-gutter-recent::before{background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(220,150,60,.14);animation:flash 1.6s ease}
+/* A block with a pending meaning-change is hidden; the diff + accept/reject widget renders in its place. */
+.pmwrap .ProseMirror .pm-orig-hidden{display:none}
+/* The diff / insert widgets are host-rendered with the renderDoc markup (.editblock/.insertblock/.ctrl),
+ * so they need no new styles; they sit full-width in the PM column. */
+.pmwrap .ProseMirror .editblock,.pmwrap .ProseMirror .insertblock{margin:0 0 14px}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -275,15 +284,22 @@ const RUNTIME = `const vscode = acquireVsCodeApi();
 const root = document.getElementById('lwd-root');
 let pmView = null, pmTimer = 0;
 function pmOnChange(){ clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
-function mountPm(md){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); } }
-function applyUpdate(htmlStr, pmMd){
+function pmDeco(spec){ if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }
+function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); } }
+// Re-render the body from a message. The live ProseMirror node is detached, the body HTML is swapped, and
+// the same node re-attached (PM is never remounted). A model-driven body change (an accepted proposal)
+// arrives as pmReset and resets the live doc to disk truth; pending proposals + the gutter are decorations.
+function applyUpdate(htmlStr, pmMd, spec, pmReset){
 	const live = (pmView && pmMd !== null) ? pmView.dom : null;
 	if (live && live.parentNode) { live.parentNode.removeChild(live); }
 	root.innerHTML = htmlStr;
 	if (pmMd !== null) {
 		const r = root.querySelector('#pm-root');
-		if (live && r) { r.appendChild(live); }
-		else if (r && window.LWDPM) { mountPm(pmMd); }
+		if (live && r) {
+			r.appendChild(live);
+			if (typeof pmReset === 'string' && window.LWDPM) { window.LWDPM.setDoc(pmView, pmReset); }
+			pmDeco(spec);
+		} else if (r && window.LWDPM) { mountPm(pmMd, spec); }
 	} else if (pmView) { window.LWDPM.destroy(pmView); pmView = null; }
 }
 root.addEventListener('mousedown', e => {
@@ -296,6 +312,7 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-reject]')) { e.stopPropagation(); return vscode.postMessage({ type: 'reject', id: el.getAttribute('data-reject') }); }
 	if (el = e.target.closest('[data-refresh]')) { return vscode.postMessage({ type: 'refresh' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
+	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
 	if (el = e.target.closest('[data-to-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
 	if (el = e.target.closest('[data-setmode]')) { return vscode.postMessage({ type: 'setMode', mode: el.getAttribute('data-setmode') }); }
 	if (el = e.target.closest('[data-source-close]')) { return vscode.postMessage({ type: 'closeSource' }); }
@@ -318,15 +335,65 @@ root.addEventListener('focusout', e => {
 	const b = e.target.closest('[data-block]');
 	if (b) { const text = b.innerText.replace(/\\s+/g, ' ').trim(); if (text !== b.getAttribute('data-orig')) { vscode.postMessage({ type: 'edit', blockId: b.getAttribute('data-block'), text: text }); } }
 });
-window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd); } });
-if (typeof window.__LWD_PM_MD === 'string') { mountPm(window.__LWD_PM_MD); }
+window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); } });
+if (typeof window.__LWD_PM_MD === 'string') { mountPm(window.__LWD_PM_MD, window.__LWD_PM_DECO); }
 vscode.postMessage({ type: 'lwdReady' });`;
 
-/** The dynamic part of the doc surface: the body HTML, plus the Markdown to mount in ProseMirror (or
- * null when the surface is not a live PM editor - raw mode, a living doc, or no doc). */
+// One resolved decoration with its host-rendered widget HTML, ready for the bundle to place by text anchor.
+interface IPmDecoEdit { readonly id: string; readonly anchorText: string; readonly html: string }
+interface IPmDecoInsert { readonly id: string; readonly afterText: string | null; readonly html: string }
+/** The decoration payload pushed to the webview: pending diffs/inserts (with widget HTML) + gutter markers. */
+export interface IPmDecoPayload {
+	readonly edits: readonly IPmDecoEdit[];
+	readonly inserts: readonly IPmDecoInsert[];
+	readonly gutters: readonly IPmGutterMarker[];
+}
+
+// Render the word-diff runs to the same inline add/del markup the renderDoc surface uses (one look).
+function renderDiffSegments(segments: readonly IPmDiffSegment[]): string {
+	return segments.map(s => {
+		const t = esc(s.text);
+		return s.t === 'del' ? `<span class="d-o">${t}</span>` : s.t === 'ins' ? `<span class="d-n">${t}</span>` : t;
+	}).join(' ');
+}
+
+// The inline diff + accept/reject control row for a pending meaning-change (reuses the renderDoc editblock
+// markup minus the grid gutter cell, since the PM gutter is a separate node decoration).
+function pmEditWidgetHtml(e: IPmEditDecoration): string {
+	return `<div class="pcell editblock">`
+		+ `<p class="editp">${renderDiffSegments(e.segments)}</p>`
+		+ `<div class="ctrl"><span class="cdot"></span>`
+		+ `<span class="lbl">Tone rewrite from <span class="src">${esc(e.source)}</span> &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
+		+ `<span class="acts"><button class="approve" data-approve="${esc(e.id)}">Approve changes</button>`
+		+ `<button class="reject" data-reject="${esc(e.id)}">Reject</button></span></div></div>`;
+}
+
+// The all-additions widget for a generative insertion (reuses the renderDoc insertblock markup).
+function pmInsertWidgetHtml(ins: IPmInsertDecoration): string {
+	return `<div class="pcell insertblock">`
+		+ `<div class="insertbody">${renderGenericMarkdown(ins.newText)}</div>`
+		+ `<div class="ctrl"><span class="cdot add"></span>`
+		+ `<span class="lbl">New content from <span class="src">Chat</span> &middot; <span class="add">inserted after ${esc(ins.blockLabel)}</span> &middot; ${Math.round(ins.confidence * 100)}% confidence</span>`
+		+ `<span class="acts"><button class="approve" data-approve="${esc(ins.id)}">Approve</button>`
+		+ `<button class="reject" data-reject="${esc(ins.id)}">Reject</button></span></div></div>`;
+}
+
+// Build the decoration payload for the PM surface: the pure spec (TDD'd) augmented with widget HTML.
+function renderPmDeco(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>): IPmDecoPayload {
+	const spec = buildPmDecorationSpec(doc, pending, recent);
+	return {
+		edits: spec.edits.map(e => ({ id: e.id, anchorText: e.anchorText, html: pmEditWidgetHtml(e) })),
+		inserts: spec.inserts.map(ins => ({ id: ins.id, afterText: ins.afterText, html: pmInsertWidgetHtml(ins) })),
+		gutters: spec.gutters,
+	};
+}
+
+/** The dynamic part of the doc surface: the body HTML, the Markdown to mount in ProseMirror (or null when
+ * the surface is not a live PM editor - raw mode or no doc), and the PM decoration payload (or null). */
 export interface ILivingDocContent {
 	readonly html: string;
 	readonly pmMd: string | null;
+	readonly pmDeco: IPmDecoPayload | null;
 }
 
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
@@ -403,8 +470,11 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		body = `<div class="empty">No document loaded.</div>`;
 	} else if (pmSurface) {
 		// A real ProseMirror EditorView (F2 / plan 15): the document IS the writing surface. Bound figures
-		// render as non-editable atom nodes; the body round-trips to Markdown and persists on change.
-		body = `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`;
+		// render as non-editable atom nodes; pending proposals + the provenance gutter are PM decorations
+		// (plan 15 iter 4); the source-peek opens as the SAME bottom drawer over the full-width doc (G1 -
+		// never a split editor), driven by the existing reveal/sync messages.
+		body = `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`
+			+ (input.sourcePeek ? renderSourceDrawer(input.sourcePeek) : '');
 	} else {
 		const docHtml = renderDoc(doc, pending, recent, resolved);
 		body = syncBar + (input.sourcePeek
@@ -417,7 +487,12 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
-	return { html: `${topbar}${docToolbar}${body}${hint}${modal}`, pmMd: pmSurface && doc ? doc.body : null };
+	// ProseMirror is fed from the FRESH body (parsed from the raw text on disk): a model-driven change
+	// (an accepted proposal) mutates blocks + persists but leaves the cached doc.body stale, so the live
+	// surface must reset to the reparsed body, not the stale cache.
+	const pmMd = pmSurface && doc ? parseLivingDoc(rawText).body : null;
+	const pmDeco = pmSurface && doc ? renderPmDeco(doc, pending, recent) : null;
+	return { html: `${topbar}${docToolbar}${body}${hint}${modal}`, pmMd, pmDeco };
 }
 
 // The full webview document: the calm chrome + the dynamic content in a persistent #lwd-root, the vendored
@@ -426,7 +501,12 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const content = renderLivingDocContent(input);
 	const bundle = proseMirrorBundle().replace(/<\/script/gi, '<\\/script');
-	const pmInit = `<script>window.__LWD_PM_MD=${content.pmMd === null ? 'null' : escapeForScript(content.pmMd)};</script>`;
+	// Seed the initial mount Markdown AND the initial decoration spec as globals (the `<` is escaped so they
+	// can't break out of the script); the RUNTIME reads them once on load (so a default-PM living doc shows
+	// its proposals/gutter without waiting for the first message).
+	const decoLiteral = content.pmDeco === null ? 'null' : JSON.stringify(content.pmDeco).replace(/</g, '\\u003c');
+	const pmInit = `<script>window.__LWD_PM_MD=${content.pmMd === null ? 'null' : escapeForScript(content.pmMd)};`
+		+ `window.__LWD_PM_DECO=${decoLiteral};</script>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>`
 		+ `<div id="lwd-root">${content.html}</div>`
 		+ `${pmInit}<script>${bundle}</script><script>${RUNTIME}</script></body></html>`;
@@ -436,6 +516,12 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 // the source slides up as a bottom drawer overlay - it never splits the editor into a side-by-side pane.
 // The sync action is the drawer header's primary button (no floating "Sync across" circle on a divider).
 function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): string {
+	return docHtml + renderSourceDrawer(peek);
+}
+
+// The bottom source drawer itself (the comp's "Workbench v2" overlay), shared by the renderDoc and the PM
+// surfaces: a full-width overlay fixed to the bottom of the webview so the document is never split.
+function renderSourceDrawer(peek: ISourcePeekRender): string {
 	const rows = peek.rows.map(r =>
 		`<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td></tr>`).join('');
 	// The comp shows the source's raw CSV grid with the latest row (the one the document binds to)
@@ -462,7 +548,7 @@ function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): strin
 		+ `<span class="sd-meta">source &middot; ${rowCount} row${rowCount === 1 ? '' : 's'}</span>`
 		+ `<span class="sd-actions">${action}<button class="sd-x" data-source-close title="Close source">&#10005;</button></span></div>`
 		+ `<div class="sd-body">${gridHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
-	return docHtml + drawer;
+	return drawer;
 }
 
 // The Present & export modal: a destination list (Google Docs / Sheets / Word / Excel / hosted page)
@@ -527,42 +613,16 @@ function gutterCell(marker: string, span: boolean): string {
 }
 
 // Word-level diff of old -> new, rendered inline (removed = red strikethrough, added = green), so a
-// meaning-change reads as an edit-in-place like the hi-fi, not a stacked before/after block.
+// meaning-change reads as an edit-in-place like the hi-fi, not a stacked before/after block. The diff
+// itself is the shared `wordDiffSegments` mapping (also used to build the PM decoration spec); this only
+// renders those runs to HTML.
 function inlineDiff(oldText: string, newText: string): { html: string; added: number; removed: number } {
-	const a = oldText.split(/\s+/).filter(Boolean);
-	const b = newText.split(/\s+/).filter(Boolean);
-	const n = a.length, m = b.length;
-	const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-	for (let i = n - 1; i >= 0; i--) {
-		for (let j = m - 1; j >= 0; j--) {
-			dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-		}
-	}
-	type Op = { t: 'eq' | 'del' | 'ins'; w: string };
-	const ops: Op[] = [];
-	let i = 0, j = 0;
-	while (i < n && j < m) {
-		if (a[i] === b[j]) { ops.push({ t: 'eq', w: a[i] }); i++; j++; }
-		else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ t: 'del', w: a[i] }); i++; }
-		else { ops.push({ t: 'ins', w: b[j] }); j++; }
-	}
-	while (i < n) { ops.push({ t: 'del', w: a[i++] }); }
-	while (j < m) { ops.push({ t: 'ins', w: b[j++] }); }
-
-	// Merge consecutive ops of the same kind into runs and render with a single space between runs.
-	const segs: string[] = [];
-	let added = 0, removed = 0;
-	let k = 0;
-	while (k < ops.length) {
-		const t = ops[k].t;
-		const words: string[] = [];
-		while (k < ops.length && ops[k].t === t) { words.push(ops[k].w); k++; }
-		const text = esc(words.join(' '));
-		if (t === 'eq') { segs.push(text); }
-		else if (t === 'del') { segs.push(`<span class="d-o">${text}</span>`); removed++; }
-		else { segs.push(`<span class="d-n">${text}</span>`); added++; }
-	}
-	return { html: segs.join(' '), added, removed };
+	const { segments, added, removed } = wordDiffSegments(oldText, newText);
+	const html = segments.map(s => {
+		const text = esc(s.text);
+		return s.t === 'del' ? `<span class="d-o">${text}</span>` : s.t === 'ins' ? `<span class="d-n">${text}</span>` : text;
+	}).join(' ');
+	return { html, added, removed };
 }
 
 // Render one block's Markdown to sanitized HTML, with bind links reconciled to their resolved value

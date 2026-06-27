@@ -255,3 +255,16 @@ reversals of earlier calls now that the *core authoring loop* (not just the visu
   (`withReplacedBody`) — editing prose in PM must never silently strip what makes the document *living*.
   Design rule: the unified editor rolls out incrementally and is the *default only when it is at least at
   parity* with the surface it replaces; until then it's a labelled, opt-in preview, never a silent regression.
+- **Proposals + the provenance gutter are now real PM decorations, and accept/reject works in PM (plan 15
+  iter 4).** The last renderDoc-only features moved onto the unified surface: a pending chat edit renders as
+  an inline word-diff *in the document* (the original block hidden, the diff + Approve/Reject widget in its
+  place — the same green/red markup as renderDoc, now a ProseMirror widget decoration); a generative insert is
+  an all-additions widget at its anchor; every source-bound block carries a detached provenance **dot** in the
+  left margin (G5 — replacing iter-3's CSS accent); and clicking a bound figure opens the source-peek **bottom
+  drawer** over the full-width doc (G1, never a split). Accept routes through the existing service so there is
+  one mutation/persist path (no second copy in the bundle), and the live PM body resets to disk truth after the
+  change. Design rule reaffirmed: **parity before the flip.** Decoration parity is done, but the calm *chrome*
+  (the persistent formatting toolbar, still wired through `execCommand`, and the Present button) is renderDoc-
+  only, so the default stays renderDoc this iteration; the flip + renderDoc retirement waits until the toolbar
+  (via `LWDPM.cmd`) and Present live in PM too — a half-flip that drops the toolbar would be a calm-shell
+  regression, not progress.

@@ -16,7 +16,7 @@ import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
-import { withReplacedBody } from '../common/livingDocMarkdown.js';
+import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { ILivingDocContent, ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml, ShareScope } from './livingDocRender.js';
 
@@ -39,6 +39,10 @@ export class LivingDocEditor extends EditorPane {
 	private _webviewInitialized = false;
 	private _webviewReady = false;
 	private _pendingContent: ILivingDocContent | undefined;
+	// The body the live ProseMirror surface currently holds. A render whose fresh body differs (a
+	// model-driven change such as an accepted proposal - NOT the user's own typing, which is saved silently
+	// and never re-renders) resets the PM doc to disk truth via `pmReset` (plan 15 iter 4).
+	private _pmBody: string | undefined;
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -70,6 +74,7 @@ export class LivingDocEditor extends EditorPane {
 		this._webviewInitialized = false;
 		this._webviewReady = false;
 		this._pendingContent = undefined;
+		this._pmBody = undefined;
 		this._createWebview();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		await this._livingDocs.loadDocument(input.resource);
@@ -105,7 +110,7 @@ export class LivingDocEditor extends EditorPane {
 				// The webview RUNTIME has loaded and is listening; flush any update that raced the load.
 				this._webviewReady = true;
 				if (this._pendingContent) {
-					void this._webview?.postMessage({ type: 'lwdRender', html: this._pendingContent.html, pmMd: this._pendingContent.pmMd });
+					void this._webview?.postMessage({ type: 'lwdRender', html: this._pendingContent.html, pmMd: this._pendingContent.pmMd, pmDeco: this._pendingContent.pmDeco });
 					this._pendingContent = undefined;
 				}
 				break;
@@ -119,6 +124,9 @@ export class LivingDocEditor extends EditorPane {
 					const text = doc?.isLiving
 						? withReplacedBody(this._livingDocs.getRawText(this._resource), message.text)
 						: message.text;
+					// The live surface already holds this body, so record it to suppress a spurious pmReset on
+					// the next (non-typing) render.
+					this._pmBody = parseLivingDoc(text).body;
 					void this._livingDocs.saveRawText(this._resource, text, { silent: true });
 				}
 				break;
@@ -256,6 +264,20 @@ export class LivingDocEditor extends EditorPane {
 			syncDiff: this._livingDocs.getLastSyncDiff(resource),
 			sourcePeek,
 		};
+		const content = renderLivingDocContent(input);
+		// Reset the live PM doc only when the fresh body changed from a model-driven source (an accepted
+		// proposal). The user's own typing is saved silently (no re-render) and already recorded in `_pmBody`,
+		// so it never triggers a reset; chrome-only renders (a modal, the source drawer) keep the same body.
+		let pmReset: string | undefined;
+		if (content.pmMd !== null) {
+			if (this._pmBody !== undefined && content.pmMd.trim() !== this._pmBody.trim()) {
+				pmReset = content.pmMd;
+			}
+			this._pmBody = content.pmMd;
+		} else {
+			this._pmBody = undefined;
+		}
+
 		// First render builds the full shell (chrome + bundle + RUNTIME) via setHtml; every later render
 		// pushes just the content as an 'lwdRender' message so the live ProseMirror view is never torn down.
 		if (!this._webviewInitialized) {
@@ -263,9 +285,8 @@ export class LivingDocEditor extends EditorPane {
 			this._webviewInitialized = true;
 			return;
 		}
-		const content = renderLivingDocContent(input);
 		if (this._webviewReady) {
-			void this._webview.postMessage({ type: 'lwdRender', html: content.html, pmMd: content.pmMd });
+			void this._webview.postMessage({ type: 'lwdRender', html: content.html, pmMd: content.pmMd, pmDeco: content.pmDeco, pmReset });
 		} else {
 			this._pendingContent = content;
 		}
