@@ -7,8 +7,8 @@ import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
-import { ILivingDoc, ILivingDocBlock, IProposedChange } from '../common/livingDocsModel.js';
-import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, wordDiffSegments } from '../common/livingDocPmDecorations.js';
+import { ILivingDoc, IProposedChange } from '../common/livingDocsModel.js';
+import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration } from '../common/livingDocPmDecorations.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
 // The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
@@ -37,10 +37,10 @@ function bindToValue(text: string): string {
 
 const EMPTY_RESOLVED: ReadonlyMap<string, string> = new Map<string, string>();
 
-// 'rendered' = the calm renderDoc HTML (default for living docs); 'raw' = the Markdown textarea;
-// 'pm' = the unified ProseMirror surface (default for plain docs; opt-in preview for living docs while
-// the renderDoc features are ported across, plan 15 iter 3+).
-export type LivingDocViewMode = 'rendered' | 'raw' | 'pm';
+// 'pm' = the unified ProseMirror surface - the single editing surface for EVERY document, plain and
+// living (plan 15 iter 5 flipped the default and retired the bespoke renderDoc body); 'raw' = the
+// Markdown textarea, reachable from the editor for hand-editing source.
+export type LivingDocViewMode = 'raw' | 'pm';
 
 export type PresentChoice = 'gdoc' | 'gsheet' | 'docx' | 'xlsx' | 'site';
 export type ShareScope = 'internal' | 'link' | 'public';
@@ -111,37 +111,15 @@ html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-
 .pill.warn .dot{background:oklch(0.66 0.16 45)}
 .btn{border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
 .av{flex:none;width:27px;height:27px;border-radius:50%;background:${ACCENT};color:#fff;font:600 11px/27px system-ui;text-align:center}
-.docwrap{max-width:780px;margin:0 auto;padding:48px 28px 80px;display:grid;grid-template-columns:30px 1fr;column-gap:10px;align-items:start}
-.docfull{grid-column:1 / -1}
-h1.title{margin:0 0 6px;font:600 30px/1.2 system-ui;letter-spacing:-.015em;color:#15171c}
-.subtitle{font:400 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:34px}
-h2.section{margin:26px 0 12px;font:600 19px/1.3 system-ui;color:#23262c}
-/* True left gutter: a fixed column holding only the provenance marker, detached from the prose column
- * so markers never indent the text. One grid row per document line; a line that wraps is just a taller
- * prose cell. A bound line shows a dot; a multi-line edit blends its marker into a spanning bar. */
-.gutter2{grid-column:1;display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:7px;-webkit-user-select:none;user-select:none}
-.gutter2.span{align-self:stretch}
-.pcell{grid-column:2;min-width:0}
-.pdot{width:8px;height:8px;border-radius:50%;background:${ACCENT};cursor:pointer}
-.pdot.warn{background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(220,150,60,.14)}
-/* A multi-line edit blends its marker into a vertical bar spanning the changed rows. */
-.gbar{width:3px;flex:1;min-height:16px;border-radius:2px;background:${ACCENT};cursor:pointer}
-.gbar.warn{background:oklch(0.66 0.16 45)}
-p.block{margin:0 0 22px;font:400 16px/1.78 system-ui;color:#2c2f36}
+/* The PM proposal widgets (inline diff / insert) sit full-width in a .pcell column. */
+.pcell{min-width:0}
 /* A source-bound figure inline in the prose: the comp's faint-blue highlight + underline, so the reader
- * sees exactly which words are live. Clicking one peeks its source. */
+ * sees exactly which words are live (the PM bound_figure atom node renders as span.bound). Clicking one
+ * peeks its source. */
 .bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px;cursor:pointer}
 .bound:hover{background:rgba(80,110,235,.16)}
-.editable{border-radius:4px;transition:background .1s,box-shadow .1s;cursor:text}
-.editable:hover{background:rgba(80,90,160,.06)}
-.editable:focus{outline:none;background:rgba(80,90,160,.08);box-shadow:0 0 0 1px #c2c9f0}
-h2.section.editable{margin-left:-6px;padding-left:6px}
-.applied{background:rgba(31,122,68,.09);border-radius:4px;padding:1px 4px;animation:flash 1.6s ease}
+/* The applied-flash keyframe is reused by the PM provenance gutter's recently-changed marker. */
 @keyframes flash{0%{background:rgba(31,122,68,.34)}100%{background:rgba(31,122,68,.09)}}
-/* Hover a bound line (or its gutter dot) to light up the provenance link to its source. */
-[data-prov]{cursor:pointer}
-.pcell[data-prov]:hover,p.bound[data-prov]:hover{background:#f4f6ff;border-radius:4px}
-.pdot[data-prov]:hover{box-shadow:0 0 0 4px rgba(91,109,196,.18)}
 /* Inline word-diff for a meaning-change, matching the hi-fi (edit-in-place, not a stacked block). */
 .editblock{box-shadow:inset 2px 0 0 oklch(0.66 0.16 45);padding-left:14px}
 .editp{margin:0 0 12px;font:400 16px/1.78 system-ui;color:#2c2f36}
@@ -151,7 +129,6 @@ h2.section.editable{margin-left:-6px;padding-left:6px}
 .insertblock{box-shadow:inset 2px 0 0 #1f7a44;padding-left:14px}
 .insertbody{background:#f1faf4;border:1px solid #d7ecdc;border-radius:8px;padding:6px 14px;margin:0 0 2px}
 .insertbody>:first-child{margin-top:6px}.insertbody>:last-child{margin-bottom:6px}
-.gbar.add{background:#1f7a44}
 .cdot.add{background:#1f7a44}
 .ctrl{display:flex;align-items:center;gap:10px;margin-top:13px;background:#fff;border:1px solid #eceef2;border-radius:9px;padding:9px 11px;flex-wrap:wrap}
 .ctrl .cdot{width:7px;height:7px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}
@@ -178,15 +155,13 @@ table.kpi td:first-child{text-align:left;font-weight:500}
  * on the right. Sticks just below the 48px top bar. No Link-to-source / Run-skill / History (the comp
  * dropped them to keep the editor calm). */
 .etoolbar{position:sticky;top:48px;z-index:4;height:46px;flex:none;display:flex;align-items:center;gap:2px;padding:0 16px;border-bottom:1px solid #eef0f3;background:#fff}
-.etoolbar .tb-h{display:flex;align-items:center;gap:6px;border:none;background:transparent;border-radius:7px;padding:7px 9px;font:500 12.5px/1 system-ui;color:#3a3f49;cursor:pointer}
-.etoolbar .tb-h:hover{background:#f4f5f7}
-.etoolbar .tb-h .caret{color:#bcc0c8}
+.etoolbar select.tb-h{border:none;background:transparent;border-radius:7px;padding:7px 24px 7px 9px;font:500 12.5px/1 system-ui;color:#3a3f49;cursor:pointer}
+.etoolbar select.tb-h:hover{background:#f4f5f7}
 .etoolbar .tb-div{width:1px;height:18px;background:#eceef2;margin:0 8px}
 .etoolbar .tb-b{width:30px;height:30px;border:none;background:transparent;border-radius:7px;color:#52575f;cursor:pointer}
 .etoolbar .tb-b:hover{background:#f4f5f7}
 .etoolbar .tb-b.bold{font:700 13px/1 system-ui}
 .etoolbar .tb-b.ital{font:400 13px/1 system-ui;font-style:italic}
-.etoolbar .tb-b.und{font:400 13px/1 system-ui;text-decoration:underline}
 .etoolbar .tb-b.ic{font:400 14px/1 system-ui}
 .etoolbar .tb-saved{margin-left:auto;display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8}
 .etoolbar .tb-saved .sdot{width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)}
@@ -302,9 +277,16 @@ function applyUpdate(htmlStr, pmMd, spec, pmReset){
 		} else if (r && window.LWDPM) { mountPm(pmMd, spec); }
 	} else if (pmView) { window.LWDPM.destroy(pmView); pmView = null; }
 }
+// The calm formatting toolbar drives the live ProseMirror view through LWDPM.cmd (plan 15 iter 5) - NOT
+// document.execCommand, which PM does not honour. The B/I/list/quote buttons fire on mousedown with
+// preventDefault so the PM selection is kept; the heading <select> fires on change.
 root.addEventListener('mousedown', e => {
-	const f = e.target.closest('[data-fmt]');
-	if (f) { e.preventDefault(); document.execCommand(f.getAttribute('data-fmt'), false, f.getAttribute('data-fmt-arg') || undefined); }
+	const b = e.target.closest('button[data-pmcmd]');
+	if (b && pmView && window.LWDPM) { e.preventDefault(); window.LWDPM.cmd(pmView, b.getAttribute('data-pmcmd')); }
+});
+root.addEventListener('change', e => {
+	const s = e.target.closest('select[data-pmcmd]');
+	if (s && pmView && window.LWDPM) { window.LWDPM.cmd(pmView, s.value); }
 });
 root.addEventListener('click', e => {
 	let el;
@@ -314,7 +296,6 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
 	if (el = e.target.closest('[data-to-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
-	if (el = e.target.closest('[data-setmode]')) { return vscode.postMessage({ type: 'setMode', mode: el.getAttribute('data-setmode') }); }
 	if (el = e.target.closest('[data-source-close]')) { return vscode.postMessage({ type: 'closeSource' }); }
 	if (el = e.target.closest('[data-sync]')) { return vscode.postMessage({ type: 'sync' }); }
 	if (el = e.target.closest('[data-present-open]')) { return vscode.postMessage({ type: 'presentOpen' }); }
@@ -325,7 +306,7 @@ root.addEventListener('click', e => {
 	// (data-present-stop) does not. Walk to whichever ancestor comes first and close only if it is a close.
 	const modalHit = e.target.closest('[data-present-close],[data-present-stop]');
 	if (modalHit && modalHit.hasAttribute('data-present-close')) { return vscode.postMessage({ type: 'presentClose' }); }
-	if (el = e.target.closest('[data-to-rendered]')) { const ta = root.querySelector('textarea.raw'); return vscode.postMessage({ type: 'applyRaw', text: ta ? ta.value : '' }); }
+	if (el = e.target.closest('[data-apply-raw]')) { const ta = root.querySelector('textarea.raw'); return vscode.postMessage({ type: 'applyRaw', text: ta ? ta.value : '' }); }
 });
 root.addEventListener('keydown', e => {
 	const b = e.target.closest('[data-block]');
@@ -397,11 +378,12 @@ export interface ILivingDocContent {
 }
 
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
-	const { doc, pending, resolved, dirty, status, recent, mode, rawText } = input;
+	const { doc, pending, dirty, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
 	const crumb = isLiving ? 'Living Document' : 'Markdown';
 
-	const isRendered = mode === 'rendered';
+	// PM is the single editing surface for every document (plan 15 iter 5); the chrome shows in 'pm' mode.
+	const isPm = mode === 'pm';
 
 	// The comp's calm 48px bar carries only: brand/crumb + the sync pill + Present + avatar. The status
 	// pill IS the refresh affordance (click to re-derive from sources) - no separate Refresh/Download
@@ -410,40 +392,37 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	const livingControls = isLiving
 		? `<span class="pill ${warn}" data-refresh title="Refresh from sources"><span class="dot"></span>${esc(status)}</span>`
 		: '';
-	// In raw mode, offer the way back to the rendered view.
+	// In raw mode, offer the way back to the editor (apply the raw text and return to the PM surface).
 	const rawToggleTop = mode === 'raw'
-		? `<button class="toggle" data-to-rendered>&#10003; Done editing source</button>`
+		? `<button class="toggle" data-apply-raw>&#10003; Done editing source</button>`
 		: '';
-	// Living docs gain an opt-in toggle into the unified ProseMirror surface (plan 15 iter 3): a preview
-	// while the renderDoc features are ported over. renderDoc stays the default, so the HOLD gates are
-	// unaffected. Plain docs are always PM, so they need no toggle.
-	const pmToggleTop = isLiving
-		? (mode === 'pm'
-			? `<button class="toggle" data-setmode="rendered">&#10003; Done editing</button>`
-			: (isRendered ? `<button class="toggle" data-setmode="pm" title="Edit in the unified editor (preview)">&#9998; Edit</button>` : ''))
-		: '';
-	const presentBtn = (doc && isRendered) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
+	const presentBtn = (doc && isPm) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
 
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${pmToggleTop}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
+		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 
 	// The comp's persistent calm formatting toolbar (sticks under the 48px top bar). Formatting essentials
-	// only - a borderless heading dropdown, B/I/U, list/ordered/quote - and a quiet "Saved" status. The
-	// buttons are wired by the generic [data-fmt] handler (execCommand, honouring data-fmt-arg). The comp
-	// deliberately dropped Link-to-source / Run-skill / History to keep the editor calm.
-	const docToolbar = (isLiving && isRendered)
+	// only - a borderless heading dropdown, B/I, list/ordered/quote - and a quiet "Saved" status. Every
+	// control drives the live ProseMirror view through LWDPM.cmd via [data-pmcmd] (plan 15 iter 5); the
+	// names map 1:1 onto the bundle's COMMANDS. Underline is dropped (Markdown / the commonmark schema has
+	// no underline mark - calm by subtraction). The comp also dropped Link-to-source / Run-skill / History.
+	const docToolbar = (isLiving && isPm)
 		? `<div class="etoolbar">`
-		+ `<button class="tb-h" data-fmt="formatBlock" data-fmt-arg="&lt;h2&gt;">Heading 2 <span class="caret">&#9662;</span></button>`
+		+ `<select class="tb-h" data-pmcmd title="Paragraph style">`
+		+ `<option value="paragraph">Paragraph</option>`
+		+ `<option value="h1">Heading 1</option>`
+		+ `<option value="h2">Heading 2</option>`
+		+ `<option value="h3">Heading 3</option>`
+		+ `</select>`
 		+ `<span class="tb-div"></span>`
-		+ `<button class="tb-b bold" data-fmt="bold" title="Bold">B</button>`
-		+ `<button class="tb-b ital" data-fmt="italic" title="Italic">I</button>`
-		+ `<button class="tb-b und" data-fmt="underline" title="Underline">U</button>`
+		+ `<button class="tb-b bold" data-pmcmd="bold" title="Bold">B</button>`
+		+ `<button class="tb-b ital" data-pmcmd="italic" title="Italic">I</button>`
 		+ `<span class="tb-div"></span>`
-		+ `<button class="tb-b ic" data-fmt="insertUnorderedList" title="Bulleted list">&#8803;</button>`
-		+ `<button class="tb-b ic" data-fmt="insertOrderedList" title="Numbered list">&#8862;</button>`
-		+ `<button class="tb-b ic" data-fmt="formatBlock" data-fmt-arg="&lt;blockquote&gt;" title="Quote">&#10077;</button>`
+		+ `<button class="tb-b ic" data-pmcmd="bullet_list" title="Bulleted list">&#8803;</button>`
+		+ `<button class="tb-b ic" data-pmcmd="ordered_list" title="Numbered list">&#8862;</button>`
+		+ `<button class="tb-b ic" data-pmcmd="blockquote" title="Quote">&#10077;</button>`
 		+ `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`
 		+ `</div>`
 		: '';
@@ -451,7 +430,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	// Source-peek / "Sync across" banner: when a linked source changed, offer a one-tap Sync; after a
 	// sync, show the figure diff (old -> new) so the source edit's effect on the document is visible.
 	const syncDiff = input.syncDiff ?? [];
-	const syncBar = (isLiving && isRendered)
+	const syncBar = (isLiving && isPm)
 		? (dirty
 			? `<div class="syncbar"><span>&#9888; A linked source changed since the last sync.</span><span class="sb-spacer"></span><button class="sb-btn" data-sync>Sync figures</button></div>`
 			: (syncDiff.length
@@ -459,30 +438,25 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 				: ''))
 		: '';
 
-	// The body is the unified ProseMirror surface when the doc is plain (always) or when a living doc has
-	// been toggled into 'pm' mode. Otherwise a living doc uses the renderDoc HTML and a plain raw textarea.
-	const pmSurface = !!doc && (mode === 'pm' || (!isLiving && isRendered));
+	// PM is the single writing surface for every document (plan 15 iter 5): the document IS the editor.
+	// Bound figures render as non-editable atom nodes; pending proposals + the provenance gutter are PM
+	// decorations (plan 15 iter 4); the source-peek opens as the SAME bottom drawer over the full-width doc
+	// (G1 - never a split editor), driven by the existing reveal/sync messages. Raw mode is the one
+	// alternative - a plain Markdown textarea for hand-editing source.
+	const pmSurface = !!doc && isPm;
 
 	let body: string;
 	if (mode === 'raw') {
 		body = `<div class="rawwrap"><textarea class="raw" spellcheck="false">${esc(rawText)}</textarea></div>`;
 	} else if (!doc) {
 		body = `<div class="empty">No document loaded.</div>`;
-	} else if (pmSurface) {
-		// A real ProseMirror EditorView (F2 / plan 15): the document IS the writing surface. Bound figures
-		// render as non-editable atom nodes; pending proposals + the provenance gutter are PM decorations
-		// (plan 15 iter 4); the source-peek opens as the SAME bottom drawer over the full-width doc (G1 -
-		// never a split editor), driven by the existing reveal/sync messages.
-		body = `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`
-			+ (input.sourcePeek ? renderSourceDrawer(input.sourcePeek) : '');
 	} else {
-		const docHtml = renderDoc(doc, pending, recent, resolved);
-		body = syncBar + (input.sourcePeek
-			? renderSourcePeekLayout(input.sourcePeek, docHtml)
-			: docHtml);
+		body = syncBar
+			+ `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`
+			+ (input.sourcePeek ? renderSourceDrawer(input.sourcePeek) : '');
 	}
 
-	const hint = (mode === 'rendered' && isLiving)
+	const hint = (isPm && isLiving)
 		? `<div class="hint">Bound figures are highlighted in blue &mdash; click one (or a gutter dot) to trace it back to the source. `
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
@@ -512,15 +486,8 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 		+ `${pmInit}<script>${bundle}</script><script>${RUNTIME}</script></body></html>`;
 }
 
-// The in-surface source-peek layout (comp "Workbench v2"): the document stays FULL-WIDTH and centred, and
-// the source slides up as a bottom drawer overlay - it never splits the editor into a side-by-side pane.
-// The sync action is the drawer header's primary button (no floating "Sync across" circle on a divider).
-function renderSourcePeekLayout(peek: ISourcePeekRender, docHtml: string): string {
-	return docHtml + renderSourceDrawer(peek);
-}
-
-// The bottom source drawer itself (the comp's "Workbench v2" overlay), shared by the renderDoc and the PM
-// surfaces: a full-width overlay fixed to the bottom of the webview so the document is never split.
+// The bottom source drawer (the comp's "Workbench v2" overlay) for the PM surface: a full-width overlay
+// fixed to the bottom of the webview so the document is never split into a side-by-side pane.
 function renderSourceDrawer(peek: ISourcePeekRender): string {
 	const rows = peek.rows.map(r =>
 		`<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td></tr>`).join('');
@@ -603,149 +570,6 @@ function renderPresentModal(present: IPresentState, title: string): string {
 		+ `<button class="pm-cta" data-present-cta style="width:100%;border:none;border-radius:9px;padding:12px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;cursor:pointer">${pc.cta}</button>`
 		+ `<div style="margin-top:11px;font:400 11px/1.5 system-ui;color:#bcc0c8;text-align:center">Provenance &amp; approval history are retained on export.</div>`
 		+ `</div></div></div></div>`;
-}
-
-// A line's gutter cell holds only its provenance marker (no line numbers -- those read as a code
-// editor). A bound line gets a dot; a multi-line edit gets a vertical bar spanning the changed rows.
-// The marker carries the source cells so hovering/clicking reveals provenance.
-function gutterCell(marker: string, span: boolean): string {
-	return `<div class="gutter2${span ? ' span' : ''}">${marker}</div>`;
-}
-
-// Word-level diff of old -> new, rendered inline (removed = red strikethrough, added = green), so a
-// meaning-change reads as an edit-in-place like the hi-fi, not a stacked before/after block. The diff
-// itself is the shared `wordDiffSegments` mapping (also used to build the PM decoration spec); this only
-// renders those runs to HTML.
-function inlineDiff(oldText: string, newText: string): { html: string; added: number; removed: number } {
-	const { segments, added, removed } = wordDiffSegments(oldText, newText);
-	const html = segments.map(s => {
-		const text = esc(s.text);
-		return s.t === 'del' ? `<span class="d-o">${text}</span>` : s.t === 'ins' ? `<span class="d-n">${text}</span>` : text;
-	}).join(' ');
-	return { html, added, removed };
-}
-
-// Render one block's Markdown to sanitized HTML, with bind links reconciled to their resolved value
-// (lock wins) and shown as plain text.
-function renderBlockMarkdown(block: ILivingDocBlock, resolved: ReadonlyMap<string, string>): string {
-	const raw = block.type === 'heading' ? `${'#'.repeat(block.level ?? 2)} ${block.text}` : block.text;
-	const rendered = renderMarkdown({ value: bindToValue(reconcileBindLinks(raw, resolved)) });
-	try {
-		return rendered.element.innerHTML;
-	} finally {
-		rendered.dispose();
-	}
-}
-
-// A bound paragraph: render its Markdown, but wrap each resolved figure in a `.bound` span (the comp's
-// blue dotted-underline highlight) so the reader can see exactly which words are source-bound. Each
-// figure is tokenized BEFORE Markdown rendering (so any formatting around it survives) and the token is
-// swapped for the highlighted span afterwards -- safe against the sanitizing Markdown renderer.
-function renderBoundParagraph(block: ILivingDocBlock, resolved: ReadonlyMap<string, string>): string {
-	const SEP = '\u0001';
-	const tokenized = reconcileBindLinks(block.text, resolved).replace(BIND_LINK_RE, (_m, value, key) => `${SEP}${key}${SEP}${value}${SEP}`);
-	const rendered = renderMarkdown({ value: tokenized });
-	let html: string;
-	try {
-		html = rendered.element.innerHTML;
-	} finally {
-		rendered.dispose();
-	}
-	const tokenRe = new RegExp(`${SEP}([^${SEP}]+)${SEP}([^${SEP}]*)${SEP}`, 'g');
-	return html.replace(tokenRe, (_m, key, value) => `<span class="bound" data-cells="${key}" data-prov>${value}</span>`);
-}
-
-function renderDoc(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>, resolved: ReadonlyMap<string, string>): string {
-	const parts: string[] = [`<div class="docwrap">`,
-		`<div class="docfull"><h1 class="title">${esc(doc.title)}</h1><div class="subtitle">${esc(doc.subtitle)}</div></div>`];
-
-	for (const block of doc.blocks) {
-		// Render the block itself (arrow so the existing branch logic can `return` early), then append any
-		// generative insertions anchored after this block (Chat "make me a list" lands inline, in place).
-		(() => {
-			const change = pending.find(c => c.blockId === block.id && !c.insert);
-			const cells = block.binds.map(b => b.key).join(',');
-			const isRecent = recent.has(block.id);
-			const bound = block.binds.length > 0;
-
-			if (change) {
-				// Render the meaning-change as an inline word-diff with an amber accent and a control row.
-				const d = inlineDiff(bindToValue(change.oldText), bindToValue(change.newText));
-				const src = esc(doc.sources.concat(doc.context).join(', '));
-				parts.push(gutterCell(`<span class="gbar warn" data-cells="${cells}" data-prov title="Pending change"></span>`, true),
-					`<div class="pcell editblock">`
-					+ `<p class="editp">${d.html}</p>`
-					+ `<div class="ctrl"><span class="cdot"></span>`
-					+ `<span class="lbl">Tone rewrite from <span class="src">${src}</span> &middot; <span class="add">+${d.added} added</span> &middot; <span class="rem">${d.removed} removed</span> &middot; ${Math.round(change.confidence * 100)}% confidence</span>`
-					+ `<span class="acts"><button class="approve" data-approve="${esc(change.id)}">Approve changes</button>`
-					+ `<button class="reject" data-reject="${esc(change.id)}">Reject</button></span></div></div>`);
-				return;
-			}
-
-			if (block.type === 'heading' && !bound) {
-				// Headings are hand-editable in place (plain text, not rendered Markdown).
-				parts.push(gutterCell('', false),
-					`<div class="pcell"><h2 class="section editable" contenteditable="true" data-block="${esc(block.id)}" data-orig="${esc(block.text)}">${esc(block.text)}</h2></div>`);
-				return;
-			}
-
-			if (bound) {
-				// A bound block is driven by its sources: a blue gutter dot, rendered Markdown with the
-				// resolved values inline, and hover/click reveals provenance. Not hand-editable. Bound prose
-				// additionally highlights each figure inline (the comp's blue underline); tables stay plain.
-				const inner = block.type === 'paragraph'
-					? renderBoundParagraph(block, resolved)
-					: renderBlockMarkdown(block, resolved);
-				parts.push(gutterCell(`<span class="pdot${isRecent ? ' warn' : ''}" data-cells="${cells}" data-prov title="Bound to source"></span>`, false),
-					`<div class="pcell${isRecent ? ' applied' : ''}" data-cells="${cells}" data-prov>${inner}</div>`);
-				return;
-			}
-
-			if (block.type === 'paragraph') {
-				// Rich content (a list, an embedded heading, or multi-line Markdown - e.g. a Chat-inserted
-				// section) renders as rendered Markdown, read-only, so it reads as a real list/section rather
-				// than raw `1.`/`**` text. Plain single-line prose stays hand-editable in place.
-				const looksRich = /^[ \t]*([-*+]|\d+\.|#{1,6})\s/m.test(block.text) || block.text.includes('\n');
-				if (looksRich) {
-					parts.push(gutterCell('', false),
-						`<div class="pcell${isRecent ? ' applied' : ''}">${renderBlockMarkdown(block, resolved)}</div>`);
-					return;
-				}
-				const text = esc(block.text);
-				parts.push(gutterCell('', false),
-					`<div class="pcell"><p class="block editable${isRecent ? ' applied' : ''}" contenteditable="true" data-block="${esc(block.id)}" data-orig="${text}">${text}</p></div>`);
-				return;
-			}
-
-			// Non-bound tables (and other rich blocks): render as Markdown, no inline editing.
-			parts.push(gutterCell('', false), `<div class="pcell">${renderBlockMarkdown(block, resolved)}</div>`);
-		})();
-
-		for (const ins of pending) {
-			if (ins.insert && ins.afterBlockId === block.id) { parts.push(renderInsertProposal(ins)); }
-		}
-	}
-
-	// Insertions anchored at the end of the document (no/!unknown heading) render after the last block.
-	for (const ins of pending) {
-		if (ins.insert && !ins.afterBlockId) { parts.push(renderInsertProposal(ins)); }
-	}
-
-	parts.push(`</div>`);
-	return parts.join('\n');
-}
-
-// A generative insertion proposed by Chat: brand-new content rendered all-additions (green), with a
-// control row to accept/reject. Shown inline at its anchor so the writer sees exactly what lands where.
-function renderInsertProposal(change: IProposedChange): string {
-	const inner = renderGenericMarkdown(change.newText);
-	return gutterCell(`<span class="gbar add" title="Proposed new content"></span>`, true)
-		+ `<div class="pcell insertblock">`
-		+ `<div class="insertbody">${inner}</div>`
-		+ `<div class="ctrl"><span class="cdot add"></span>`
-		+ `<span class="lbl">New content from <span class="src">Chat</span> &middot; <span class="add">inserted after ${esc(change.blockLabel)}</span> &middot; ${Math.round(change.confidence * 100)}% confidence</span>`
-		+ `<span class="acts"><button class="approve" data-approve="${esc(change.id)}">Approve</button>`
-		+ `<button class="reject" data-reject="${esc(change.id)}">Reject</button></span></div></div>`;
 }
 
 // Clean, self-contained export: no IDE chrome, no provenance dots, no diff UI -- just the

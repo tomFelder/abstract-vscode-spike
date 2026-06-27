@@ -26,7 +26,8 @@ export class LivingDocEditor extends EditorPane {
 
 	private _container: HTMLElement | undefined;
 	private _webview: IWebviewElement | undefined;
-	private _mode: LivingDocViewMode = 'rendered';
+	// PM is the single editing surface for every document (plan 15 iter 5): a doc opens in ProseMirror.
+	private _mode: LivingDocViewMode = 'pm';
 	private _resource: URI | undefined;
 	private _present: IPresentState = { open: false, choice: 'gdoc', scope: 'internal' };
 	// In-surface source-peek state (the comp's "Sync across" pane). Held on the editor, NOT opened as a
@@ -65,7 +66,7 @@ export class LivingDocEditor extends EditorPane {
 
 	override async setInput(input: LivingDocEditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		this._mode = 'rendered';
+		this._mode = 'pm';
 		this._present = { open: false, choice: 'gdoc', scope: 'internal' };
 		this._sourcePeek = undefined;
 		this._resource = input.resource;
@@ -197,7 +198,7 @@ export class LivingDocEditor extends EditorPane {
 				}
 				break;
 			case 'setMode':
-				if (message.mode === 'raw' || message.mode === 'rendered' || message.mode === 'pm') {
+				if (message.mode === 'raw' || message.mode === 'pm') {
 					this._mode = message.mode;
 					this._render();
 				}
@@ -235,7 +236,7 @@ export class LivingDocEditor extends EditorPane {
 
 	private async _applyRaw(text: string): Promise<void> {
 		if (!this._resource) { return; }
-		this._mode = 'rendered';
+		this._mode = 'pm';
 		await this._livingDocs.saveRawText(this._resource, text);
 		// saveRawText fires onDidChange, but render again in case nothing changed.
 		this._render();

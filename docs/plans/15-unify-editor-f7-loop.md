@@ -238,3 +238,40 @@ webview resource so switches/reopens are cheap.
   required this iteration (persistence proven live via memfs reopen).
 - **Next (iter 5):** port the formatting toolbar to `LWDPM.cmd` + bring Present into the PM surface, then FLIP the
   default to 'pm' and retire the `renderDoc` HTML body (decision 49, U1) — closing U3/F7 with the desktop disk smoke.
+
+### Iter 5 (flip the default + retire `renderDoc` — U1) — done, 0 core patches, TDD; **default FLIPPED**
+- **Settled the one open question by investigation (decision 53):** dropping the read-only `rendered` mode does
+  NOT entangle Present/export (`renderExportHtml`/`renderExportMarkdown` take `(doc, resolved)` and run from the
+  service, never through `renderDoc`; the Present modal renders off `present.open`). Per the plan's rule
+  ("confirm with Tom only if it entangles Present/export"), proceeded on the default recommendation: **drop
+  `rendered` entirely** — PM is the one editing surface, `raw` stays reachable, export covers print.
+- **What changed:**
+  - **Toolbar in PM:** `.etoolbar` rewired from `data-fmt`/`execCommand` to `data-pmcmd` → `LWDPM.cmd(pmView, name)`
+    (a heading `<select>` → `paragraph`/`h1`/`h2`/`h3` on `change`; B/I + bullet/ordered/blockquote buttons on
+    `mousedown` with `preventDefault` to keep the PM selection). **No bundle rebuild** — every command already
+    existed in the bundle's `COMMANDS`. **Underline dropped** (Tom's call): Markdown / the commonmark schema has
+    no underline mark, so the `U` button was removed rather than faked.
+  - **Present in PM:** the Present button + modal now show in `pm` (was gated to the rendered mode); the export
+    path is unchanged.
+  - **Flip + retire:** `LivingDocViewMode` is now `'raw' | 'pm'`; `_mode`/`setInput`/`_applyRaw` default to `pm`;
+    `setMode` accepts only `raw`/`pm`. Deleted `renderDoc`, `renderBoundParagraph`, `gutterCell`,
+    `renderInsertProposal`, `inlineDiff`, `renderBlockMarkdown`, `renderSourcePeekLayout`, the renderDoc branch,
+    the pm↔rendered toggle, and the dead grid/gutter/editable/applied CSS. Net **−176 lines** in
+    `livingDocRender.ts` (+59/−235) — delete > add (U1). Tier: **our-surface, 0 core patches.**
+  - **Tests:** `renderLivingDocHtml` suite rewritten to assert the PM default (8 tests: PM surface for living
+    docs, bind link carried into PM, no renderDoc artifacts, toolbar wired to `data-pmcmd` + no Underline,
+    Present in pm, raw reachable). 99 living-docs unit tests pass; `typecheck-client` + `valid-layers-check` clean.
+- **Verified live on the flipped default** (code-web + OpenRouter proxy, real folder): a living doc opens
+  straight into PM with the calm toolbar + Present (no renderDoc); the toolbar formats the live doc
+  (paragraph⇄H2 via `cmd`); the bound figure `49800` is a non-editable node that opens the source-peek **bottom
+  drawer** over the full-width doc (U2/G1/G5); a chat edit renders the inline word-diff **in the PM doc** with a
+  synced rail card → **Approve** persists + clears + resets the body (U3/F4/F5/F6); raw mode round-trips
+  (frontmatter + `[49800](bind:metrics.mrr.latest)` intact) and "Done editing source" returns to PM. No
+  living-docs console errors (G6); all 6 design gates hold.
+- **Desktop disk smoke (REQUIRED, decision 38):** `code.sh` on the real `living-docs-sample` folder — the living
+  doc opened in PM by default, a typed PM edit ("Momentum is building [disk-smoke-iter5]") **persisted to the
+  real `Weekly Summary.md` on disk** (re-read confirmed); reverted after.
+- **Out of scope (iter 6):** F7 fresh-project end-to-end + chat-on-every-doc (decision 48 — the `isLiving` chat
+  gate was deliberately untouched). This iteration was flip-only.
+- Screenshots: `.lwd-shots/iter5-01..06` (PM default, source-peek, chat diff, accepted, Present modal, desktop
+  disk smoke), posted as a PR comment.
