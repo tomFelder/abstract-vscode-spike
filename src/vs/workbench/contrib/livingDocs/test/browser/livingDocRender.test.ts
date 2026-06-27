@@ -5,10 +5,13 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { ILivingDocRenderInput, IPresentState, PresentChoice, renderLivingDocHtml } from '../../browser/livingDocRender.js';
+import { ILivingDocRenderInput, IPresentState, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from '../../browser/livingDocRender.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
 
-suite('livingDocs Present modal (renderLivingDocHtml)', () => {
+// Plan 15 iter 5 flipped the default: every living document now opens in the unified ProseMirror surface
+// ('pm'), the bespoke renderDoc HTML body is retired, and the calm chrome (formatting toolbar + Present)
+// lives in PM. These tests assert the PM default and the absence of the old renderDoc body.
+suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	const doc: ILivingDoc = {
@@ -19,7 +22,7 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 	function html(present: IPresentState): string {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: '',
-			recent: new Set(), mode: 'rendered', rawText: '', present, syncDiff: [],
+			recent: new Set(), mode: 'pm', rawText: '', present, syncDiff: [],
 		};
 		return renderLivingDocHtml(input);
 	}
@@ -36,7 +39,7 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 	test('the editor top bar carries the user avatar, matching the screens and the comp', () => {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',
-			recent: new Set(), mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
+			recent: new Set(), mode: 'pm', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
 		};
 		const h = renderLivingDocHtml(input);
 		assert.ok(h.includes('class="topbar"') && h.includes('class="av">TS<'), 'top bar shows the TS avatar');
@@ -48,31 +51,43 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 		assert.ok(html({ open: true, choice: 'gdoc', scope: 'public' }).includes('opportunity-os.live'), 'URL shown for public');
 	});
 
-	test('a bound prose figure renders as an inline highlighted span carrying its source key', () => {
+	test('a living doc renders the unified ProseMirror surface (not the retired renderDoc body), and bound figures round-trip into PM as bind links', () => {
+		const body = 'Revenue grew [12%](bind:metrics.mrr.delta) week-on-week.\n';
 		const boundDoc: ILivingDoc = {
 			title: 'Weekly', subtitle: 'Week 24', sources: ['metrics.csv'], context: [], isLiving: true,
-			body: '', blocks: [{
+			body, blocks: [{
 				id: 'b1', type: 'paragraph', level: undefined,
 				text: 'Revenue grew [12%](bind:metrics.mrr.delta) week-on-week.',
 				binds: [{ key: 'metrics.mrr.delta', value: '12%' }],
 			}],
 		};
-		const h = renderLivingDocHtml({
+		const content = renderLivingDocContent({
 			doc: boundDoc, pending: [], resolved: new Map([['metrics.mrr.delta', '+18%']]), dirty: false,
-			status: '', recent: new Set(), mode: 'rendered', rawText: '',
+			status: '', recent: new Set(), mode: 'pm', rawText: body,
 			present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
 		});
 		assert.deepStrictEqual({
-			hasBoundSpan: h.includes('<span class="bound" data-cells="metrics.mrr.delta"'),
-			showsResolvedValue: h.includes('>+18%</span>'),       // reconciled to the latest source value
-			noRawBindSyntax: !h.includes('bind:metrics'),         // the bind: URL is never shown
-		}, { hasBoundSpan: true, showsResolvedValue: true, noRawBindSyntax: true });
+			// the document IS the ProseMirror writing surface
+			isPmSurface: content.html.includes('id="pm-root"'),
+			// the bind link is handed to PM (the bundle renders it as the bound_figure atom node client-side)
+			pmCarriesBindLink: content.pmMd?.includes('[12%](bind:metrics.mrr.delta)') ?? false,
+			// the retired renderDoc body is gone: no server-rendered grid / bound span / contenteditable block
+			noRenderDocGrid: !content.html.includes('class="docwrap"') && !content.html.includes('class="gutter2'),
+			noServerBoundSpan: !content.html.includes('class="bound" data-cells='),
+			noContentEditableBlock: !content.html.includes('contenteditable="true"'),
+		}, {
+			isPmSurface: true,
+			pmCarriesBindLink: true,
+			noRenderDocGrid: true,
+			noServerBoundSpan: true,
+			noContentEditableBlock: true,
+		});
 	});
 
 	test('source-peek is a bottom in-surface drawer (never splits the editor): grip + header + sync action over the CSV grid', () => {
 		const h = renderLivingDocHtml({
 			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
-			mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
+			mode: 'pm', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
 			sourcePeek: {
 				source: 'metrics.csv', referencedBy: [], synced: false, syncedCount: 0,
 				rows: [{ key: 'metrics.mrr', value: '$48.6k', selected: true }],
@@ -106,7 +121,7 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 	test('source-peek drawer, once synced, swaps the Sync button for a "N synced" chip', () => {
 		const h = renderLivingDocHtml({
 			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
-			mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
+			mode: 'pm', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
 			sourcePeek: {
 				source: 'metrics.csv', referencedBy: [], synced: true, syncedCount: 3,
 				rows: [{ key: 'metrics.mrr', value: '$48.6k', selected: true }], grid: undefined,
@@ -118,37 +133,55 @@ suite('livingDocs Present modal (renderLivingDocHtml)', () => {
 		}, { showsSyncedChip: true, noSyncButton: true });
 	});
 
-	test('the header is the comp calm bar; formatting is a persistent calm toolbar (no Link-to-source / Run-skill / History)', () => {
+	test('the calm formatting toolbar lives in PM: wired to LWDPM.cmd (data-pmcmd), heading dropdown + B/I/lists/quote, Underline dropped, Present available', () => {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',
-			recent: new Set(), mode: 'rendered', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
+			recent: new Set(), mode: 'pm', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
 		};
 		const h = renderLivingDocHtml(input);
 		assert.deepStrictEqual({
 			pillIsRefresh: h.includes('class="pill ') && h.includes('data-refresh'),
-			noDownloadButton: !h.includes('data-export-md'),
-			noStandaloneRefreshButton: !h.includes('class="btn" data-refresh'),
-			// the new "Workbench v2" comp DOES carry a calm persistent toolbar (was a floating selection
-			// toolbar before; the comp now shows the persistent one, which is authoritative)
-			hasCalmToolbar: h.includes('class="etoolbar"') && h.includes('Saved &middot; v14'),
-			toolbarHasFormatting: h.includes('data-fmt="bold"') && h.includes('data-fmt="italic"'),
+			// the persistent calm toolbar is present and wired to the ProseMirror command bridge, NOT execCommand
+			hasCalmToolbar: h.includes('class="etoolbar"'),
+			wiredToPmCmd: h.includes('data-pmcmd="bold"') && h.includes('data-pmcmd="italic"'),
+			noExecCommand: !h.includes('data-fmt='),
+			// heading dropdown (a <select data-pmcmd>) -> paragraph/h1/h2/h3 option values
+			hasHeadingDropdown: h.includes('<select class="tb-h" data-pmcmd') && h.includes('value="h2"') && h.includes('value="paragraph"'),
+			hasListAndQuote: h.includes('data-pmcmd="bullet_list"') && h.includes('data-pmcmd="ordered_list"') && h.includes('data-pmcmd="blockquote"'),
+			// Underline dropped: Markdown / the commonmark schema has no underline mark (calm by subtraction)
+			noUnderline: !h.includes('data-pmcmd="underline"') && !h.includes('class="tb-b und"'),
 			// the comp pares the toolbar to essentials - none of the old heavy controls
 			noLinkToSource: !h.includes('Link to source'),
 			noRunSkill: !h.includes('Run skill'),
 			noHistoryButton: !h.includes('>History<'),
-			rawEditMovedToHint: h.includes('class="hint-raw" data-to-raw'),
+			// raw Markdown stays reachable via the hint affordance
+			rawEditReachable: h.includes('class="hint-raw" data-to-raw'),
 			present: h.includes('data-present-open'),
 		}, {
 			pillIsRefresh: true,
-			noDownloadButton: true,
-			noStandaloneRefreshButton: true,
 			hasCalmToolbar: true,
-			toolbarHasFormatting: true,
+			wiredToPmCmd: true,
+			noExecCommand: true,
+			hasHeadingDropdown: true,
+			hasListAndQuote: true,
+			noUnderline: true,
 			noLinkToSource: true,
 			noRunSkill: true,
 			noHistoryButton: true,
-			rawEditMovedToHint: true,
+			rawEditReachable: true,
 			present: true,
 		});
+	});
+
+	test('raw mode is reachable and offers the way back to the editor without a separate "rendered" mode', () => {
+		const raw = renderLivingDocContent({
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'raw', rawText: '# Hello', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
+		});
+		assert.deepStrictEqual({
+			isRawTextarea: raw.html.includes('class="raw"') && raw.html.includes('# Hello'),
+			noPmSurfaceInRaw: raw.pmMd === null,
+			wayBack: raw.html.includes('data-apply-raw'),
+		}, { isRawTextarea: true, noPmSurfaceInRaw: true, wayBack: true });
 	});
 });

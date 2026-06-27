@@ -268,3 +268,25 @@ reversals of earlier calls now that the *core authoring loop* (not just the visu
   only, so the default stays renderDoc this iteration; the flip + renderDoc retirement waits until the toolbar
   (via `LWDPM.cmd`) and Present live in PM too — a half-flip that drops the toolbar would be a calm-shell
   regression, not progress.
+- **The flip: ProseMirror is now THE editor, and `renderDoc` is gone (plan 15 iter 5 — U1).** The last two
+  blockers were chrome, not features: the calm formatting toolbar was wired through `document.execCommand`
+  (which PM ignores) and the Present button was gated to the rendered mode. Iter 5 rewired the `.etoolbar` to
+  the bundle's `LWDPM.cmd(view, name)` (heading `<select>` → `paragraph`/`h1`/`h2`/`h3`, B/I, list/ordered/
+  quote — all pre-existing COMMANDS, **no bundle rebuild needed**), showed the toolbar + Present in PM, then
+  **flipped the default to `pm` for every document and deleted the `renderDoc` HTML body** (and
+  `renderBoundParagraph`, `gutterCell`, `renderInsertProposal`, `inlineDiff`, `renderBlockMarkdown`,
+  `renderSourcePeekLayout`, plus the dead grid/gutter CSS). The `'rendered'` view mode is retired entirely —
+  PM is the one surface; `raw` (a Markdown textarea, reached from the "Edit raw Markdown" hint) is the only
+  alternative, and the export path (`renderExportHtml`/`renderExportMarkdown`, which never went through
+  `renderDoc`) is untouched. Net: **−176 lines** in `livingDocRender.ts` (+59/−235) — delete > add, as U1
+  requires. **Underline was dropped** (Tom's call): Markdown / the commonmark schema has no underline mark, so
+  a `U` button would be faking a format that can't round-trip — calm by subtraction. Tier: **our-surface, 0
+  core patches** (merge-tax ledger unchanged — target met). Design rule realised: there is now exactly one
+  writing surface for every `.md`, plain or living; the calm chrome (topbar, formatting toolbar, sync bar,
+  source drawer, Present) is layered *around* the live ProseMirror node, never a second renderer. Verified
+  live end-to-end on the flipped default — web (code-web + OpenRouter): a living doc opens straight into PM
+  with the calm toolbar + Present; the toolbar formats the live doc (paragraph⇄H2 via `cmd`); the bound figure
+  is a non-editable node that opens the source-peek drawer (U2/G1/G5); a chat edit renders the inline diff in
+  the doc → Approve persists + clears (U3/F4/F5/F6); raw round-trips (frontmatter + `[…](bind:…)` intact); and
+  desktop (`code.sh`, **real disk**, decision 38): the same doc opens in PM and a typed edit persisted to the
+  real `Weekly Summary.md` on disk (re-read confirmed). The 6 design gates hold; no living-docs console errors.
