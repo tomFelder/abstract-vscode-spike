@@ -275,3 +275,43 @@ webview resource so switches/reopens are cheap.
   gate was deliberately untouched). This iteration was flip-only.
 - Screenshots: `.lwd-shots/iter5-01..06` (PM default, source-peek, chat diff, accepted, Present modal, desktop
   disk smoke), posted as a PR comment.
+
+### Iter 6 (chat on every doc — F7 closed) — done, 0 core patches, TDD; **STOP CONDITION MET**
+- **Wired decision 48 (chat-on-every-doc).** With PM the one surface (iter 5), the only thing blocking the
+  fresh-project loop was an `isLiving` guard on chat. Dropped it in exactly two places:
+  - `livingDocsService.sendChatMessage` — `if (!state || !state.doc.isLiving)` → `if (!state)`, so chat
+    reaches `_chatRespond` for any *open* doc (a plain doc just has no sources → answers from the prose, can
+    still generate/insert/revise). The `!state` fallback copy was de-living-ified ("Open a document…").
+  - `reviewRailView._activeDoc()` — dropped the `?.isLiving` clause so the Chat/Review surface attaches to any
+    known doc; the two "Open a Living Document to chat" empty/placeholder strings became "Open a document".
+- **Data affordances stay tied to real bindings (Tom's constraint):** `getSkillReport`/`applySkillFix`,
+  `_recomputeFreshness`/sync bar, the bound-figure highlight + source-peek, and the `@mention` source chips
+  remain `isLiving`-gated. The proposal→in-PM-diff→`approve`/`_persist` path was already doc-agnostic
+  (`getPendingForDoc`/`renderPmDeco`/`approve` never checked `isLiving`), so this iteration is a **pure gate
+  removal** — no other code moved. Tier: **our-surface, 0 core patches.**
+- **TDD:** new `livingDocsService.test.ts` case — "chat works on a PLAIN doc (decision 48)": a generated
+  insert queues on the plain README doc, approve splices it, **and the doc stays plain** (isLiving false).
+  Watched it RED (plain doc hit the living-doc fallback) → GREEN after the gate drop. 110 living-docs unit
+  tests pass; `typecheck-client` + `valid-layers-check` clean.
+- **F7 verified live (web, code-web + OpenRouter, fresh folder):** created a `Strategy/` folder + a
+  `Growth Levers.md` doc via the **native Explorer** → opened in PM as "Markdown" → typed in PM → Chat
+  composer live on the plain doc → "generate a top-10 list" → all-additions inline diff in the PM doc + a
+  synced rail card → **Approve** rendered the list + cleared the card (doc still "Markdown"); a separate plain
+  `Q3 Plan.md` proved the **follow-up edit** path — "rewrite … to focus on enterprise sales" → word-level
+  green/red diff → **Approve changes** applied it. No CLI, no hand-edited Markdown.
+- **HOLD re-verified live on the new gate (living doc, `Weekly Summary.md`):** opens in PM with bound figures
+  (`+18%`/`$48.6k`/…), calm formatting toolbar, "All sources synced", and `@mention` source chips; a chat edit
+  read `metrics.csv, market-research.md`, rendered the word diff in Commentary, and **Approve** persisted +
+  cleared (F1–F6/F8, U1–U3, G1/G2/G5/G6 hold; the gate drop left living docs untouched).
+- **Desktop disk smoke (REQUIRED, decision 38, `TMPDIR=/tmp`):** launched `code.sh` on a fresh real folder via
+  the `launch` skill; created `Notes.md` via Explorer (landed on **real disk**), chatted "generate a 3-item
+  list" on the plain doc, **Approved**, and re-read `/…/f7-fresh/Notes.md` **from real disk** — it carries the
+  accepted list (`Notes.lock.json` sidecar written; `serializeLivingDoc` adds a minimal `title: Untitled`
+  frontmatter on first persist but no `sources:`/`context:`, so the doc stays plain).
+- **Model flakiness note:** OpenRouter occasionally errored/hung on a larger follow-up prompt mid-thread (the
+  honest fallback fired, "the agent model errored"); retrying with a smaller prompt succeeded. This is
+  upstream-model flakiness, not the gate — the first turn always reached the model. (The `_chatRespond`
+  JSON-parse path could be hardened against non-JSON model replies in a later pass.)
+- **STOP CONDITION MET:** U1–U3 + F7 all pass live on a freshly created folder with OpenRouter-backed chat;
+  every HOLD gate green on the new gate; the desktop smoke confirms real-disk persistence. Branch
+  `living-docs-chat-every-doc`. Screenshots `.lwd-shots/iter6-01..11` posted as a PR comment.

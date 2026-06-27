@@ -290,3 +290,27 @@ reversals of earlier calls now that the *core authoring loop* (not just the visu
   the doc → Approve persists + clears (U3/F4/F5/F6); raw round-trips (frontmatter + `[…](bind:…)` intact); and
   desktop (`code.sh`, **real disk**, decision 38): the same doc opens in PM and a typed edit persisted to the
   real `Weekly Summary.md` on disk (re-read confirmed). The 6 design gates hold; no living-docs console errors.
+- **Chat on every document — F7 closed (plan 15 iter 6, decision 48).** The last F-gate (the whole chat
+  loop from a *freshly created* doc) was blocked only by an `isLiving` guard on chat, left over from when a
+  bespoke renderer (not PM) drove living docs. With PM now the one surface (iter 5), that guard is the only
+  thing standing between a plain `.md` and the agent. Iter 6 drops it in exactly two places — `sendChatMessage`
+  (the `!state.doc.isLiving` clause becomes just `!state`, so any *open* doc can chat) and the rail's
+  `_activeDoc()` (which decided whether the Chat/Review surface attaches). "Living" is now purely a
+  data-binding **badge** (decision 39/48), never a chat gate. Crucially, the **data affordances stay tied to
+  real bindings**: `getSkillReport`/`applySkillFix` (the Financial/Formatting/Strategy agents),
+  `_recomputeFreshness`/the sync bar, the bound-figure highlight + source-peek, and the `@mention` source
+  chips all remain `isLiving`-gated — a plain doc gets the chat loop and nothing it has no data for. The chat
+  proposal → in-PM inline diff → accept/persist path was already doc-agnostic (`getPendingForDoc`,
+  `renderPmDeco`, `approve`/`_persist` never checked `isLiving`), so no other code moved — the change is a
+  pure gate removal. Tier: **our-surface, 0 core patches** (merge-tax ledger unchanged — target still met).
+  Verified live end-to-end: web (code-web + OpenRouter) — a brand-new folder + doc created via the native
+  Explorer opens in PM as "Markdown"; the Chat composer is live on it; "generate a top-10 list" → inline
+  all-additions diff in the PM doc + a synced rail card → accept renders the list + clears the card; a
+  follow-up "rewrite … to focus on enterprise sales" → word-level diff → accept; the doc **stays plain**
+  (crumb "Markdown", isLiving false) through both accepts. HOLD re-verified on the same gate: an existing
+  living doc still opens in PM with figures + calm toolbar + `@mention` chips, and a chat edit there still
+  reads its sources, renders the diff, and persists on accept (F1–F6). Desktop (`code.sh`, **real disk**,
+  decision 38, `TMPDIR=/tmp`): a freshly-created `Notes.md` + an accepted chat insert were **re-read from real
+  disk** carrying the generated list (with a `Notes.lock.json` sidecar; `serializeLivingDoc` adds a minimal
+  `title:` frontmatter on first persist but no `sources:`/`context:`, so the doc stays plain). All 6 design
+  gates hold; no living-docs console errors.

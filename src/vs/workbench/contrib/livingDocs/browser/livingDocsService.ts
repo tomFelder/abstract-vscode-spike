@@ -1423,9 +1423,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 
 		try {
+			// Chat is available on EVERY open document (decision 48): "living" is just a data-binding badge,
+			// not a chat gate. A plain doc simply has no sources/figures, so the agent answers from the prose
+			// alone and can still generate/insert/revise content. Only an unopened doc has no state to chat over.
 			const state = this._docs.get(id);
-			if (!state || !state.doc.isLiving) {
-				history.push({ role: 'assistant', via: 'fallback', content: 'Open a Living Document in the editor to chat about it - I answer using the document and its sources.' });
+			if (!state) {
+				history.push({ role: 'assistant', via: 'fallback', content: 'Open a document in the editor to chat about it - I answer using the document and its sources.' });
 				return;
 			}
 			if (!await this._hasModel()) {

@@ -63,8 +63,12 @@ export class ReviewRailView extends ViewPane {
 	// The Review tab grades the active document (the checks section), so re-render when the active
 	// editor changes.
 	private _activeDoc(): URI | undefined {
+		// Chat (and the rail) are available on EVERY open document (decision 48), not just living ones -
+		// "living" is a data-binding badge, not a chat gate. The Skills/checks section stays tied to real
+		// bindings via getSkillReport (which returns nothing for a plain doc), so a plain doc gets the chat
+		// surface + any chat proposals without the source-bound affordances.
 		const resource = this._editors.activeEditor?.resource;
-		return resource && this._livingDocs.getDoc(resource)?.isLiving ? resource : undefined;
+		return resource && this._livingDocs.getDoc(resource) ? resource : undefined;
 	}
 
 	protected override renderBody(container: HTMLElement): void {
@@ -231,7 +235,7 @@ export class ReviewRailView extends ViewPane {
 
 		const messages = doc ? this._livingDocs.getChatMessages(doc) : [];
 		if (!doc) {
-			this._renderChatEmpty(scroll, 'Open a Living Document in the editor to chat with its agent.');
+			this._renderChatEmpty(scroll, 'Open a document in the editor to chat with its agent.');
 		} else if (messages.length === 0) {
 			this._renderChatEmpty(scroll, 'Ask the agent about this document, or @mention a source to pull it in.');
 		} else {
@@ -369,7 +373,7 @@ export class ReviewRailView extends ViewPane {
 		box.style.cssText = 'border:1px solid #e0e2e8;border-radius:11px;background:#fff;padding:8px 9px';
 
 		const input = append(box, $('textarea')) as HTMLTextAreaElement;
-		input.placeholder = doc ? 'Ask the agent, or @mention a file\u2026' : 'Open a Living Document to chat\u2026';
+		input.placeholder = doc ? 'Ask the agent, or @mention a file\u2026' : 'Open a document to chat\u2026';
 		input.value = this._chatDraft;
 		input.rows = 2;
 		input.disabled = !doc;
