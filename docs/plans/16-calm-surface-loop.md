@@ -258,5 +258,35 @@ Ranked by impact on the first impression. Pick the highest unmet one each cycle.
 
 ## Iteration log
 
-(empty — the loop appends one entry per iteration: what changed, core patches logged, HOLD re-verified live,
-the PR in the stack, screenshots, and any default-and-log decisions.)
+### Iteration 1 — Strip the workbench shell to a document surface (branch `calm-surface-1`, PR → `main`)
+**What changed (one focused commit):** registered four product config-default overrides in
+`livingDocs.contribution.ts` (a single `registerDefaultConfigurations` call beside the existing
+`registerConfiguration`) so the IDE shell parts are OFF by default — `workbench.statusBar.visible:false`
+(the footer), `workbench.activityBar.location:'hidden'` (the icon column), `workbench.editor.showTabs:'none'`
+(the tab strip), `breadcrumbs.enabled:false` (the breadcrumb). The desktop title bar (OS window controls) is
+left alone.
+
+**Core patches:** none. Tier **additive-contribution** — these are real, user-overridable settings set via the
+same registry API a built-in uses, so the merge-tax ledger is unchanged (logged in `06-design-notes.md` D8).
+
+**Default-and-log decision:** #54 (decision log) — config-defaults over `setPartHidden`; and the consequence
+that hiding the activity bar retires the v3 labelled icon-nav (Home + command palette carry the screens; the
+tree-rail / Explorer is the single sidebar). Flagged for Tom's morning sanity-check.
+
+**HOLD re-verified live (web, code-web + OpenRouter, real folder `.realdocs-test`):** the living doc opens in
+ProseMirror (U1) with the calm formatting toolbar (G2), the bound figure `49800` as a non-editable node + a
+provenance gutter dot (U2/G5), the "All sources synced" chip + Present; a chat turn read `metrics.csv` +
+`forecast.csv` and rendered an "Outlook" insertion as a green inline diff in the PM doc with Approve/Reject +
+a synced rail card "1 change waiting on you · Approve all" (F1/F3/F4/F5/U3). No status bar, activity bar, tabs
+or breadcrumb anywhere.
+
+**Desktop smoke (`code.sh`, `TMPDIR=/tmp`, via the launch skill):** the same shell-strip holds on desktop —
+the Home dashboard renders on a surface with no status bar / activity bar / tabs / breadcrumb. (The
+cold-launch Restricted-Mode banner + Sign-In button + first-run welcome walkthroughs are still present — those
+are iteration 2's scope.)
+
+**Screenshots:** `docs/plans/16-verify/iter1-*` — before/after web shell, the HOLD doc + chat spine, and the
+desktop shell.
+
+**Carry-over:** iteration 2 (off `calm-surface-1`) kills the cold-launch noise (trust banner, ext
+activation-failure toasts, Sign-In / Copilot chrome, the workspace label).

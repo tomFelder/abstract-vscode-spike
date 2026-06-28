@@ -80,6 +80,24 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	},
 });
 
+// --- calm shell: hide the IDE chrome by registering product setting defaults ---
+// (plan 16 iter 1, decision 54). The product is a document tool, not an editor, so the workbench
+// shell parts are OFF by default: the status-bar footer, the activity-bar icon column, the editor
+// tab strip, and the breadcrumb. These are all real, user-overridable settings, so this is an
+// ADDITIVE CONTRIBUTION (no core patch) -- a user who wants the IDE shell back can flip any of them.
+// The calm topbar + the tree-rail inside the document surface are the chrome that stays; the desktop
+// title bar (OS window controls) is intentionally NOT touched here. Logged in 06-design-notes ledger.
+// Registered at module load (an import side effect, the earliest phase) so the layout reads these as
+// the effective defaults on its first startup pass, before any part is laid out.
+Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerDefaultConfigurations([{
+	overrides: {
+		'workbench.statusBar.visible': false,
+		'workbench.activityBar.location': 'hidden',
+		'workbench.editor.showTabs': 'none',
+		'breadcrumbs.enabled': false,
+	}
+}]);
+
 // --- editor pane ---
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
 	EditorPaneDescriptor.create(LivingDocEditor, LivingDocEditor.ID, localize('livingDocEditor', "Living Document")),

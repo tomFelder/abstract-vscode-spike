@@ -314,3 +314,29 @@ reversals of earlier calls now that the *core authoring loop* (not just the visu
   disk** carrying the generated list (with a `Notes.lock.json` sidecar; `serializeLivingDoc` adds a minimal
   `title:` frontmatter on first persist but no `sources:`/`context:`, so the doc stays plain). All 6 design
   gates hold; no living-docs console errors.
+
+---
+
+## D8 — (plan 16) The Calm Surface loop: make it a document tool, not VS Code in a costume
+
+Plan 16 ([plans/16-calm-surface-loop.md](plans/16-calm-surface-loop.md)) is the first loop whose target is
+the user's **first impression** rather than a capability gate. It runs overnight, autonomously, across a stack
+of PRs off `main`, and — unlike plan 15's "0 core patches" target — **core patches are permitted** (you can't
+suppress the workbench shell contrib-only). The discipline shifts to "minimal and logged", not "zero". This is
+the **merge-tax ledger** for the loop: one entry per iteration, recording the tier (additive-contribution /
+our-surface / core-patch) and, for any core patch, the file + why a contrib-only route didn't exist.
+
+- **Iter 1 — strip the workbench shell. Tier: additive-contribution, 0 core patches (ledger unchanged).**
+  The four IDE tells Tom called out — the **status-bar footer**, the **activity-bar icon column**, the
+  **editor tab strip**, and the **breadcrumb** — are each governed by a real, user-overridable setting, so
+  they are turned off as **product defaults** via one `registerDefaultConfigurations` call in
+  `livingDocs.contribution.ts` (`workbench.statusBar.visible:false`, `workbench.activityBar.location:'hidden'`,
+  `workbench.editor.showTabs:'none'`, `breadcrumbs.enabled:false`). No shared workbench part was patched —
+  this is the same registry API a built-in uses (cf. `remoteExplorer.ts:317`), so it is an additive
+  contribution and the merge-tax target survives the very first iteration despite core patches being allowed.
+  Trade-off logged in decision 54: hiding the activity bar also retires the v3 labelled icon-nav; Home (the
+  startup screen) + the command palette carry Templates/Knowledge/Agents, and the Workspace tree-rail / native
+  Explorer is the single sidebar. Desktop **title bar** (OS window controls) intentionally kept. Verified live
+  web + desktop (no status bar / activity bar / tabs / breadcrumb); HOLD re-verified (PM editor, bound figure,
+  chat → inline diff → rail card). _The desktop cold-launch still shows the Restricted-Mode banner + Sign-In +
+  welcome walkthroughs — those are iteration 2._
