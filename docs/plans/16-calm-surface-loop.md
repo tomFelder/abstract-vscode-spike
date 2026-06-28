@@ -319,3 +319,31 @@ no onboarding modal, no Copilot chrome — it opens straight to the calm Home da
 (clean cold launch), the desktop HOLD chat spine, and the calm web home.
 
 **Carry-over:** iteration 3 (off `calm-surface-2`) is the document-first on-ramp.
+
+### Iteration 3 — Document-first on-ramp (branch `calm-surface-3`, PR → `calm-surface-2`)
+**What changed (one focused commit):** (1) `NEW_DOCUMENT_TEMPLATE` in `livingDocsService.ts` becomes a single
+newline — a new doc opens as a **blank writing surface**, no injected `title:` frontmatter, no "## Overview /
+Write your document here" boilerplate. (2) `focusPm()` in the `livingDocRender` runtime calls `pmView.focus()`
+on mount so the caret lands in the doc (once per mount — decision-50 mount-once means re-renders never steal
+focus). (3) A `LivingDocEditor.focus()` override forwards pane focus into the webview iframe so the in-iframe
+focus actually takes effect. Home stays the friendly landing (recents + New document + empty-state) — not the
+bare Explorer.
+
+**Core patches:** none. Tier **our-surface**.
+
+**Default-and-log decision:** #56.
+
+**Acceptance met + desktop disk smoke (decision 38, `TMPDIR=/tmp`, fresh `/tmp/calm-iter3`):** the empty-state
+"New document" created `Untitled.md` on **real disk** containing only a newline (no `title:`, no boilerplate);
+typing persisted it as **clean plain Markdown** (`Q3 Planning Notes for the launch`), re-read from disk. On
+web, New document → a blank PM surface, writable; the PM editor reports `focused`.
+
+**HOLD re-verified live:** the living doc still opens in PM with the calm toolbar + bound figure `49800`
+(U1/U2/G2/G5). _Observed (pre-existing, flagged for iter 6): the formatting toolbar is absent on a blank plain
+doc but present on living docs._
+
+**Screenshots:** `docs/plans/16-verify/iter3-*` — before/after New document (boilerplate → blank), the typed
+blank doc, the desktop empty-state on-ramp, and the HOLD living doc.
+
+**Carry-over:** iteration 4 (off `calm-surface-3`) hides internal artifacts (`.lock.json`/`agents.json`) +
+stops injecting frontmatter on the serialize-on-accept path (the create path is already clean as of iter 3).

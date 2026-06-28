@@ -260,7 +260,12 @@ const root = document.getElementById('lwd-root');
 let pmView = null, pmTimer = 0;
 function pmOnChange(){ clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
 function pmDeco(spec){ if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }
-function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); } }
+function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); focusPm(); } }
+// plan 16 iter 3 (decision 56): land the caret in the document on first mount so a freshly-opened (or
+// freshly-created blank) doc is immediately writable -- "one click -> cursor ready", no extra click to
+// start typing. Only fires on the initial mount (mount-once-then-message, decision 50), so re-renders
+// never steal the caret. Fail-soft: a focus that throws (view torn down) is ignored.
+function focusPm(){ try { if (pmView && pmView.focus) { setTimeout(function(){ try { pmView && pmView.focus(); } catch (e) {} }, 0); } } catch (e) {} }
 // Re-render the body from a message. The live ProseMirror node is detached, the body HTML is swapped, and
 // the same node re-attached (PM is never remounted). A model-driven body change (an accepted proposal)
 // arrives as pmReset and resets the live doc to disk truth; pending proposals + the gutter are decorations.

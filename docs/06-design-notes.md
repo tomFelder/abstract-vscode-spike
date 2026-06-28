@@ -360,3 +360,12 @@ our-surface / core-patch) and, for any core patch, the file + why a contrib-only
   missed case just shows a toast, never breaks activation). Re-pin on rebase if the handler is refactored.
   Verified live on a desktop cold launch: zero toasts / banner / sign-in / onboarding / Copilot chrome; HOLD
   green (PM doc + bound figure + the product chat -> inline diff -> rail card, with `disableAIFeatures` on).
+
+- **Iter 3 — document-first on-ramp. Tier: our-surface, 0 core patches.** Three our-surface changes, no core
+  patch: (1) `NEW_DOCUMENT_TEMPLATE` (`livingDocsService.ts`) goes from a `title:`-frontmatter + "## Overview"
+  boilerplate to a single newline, so a new doc opens as a **blank writing surface**; (2) `focusPm` in the
+  `livingDocRender` runtime calls `pmView.focus()` on mount (once — decision 50 mount-once); (3) a
+  `LivingDocEditor.focus()` override forwards pane focus into the webview iframe so the in-iframe focus lands.
+  Verified on a **desktop real-disk smoke**: the create path writes clean blank Markdown to disk (no `title:`),
+  and typed content persists as clean plain Markdown. HOLD green (living doc still opens in PM with toolbar +
+  figure). _Flagged for iter 6: the formatting toolbar is absent on blank plain docs (pre-existing)._
