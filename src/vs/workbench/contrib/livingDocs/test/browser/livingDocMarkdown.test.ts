@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, parseChatResponse, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -224,5 +224,31 @@ suite('LivingDoc bind-link format', () => {
 
 	test('withReplacedBody on a plain doc (no frontmatter) just returns the new body', () => {
 		assert.strictEqual(withReplacedBody('# Title\n\nold body\n', 'new body').trim(), 'new body');
+	});
+
+	// plan 16 iter 5: the chat-response parser must be tolerant -- a non-JSON / truncated / prose-wrapped
+	// reply degrades to a plain answer instead of throwing (which used to surface as "the agent model errored").
+	test('parseChatResponse extracts a clean JSON object with reply + edits + inserts', () => {
+		const raw = '{"reply":"Done.","edits":[{"oldText":"a","newText":"b"}],"inserts":[{"afterHeading":"","newText":"- x"}]}';
+		assert.deepStrictEqual(parseChatResponse(raw), {
+			reply: 'Done.',
+			edits: [{ oldText: 'a', newText: 'b' }],
+			inserts: [{ afterHeading: '', newText: '- x' }],
+		});
+	});
+
+	test('parseChatResponse extracts the JSON object even when the model wraps it in prose', () => {
+		const raw = 'Sure, here is the change:\n{"reply":"Updated the intro.","edits":[],"inserts":[]}\nHope that helps!';
+		assert.deepStrictEqual(parseChatResponse(raw), { reply: 'Updated the intro.', edits: [], inserts: [] });
+	});
+
+	test('parseChatResponse degrades a plain-text (non-JSON) reply to a plain answer with no proposals', () => {
+		const raw = 'The document already covers that, so no change is needed.';
+		assert.deepStrictEqual(parseChatResponse(raw), { reply: raw, edits: [], inserts: [] });
+	});
+
+	test('parseChatResponse degrades malformed / truncated JSON to a plain answer instead of throwing', () => {
+		const raw = '{"reply":"half a sentence and then the stream cut o';
+		assert.deepStrictEqual(parseChatResponse(raw), { reply: raw, edits: [], inserts: [] });
 	});
 });

@@ -376,3 +376,32 @@ Markdown (`grep -c 'title:'` = 0, `grep -c '^---'` = 0), the insertion present; 
 the desktop after-accept (clean doc + Explorer hides both sidecars).
 
 **Carry-over:** iteration 5 (off `calm-surface-4`) is chat feel — streaming, retry, robust parse.
+
+### Iteration 5 — Chat feel: robust parse + retry + alive indicator (branch `calm-surface-5`, PR → `calm-surface-4`)
+**What changed (one focused commit):** (a) a pure, TDD'd `parseChatResponse(raw)` replaces the bare throwing
+`JSON.parse` in `_chatRespond` — extracts the JSON object when present, otherwise degrades to a plain-text
+answer; the bubble never shows the raw JSON envelope (a parsed-but-empty `reply` falls back to a neutral
+line). (b) `_callModel` retries once on a transient failure (not on a refusal). (c) the "Working…" indicator
+becomes a pulsing agent avatar + an animated "Thinking…" ellipsis (pure CSS in `reviewRailView`).
+
+**Streaming — DEFERRED + logged (decision 58):** the model is asked for "ONLY a JSON object" and the proxy is
+a buffered round-trip, so token-streaming would surface raw JSON. Real streaming needs a response-format
+redesign (prose stream + structured tail) + proxy SSE + a progressive webview render — a larger, riskier
+change than fits an unattended iteration. The robustness trio removes the felt pain (false errors, dead hang).
+
+**Core patches:** none. Tier **our-surface**.
+
+**TDD (pure logic):** 4 `parseChatResponse` tests — clean JSON, prose-wrapped JSON, plain-text degrade,
+truncated-JSON degrade. 91 LivingDoc tests pass.
+
+**Default-and-log decision:** #58.
+
+**HOLD re-verified live (code-web + OpenRouter):** a chat question returned a real prose answer ("…MRR growth
+to $49,800… Churn… now standing at 2.4%…") with the source-read step — no raw JSON, no false error; figure
+`49800` + calm toolbar intact (F1/F-spine, U1/U2/G2). A live edge-case (gpt-4o-mini returning an empty
+`reply`) was caught and fixed (neutral fallback instead of a raw-JSON bubble).
+
+**Screenshots:** `docs/plans/16-verify/iter5-*` — the prose chat answer (no JSON leak).
+
+**Carry-over:** iteration 6 (off `calm-surface-5`) is the calm design-audit polish pass — incl. the
+plain-doc formatting-toolbar gap flagged in iter 3.
