@@ -340,3 +340,23 @@ our-surface / core-patch) and, for any core patch, the file + why a contrib-only
   web + desktop (no status bar / activity bar / tabs / breadcrumb); HOLD re-verified (PM editor, bound figure,
   chat → inline diff → rail card). _The desktop cold-launch still shows the Restricted-Mode banner + Sign-In +
   welcome walkthroughs — those are iteration 2._
+
+- **Iter 2 — kill the cold-launch noise + trust leaks. Tier: additive-contribution + 1 core patch.**
+  Four of the five fixes are real settings, registered as product defaults in the same
+  `registerDefaultConfigurations` block (still additive, 0 core patches): `security.workspace.trust.enabled:false`
+  (Restricted-Mode banner), `workbench.welcomePage.experimentalOnboarding:false` (the "Welcome / Sign in to use
+  Copilot" modal + the "Make It Yours" walkthrough — both onboarding steps gated by this flag),
+  `workbench.startupEditor:'none'` (welcome page), `chat.disableAIFeatures:true` (the built-in **Copilot** chrome
+  — Sign-In button + Copilot status; the product's own Review-rail chat is a separate contribution and is
+  unaffected), and `window.title:'${activeEditorShort}'` (drop the `${rootName} [remote]` label).
+  **The one core patch** (this loop's first ledger entry):
+  `src/vs/workbench/api/browser/mainThreadExtensionService.ts` `$onExtensionActivationError` (~`:102`) — the
+  "Activating extension 'vscode.X' failed: Not Found" toasts are **dev-build-only** (the `isDev` branch; a built
+  product just `console.error`s) and come from built-in `vscode.*` extensions this slim build doesn't ship.
+  Guarded the toast with `&& !extensionId.value.startsWith('vscode.')` so built-in activation failures log
+  instead of toasting; user/third-party errors still toast in dev. **Why no contrib-only route:** this is a
+  hard-coded `notificationService.error` call inside a `$`-RPC handler on `MainThreadExtensionService` — no
+  contribution seam, event, or setting exists on this path. Minimal (one boolean + a comment) and fail-soft (a
+  missed case just shows a toast, never breaks activation). Re-pin on rebase if the handler is refactored.
+  Verified live on a desktop cold launch: zero toasts / banner / sign-in / onboarding / Copilot chrome; HOLD
+  green (PM doc + bound figure + the product chat -> inline diff -> rail card, with `disableAIFeatures` on).

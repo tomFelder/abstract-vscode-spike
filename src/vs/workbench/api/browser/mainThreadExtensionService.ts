@@ -100,7 +100,14 @@ export class MainThreadExtensionService implements MainThreadExtensionServiceSha
 		}
 
 		const isDev = !this._environmentService.isBuilt || this._environmentService.isExtensionDevelopment;
-		if (isDev) {
+		// Living Documents (plan 16 iter 2, decision 55): built-in (`vscode.*`) extensions that this slim
+		// product build does not ship fail activation with a benign "Not Found" -- in a built product these
+		// only `console.error`, but in a dev build (`!isBuilt`) the branch below surfaces them as error
+		// toasts, which is cold-launch noise for a document tool. Log built-in activation failures instead
+		// of toasting them; user/third-party extension errors still toast in dev. Minimal, fail-soft.
+		// CORE-PATCH (merge-tax ledger D8) -- there is no contribution seam on this notification path.
+		const isBuiltinExtension = extensionId.value.startsWith('vscode.');
+		if (isDev && !isBuiltinExtension) {
 			this._notificationService.error(error);
 			return;
 		}

@@ -290,3 +290,32 @@ desktop shell.
 
 **Carry-over:** iteration 2 (off `calm-surface-1`) kills the cold-launch noise (trust banner, ext
 activation-failure toasts, Sign-In / Copilot chrome, the workspace label).
+
+### Iteration 2 — Kill the cold-launch noise + trust leaks (branch `calm-surface-2`, PR → `calm-surface-1`)
+**What changed (one focused commit):** extended the config-default block in `livingDocs.contribution.ts` with
+five more overrides — `security.workspace.trust.enabled:false` (Restricted-Mode banner),
+`workbench.welcomePage.experimentalOnboarding:false` (the "Welcome / Sign in to use Copilot" modal + the "Make
+It Yours" walkthrough), `workbench.startupEditor:'none'` (welcome page), `chat.disableAIFeatures:true` (the
+built-in Copilot Sign-In/status chrome), `window.title:'${activeEditorShort}'` (drop the `[remote]` label) —
+plus one minimal core patch in `mainThreadExtensionService.ts` to log (not toast) dev-only built-in
+`vscode.*` activation-failure errors.
+
+**Core patches:** 1 — `mainThreadExtensionService.$onExtensionActivationError` (guard the dev toast with
+`!extensionId.value.startsWith('vscode.')`). Fail-soft; no contribution seam exists on this `$`-RPC handler.
+Logged in `06-design-notes.md` D8 with the file:line + why contrib-only wasn't possible.
+
+**Default-and-log decision:** #55.
+
+**HOLD re-verified live (desktop cold launch, `code.sh`, `TMPDIR=/tmp`, fresh folder `.realdocs-test`):** the
+living doc opens in PM with the calm toolbar + bound figure `49800` (U1/U2/G2/G5); a chat turn (the product's
+own Review-rail chat, **with `disableAIFeatures` on**) read `metrics.csv` + `forecast.csv` and rendered an
+"Outlook" insertion as a green inline diff with Approve/Reject + a synced rail card (F1/F3/F4/F5/U3). Web
+reload: no regression; the title is now just the document name.
+
+**Acceptance met:** the desktop cold launch shows **zero** error toasts, no Restricted-Mode banner, no Sign-In,
+no onboarding modal, no Copilot chrome — it opens straight to the calm Home dashboard.
+
+**Screenshots:** `docs/plans/16-verify/iter2-*` — desktop before (iter-1 shell, banner + Sign-In) / after
+(clean cold launch), the desktop HOLD chat spine, and the calm web home.
+
+**Carry-over:** iteration 3 (off `calm-surface-2`) is the document-first on-ramp.
