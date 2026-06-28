@@ -136,6 +136,35 @@ suite('LivingDoc bind-link format', () => {
 		assert.ok(doc.body.includes('- first item'), 'body retains the raw Markdown for generic rendering');
 	});
 
+	// plan 16 iter 4: a plain doc must round-trip to BYTE-CLEAN plain Markdown. The display title derives
+	// from the H1 (above), but that derived title must NOT be written back as `---\ntitle: ...\n---` -- a
+	// file the user wrote as plain Markdown stays plain Markdown after an accepted chat edit re-serializes it.
+	test('a plain doc round-trips through parse -> serialize as byte-clean plain Markdown (no injected frontmatter)', () => {
+		assert.strictEqual(serializeLivingDoc(parseLivingDoc(PLAIN_MD)), PLAIN_MD);
+	});
+
+	test('serializing a plain doc after an inserted block stays plain Markdown -- no injected title frontmatter', () => {
+		// Mirrors accepting a chat insert on a plain doc: the body gains a paragraph, then _persist re-serializes.
+		const withInsert = PLAIN_MD + '\nA freshly inserted paragraph from chat.\n';
+		const serialized = serializeLivingDoc(parseLivingDoc(withInsert));
+		assert.deepStrictEqual(
+			{
+				startsWithFrontmatter: serialized.startsWith('---'),
+				injectsTitle: serialized.includes('title:'),
+				keepsInsert: serialized.includes('A freshly inserted paragraph from chat.'),
+				stillPlain: parseLivingDoc(serialized).isLiving,
+			},
+			{ startsWithFrontmatter: false, injectsTitle: false, keepsInsert: true, stillPlain: false },
+		);
+	});
+
+	// A plain doc that DID author a `title:` (but no sources/context) keeps it -- we drop only the DERIVED
+	// title, never frontmatter the user actually wrote.
+	test('a plain doc with an authored title (no sources) keeps that title on round-trip', () => {
+		const TITLED_PLAIN = ['---', 'title: My Notes', '---', '', 'Just some prose.'].join('\n') + '\n';
+		assert.strictEqual(serializeLivingDoc(parseLivingDoc(TITLED_PLAIN)), TITLED_PLAIN);
+	});
+
 	// withFrontmatterSource edits only the frontmatter `sources:` list, leaving the body verbatim - so adding
 	// a source via the UI never touches the prose (the add-source affordance, R5).
 	test('withFrontmatterSource adds a source to an existing sources list and the body is untouched', () => {

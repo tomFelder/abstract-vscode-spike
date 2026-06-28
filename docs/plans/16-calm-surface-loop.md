@@ -347,3 +347,32 @@ blank doc, the desktop empty-state on-ramp, and the HOLD living doc.
 
 **Carry-over:** iteration 4 (off `calm-surface-3`) hides internal artifacts (`.lock.json`/`agents.json`) +
 stops injecting frontmatter on the serialize-on-accept path (the create path is already clean as of iter 3).
+
+### Iteration 4 — Hide internal artifacts + stop injecting frontmatter (branch `calm-surface-4`, PR → `calm-surface-3`)
+**What changed (one focused commit):** (a) `.lock.json` + `agents.json` added to a `files.exclude` product
+default (object-valued defaults merge, so the built-in `.git`/`.DS_Store` excludes survive) — hidden from the
+native Explorer; the custom tree-rail already lists only `.md`. (b) Stopped `serializeLivingDoc` injecting a
+derived `title:`: `parseLivingDoc` now records the authored `frontmatterTitle` (`''` if none), serialize emits
+`title:` only from that and drops the entire `---` block when there is no authored frontmatter — so a plain doc
+round-trips byte-clean Markdown, while living docs (and plain docs with an authored title) are unchanged.
+
+**Core patches:** none. Tier **our-surface + additive-contribution**.
+
+**TDD (pure logic, red→green):** 3 tests in `livingDocMarkdown.test.ts` — plain doc round-trips byte-clean; a
+plain doc + an inserted block stays plain (no injected `title:`, `isLiving` false); a plain doc with an
+authored title keeps it. Watched the first two fail, then pass. All 87 LivingDoc tests green.
+
+**Default-and-log decision:** #57.
+
+**Desktop disk smoke (decision 38, `TMPDIR=/tmp`, fresh `/tmp/calm-iter4`):** created a plain `Untitled.md`
+("Launch Plan"), chat-inserted an intro paragraph, **Approved** → re-read from **real disk**: clean plain
+Markdown (`grep -c 'title:'` = 0, `grep -c '^---'` = 0), the insertion present; `agents.json` +
+`Untitled.lock.json` both on disk but **absent from the Explorer**.
+
+**HOLD re-verified live:** chat → inline diff → Approve → persist all work; the crumb stays "Markdown" (plain,
+`isLiving` false) through the accept.
+
+**Screenshots:** `docs/plans/16-verify/iter4-*` — web Explorer (no agents.json), the desktop chat insert, and
+the desktop after-accept (clean doc + Explorer hides both sidecars).
+
+**Carry-over:** iteration 5 (off `calm-surface-4`) is chat feel — streaming, retry, robust parse.

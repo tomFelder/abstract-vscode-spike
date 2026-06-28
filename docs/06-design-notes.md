@@ -369,3 +369,12 @@ our-surface / core-patch) and, for any core patch, the file + why a contrib-only
   Verified on a **desktop real-disk smoke**: the create path writes clean blank Markdown to disk (no `title:`),
   and typed content persists as clean plain Markdown. HOLD green (living doc still opens in PM with toolbar +
   figure). _Flagged for iter 6: the formatting toolbar is absent on blank plain docs (pre-existing)._
+
+- **Iter 4 — hide internal artifacts + stop injecting frontmatter. Tier: our-surface + additive-contribution,
+  0 core patches.** (a) `.lock.json` + `agents.json` are added to a `files.exclude` product default (object
+  defaults merge, so the built-in excludes are kept); the custom tree-rail already lists only `.md`. (b)
+  `serializeLivingDoc` no longer injects a derived `title:` — `parseLivingDoc` now records the *authored*
+  `frontmatterTitle` (`''` if none), serialize emits `title:` only from that and drops the whole `---` block
+  when there is no authored frontmatter, so a plain doc round-trips byte-clean. TDD'd red->green (3 tests). No
+  core patch. Verified on a **desktop real-disk smoke**: a plain doc + accepted chat insert persists as clean
+  plain Markdown (0 `title:`, 0 `---`); `agents.json` + `.lock.json` hidden from the Explorer.

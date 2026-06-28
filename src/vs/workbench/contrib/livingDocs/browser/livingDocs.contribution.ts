@@ -108,6 +108,15 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'workbench.startupEditor': 'none',
 		'chat.disableAIFeatures': true,
 		'window.title': '${activeEditorShort}',
+		// iter 4 (decision 57) -- hide the internal plumbing from the native Explorer. `.lock.json`
+		// (provenance/claim sidecars) and `agents.json` (the agent registry) are implementation detail, not
+		// documents. Object-valued default configurations MERGE in VS Code, so these patterns ADD to the
+		// built-in excludes (`.git`, `.DS_Store`, ...) rather than replacing them. The files stay on disk;
+		// the user just never sees them in their document list. The custom tree-rail already shows only `.md`.
+		'files.exclude': {
+			'**/*.lock.json': true,
+			'**/agents.json': true,
+		},
 	}
 }]);
 
