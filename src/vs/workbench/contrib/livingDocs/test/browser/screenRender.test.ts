@@ -30,7 +30,7 @@ suite('livingDocs screenRender', () => {
 			assert.ok(head >= 0, 'has a top bar');
 			// The top bar precedes the screen content (it is the first flex child of .screen).
 			assert.ok(head < html.indexOf('class="scr-body"') || html.indexOf('class="scr-body"') === -1, 'top bar is above the body');
-			assert.ok(html.includes('Opportunity OS'), 'shows the product brand');
+			assert.ok(html.includes('Abstract'), 'shows the product brand');
 			assert.ok(html.includes(`class="crumb">${crumb}<`), `crumb reads ${crumb}`);
 			assert.ok(html.includes('All sources synced'), 'shows the sync-status pill');
 			assert.ok(/data-msg="present"[^>]*class="tb-present"|class="tb-present"[^>]*data-msg="present"/.test(html), 'has a Present control wired to the present message');

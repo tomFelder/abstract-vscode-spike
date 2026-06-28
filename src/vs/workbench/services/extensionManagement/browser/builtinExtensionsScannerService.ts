@@ -25,7 +25,7 @@ interface IBundledExtension {
 	changelogPath?: string;
 }
 
-// Living Documents (Opportunity OS) is a word processor, not an IDE, so these IDE-only first-party
+// Living Documents (Abstract) is a word processor, not an IDE, so these IDE-only first-party
 // builtins are excluded from the product. They are also the ones whose web bundle 404s in the
 // @vscode/test-web dev run, producing "Activating extension '...' failed: Not Found" toasts on every
 // launch (v2 design gate G6). Removing them here clears the toasts and keeps the shell calm.

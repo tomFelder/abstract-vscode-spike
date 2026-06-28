@@ -14,8 +14,8 @@
   "contributes": {
     "themes": [
       {
-        "id": "Opportunity OS",
-        "label": "Opportunity OS",
+        "id": "Abstract",
+        "label": "Abstract",
         "uiTheme": "vs",
         "path": "./themes/opportunity-os-color-theme.json"
       },

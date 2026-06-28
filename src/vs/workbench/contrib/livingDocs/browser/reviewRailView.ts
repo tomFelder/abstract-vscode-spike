@@ -479,7 +479,7 @@ export class ReviewRailView extends ViewPane {
 }
 
 // ---- Static comp-faithful bodies (History, and the document-checks section folded into Review).
-// Light colours match the registered "Opportunity OS" theme, so hardcoding them here reproduces the
+// Light colours match the registered "Abstract" theme, so hardcoding them here reproduces the
 // comp exactly. (Chat is now a live DOM surface in _renderChat, not a static string.) ----
 
 function timelineRow(dot: string, title: string, badge: string, body: string, meta: string, last: boolean): string {
