@@ -17,7 +17,7 @@ const TITLES: Record<ScreenId, string> = {
 	agents: 'Agents',
 };
 
-// One singleton editor input per Opportunity OS screen (Templates / Knowledge / Agents). The screen
+// One singleton editor input per Abstract screen (Templates / Knowledge / Agents). The screen
 // id is carried in a synthetic resource so the editor service treats each screen as its own editor.
 export class ScreenEditorInput extends EditorInput {
 

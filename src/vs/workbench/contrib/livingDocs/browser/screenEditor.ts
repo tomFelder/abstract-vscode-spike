@@ -32,7 +32,7 @@ interface IScreenEditorState {
 	docs?: readonly ILivingDocSummary[];
 }
 
-// Webview editor that hosts one Opportunity OS screen (Templates / Knowledge / Agents) in the
+// Webview editor that hosts one Abstract screen (Templates / Knowledge / Agents) in the
 // editor area. The screen's small interactive state (Knowledge scope, agent canvas, run state)
 // lives here and re-renders the webview, mirroring the comp; cross-surface actions are routed to
 // the living-docs service / editor service.
@@ -109,7 +109,7 @@ export class ScreenEditor extends EditorPane {
 		const webview = store.add(this._webviewService.createWebviewElement({
 			options: {},
 			contentOptions: { allowScripts: true },
-			title: 'Opportunity OS',
+			title: 'Abstract',
 			extension: undefined,
 		}));
 		this._container.replaceChildren();

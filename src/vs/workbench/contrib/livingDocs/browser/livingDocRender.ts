@@ -403,7 +403,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		: '';
 	const presentBtn = (doc && isPm) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
 
-	const topbar = `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
+	const topbar = `<div class="topbar"><div class="brand"><span class="logo">A</span>Abstract<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
 		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
@@ -605,7 +605,7 @@ footer{margin-top:48px;padding-top:14px;border-top:1px solid #eee;font:400 11px/
 /** Build a standalone, shareable HTML page from a document's current (resolved) state. */
 export function renderExportHtml(doc: ILivingDoc, resolved: ReadonlyMap<string, string> = EMPTY_RESOLVED): string {
 	const body = renderGenericMarkdown(renderExportMarkdown(doc, resolved));
-	const footer = `<footer>Exported from Opportunity OS &middot; Living Document</footer>`;
+	const footer = `<footer>Exported from Abstract &middot; Living Document</footer>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(doc.title)}</title><style>${EXPORT_STYLE}</style></head><body><main class="page">${body}${footer}</main></body></html>`;
 }
 

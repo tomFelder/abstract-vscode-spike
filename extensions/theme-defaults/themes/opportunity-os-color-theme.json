@@ -1,6 +1,6 @@
 {
 	"$schema": "vscode://schemas/color-theme",
-	"name": "Opportunity OS",
+	"name": "Abstract",
 	"include": "./light_modern.json",
 	"colors": {
 		"focusBorder": "#5b6dc4",

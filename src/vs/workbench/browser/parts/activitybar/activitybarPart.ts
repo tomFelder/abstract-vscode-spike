@@ -45,7 +45,7 @@ export class ActivitybarPart extends Part {
 	static readonly ACTION_HEIGHT = 48;
 	static readonly COMPACT_ACTION_HEIGHT = 32;
 
-	// Living Documents (Opportunity OS) renders a 76px labeled icon-nav (the "Agentic Workbench" comp),
+	// Living Documents (Abstract) renders a 76px labeled icon-nav (the "Agentic Workbench" comp),
 	// not VS Code's 48px icon-only bar; the grid must allocate the wider rail so the label under each
 	// icon fits and the sidebar doesn't overlap. Merge-tax: core patch (livingDocs v2 iter 9). The label
 	// itself is added by the Studio styleOverrides CSS (.style-override-studio).

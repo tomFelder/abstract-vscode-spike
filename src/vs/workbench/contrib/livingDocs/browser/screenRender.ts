@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The "main-area" Opportunity OS screens beyond the document editor -- Templates, Knowledge and
+// The "main-area" Abstract screens beyond the document editor -- Templates, Knowledge and
 // Agents (with the workflow canvas). Each is rendered into a webview editor (see screenEditor.ts)
 // so it fills the editor area at the comp's intended width, matching the Workbench hi-fi. These are
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
@@ -86,7 +86,7 @@ function page(body: string): string {
 // in livingDocRender). Brand + per-screen crumb on the left; sync-status pill, Present (posts the
 // same `present` message the host already handles), and the user avatar on the right.
 function topBar(crumb: string): string {
-	return `<div class="topbar"><div class="brand"><span class="logo">L</span>Opportunity OS<span class="sep">/</span><span class="crumb">${esc(crumb)}</span></div>`
+	return `<div class="topbar"><div class="brand"><span class="logo">A</span>Abstract<span class="sep">/</span><span class="crumb">${esc(crumb)}</span></div>`
 		+ `<div class="right"><span class="pill"><span class="dot"></span>All sources synced</span>`
 		+ `<button class="tb-present" data-msg="present">&#8599; Present</button>`
 		+ `<span class="av">TS</span></div></div>`;
@@ -222,7 +222,7 @@ function renderKnowledge(state: IScreenState): string {
 		<div><h2 class="scr-title">Knowledge</h2><div class="scr-sub">The decision stack &mdash; what agents and documents align to.</div></div>
 		<div style="margin-left:auto;display:flex;gap:5px;background:#f1f2f5;border-radius:9px;padding:3px">
 			<button data-msg="setKnOrg" style="border:none;border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;${tabStyle(isOrg)}">Organization</button>
-			<button data-msg="setKnProject" style="border:none;border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;${tabStyle(!isOrg)}">Project &middot; Opportunity OS</button>
+			<button data-msg="setKnProject" style="border:none;border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;${tabStyle(!isOrg)}">Project &middot; Abstract</button>
 		</div>
 		<button class="btn-ghost">Edit</button>
 	</div>

@@ -126,9 +126,9 @@ Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane
 	[new SyncDescriptor(LivingDocEditorInput)]
 );
 
-// The main-area Opportunity OS screens (Templates / Knowledge / Agents) share one webview editor.
+// The main-area Abstract screens (Templates / Knowledge / Agents) share one webview editor.
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
-	EditorPaneDescriptor.create(ScreenEditor, ScreenEditor.ID, localize('livingDocsScreen', "Opportunity OS")),
+	EditorPaneDescriptor.create(ScreenEditor, ScreenEditor.ID, localize('livingDocsScreen', "Abstract")),
 	[new SyncDescriptor(ScreenEditorInput)]
 );
 
@@ -266,7 +266,7 @@ const SCREEN_NAV: readonly IScreenNavEntry[] = [
 ];
 
 for (const entry of SCREEN_NAV) {
-	const icon = registerIcon(`living-docs-${entry.screen}`, entry.icon, localize('livingDocs.screenIcon', "Opportunity OS {0}", entry.title));
+	const icon = registerIcon(`living-docs-${entry.screen}`, entry.icon, localize('livingDocs.screenIcon', "Abstract {0}", entry.title));
 	const container = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
 		id: entry.containerId,
 		title: { value: entry.title, original: entry.title },
@@ -291,7 +291,7 @@ for (const entry of SCREEN_NAV) {
 			super({
 				id: `livingDocs.open.${entry.screen}`,
 				title: localize2('livingDocs.openScreen', "Open {0}", entry.title),
-				category: localize2('livingDocs.category', "Opportunity OS"),
+				category: localize2('livingDocs.category', "Abstract"),
 				f1: true,
 			});
 		}
