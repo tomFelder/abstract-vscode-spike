@@ -243,14 +243,15 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		if (doc && this._livingDocs.isChatBusy(doc)) {
-			const busy = append(scroll, $('div'));
-			busy.style.cssText = 'display:flex;gap:9px;align-items:center';
-			const avatar = append(busy, $('span'));
-			avatar.style.cssText = 'flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center';
+			// A visibly-alive working state (plan 16 iter 5): a pulsing agent avatar + an animated ellipsis,
+			// so the in-flight wait reads as "thinking", not a frozen hang. Pure CSS animation (the rail is
+			// DOM, re-rendered on state change) -- no timer to leak.
+			const busy = append(scroll, $('div.ldp-busy'));
+			const avatar = append(busy, $('span.ldp-busy-avatar'));
 			avatar.textContent = '\u273B';
-			const dots = append(busy, $('span'));
-			dots.style.cssText = 'font:400 13px/1.6 system-ui;color:#a3a8b2';
-			dots.textContent = 'Working\u2026';
+			const label = append(busy, $('span.ldp-busy-label'));
+			label.textContent = 'Thinking';
+			append(label, $('span.ldp-busy-dots'));
 		}
 
 		// The standing approve/reject summary: whenever changes are pending, the agent surfaces the
@@ -459,6 +460,12 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldr-reject{border:1px solid #e0e2e8;border-radius:8px;padding:11px 16px;background:#fff;color:#696e78;font:500 13px/1 system-ui;cursor:pointer}
 		.living-docs-panel .ldr-reject:hover{background:#f4f5f7}
 		.living-docs-panel .ldr-checks{margin-top:6px;padding-top:16px;border-top:1px solid #eef0f3}
+		.living-docs-panel .ldp-busy{display:flex;gap:9px;align-items:center}
+		.living-docs-panel .ldp-busy-avatar{flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center;animation:ldp-pulse 1.4s ease-in-out infinite}
+		.living-docs-panel .ldp-busy-label{font:400 13px/1.6 system-ui;color:#a3a8b2}
+		.living-docs-panel .ldp-busy-dots::after{content:"";animation:ldp-dots 1.4s steps(4,end) infinite}
+		@keyframes ldp-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+		@keyframes ldp-dots{0%{content:""}25%{content:"\\2009."}50%{content:"\\2009.."}75%{content:"\\2009..."}100%{content:"\\2009..."}}
 		`;
 		container.appendChild(style);
 	}

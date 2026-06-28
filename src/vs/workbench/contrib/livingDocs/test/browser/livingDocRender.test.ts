@@ -173,6 +173,34 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		});
 	});
 
+	// plan 16 iter 6: the formatting toolbar must show for a PLAIN doc too (PM is the one surface) -- a blank
+	// new note previously opened with no way to format. The living-only chrome (sync bar, figure hint) stays off.
+	test('a plain (non-living) doc in PM still gets the formatting toolbar, without the living-only chrome', () => {
+		const plain: ILivingDoc = { title: 'Notes', subtitle: '', sources: [], context: [], blocks: [], isLiving: false, body: '' };
+		const content = renderLivingDocContent({
+			doc: plain, pending: [], resolved: new Map(), dirty: false, status: '',
+			recent: new Set(), mode: 'pm', rawText: '', present: { open: false, choice: 'gdoc', scope: 'internal' }, syncDiff: [],
+		});
+		const h = content.html;
+		assert.deepStrictEqual({
+			hasCalmToolbar: h.includes('class="etoolbar"'),
+			wiredToPmCmd: h.includes('data-pmcmd="bold"') && h.includes('data-pmcmd="blockquote"'),
+			crumbIsMarkdown: h.includes('class="crumb">Markdown<'),
+			// living-only chrome stays off for a plain doc
+			noSyncBar: !h.includes('class="syncbar"'),
+			noFigureHint: !h.includes('Bound figures are highlighted'),
+			// the document is still the PM writing surface
+			isPmSurface: h.includes('id="pm-root"'),
+		}, {
+			hasCalmToolbar: true,
+			wiredToPmCmd: true,
+			crumbIsMarkdown: true,
+			noSyncBar: true,
+			noFigureHint: true,
+			isPmSurface: true,
+		});
+	});
+
 	test('raw mode is reachable and offers the way back to the editor without a separate "rendered" mode', () => {
 		const raw = renderLivingDocContent({
 			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),

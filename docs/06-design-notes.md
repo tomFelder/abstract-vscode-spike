@@ -340,3 +340,66 @@ our-surface / core-patch) and, for any core patch, the file + why a contrib-only
   web + desktop (no status bar / activity bar / tabs / breadcrumb); HOLD re-verified (PM editor, bound figure,
   chat → inline diff → rail card). _The desktop cold-launch still shows the Restricted-Mode banner + Sign-In +
   welcome walkthroughs — those are iteration 2._
+
+- **Iter 2 — kill the cold-launch noise + trust leaks. Tier: additive-contribution + 1 core patch.**
+  Four of the five fixes are real settings, registered as product defaults in the same
+  `registerDefaultConfigurations` block (still additive, 0 core patches): `security.workspace.trust.enabled:false`
+  (Restricted-Mode banner), `workbench.welcomePage.experimentalOnboarding:false` (the "Welcome / Sign in to use
+  Copilot" modal + the "Make It Yours" walkthrough — both onboarding steps gated by this flag),
+  `workbench.startupEditor:'none'` (welcome page), `chat.disableAIFeatures:true` (the built-in **Copilot** chrome
+  — Sign-In button + Copilot status; the product's own Review-rail chat is a separate contribution and is
+  unaffected), and `window.title:'${activeEditorShort}'` (drop the `${rootName} [remote]` label).
+  **The one core patch** (this loop's first ledger entry):
+  `src/vs/workbench/api/browser/mainThreadExtensionService.ts` `$onExtensionActivationError` (~`:102`) — the
+  "Activating extension 'vscode.X' failed: Not Found" toasts are **dev-build-only** (the `isDev` branch; a built
+  product just `console.error`s) and come from built-in `vscode.*` extensions this slim build doesn't ship.
+  Guarded the toast with `&& !extensionId.value.startsWith('vscode.')` so built-in activation failures log
+  instead of toasting; user/third-party errors still toast in dev. **Why no contrib-only route:** this is a
+  hard-coded `notificationService.error` call inside a `$`-RPC handler on `MainThreadExtensionService` — no
+  contribution seam, event, or setting exists on this path. Minimal (one boolean + a comment) and fail-soft (a
+  missed case just shows a toast, never breaks activation). Re-pin on rebase if the handler is refactored.
+  Verified live on a desktop cold launch: zero toasts / banner / sign-in / onboarding / Copilot chrome; HOLD
+  green (PM doc + bound figure + the product chat -> inline diff -> rail card, with `disableAIFeatures` on).
+
+- **Iter 3 — document-first on-ramp. Tier: our-surface, 0 core patches.** Three our-surface changes, no core
+  patch: (1) `NEW_DOCUMENT_TEMPLATE` (`livingDocsService.ts`) goes from a `title:`-frontmatter + "## Overview"
+  boilerplate to a single newline, so a new doc opens as a **blank writing surface**; (2) `focusPm` in the
+  `livingDocRender` runtime calls `pmView.focus()` on mount (once — decision 50 mount-once); (3) a
+  `LivingDocEditor.focus()` override forwards pane focus into the webview iframe so the in-iframe focus lands.
+  Verified on a **desktop real-disk smoke**: the create path writes clean blank Markdown to disk (no `title:`),
+  and typed content persists as clean plain Markdown. HOLD green (living doc still opens in PM with toolbar +
+  figure). _Flagged for iter 6: the formatting toolbar is absent on blank plain docs (pre-existing)._
+
+- **Iter 4 — hide internal artifacts + stop injecting frontmatter. Tier: our-surface + additive-contribution,
+  0 core patches.** (a) `.lock.json` + `agents.json` are added to a `files.exclude` product default (object
+  defaults merge, so the built-in excludes are kept); the custom tree-rail already lists only `.md`. (b)
+  `serializeLivingDoc` no longer injects a derived `title:` — `parseLivingDoc` now records the *authored*
+  `frontmatterTitle` (`''` if none), serialize emits `title:` only from that and drops the whole `---` block
+  when there is no authored frontmatter, so a plain doc round-trips byte-clean. TDD'd red->green (3 tests). No
+  core patch. Verified on a **desktop real-disk smoke**: a plain doc + accepted chat insert persists as clean
+  plain Markdown (0 `title:`, 0 `---`); `agents.json` + `.lock.json` hidden from the Explorer.
+
+- **Iter 5 — chat robustness (parse + retry + indicator). Tier: our-surface, 0 core patches.** A pure,
+  TDD'd `parseChatResponse` replaces the throwing `JSON.parse` so a non-JSON / truncated / prose-wrapped reply
+  degrades to a plain answer (never "the agent model errored", never a raw-JSON bubble); `_callModel` retries
+  once on a transient failure; the "Working…" indicator becomes a pulsing avatar + animated "Thinking…" dots
+  (pure CSS). **True token-streaming is deferred and logged** (decision 58): the "ONLY JSON" reply format +
+  buffered proxy mean streaming would surface raw JSON; it needs a response-format redesign (prose stream +
+  structured tail) + proxy SSE + a progressive webview render — out of scope for an unattended iteration. The
+  robustness trio removes the felt pain (false errors, dead hang) without it. 91 LivingDoc tests pass.
+
+- **Iter 6 — calm polish pass. Tier: our-surface, 0 core patches.** Closed the one concrete defect surfaced
+  across the loop: the formatting toolbar was gated `isLiving`, so a plain/blank doc had no way to format —
+  now it shows for every PM document (B/I/headings/lists/quote universal; sync bar + figure hint stay
+  living-only). Gate-by-gate calm-document audit confirms G1–G6 hold and every tell in Tom's "IDE in a trench
+  coat" critique (footer, activity bar, tabs, breadcrumb, trust banner, sign-in, ext-failure toasts, sidecars,
+  injected frontmatter, false chat errors) is closed across iters 1–6. Final capstone desktop smoke green
+  (calm cold launch → blank doc with toolbar → clean disk persistence). Residuals logged in decision 59
+  (streaming deferred; "v14" mock; plain-doc raw affordance; minimal title bar by design).
+
+### Merge-tax ledger summary (plan 16 / calm-surface stack)
+Six iterations, **exactly one core patch total** (iter 2: `mainThreadExtensionService.$onExtensionActivationError`
+— guard the dev-only built-in activation toast; fail-soft; no contribution seam). Everything else landed as
+additive config-default registrations or our-surface (livingDocs contribution / renderer / service) changes.
+Plan 16 *permitted* core patches freely; the loop took one. Re-pin that one guard on rebase if the handler is
+refactored.

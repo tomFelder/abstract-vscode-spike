@@ -120,6 +120,7 @@ export function parseLivingDoc(text: string): ILivingDoc {
 
 	return {
 		title,
+		frontmatterTitle: fm.title,
 		subtitle: fm.subtitle,
 		sources: fm.sources,
 		context: fm.context,
@@ -208,19 +209,64 @@ export function withReplacedBody(text: string, newBody: string): string {
 }
 
 export function serializeLivingDoc(doc: ILivingDoc): string {
-	const fm: string[] = ['---'];
-	if (doc.title) { fm.push(`title: ${doc.title}`); }
-	if (doc.subtitle) { fm.push(`subtitle: ${doc.subtitle}`); }
+	const body = doc.blocks.map(serializeBlock).join('\n\n');
+
+	// Only emit the frontmatter the file actually authored. The `title:` line comes from
+	// `frontmatterTitle` (the authored value), NEVER the derived `doc.title` (H1/'Untitled' fallback) -- so
+	// a plain Markdown doc round-trips byte-clean and an accepted chat edit never injects a `title:` block
+	// into a file the user wrote as plain Markdown (plan 16 iter 4, decision 57).
+	const fmTitle = doc.frontmatterTitle ?? '';
+	const fmLines: string[] = [];
+	if (fmTitle) { fmLines.push(`title: ${fmTitle}`); }
+	if (doc.subtitle) { fmLines.push(`subtitle: ${doc.subtitle}`); }
 	if (doc.sources.length) {
-		fm.push('sources:');
-		for (const s of doc.sources) { fm.push(`  - ${s}`); }
+		fmLines.push('sources:');
+		for (const s of doc.sources) { fmLines.push(`  - ${s}`); }
 	}
 	if (doc.context.length) {
-		fm.push('context:');
-		for (const c of doc.context) { fm.push(`  - ${c}`); }
+		fmLines.push('context:');
+		for (const c of doc.context) { fmLines.push(`  - ${c}`); }
 	}
-	fm.push('---', '');
 
-	const body = doc.blocks.map(serializeBlock).join('\n\n');
-	return `${fm.join('\n')}\n${body}\n`;
+	// No authored frontmatter -> the document is plain Markdown; emit the body alone (no `---` block).
+	if (fmLines.length === 0) {
+		return `${body}\n`;
+	}
+	return `---\n${fmLines.join('\n')}\n---\n\n${body}\n`;
+}
+
+// The chat model is asked for "ONLY a JSON object" of {reply, edits, inserts}, but a real model
+// intermittently wraps it in prose, truncates it, or answers in plain text. The old call-site did a bare
+// `JSON.parse(raw.slice(indexOf('{'), lastIndexOf('}')+1))`, which THREW on any of those and surfaced as a
+// flat "the agent model errored". This pure parser is tolerant (plan 16 iter 5, decision 58): it extracts
+// the JSON object when present, and otherwise degrades to treating the whole reply as a plain chat answer
+// (no proposals) -- never a crash. Unit-tested independently of the model.
+export interface IParsedChatResponse {
+	readonly reply: string;
+	readonly edits: { heading?: string; oldText?: string; newText?: string; rationale?: string }[];
+	readonly inserts: { afterHeading?: string; newText?: string; rationale?: string }[];
+}
+
+export function parseChatResponse(raw: string): IParsedChatResponse {
+	const plain: IParsedChatResponse = { reply: raw.trim(), edits: [], inserts: [] };
+	const start = raw.indexOf('{');
+	const end = raw.lastIndexOf('}');
+	if (start < 0 || end <= start) {
+		return plain; // no JSON object at all -> a plain-text answer
+	}
+	try {
+		const json = JSON.parse(raw.slice(start, end + 1)) as {
+			reply?: unknown;
+			edits?: unknown;
+			inserts?: unknown;
+		};
+		return {
+			// A parsed object with no `reply` leaves reply empty -- the queued proposal cards carry the meaning.
+			reply: typeof json.reply === 'string' ? json.reply.trim() : '',
+			edits: Array.isArray(json.edits) ? json.edits : [],
+			inserts: Array.isArray(json.inserts) ? json.inserts : [],
+		};
+	} catch {
+		return plain; // malformed / truncated JSON -> degrade to a plain answer, never throw
+	}
 }

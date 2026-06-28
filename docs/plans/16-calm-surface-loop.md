@@ -290,3 +290,165 @@ desktop shell.
 
 **Carry-over:** iteration 2 (off `calm-surface-1`) kills the cold-launch noise (trust banner, ext
 activation-failure toasts, Sign-In / Copilot chrome, the workspace label).
+
+### Iteration 2 — Kill the cold-launch noise + trust leaks (branch `calm-surface-2`, PR → `calm-surface-1`)
+**What changed (one focused commit):** extended the config-default block in `livingDocs.contribution.ts` with
+five more overrides — `security.workspace.trust.enabled:false` (Restricted-Mode banner),
+`workbench.welcomePage.experimentalOnboarding:false` (the "Welcome / Sign in to use Copilot" modal + the "Make
+It Yours" walkthrough), `workbench.startupEditor:'none'` (welcome page), `chat.disableAIFeatures:true` (the
+built-in Copilot Sign-In/status chrome), `window.title:'${activeEditorShort}'` (drop the `[remote]` label) —
+plus one minimal core patch in `mainThreadExtensionService.ts` to log (not toast) dev-only built-in
+`vscode.*` activation-failure errors.
+
+**Core patches:** 1 — `mainThreadExtensionService.$onExtensionActivationError` (guard the dev toast with
+`!extensionId.value.startsWith('vscode.')`). Fail-soft; no contribution seam exists on this `$`-RPC handler.
+Logged in `06-design-notes.md` D8 with the file:line + why contrib-only wasn't possible.
+
+**Default-and-log decision:** #55.
+
+**HOLD re-verified live (desktop cold launch, `code.sh`, `TMPDIR=/tmp`, fresh folder `.realdocs-test`):** the
+living doc opens in PM with the calm toolbar + bound figure `49800` (U1/U2/G2/G5); a chat turn (the product's
+own Review-rail chat, **with `disableAIFeatures` on**) read `metrics.csv` + `forecast.csv` and rendered an
+"Outlook" insertion as a green inline diff with Approve/Reject + a synced rail card (F1/F3/F4/F5/U3). Web
+reload: no regression; the title is now just the document name.
+
+**Acceptance met:** the desktop cold launch shows **zero** error toasts, no Restricted-Mode banner, no Sign-In,
+no onboarding modal, no Copilot chrome — it opens straight to the calm Home dashboard.
+
+**Screenshots:** `docs/plans/16-verify/iter2-*` — desktop before (iter-1 shell, banner + Sign-In) / after
+(clean cold launch), the desktop HOLD chat spine, and the calm web home.
+
+**Carry-over:** iteration 3 (off `calm-surface-2`) is the document-first on-ramp.
+
+### Iteration 3 — Document-first on-ramp (branch `calm-surface-3`, PR → `calm-surface-2`)
+**What changed (one focused commit):** (1) `NEW_DOCUMENT_TEMPLATE` in `livingDocsService.ts` becomes a single
+newline — a new doc opens as a **blank writing surface**, no injected `title:` frontmatter, no "## Overview /
+Write your document here" boilerplate. (2) `focusPm()` in the `livingDocRender` runtime calls `pmView.focus()`
+on mount so the caret lands in the doc (once per mount — decision-50 mount-once means re-renders never steal
+focus). (3) A `LivingDocEditor.focus()` override forwards pane focus into the webview iframe so the in-iframe
+focus actually takes effect. Home stays the friendly landing (recents + New document + empty-state) — not the
+bare Explorer.
+
+**Core patches:** none. Tier **our-surface**.
+
+**Default-and-log decision:** #56.
+
+**Acceptance met + desktop disk smoke (decision 38, `TMPDIR=/tmp`, fresh `/tmp/calm-iter3`):** the empty-state
+"New document" created `Untitled.md` on **real disk** containing only a newline (no `title:`, no boilerplate);
+typing persisted it as **clean plain Markdown** (`Q3 Planning Notes for the launch`), re-read from disk. On
+web, New document → a blank PM surface, writable; the PM editor reports `focused`.
+
+**HOLD re-verified live:** the living doc still opens in PM with the calm toolbar + bound figure `49800`
+(U1/U2/G2/G5). _Observed (pre-existing, flagged for iter 6): the formatting toolbar is absent on a blank plain
+doc but present on living docs._
+
+**Screenshots:** `docs/plans/16-verify/iter3-*` — before/after New document (boilerplate → blank), the typed
+blank doc, the desktop empty-state on-ramp, and the HOLD living doc.
+
+**Carry-over:** iteration 4 (off `calm-surface-3`) hides internal artifacts (`.lock.json`/`agents.json`) +
+stops injecting frontmatter on the serialize-on-accept path (the create path is already clean as of iter 3).
+
+### Iteration 4 — Hide internal artifacts + stop injecting frontmatter (branch `calm-surface-4`, PR → `calm-surface-3`)
+**What changed (one focused commit):** (a) `.lock.json` + `agents.json` added to a `files.exclude` product
+default (object-valued defaults merge, so the built-in `.git`/`.DS_Store` excludes survive) — hidden from the
+native Explorer; the custom tree-rail already lists only `.md`. (b) Stopped `serializeLivingDoc` injecting a
+derived `title:`: `parseLivingDoc` now records the authored `frontmatterTitle` (`''` if none), serialize emits
+`title:` only from that and drops the entire `---` block when there is no authored frontmatter — so a plain doc
+round-trips byte-clean Markdown, while living docs (and plain docs with an authored title) are unchanged.
+
+**Core patches:** none. Tier **our-surface + additive-contribution**.
+
+**TDD (pure logic, red→green):** 3 tests in `livingDocMarkdown.test.ts` — plain doc round-trips byte-clean; a
+plain doc + an inserted block stays plain (no injected `title:`, `isLiving` false); a plain doc with an
+authored title keeps it. Watched the first two fail, then pass. All 87 LivingDoc tests green.
+
+**Default-and-log decision:** #57.
+
+**Desktop disk smoke (decision 38, `TMPDIR=/tmp`, fresh `/tmp/calm-iter4`):** created a plain `Untitled.md`
+("Launch Plan"), chat-inserted an intro paragraph, **Approved** → re-read from **real disk**: clean plain
+Markdown (`grep -c 'title:'` = 0, `grep -c '^---'` = 0), the insertion present; `agents.json` +
+`Untitled.lock.json` both on disk but **absent from the Explorer**.
+
+**HOLD re-verified live:** chat → inline diff → Approve → persist all work; the crumb stays "Markdown" (plain,
+`isLiving` false) through the accept.
+
+**Screenshots:** `docs/plans/16-verify/iter4-*` — web Explorer (no agents.json), the desktop chat insert, and
+the desktop after-accept (clean doc + Explorer hides both sidecars).
+
+**Carry-over:** iteration 5 (off `calm-surface-4`) is chat feel — streaming, retry, robust parse.
+
+### Iteration 5 — Chat feel: robust parse + retry + alive indicator (branch `calm-surface-5`, PR → `calm-surface-4`)
+**What changed (one focused commit):** (a) a pure, TDD'd `parseChatResponse(raw)` replaces the bare throwing
+`JSON.parse` in `_chatRespond` — extracts the JSON object when present, otherwise degrades to a plain-text
+answer; the bubble never shows the raw JSON envelope (a parsed-but-empty `reply` falls back to a neutral
+line). (b) `_callModel` retries once on a transient failure (not on a refusal). (c) the "Working…" indicator
+becomes a pulsing agent avatar + an animated "Thinking…" ellipsis (pure CSS in `reviewRailView`).
+
+**Streaming — DEFERRED + logged (decision 58):** the model is asked for "ONLY a JSON object" and the proxy is
+a buffered round-trip, so token-streaming would surface raw JSON. Real streaming needs a response-format
+redesign (prose stream + structured tail) + proxy SSE + a progressive webview render — a larger, riskier
+change than fits an unattended iteration. The robustness trio removes the felt pain (false errors, dead hang).
+
+**Core patches:** none. Tier **our-surface**.
+
+**TDD (pure logic):** 4 `parseChatResponse` tests — clean JSON, prose-wrapped JSON, plain-text degrade,
+truncated-JSON degrade. 91 LivingDoc tests pass.
+
+**Default-and-log decision:** #58.
+
+**HOLD re-verified live (code-web + OpenRouter):** a chat question returned a real prose answer ("…MRR growth
+to $49,800… Churn… now standing at 2.4%…") with the source-read step — no raw JSON, no false error; figure
+`49800` + calm toolbar intact (F1/F-spine, U1/U2/G2). A live edge-case (gpt-4o-mini returning an empty
+`reply`) was caught and fixed (neutral fallback instead of a raw-JSON bubble).
+
+**Screenshots:** `docs/plans/16-verify/iter5-*` — the prose chat answer (no JSON leak).
+
+**Carry-over:** iteration 6 (off `calm-surface-5`) is the calm design-audit polish pass — incl. the
+plain-doc formatting-toolbar gap flagged in iter 3.
+
+### Iteration 6 — Calm polish pass (branch `calm-surface-6`, PR → `calm-surface-5`)
+**What changed (one focused commit):** the calm formatting toolbar was gated `(isLiving && isPm)`, so a plain
+or freshly-created blank doc opened with no way to format. Changed the gate to `(!!doc && isPm)` — the toolbar
+(Paragraph/B/I/lists/quote) now shows for every PM document; the living-only chrome (sync bar, bound-figure
+hint) stays `isLiving`-gated. This closes the gap flagged in iter 3.
+
+**Core patches:** none. Tier **our-surface**.
+
+**TDD:** a render test asserts a plain doc gets the toolbar but NOT the sync bar / figure hint; 9 render tests
+pass.
+
+**Default-and-log decision:** #59 (incl. the calm-document audit assessment).
+
+**Calm-document audit (gate-by-gate):** G1 one quiet PM surface ✓ · G2 calm header + now-universal toolbar ✓ ·
+G3 detached gutter + inline figures ✓ · G4 reduced IDE optionality (activity bar hidden, iter 1) ✓ · G5
+source-peek bottom drawer ✓ · G6 no dev toasts / nav never blanks ✓. Every "IDE in a trench coat" tell from
+Tom's critique is closed (footer, activity bar, tabs, breadcrumb, trust banner, sign-in, ext-failure toasts,
+`.lock.json`/`agents.json`, injected frontmatter, false chat errors). Rubric ~met (≥~90%). Residuals (minor,
+logged): chat streaming deferred (iter 5); "Saved · v14" mock version; plain-doc "Edit raw" affordance is
+living-only; the title bar keeps a minimal command-center + layout toggles by design.
+
+**Final capstone desktop smoke (decision 38, `TMPDIR=/tmp`, fresh `/tmp/calm-iter6`):** cold launch is calm
+(no shell / banner / sign-in / toasts; `agents.json` hidden), New document → blank surface **with toolbar**,
+typing persists clean plain Markdown to real disk (0 `title:`, 0 `---`).
+
+**Screenshots:** `docs/plans/16-verify/iter6-*` — the plain-doc toolbar (web + desktop) and the calm cold launch.
+
+---
+
+## Readiness summary (morning review)
+
+**The PR stack (merge bottom-up; GitHub auto-retargets the next to `main` as each lands):**
+1. **PR #31 `calm-surface-1` → `main`** — strip the workbench shell (status bar, activity bar, tabs, breadcrumb).
+2. **PR #32 `calm-surface-2` → `calm-surface-1`** — kill cold-launch noise (trust banner, onboarding/sign-in, Copilot chrome, ext-failure toasts, title label).
+3. **PR #33 `calm-surface-3` → `calm-surface-2`** — document-first on-ramp (blank writing surface + cursor ready).
+4. **PR #34 `calm-surface-4` → `calm-surface-3`** — hide `.lock.json`/`agents.json` + stop injecting frontmatter (TDD).
+5. **PR #35 `calm-surface-5` → `calm-surface-4`** — chat robustness (tolerant parse + retry + alive indicator; streaming deferred).
+6. **PR #36 `calm-surface-6` → `calm-surface-5`** — calm polish (toolbar for every PM doc) + the audit + this summary.
+
+**Merge tax:** exactly **one core patch** across the whole stack (iter 2, the dev-only activation-toast guard); everything else is additive config-defaults or our-surface. Plan 16 permitted core patches freely.
+
+**HOLD:** green across the stack every iteration — F1–F8/F7 (chat→diff→accept→persist, figures, OpenRouter), U1–U3 (one PM surface, bound figures, in-PM diff), R1–R6 (open/create folder, folder-reflecting Home, edit→disk, sources/context/@mention), G1–G6, decisions 38–53.
+
+**Decisions to sanity-check (default-and-log):** **#54** (hiding the activity bar retires the v3 labelled icon-nav — Home + palette carry the screens; if you want the labelled nav back it should become an in-surface element), **#55** (`chat.disableAIFeatures` hides built-in Copilot; the product's own chat is unaffected), **#56** (new docs are blank + name-on-first-save deferred), **#58** (chat streaming deferred — the bigger redesign).
+
+**Before/after of the cold-launch-to-first-paragraph path:** iter-1 before (`docs/plans/16-verify/iter1-before-web-shell.png`, the IDE-in-a-trench-coat) → iter-6 after (`iter6-desktop-coldlaunch.png` + `iter6-desktop-newdoc-toolbar.png`): cold launch lands on a calm Home with no shell/noise; one click opens a blank writing surface with a formatting toolbar and the caret ready; typing persists as clean plain Markdown.

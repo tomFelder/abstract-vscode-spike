@@ -89,12 +89,34 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 // title bar (OS window controls) is intentionally NOT touched here. Logged in 06-design-notes ledger.
 // Registered at module load (an import side effect, the earliest phase) so the layout reads these as
 // the effective defaults on its first startup pass, before any part is laid out.
+// (plan 16 iter 2, decision 55) ALSO kill the cold-launch noise + trust leaks by the same additive
+// config-default route: trust the product's own workspaces (no Restricted-Mode banner), skip the
+// Copilot onboarding modal + the welcome page, hide the built-in GitHub Copilot AI chrome (the
+// Sign-In button + Copilot status -- the product has its OWN chat in the Review rail), and replace
+// the "${rootName} [remote]" title with just the document name. All user-overridable settings, so
+// still 0 core patches. Logged in 06-design-notes ledger D8.
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerDefaultConfigurations([{
 	overrides: {
+		// iter 1 -- strip the IDE shell parts
 		'workbench.statusBar.visible': false,
 		'workbench.activityBar.location': 'hidden',
 		'workbench.editor.showTabs': 'none',
 		'breadcrumbs.enabled': false,
+		// iter 2 -- kill the cold-launch noise + trust leaks
+		'security.workspace.trust.enabled': false,
+		'workbench.welcomePage.experimentalOnboarding': false,
+		'workbench.startupEditor': 'none',
+		'chat.disableAIFeatures': true,
+		'window.title': '${activeEditorShort}',
+		// iter 4 (decision 57) -- hide the internal plumbing from the native Explorer. `.lock.json`
+		// (provenance/claim sidecars) and `agents.json` (the agent registry) are implementation detail, not
+		// documents. Object-valued default configurations MERGE in VS Code, so these patterns ADD to the
+		// built-in excludes (`.git`, `.DS_Store`, ...) rather than replacing them. The files stay on disk;
+		// the user just never sees them in their document list. The custom tree-rail already shows only `.md`.
+		'files.exclude': {
+			'**/*.lock.json': true,
+			'**/agents.json': true,
+		},
 	}
 }]);
 

@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, parseChatResponse, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -136,6 +136,35 @@ suite('LivingDoc bind-link format', () => {
 		assert.ok(doc.body.includes('- first item'), 'body retains the raw Markdown for generic rendering');
 	});
 
+	// plan 16 iter 4: a plain doc must round-trip to BYTE-CLEAN plain Markdown. The display title derives
+	// from the H1 (above), but that derived title must NOT be written back as `---\ntitle: ...\n---` -- a
+	// file the user wrote as plain Markdown stays plain Markdown after an accepted chat edit re-serializes it.
+	test('a plain doc round-trips through parse -> serialize as byte-clean plain Markdown (no injected frontmatter)', () => {
+		assert.strictEqual(serializeLivingDoc(parseLivingDoc(PLAIN_MD)), PLAIN_MD);
+	});
+
+	test('serializing a plain doc after an inserted block stays plain Markdown -- no injected title frontmatter', () => {
+		// Mirrors accepting a chat insert on a plain doc: the body gains a paragraph, then _persist re-serializes.
+		const withInsert = PLAIN_MD + '\nA freshly inserted paragraph from chat.\n';
+		const serialized = serializeLivingDoc(parseLivingDoc(withInsert));
+		assert.deepStrictEqual(
+			{
+				startsWithFrontmatter: serialized.startsWith('---'),
+				injectsTitle: serialized.includes('title:'),
+				keepsInsert: serialized.includes('A freshly inserted paragraph from chat.'),
+				stillPlain: parseLivingDoc(serialized).isLiving,
+			},
+			{ startsWithFrontmatter: false, injectsTitle: false, keepsInsert: true, stillPlain: false },
+		);
+	});
+
+	// A plain doc that DID author a `title:` (but no sources/context) keeps it -- we drop only the DERIVED
+	// title, never frontmatter the user actually wrote.
+	test('a plain doc with an authored title (no sources) keeps that title on round-trip', () => {
+		const TITLED_PLAIN = ['---', 'title: My Notes', '---', '', 'Just some prose.'].join('\n') + '\n';
+		assert.strictEqual(serializeLivingDoc(parseLivingDoc(TITLED_PLAIN)), TITLED_PLAIN);
+	});
+
 	// withFrontmatterSource edits only the frontmatter `sources:` list, leaving the body verbatim - so adding
 	// a source via the UI never touches the prose (the add-source affordance, R5).
 	test('withFrontmatterSource adds a source to an existing sources list and the body is untouched', () => {
@@ -195,5 +224,31 @@ suite('LivingDoc bind-link format', () => {
 
 	test('withReplacedBody on a plain doc (no frontmatter) just returns the new body', () => {
 		assert.strictEqual(withReplacedBody('# Title\n\nold body\n', 'new body').trim(), 'new body');
+	});
+
+	// plan 16 iter 5: the chat-response parser must be tolerant -- a non-JSON / truncated / prose-wrapped
+	// reply degrades to a plain answer instead of throwing (which used to surface as "the agent model errored").
+	test('parseChatResponse extracts a clean JSON object with reply + edits + inserts', () => {
+		const raw = '{"reply":"Done.","edits":[{"oldText":"a","newText":"b"}],"inserts":[{"afterHeading":"","newText":"- x"}]}';
+		assert.deepStrictEqual(parseChatResponse(raw), {
+			reply: 'Done.',
+			edits: [{ oldText: 'a', newText: 'b' }],
+			inserts: [{ afterHeading: '', newText: '- x' }],
+		});
+	});
+
+	test('parseChatResponse extracts the JSON object even when the model wraps it in prose', () => {
+		const raw = 'Sure, here is the change:\n{"reply":"Updated the intro.","edits":[],"inserts":[]}\nHope that helps!';
+		assert.deepStrictEqual(parseChatResponse(raw), { reply: 'Updated the intro.', edits: [], inserts: [] });
+	});
+
+	test('parseChatResponse degrades a plain-text (non-JSON) reply to a plain answer with no proposals', () => {
+		const raw = 'The document already covers that, so no change is needed.';
+		assert.deepStrictEqual(parseChatResponse(raw), { reply: raw, edits: [], inserts: [] });
+	});
+
+	test('parseChatResponse degrades malformed / truncated JSON to a plain answer instead of throwing', () => {
+		const raw = '{"reply":"half a sentence and then the stream cut o';
+		assert.deepStrictEqual(parseChatResponse(raw), { reply: raw, edits: [], inserts: [] });
 	});
 });

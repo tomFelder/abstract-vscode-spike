@@ -21,7 +21,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { extractBindLinks, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { extractBindLinks, parseChatResponse, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
@@ -105,17 +105,13 @@ function similarity(a: string, b: string): number {
 	return inter / (ta.size + tb.size - inter);
 }
 
-// The "New document" starting point: clean Markdown the user owns. It becomes a Living Document once
-// a source is connected (a `sources:`/`context:` entry or a bind link appears). Authored as a single
-// left-aligned template literal so source indentation stays tab-only.
-const NEW_DOCUMENT_TEMPLATE = `---
-title: Untitled document
----
-
-## Overview
-
-Write your document here. Connect a source to start binding live figures.
-`;
+// The "New document" starting point (plan 16 iter 3, decision 56): a BLANK writing surface, not an
+// IDE boilerplate template. A new doc is clean Markdown the user owns -- no injected `title:`
+// frontmatter and no "## Overview / Write your document here" placeholder, so opening it reads as
+// "just start writing" (the editor focuses the first line on mount). It becomes a Living Document the
+// moment a source is connected (a `sources:`/`context:` entry or a bind link). A single trailing
+// newline (not a 0-byte file) gives ProseMirror one empty paragraph to land the caret in.
+const NEW_DOCUMENT_TEMPLATE = `\n`;
 
 export class LivingDocsService extends Disposable implements ILivingDocsService {
 	declare readonly _serviceBrand: undefined;
@@ -1302,7 +1298,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// POST one short request to the proxy and return the assistant text. Throws on a refusal or any
 	// transport/parse error so the caller falls back to the deterministic path. Opus 4.8 request shape:
 	// adaptive thinking, low effort, no sampling params (those 400). The credential stays in the proxy.
+	// Call the model, retrying ONCE on a transient failure (plan 16 iter 5, decision 58). The OpenRouter
+	// backend intermittently errors or returns an empty/refusal body on larger follow-ups; a single silent
+	// retry recovers most of those before the caller's honest fallback ever shows. A refusal is NOT retried
+	// (it would just refuse again). Only a genuine second failure propagates.
 	private async _callModel(system: string, user: string): Promise<string> {
+		try {
+			return await this._callModelOnce(system, user);
+		} catch (e) {
+			if (e instanceof Error && e.message === 'model refused the request') { throw e; }
+			this._log.info('[livingDocs] model call failed, retrying once', e instanceof Error ? e.message : String(e));
+			return await this._callModelOnce(system, user);
+		}
+	}
+
+	private async _callModelOnce(system: string, user: string): Promise<string> {
 		const body = JSON.stringify({
 			model: this._modelName(),
 			max_tokens: MODEL_MAX_TOKENS,
@@ -1464,25 +1474,28 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const transcript = this._chatTranscript(state.uri);
 		const user = `Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nHeadings: ${headings.join(' | ') || '(none)'}\n\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
 		const raw = await this._callModel(system, user);
-		const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as {
-			reply?: string;
-			edits?: { heading?: string; oldText?: string; newText?: string; rationale?: string }[];
-			inserts?: { afterHeading?: string; newText?: string; rationale?: string }[];
-		};
+		// Tolerant parse (plan 16 iter 5): a non-JSON / truncated / prose-wrapped reply degrades to a plain
+		// chat answer instead of throwing (which used to surface as a false "the agent model errored").
+		const json = parseChatResponse(raw);
 
 		const steps: IChatStep[] = [];
 		const proposedIds: string[] = [];
 		if (sourceFiles.length) { steps.push({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
-		for (const edit of Array.isArray(json.edits) ? json.edits : []) {
+		for (const edit of json.edits) {
 			const queued = this._queueChatEdit(state, edit);
 			if (queued) { steps.push({ label: `Proposed edit: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 		}
-		for (const insert of Array.isArray(json.inserts) ? json.inserts : []) {
+		for (const insert of json.inserts) {
 			const queued = this._queueChatInsert(state, insert);
 			if (queued) { steps.push({ label: `Proposed new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 		}
+		// What the bubble shows: the model's reply when it gave one; nothing when proposals carry the meaning
+		// (their cards speak); otherwise a neutral honest line. `parseChatResponse` already routed a non-JSON
+		// plain-text answer into `reply`, so a truthy `reply` is always real prose -- we NEVER surface the raw
+		// JSON envelope (a parsed-but-empty reply used to leak `{"reply":"",...}` into the chat).
+		const content = json.reply || (proposedIds.length ? '' : 'I do not have anything to add on that.');
 		return {
-			role: 'assistant', via: 'model', content: String(json.reply ?? raw).trim(),
+			role: 'assistant', via: 'model', content,
 			steps: steps.length ? steps : undefined,
 			proposedIds: proposedIds.length ? proposedIds : undefined,
 		};
