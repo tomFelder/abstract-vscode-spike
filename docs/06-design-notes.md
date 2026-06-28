@@ -387,3 +387,19 @@ our-surface / core-patch) and, for any core patch, the file + why a contrib-only
   buffered proxy mean streaming would surface raw JSON; it needs a response-format redesign (prose stream +
   structured tail) + proxy SSE + a progressive webview render — out of scope for an unattended iteration. The
   robustness trio removes the felt pain (false errors, dead hang) without it. 91 LivingDoc tests pass.
+
+- **Iter 6 — calm polish pass. Tier: our-surface, 0 core patches.** Closed the one concrete defect surfaced
+  across the loop: the formatting toolbar was gated `isLiving`, so a plain/blank doc had no way to format —
+  now it shows for every PM document (B/I/headings/lists/quote universal; sync bar + figure hint stay
+  living-only). Gate-by-gate calm-document audit confirms G1–G6 hold and every tell in Tom's "IDE in a trench
+  coat" critique (footer, activity bar, tabs, breadcrumb, trust banner, sign-in, ext-failure toasts, sidecars,
+  injected frontmatter, false chat errors) is closed across iters 1–6. Final capstone desktop smoke green
+  (calm cold launch → blank doc with toolbar → clean disk persistence). Residuals logged in decision 59
+  (streaming deferred; "v14" mock; plain-doc raw affordance; minimal title bar by design).
+
+### Merge-tax ledger summary (plan 16 / calm-surface stack)
+Six iterations, **exactly one core patch total** (iter 2: `mainThreadExtensionService.$onExtensionActivationError`
+— guard the dev-only built-in activation toast; fail-soft; no contribution seam). Everything else landed as
+additive config-default registrations or our-surface (livingDocs contribution / renderer / service) changes.
+Plan 16 *permitted* core patches freely; the loop took one. Re-pin that one guard on rebase if the handler is
+refactored.
