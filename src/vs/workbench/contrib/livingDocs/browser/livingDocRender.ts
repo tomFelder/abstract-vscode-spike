@@ -247,7 +247,14 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pmwrap .ProseMirror .pm-orig-hidden{display:none}
 /* The diff / insert widgets are host-rendered with the renderDoc markup (.editblock/.insertblock/.ctrl),
  * so they need no new styles; they sit full-width in the PM column. */
-.pmwrap .ProseMirror .editblock,.pmwrap .ProseMirror .insertblock{margin:0 0 14px}`;
+.pmwrap .ProseMirror .editblock,.pmwrap .ProseMirror .insertblock{margin:0 0 14px}
+/* GFM tables render as a read-only table_block node (the cells stay clickable bound figures). Calm,
+ * board-report styling: hairline rules, a quiet header row, comfortable cell padding. */
+.pmwrap .ProseMirror table.lwd-table{border-collapse:collapse;width:100%;margin:0 0 16px;font-size:14px;line-height:1.5}
+.pmwrap .ProseMirror table.lwd-table th,.pmwrap .ProseMirror table.lwd-table td{border:1px solid #e9eaee;padding:7px 12px;text-align:left;vertical-align:top}
+.pmwrap .ProseMirror table.lwd-table thead th{background:#f7f8fa;font-weight:600;color:#3a3a42;border-bottom:1px solid #dfe1e6}
+.pmwrap .ProseMirror table.lwd-table tbody tr:nth-child(even){background:#fcfcfd}
+.pmwrap .ProseMirror table.lwd-table td:first-child{color:#3a3a42;font-weight:500}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,

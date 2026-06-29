@@ -214,3 +214,42 @@ if (process.argv.includes('--emit')) {
 	console.log('emitted ->', TARGET);
 }
 ```
+
+## Update — plan 17: read-only GFM tables (`table_block`)
+
+The blocks above are the plan-15 baseline. Plan 17 iter 5 added GFM **table** support so a board
+table renders as a real table instead of raw pipe-text. The authoritative current sources are the
+files in `/Users/tommy/Sites/.lwd-pm-build/` (`lwdpm-entry.js`, `build.mjs`); apply these deltas to the
+baseline above to reproduce them:
+
+1. **Enable tables + a bound_figure renderer rule** (right after `const md = markdownit('commonmark', …)`):
+   ```js
+   md.enable(['table']);                 // CommonMark has no tables
+   md.renderer.rules.bound_figure = (tokens, idx) => {
+     const t = tokens[idx];
+     const key = md.utils.escapeHtml(t.attrGet('key') || '');
+     const label = md.utils.escapeHtml(t.attrGet('label') || t.content || '');
+     return '<span class="bound" data-key="' + key + '" data-label="' + label + '" contenteditable="false">' + label + '</span>';
+   };
+   ```
+   The renderer rule matters because `md.renderInline` (the cell renderer) runs the core ruler, so a
+   `bind:` link is already a `bound_figure` token; without a rule markdown-it emits it as an empty-tag
+   token (`< key=.. label=.. />`).
+2. **Schema** — chain `.addToEnd('table_block', { group:'block', atom:true, isolating:true,
+   attrs:{ markdown:{default:''} }, toDOM(node){ return tableDom(node.attrs.markdown); },
+   parseDOM:[{ tag:'table[data-md]', getAttrs(dom){ return { markdown: dom.getAttribute('data-md')||'' }; } }] })`
+   onto the `bound_figure` node before `new Schema(...)`.
+3. **Core rule `table_block`** — collapse the `table_open … table_close` token run into one
+   `table_block` token whose `markdown` attr is the table re-serialized to canonical GFM from each cell's
+   raw inline `.content` (`| h | h |\n| --- | --- |\n| c | c |`, with `:---`/`:---:`/`---:` for header
+   alignment and `\|` escaping). Helpers: `escTableCell`, `buildTableMarkdown`.
+4. **Parser tokens** — add `table_block: { node:'table_block', getAttrs: tok => ({ markdown: tok.attrGet('markdown') || tok.content || '' }) }`.
+5. **Serializer node** — `table_block(state, node){ state.write(node.attrs.markdown || ''); state.closeBlock(node); }` (emits the captured Markdown verbatim → byte round-trip).
+6. **toDOM helpers** — `renderCellHtml` (just `md.renderInline(src)`), `splitTableRow`, `isSeparatorRow`,
+   `alignOf`, `tableDom` (builds `<table class="lwd-table" data-md=…>` with thead/tbody).
+7. **`build.mjs`** — a table sample in `samples` + a `hasTable` (`table_block`) check in the emit gate.
+8. **Host CSS** (`livingDocRender.ts`, not the bundle) — `.pmwrap .ProseMirror table.lwd-table` calm
+   board-report styling.
+
+Read-only in PM is deliberate (figures are bound, not hand-edited; the raw-Markdown toggle is the edit
+path). Round-trip + `table_block` parse are gated in `build.mjs` and covered by `prosemirrorBundle.test.ts`.
