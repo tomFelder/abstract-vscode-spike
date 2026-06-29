@@ -106,3 +106,38 @@ source-peek. Findings, prioritised:
   is decorative.
 - **#13 blank new-doc has no placeholder** — "New document" opens a stark white canvas; a faint "Start
   writing…" affordance would warm the empty state. (P2.)
+
+## Readiness summary (morning of 2026-06-30)
+
+Eight stacked PRs off `main`, **#39 → #46**, each verified live (code-web + OpenRouter) with before/after
+shots in the PR and in `docs/plans/17-verify/`. **0 core patches across the whole loop.** Merge
+bottom-up (#39 first); GitHub auto-retargets each base as the one below it merges.
+
+| PR | Branch | What it fixes |
+|---|---|---|
+| #39 | `plan17-1-workspace-default` | Cold boot lands on the calm Workspace rail, not the IDE Explorer |
+| #40 | `plan17-2-doc-name-crumb` | Topbar crumb names the open document, not the editor type |
+| #41 | `plan17-3-review-empty-states` | Review rail empty copy is context-aware (no stale "open a Living Document…") |
+| #42 | `plan17-4-drop-fake-version` | Drop the fabricated "· v14" from the toolbar |
+| #43 | `plan17-5-render-tables` | **GFM tables render as real tables** (was raw pipe-text) — flagship fix |
+| #44 | `plan17-6-generate-draft-cta` | Templates "Generate draft" CTA now opens the draft (was a dead click) |
+| #45 | `plan17-7-honest-unbuilt-buttons` | Voice / +New agent / Edit flagged "Soon" instead of dead clicks |
+| #46 | `plan17-8-calm-hint` | Living-doc hint trimmed from a 2-sentence tutorial to one calm line |
+
+**Verified healthy off the golden path (no change needed):** the chat → proposal → inline diff → rail
+card → approve loop (real model); bound-figure source-peek (incl. from inside tables now); the Home
+on-ramp (New document / New doc from template / Open + Switch folder all wired); the Agents screen
+(rows/open/run/filters wired); empty-folder + new-doc flows.
+
+**Deferred for Tom's judgment (documented, not changed):**
+- **Activity-bar IDE tells** — the nav still carries the native "Explorer" (kept by decision 42 for disk
+  file ops), plus "Accounts" and the "Manage" gear. Hiding the latter two would calm the nav but removes
+  the only UI path to Settings/Keyboard Shortcuts — a product call.
+- **Unbuilt features behind the "Soon" tags** (Voice, New agent, Knowledge Edit) — build or remove.
+- **Templates mock honesty** — the `crm` / `api` source chips reference sources not in the folder;
+  `+ add source` is decorative.
+- **Web-only artifacts** (correct on desktop): Home greeting shows the memfs mount name "mount" as the
+  folder; the browser tab title reads the old "Opportunity OS" (product.json + desktop window are
+  "Abstract"; no source references the old name).
+- **Nice-to-haves:** a faint "Start writing…" placeholder on a blank new doc; source-peek highlights the
+  latest CSV row even when a *previous*-bound figure is clicked.
