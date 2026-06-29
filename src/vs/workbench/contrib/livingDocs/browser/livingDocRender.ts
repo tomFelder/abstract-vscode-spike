@@ -438,7 +438,11 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `<button class="tb-b ic" data-pmcmd="bullet_list" title="Bulleted list">&#8803;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="ordered_list" title="Numbered list">&#8862;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="blockquote" title="Quote">&#10077;</button>`
-		+ `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`
+		// Honest save status: the editor autosaves every edit (saveRawText silent), so the doc is always
+		// saved -- but the old label tacked on a fabricated "&middot; v14" revision that was identical on
+		// every document, including brand-new blank ones. Tom is anti-fake-data; drop the made-up version
+		// and show just "Saved". (Freshness/staleness is a separate concept, carried by the sync pill.)
+		+ `<span class="tb-saved"><span class="sdot"></span>Saved</span>`
 		+ `</div>`
 		: '';
 

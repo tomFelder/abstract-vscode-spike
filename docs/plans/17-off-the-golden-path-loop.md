@@ -58,4 +58,24 @@ source-peek. Findings, prioritised:
 
 ## Iteration log
 
-(appended as work lands)
+- **Iter 1 — PR #39 `plan17-1-workspace-default`** (fixes backlog #1). Cold boot now lands on the calm
+  Workspace rail, not the native Explorer. `StudioStartupContribution` opens the Workspace view on
+  startup (re-asserted once on the next tick). 0 core patches.
+- **Iter 2 — PR #40 `plan17-2-doc-name-crumb`** (fixes #3, stacked on #39). Topbar crumb now names the
+  open document (`Abstract / Board Note`) instead of the editor type (`Living Document`). 0 core patches.
+- **Iter 3 — PR #41 `plan17-3-review-empty-states`** (fixes #4, stacked on #40). Review rail empty copy
+  is context-aware: names the open doc, or invites opening one — no more stale "Open a Living Document
+  and click 'Refresh from sources'." on every screen. 0 core patches.
+- **Iter 4 — PR #42 `plan17-4-drop-fake-version`** (new find, stacked on #41). The editor toolbar showed
+  a fabricated `Saved · v14` on every document — identical on all of them, including brand-new blank
+  ones. Tom is anti-fake-data; dropped the made-up version, leaving an honest "Saved" (the editor
+  autosaves; staleness is the sync pill's job). 0 core patches.
+
+### New findings from this pass
+- **#11 fake version number** — fixed in iter 4.
+- **#12 mock content on the screens** — Templates shows `crm` / `api` source chips that do not exist in
+  the folder (only `metrics.csv`); Agents lists 5 agents with cron/event triggers; Knowledge is static.
+  Need to confirm the action buttons (Generate draft / +New agent / Edit / Run now / +add sources) are
+  wired or degrade honestly rather than dead-ending. (P2 — verify.)
+- **#13 blank new-doc has no placeholder** — "New document" opens a stark white canvas; a faint "Start
+  writing…" affordance would warm the empty state. (P2.)
