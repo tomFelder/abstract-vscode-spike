@@ -85,12 +85,19 @@ source-peek. Findings, prioritised:
   Wired it to open the previewed draft document (Weekly Operating Summary), the honest outcome for the
   mock. Full template-driven generation from prompt + sources is logged as future work. 0 core patches.
 
+- **Iter 7 — PR #45 `plan17-7-honest-unbuilt-buttons`** (finishes #12, stacked on #44). Audited every
+  screen button: only three were dead-ends (no `data-msg`) — Templates "Voice", Agents "+New agent",
+  Knowledge "Edit" (the rest are wired). These are genuinely unbuilt features, so rather than silently
+  doing nothing they now wear a quiet "Soon" tag and read as inactive (honest > broken). Tom to decide
+  later whether to build or remove each. 0 core patches.
+
 ### New findings from this pass
 - **#11 fake version number** — fixed in iter 4.
-- **#12 dead CTAs on the screens** — CONFIRMED: Templates "Generate draft" was wired to nothing (fixed
-  in iter 6). STILL TO AUDIT (likely the same stateful-mock pattern): Agents "+New agent", a row's
-  "open", Knowledge "Edit", Templates "+add source" / "Voice" / the template dropdown, the `crm`/`api`
-  source chips that do not exist in the folder. These should be wired or wear an honest disabled/preview
-  state. (P1 — a dead-click is the sharpest "clicking around falls down" tell.)
+- **#12 dead CTAs on the screens** — RESOLVED. Static audit of every screen button: Templates
+  "Generate draft" was the one wired-to-nothing primary CTA (fixed iter 6); "Voice" / "+New agent" /
+  "Edit" are unbuilt features now flagged "Soon" (iter 7). All other buttons (Agents rows/open/run,
+  filters, Review diff, Export, Home cards, folder/new-doc) are wired. Remaining honesty nits (lower
+  priority): the Templates `crm` / `api` source chips reference sources not in the folder; `+add source`
+  is decorative.
 - **#13 blank new-doc has no placeholder** — "New document" opens a stark white canvas; a faint "Start
   writing…" affordance would warm the empty state. (P2.)
