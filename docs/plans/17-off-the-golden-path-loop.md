@@ -91,6 +91,11 @@ source-peek. Findings, prioritised:
   doing nothing they now wear a quiet "Soon" tag and read as inactive (honest > broken). Tom to decide
   later whether to build or remove each. 0 core patches.
 
+- **Iter 8 — PR #46 `plan17-8-calm-hint`** (calm polish, stacked on #45). The living-doc hint bar was a
+  permanent two-sentence tutorial re-explaining the whole bound-figure + review model on every open.
+  Trimmed to one calm line ("Figures stay bound to their sources. Click one to trace it back to the
+  data.") keeping the "Edit raw Markdown" escape hatch. 0 core patches.
+
 ### New findings from this pass
 - **#11 fake version number** — fixed in iter 4.
 - **#12 dead CTAs on the screens** — RESOLVED. Static audit of every screen button: Templates
