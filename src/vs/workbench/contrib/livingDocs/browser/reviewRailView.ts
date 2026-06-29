@@ -129,9 +129,17 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		const status = append(content, $('div.ldr-status'));
+		// The empty state used to read "No changes waiting. Open a Living Document and click 'Refresh
+		// from sources'." verbatim on EVERY screen and even while a document was already open -- stale,
+		// jargon-y, and often plainly false. Make it context-aware: name the open document, or, when none
+		// is open, invite the user to open one without the IDE-ish "Refresh from sources" instruction.
+		const activeResource = this._activeDoc();
+		const activeTitle = activeResource ? this._livingDocs.getDoc(activeResource)?.title : undefined;
 		status.textContent = pending.length
 			? `${pending.length} change${pending.length > 1 ? 's' : ''} need approval across ${groups.size} document${groups.size > 1 ? 's' : ''}.`
-			: 'No changes waiting. Open a Living Document and click "Refresh from sources".';
+			: activeTitle
+				? `No changes waiting on "${activeTitle}".`
+				: 'Nothing to review yet. Open a document to see the changes its agents propose.';
 
 		for (const [docTitle, changes] of groups) {
 			const group = append(content, $('div.ldr-group'));
