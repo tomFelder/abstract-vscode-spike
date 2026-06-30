@@ -1665,6 +1665,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	// Discard every pending change for one document in a single action (the per-document "Reject all",
+	// mirroring approveAll). Each reject audits the discard and clears it from the rail; other documents'
+	// pending changes are untouched.
+	async rejectAll(docId: string): Promise<void> {
+		const ids = this._pending.filter(c => c.docId === docId).map(c => c.id);
+		for (const id of ids) {
+			this.reject(id);
+		}
+	}
+
+	// Discard every pending change across every document at once (the chat-level "Reject all" spanning
+	// the whole working set). Clears the rail in one action.
+	async rejectAllPending(): Promise<void> {
+		const ids = this._pending.map(c => c.id);
+		for (const id of ids) {
+			this.reject(id);
+		}
+	}
+
 	// Mark each reviewed context source as reviewed-at-current in the lock so its stale flag clears.
 	private async _markContextReviewed(state: IDocState, files: readonly string[] | undefined): Promise<void> {
 		if (!files?.length) { return; }
