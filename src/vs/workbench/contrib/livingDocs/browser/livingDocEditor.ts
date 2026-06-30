@@ -14,8 +14,10 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { EditorPane } from '../../../browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
+import { nextPendingDocId } from '../common/livingDocsModel.js';
 import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { ILivingDocContent, ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml, ShareScope } from './livingDocRender.js';
@@ -57,6 +59,7 @@ export class LivingDocEditor extends EditorPane {
 		@IStorageService storageService: IStorageService,
 		@IWebviewService private readonly _webviewService: IWebviewService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+		@IEditorService private readonly _editorService: IEditorService,
 	) {
 		super(LivingDocEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -177,6 +180,14 @@ export class LivingDocEditor extends EditorPane {
 			case 'reject':
 				if (typeof message.id === 'string') { this._livingDocs.reject(message.id); }
 				break;
+			case 'approveAllDoc':
+				// Editor action bar: accept every pending change in THIS document at once (plan 19 iter 4).
+				if (this._resource) { void this._livingDocs.approveAll(this._resource.toString()); }
+				break;
+			case 'nextDoc':
+				// Editor action bar: step the editor pane to the next document that still has pending changes.
+				this._openNextChangedDoc();
+				break;
 			case 'askAi':
 				this._livingDocs.focusPanel('chat');
 				break;
@@ -266,6 +277,11 @@ export class LivingDocEditor extends EditorPane {
 				return data ? { ...data, synced: peek.synced, syncedCount: peek.syncedCount } : undefined;
 			})()
 			: undefined;
+		// The next document (other than this one) with pending changes drives the action bar's "Next
+		// document" button - shown only when there is somewhere to advance to (plan 19 iter 4).
+		const allPending = this._livingDocs.getAllPending();
+		const nextId = nextPendingDocId(allPending, resource.toString());
+		const nextChangedDocTitle = nextId ? allPending.find(c => c.docId === nextId)?.docTitle : undefined;
 		const input: ILivingDocRenderInput = {
 			doc: this._livingDocs.getDoc(resource),
 			pending: this._livingDocs.getPendingForDoc(resource),
@@ -278,6 +294,7 @@ export class LivingDocEditor extends EditorPane {
 			present: this._present,
 			syncDiff: this._livingDocs.getLastSyncDiff(resource),
 			sourcePeek,
+			nextChangedDocTitle,
 		};
 		const content = renderLivingDocContent(input);
 		// Reset the live PM doc only when the fresh body changed from a model-driven source (an accepted
@@ -305,6 +322,14 @@ export class LivingDocEditor extends EditorPane {
 		} else {
 			this._pendingContent = content;
 		}
+	}
+
+	// Editor action bar "Next document with changes": advance the pane to the next document that still has
+	// pending changes (cycling), so the whole multi-doc review can be driven from the document surface.
+	private _openNextChangedDoc(): void {
+		if (!this._resource) { return; }
+		const nextId = nextPendingDocId(this._livingDocs.getAllPending(), this._resource.toString());
+		if (nextId) { void this._editorService.openEditor({ resource: URI.parse(nextId) }); }
 	}
 
 	// Post the pending rail-to-editor focus target once the webview is ready (the body + its inline-diff

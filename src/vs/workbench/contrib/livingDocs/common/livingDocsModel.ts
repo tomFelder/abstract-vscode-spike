@@ -228,6 +228,27 @@ export interface IProposedChange {
 	readonly afterBlockId?: string;
 }
 
+/**
+ * The next document (other than the current one) that still has pending changes, for the editor's
+ * "Next document with changes" step-through (plan 19 iter 4). Distinct doc ids are ordered by where
+ * their first pending change appears; the walk cycles forward from the current document so repeated
+ * presses round-robin through every changed doc. Returns undefined when the current document is the only
+ * one with pending changes (nowhere else to advance). Pure so it can be unit-tested directly.
+ */
+export function nextPendingDocId(pending: readonly IProposedChange[], currentDocId: string): string | undefined {
+	const order: string[] = [];
+	for (const c of pending) { if (!order.includes(c.docId)) { order.push(c.docId); } }
+	const others = order.filter(id => id !== currentDocId);
+	if (others.length === 0) { return undefined; }
+	const idx = order.indexOf(currentDocId);
+	if (idx < 0) { return others[0]; }
+	for (let i = 1; i <= order.length; i++) {
+		const cand = order[(idx + i) % order.length];
+		if (cand !== currentDocId) { return cand; }
+	}
+	return undefined;
+}
+
 export interface IAuditEntry {
 	readonly time: string;
 	readonly docTitle: string;
