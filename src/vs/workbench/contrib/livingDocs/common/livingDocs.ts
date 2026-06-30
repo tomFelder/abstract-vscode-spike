@@ -147,8 +147,19 @@ export interface ILivingDocsService {
 	/** Fires when something asks the right panel to focus a tab (e.g. "Ask AI" -> Chat). */
 	readonly onDidRequestPanel: Event<LivingDocsPanelTab>;
 
+	/**
+	 * Fires when a surface (the review rail) asks the editor to scroll to and highlight one pending
+	 * change's inline diff - the rail-to-editor navigation (plan 19, E-A). `docId` is the change's
+	 * document; the editor pane showing that document reveals the change by id. Navigate-only: this never
+	 * approves - approval happens wherever the user then acts (rail or editor).
+	 */
+	readonly onDidRequestFocusChange: Event<{ readonly docId: string; readonly changeId: string }>;
+
 	/** Reveal the right panel and switch it to the given tab. */
 	focusPanel(tab: LivingDocsPanelTab): void;
+
+	/** Ask the editor showing a change's document to scroll to and highlight that change's inline diff. */
+	focusChange(changeId: string): void;
 
 	// --- per-document views (the editor renders one document by its resource) ---
 	getDoc(resource: URI): ILivingDoc | undefined;

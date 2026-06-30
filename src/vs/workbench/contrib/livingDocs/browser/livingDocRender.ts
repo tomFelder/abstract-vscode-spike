@@ -247,7 +247,10 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pmwrap .ProseMirror .pm-orig-hidden{display:none}
 /* The diff / insert widgets are host-rendered with the renderDoc markup (.editblock/.insertblock/.ctrl),
  * so they need no new styles; they sit full-width in the PM column. */
-.pmwrap .ProseMirror .editblock,.pmwrap .ProseMirror .insertblock{margin:0 0 14px}`;
+.pmwrap .ProseMirror .editblock,.pmwrap .ProseMirror .insertblock{margin:0 0 14px;border-radius:10px;transition:box-shadow .3s ease,background-color .3s ease}
+/* Rail-to-editor navigation (plan 19 iter 2): the change the rail sent us to gets a brief calm ring +
+ * tint so the eye lands on it, then fades - no permanent chrome. */
+.pmwrap .ProseMirror .lwd-focus-flash{box-shadow:0 0 0 3px oklch(0.66 0.16 45 / .5);background:oklch(0.97 0.03 70)}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -321,7 +324,11 @@ root.addEventListener('focusout', e => {
 	const b = e.target.closest('[data-block]');
 	if (b) { const text = b.innerText.replace(/\\s+/g, ' ').trim(); if (text !== b.getAttribute('data-orig')) { vscode.postMessage({ type: 'edit', blockId: b.getAttribute('data-block'), text: text }); } }
 });
-window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); } });
+// Scroll a pending change's inline diff into view and flash it (rail-to-editor navigation, plan 19 iter 2).
+// The change's accept/reject widget carries data-approve="<id>"; reveal its surrounding diff/insert block.
+// A short timeout lets the just-applied decorations lay out before we measure/scroll.
+function focusChange(id){ setTimeout(function(){ try { const el = root.querySelector('[data-approve="' + id + '"]'); const block = el && el.closest('.editblock, .insertblock'); if (block) { block.scrollIntoView({ block: 'center', behavior: 'smooth' }); block.classList.add('lwd-focus-flash'); setTimeout(function(){ block.classList.remove('lwd-focus-flash'); }, 1600); } } catch (e) {} }, 30); }
+window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); } else if (m && m.type === 'focusChange') { focusChange(m.id); } });
 if (typeof window.__LWD_PM_MD === 'string') { mountPm(window.__LWD_PM_MD, window.__LWD_PM_DECO); }
 vscode.postMessage({ type: 'lwdReady' });`;
 
