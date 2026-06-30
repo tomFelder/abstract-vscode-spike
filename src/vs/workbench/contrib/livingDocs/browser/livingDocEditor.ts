@@ -50,6 +50,10 @@ export class LivingDocEditor extends EditorPane {
 	// body (with its inline-diff decorations) has rendered, then posted as a 'focusChange' message and
 	// cleared. Navigate-only: revealing a change never approves it.
 	private _pendingFocusChangeId: string | undefined;
+	// True once this editor has rendered with pending changes anywhere in the workspace (plan 19 iter 5).
+	// When the workspace later goes to zero pending, the action bar shows the "All changes reviewed" end
+	// state instead of the neutral "Saved" - so completing a multi-doc review reads as done.
+	private _reviewWasActive = false;
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -84,6 +88,7 @@ export class LivingDocEditor extends EditorPane {
 		this._pendingContent = undefined;
 		this._pmBody = undefined;
 		this._pendingFocusChangeId = undefined;
+		this._reviewWasActive = false;
 		this._createWebview();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		// Rail-to-editor navigation: when a change for THIS document is asked to be focused, scroll to it.
@@ -184,6 +189,10 @@ export class LivingDocEditor extends EditorPane {
 				// Editor action bar: accept every pending change in THIS document at once (plan 19 iter 4).
 				if (this._resource) { void this._livingDocs.approveAll(this._resource.toString()); }
 				break;
+			case 'approveAllEverywhere':
+				// Editor action bar: accept every pending change across ALL documents (plan 19 iter 5).
+				void this._livingDocs.approveAllPending();
+				break;
 			case 'nextDoc':
 				// Editor action bar: step the editor pane to the next document that still has pending changes.
 				this._openNextChangedDoc();
@@ -282,6 +291,9 @@ export class LivingDocEditor extends EditorPane {
 		const allPending = this._livingDocs.getAllPending();
 		const nextId = nextPendingDocId(allPending, resource.toString());
 		const nextChangedDocTitle = nextId ? allPending.find(c => c.docId === nextId)?.docTitle : undefined;
+		// Remember that a review was underway so the "All changes reviewed" end state only shows after the
+		// workspace actually had pending changes (plan 19 iter 5) - never on a doc that never had any.
+		if (allPending.length > 0) { this._reviewWasActive = true; }
 		const input: ILivingDocRenderInput = {
 			doc: this._livingDocs.getDoc(resource),
 			pending: this._livingDocs.getPendingForDoc(resource),
@@ -295,6 +307,8 @@ export class LivingDocEditor extends EditorPane {
 			syncDiff: this._livingDocs.getLastSyncDiff(resource),
 			sourcePeek,
 			nextChangedDocTitle,
+			totalPendingCount: allPending.length,
+			reviewWasActive: this._reviewWasActive,
 		};
 		const content = renderLivingDocContent(input);
 		// Reset the live PM doc only when the fresh body changed from a model-driven source (an accepted
