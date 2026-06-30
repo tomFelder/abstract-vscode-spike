@@ -247,28 +247,43 @@ export interface IParsedChatResponse {
 	readonly inserts: { afterHeading?: string; newText?: string; rationale?: string }[];
 }
 
-// Extract the first complete, balanced JSON object from a string, ignoring prose or stray characters
-// before and after it. A real model intermittently wraps the object in prose, appends a stray trailing
-// brace, or truncates mid-stream; the old `indexOf('{')..lastIndexOf('}')` slice broke on a trailing brace
-// (it swallowed the extra `}`, threw, and leaked the raw JSON into the chat). This brace-matches from the
-// first `{`, tracking string state + escapes so braces inside string values never unbalance the scan.
-// Returns undefined when no balanced object closes (e.g. a truncated stream) so callers degrade to a plain
-// answer. Pure + unit-tested.
+// Extract the first complete JSON object from a string, ignoring prose or stray characters before and
+// after it AND dropping stray closing tokens the model appends inside it. A real model (gpt-4o-mini,
+// observed live) intermittently wraps the object in prose, appends a stray trailing `}` or a stray `]` on
+// an array (`{..."inserts":[]]}`), or truncates mid-stream; the old `indexOf('{')..lastIndexOf('}')` slice
+// broke on any of those and leaked the raw JSON into the chat. This rebuilds the object from the first `{`,
+// tracking brace AND bracket depth (plus string state + escapes), emitting characters but DROPPING any
+// closer that would go below zero - so a doubled `}}` / `]]` the model tacked on is discarded rather than
+// breaking the parse. Returns the reconstructed object string, or undefined when no object ever closes
+// (a truncated stream) so callers degrade to a plain answer. Pure + unit-tested.
 function extractBalancedJsonObject(raw: string): string | undefined {
 	const start = raw.indexOf('{');
 	if (start < 0) { return undefined; }
-	let depth = 0, inString = false, escaped = false;
+	let braceDepth = 0, bracketDepth = 0, inString = false, escaped = false;
+	let out = '';
 	for (let i = start; i < raw.length; i++) {
 		const ch = raw[i];
 		if (inString) {
+			out += ch;
 			if (escaped) { escaped = false; }
 			else if (ch === '\\') { escaped = true; }
 			else if (ch === '"') { inString = false; }
 			continue;
 		}
-		if (ch === '"') { inString = true; }
-		else if (ch === '{') { depth++; }
-		else if (ch === '}') { depth--; if (depth === 0) { return raw.slice(start, i + 1); } }
+		if (ch === '"') { inString = true; out += ch; continue; }
+		if (ch === '{') { braceDepth++; out += ch; continue; }
+		if (ch === '[') { bracketDepth++; out += ch; continue; }
+		if (ch === ']') {
+			if (bracketDepth === 0) { continue; } // stray array close -> drop
+			bracketDepth--; out += ch; continue;
+		}
+		if (ch === '}') {
+			if (braceDepth === 0) { continue; } // stray object close -> drop
+			braceDepth--; out += ch;
+			if (braceDepth === 0 && bracketDepth === 0) { return out; } // object complete
+			continue;
+		}
+		out += ch;
 	}
 	return undefined; // never balanced (truncated) -> plain answer
 }
