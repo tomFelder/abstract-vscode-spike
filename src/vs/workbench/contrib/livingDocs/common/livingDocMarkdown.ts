@@ -247,15 +247,40 @@ export interface IParsedChatResponse {
 	readonly inserts: { afterHeading?: string; newText?: string; rationale?: string }[];
 }
 
+// Extract the first complete, balanced JSON object from a string, ignoring prose or stray characters
+// before and after it. A real model intermittently wraps the object in prose, appends a stray trailing
+// brace, or truncates mid-stream; the old `indexOf('{')..lastIndexOf('}')` slice broke on a trailing brace
+// (it swallowed the extra `}`, threw, and leaked the raw JSON into the chat). This brace-matches from the
+// first `{`, tracking string state + escapes so braces inside string values never unbalance the scan.
+// Returns undefined when no balanced object closes (e.g. a truncated stream) so callers degrade to a plain
+// answer. Pure + unit-tested.
+function extractBalancedJsonObject(raw: string): string | undefined {
+	const start = raw.indexOf('{');
+	if (start < 0) { return undefined; }
+	let depth = 0, inString = false, escaped = false;
+	for (let i = start; i < raw.length; i++) {
+		const ch = raw[i];
+		if (inString) {
+			if (escaped) { escaped = false; }
+			else if (ch === '\\') { escaped = true; }
+			else if (ch === '"') { inString = false; }
+			continue;
+		}
+		if (ch === '"') { inString = true; }
+		else if (ch === '{') { depth++; }
+		else if (ch === '}') { depth--; if (depth === 0) { return raw.slice(start, i + 1); } }
+	}
+	return undefined; // never balanced (truncated) -> plain answer
+}
+
 export function parseChatResponse(raw: string): IParsedChatResponse {
 	const plain: IParsedChatResponse = { reply: raw.trim(), edits: [], inserts: [] };
-	const start = raw.indexOf('{');
-	const end = raw.lastIndexOf('}');
-	if (start < 0 || end <= start) {
-		return plain; // no JSON object at all -> a plain-text answer
+	const objStr = extractBalancedJsonObject(raw);
+	if (!objStr) {
+		return plain; // no balanced JSON object -> a plain-text answer
 	}
 	try {
-		const json = JSON.parse(raw.slice(start, end + 1)) as {
+		const json = JSON.parse(objStr) as {
 			reply?: unknown;
 			edits?: unknown;
 			inserts?: unknown;
@@ -289,13 +314,12 @@ export interface IParsedMultiChatResponse {
 
 export function parseMultiChatResponse(raw: string): IParsedMultiChatResponse {
 	const plain: IParsedMultiChatResponse = { reply: raw.trim(), docs: [] };
-	const start = raw.indexOf('{');
-	const end = raw.lastIndexOf('}');
-	if (start < 0 || end <= start) {
+	const objStr = extractBalancedJsonObject(raw);
+	if (!objStr) {
 		return plain;
 	}
 	try {
-		const json = JSON.parse(raw.slice(start, end + 1)) as { reply?: unknown; docs?: unknown };
+		const json = JSON.parse(objStr) as { reply?: unknown; docs?: unknown };
 		const docs: IParsedDocEdits[] = Array.isArray(json.docs)
 			? json.docs
 				.filter((d): d is { doc?: unknown; edits?: unknown; inserts?: unknown } => !!d && typeof d === 'object')
