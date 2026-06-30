@@ -162,7 +162,10 @@ export class ReviewRailView extends ViewPane {
 			const groupActions = append(groupHeader, $('div.ldr-group-actions'));
 			const approveAll = append(groupActions, $('button.ldr-group-btn.approve')) as HTMLButtonElement;
 			approveAll.textContent = 'Approve all';
-			this._renderDisposables.add(addDisposableListener(approveAll, 'click', () => void this._livingDocs.approveAll(docId)));
+			this._renderDisposables.add(addDisposableListener(approveAll, 'click', async () => {
+				await this._livingDocs.approveAll(docId);
+				this._openNextPending(docId);
+			}));
 			const rejectAll = append(groupActions, $('button.ldr-group-btn')) as HTMLButtonElement;
 			rejectAll.textContent = 'Reject all';
 			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAll(docId)));
@@ -207,6 +210,25 @@ export class ReviewRailView extends ViewPane {
 		// Review (v4 iter 4): collapsed by default so the Review tab matches the comp, expandable to reach
 		// the wired v1 agents (Run / Re-run / Apply fix). The disclosure only shows for a living document.
 		this._appendChecks(content);
+	}
+
+	// Group pending changes by their document, preserving first-seen order, so the changed-docs list and
+	// the review groups iterate documents consistently.
+	private _groupByDoc(pending: readonly IProposedChange[]): Map<string, IProposedChange[]> {
+		const groups = new Map<string, IProposedChange[]>();
+		for (const change of pending) {
+			const list = groups.get(change.docId) ?? [];
+			list.push(change);
+			groups.set(change.docId, list);
+		}
+		return groups;
+	}
+
+	// After a per-document "Approve all", open the next document that still has pending changes so the
+	// user lands on the next set of diffs without hunting for it (Cursor-style step-through).
+	private _openNextPending(approvedDocId: string): void {
+		const next = this._livingDocs.getAllPending().find(c => c.docId !== approvedDocId);
+		if (next) { void this._editors.openEditor({ resource: URI.parse(next.docId) }); }
 	}
 
 	// The +N / -N changed-line summary for a document's pending changes: newText lines added, oldText
@@ -318,6 +340,29 @@ export class ReviewRailView extends ViewPane {
 			reviewEach.style.cssText = 'border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer';
 			reviewEach.textContent = 'Review each';
 			this._renderDisposables.add(addDisposableListener(reviewEach, 'click', () => { this._activeTab = 'review'; this._render(); }));
+
+			// Cursor-style changed-documents list: one row per changed doc with its +N/-N, clickable to open
+			// that document (so its inline diffs show). Shown only when the change spans more than one doc.
+			if (docCount > 1) {
+				const list = append(summary, $('div'));
+				list.style.cssText = 'margin-top:10px;border-top:1px solid #e4e9fb;padding-top:8px;display:flex;flex-direction:column;gap:2px';
+				for (const [docId, changes] of this._groupByDoc(pending)) {
+					const stat = this._diffStat(changes);
+					const row = append(list, $('button')) as HTMLButtonElement;
+					row.style.cssText = 'display:flex;align-items:center;gap:8px;border:none;background:transparent;padding:5px 4px;border-radius:6px;cursor:pointer;text-align:left;font:500 11.5px/1.2 system-ui;color:#3a3f49';
+					row.title = `Open ${changes[0].docTitle}`;
+					const nm = append(row, $('span'));
+					nm.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+					nm.textContent = `\u25A4 ${changes[0].docTitle}`;
+					const st = append(row, $('span'));
+					st.style.cssText = 'font:600 10px/1 ui-monospace,monospace;color:#868b95';
+					st.textContent = `+${stat.added} -${stat.removed}`;
+					const arrow = append(row, $('span'));
+					arrow.style.cssText = 'color:#aab; font-size:12px';
+					arrow.textContent = '→';
+					this._renderDisposables.add(addDisposableListener(row, 'click', () => void this._editors.openEditor({ resource: URI.parse(docId) })));
+				}
+			}
 		}
 
 		this._renderChatComposer(content, doc);
