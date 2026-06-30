@@ -159,6 +159,9 @@ export class ScreenEditor extends EditorPane {
 			case 'present':
 				void this._openFirstDocument();
 				break;
+			case 'genDraft':
+				void this._openTemplateDraft();
+				break;
 			case 'goTemplates':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'templates'), { pinned: true });
 				break;
@@ -189,6 +192,18 @@ export class ScreenEditor extends EditorPane {
 		const living = docs.find(d => d.isLiving) ?? docs[0];
 		if (living) {
 			await this._editors.openEditor({ resource: living.resource, options: { pinned: true } });
+		}
+	}
+
+	// "Generate draft" on the Templates screen previews the Weekly Operating Summary; landing the user in
+	// that document is the honest outcome of the button (it used to be wired to nothing). Full
+	// template-driven generation from the prompt + sources is future work; for now the primary CTA opens
+	// the previewed draft (matched by title), falling back to the first living document.
+	private async _openTemplateDraft(): Promise<void> {
+		const docs = await this._livingDocs.listDocuments();
+		const draft = docs.find(d => d.title.toLowerCase().includes('weekly')) ?? docs.find(d => d.isLiving) ?? docs[0];
+		if (draft) {
+			await this._editors.openEditor({ resource: draft.resource, options: { pinned: true } });
 		}
 	}
 

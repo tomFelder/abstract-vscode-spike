@@ -79,11 +79,18 @@ source-peek. Findings, prioritised:
   test). Read-only matches the "figures are bound, not hand-edited" stance; the raw-Markdown toggle is the
   edit path. Calm board-report table CSS. 0 core patches.
 
+- **Iter 6 — PR #44 `plan17-6-generate-draft-cta`** (fixes part of #12, stacked on #43). The Templates
+  screen's primary CTA "Generate draft" was wired to nothing (no `data-msg`, while its siblings
+  "Review diff" / "Export" were wired) — the most prominent button on the screen did nothing on click.
+  Wired it to open the previewed draft document (Weekly Operating Summary), the honest outcome for the
+  mock. Full template-driven generation from prompt + sources is logged as future work. 0 core patches.
+
 ### New findings from this pass
 - **#11 fake version number** — fixed in iter 4.
-- **#12 mock content on the screens** — Templates shows `crm` / `api` source chips that do not exist in
-  the folder (only `metrics.csv`); Agents lists 5 agents with cron/event triggers; Knowledge is static.
-  Need to confirm the action buttons (Generate draft / +New agent / Edit / Run now / +add sources) are
-  wired or degrade honestly rather than dead-ending. (P2 — verify.)
+- **#12 dead CTAs on the screens** — CONFIRMED: Templates "Generate draft" was wired to nothing (fixed
+  in iter 6). STILL TO AUDIT (likely the same stateful-mock pattern): Agents "+New agent", a row's
+  "open", Knowledge "Edit", Templates "+add source" / "Voice" / the template dropdown, the `crm`/`api`
+  source chips that do not exist in the folder. These should be wired or wear an honest disabled/preview
+  state. (P1 — a dead-click is the sharpest "clicking around falls down" tell.)
 - **#13 blank new-doc has no placeholder** — "New document" opens a stark white canvas; a faint "Start
   writing…" affordance would warm the empty state. (P2.)
