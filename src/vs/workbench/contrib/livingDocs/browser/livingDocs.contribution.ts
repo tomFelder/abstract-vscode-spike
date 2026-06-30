@@ -334,6 +334,16 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		if (this._editorService.editors.length === 0) {
 			void this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'home'), { pinned: true });
 		}
+		// Land the primary sidebar on the calm Workspace rail, NOT the native File Explorer. The
+		// Explorer is the workbench's hard-coded default sidebar viewlet, so on a fresh window it wins
+		// over our `isDefault` Workspace container and the user's first sidebar is a raw file tree with
+		// Outline + Timeline -- the "IDE in a trench coat" first impression the calm shell exists to kill.
+		// Force the Workspace rail active on startup; the Explorer stays one click away in the activity
+		// nav for raw disk file ops (decision 42 / F1). Re-assert once on the next tick in case the
+		// workbench restores the Explorer a beat later (mirrors the welcome-editor + shell-width handling).
+		const showWorkspaceRail = () => { void viewsService.openView(DOCUMENTS_VIEW_ID, false); };
+		showWorkspaceRail();
+		this._register(disposableTimeout(showWorkspaceRail, 0));
 		// Reveal the Studio right panel (Chat / Review / History / Skills) without stealing focus, then
 		// pin the shell to the comp's pixel widths: a 264px tree-rail and a 392px right rail. Sizing
 		// happens AFTER the rail is revealed (setSize is a no-op on a hidden part) and after a layout
