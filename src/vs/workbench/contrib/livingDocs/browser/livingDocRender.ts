@@ -385,7 +385,12 @@ export interface ILivingDocContent {
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
 	const { doc, pending, dirty, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
-	const crumb = isLiving ? 'Living Document' : 'Markdown';
+	// The crumb names the document the user is in (e.g. "Abstract / Board Note"), matching the screen
+	// topbars which show their own name ("Abstract / Home"). It used to show the editor *type*
+	// ("Living Document" / "Markdown"), which told the reader nothing about *which* doc was open; the
+	// living-vs-plain distinction is already carried by the "All sources synced" pill and the doc-list
+	// badges. Escaped: the title is authored content.
+	const crumb = esc(doc?.title || 'Document');
 
 	// PM is the single editing surface for every document (plan 15 iter 5); the chrome shows in 'pm' mode.
 	const isPm = mode === 'pm';
