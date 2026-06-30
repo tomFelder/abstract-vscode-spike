@@ -286,6 +286,8 @@ export interface ILivingDocsService {
 	approve(changeId: string): Promise<void>;
 	/** Accept every pending change for a document at once (the comp's "accept all"). */
 	approveAll(docId: string): Promise<void>;
+	/** Accept every pending change across every document at once (the chat-level "Accept all"). */
+	approveAllPending(): Promise<void>;
 	reject(changeId: string): void;
 	/** Discard every pending change for one document at once (the per-document "Reject all"). */
 	rejectAll(docId: string): Promise<void>;

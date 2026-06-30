@@ -1778,6 +1778,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	// Accept every pending change across every document at once (the chat-level "Accept all" spanning the
+	// whole working set). Applied per document so each doc's insertions stay correctly anchored.
+	async approveAllPending(): Promise<void> {
+		const docIds = [...new Set(this._pending.map(c => c.docId))];
+		for (const docId of docIds) {
+			await this.approveAll(docId);
+		}
+	}
+
 	// Discard every pending change for one document in a single action (the per-document "Reject all",
 	// mirroring approveAll). Each reject audits the discard and clears it from the rail; other documents'
 	// pending changes are untouched.

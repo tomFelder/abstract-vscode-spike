@@ -729,6 +729,20 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.getAllPending().length, 0, 'reject-all clears every doc');
 	});
 
+	test('approveAllPending() applies every pending change across all documents in one action (chat-level accept-all)', async () => {
+		const service = await queuePendingInTwoDocs();
+		assert.strictEqual(service.getAllPending().length, 2, 'precondition: pending across two docs');
+
+		await service.approveAllPending();
+
+		assert.strictEqual(service.getAllPending().length, 0, 'accept-all clears every doc');
+		assert.ok(
+			service.getDoc(WEEKLY)!.blocks.some(b => b.text === 'A shared closing note.')
+			&& service.getDoc(BOARD)!.blocks.some(b => b.text === 'A shared closing note.'),
+			'the change landed in both documents',
+		);
+	});
+
 	// --- working set (plan 18 iter 2): the documents a chat instruction edits across (D-A/D-B) ---
 
 	test('addFolderToWorkingSet puts every folder document into the chat working set as titled chips', async () => {

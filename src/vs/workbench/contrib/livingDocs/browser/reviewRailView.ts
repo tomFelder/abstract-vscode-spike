@@ -290,25 +290,30 @@ export class ReviewRailView extends ViewPane {
 			append(label, $('span.ldp-busy-dots'));
 		}
 
-		// The standing approve/reject summary: whenever changes are pending, the agent surfaces the
-		// one-tap "Approve all" + "Review each" controls (criterion 2 keeps these wired).
+		// The standing chat-level accept/reject summary: whenever changes are pending, the agent surfaces
+		// one-tap controls that span the WHOLE working set (plan 18) - Accept all / Reject all every change
+		// across every document at once, plus a way to step through them. (criterion 2 keeps these wired.)
 		if (pendingCount > 0) {
+			const pending = this._livingDocs.getAllPending();
+			const docCount = new Set(pending.map(c => c.docId)).size;
 			const summary = append(scroll, $('div'));
 			summary.style.cssText = 'border:1px solid #e0e6ff;background:#f7f9ff;border-radius:10px;padding:11px 12px';
 			const head = append(summary, $('div'));
 			head.style.cssText = 'font:600 11.5px/1 system-ui;color:#3a3f49;margin-bottom:9px';
-			head.textContent = `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting on you`;
+			head.textContent = docCount > 1
+				? `${pendingCount} changes across ${docCount} documents`
+				: `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting on you`;
 			const actions = append(summary, $('div'));
 			actions.style.cssText = 'display:flex;gap:7px';
-			const approveAll = append(actions, $('button')) as HTMLButtonElement;
-			approveAll.style.cssText = 'flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer';
-			approveAll.textContent = 'Approve all';
-			this._renderDisposables.add(addDisposableListener(approveAll, 'click', () => {
-				// Scope accept-all to the document in view; fall back to every pending change when no doc is active.
-				const doc = this._activeDoc();
-				if (doc) { void this._livingDocs.approveAll(doc.toString()); }
-				else { for (const change of this._livingDocs.getAllPending()) { void this._livingDocs.approve(change.id); } }
-			}));
+			const acceptAll = append(actions, $('button')) as HTMLButtonElement;
+			acceptAll.style.cssText = 'flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer';
+			// Span every document, not just the one in view (the chat instruction edited the whole set).
+			acceptAll.textContent = docCount > 1 ? 'Accept all' : 'Approve all';
+			this._renderDisposables.add(addDisposableListener(acceptAll, 'click', () => void this._livingDocs.approveAllPending()));
+			const rejectAll = append(actions, $('button')) as HTMLButtonElement;
+			rejectAll.style.cssText = 'border:1px solid #e7c9c6;border-radius:8px;padding:9px 12px;background:#fff;color:#b4332f;font:500 12.5px/1 system-ui;cursor:pointer';
+			rejectAll.textContent = 'Reject all';
+			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAllPending()));
 			const reviewEach = append(actions, $('button')) as HTMLButtonElement;
 			reviewEach.style.cssText = 'border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer';
 			reviewEach.textContent = 'Review each';
