@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { extractBindLinks, parseChatResponse, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -250,5 +250,22 @@ suite('LivingDoc bind-link format', () => {
 	test('parseChatResponse degrades malformed / truncated JSON to a plain answer instead of throwing', () => {
 		const raw = '{"reply":"half a sentence and then the stream cut o';
 		assert.deepStrictEqual(parseChatResponse(raw), { reply: raw, edits: [], inserts: [] });
+	});
+
+	// plan 18 (D-C): one model call returns a per-document edit map for the working set.
+	test('parseMultiChatResponse extracts a reply plus per-document edits/inserts keyed by doc', () => {
+		const raw = '{"reply":"Changed blue to red.","docs":[{"doc":"Project Brief","edits":[{"oldText":"blue","newText":"red"}]},{"doc":"Appendix","inserts":[{"afterHeading":"","newText":"Primary is red."}]}]}';
+		assert.deepStrictEqual(parseMultiChatResponse(raw), {
+			reply: 'Changed blue to red.',
+			docs: [
+				{ doc: 'Project Brief', edits: [{ oldText: 'blue', newText: 'red' }], inserts: [] },
+				{ doc: 'Appendix', edits: [], inserts: [{ afterHeading: '', newText: 'Primary is red.' }] },
+			],
+		});
+	});
+
+	test('parseMultiChatResponse degrades a plain-text / malformed reply to a plain answer with no docs', () => {
+		assert.deepStrictEqual(parseMultiChatResponse('I could not find blue anywhere.'), { reply: 'I could not find blue anywhere.', docs: [] });
+		assert.deepStrictEqual(parseMultiChatResponse('{"reply":"cut o'), { reply: '{"reply":"cut o', docs: [] });
 	});
 });
