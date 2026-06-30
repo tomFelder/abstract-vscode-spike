@@ -248,6 +248,9 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 /* The diff / insert widgets are host-rendered with the renderDoc markup (.editblock/.insertblock/.ctrl),
  * so they need no new styles; they sit full-width in the PM column. */
 .pmwrap .ProseMirror .editblock,.pmwrap .ProseMirror .insertblock{margin:0 0 14px;border-radius:10px;transition:box-shadow .3s ease,background-color .3s ease}
+/* Inline review prominence (plan 19 iter 3): hovering a pending change lifts its accept/reject row so it
+ * reads as one actionable unit you can approve while reading, without adding permanent chrome. */
+.pmwrap .ProseMirror .editblock:hover .ctrl,.pmwrap .ProseMirror .insertblock:hover .ctrl{border-color:oklch(0.66 0.16 45 / .45);box-shadow:0 1px 6px oklch(0.66 0.16 45 / .14)}
 /* Rail-to-editor navigation (plan 19 iter 2): the change the rail sent us to gets a brief calm ring +
  * tint so the eye lands on it, then fades - no permanent chrome. */
 .pmwrap .ProseMirror .lwd-focus-flash{box-shadow:0 0 0 3px oklch(0.66 0.16 45 / .5);background:oklch(0.97 0.03 70)}`;
@@ -353,10 +356,14 @@ function renderDiffSegments(segments: readonly IPmDiffSegment[]): string {
 // The inline diff + accept/reject control row for a pending meaning-change (reuses the renderDoc editblock
 // markup minus the grid gutter cell, since the PM gutter is a separate node decoration).
 function pmEditWidgetHtml(e: IPmEditDecoration): string {
+	// Provenance reads cleanly with or without a source: a bound/source-driven doc shows "Suggested edit
+	// from <source>"; a plain doc (e.g. a chat rewrite) just shows "Suggested edit" - never a dangling
+	// "from" with an empty source after it.
+	const origin = e.source ? `Suggested edit from <span class="src">${esc(e.source)}</span>` : 'Suggested edit';
 	return `<div class="pcell editblock">`
 		+ `<p class="editp">${renderDiffSegments(e.segments)}</p>`
 		+ `<div class="ctrl"><span class="cdot"></span>`
-		+ `<span class="lbl">Tone rewrite from <span class="src">${esc(e.source)}</span> &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
+		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
 		+ `<span class="acts"><button class="approve" data-approve="${esc(e.id)}">Approve changes</button>`
 		+ `<button class="reject" data-reject="${esc(e.id)}">Reject</button></span></div></div>`;
 }
