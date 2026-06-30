@@ -60,6 +60,10 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 .scr-body{flex:1;overflow-y:auto;background:#f8f9fb}
 .btn-primary{border:none;border-radius:8px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer}
 .btn-ghost{border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer}
+/* Buttons for features that are not built yet wear a quiet "Soon" tag and read as inactive, rather than
+ * silently doing nothing on click (honest > broken). */
+.is-soon{opacity:.5;cursor:default}
+.soon-tag{margin-left:6px;font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;color:#a3a8b2;border:1px solid #e0e2e8;border-radius:999px;padding:2px 5px;vertical-align:middle;text-transform:uppercase}
 .topbar{flex:none;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc}
 .brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
 .logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
@@ -170,7 +174,7 @@ function renderTemplates(): string {
 		<div style="max-width:980px;margin:0 auto;padding:26px 28px 80px;display:flex;gap:20px;align-items:flex-start">
 			<div style="width:380px;flex:none;display:flex;flex-direction:column;gap:14px">
 				${step('1', 'Template', '', `<div style="border:1px solid #e6e8ed;border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;font:500 13px/1 system-ui;color:#2c2f36">&#9636; Weekly report<span style="margin-left:auto;color:#a3a8b2">&#9662;</span></div>`)}
-				${step('2', 'Prompt', `<button class="btn-ghost" style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:5px 9px;font:500 11px/1 system-ui">&#127897; Voice</button>`, `<div style="border:1px solid #e6e8ed;border-radius:8px;padding:11px 12px;font:400 13.5px/1.55 system-ui;color:#2c2f36;background:#fcfcfd">Summarise week 24. Flag the signup spike and call out that growth accelerated.</div>`)}
+				${step('2', 'Prompt', `<button class="btn-ghost is-soon" disabled title="Voice input is not available yet" style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:5px 9px;font:500 11px/1 system-ui">&#127897; Voice<span class="soon-tag">Soon</span></button>`, `<div style="border:1px solid #e6e8ed;border-radius:8px;padding:11px 12px;font:400 13.5px/1.55 system-ui;color:#2c2f36;background:#fcfcfd">Summarise week 24. Flag the signup spike and call out that growth accelerated.</div>`)}
 				${step('3', 'Sources', '', `<div style="display:flex;flex-wrap:wrap;gap:7px">${srcChip('metrics.csv')}${srcChip('crm &middot; api')}<span style="display:flex;align-items:center;gap:6px;font:500 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;background:#fff;border:1px dashed #d4d7de;border-radius:999px;padding:6px 10px">&#65291; add source</span></div>`)}
 				<button class="btn-primary" data-msg="genDraft" style="border-radius:10px;padding:13px;font:600 14px/1 system-ui">Generate draft</button>
 			</div>
@@ -224,7 +228,7 @@ function renderKnowledge(state: IScreenState): string {
 			<button data-msg="setKnOrg" style="border:none;border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;${tabStyle(isOrg)}">Organization</button>
 			<button data-msg="setKnProject" style="border:none;border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;${tabStyle(!isOrg)}">Project &middot; Abstract</button>
 		</div>
-		<button class="btn-ghost">Edit</button>
+		<button class="btn-ghost is-soon" disabled title="Editing the knowledge base is not available yet">Edit<span class="soon-tag">Soon</span></button>
 	</div>
 	<div class="scr-body">
 		<div style="max-width:1040px;margin:0 auto;padding:26px 28px 80px;display:flex;gap:22px;align-items:flex-start">
@@ -336,7 +340,7 @@ function renderAgentList(state: IScreenState): string {
 	</div>`).join('');
 	const empty = `<div style="padding:24px 18px;font:400 12.5px/1.5 system-ui;color:#969ba4">No agents match this filter.</div>`;
 	return `<div class="screen">
-	<div class="scr-head"><div><h2 class="scr-title">Agents</h2><div class="scr-sub">Documents talking to documents &mdash; running quietly in the background.</div></div><button class="btn-primary" style="margin-left:auto">&#65291; New agent</button></div>
+	<div class="scr-head"><div><h2 class="scr-title">Agents</h2><div class="scr-sub">Documents talking to documents &mdash; running quietly in the background.</div></div><button class="btn-primary is-soon" disabled title="Creating new agents is not available yet" style="margin-left:auto">&#65291; New agent<span class="soon-tag">Soon</span></button></div>
 	<div class="scr-body">
 		<div style="max-width:1040px;margin:0 auto;padding:24px 28px 80px">
 			<div style="display:flex;gap:6px;margin-bottom:16px">${chip('all', `All &middot; ${counts.all}`)}${chip('scheduled', `Scheduled &middot; ${counts.scheduled}`)}${chip('event', `Event &middot; ${counts.event}`)}${chip('needs-approval', `Needs approval &middot; ${counts.needs}`, true)}</div>
