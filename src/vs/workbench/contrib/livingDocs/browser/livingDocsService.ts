@@ -20,7 +20,7 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { extractBindLinks, parseChatResponse, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
@@ -145,6 +145,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// "working" indicator. Kept in the service so the rail survives re-renders and tab switches.
 	private readonly _chats = new Map<string, IChatMessage[]>();
 	private readonly _chatBusy = new Set<string>();
+	// The chat's working set (plan 18): the documents one instruction fans out across, keyed by the
+	// active document the chat belongs to (mirrors the per-document _chats keying). Empty by default,
+	// so with no set added the chat stays single-doc (decision 61).
+	private readonly _workingSets = new Map<string, IWorkingSetDoc[]>();
 	// The figure diff from each document's last "Sync across", for the editor's synced banner.
 	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
 
@@ -1405,6 +1409,52 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getChatMessages(resource: URI): readonly IChatMessage[] {
 		return this._chats.get(resource.toString()) ?? [];
+	}
+
+	// --- working set (plan 18): the documents a chat instruction edits across ---
+
+	getWorkingSet(resource: URI): readonly IWorkingSetDoc[] {
+		return this._workingSets.get(resource.toString()) ?? [];
+	}
+
+	async addToWorkingSet(resource: URI, docs: readonly URI[]): Promise<void> {
+		const id = resource.toString();
+		const set = this._workingSets.get(id) ?? [];
+		const known = new Set(set.map(d => d.resource.toString()));
+		let added = false;
+		for (const doc of docs) {
+			if (known.has(doc.toString())) { continue; }
+			// Resolve a human title for the chip: the loaded doc's title, else a parsed summary, else the file name.
+			const title = this.getDoc(doc)?.title ?? (await this._summarize(doc))?.title ?? basename(doc);
+			set.push({ resource: doc, title });
+			known.add(doc.toString());
+			added = true;
+		}
+		if (added) {
+			this._workingSets.set(id, set);
+			this._onDidChange.fire();
+		}
+	}
+
+	async addFolderToWorkingSet(resource: URI): Promise<void> {
+		const docs = await this.listDocuments();
+		await this.addToWorkingSet(resource, docs.map(d => d.resource));
+	}
+
+	removeFromWorkingSet(resource: URI, doc: URI): void {
+		const id = resource.toString();
+		const set = this._workingSets.get(id);
+		if (!set) { return; }
+		const next = set.filter(d => d.resource.toString() !== doc.toString());
+		if (next.length === set.length) { return; }
+		this._workingSets.set(id, next);
+		this._onDidChange.fire();
+	}
+
+	async getWorkingSetCandidates(resource: URI): Promise<readonly IWorkingSetDoc[]> {
+		const inSet = new Set(this.getWorkingSet(resource).map(d => d.resource.toString()));
+		const docs = await this.listDocuments();
+		return docs.filter(d => !inSet.has(d.resource.toString())).map(d => ({ resource: d.resource, title: d.title }));
 	}
 
 	getMentionableFiles(resource: URI): readonly string[] {
