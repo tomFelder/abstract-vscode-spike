@@ -131,15 +131,41 @@ export class ReviewRailView extends ViewPane {
 
 		const status = append(content, $('div.ldr-status'));
 		status.textContent = pending.length
-			? `${pending.length} change${pending.length > 1 ? 's' : ''} need approval across ${groups.size} document${groups.size > 1 ? 's' : ''}.`
+			? `${pending.length} change${pending.length > 1 ? 's' : ''} ${pending.length > 1 ? 'need' : 'needs'} approval across ${groups.size} document${groups.size > 1 ? 's' : ''}.`
 			: 'No changes waiting. Open a Living Document and click "Refresh from sources".';
 
 		for (const [docTitle, changes] of groups) {
 			const group = append(content, $('div.ldr-group'));
+			const docId = changes[0].docId;
+
 			const groupHeader = append(group, $('div.ldr-group-head'));
-			groupHeader.textContent = docTitle;
-			const count = append(groupHeader, $('span.ldr-group-count'));
+			// The document title opens that document (so its inline diffs are visible), Cursor-style. The
+			// whole label is the click target; the per-document Approve all / Reject all sit on the right.
+			const titleBtn = append(groupHeader, $('button.ldr-group-title')) as HTMLButtonElement;
+			titleBtn.title = `Open ${docTitle}`;
+			const titleText = append(titleBtn, $('span'));
+			titleText.textContent = docTitle;
+			const count = append(titleBtn, $('span.ldr-group-count'));
 			count.textContent = `${changes.length}`;
+			this._renderDisposables.add(addDisposableListener(titleBtn, 'click', () => {
+				void this._editors.openEditor({ resource: URI.parse(docId) });
+			}));
+
+			// The +N / -N line summary for the document, like Cursor's per-file changed-line count.
+			const stat = this._diffStat(changes);
+			const stats = append(groupHeader, $('span.ldr-group-stat'));
+			const add = append(stats, $('span.ldr-stat-add'));
+			add.textContent = `+${stat.added}`;
+			const del = append(stats, $('span.ldr-stat-del'));
+			del.textContent = `-${stat.removed}`;
+
+			const groupActions = append(groupHeader, $('div.ldr-group-actions'));
+			const approveAll = append(groupActions, $('button.ldr-group-btn.approve')) as HTMLButtonElement;
+			approveAll.textContent = 'Approve all';
+			this._renderDisposables.add(addDisposableListener(approveAll, 'click', () => void this._livingDocs.approveAll(docId)));
+			const rejectAll = append(groupActions, $('button.ldr-group-btn')) as HTMLButtonElement;
+			rejectAll.textContent = 'Reject all';
+			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAll(docId)));
 
 			for (const change of changes) {
 				const card = append(group, $('div.ldr-card'));
@@ -181,6 +207,15 @@ export class ReviewRailView extends ViewPane {
 		// Review (v4 iter 4): collapsed by default so the Review tab matches the comp, expandable to reach
 		// the wired v1 agents (Run / Re-run / Apply fix). The disclosure only shows for a living document.
 		this._appendChecks(content);
+	}
+
+	// The +N / -N changed-line summary for a document's pending changes: newText lines added, oldText
+	// lines removed (an insertion has no oldText, so it counts as pure additions).
+	private _diffStat(changes: readonly IProposedChange[]): { added: number; removed: number } {
+		const lines = (s: string) => s.trim() ? s.trim().split('\n').length : 0;
+		let added = 0, removed = 0;
+		for (const c of changes) { added += lines(c.newText); removed += lines(c.oldText); }
+		return { added, removed };
 	}
 
 	private _renderHistory(content: HTMLElement, audit: readonly IAuditEntry[]): void {
@@ -494,8 +529,18 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldr-content,.living-docs-panel .ldp-content{padding:14px 12px}
 		.living-docs-panel .ldr-status{font:400 11.5px/1.5 system-ui;color:#868b95;margin-bottom:14px}
 		.living-docs-panel .ldr-group{margin-bottom:16px}
-		.living-docs-panel .ldr-group-head{display:flex;align-items:center;gap:8px;font:600 11px/1 system-ui;letter-spacing:.02em;color:#1a1c20;text-transform:uppercase;margin:6px 0 8px}
+		.living-docs-panel .ldr-group-head{display:flex;align-items:center;gap:8px;margin:6px 0 8px}
+		.living-docs-panel .ldr-group-title{display:flex;align-items:center;gap:7px;border:none;background:transparent;padding:0;cursor:pointer;font:600 11px/1 system-ui;letter-spacing:.02em;color:#1a1c20;text-transform:uppercase;text-align:left}
+		.living-docs-panel .ldr-group-title:hover span:first-child{text-decoration:underline}
 		.living-docs-panel .ldr-group-count{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;background:#0001;border-radius:999px;padding:2px 7px}
+		.living-docs-panel .ldr-group-stat{display:inline-flex;gap:6px;margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace}
+		.living-docs-panel .ldr-stat-add{color:#1f7a43}
+		.living-docs-panel .ldr-stat-del{color:#b4332f}
+		.living-docs-panel .ldr-group-actions{display:flex;gap:6px}
+		.living-docs-panel .ldr-group-btn{border:1px solid #e0e2e8;border-radius:7px;padding:5px 9px;background:#fff;color:#52575f;font:600 10.5px/1 system-ui;cursor:pointer;text-transform:none;letter-spacing:0}
+		.living-docs-panel .ldr-group-btn:hover{background:#f4f5f7}
+		.living-docs-panel .ldr-group-btn.approve{border-color:transparent;background:oklch(0.55 0.13 255);color:#fff}
+		.living-docs-panel .ldr-group-btn.approve:hover{background:oklch(0.5 0.13 255)}
 		.living-docs-panel .ldr-card{border:1px solid #eceef2;border-radius:10px;padding:13px;margin-bottom:12px;background:#fff}
 		.living-docs-panel .ldr-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
 		.living-docs-panel .ldr-card-name{font:600 12.5px/1 system-ui;color:#1a1c20}
