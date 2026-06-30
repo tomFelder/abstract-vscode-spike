@@ -270,3 +270,43 @@ export function parseChatResponse(raw: string): IParsedChatResponse {
 		return plain; // malformed / truncated JSON -> degrade to a plain answer, never throw
 	}
 }
+
+// The multi-document chat contract (plan 18, decision 62): one model call over the whole working set
+// returns a reply plus a per-document map of edits/inserts, each entry keyed by the document it targets.
+// Tolerant in the same way as parseChatResponse: a non-JSON / truncated reply degrades to a plain answer
+// with no per-doc proposals (never throws). The `doc` key is matched to a working-set document by title
+// at the call site.
+export interface IParsedDocEdits {
+	readonly doc: string;
+	readonly edits: { heading?: string; oldText?: string; newText?: string; rationale?: string }[];
+	readonly inserts: { afterHeading?: string; newText?: string; rationale?: string }[];
+}
+
+export interface IParsedMultiChatResponse {
+	readonly reply: string;
+	readonly docs: IParsedDocEdits[];
+}
+
+export function parseMultiChatResponse(raw: string): IParsedMultiChatResponse {
+	const plain: IParsedMultiChatResponse = { reply: raw.trim(), docs: [] };
+	const start = raw.indexOf('{');
+	const end = raw.lastIndexOf('}');
+	if (start < 0 || end <= start) {
+		return plain;
+	}
+	try {
+		const json = JSON.parse(raw.slice(start, end + 1)) as { reply?: unknown; docs?: unknown };
+		const docs: IParsedDocEdits[] = Array.isArray(json.docs)
+			? json.docs
+				.filter((d): d is { doc?: unknown; edits?: unknown; inserts?: unknown } => !!d && typeof d === 'object')
+				.map(d => ({
+					doc: typeof d.doc === 'string' ? d.doc : '',
+					edits: Array.isArray(d.edits) ? d.edits : [],
+					inserts: Array.isArray(d.inserts) ? d.inserts : [],
+				}))
+			: [];
+		return { reply: typeof json.reply === 'string' ? json.reply.trim() : '', docs };
+	} catch {
+		return plain;
+	}
+}

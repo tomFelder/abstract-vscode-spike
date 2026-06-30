@@ -123,6 +123,7 @@ suite('LivingDocsService', () => {
 
 	let lastFiles: Map<string, string> | undefined;
 	let lastModelBody: string | undefined;
+	let lastModelCalls = 0;
 	let lastOpenedFolder: URI | undefined;
 
 	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[]; model?: object; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
@@ -169,7 +170,7 @@ suite('LivingDocsService', () => {
 				let payload: object = API_PAYLOAD;
 				if (opts.model) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
-					else if (url.includes('/v1/messages')) { payload = opts.model; lastModelBody = options.data; }
+					else if (url.includes('/v1/messages')) { payload = opts.model; lastModelBody = options.data; lastModelCalls++; }
 				}
 				return {
 					res: { statusCode: 200, headers: {} },
@@ -181,6 +182,7 @@ suite('LivingDocsService', () => {
 		// Folder open: the picker returns the configured folder (or nothing when cancelled); openWindow records it.
 		const fileDialogService = { showOpenDialog: async () => opts.pickFolder ? [opts.pickFolder] : undefined } as unknown as IFileDialogService;
 		lastOpenedFolder = undefined;
+		lastModelCalls = 0;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
 
 		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
@@ -783,6 +785,51 @@ suite('LivingDocsService', () => {
 			['Market research', 'Team Notes', 'Weekly Operating Summary'],
 			'the picker offers every folder doc except those already added',
 		);
+	});
+
+	// --- multi-document fan-out (plan 18 iter 3): one instruction edits the whole working set (D-C) ---
+
+	// One model reply carrying the per-document edit map for the working set.
+	function multiReply(reply: string, docs: object[]): object {
+		return modelMessage({ reply, docs });
+	}
+
+	test('with a working set, one chat instruction fans out edits to every document via a single model call (D-C)', async () => {
+		const service = createService([], {
+			boardNote: true,
+			model: multiReply('Changed blue to red across all three.', [
+				{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] },
+				{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum is now red-themed.', rationale: 'r' }] },
+				{ doc: 'Team Notes', inserts: [{ afterHeading: '', newText: 'Primary colour is now red.', rationale: 'r' }] },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'change the primary colour from blue to red');
+
+		assert.strictEqual(lastModelCalls, 1, 'D-C: the working set is edited with ONE model call, not one per doc');
+		const docIds = new Set(service.getAllPending().map(c => c.docId));
+		assert.deepStrictEqual(
+			[...docIds].sort(),
+			[BOARD.toString(), README.toString(), WEEKLY.toString()].sort(),
+			'proposals are queued across all three working-set documents',
+		);
+	});
+
+	test('with NO working set, chat still edits only the active document (backwards compatible, D-B)', async () => {
+		const service = createService([], {
+			boardNote: true,
+			// A single-doc reply shape; were the fan-out wrongly triggered it would look for a `docs` array.
+			model: chatReply('Tightened it.', [{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated.', rationale: 'r' }]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'tighten the commentary');
+
+		const docIds = new Set(service.getAllPending().map(c => c.docId));
+		assert.deepStrictEqual([...docIds], [WEEKLY.toString()], 'with no set, only the active doc is edited');
 	});
 
 	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {
