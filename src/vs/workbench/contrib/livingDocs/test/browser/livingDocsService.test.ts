@@ -686,6 +686,47 @@ suite('LivingDocsService', () => {
 		assert.ok(blocks.some(b => b.text === 'Growth accelerated this week.'), 'the edit landed');
 	});
 
+	// --- multi-document review (plan 18): reject-all mirrors of approveAll ---
+
+	// Queue one end-of-document insertion into each of two docs by chatting on each in turn. The single
+	// canned model reply (an insert with an empty afterHeading) lands in whichever doc is active, so this
+	// builds genuine cross-document pending state without depending on the iter-3 fan-out.
+	async function queuePendingInTwoDocs(): Promise<LivingDocsService> {
+		const service = createService([], {
+			boardNote: true,
+			model: modelMessage({ reply: 'Added.', edits: [], inserts: [{ afterHeading: '', newText: 'A shared closing note.', rationale: 'r' }] }),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.sendChatMessage(WEEKLY, 'Add a closing note');
+		await service.loadDocument(BOARD);
+		await service.sendChatMessage(BOARD, 'Add a closing note');
+		return service;
+	}
+
+	test('rejectAll(docId) discards one document\'s pending changes and leaves the others untouched', async () => {
+		const service = await queuePendingInTwoDocs();
+		assert.strictEqual(service.getAllPending().length, 2, 'precondition: one pending change in each of two docs');
+
+		await service.rejectAll(WEEKLY.toString());
+
+		assert.deepStrictEqual(
+			{ weekly: service.getPendingForDoc(WEEKLY).length, board: service.getPendingForDoc(BOARD).length },
+			{ weekly: 0, board: 1 },
+			'rejectAll clears the named doc only',
+		);
+		assert.ok(service.getAudit().some(e => e.action === 'rejected' && e.docTitle === 'Board Note') === false
+			&& service.getAudit().some(e => e.action === 'rejected'), 'the rejection is audited for the cleared doc');
+	});
+
+	test('rejectAllPending() discards every pending change across all documents in one action', async () => {
+		const service = await queuePendingInTwoDocs();
+		assert.strictEqual(service.getAllPending().length, 2, 'precondition: pending across two docs');
+
+		await service.rejectAllPending();
+
+		assert.strictEqual(service.getAllPending().length, 0, 'reject-all clears every doc');
+	});
+
 	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {
 		const newText = '1. First lever\n2. Second lever\n3. Third lever';
 		const service = createService([], {

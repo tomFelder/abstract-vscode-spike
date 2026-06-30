@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "bindings": {
+    "metrics.mrr.prev": {
+      "resolved": "$41.2k",
+      "source": "metrics.csv#mrr",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-06-28T06:54:04.585Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.mrr": {
+      "resolved": "$48.6k",
+      "source": "metrics.csv#mrr",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-06-28T06:54:04.585Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.mrr.delta": {
+      "resolved": "+18%",
+      "source": "metrics.csv#mrr",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-06-28T06:54:04.585Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.signups.prev": {
+      "resolved": "312",
+      "source": "metrics.csv#signups",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-06-28T06:54:04.585Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.signups": {
+      "resolved": "427",
+      "source": "metrics.csv#signups",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-06-28T06:54:04.585Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.signups.delta": {
+      "resolved": "+37%",
+      "source": "metrics.csv#signups",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-06-28T06:54:04.585Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    }
+  },
+  "context": {
+    "market-research.md": {
+      "reviewedHash": "5c660c0f",
+      "reviewedAt": "2026-06-28T06:54:04.586Z",
+      "scope": "document"
+    }
+  },
+  "claims": {},
+  "pins": [],
+  "audit": [],
+  "contextItems": []
+}

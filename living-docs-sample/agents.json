@@ -1,0 +1,72 @@
+[
+  {
+    "id": "weekly-refresh",
+    "name": "Weekly refresh",
+    "trigger": {
+      "kind": "cron",
+      "cron": "Mon 09:00"
+    },
+    "flow": {
+      "sources": [],
+      "docs": []
+    },
+    "policy": "auto-figures",
+    "status": "idle"
+  },
+  {
+    "id": "source-watcher",
+    "name": "Source-change watcher",
+    "trigger": {
+      "kind": "event",
+      "source": "*"
+    },
+    "flow": {
+      "sources": [],
+      "docs": []
+    },
+    "policy": "auto-figures",
+    "status": "idle"
+  },
+  {
+    "id": "freshness-sweep",
+    "name": "Freshness sweep",
+    "trigger": {
+      "kind": "heartbeat",
+      "everyHours": 6
+    },
+    "flow": {
+      "sources": [],
+      "docs": []
+    },
+    "policy": "draft-only",
+    "status": "idle"
+  },
+  {
+    "id": "before-export-gate",
+    "name": "Before-export gate",
+    "trigger": {
+      "kind": "lifecycle",
+      "lifecycle": "before-export"
+    },
+    "flow": {
+      "sources": [],
+      "docs": []
+    },
+    "policy": "ask-before-apply",
+    "status": "idle"
+  },
+  {
+    "id": "on-publish-snapshot",
+    "name": "On-publish snapshot",
+    "trigger": {
+      "kind": "lifecycle",
+      "lifecycle": "on-publish"
+    },
+    "flow": {
+      "sources": [],
+      "docs": []
+    },
+    "policy": "auto-figures",
+    "status": "idle"
+  }
+]
