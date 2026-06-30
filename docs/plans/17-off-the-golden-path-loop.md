@@ -71,6 +71,14 @@ source-peek. Findings, prioritised:
   ones. Tom is anti-fake-data; dropped the made-up version, leaving an honest "Saved" (the editor
   autosaves; staleness is the sync pill's job). 0 core patches.
 
+- **Iter 5 — PR #43 `plan17-5-render-tables`** (fixes backlog #2, stacked on #42). GFM tables now render
+  as real read-only tables instead of raw pipe-text. Added a `table_block` atom node to the vendored PM
+  bundle: it captures the table's Markdown at parse time, renders it as an HTML table (cells reuse
+  markdown-it inline rendering; `bind:` links become clickable `.bound` spans so source-peek still works),
+  and serializes the captured Markdown back verbatim → byte-for-byte round-trip (build gate + a new repo
+  test). Read-only matches the "figures are bound, not hand-edited" stance; the raw-Markdown toggle is the
+  edit path. Calm board-report table CSS. 0 core patches.
+
 ### New findings from this pass
 - **#11 fake version number** — fixed in iter 4.
 - **#12 mock content on the screens** — Templates shows `crm` / `api` source chips that do not exist in

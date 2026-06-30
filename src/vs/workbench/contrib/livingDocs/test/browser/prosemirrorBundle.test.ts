@@ -70,4 +70,13 @@ suite('ProseMirror vendored bundle (LWDPM)', () => {
 		assert.ok(json.includes('https://example.com'), 'normal link href should survive');
 		assert.strictEqual(lwdpm.roundTrip(md).trim(), md);
 	});
+
+	test('a GFM table parses to a read-only table_block node and round-trips byte-for-byte', () => {
+		// A board table with bound figures in cells: the whole table is one captured-Markdown atom
+		// (read-only in PM; the figures stay live in toDOM). Canonical pipe form round-trips exactly.
+		const md = '| Metric | Previous | Current |\n| --- | --- | --- |\n| MRR | [$41.2k](bind:metrics.mrr.prev) | [$48.6k](bind:metrics.mrr) |';
+		const json = JSON.stringify(lwdpm.docJSON(md));
+		assert.strictEqual(json.split('"table_block"').length - 1, 1, 'exactly one table_block node');
+		assert.strictEqual(lwdpm.roundTrip(md).trim(), md.trim());
+	});
 });
