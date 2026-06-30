@@ -727,6 +727,64 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.getAllPending().length, 0, 'reject-all clears every doc');
 	});
 
+	// --- working set (plan 18 iter 2): the documents a chat instruction edits across (D-A/D-B) ---
+
+	test('addFolderToWorkingSet puts every folder document into the chat working set as titled chips', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+
+		await service.addFolderToWorkingSet(WEEKLY);
+
+		assert.deepStrictEqual(
+			service.getWorkingSet(WEEKLY).map(d => d.title).sort(),
+			['Board Note', 'Market research', 'Team Notes', 'Weekly Operating Summary'],
+			'a folder expands to all its Markdown documents',
+		);
+	});
+
+	test('addToWorkingSet de-duplicates by resource and removeFromWorkingSet drops one document', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+
+		await service.addToWorkingSet(WEEKLY, [BOARD, README]);
+		await service.addToWorkingSet(WEEKLY, [BOARD]);
+		assert.strictEqual(service.getWorkingSet(WEEKLY).length, 2, 'adding the same document twice does not duplicate it');
+
+		service.removeFromWorkingSet(WEEKLY, BOARD);
+		assert.deepStrictEqual(
+			service.getWorkingSet(WEEKLY).map(d => d.resource.toString()),
+			[README.toString()],
+			'removeFromWorkingSet drops only the named document',
+		);
+	});
+
+	test('the working set is per chat (active document): adding to one does not leak into another', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+		await service.loadDocument(BOARD);
+
+		await service.addToWorkingSet(WEEKLY, [README]);
+
+		assert.deepStrictEqual(
+			{ weekly: service.getWorkingSet(WEEKLY).length, board: service.getWorkingSet(BOARD).length },
+			{ weekly: 1, board: 0 },
+			'the working set is scoped to the chat it was added from',
+		);
+	});
+
+	test('getWorkingSetCandidates lists folder documents not already in the working set', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [BOARD]);
+
+		const candidates = (await service.getWorkingSetCandidates(WEEKLY)).map(d => d.title).sort();
+		assert.deepStrictEqual(
+			candidates,
+			['Market research', 'Team Notes', 'Weekly Operating Summary'],
+			'the picker offers every folder doc except those already added',
+		);
+	});
+
 	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {
 		const newText = '1. First lever\n2. Second lever\n3. Third lever';
 		const service = createService([], {

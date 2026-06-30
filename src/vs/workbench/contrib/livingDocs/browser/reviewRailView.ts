@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -373,6 +374,10 @@ export class ReviewRailView extends ViewPane {
 		const box = append(footer, $('div'));
 		box.style.cssText = 'border:1px solid #e0e2e8;border-radius:11px;background:#fff;padding:8px 9px';
 
+		// The working set: the documents this instruction edits across (plan 18, decision 60). A separate
+		// row from the @mention "Attach" source chips below - these are edit targets, not data bindings.
+		if (doc) { this._renderWorkingSetRow(box, doc); }
+
 		const input = append(box, $('textarea')) as HTMLTextAreaElement;
 		input.placeholder = doc ? 'Ask the agent, or @mention a file\u2026' : 'Open a document to chat\u2026';
 		input.value = this._chatDraft;
@@ -425,6 +430,52 @@ export class ReviewRailView extends ViewPane {
 
 		// Keep the cursor in the composer across the re-render that each message triggers.
 		if (doc && !this._livingDocs.isChatBusy(doc)) { input.focus(); }
+	}
+
+	// The working-set row in the composer: the documents a single instruction fans out across (plan 18).
+	// Each is a removable chip; the "Add" affordance offers the whole folder or any single document. When
+	// the set is empty the row is just the discoverable add affordance (no set -> single-doc chat, D-B).
+	private _renderWorkingSetRow(box: HTMLElement, doc: URI): void {
+		const set = this._livingDocs.getWorkingSet(doc);
+		const row = append(box, $('div'));
+		row.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:0 0 8px;border-bottom:1px solid #f1f2f5;margin-bottom:8px';
+
+		const label = append(row, $('span'));
+		label.style.cssText = 'font:500 10.5px/1.6 system-ui;color:#bcc0c8';
+		label.textContent = set.length ? 'Editing:' : 'Edit across:';
+
+		for (const wsDoc of set) {
+			const chip = append(row, $('span'));
+			chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font:500 11px/1 system-ui;color:#3c4250;background:#f1f3f8;border:1px solid #e3e7ef;border-radius:6px;padding:4px 5px 4px 8px';
+			const name = append(chip, $('span'));
+			name.textContent = `\u25A4 ${wsDoc.title}`;
+			const remove = append(chip, $('button')) as HTMLButtonElement;
+			remove.style.cssText = 'border:none;background:transparent;color:#9aa0ac;cursor:pointer;font:600 13px/1 system-ui;padding:0 2px';
+			remove.textContent = '\u00D7';
+			remove.title = `Remove ${wsDoc.title} from the working set`;
+			this._renderDisposables.add(addDisposableListener(remove, 'click', () => this._livingDocs.removeFromWorkingSet(doc, wsDoc.resource)));
+		}
+
+		const add = append(row, $('button')) as HTMLButtonElement;
+		add.style.cssText = 'border:1px dashed #cdd2dc;background:transparent;color:#6b7280;border-radius:6px;padding:4px 8px;font:500 11px/1 system-ui;cursor:pointer';
+		add.textContent = set.length ? '\uFF0B Add' : '\uFF0B Add documents';
+		this._renderDisposables.add(addDisposableListener(add, 'click', () => this._openWorkingSetMenu(add, doc)));
+	}
+
+	// The add-to-working-set menu: the whole folder in one click, or pick any single document not yet in
+	// the set. Mutating the set fires onDidChange, which re-renders the composer with the new chips.
+	private async _openWorkingSetMenu(anchor: HTMLElement, doc: URI): Promise<void> {
+		const candidates = await this._livingDocs.getWorkingSetCandidates(doc);
+		const actions: IAction[] = [
+			toAction({ id: 'livingDocs.ws.addFolder', label: 'Add all documents in the folder', run: () => void this._livingDocs.addFolderToWorkingSet(doc) }),
+		];
+		if (candidates.length) {
+			actions.push(new Separator());
+			for (const c of candidates) {
+				actions.push(toAction({ id: `livingDocs.ws.add.${c.resource.toString()}`, label: c.title, run: () => void this._livingDocs.addToWorkingSet(doc, [c.resource]) }));
+			}
+		}
+		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
 	}
 
 	private _injectStyles(container: HTMLElement): void {
