@@ -20,8 +20,8 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { extractBindLinks, parseChatResponse, parseLivingDoc, reconcileBindLinks, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { extractBindLinks, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
@@ -145,6 +145,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// "working" indicator. Kept in the service so the rail survives re-renders and tab switches.
 	private readonly _chats = new Map<string, IChatMessage[]>();
 	private readonly _chatBusy = new Set<string>();
+	// The chat's working set (plan 18): the documents one instruction fans out across, keyed by the
+	// active document the chat belongs to (mirrors the per-document _chats keying). Empty by default,
+	// so with no set added the chat stays single-doc (decision 61).
+	private readonly _workingSets = new Map<string, IWorkingSetDoc[]>();
 	// The figure diff from each document's last "Sync across", for the editor's synced banner.
 	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
 
@@ -1407,6 +1411,52 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._chats.get(resource.toString()) ?? [];
 	}
 
+	// --- working set (plan 18): the documents a chat instruction edits across ---
+
+	getWorkingSet(resource: URI): readonly IWorkingSetDoc[] {
+		return this._workingSets.get(resource.toString()) ?? [];
+	}
+
+	async addToWorkingSet(resource: URI, docs: readonly URI[]): Promise<void> {
+		const id = resource.toString();
+		const set = this._workingSets.get(id) ?? [];
+		const known = new Set(set.map(d => d.resource.toString()));
+		let added = false;
+		for (const doc of docs) {
+			if (known.has(doc.toString())) { continue; }
+			// Resolve a human title for the chip: the loaded doc's title, else a parsed summary, else the file name.
+			const title = this.getDoc(doc)?.title ?? (await this._summarize(doc))?.title ?? basename(doc);
+			set.push({ resource: doc, title });
+			known.add(doc.toString());
+			added = true;
+		}
+		if (added) {
+			this._workingSets.set(id, set);
+			this._onDidChange.fire();
+		}
+	}
+
+	async addFolderToWorkingSet(resource: URI): Promise<void> {
+		const docs = await this.listDocuments();
+		await this.addToWorkingSet(resource, docs.map(d => d.resource));
+	}
+
+	removeFromWorkingSet(resource: URI, doc: URI): void {
+		const id = resource.toString();
+		const set = this._workingSets.get(id);
+		if (!set) { return; }
+		const next = set.filter(d => d.resource.toString() !== doc.toString());
+		if (next.length === set.length) { return; }
+		this._workingSets.set(id, next);
+		this._onDidChange.fire();
+	}
+
+	async getWorkingSetCandidates(resource: URI): Promise<readonly IWorkingSetDoc[]> {
+		const inSet = new Set(this.getWorkingSet(resource).map(d => d.resource.toString()));
+		const docs = await this.listDocuments();
+		return docs.filter(d => !inSet.has(d.resource.toString())).map(d => ({ resource: d.resource, title: d.title }));
+	}
+
 	getMentionableFiles(resource: URI): readonly string[] {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return []; }
@@ -1445,7 +1495,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				history.push({ role: 'assistant', via: 'fallback', content: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this document and its sources.' });
 				return;
 			}
-			const reply = await this._chatRespond(state, trimmed, mentions);
+			// A working set fans the instruction across every doc in one model call (plan 18, decision 62);
+			// with no set the chat stays single-doc against the active document (decision 61).
+			const workingSet = this.getWorkingSet(resource);
+			const reply = workingSet.length
+				? await this._chatRespondMulti(state, trimmed, mentions, workingSet)
+				: await this._chatRespond(state, trimmed, mentions);
 			history.push(reply);
 		} catch (e) {
 			this._log.info('[livingDocs] chat failed, honest fallback', e instanceof Error ? e.message : String(e));
@@ -1494,6 +1549,64 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// plain-text answer into `reply`, so a truthy `reply` is always real prose -- we NEVER surface the raw
 		// JSON envelope (a parsed-but-empty reply used to leak `{"reply":"",...}` into the chat).
 		const content = json.reply || (proposedIds.length ? '' : 'I do not have anything to add on that.');
+		return {
+			role: 'assistant', via: 'model', content,
+			steps: steps.length ? steps : undefined,
+			proposedIds: proposedIds.length ? proposedIds : undefined,
+		};
+	}
+
+	// Fan one instruction across the whole working set in a SINGLE model call (plan 18, decision 62). The
+	// model is shown every target document (figures resolved) and asked for a per-document edit map; each
+	// doc's edits/inserts are routed into the existing proposal queue tagged with that doc's id, so the
+	// Review rail's per-document grouping + approve/reject loop is reused unchanged. Plain and living docs
+	// flow through the same path (decision 63).
+	private async _chatRespondMulti(active: IDocState, text: string, mentions: string[], workingSet: readonly IWorkingSetDoc[]): Promise<IChatMessage> {
+		// Ensure every target document is loaded so it can be serialized for the prompt and edited.
+		for (const wsDoc of workingSet) {
+			if (!this._docs.get(wsDoc.resource.toString())) { await this.loadDocument(wsDoc.resource); }
+		}
+		const states = workingSet
+			.map(ws => this._docs.get(ws.resource.toString()))
+			.filter((s): s is IDocState => !!s);
+
+		const sourceFiles = mentions.length ? mentions : [...active.doc.sources, ...active.doc.context];
+		const sources = await this._readContext(active, sourceFiles);
+		const docSections = states.map(s => {
+			const headings = s.doc.blocks.filter(b => b.type === 'heading').map(b => b.text);
+			return `### Document: "${s.doc.title}"\n${this._serializeDocForChat(s)}\nHeadings: ${headings.join(' | ') || '(none)'}`;
+		}).join('\n\n');
+
+		const system = 'You are the agent inside a Living Document editor. The user has selected a WORKING SET of documents and given ONE instruction to apply across ALL of them. '
+			+ 'Apply the instruction to every document where it is relevant; a document that needs no change simply gets empty arrays. Never touch bound figures. '
+			+ 'Reply with ONLY a JSON object: {"reply": string, "docs": [{"doc": string, '
+			+ '"edits": [{"heading": string, "oldText": string, "newText": string, "rationale": string}], '
+			+ '"inserts": [{"afterHeading": string, "newText": string, "rationale": string}]}]}. '
+			+ 'The "doc" field MUST be the exact document title shown below. Use "edits" to rewrite an existing paragraph (oldText must quote the current prose). Use "inserts" to add NEW content after the named heading (empty afterHeading = end of that document). Keep reply concise.';
+		const transcript = this._chatTranscript(active.uri);
+		const user = `Working set (${states.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
+		const raw = await this._callModel(system, user);
+		const json = parseMultiChatResponse(raw);
+
+		const steps: IChatStep[] = [];
+		const proposedIds: string[] = [];
+		if (sourceFiles.length) { steps.push({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
+		// Match each returned doc entry to a working-set document by title, then queue its edits/inserts
+		// against that document's own state (so proposals carry the right docId for the rail grouping).
+		const byTitle = new Map(states.map(s => [s.doc.title.trim().toLowerCase(), s]));
+		for (const entry of json.docs) {
+			const target = byTitle.get(entry.doc.trim().toLowerCase());
+			if (!target) { continue; }
+			for (const edit of entry.edits) {
+				const queued = this._queueChatEdit(target, edit);
+				if (queued) { steps.push({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+			}
+			for (const insert of entry.inserts) {
+				const queued = this._queueChatInsert(target, insert);
+				if (queued) { steps.push({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+			}
+		}
+		const content = json.reply || (proposedIds.length ? '' : 'I did not find anything to change across those documents.');
 		return {
 			role: 'assistant', via: 'model', content,
 			steps: steps.length ? steps : undefined,
@@ -1663,6 +1776,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				.catch(e => this._log.warn('[livingDocs] reject follow-up failed', e));
 		}
 		this._onDidChange.fire();
+	}
+
+	// Accept every pending change across every document at once (the chat-level "Accept all" spanning the
+	// whole working set). Applied per document so each doc's insertions stay correctly anchored.
+	async approveAllPending(): Promise<void> {
+		const docIds = [...new Set(this._pending.map(c => c.docId))];
+		for (const docId of docIds) {
+			await this.approveAll(docId);
+		}
 	}
 
 	// Discard every pending change for one document in a single action (the per-document "Reject all",

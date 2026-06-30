@@ -123,6 +123,7 @@ suite('LivingDocsService', () => {
 
 	let lastFiles: Map<string, string> | undefined;
 	let lastModelBody: string | undefined;
+	let lastModelCalls = 0;
 	let lastOpenedFolder: URI | undefined;
 
 	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; badBind?: boolean; agents?: IAgentDef[]; model?: object; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
@@ -169,7 +170,7 @@ suite('LivingDocsService', () => {
 				let payload: object = API_PAYLOAD;
 				if (opts.model) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
-					else if (url.includes('/v1/messages')) { payload = opts.model; lastModelBody = options.data; }
+					else if (url.includes('/v1/messages')) { payload = opts.model; lastModelBody = options.data; lastModelCalls++; }
 				}
 				return {
 					res: { statusCode: 200, headers: {} },
@@ -181,6 +182,7 @@ suite('LivingDocsService', () => {
 		// Folder open: the picker returns the configured folder (or nothing when cancelled); openWindow records it.
 		const fileDialogService = { showOpenDialog: async () => opts.pickFolder ? [opts.pickFolder] : undefined } as unknown as IFileDialogService;
 		lastOpenedFolder = undefined;
+		lastModelCalls = 0;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
 
 		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
@@ -725,6 +727,123 @@ suite('LivingDocsService', () => {
 		await service.rejectAllPending();
 
 		assert.strictEqual(service.getAllPending().length, 0, 'reject-all clears every doc');
+	});
+
+	test('approveAllPending() applies every pending change across all documents in one action (chat-level accept-all)', async () => {
+		const service = await queuePendingInTwoDocs();
+		assert.strictEqual(service.getAllPending().length, 2, 'precondition: pending across two docs');
+
+		await service.approveAllPending();
+
+		assert.strictEqual(service.getAllPending().length, 0, 'accept-all clears every doc');
+		assert.ok(
+			service.getDoc(WEEKLY)!.blocks.some(b => b.text === 'A shared closing note.')
+			&& service.getDoc(BOARD)!.blocks.some(b => b.text === 'A shared closing note.'),
+			'the change landed in both documents',
+		);
+	});
+
+	// --- working set (plan 18 iter 2): the documents a chat instruction edits across (D-A/D-B) ---
+
+	test('addFolderToWorkingSet puts every folder document into the chat working set as titled chips', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+
+		await service.addFolderToWorkingSet(WEEKLY);
+
+		assert.deepStrictEqual(
+			service.getWorkingSet(WEEKLY).map(d => d.title).sort(),
+			['Board Note', 'Market research', 'Team Notes', 'Weekly Operating Summary'],
+			'a folder expands to all its Markdown documents',
+		);
+	});
+
+	test('addToWorkingSet de-duplicates by resource and removeFromWorkingSet drops one document', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+
+		await service.addToWorkingSet(WEEKLY, [BOARD, README]);
+		await service.addToWorkingSet(WEEKLY, [BOARD]);
+		assert.strictEqual(service.getWorkingSet(WEEKLY).length, 2, 'adding the same document twice does not duplicate it');
+
+		service.removeFromWorkingSet(WEEKLY, BOARD);
+		assert.deepStrictEqual(
+			service.getWorkingSet(WEEKLY).map(d => d.resource.toString()),
+			[README.toString()],
+			'removeFromWorkingSet drops only the named document',
+		);
+	});
+
+	test('the working set is per chat (active document): adding to one does not leak into another', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+		await service.loadDocument(BOARD);
+
+		await service.addToWorkingSet(WEEKLY, [README]);
+
+		assert.deepStrictEqual(
+			{ weekly: service.getWorkingSet(WEEKLY).length, board: service.getWorkingSet(BOARD).length },
+			{ weekly: 1, board: 0 },
+			'the working set is scoped to the chat it was added from',
+		);
+	});
+
+	test('getWorkingSetCandidates lists folder documents not already in the working set', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [BOARD]);
+
+		const candidates = (await service.getWorkingSetCandidates(WEEKLY)).map(d => d.title).sort();
+		assert.deepStrictEqual(
+			candidates,
+			['Market research', 'Team Notes', 'Weekly Operating Summary'],
+			'the picker offers every folder doc except those already added',
+		);
+	});
+
+	// --- multi-document fan-out (plan 18 iter 3): one instruction edits the whole working set (D-C) ---
+
+	// One model reply carrying the per-document edit map for the working set.
+	function multiReply(reply: string, docs: object[]): object {
+		return modelMessage({ reply, docs });
+	}
+
+	test('with a working set, one chat instruction fans out edits to every document via a single model call (D-C)', async () => {
+		const service = createService([], {
+			boardNote: true,
+			model: multiReply('Changed blue to red across all three.', [
+				{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] },
+				{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum is now red-themed.', rationale: 'r' }] },
+				{ doc: 'Team Notes', inserts: [{ afterHeading: '', newText: 'Primary colour is now red.', rationale: 'r' }] },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'change the primary colour from blue to red');
+
+		assert.strictEqual(lastModelCalls, 1, 'D-C: the working set is edited with ONE model call, not one per doc');
+		const docIds = new Set(service.getAllPending().map(c => c.docId));
+		assert.deepStrictEqual(
+			[...docIds].sort(),
+			[BOARD.toString(), README.toString(), WEEKLY.toString()].sort(),
+			'proposals are queued across all three working-set documents',
+		);
+	});
+
+	test('with NO working set, chat still edits only the active document (backwards compatible, D-B)', async () => {
+		const service = createService([], {
+			boardNote: true,
+			// A single-doc reply shape; were the fan-out wrongly triggered it would look for a `docs` array.
+			model: chatReply('Tightened it.', [{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated.', rationale: 'r' }]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'tighten the commentary');
+
+		const docIds = new Set(service.getAllPending().map(c => c.docId));
+		assert.deepStrictEqual([...docIds], [WEEKLY.toString()], 'with no set, only the active doc is edited');
 	});
 
 	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {

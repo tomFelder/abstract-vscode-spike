@@ -42,6 +42,16 @@ export interface ILivingDocSummary {
 }
 
 /**
+ * One document in a chat's *working set* - the edit targets a multi-document instruction fans out
+ * across (plan 18, decision 60). Distinct from a document's `sources` (data bindings it reads from):
+ * the working set is "the documents this instruction should change". Rendered as a chip in the composer.
+ */
+export interface IWorkingSetDoc {
+	readonly resource: URI;
+	readonly title: string;
+}
+
+/**
  * One document Skill's verdict for the Skills rail (spec 5, maker != checker). Financial and
  * Formatting are deterministic and run with no model; Strategy needs a model to test claims against
  * the Knowledge decision stack, so it reports `needs-model` in the model-less build.
@@ -261,10 +271,28 @@ export interface ILivingDocsService {
 	 */
 	sendChatMessage(resource: URI, text: string): Promise<void>;
 
+	// --- working set (plan 18: the documents a chat instruction edits across; decisions 60-62) ---
+	/** The documents in the chat's working set (edit targets), keyed by the active document. */
+	getWorkingSet(resource: URI): readonly IWorkingSetDoc[];
+	/** Add documents to the chat's working set (de-duplicated by resource; titles resolved on add). */
+	addToWorkingSet(resource: URI, docs: readonly URI[]): Promise<void>;
+	/** Add every Markdown document in the workspace folder to the working set (the "Add folder" affordance). */
+	addFolderToWorkingSet(resource: URI): Promise<void>;
+	/** Remove one document from the chat's working set. */
+	removeFromWorkingSet(resource: URI, doc: URI): void;
+	/** The folder documents not already in the working set, for the "Add documents…" picker. */
+	getWorkingSetCandidates(resource: URI): Promise<readonly IWorkingSetDoc[]>;
+
 	approve(changeId: string): Promise<void>;
 	/** Accept every pending change for a document at once (the comp's "accept all"). */
 	approveAll(docId: string): Promise<void>;
+	/** Accept every pending change across every document at once (the chat-level "Accept all"). */
+	approveAllPending(): Promise<void>;
 	reject(changeId: string): void;
+	/** Discard every pending change for one document at once (the per-document "Reject all"). */
+	rejectAll(docId: string): Promise<void>;
+	/** Discard every pending change across every document at once (the chat-level "Reject all"). */
+	rejectAllPending(): Promise<void>;
 
 	// --- source-peek + "Sync across" (the comp's signature editing interaction) ---
 	/**

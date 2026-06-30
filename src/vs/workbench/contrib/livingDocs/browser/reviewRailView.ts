@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -130,15 +131,44 @@ export class ReviewRailView extends ViewPane {
 
 		const status = append(content, $('div.ldr-status'));
 		status.textContent = pending.length
-			? `${pending.length} change${pending.length > 1 ? 's' : ''} need approval across ${groups.size} document${groups.size > 1 ? 's' : ''}.`
+			? `${pending.length} change${pending.length > 1 ? 's' : ''} ${pending.length > 1 ? 'need' : 'needs'} approval across ${groups.size} document${groups.size > 1 ? 's' : ''}.`
 			: 'No changes waiting. Open a Living Document and click "Refresh from sources".';
 
 		for (const [docTitle, changes] of groups) {
 			const group = append(content, $('div.ldr-group'));
+			const docId = changes[0].docId;
+
 			const groupHeader = append(group, $('div.ldr-group-head'));
-			groupHeader.textContent = docTitle;
-			const count = append(groupHeader, $('span.ldr-group-count'));
+			// The document title opens that document (so its inline diffs are visible), Cursor-style. The
+			// whole label is the click target; the per-document Approve all / Reject all sit on the right.
+			const titleBtn = append(groupHeader, $('button.ldr-group-title')) as HTMLButtonElement;
+			titleBtn.title = `Open ${docTitle}`;
+			const titleText = append(titleBtn, $('span'));
+			titleText.textContent = docTitle;
+			const count = append(titleBtn, $('span.ldr-group-count'));
 			count.textContent = `${changes.length}`;
+			this._renderDisposables.add(addDisposableListener(titleBtn, 'click', () => {
+				void this._editors.openEditor({ resource: URI.parse(docId) });
+			}));
+
+			// The +N / -N line summary for the document, like Cursor's per-file changed-line count.
+			const stat = this._diffStat(changes);
+			const stats = append(groupHeader, $('span.ldr-group-stat'));
+			const add = append(stats, $('span.ldr-stat-add'));
+			add.textContent = `+${stat.added}`;
+			const del = append(stats, $('span.ldr-stat-del'));
+			del.textContent = `-${stat.removed}`;
+
+			const groupActions = append(groupHeader, $('div.ldr-group-actions'));
+			const approveAll = append(groupActions, $('button.ldr-group-btn.approve')) as HTMLButtonElement;
+			approveAll.textContent = 'Approve all';
+			this._renderDisposables.add(addDisposableListener(approveAll, 'click', async () => {
+				await this._livingDocs.approveAll(docId);
+				this._openNextPending(docId);
+			}));
+			const rejectAll = append(groupActions, $('button.ldr-group-btn')) as HTMLButtonElement;
+			rejectAll.textContent = 'Reject all';
+			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAll(docId)));
 
 			for (const change of changes) {
 				const card = append(group, $('div.ldr-card'));
@@ -180,6 +210,34 @@ export class ReviewRailView extends ViewPane {
 		// Review (v4 iter 4): collapsed by default so the Review tab matches the comp, expandable to reach
 		// the wired v1 agents (Run / Re-run / Apply fix). The disclosure only shows for a living document.
 		this._appendChecks(content);
+	}
+
+	// Group pending changes by their document, preserving first-seen order, so the changed-docs list and
+	// the review groups iterate documents consistently.
+	private _groupByDoc(pending: readonly IProposedChange[]): Map<string, IProposedChange[]> {
+		const groups = new Map<string, IProposedChange[]>();
+		for (const change of pending) {
+			const list = groups.get(change.docId) ?? [];
+			list.push(change);
+			groups.set(change.docId, list);
+		}
+		return groups;
+	}
+
+	// After a per-document "Approve all", open the next document that still has pending changes so the
+	// user lands on the next set of diffs without hunting for it (Cursor-style step-through).
+	private _openNextPending(approvedDocId: string): void {
+		const next = this._livingDocs.getAllPending().find(c => c.docId !== approvedDocId);
+		if (next) { void this._editors.openEditor({ resource: URI.parse(next.docId) }); }
+	}
+
+	// The +N / -N changed-line summary for a document's pending changes: newText lines added, oldText
+	// lines removed (an insertion has no oldText, so it counts as pure additions).
+	private _diffStat(changes: readonly IProposedChange[]): { added: number; removed: number } {
+		const lines = (s: string) => s.trim() ? s.trim().split('\n').length : 0;
+		let added = 0, removed = 0;
+		for (const c of changes) { added += lines(c.newText); removed += lines(c.oldText); }
+		return { added, removed };
 	}
 
 	private _renderHistory(content: HTMLElement, audit: readonly IAuditEntry[]): void {
@@ -254,29 +312,57 @@ export class ReviewRailView extends ViewPane {
 			append(label, $('span.ldp-busy-dots'));
 		}
 
-		// The standing approve/reject summary: whenever changes are pending, the agent surfaces the
-		// one-tap "Approve all" + "Review each" controls (criterion 2 keeps these wired).
+		// The standing chat-level accept/reject summary: whenever changes are pending, the agent surfaces
+		// one-tap controls that span the WHOLE working set (plan 18) - Accept all / Reject all every change
+		// across every document at once, plus a way to step through them. (criterion 2 keeps these wired.)
 		if (pendingCount > 0) {
+			const pending = this._livingDocs.getAllPending();
+			const docCount = new Set(pending.map(c => c.docId)).size;
 			const summary = append(scroll, $('div'));
 			summary.style.cssText = 'border:1px solid #e0e6ff;background:#f7f9ff;border-radius:10px;padding:11px 12px';
 			const head = append(summary, $('div'));
 			head.style.cssText = 'font:600 11.5px/1 system-ui;color:#3a3f49;margin-bottom:9px';
-			head.textContent = `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting on you`;
+			head.textContent = docCount > 1
+				? `${pendingCount} changes across ${docCount} documents`
+				: `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting on you`;
 			const actions = append(summary, $('div'));
 			actions.style.cssText = 'display:flex;gap:7px';
-			const approveAll = append(actions, $('button')) as HTMLButtonElement;
-			approveAll.style.cssText = 'flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer';
-			approveAll.textContent = 'Approve all';
-			this._renderDisposables.add(addDisposableListener(approveAll, 'click', () => {
-				// Scope accept-all to the document in view; fall back to every pending change when no doc is active.
-				const doc = this._activeDoc();
-				if (doc) { void this._livingDocs.approveAll(doc.toString()); }
-				else { for (const change of this._livingDocs.getAllPending()) { void this._livingDocs.approve(change.id); } }
-			}));
+			const acceptAll = append(actions, $('button')) as HTMLButtonElement;
+			acceptAll.style.cssText = 'flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer';
+			// Span every document, not just the one in view (the chat instruction edited the whole set).
+			acceptAll.textContent = docCount > 1 ? 'Accept all' : 'Approve all';
+			this._renderDisposables.add(addDisposableListener(acceptAll, 'click', () => void this._livingDocs.approveAllPending()));
+			const rejectAll = append(actions, $('button')) as HTMLButtonElement;
+			rejectAll.style.cssText = 'border:1px solid #e7c9c6;border-radius:8px;padding:9px 12px;background:#fff;color:#b4332f;font:500 12.5px/1 system-ui;cursor:pointer';
+			rejectAll.textContent = 'Reject all';
+			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAllPending()));
 			const reviewEach = append(actions, $('button')) as HTMLButtonElement;
 			reviewEach.style.cssText = 'border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer';
 			reviewEach.textContent = 'Review each';
 			this._renderDisposables.add(addDisposableListener(reviewEach, 'click', () => { this._activeTab = 'review'; this._render(); }));
+
+			// Cursor-style changed-documents list: one row per changed doc with its +N/-N, clickable to open
+			// that document (so its inline diffs show). Shown only when the change spans more than one doc.
+			if (docCount > 1) {
+				const list = append(summary, $('div'));
+				list.style.cssText = 'margin-top:10px;border-top:1px solid #e4e9fb;padding-top:8px;display:flex;flex-direction:column;gap:2px';
+				for (const [docId, changes] of this._groupByDoc(pending)) {
+					const stat = this._diffStat(changes);
+					const row = append(list, $('button')) as HTMLButtonElement;
+					row.style.cssText = 'display:flex;align-items:center;gap:8px;border:none;background:transparent;padding:5px 4px;border-radius:6px;cursor:pointer;text-align:left;font:500 11.5px/1.2 system-ui;color:#3a3f49';
+					row.title = `Open ${changes[0].docTitle}`;
+					const nm = append(row, $('span'));
+					nm.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+					nm.textContent = `\u25A4 ${changes[0].docTitle}`;
+					const st = append(row, $('span'));
+					st.style.cssText = 'font:600 10px/1 ui-monospace,monospace;color:#868b95';
+					st.textContent = `+${stat.added} -${stat.removed}`;
+					const arrow = append(row, $('span'));
+					arrow.style.cssText = 'color:#aab; font-size:12px';
+					arrow.textContent = '→';
+					this._renderDisposables.add(addDisposableListener(row, 'click', () => void this._editors.openEditor({ resource: URI.parse(docId) })));
+				}
+			}
 		}
 
 		this._renderChatComposer(content, doc);
@@ -373,6 +459,10 @@ export class ReviewRailView extends ViewPane {
 		const box = append(footer, $('div'));
 		box.style.cssText = 'border:1px solid #e0e2e8;border-radius:11px;background:#fff;padding:8px 9px';
 
+		// The working set: the documents this instruction edits across (plan 18, decision 60). A separate
+		// row from the @mention "Attach" source chips below - these are edit targets, not data bindings.
+		if (doc) { this._renderWorkingSetRow(box, doc); }
+
 		const input = append(box, $('textarea')) as HTMLTextAreaElement;
 		input.placeholder = doc ? 'Ask the agent, or @mention a file\u2026' : 'Open a document to chat\u2026';
 		input.value = this._chatDraft;
@@ -427,6 +517,52 @@ export class ReviewRailView extends ViewPane {
 		if (doc && !this._livingDocs.isChatBusy(doc)) { input.focus(); }
 	}
 
+	// The working-set row in the composer: the documents a single instruction fans out across (plan 18).
+	// Each is a removable chip; the "Add" affordance offers the whole folder or any single document. When
+	// the set is empty the row is just the discoverable add affordance (no set -> single-doc chat, D-B).
+	private _renderWorkingSetRow(box: HTMLElement, doc: URI): void {
+		const set = this._livingDocs.getWorkingSet(doc);
+		const row = append(box, $('div'));
+		row.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:0 0 8px;border-bottom:1px solid #f1f2f5;margin-bottom:8px';
+
+		const label = append(row, $('span'));
+		label.style.cssText = 'font:500 10.5px/1.6 system-ui;color:#bcc0c8';
+		label.textContent = set.length ? 'Editing:' : 'Edit across:';
+
+		for (const wsDoc of set) {
+			const chip = append(row, $('span'));
+			chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font:500 11px/1 system-ui;color:#3c4250;background:#f1f3f8;border:1px solid #e3e7ef;border-radius:6px;padding:4px 5px 4px 8px';
+			const name = append(chip, $('span'));
+			name.textContent = `\u25A4 ${wsDoc.title}`;
+			const remove = append(chip, $('button')) as HTMLButtonElement;
+			remove.style.cssText = 'border:none;background:transparent;color:#9aa0ac;cursor:pointer;font:600 13px/1 system-ui;padding:0 2px';
+			remove.textContent = '\u00D7';
+			remove.title = `Remove ${wsDoc.title} from the working set`;
+			this._renderDisposables.add(addDisposableListener(remove, 'click', () => this._livingDocs.removeFromWorkingSet(doc, wsDoc.resource)));
+		}
+
+		const add = append(row, $('button')) as HTMLButtonElement;
+		add.style.cssText = 'border:1px dashed #cdd2dc;background:transparent;color:#6b7280;border-radius:6px;padding:4px 8px;font:500 11px/1 system-ui;cursor:pointer';
+		add.textContent = set.length ? '\uFF0B Add' : '\uFF0B Add documents';
+		this._renderDisposables.add(addDisposableListener(add, 'click', () => this._openWorkingSetMenu(add, doc)));
+	}
+
+	// The add-to-working-set menu: the whole folder in one click, or pick any single document not yet in
+	// the set. Mutating the set fires onDidChange, which re-renders the composer with the new chips.
+	private async _openWorkingSetMenu(anchor: HTMLElement, doc: URI): Promise<void> {
+		const candidates = await this._livingDocs.getWorkingSetCandidates(doc);
+		const actions: IAction[] = [
+			toAction({ id: 'livingDocs.ws.addFolder', label: 'Add all documents in the folder', run: () => void this._livingDocs.addFolderToWorkingSet(doc) }),
+		];
+		if (candidates.length) {
+			actions.push(new Separator());
+			for (const c of candidates) {
+				actions.push(toAction({ id: `livingDocs.ws.add.${c.resource.toString()}`, label: c.title, run: () => void this._livingDocs.addToWorkingSet(doc, [c.resource]) }));
+			}
+		}
+		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
+	}
+
 	private _injectStyles(container: HTMLElement): void {
 		if (this._stylesInjected) { return; }
 		this._stylesInjected = true;
@@ -443,8 +579,18 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldr-content,.living-docs-panel .ldp-content{padding:14px 12px}
 		.living-docs-panel .ldr-status{font:400 11.5px/1.5 system-ui;color:#868b95;margin-bottom:14px}
 		.living-docs-panel .ldr-group{margin-bottom:16px}
-		.living-docs-panel .ldr-group-head{display:flex;align-items:center;gap:8px;font:600 11px/1 system-ui;letter-spacing:.02em;color:#1a1c20;text-transform:uppercase;margin:6px 0 8px}
+		.living-docs-panel .ldr-group-head{display:flex;align-items:center;gap:8px;margin:6px 0 8px}
+		.living-docs-panel .ldr-group-title{display:flex;align-items:center;gap:7px;border:none;background:transparent;padding:0;cursor:pointer;font:600 11px/1 system-ui;letter-spacing:.02em;color:#1a1c20;text-transform:uppercase;text-align:left}
+		.living-docs-panel .ldr-group-title:hover span:first-child{text-decoration:underline}
 		.living-docs-panel .ldr-group-count{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;background:#0001;border-radius:999px;padding:2px 7px}
+		.living-docs-panel .ldr-group-stat{display:inline-flex;gap:6px;margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace}
+		.living-docs-panel .ldr-stat-add{color:#1f7a43}
+		.living-docs-panel .ldr-stat-del{color:#b4332f}
+		.living-docs-panel .ldr-group-actions{display:flex;gap:6px}
+		.living-docs-panel .ldr-group-btn{border:1px solid #e0e2e8;border-radius:7px;padding:5px 9px;background:#fff;color:#52575f;font:600 10.5px/1 system-ui;cursor:pointer;text-transform:none;letter-spacing:0}
+		.living-docs-panel .ldr-group-btn:hover{background:#f4f5f7}
+		.living-docs-panel .ldr-group-btn.approve{border-color:transparent;background:oklch(0.55 0.13 255);color:#fff}
+		.living-docs-panel .ldr-group-btn.approve:hover{background:oklch(0.5 0.13 255)}
 		.living-docs-panel .ldr-card{border:1px solid #eceef2;border-radius:10px;padding:13px;margin-bottom:12px;background:#fff}
 		.living-docs-panel .ldr-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
 		.living-docs-panel .ldr-card-name{font:600 12.5px/1 system-ui;color:#1a1c20}
