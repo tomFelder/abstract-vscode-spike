@@ -482,9 +482,11 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 			+ (input.sourcePeek ? renderSourceDrawer(input.sourcePeek) : '');
 	}
 
+	// A single calm line, not a permanent two-sentence tutorial. The earlier banner re-explained the whole
+	// bound-figure + review model on every living doc open; the essential, discoverable idea is "figures
+	// are bound, click to trace". The raw-Markdown escape hatch stays.
 	const hint = (isPm && isLiving)
-		? `<div class="hint">Bound figures are highlighted in blue &mdash; click one (or a gutter dot) to trace it back to the source. `
-		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
+		? `<div class="hint">Figures stay bound to their sources. Click one to trace it back to the data. `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
 	// ProseMirror is fed from the FRESH body (parsed from the raw text on disk): a model-driven change
