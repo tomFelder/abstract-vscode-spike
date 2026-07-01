@@ -269,6 +269,26 @@ suite('LivingDoc bind-link format', () => {
 		assert.deepStrictEqual(parseChatResponse(raw), { reply: 'use {tokens} like this', edits: [], inserts: [] });
 	});
 
+	test('parseChatResponse drops a stray trailing close bracket the model appends to an array', () => {
+		// Observed live (gpt-4o-mini): a complete object whose final array carries an extra "]" -
+		// {..."inserts":[]]}. The brace scan must drop the stray closer rather than fail and leak the JSON.
+		const raw = '{"reply":"","edits":[{"oldText":"blue","newText":"red"}],"inserts":[]]}';
+		assert.deepStrictEqual(parseChatResponse(raw), {
+			reply: '',
+			edits: [{ oldText: 'blue', newText: 'red' }],
+			inserts: [],
+		});
+	});
+
+	test('parseChatResponse keeps a real nested array intact', () => {
+		const raw = '{"reply":"ok","edits":[{"oldText":"a","newText":"b"}],"inserts":[]}';
+		assert.deepStrictEqual(parseChatResponse(raw), {
+			reply: 'ok',
+			edits: [{ oldText: 'a', newText: 'b' }],
+			inserts: [],
+		});
+	});
+
 	// plan 18 (D-C): one model call returns a per-document edit map for the working set.
 	test('parseMultiChatResponse extracts a reply plus per-document edits/inserts keyed by doc', () => {
 		const raw = '{"reply":"Changed blue to red.","docs":[{"doc":"Project Brief","edits":[{"oldText":"blue","newText":"red"}]},{"doc":"Appendix","inserts":[{"afterHeading":"","newText":"Primary is red."}]}]}';
@@ -288,6 +308,14 @@ suite('LivingDoc bind-link format', () => {
 
 	test('parseMultiChatResponse extracts the object even with a stray trailing brace', () => {
 		const raw = '{"reply":"Done.","docs":[{"doc":"Brief","edits":[{"oldText":"a","newText":"b"}]}]}}';
+		assert.deepStrictEqual(parseMultiChatResponse(raw), {
+			reply: 'Done.',
+			docs: [{ doc: 'Brief', edits: [{ oldText: 'a', newText: 'b' }], inserts: [] }],
+		});
+	});
+
+	test('parseMultiChatResponse drops a stray trailing close bracket', () => {
+		const raw = '{"reply":"Done.","docs":[{"doc":"Brief","edits":[{"oldText":"a","newText":"b"}]}]]}';
 		assert.deepStrictEqual(parseMultiChatResponse(raw), {
 			reply: 'Done.',
 			docs: [{ doc: 'Brief', edits: [{ oldText: 'a', newText: 'b' }], inserts: [] }],
