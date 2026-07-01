@@ -109,3 +109,27 @@ Open gaps (deferred / by-design):
 - The topbar source pill was absent this run (the chat-driven fan-out did not carry a `reviewSource` into screen state; the entry wiring in 24.3 will pass the run's transcript name). Layout is ready for it.
 - Real data differs from the comp's illustrative 12 docs / 38 changes / a `◐ Inferred` example (real-data guardrail): the cheap model produced 3 confident changes, so no `◐ Inferred` card rendered live (the amber path is test-proven).
 - A reviewed doc's `✓` row shows the doc id (URI string), since the reviewed-set is populated only in 24.2 when a doc empties in-session and the title is looked up there; empty this read-only iter, so not exercised live.
+
+### Cross-document review — actions wired to the engine + reviewed/end state (plan 24 iters 3+4, LIVE) — 92%
+
+Scope: the C5 cross-document review surface goes live.
+Per-change Accept/Reject/Tweak, the sticky doc action bar (Accept All Here / Next / Accept All Remaining), live re-sync of the screen + doc-nav rail + C6 Review rail from the shared model, the reviewed-set carrying the human title, and an honest "All changes reviewed" end state.
+All actions drive the EXISTING engine - no new approve/reject logic.
+
+Built this iteration:
+- Per-change actions (`reviewCard`): Accept -> `approve(id)`, Reject -> `reject(id)`, Tweak -> `_tweakChange(id)` (resolve `docId` from the live pending set, `openEditor` the doc, `focusChange(id)` - the plan-19 navigate-to-inline path, navigate-only).
+- Sticky doc action bar (`reviewColumn`): `Accept All N Here` -> `approveAll(currentDocId)`; `Next: <doc>` -> advance `reviewCurrentDocId` via the existing pure `nextPendingDocId` (omitted when only one doc has changes); topbar `Accept All Remaining (N)` -> `approveAllPending()`.
+- Live re-sync reuses the existing `onDidChange` -> `_render` subscription (no new event path, no new disposables); the centre cards, the rail counts/glyphs and the C6 rail all update from the one shared model.
+- Reviewed-set-with-title fix: the editor tracks `reviewSeenDocs: Map<docId,title>`; the new pure TDD'd `reviewedDocsFromSeen(seen, pendingDocIds)` derives the reviewed list with the HUMAN title, so the check rows show the doc title, not the URI (closes the #83 gap).
+- End state: celebratory "All changes reviewed" only after a review happened this session; else a calm "Nothing waiting" idle.
+- Carry-over fix: corrected the inverted `reviewCard` diff-order comment (code renders addition-then-removal).
+- 19 model tests pass (new `reviewedDocsFromSeen` suite). `typecheck-client` + `valid-layers-check` clean; 0 core patches.
+
+Verified live (ISMS throwaway :8082, 1440x900): Agents -> "Run Across the Project" fanned out to 4 real pending changes across 4 docs (Access Control/MFA line 2, Acceptable Use/BYOD line 15, Vulnerability Management/remediation line 27, Change Management/emergency line 30); opened `review-project` via the palette command. E2E: Accept on Access Control -> applied, rail `4 docs . 3 changes` / `1 of 4 reviewed`, Access Control now a check row with its real title, C6 rail `Review 3`; Reject on Acceptable Use -> `2 of 4 reviewed`, C6 `Review 2`; Accept All 1 Here on Vulnerability Management -> `3 of 4 reviewed`, C6 `Review 1`; Accept All Remaining (1) -> the "All changes reviewed" end state, C6 rail emptied. The C6 rail stayed in exact sync throughout and remained independently functional. See `24-2-actions-live.png`, `24-2-reviewed-endstate.png`, comp `24-2-comp.png`.
+
+Open gaps (deferred / by-design):
+- Reading type stays UI sans (system-ui); the comp uses Instrument Sans for the doc title + change prose (handoff Part B/F decision 4b - handoff wins; consistent with plans 22/23). The one systematic visual difference vs the comp.
+- The in-context diff renders the full new + struck-through old paragraph, which is more verbose than the comp's compact single-line word-diff. Honest (shows the whole change), but a denser word-diff render would match the comp more tightly - deferred.
+- The topbar source pill was absent this run (the chat-driven fan-out did not carry a `reviewSource` into screen state; the plan-24.3 entry wiring will pass the run's transcript name). Layout is ready for it.
+- The `Next` button target/label were verified (correct next-doc named at each step) but the button itself was not clicked in isolation (each action auto-advanced the current doc, and the final doc had no Next); the advance path is exercised end-to-end and `nextPendingDocId` is unit-tested.
+- Real data differs from the comp's illustrative 12 docs / 38 changes / a `Inferred` example (real-data guardrail): the cheap model produced 4 confident (0.85) changes, so no `Inferred` card rendered live (the amber path is test-proven).
