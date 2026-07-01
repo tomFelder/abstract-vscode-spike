@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { groupDecisions, groupPendingByDoc, IProposedChange, nextPendingDocId, reviewConfidence, summariseProjectRun } from '../../common/livingDocsModel.js';
+import { groupDecisions, groupPendingByDoc, IProposedChange, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, summariseProjectRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
@@ -193,5 +193,23 @@ suite('LivingDoc model - groupPendingByDoc', () => {
 
 	test('returns an empty list when there are no pending changes', () => {
 		assert.deepStrictEqual(groupPendingByDoc([]), []);
+	});
+});
+
+suite('LivingDoc model - reviewedDocsFromSeen', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('a seen doc with no remaining pending is reviewed with its human title, in seen order', () => {
+		const seen = new Map<string, string>([['a-uri', 'Access Control'], ['b-uri', 'Backup Policy'], ['c-uri', 'Cryptography']]);
+		const pendingDocIds = new Set<string>(['b-uri']);
+		assert.deepStrictEqual(
+			reviewedDocsFromSeen(seen, pendingDocIds),
+			[{ docId: 'a-uri', title: 'Access Control' }, { docId: 'c-uri', title: 'Cryptography' }],
+		);
+	});
+
+	test('nothing is reviewed while every seen doc still has pending changes', () => {
+		const seen = new Map<string, string>([['a-uri', 'Access Control']]);
+		assert.deepStrictEqual(reviewedDocsFromSeen(seen, new Set(['a-uri'])), []);
 	});
 });

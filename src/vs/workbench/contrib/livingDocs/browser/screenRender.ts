@@ -9,7 +9,7 @@
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
-import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, reviewConfidence } from '../common/livingDocsModel.js';
+import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, reviewConfidence } from '../common/livingDocsModel.js';
 import { ILivingDocSummary } from '../common/livingDocs.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project';
@@ -72,7 +72,12 @@ export interface IScreenState {
 export interface IReviewProjectScreenState {
 	readonly pending: readonly IProposedChange[];
 	readonly currentDocId?: string;
-	readonly reviewedDocIds?: readonly string[];
+	/**
+	 * Documents reviewed THIS session (seen with pending changes, now zero). Each carries the HUMAN title
+	 * (not the raw docId URI) so the reviewed rail row is legible; derived by the editor via
+	 * `reviewedDocsFromSeen`.
+	 */
+	readonly reviewedDocs?: readonly IReviewedDoc[];
 	readonly source?: string;
 	/** The project's folder name, for the topbar crumb + avatar. */
 	readonly folderName?: string;
@@ -740,29 +745,40 @@ function renderReviewProject(state: IScreenState): string {
 	const groups = groupPendingByDoc(pending);
 	const folderName = rp?.folderName ?? 'Project';
 	const projectAv = avatar(folderName);
-	const reviewed = new Set(rp?.reviewedDocIds ?? []);
+	const reviewed = rp?.reviewedDocs ?? [];
 
 	// The 48px topbar: project avatar + name crumb + `Review project update` + the attached source pill.
 	// The right side reports the session totals from the reviewed set - honest zeros when nothing has been
-	// reviewed yet. `Accept all remaining` is rendered but inert this iter (wired in 24.2).
+	// reviewed yet. `Accept All Remaining` -> approveAllPending() (posts `reviewAcceptAllRemaining`); shown
+	// only while something is still pending.
 	const sourcePill = rp?.source
 		? `<span style="font:500 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:4px 10px">${esc(rp.source)}</span>`
 		: '';
 	const totalRemaining = pending.length;
+	const acceptRemaining = totalRemaining
+		? `<button data-msg="reviewAcceptAllRemaining" style="font:600 12.5px/1 system-ui;color:#5661c9;background:#fff;border:1px solid #d9d7fb;border-radius:9px;padding:7px 13px;cursor:pointer">Accept All Remaining (${totalRemaining})</button>`
+		: '';
 	const topBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
 		<span style="width:20px;height:20px;border-radius:6px;background:#3b4d8f;display:flex;align-items:center;justify-content:center;color:#fff;font:600 10px/1 system-ui">${projectAv.text}</span>
 		<span style="font:600 13px/1 system-ui;color:#1a1c20">${esc(folderName)}</span><span style="color:#cfd3da">/</span><span style="font:500 13px/1 system-ui;color:#868b95">Review project update</span>
 		${sourcePill}
-		<div style="margin-left:auto;display:flex;align-items:center;gap:12px"><span style="font:400 13px/1 system-ui;color:#a3a8b2">${reviewed.size} reviewed</span><span style="font:600 12.5px/1 system-ui;color:#5661c9;border:1px solid #d9d7fb;border-radius:9px;padding:7px 13px">Accept All Remaining${totalRemaining ? ` (${totalRemaining})` : ''}</span></div>
+		<div style="margin-left:auto;display:flex;align-items:center;gap:12px"><span style="font:400 13px/1 system-ui;color:#a3a8b2">${reviewed.length} reviewed</span>${acceptRemaining}</div>
 	</div>`;
 
-	// The reviewed end-state: nothing pending. A calm confirmation rather than an empty rail/column.
+	// The end-state: nothing pending. Honest copy - the celebratory "All changes reviewed" only when a
+	// review actually happened this session (docs were actioned to zero); otherwise the calm idle state.
 	if (!groups.length) {
+		const didReview = reviewed.length > 0;
+		const glyph = didReview ? '&#10003;' : '&#9679;';
+		const heading = didReview ? 'All changes reviewed' : 'Nothing waiting';
+		const body = didReview
+			? `Every proposed change across ${reviewed.length} document${reviewed.length === 1 ? '' : 's'} has been actioned. Nothing is left to review.`
+			: 'No changes are waiting across the project. Run an agent across the project to propose updates.';
 		return `<div class="screen">${topBar}<div style="flex:1;display:flex;align-items:center;justify-content:center;background:#f8f9fb;padding:40px">
 			<div style="text-align:center;max-width:420px">
-				<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:12px;background:#eef7f0;border:1px solid #d7ecdc;display:flex;align-items:center;justify-content:center;font-size:20px;color:#2c8159">&#10003;</div>
-				<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">All reviewed</h2>
-				<p style="margin:0;font:400 14px/1.6 system-ui;color:#696e78">Nothing is waiting across the project. Every proposed change has been actioned.</p>
+				<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:12px;background:#eef7f0;border:1px solid #d7ecdc;display:flex;align-items:center;justify-content:center;font-size:20px;color:#2c8159">${glyph}</div>
+				<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">${heading}</h2>
+				<p style="margin:0;font:400 14px/1.6 system-ui;color:#696e78">${body}</p>
 			</div>
 		</div></div>`;
 	}
@@ -772,7 +788,7 @@ function renderReviewProject(state: IScreenState): string {
 	const current = groups.find(g => g.docId === rp?.currentDocId) ?? groups[0];
 	const currentIndex = groups.findIndex(g => g.docId === current.docId);
 
-	return `<div class="screen">${topBar}<div style="flex:1;display:flex;overflow:hidden;min-height:0">${reviewRail(groups, current.docId, reviewed)}${reviewColumn(current.changes, current.docTitle, currentIndex, groups)}</div></div>`;
+	return `<div class="screen">${topBar}<div style="flex:1;display:flex;overflow:hidden;min-height:0">${reviewRail(groups, current.docId, reviewed)}${reviewColumn(current.changes, current.docId, current.docTitle, currentIndex, groups)}</div></div>`;
 }
 
 // The 292px doc-nav rail (C5): a header count `N docs . M changes`, a green progress bar (reviewed /
@@ -781,10 +797,10 @@ function renderReviewProject(state: IScreenState): string {
 // doc empties, so in a fresh run every changed doc is hollow-dot "pending" or filled-dot "current"),
 // filled-dot "current" (the selected doc, accent tint + 3px accent bar), hollow-dot "pending" (still has
 // changes, not selected) - and its count.
-function reviewRail(groups: readonly { docId: string; docTitle: string; changes: readonly IProposedChange[] }[], currentDocId: string, reviewed: ReadonlySet<string>): string {
+function reviewRail(groups: readonly { docId: string; docTitle: string; changes: readonly IProposedChange[] }[], currentDocId: string, reviewed: readonly IReviewedDoc[]): string {
 	const changeTotal = groups.reduce((n, g) => n + g.changes.length, 0);
-	const docTotal = groups.length + reviewed.size;
-	const reviewedCount = reviewed.size;
+	const docTotal = groups.length + reviewed.length;
+	const reviewedCount = reviewed.length;
 	const pct = docTotal > 0 ? Math.round((reviewedCount / docTotal) * 100) : 0;
 	const header = `<div style="padding:17px 18px;border-bottom:1px solid #eef0f3">
 		<div style="font:600 13px/1 system-ui;color:#1a1c20;margin-bottom:10px">${docTotal} document${docTotal === 1 ? '' : 's'} &middot; ${changeTotal} change${changeTotal === 1 ? '' : 's'}</div>
@@ -792,12 +808,12 @@ function reviewRail(groups: readonly { docId: string; docTitle: string; changes:
 		<div style="font:400 11.5px/1 system-ui;color:#a3a8b2;margin-top:7px">${reviewedCount} of ${docTotal} reviewed</div>
 	</div>`;
 
-	// Reviewed docs (0 pending) come first as muted check rows, then the still-pending docs. A reviewed doc has
-	// no changes left, so it is not in `groups` - it only shows here once the editor moves its id into the
-	// reviewed set. This iter is read-only so the reviewed set stays empty; the row style is ready for 24.2.
-	const reviewedRows = [...reviewed].map(docId => `<div style="display:flex;align-items:center;gap:9px;padding:8px 10px">
+	// Reviewed docs (0 pending) come first as muted check rows showing the HUMAN title (not the docId URI),
+	// then the still-pending docs. A reviewed doc has no changes left, so it is not in `groups` - it shows
+	// here once the editor derives it (a seen doc, now zero pending) via `reviewedDocsFromSeen`.
+	const reviewedRows = reviewed.map(r => `<div style="display:flex;align-items:center;gap:9px;padding:8px 10px">
 		<span style="color:#2c8159;font-size:12px;width:13px;text-align:center">&#10003;</span>
-		<span style="font:500 12px/1 system-ui;color:#a3a8b2;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(docId)}</span>
+		<span style="font:500 12px/1 system-ui;color:#a3a8b2;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.title)}</span>
 	</div>`).join('');
 
 	const rows = groups.map(g => {
@@ -828,28 +844,30 @@ function reviewRail(groups: readonly { docId: string; docTitle: string; changes:
 // the change IN CONTEXT (old struck through -> new added, reusing the addition/removal tokens the rail +
 // editor use; an insertion has no oldText so it renders as pure additions), a `decision . line NN` source
 // chip (from sourceQuote/sourceLine, plan 23.4 - the line is OMITTED when unknown so nothing is
-// fabricated), and a filled-dot "High" / half-dot "Inferred" confidence chip per D24-A. The bottom bar reports the
-// still-attention count + the batch controls. Accept / Tweak / Reject + the batch buttons are RENDERED to
-// match the comp but INERT this iteration; TODO(24.2): wire Accept->approve(id), Reject->reject(id),
-// Tweak->focusChange navigate, Accept all here->approveAll(docId), Next->advance current doc.
-function reviewColumn(changes: readonly IProposedChange[], docTitle: string, currentIndex: number, groups: readonly { docTitle: string }[]): string {
+// fabricated), and a filled-dot "High" / half-dot "Inferred" confidence chip per D24-A. The bottom bar
+// reports the still-attention count + the batch controls. All actions drive the EXISTING engine (24.2):
+// `Accept All N Here` -> approveAll(docId), `Next` -> advance the current doc (nextPendingDocId), the
+// per-card Accept/Reject/Tweak -> approve/reject/focusChange.
+function reviewColumn(changes: readonly IProposedChange[], docId: string, docTitle: string, currentIndex: number, groups: readonly { docId: string; docTitle: string }[]): string {
 	const total = groups.length;
 	const eyebrow = `<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:#a3a8b2;margin-bottom:7px">Document ${currentIndex + 1} of ${total}</div>`;
 	const cards = changes.map(reviewCard).join('');
 	const inferredCount = changes.filter(c => reviewConfidence(c) === 'inferred').length;
 
-	// TODO(24.2): the buttons below are inert this iteration (read-only). `Accept all N here` will call
-	// approveAll(docId); `Next` will advance to the next changed document.
+	// `Next` advances to the next changed document; the label names it. Only shown when more than one
+	// document still has changes (the editor computes the real target via nextPendingDocId when clicked).
 	const next = groups[currentIndex + 1] ?? groups[0];
-	const nextLabel = total > 1 ? `Next: ${esc(next.docTitle)} &#8594;` : 'Next &#8594;';
+	const nextBtn = total > 1
+		? `<button data-msg="reviewNext" data-arg="${esc(docId)}" style="font:600 13px/1 system-ui;color:#fff;background:#1a1c20;border:none;border-radius:9px;padding:10px 18px;cursor:pointer">Next: ${esc(next.docTitle)} &#8594;</button>`
+		: '';
 	const attention = inferredCount
 		? `${inferredCount} change${inferredCount === 1 ? '' : 's'} need${inferredCount === 1 ? 's' : ''} your eyes`
 		: 'All changes look confident';
 	const bottomBar = `<div style="flex:none;height:64px;border-top:1px solid #eef0f3;background:#fafbfc;display:flex;align-items:center;padding:0 40px;gap:14px">
 		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${attention}</span>
 		<div style="margin-left:auto;display:flex;gap:10px">
-			<button style="font:600 13px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:9px;padding:10px 16px;cursor:default">Accept All ${changes.length} Here</button>
-			<button style="font:600 13px/1 system-ui;color:#fff;background:#1a1c20;border:none;border-radius:9px;padding:10px 18px;cursor:default">${nextLabel}</button>
+			<button data-msg="reviewAcceptAllHere" data-arg="${esc(docId)}" style="font:600 13px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:9px;padding:10px 16px;cursor:pointer">Accept All ${changes.length} Here</button>
+			${nextBtn}
 		</div>
 	</div>`;
 
@@ -866,10 +884,10 @@ function reviewColumn(changes: readonly IProposedChange[], docTitle: string, cur
 	</div>`;
 }
 
-// One change card. The prose renders the change in context: `oldText` struck through with the removal
-// tokens, then `newText` with the addition tokens (an insertion has no oldText -> pure additions). Below,
-// the source chip + confidence chip + inert Accept / Tweak / Reject (24.2). An `inferred` change gets the
-// attention-tinted card (bg #fffdf8, border #e4dccb) + the amber half-dot "Inferred . needs your eyes" chip.
+// One change card. The prose renders the change in context: `newText` with the addition tokens, then
+// `oldText` struck through with the removal tokens (an insertion has no oldText -> pure additions). Below,
+// the source chip + confidence chip + Accept / Tweak / Reject wired to the engine (24.2). An `inferred`
+// change gets the attention-tinted card (bg #fffdf8, border #e4dccb) + the amber half-dot chip.
 function reviewCard(change: IProposedChange): string {
 	const level = reviewConfidence(change);
 	const inferred = level === 'inferred';
@@ -899,12 +917,13 @@ function reviewCard(change: IProposedChange): string {
 		? `<span style="font:600 11px/1 system-ui;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:999px;padding:5px 10px">&#9680; Inferred &middot; needs your eyes</span>`
 		: `<span style="font:600 11px/1 system-ui;color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:5px 10px">&#9679; High</span>`;
 
-	// TODO(24.2): wire Accept->approve(change.id), Tweak->focusChange navigate, Reject->reject(change.id).
-	// Rendered inert this iteration (cursor:default) so the layout matches the comp without acting.
+	// Actions wired to the EXISTING engine (24.2): Accept -> approve(id), Reject -> reject(id), Tweak ->
+	// open the change's document and focus its inline diff (focusChange). The editor resolves the docId
+	// from the change id, so the card only carries the change id.
 	const actions = `<div style="margin-left:auto;display:flex;gap:7px">
-		<button style="font:600 12px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:8px;padding:8px 14px;cursor:default">Accept</button>
-		<button style="font:600 12px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:8px;padding:8px 12px;cursor:default">Tweak</button>
-		<button style="font:600 12px/1 system-ui;color:#a3a8b2;background:none;border:none;padding:8px 4px;cursor:default">Reject</button>
+		<button data-msg="reviewAccept" data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:8px;padding:8px 14px;cursor:pointer">Accept</button>
+		<button data-msg="reviewTweak" data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:8px;padding:8px 12px;cursor:pointer">Tweak</button>
+		<button data-msg="reviewReject" data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#a3a8b2;background:none;border:none;padding:8px 4px;cursor:pointer">Reject</button>
 	</div>`;
 
 	return `<div style="${cardStyle}">
