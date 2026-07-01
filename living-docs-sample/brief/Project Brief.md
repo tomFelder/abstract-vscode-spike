@@ -1,3 +1,8 @@
+---
+sources:
+  - Appendix.md
+---
+
 # Project Brief — Northwind Rebrand
 
 ## Overview
