@@ -188,4 +188,40 @@ suite('LivingDoc PM decoration mapping', () => {
 
 		assert.deepStrictEqual(spec.gutters, [{ kind: 'dot', keys: ['metrics.margin'], recent: false }]);
 	});
+
+	test('a multi-line source-bound block under a pending edit emits both a dot and a bar', () => {
+		// A wrapped paragraph that is ALSO source-bound should produce a dot (from its binds) AND a bar
+		// (from the multi-line pending edit). The dot and bar have independent anchoring -- the dot marks
+		// provenance, the bar marks the edit extent -- so both must be present with no crash or double-up.
+		const multiLineBoundMd = [
+			'---',
+			'title: Campaign Brief',
+			'sources:',
+			'  - brand.csv',
+			'---',
+			'',
+			'## Identity',
+			'',
+			'The primary colour is [blue](bind:brand.colour). It anchors the logo, primary buttons, and',
+			'links across every touchpoint. The blue is reserved for the single most',
+			'important action on a screen.',
+		].join('\n') + '\n';
+		const doc = parseLivingDoc(multiLineBoundMd);
+		const bound = doc.blocks.find(b => b.binds.length > 0)!;
+		// Sanity: the block really is both bound and multi-line.
+		assert.ok(bound.binds.length > 0, 'expected a bound block');
+		assert.ok(bound.text.includes('\n'), 'expected a multi-line block');
+
+		const pending = [change({ blockId: bound.id, oldText: bound.text, newText: 'The primary colour is red.' })];
+		const spec = buildPmDecorationSpec(doc, pending, new Set([bound.id]));
+
+		// One edit decoration (the meaning-change).
+		assert.strictEqual(spec.edits.length, 1);
+		// The gutter must have exactly one dot (from binds) and one bar (from the multi-line edit).
+		const dots = spec.gutters.filter(g => g.kind === 'dot');
+		const bars = spec.gutters.filter(g => g.kind === 'bar');
+		assert.deepStrictEqual(dots, [{ kind: 'dot', keys: ['brand.colour'], recent: true }]);
+		assert.strictEqual(bars.length, 1);
+		assert.ok(!bars[0].anchorText.includes('\n'), 'bar anchorText must be whitespace-collapsed');
+	});
 });

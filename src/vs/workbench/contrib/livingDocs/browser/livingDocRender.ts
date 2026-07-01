@@ -251,9 +251,11 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 /* Plain-Markdown ProseMirror editor (F2): the document IS the writing surface (reuses .prose type).
  * Layout (plan 21 iter 1 / C2): a flex row that centres a reading group of [30px provenance gutter][720px
  * reading column]. The gutter is a real reserved column (via the prose column's 30px left padding) so
- * provenance markers live to the LEFT of the prose and the prose NEVER shifts when markers toggle. */
+ * provenance markers live to the LEFT of the prose and the prose NEVER shifts when markers toggle.
+ * The .prose element is content-box with max-width:720px (the reading text) + padding-left:30px (the
+ * reserved gutter lane), giving a total element width of 750px. */
 .pmwrap{display:flex;justify-content:center;padding:32px 40px 90px}
-.pmwrap .prose{flex:0 1 auto;max-width:750px;margin:0;padding-left:30px;padding-right:0;box-sizing:content-box;position:relative}
+.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px;padding-right:0;box-sizing:content-box;position:relative}
 .pmwrap .ProseMirror{outline:none;min-height:60vh;white-space:pre-wrap;word-wrap:break-word;-webkit-font-smoothing:antialiased}
 .pmwrap .ProseMirror:focus{outline:none}
 .pmwrap .ProseMirror p.is-editor-empty:first-child::before{color:#bcc0c8;content:attr(data-placeholder);float:left;pointer-events:none;height:0}
@@ -279,9 +281,11 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pmwrap .ProseMirror .pm-gutter::before{content:"";position:absolute;left:-21px;top:.62em;width:9px;height:9px;border-radius:50%;background:oklch(0.55 0.13 255);cursor:pointer;transition:transform .15s ease}
 .pmwrap .ProseMirror .pm-gutter:hover::before{transform:scale(1.25)}
 .pmwrap .ProseMirror .pm-gutter-recent::before{background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(220,150,60,.14);animation:flash 1.6s ease}
-/* A multi-line edited paragraph hangs a 3px attention bar in the gutter spanning the widget's rows. */
-.pmwrap .ProseMirror .pm-edit-bar{position:relative}
-.pmwrap .ProseMirror .pm-edit-bar::before{content:"";position:absolute;left:-22px;top:2px;bottom:2px;width:3px;border-radius:999px;background:oklch(0.66 0.16 45);cursor:pointer}
+/* A multi-line edited paragraph hangs a 3px attention bar in the gutter spanning the diff-text rows
+ * only (the .editp), so it does not overspill into the Approve/Reject control row below.
+ * The bar is placed on .pm-edit-bar .editp rather than the outer .editblock to cap its extent. */
+.pmwrap .ProseMirror .pm-edit-bar .editp{position:relative}
+.pmwrap .ProseMirror .pm-edit-bar .editp::before{content:"";position:absolute;left:-22px;top:2px;bottom:2px;width:3px;border-radius:999px;background:oklch(0.66 0.16 45);cursor:pointer}
 /* A block with a pending meaning-change is hidden; the diff + accept/reject widget renders in its place. */
 .pmwrap .ProseMirror .pm-orig-hidden{display:none}
 /* The diff / insert widgets are host-rendered with the renderDoc markup (.editblock/.insertblock/.ctrl),
@@ -370,14 +374,17 @@ root.addEventListener('keydown', e => {
 // figure's click already fires, keyed by that figure's data-key. Delegated on root so it survives the
 // innerHTML swaps (mount-once-then-message). Only fires when the marker's ::before is under the pointer
 // (the gutter column), not the whole prose line, so reading text stays quiet.
+// The last-revealed key is tracked so the 'reveal' fires once per marker entry, not on every sub-pixel
+// mouse movement while the pointer stays within the same gutter marker (mouseover fires continuously).
 function gutterKeyFor(node){ const bound = node.querySelector('span.bound[data-key]'); return bound ? bound.getAttribute('data-key') : null; }
+let _gutterLastKey = null;
 root.addEventListener('mouseover', e => {
 	const g = e.target.closest && e.target.closest('.pm-gutter');
-	if (!g) { return; }
+	if (!g) { _gutterLastKey = null; return; }
 	const box = g.getBoundingClientRect();
-	if (e.clientX > box.left) { return; }
+	if (e.clientX > box.left) { _gutterLastKey = null; return; }
 	const key = gutterKeyFor(g);
-	if (key) { vscode.postMessage({ type: 'reveal', cells: [key] }); }
+	if (key && key !== _gutterLastKey) { _gutterLastKey = key; vscode.postMessage({ type: 'reveal', cells: [key] }); }
 });
 root.addEventListener('focusout', e => {
 	const b = e.target.closest('[data-block]');
