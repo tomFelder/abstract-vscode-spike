@@ -14,8 +14,10 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { EditorPane } from '../../../browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
+import { nextPendingDocId } from '../common/livingDocsModel.js';
 import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { ILivingDocContent, ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml, ShareScope } from './livingDocRender.js';
@@ -44,6 +46,14 @@ export class LivingDocEditor extends EditorPane {
 	// model-driven change such as an accepted proposal - NOT the user's own typing, which is saved silently
 	// and never re-renders) resets the PM doc to disk truth via `pmReset` (plan 15 iter 4).
 	private _pmBody: string | undefined;
+	// The change the rail asked us to scroll to (plan 19 iter 2). Held until the webview is ready and the
+	// body (with its inline-diff decorations) has rendered, then posted as a 'focusChange' message and
+	// cleared. Navigate-only: revealing a change never approves it.
+	private _pendingFocusChangeId: string | undefined;
+	// True once this editor has rendered with pending changes anywhere in the workspace (plan 19 iter 5).
+	// When the workspace later goes to zero pending, the action bar shows the "All changes reviewed" end
+	// state instead of the neutral "Saved" - so completing a multi-doc review reads as done.
+	private _reviewWasActive = false;
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -53,6 +63,7 @@ export class LivingDocEditor extends EditorPane {
 		@IStorageService storageService: IStorageService,
 		@IWebviewService private readonly _webviewService: IWebviewService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+		@IEditorService private readonly _editorService: IEditorService,
 	) {
 		super(LivingDocEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -76,8 +87,17 @@ export class LivingDocEditor extends EditorPane {
 		this._webviewReady = false;
 		this._pendingContent = undefined;
 		this._pmBody = undefined;
+		this._pendingFocusChangeId = undefined;
+		this._reviewWasActive = false;
 		this._createWebview();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
+		// Rail-to-editor navigation: when a change for THIS document is asked to be focused, scroll to it.
+		this._inputDisposables.add(this._livingDocs.onDidRequestFocusChange(e => {
+			if (this._resource && e.docId === this._resource.toString()) {
+				this._pendingFocusChangeId = e.changeId;
+				this._flushFocusChange();
+			}
+		}));
 		await this._livingDocs.loadDocument(input.resource);
 		this._render();
 	}
@@ -114,6 +134,8 @@ export class LivingDocEditor extends EditorPane {
 					void this._webview?.postMessage({ type: 'lwdRender', html: this._pendingContent.html, pmMd: this._pendingContent.pmMd, pmDeco: this._pendingContent.pmDeco });
 					this._pendingContent = undefined;
 				}
+				// The body (with its inline-diff decorations) is now live; reveal any pending focus target.
+				this._flushFocusChange();
 				break;
 			case 'pmEdit':
 				// The ProseMirror editing surface serialized its current state back to Markdown. Persist it
@@ -162,6 +184,18 @@ export class LivingDocEditor extends EditorPane {
 				break;
 			case 'reject':
 				if (typeof message.id === 'string') { this._livingDocs.reject(message.id); }
+				break;
+			case 'approveAllDoc':
+				// Editor action bar: accept every pending change in THIS document at once (plan 19 iter 4).
+				if (this._resource) { void this._livingDocs.approveAll(this._resource.toString()); }
+				break;
+			case 'approveAllEverywhere':
+				// Editor action bar: accept every pending change across ALL documents (plan 19 iter 5).
+				void this._livingDocs.approveAllPending();
+				break;
+			case 'nextDoc':
+				// Editor action bar: step the editor pane to the next document that still has pending changes.
+				this._openNextChangedDoc();
 				break;
 			case 'askAi':
 				this._livingDocs.focusPanel('chat');
@@ -252,6 +286,14 @@ export class LivingDocEditor extends EditorPane {
 				return data ? { ...data, synced: peek.synced, syncedCount: peek.syncedCount } : undefined;
 			})()
 			: undefined;
+		// The next document (other than this one) with pending changes drives the action bar's "Next
+		// document" button - shown only when there is somewhere to advance to (plan 19 iter 4).
+		const allPending = this._livingDocs.getAllPending();
+		const nextId = nextPendingDocId(allPending, resource.toString());
+		const nextChangedDocTitle = nextId ? allPending.find(c => c.docId === nextId)?.docTitle : undefined;
+		// Remember that a review was underway so the "All changes reviewed" end state only shows after the
+		// workspace actually had pending changes (plan 19 iter 5) - never on a doc that never had any.
+		if (allPending.length > 0) { this._reviewWasActive = true; }
 		const input: ILivingDocRenderInput = {
 			doc: this._livingDocs.getDoc(resource),
 			pending: this._livingDocs.getPendingForDoc(resource),
@@ -264,6 +306,9 @@ export class LivingDocEditor extends EditorPane {
 			present: this._present,
 			syncDiff: this._livingDocs.getLastSyncDiff(resource),
 			sourcePeek,
+			nextChangedDocTitle,
+			totalPendingCount: allPending.length,
+			reviewWasActive: this._reviewWasActive,
 		};
 		const content = renderLivingDocContent(input);
 		// Reset the live PM doc only when the fresh body changed from a model-driven source (an accepted
@@ -290,6 +335,23 @@ export class LivingDocEditor extends EditorPane {
 			void this._webview.postMessage({ type: 'lwdRender', html: content.html, pmMd: content.pmMd, pmDeco: content.pmDeco, pmReset });
 		} else {
 			this._pendingContent = content;
+		}
+	}
+
+	// Editor action bar "Next document with changes": advance the pane to the next document that still has
+	// pending changes (cycling), so the whole multi-doc review can be driven from the document surface.
+	private _openNextChangedDoc(): void {
+		if (!this._resource) { return; }
+		const nextId = nextPendingDocId(this._livingDocs.getAllPending(), this._resource.toString());
+		if (nextId) { void this._editorService.openEditor({ resource: URI.parse(nextId) }); }
+	}
+
+	// Post the pending rail-to-editor focus target once the webview is ready (the body + its inline-diff
+	// decorations are live by then). The RUNTIME scrolls that change's widget into view and flashes it.
+	private _flushFocusChange(): void {
+		if (this._webviewReady && this._webview && this._pendingFocusChangeId) {
+			void this._webview.postMessage({ type: 'focusChange', id: this._pendingFocusChangeId });
+			this._pendingFocusChangeId = undefined;
 		}
 	}
 

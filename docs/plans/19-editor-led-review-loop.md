@@ -93,16 +93,23 @@ to `main`) so they don't cascade into intermediate branches - plan 18 hit exactl
 
 ## 6. Acceptance criteria (verified live)
 
-- [ ] Clicking a change in the rail opens its document in the editor and focuses that change's inline diff
-      in full context.
-- [ ] Every inline diff in the document has a working Approve / Reject affordance at the diff.
-- [ ] The editor hosts "Approve all in this document", "Next document with changes", and "Approve all across
-      all documents", all working.
-- [ ] I can complete the entire multi-document review from the editor by cycling doc -> doc.
-- [ ] The rail still does everything it did in plan 18 (nothing removed); both surfaces drive the same
-      engine.
-- [ ] Plan-17 + plan-18 HOLD intact (single-doc chat, working set, fan-out, 3-tier approve, calm shell).
-- [ ] `typecheck-client` + `valid-layers-check` clean; any core patch is minimal and logged in the ledger.
+- [x] Clicking a change in the rail opens its document in the editor and focuses that change's inline diff
+      in full context. _(iter 2, PR #56)_
+- [x] Every inline diff in the document has a working Approve / Reject affordance at the diff.
+      _(iter 3, PR #58; rendering fixed in #55)_
+- [x] The editor hosts "Approve all in this document", "Next document with changes", and "Approve all across
+      all documents", all working. _(iters 4-5, PRs #59, #61)_
+- [x] I can complete the entire multi-document review from the editor by cycling doc -> doc. _(iter 6 E2E)_
+- [x] The rail still does everything it did in plan 18 (nothing removed); both surfaces drive the same
+      engine. _(observed throughout; rail unchanged)_
+- [x] Plan-17 + plan-18 HOLD intact (single-doc chat, working set, fan-out, 3-tier approve, calm shell).
+- [x] `typecheck-client` + `valid-layers-check` clean; any core patch is minimal and logged in the ledger.
+      _(clean across the whole stack; **0 core patches**)_
+
+**Verified on web** (`code-web ./living-docs-sample/brief` + the OpenRouter proxy). Desktop real-disk smoke
+deferred with rationale (no new persistence code in plan 19; existing service methods desktop-verified by
+prior plans) - see decision #71. One known finding for a future iteration: chat edits on a bulleted-list
+item can drop sibling items (decision #68).
 
 ## 7. Verify approach
 

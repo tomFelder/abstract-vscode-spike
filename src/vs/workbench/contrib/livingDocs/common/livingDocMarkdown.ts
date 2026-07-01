@@ -247,15 +247,55 @@ export interface IParsedChatResponse {
 	readonly inserts: { afterHeading?: string; newText?: string; rationale?: string }[];
 }
 
+// Extract the first complete JSON object from a string, ignoring prose or stray characters before and
+// after it AND dropping stray closing tokens the model appends inside it. A real model (gpt-4o-mini,
+// observed live) intermittently wraps the object in prose, appends a stray trailing `}` or a stray `]` on
+// an array (`{..."inserts":[]]}`), or truncates mid-stream; the old `indexOf('{')..lastIndexOf('}')` slice
+// broke on any of those and leaked the raw JSON into the chat. This rebuilds the object from the first `{`,
+// tracking brace AND bracket depth (plus string state + escapes), emitting characters but DROPPING any
+// closer that would go below zero - so a doubled `}}` / `]]` the model tacked on is discarded rather than
+// breaking the parse. Returns the reconstructed object string, or undefined when no object ever closes
+// (a truncated stream) so callers degrade to a plain answer. Pure + unit-tested.
+function extractBalancedJsonObject(raw: string): string | undefined {
+	const start = raw.indexOf('{');
+	if (start < 0) { return undefined; }
+	let braceDepth = 0, bracketDepth = 0, inString = false, escaped = false;
+	let out = '';
+	for (let i = start; i < raw.length; i++) {
+		const ch = raw[i];
+		if (inString) {
+			out += ch;
+			if (escaped) { escaped = false; }
+			else if (ch === '\\') { escaped = true; }
+			else if (ch === '"') { inString = false; }
+			continue;
+		}
+		if (ch === '"') { inString = true; out += ch; continue; }
+		if (ch === '{') { braceDepth++; out += ch; continue; }
+		if (ch === '[') { bracketDepth++; out += ch; continue; }
+		if (ch === ']') {
+			if (bracketDepth === 0) { continue; } // stray array close -> drop
+			bracketDepth--; out += ch; continue;
+		}
+		if (ch === '}') {
+			if (braceDepth === 0) { continue; } // stray object close -> drop
+			braceDepth--; out += ch;
+			if (braceDepth === 0 && bracketDepth === 0) { return out; } // object complete
+			continue;
+		}
+		out += ch;
+	}
+	return undefined; // never balanced (truncated) -> plain answer
+}
+
 export function parseChatResponse(raw: string): IParsedChatResponse {
 	const plain: IParsedChatResponse = { reply: raw.trim(), edits: [], inserts: [] };
-	const start = raw.indexOf('{');
-	const end = raw.lastIndexOf('}');
-	if (start < 0 || end <= start) {
-		return plain; // no JSON object at all -> a plain-text answer
+	const objStr = extractBalancedJsonObject(raw);
+	if (!objStr) {
+		return plain; // no balanced JSON object -> a plain-text answer
 	}
 	try {
-		const json = JSON.parse(raw.slice(start, end + 1)) as {
+		const json = JSON.parse(objStr) as {
 			reply?: unknown;
 			edits?: unknown;
 			inserts?: unknown;
@@ -289,13 +329,12 @@ export interface IParsedMultiChatResponse {
 
 export function parseMultiChatResponse(raw: string): IParsedMultiChatResponse {
 	const plain: IParsedMultiChatResponse = { reply: raw.trim(), docs: [] };
-	const start = raw.indexOf('{');
-	const end = raw.lastIndexOf('}');
-	if (start < 0 || end <= start) {
+	const objStr = extractBalancedJsonObject(raw);
+	if (!objStr) {
 		return plain;
 	}
 	try {
-		const json = JSON.parse(raw.slice(start, end + 1)) as { reply?: unknown; docs?: unknown };
+		const json = JSON.parse(objStr) as { reply?: unknown; docs?: unknown };
 		const docs: IParsedDocEdits[] = Array.isArray(json.docs)
 			? json.docs
 				.filter((d): d is { doc?: unknown; edits?: unknown; inserts?: unknown } => !!d && typeof d === 'object')

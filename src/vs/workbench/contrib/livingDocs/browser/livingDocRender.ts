@@ -70,6 +70,21 @@ export interface ILivingDocRenderInput {
 	 * renders to the LEFT of the document inside the one surface - never a second editor group.
 	 */
 	readonly sourcePeek?: ISourcePeekRender;
+	/**
+	 * The next document (other than this one) that still has pending changes, if any (plan 19 iter 4).
+	 * Drives the editor action bar's "Next document with changes" button - shown only when there is
+	 * somewhere to advance to. Computed by the editor pane (which sees workspace-wide pending).
+	 */
+	readonly nextChangedDocTitle?: string;
+	/** Total pending changes across EVERY document (plan 19 iter 5) - drives "Approve all everywhere". */
+	readonly totalPendingCount?: number;
+	/**
+	 * True once this editor has shown pending changes during the current review (plan 19 iter 5). When the
+	 * workspace later has zero pending, the action bar shows a calm "All changes reviewed" end state instead
+	 * of the neutral "Saved" - so finishing a multi-doc review feels complete, without faking it on a doc
+	 * that never had changes.
+	 */
+	readonly reviewWasActive?: boolean;
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -165,6 +180,21 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .etoolbar .tb-b.ic{font:400 14px/1 system-ui}
 .etoolbar .tb-saved{margin-left:auto;display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8}
 .etoolbar .tb-saved .sdot{width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)}
+/* Editor action bar (plan 19 iter 4): when this document has pending changes the calm "Saved" status is
+ * replaced by a review cluster - a count, "Approve all in this doc", and (when there is somewhere to go)
+ * "Next document with changes". Lives in the in-webview toolbar (decision E-B) - no editor-chrome core patch. */
+.etoolbar .tb-review{margin-left:auto;display:flex;align-items:center;gap:8px}
+.etoolbar .tb-review .tb-rev-count{font:500 11.5px/1 system-ui;color:#9a6b16;background:oklch(0.97 0.04 75);border:1px solid oklch(0.9 0.05 75);border-radius:999px;padding:5px 9px}
+.etoolbar .tb-review .tb-rev-next{border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 12px/1 system-ui;cursor:pointer;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.etoolbar .tb-review .tb-rev-next:hover{background:#f4f5f7}
+.etoolbar .tb-review .tb-rev-approve{border:none;border-radius:7px;padding:7px 13px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+.etoolbar .tb-review .tb-rev-approve:hover{background:oklch(0.5 0.13 255)}
+/* "Approve all everywhere" is a quiet secondary next to the per-doc primary (plan 19 iter 5). */
+.etoolbar .tb-review .tb-rev-all{border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 12px/1 system-ui;cursor:pointer}
+.etoolbar .tb-review .tb-rev-all:hover{background:#f4f5f7}
+/* "This document is clear" / "All changes reviewed" calm end states (plan 19 iter 5). */
+.etoolbar .tb-clear{margin-left:auto;display:flex;align-items:center;gap:8px;font:500 12px/1 system-ui;color:#1f7a44}
+.etoolbar .tb-clear .tb-clear-tick{width:15px;height:15px;border-radius:50%;background:oklch(0.6 0.13 150);color:#fff;display:flex;align-items:center;justify-content:center;font:700 9px/1 system-ui}
 .hint-raw{border:none;background:none;padding:0;margin-left:5px;color:#8a93c4;font:500 12px/1.6 system-ui;cursor:pointer;text-decoration:underline}
 .hint-raw:hover{color:oklch(0.5 0.13 255)}
 /* Source-peek / Sync-across banner. */
@@ -247,7 +277,13 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pmwrap .ProseMirror .pm-orig-hidden{display:none}
 /* The diff / insert widgets are host-rendered with the renderDoc markup (.editblock/.insertblock/.ctrl),
  * so they need no new styles; they sit full-width in the PM column. */
-.pmwrap .ProseMirror .editblock,.pmwrap .ProseMirror .insertblock{margin:0 0 14px}`;
+.pmwrap .ProseMirror .editblock,.pmwrap .ProseMirror .insertblock{margin:0 0 14px;border-radius:10px;transition:box-shadow .3s ease,background-color .3s ease}
+/* Inline review prominence (plan 19 iter 3): hovering a pending change lifts its accept/reject row so it
+ * reads as one actionable unit you can approve while reading, without adding permanent chrome. */
+.pmwrap .ProseMirror .editblock:hover .ctrl,.pmwrap .ProseMirror .insertblock:hover .ctrl{border-color:oklch(0.66 0.16 45 / .45);box-shadow:0 1px 6px oklch(0.66 0.16 45 / .14)}
+/* Rail-to-editor navigation (plan 19 iter 2): the change the rail sent us to gets a brief calm ring +
+ * tint so the eye lands on it, then fades - no permanent chrome. */
+.pmwrap .ProseMirror .lwd-focus-flash{box-shadow:0 0 0 3px oklch(0.66 0.16 45 / .5);background:oklch(0.97 0.03 70)}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -297,6 +333,9 @@ root.addEventListener('click', e => {
 	let el;
 	if (el = e.target.closest('[data-approve]')) { e.stopPropagation(); return vscode.postMessage({ type: 'approve', id: el.getAttribute('data-approve') }); }
 	if (el = e.target.closest('[data-reject]')) { e.stopPropagation(); return vscode.postMessage({ type: 'reject', id: el.getAttribute('data-reject') }); }
+	if (el = e.target.closest('[data-approve-all-doc]')) { return vscode.postMessage({ type: 'approveAllDoc' }); }
+	if (el = e.target.closest('[data-approve-all-everywhere]')) { return vscode.postMessage({ type: 'approveAllEverywhere' }); }
+	if (el = e.target.closest('[data-next-doc]')) { return vscode.postMessage({ type: 'nextDoc' }); }
 	if (el = e.target.closest('[data-refresh]')) { return vscode.postMessage({ type: 'refresh' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
@@ -321,7 +360,11 @@ root.addEventListener('focusout', e => {
 	const b = e.target.closest('[data-block]');
 	if (b) { const text = b.innerText.replace(/\\s+/g, ' ').trim(); if (text !== b.getAttribute('data-orig')) { vscode.postMessage({ type: 'edit', blockId: b.getAttribute('data-block'), text: text }); } }
 });
-window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); } });
+// Scroll a pending change's inline diff into view and flash it (rail-to-editor navigation, plan 19 iter 2).
+// The change's accept/reject widget carries data-approve="<id>"; reveal its surrounding diff/insert block.
+// A short timeout lets the just-applied decorations lay out before we measure/scroll.
+function focusChange(id){ setTimeout(function(){ try { const el = root.querySelector('[data-approve="' + id + '"]'); const block = el && el.closest('.editblock, .insertblock'); if (block) { block.scrollIntoView({ block: 'center', behavior: 'smooth' }); block.classList.add('lwd-focus-flash'); setTimeout(function(){ block.classList.remove('lwd-focus-flash'); }, 1600); } } catch (e) {} }, 30); }
+window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); } else if (m && m.type === 'focusChange') { focusChange(m.id); } });
 if (typeof window.__LWD_PM_MD === 'string') { mountPm(window.__LWD_PM_MD, window.__LWD_PM_DECO); }
 vscode.postMessage({ type: 'lwdReady' });`;
 
@@ -346,10 +389,14 @@ function renderDiffSegments(segments: readonly IPmDiffSegment[]): string {
 // The inline diff + accept/reject control row for a pending meaning-change (reuses the renderDoc editblock
 // markup minus the grid gutter cell, since the PM gutter is a separate node decoration).
 function pmEditWidgetHtml(e: IPmEditDecoration): string {
+	// Provenance reads cleanly with or without a source: a bound/source-driven doc shows "Suggested edit
+	// from <source>"; a plain doc (e.g. a chat rewrite) just shows "Suggested edit" - never a dangling
+	// "from" with an empty source after it.
+	const origin = e.source ? `Suggested edit from <span class="src">${esc(e.source)}</span>` : 'Suggested edit';
 	return `<div class="pcell editblock">`
 		+ `<p class="editp">${renderDiffSegments(e.segments)}</p>`
 		+ `<div class="ctrl"><span class="cdot"></span>`
-		+ `<span class="lbl">Tone rewrite from <span class="src">${esc(e.source)}</span> &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
+		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
 		+ `<span class="acts"><button class="approve" data-approve="${esc(e.id)}">Approve changes</button>`
 		+ `<button class="reject" data-reject="${esc(e.id)}">Reject</button></span></div></div>`;
 }
@@ -380,6 +427,47 @@ export interface ILivingDocContent {
 	readonly html: string;
 	readonly pmMd: string | null;
 	readonly pmDeco: IPmDecoPayload | null;
+}
+
+// The right side of the in-webview toolbar - the editor action bar (plan 19 iter 4 + 5). Four calm states
+// let the whole multi-document review run from the document pane:
+//  - this doc has changes: a count, "Approve all in this doc", "Next document" (when another changed doc
+//    exists), and a quiet "Approve everywhere" (when other docs also have changes);
+//  - this doc is clear but others still have changes: a tick + "Next document" to keep cycling;
+//  - nothing pending anywhere after a review: "All changes reviewed" (the end state);
+//  - nothing pending and no review happened: the neutral "Saved" status.
+function docToolbarReview(pendingCount: number, totalPendingCount: number, nextChangedDocTitle: string | undefined, reviewWasActive: boolean): string {
+	const next = nextChangedDocTitle
+		? `<button class="tb-rev-next" data-next-doc title="Go to ${esc(nextChangedDocTitle)}">Next document &rarr;</button>`
+		: '';
+	const othersHavePending = totalPendingCount > pendingCount;
+
+	if (pendingCount > 0) {
+		const approveEverywhere = othersHavePending
+			? `<button class="tb-rev-all" data-approve-all-everywhere title="Approve every pending change across all documents">Approve everywhere</button>`
+			: '';
+		return `<span class="tb-review">`
+			+ `<span class="tb-rev-count">${pendingCount} change${pendingCount === 1 ? '' : 's'} here</span>`
+			+ `<button class="tb-rev-approve" data-approve-all-doc>Approve all in this doc</button>`
+			+ next
+			+ approveEverywhere
+			+ `</span>`;
+	}
+
+	if (totalPendingCount > 0) {
+		// This document is clear, but the review is not finished - keep the cycle moving to the next doc.
+		return `<span class="tb-clear">`
+			+ `<span class="tb-clear-tick">&#10003;</span>This document is clear`
+			+ `</span>`
+			+ `<span class="tb-review" style="margin-left:10px">${next}`
+			+ `<button class="tb-rev-all" data-approve-all-everywhere title="Approve every pending change across all documents">Approve everywhere</button></span>`;
+	}
+
+	if (reviewWasActive) {
+		return `<span class="tb-clear"><span class="tb-clear-tick">&#10003;</span>All changes reviewed</span>`;
+	}
+
+	return `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`;
 }
 
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
@@ -433,7 +521,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `<button class="tb-b ic" data-pmcmd="bullet_list" title="Bulleted list">&#8803;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="ordered_list" title="Numbered list">&#8862;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="blockquote" title="Quote">&#10077;</button>`
-		+ `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`
+		+ docToolbarReview(pending.length, input.totalPendingCount ?? pending.length, input.nextChangedDocTitle, !!input.reviewWasActive)
 		+ `</div>`
 		: '';
 
