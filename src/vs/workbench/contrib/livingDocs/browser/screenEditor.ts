@@ -23,7 +23,7 @@ import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocSummary, ILivingDocsService } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
-import { AgentFilter, IRecentProject, renderScreenHtml, ScreenId } from './screenRender.js';
+import { AgentFilter, IProjectRunScreenState, IRecentProject, renderScreenHtml, ScreenId } from './screenRender.js';
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -35,6 +35,9 @@ interface IScreenEditorState {
 	docs?: readonly ILivingDocSummary[];
 	// Home: recently-opened folders from the workbench history (D22-A); fetched async alongside docs.
 	recentFolders?: readonly IRecentProject[];
+	// Project-run (C4): the live/last whole-project fan-out state, or undefined for the truthful idle
+	// state. Iter 2 leaves this undefined (idle) - the run-kick + swarm/decisions data land in 23.3/23.4.
+	projectRun?: IProjectRunScreenState;
 }
 
 // Webview editor that hosts one Abstract screen (Templates / Knowledge / Agents) in the
@@ -201,6 +204,21 @@ export class ScreenEditor extends EditorPane {
 			case 'goTemplates':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'templates'), { pinned: true });
 				break;
+			// Agents entry point (D23-B): "Run across the project" opens the project-run screen live.
+			// The whole-project chat fan-out that populates the swarm is kicked in 23.3 (TODO below);
+			// opening the screen from Agents works live now, landing on the truthful idle state.
+			case 'runProject':
+				void this._openProjectRun();
+				break;
+			// Project-run screen idle-state affordance: jump to the Agents screen (the run entry point).
+			case 'goAgents':
+				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'agents'), { pinned: true });
+				break;
+			// Project-run bottom bar: "Review across the project" routes to the Review rail as the
+			// interim target. TODO(plan-24): retarget to the cross-document review surface once it lands.
+			case 'reviewProject':
+				this._livingDocs.focusPanel('review');
+				break;
 			case 'openFolder':
 				void this._livingDocs.openFolder();
 				break;
@@ -230,6 +248,16 @@ export class ScreenEditor extends EditorPane {
 		this._state = { ...this._state, lastRun: run };
 		this._render();
 		if (run && run.queued > 0) { this._livingDocs.focusPanel('review'); }
+	}
+
+	// D23-B entry point: open the project-run screen (C4) via the SAME open-screen path every other
+	// Abstract screen uses (a singleton ScreenEditorInput opened through the editor service). Iter 2
+	// lands on the truthful idle state; the whole-project chat fan-out that fills the swarm is 23.3.
+	private async _openProjectRun(): Promise<void> {
+		// TODO(23.3): kick the whole-project chat fan-out here - addFolderToWorkingSet(active doc)
+		// + sendChatMessage(instruction) - and carry the run's instruction/source into this._state.projectRun
+		// so the command strip and the live swarm reflect the REAL run rather than the idle state.
+		await this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'project-run'), { pinned: true });
 	}
 
 	// Templates "Export" lands the user on a real document, where the Present/export modal lives.
