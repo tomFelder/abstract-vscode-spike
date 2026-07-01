@@ -608,7 +608,7 @@ function decisionsRail(): string {
 	return `<div style="width:360px;flex:none;border-right:1px solid #eef0f3;background:#fafbfc;padding:22px;overflow:hidden;display:flex;flex-direction:column">
 		<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#5661c9;margin-bottom:16px">Decisions Understood</div>
 		<div style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#a3a8b2">
-			<p style="margin:0;font:400 13px/1.6 system-ui;max-width:240px">The decisions the agent extracted &mdash; each traced to its line in the source &mdash; will appear here.</p>
+			<p style="margin:0;font:400 13px/1.6 system-ui;max-width:240px">The decisions the agent extracted, each traced to its line in the source, will appear here.</p>
 		</div>
 	</div>`;
 }
