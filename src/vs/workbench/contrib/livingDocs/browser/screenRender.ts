@@ -620,7 +620,7 @@ function renderProjectRun(state: IScreenState): string {
 
 	// Bottom-bar totals. When a run is active they read from the REAL summary (`summariseProjectRun`) +
 	// the live working count; idle shows honest zeros. The primary "Review across the project" opens the
-	// Review rail as the interim target (TODO(plan-24): retarget at the cross-document review surface).
+	// cross-document review screen (C5) on the first changed doc - handled by `reviewProject` in screenEditor.
 	const changed = summary?.totalChanges ?? 0;
 	const changedDocs = summary?.changedDocs ?? 0;
 	const workingCount = summary ? workingSet.size : 0;

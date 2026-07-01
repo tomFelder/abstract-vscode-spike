@@ -133,3 +133,28 @@ Open gaps (deferred / by-design):
 - The topbar source pill was absent this run (the chat-driven fan-out did not carry a `reviewSource` into screen state; the plan-24.3 entry wiring will pass the run's transcript name). Layout is ready for it.
 - The `Next` button target/label were verified (correct next-doc named at each step) but the button itself was not clicked in isolation (each action auto-advanced the current doc, and the final doc had no Next); the advance path is exercised end-to-end and `nextPendingDocId` is unit-tested.
 - Real data differs from the comp's illustrative 12 docs / 38 changes / a `Inferred` example (real-data guardrail): the cheap model produced 4 confident (0.85) changes, so no `Inferred` card rendered live (the amber path is test-proven).
+
+---
+
+## Plan 24, iters 5+6 — wire the fan-out entry + E2E finish (PLAN 24 COMPLETE) — design-match 93%
+
+Branch `redesign-24-3-wire-entry` (PR base `redesign-24-2-review-actions`).
+This iteration is the ENTRY WIRING only - it makes plan-23's "Review Across the Project →" open the plan-24 cross-document review screen, closing the interim `focusPanel('review')` route.
+No changes to the `review-project` renderer (rail / cards / chips / action bar are all unchanged from iters 1-4), so the design-match score carries over unchanged at ~93%.
+
+Built this iteration:
+- Retarget (`ScreenEditor._onMessage`, `screenEditor.ts:238-240`): the `reviewProject` message now calls `_openReviewProject()` instead of the interim `this._livingDocs.focusPanel('review')`; the `TODO(plan-24.3)` note is removed.
+- New `_openReviewProject()` (mirrors `_openProjectRun`): computes the first changed doc as `groupPendingByDoc(getAllPending())[0].docId`, seeds `reviewCurrentDocId` to it (falls back to the existing selection when nothing pending) and `reviewSource` to `projectRun?.source`, then opens via `createInstance(ScreenEditorInput, 'review-project')` through the editor service - selection set BEFORE open so the first render lands on the right doc.
+- `groupPendingByDoc` added to the model import; bottom-bar comment in `screenRender.ts` updated to describe the real target (no renderer code change).
+- Home NEEDS-YOU "Review" deliberately NOT re-wired (keeps plan-22 open-the-doc behaviour; the cross-doc screen is the project-scale landing from a run - re-pointing Home would expand scope and risk plan 22). Left as-is and noted.
+- The C6 Review rail (`reviewRailView.ts`) is untouched and stays a parallel presentation of the same model.
+- `typecheck-client` + `valid-layers-check` clean; **0 core patches** (committed diff: `screenEditor.ts` + one comment in `screenRender.ts`).
+
+Verified live, FULL E2E (ISMS throwaway :8082, 1440x900): Agents -> "Run Across the Project" fanned out to 14 sub-agents and settled with 3 DECISIONS UNDERSTOOD + "3 changes proposed in 3 documents" (Access Control/MFA, Logging & Monitoring/log retention 6->12 months, Change Management/emergency-change approval - each grounded in the 3 March transcript). Clicked **Review Across the Project ->** -> it OPENED the `review-project` screen (tab "Review Project") landing on **DOCUMENT 1 OF 3: Access Control Policy** (the first changed doc), NOT the C6 rail. Rail: `3 documents · 3 changes` / `0 of 3 reviewed`; card: MFA change in context + `decision` source chip + `● High`. Then: Accept (Access Control) -> `1 of 3 reviewed`, auto-advance to Logging, C6 rail `Review 2`; Reject (Logging) -> `2 of 3 reviewed`, advance to Change Management, C6 `Review 1`; Accept All 1 Here (Change Management) -> the "All changes reviewed · Every proposed change across 3 documents has been actioned" end state, C6 rail emptied. The C6 rail stayed in exact sync throughout and remained independently functional. See `24-3-review-across-lands.png` (the landing on the first changed doc), `24-3-e2e-endstate.png`, comp `24-3-comp.png`.
+
+Closed / carried gaps:
+- The plan-23 interim `focusPanel('review')` route is CLOSED (decision #85). Plan 24 acceptance criterion "Plan 23's Review across the project lands here on the first changed doc" is met.
+- The topbar source pill layout is ready and `_openReviewProject` now carries `projectRun?.source` into `reviewSource`; it renders when the run supplied a source label.
+- Source chip shows just `decision` (no `· line NN`) for chat-produced changes with no `sourceLine` - the honest real-data guardrail; the comp's "line NN" is illustrative. Unchanged from #83/#84.
+- Reading type stays UI sans (system-ui) vs the comp's Instrument Sans / Newsreader title - fork-wide Part B/F decision 4b (handoff wins). The one systematic visual difference vs the comp.
+- Model stochasticity: the whole-project fan-out over this transcript returned "no change" on several gpt-4o-mini runs; the 3 pending changes were seeded via grounded per-doc chat (same engine + review model), then a fresh fan-out picked them up so the decisions column + bottom bar + "Review Across" all reflected them.
