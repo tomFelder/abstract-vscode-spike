@@ -78,13 +78,6 @@ export interface ILivingDocRenderInput {
 	readonly nextChangedDocTitle?: string;
 	/** Total pending changes across EVERY document (plan 19 iter 5) - drives "Approve all everywhere". */
 	readonly totalPendingCount?: number;
-	/**
-	 * True once this editor has shown pending changes during the current review (plan 19 iter 5). When the
-	 * workspace later has zero pending, the action bar shows a calm "All changes reviewed" end state instead
-	 * of the neutral "Saved" - so finishing a multi-doc review feels complete, without faking it on a doc
-	 * that never had changes.
-	 */
-	readonly reviewWasActive?: boolean;
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -180,21 +173,23 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .etoolbar .tb-b.ic{font:400 14px/1 system-ui}
 .etoolbar .tb-saved{margin-left:auto;display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8}
 .etoolbar .tb-saved .sdot{width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)}
-/* Editor action bar (plan 19 iter 4): when this document has pending changes the calm "Saved" status is
- * replaced by a review cluster - a count, "Approve all in this doc", and (when there is somewhere to go)
- * "Next document with changes". Lives in the in-webview toolbar (decision E-B) - no editor-chrome core patch. */
-.etoolbar .tb-review{margin-left:auto;display:flex;align-items:center;gap:8px}
-.etoolbar .tb-review .tb-rev-count{font:500 11.5px/1 system-ui;color:#9a6b16;background:oklch(0.97 0.04 75);border:1px solid oklch(0.9 0.05 75);border-radius:999px;padding:5px 9px}
-.etoolbar .tb-review .tb-rev-next{border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 12px/1 system-ui;cursor:pointer;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.etoolbar .tb-review .tb-rev-next:hover{background:#f4f5f7}
-.etoolbar .tb-review .tb-rev-approve{border:none;border-radius:7px;padding:7px 13px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
-.etoolbar .tb-review .tb-rev-approve:hover{background:oklch(0.5 0.13 255)}
-/* "Approve all everywhere" is a quiet secondary next to the per-doc primary (plan 19 iter 5). */
-.etoolbar .tb-review .tb-rev-all{border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 12px/1 system-ui;cursor:pointer}
-.etoolbar .tb-review .tb-rev-all:hover{background:#f4f5f7}
-/* "This document is clear" / "All changes reviewed" calm end states (plan 19 iter 5). */
-.etoolbar .tb-clear{margin-left:auto;display:flex;align-items:center;gap:8px;font:500 12px/1 system-ui;color:#1f7a44}
-.etoolbar .tb-clear .tb-clear-tick{width:15px;height:15px;border-radius:50%;background:oklch(0.6 0.13 150);color:#fff;display:flex;align-items:center;justify-content:center;font:700 9px/1 system-ui}
+/* Floating review bar (plan 19 iter 7): a calm affordance that floats DIRECTLY BELOW the formatting
+ * toolbar - never inside the WYSIWYG header - and is present ONLY while there are pending changes in this
+ * or another document. It sticks under the sticky topbar (top:48px, h48) + formatting toolbar (top:48px,
+ * h46) at top:94px, spans the full document width, and reads as its own affordance via a warm amber tint
+ * + soft elevation so it is distinct from the grey formatting chrome. When the last change is approved the
+ * bar simply disappears (no persistent end state) - that disappearance is the "done" signal. */
+.reviewbar{position:sticky;top:94px;z-index:5;display:flex;align-items:center;gap:8px;padding:9px 16px;border-bottom:1px solid oklch(0.9 0.05 75);background:oklch(0.985 0.02 75);box-shadow:0 6px 16px -6px rgba(120,90,20,.18)}
+.reviewbar .rv-spacer{flex:1}
+.reviewbar .rv-count{font:500 11.5px/1 system-ui;color:#9a6b16;background:oklch(0.97 0.04 75);border:1px solid oklch(0.9 0.05 75);border-radius:999px;padding:5px 9px}
+.reviewbar .rv-clear{display:flex;align-items:center;gap:8px;font:500 12px/1 system-ui;color:#1f7a44}
+.reviewbar .rv-tick{width:15px;height:15px;border-radius:50%;background:oklch(0.6 0.13 150);color:#fff;display:flex;align-items:center;justify-content:center;font:700 9px/1 system-ui}
+.reviewbar .rv-next{border:1px solid #e6dcc2;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 12px/1 system-ui;cursor:pointer;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reviewbar .rv-next:hover{background:#fbf7ee}
+.reviewbar .rv-all{border:1px solid #e6dcc2;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 12px/1 system-ui;cursor:pointer}
+.reviewbar .rv-all:hover{background:#fbf7ee}
+.reviewbar .rv-approve{border:none;border-radius:7px;padding:7px 13px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+.reviewbar .rv-approve:hover{background:oklch(0.5 0.13 255)}
 .hint-raw{border:none;background:none;padding:0;margin-left:5px;color:#8a93c4;font:500 12px/1.6 system-ui;cursor:pointer;text-decoration:underline}
 .hint-raw:hover{color:oklch(0.5 0.13 255)}
 /* Source-peek / Sync-across banner. */
@@ -436,38 +431,38 @@ export interface ILivingDocContent {
 //  - this doc is clear but others still have changes: a tick + "Next document" to keep cycling;
 //  - nothing pending anywhere after a review: "All changes reviewed" (the end state);
 //  - nothing pending and no review happened: the neutral "Saved" status.
-function docToolbarReview(pendingCount: number, totalPendingCount: number, nextChangedDocTitle: string | undefined, reviewWasActive: boolean): string {
+function docReviewBar(pendingCount: number, totalPendingCount: number, nextChangedDocTitle: string | undefined): string {
+	// The review bar is a floating affordance that only exists while there are pending changes somewhere -
+	// in this document or another. When the last change is approved it simply disappears, and that
+	// disappearance IS the "done" signal (plan 19 iter 7: no persistent end state).
+	if (totalPendingCount <= 0) {
+		return '';
+	}
+
 	const next = nextChangedDocTitle
-		? `<button class="tb-rev-next" data-next-doc title="Go to ${esc(nextChangedDocTitle)}">Next document &rarr;</button>`
+		? `<button class="rv-next" data-next-doc title="Go to ${esc(nextChangedDocTitle)}">Next document &rarr;</button>`
 		: '';
 	const othersHavePending = totalPendingCount > pendingCount;
 
+	let inner: string;
 	if (pendingCount > 0) {
 		const approveEverywhere = othersHavePending
-			? `<button class="tb-rev-all" data-approve-all-everywhere title="Approve every pending change across all documents">Approve everywhere</button>`
+			? `<button class="rv-all" data-approve-all-everywhere title="Approve every pending change across all documents">Approve everywhere</button>`
 			: '';
-		return `<span class="tb-review">`
-			+ `<span class="tb-rev-count">${pendingCount} change${pendingCount === 1 ? '' : 's'} here</span>`
-			+ `<button class="tb-rev-approve" data-approve-all-doc>Approve all in this doc</button>`
+		inner = `<span class="rv-count">${pendingCount} change${pendingCount === 1 ? '' : 's'} here</span>`
+			+ `<span class="rv-spacer"></span>`
 			+ next
 			+ approveEverywhere
-			+ `</span>`;
-	}
-
-	if (totalPendingCount > 0) {
+			+ `<button class="rv-approve" data-approve-all-doc>Approve all in this doc</button>`;
+	} else {
 		// This document is clear, but the review is not finished - keep the cycle moving to the next doc.
-		return `<span class="tb-clear">`
-			+ `<span class="tb-clear-tick">&#10003;</span>This document is clear`
-			+ `</span>`
-			+ `<span class="tb-review" style="margin-left:10px">${next}`
-			+ `<button class="tb-rev-all" data-approve-all-everywhere title="Approve every pending change across all documents">Approve everywhere</button></span>`;
+		inner = `<span class="rv-clear"><span class="rv-tick">&#10003;</span>This document is clear</span>`
+			+ `<span class="rv-spacer"></span>`
+			+ next
+			+ `<button class="rv-all" data-approve-all-everywhere title="Approve every pending change across all documents">Approve everywhere</button>`;
 	}
 
-	if (reviewWasActive) {
-		return `<span class="tb-clear"><span class="tb-clear-tick">&#10003;</span>All changes reviewed</span>`;
-	}
-
-	return `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`;
+	return `<div class="reviewbar">${inner}</div>`;
 }
 
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
@@ -521,7 +516,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `<button class="tb-b ic" data-pmcmd="bullet_list" title="Bulleted list">&#8803;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="ordered_list" title="Numbered list">&#8862;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="blockquote" title="Quote">&#10077;</button>`
-		+ docToolbarReview(pending.length, input.totalPendingCount ?? pending.length, input.nextChangedDocTitle, !!input.reviewWasActive)
+		+ `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`
 		+ `</div>`
 		: '';
 
@@ -564,7 +559,13 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	// surface must reset to the reparsed body, not the stale cache.
 	const pmMd = pmSurface && doc ? parseLivingDoc(rawText).body : null;
 	const pmDeco = pmSurface && doc ? renderPmDeco(doc, pending, recent) : null;
-	return { html: `${topbar}${docToolbar}${body}${hint}${modal}`, pmMd, pmDeco };
+	// Floating review bar: rendered directly below the formatting toolbar, present ONLY when there are
+	// pending changes in this document or another (plan 19 iter 7). It is distinct from the formatting
+	// chrome - it floats under it with a warm tint - so review never lives inside the WYSIWYG header.
+	const reviewBar = (!!doc && isPm)
+		? docReviewBar(pending.length, input.totalPendingCount ?? pending.length, input.nextChangedDocTitle)
+		: '';
+	return { html: `${topbar}${docToolbar}${reviewBar}${body}${hint}${modal}`, pmMd, pmDeco };
 }
 
 // The full webview document: the calm chrome + the dynamic content in a persistent #lwd-root, the vendored
