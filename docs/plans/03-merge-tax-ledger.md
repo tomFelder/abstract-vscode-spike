@@ -194,6 +194,28 @@ out as the most likely fresh core patch cost **0 new core** this iteration — t
 already paid, and the labeled layout + the new Editor nav ride entirely on styleOverrides CSS + additive
 contributions.
 
+### Redesign round — plan 25 iter 2 (active chip + bottom pins + nav tidy): 0 ADDED core patches
+
+**C1 finish — the active white chip, the bottom-pinned account/settings, and the clean 5-item nav all
+landed our-surface. NO new core patch.** The active-chip driver was the only place a core touch was
+plausible (marking an activity-bar item as active), but it was avoidable: the item's own `.checked`
+state tracks the sidebar container (always the bounced-back Workspace rail), so it was the wrong signal
+anyway. A tiny contribution reads `IEditorService` and toggles a class instead — no `activitybarpart`
+edit.
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 25-2a | Active white chip driven by the active editor: `ActiveNavChipContribution` toggles `lwd-nav-active` on the matching nav `.action-item`; `studio.css` paints white chip + `#4650B8` glyph + e1 off that class | additive-contribution + styleOverrides-CSS | `livingDocs/browser/livingDocs.contribution.ts`, `styleOverrides/browser/media/studio.css` | Reads `IEditorService.onDidActiveEditorChange` + the activity-bar part container via `IWorkbenchLayoutService.getContainer(mainWindow, Parts.ACTIVITYBAR_PART)`, then walks its descendants via `element.children` and matches by the known `codicon-living-docs-<id>` classes + `.closest('.action-item')` (activity bar has no per-item API). Avoids the banned query APIs (`querySelector`/`getElementsByClassName`/`getElementsByTagName`), so hygiene is clean. Re-pin if the `living-docs-<id>` icon ids move. No core edit. |
+| 25-2b | Account + settings styled + confirmed pinned bottom (reverses 25.1's hide of them) | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | The core `GlobalCompositeBar` already renders them as `.content`'s last child, floated down by the core `.composite-bar{margin-bottom:auto}` — CSS only styles them (44px, faint glyph, no label). Functionality untouched. No core edit. |
+| 25-2c | **Nav tidy (W1/D25-C):** deregister the Explorer container; hide the Workspace container's activity-bar icon (keep the container) | additive-contribution + styleOverrides-CSS | `livingDocs/browser/livingDocs.contribution.ts` (`+'workbench.view.explorer'` in `IDE_VIEW_CONTAINER_IDS`), `styleOverrides/browser/media/studio.css` (`:has(codicon-living-docs-workspace){display:none}`) | **Revises decision 42 / ledger row V6-1** (which had re-added the Explorer icon). Uses the existing `HideIdeContainersContribution` for Explorer (public registry `deregisterViewContainer`) — so the Explorer now rejoins the HIGH-risk "fails-unsafely on id rename" set (see note below). The Workspace icon is hidden by CSS only; its container stays `isDefault`, so the 264px tree-rail is unaffected (verified live). No core edit. |
+| 25-2d | Minors from 25.1 review: (M1) distinct `livingDocs.editorIcon` NLS key for the Editor icon; (M3) drop the `_register(...)` wrapper on the fire-and-forget `disposableTimeout` in `editorNavLauncherView` (was leaking one dead disposable per visibility change) | our-surface | `livingDocs/browser/livingDocs.contribution.ts`, `livingDocs/browser/editorNavLauncherView.ts` | Correctness/hygiene only. No core edit. |
+
+**Core-patch count is unchanged by plan 25 iter 2: still 5 total.** The C1 finish (chip + pins + tidy)
+rode entirely on styleOverrides CSS + two small additive contributions. **Greenfield evidence (Q3):**
+the whole labeled-nav row (plan 25, the item flagged as most likely to need core work) landed across two
+iterations at **0 new core patches**. The residual coupling it adds is the codicon-class DOM reach
+(fragile-on-rename, but hygiene-clean) — appearance wiring, not a behavioural fork.
+
 ## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**

@@ -36,3 +36,26 @@ explicitly 25.2 / later scope.
   native File Explorer as activity-bar containers (deliberate, decision 42), so the live rail shows two
   icons the comp's clean 5-item list does not. The Explorer's label ("Explorer (Shift+Cmd+E)") also
   overflows the 60px item. _(pre-existing; out of plan-25 scope, flag for a nav-tidy pass.)_
+
+### Labeled 76px icon-nav (plan 25 iter 2) — design-match 93%, gap backlog
+
+Measured live at 1440x900 against the comp's "ICON NAV 76px" block in
+`Abstract - UI Redesign.dc.html`. Iter 2 closed the three big iter-1 gaps: the **active white chip**,
+the **bottom-pinned account/settings**, and the **stray Workspace/Explorer icons** (nav is now exactly
+Home . Editor . Templates . Knowledge . Agents). Verified live that the chip TRACKS the active surface
+(Home -> Editor moved the chip; glyph `rgb(70,80,184)`=#4650B8, white bg, e1 shadow) and the 264px
+tree-rail still renders + a document opens beneath it.
+
+Score: **93%** (up from ~93% on the iter-1 *slice* — now scoring the whole nav: width + labels + order
++ active chip + bottom pins + clean 5-item set, all present and matching).
+
+Remaining gaps (diminishing returns; not worth further core-adjacent effort):
+- **Divider after Editor** — the comp draws a 34px x 1px hairline (`#e4e6ea`) between Editor and
+  Templates. Not rendered live. ~3%. _(cheap CSS spacer; the activity bar has no per-item separator slot,
+  so a robust `::after` on the Editor item is the likely route — a small later polish.)_
+- **Inactive glyph colour** — comp inactive glyph is `#868B95`; live computes `#606060` (the inline theme
+  foreground). The `#868B95` override is authored but was not reliably present in the loaded CSS bundle at
+  verify time (a live `<style>` injection of the exact selector DID apply it, confirming the rule is
+  correct) — both are muted greys, visually near-identical. ~2%.
+- **Custom SVG glyphs vs codicons** — the comp uses bespoke 1.8px-stroke SVGs; live uses the nearest
+  codicons (home / edit / layout / library / sync, + accounts / gear). Pre-existing since 25.1. ~2%.

@@ -41,11 +41,12 @@
 	display: none !important;
 }
 
-/* The global "Accounts" (sign-in-to-sync) and "Manage" (gear -> Settings / Command Palette / Check for
- * Updates / Extensions) activity-bar actions are pure IDE tells and surface the command palette, which
- * the Studio shell does not expose. The comp's icon-nav carries neither. */
-.style-override-studio .action-item.icon:has(> .action-label.codicon-accounts-view-bar-icon),
-.style-override-studio .action-item.icon:has(> .action-label.codicon-settings-view-bar-icon) {
+/* The Workspace tree-rail's own activity-bar icon is redundant with the always-visible 264px
+ * tree-rail it fronts (Files / Context / Outline), and the comp's icon-nav shows EXACTLY the five
+ * living-docs items (Home . Editor . Templates . Knowledge . Agents). Hide just the icon; the
+ * container itself stays registered as the default primary sidebar, so the tree-rail is unaffected.
+ * (plan 25 iter 2, W1 nav tidy, decision D25-C.) */
+.style-override-studio .part.activitybar .action-item.icon:has(> .action-label.codicon-living-docs-workspace) {
 	display: none !important;
 }
 
@@ -55,6 +56,7 @@
  * icon-nav; Part B tokens re-pinned in plan 25 iter 1.) */
 .style-override-studio .part.activitybar {
 	background-color: #F6F7F9 !important;
+	border-right: 1px solid #E9EAEE;
 }
 .style-override-studio .part.activitybar .monaco-action-bar .action-item.icon {
 	height: auto !important;
@@ -69,6 +71,12 @@
 	height: auto !important;
 	margin: 0 auto;
 	padding: 9px 0 7px;
+	border-radius: 10px;
+}
+/* Inactive glyph = `muted` #868B95 (comp C1). The inline colour + theme foreground rule are
+ * higher-specificity, so match the theme's selector depth (see the active-chip note below). */
+.style-override-studio.monaco-workbench .part.activitybar .action-item.icon .action-label.action-label.codicon {
+	color: #868B95 !important;
 }
 /* 18px stroke glyph (the codicon font-size drives the glyph; the default is the 24px core ICON_SIZE). */
 .style-override-studio .part.activitybar .action-label.codicon::before {
@@ -78,4 +86,55 @@
 	content: attr(aria-label);
 	font: 500 10px/1 system-ui;
 	letter-spacing: .005em;
+}
+
+/* Active nav item = a WHITE chip behind the item, an `accent-hover` (#4650B8) glyph + label, and e1
+ * elevation. The activity bar's own `.checked` state tracks the active sidebar CONTAINER (always the
+ * Workspace tree-rail here, because the nav launchers bounce the sidebar back to it), so it is the
+ * wrong signal. The ActiveNavChipContribution instead toggles `lwd-nav-active` on the item whose
+ * screen / document is the ACTIVE EDITOR; the chip keys off that. (plan 25 iter 2, C1 active chip;
+ * Part B tokens: white chip + accent-hover glyph + e1.) */
+/* The glyph colour is set inline by the composite bar (updateStyles) and the theme also emits a
+ * high-specificity `!important` foreground rule, so the chip's accent glyph needs a selector at least
+ * as specific as the theme's: scope under `.monaco-workbench` and double the label class. */
+.style-override-studio.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon {
+	background: #FFFFFF;
+	color: #4650B8 !important;
+	box-shadow: 0 1px 2px rgba(20, 22, 28, .05);
+	border: 1px solid #E7E9EF;
+	/* Keep the chip the same size as an inactive item despite the 1px border. */
+	padding: 8px 0 6px;
+}
+.style-override-studio.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon::after {
+	font-weight: 600;
+}
+
+/* The bottom-pinned account + settings (the core global-activity region). It renders as the last
+ * child of the activity bar's `.content` (a bare div holding a vertical action bar), which the core
+ * `.composite-bar { margin-bottom: auto }` rule already floats to the bottom. Match the comp's quiet
+ * treatment: 19px glyph, `faint` #A3A8B2, no label row. Functionality is untouched -- clicking still
+ * opens the accounts / manage menus. (plan 25 iter 2, C1 bottom pins.) */
+.style-override-studio .part.activitybar > .content > div:not(.menubar):not(.composite-bar) {
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	padding: 10px 0 12px;
+}
+.style-override-studio .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon {
+	width: 44px !important;
+	gap: 0;
+	padding: 7px 0;
+}
+.style-override-studio.monaco-workbench .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-item.icon .action-label.action-label.codicon {
+	color: #A3A8B2 !important;
+}
+.style-override-studio .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon::before {
+	font-size: 19px !important;
+}
+/* The account / settings items carry no visible aria-label chip in the comp -- suppress the label
+ * row that the shared codicon rule would otherwise print beneath them. */
+.style-override-studio .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon::after {
+	content: none;
 }
