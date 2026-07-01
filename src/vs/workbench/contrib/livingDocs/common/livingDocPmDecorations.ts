@@ -51,6 +51,16 @@ function bindToValue(text: string): string {
 	return text.replace(BIND_LINK_RE, '$1');
 }
 
+// The decoration bundle places an inline diff/insert by EXACT match of its anchor against the live
+// ProseMirror node's `textContent`. Source prose is wrapped one-sentence-per-line (house style), but
+// CommonMark renders those soft wraps as single spaces, so the node text is single-spaced. Collapse the
+// anchor's internal whitespace to match - otherwise a wrapped paragraph never decorates and the change
+// shows only in the review rail (the plan-19 baseline bug). Kept here, next to where anchors are built, so
+// the host stays the single source of anchor truth (no offline PM-bundle rebuild needed).
+function anchorNormalize(text: string): string {
+	return text.replace(/\s+/g, ' ').trim();
+}
+
 /** Word-level diff of `oldText` -> `newText` merged into eq/del/ins runs, with the run counts. */
 export function wordDiffSegments(oldText: string, newText: string): { segments: IPmDiffSegment[]; added: number; removed: number } {
 	const a = oldText.split(/\s+/).filter(Boolean);
@@ -100,7 +110,7 @@ export function buildPmDecorationSpec(doc: ILivingDoc, pending: readonly IPropos
 			const anchor = change.afterBlockId ? doc.blocks.find(b => b.id === change.afterBlockId) : undefined;
 			inserts.push({
 				id: change.id,
-				afterText: anchor ? anchor.text : null,
+				afterText: anchor ? anchorNormalize(anchor.text) : null,
 				newText: change.newText,
 				blockLabel: change.blockLabel,
 				confidence: change.confidence,
@@ -111,7 +121,7 @@ export function buildPmDecorationSpec(doc: ILivingDoc, pending: readonly IPropos
 		const diff = wordDiffSegments(bindToValue(change.oldText), bindToValue(change.newText));
 		edits.push({
 			id: change.id,
-			anchorText: bindToValue(change.oldText),
+			anchorText: anchorNormalize(bindToValue(change.oldText)),
 			segments: diff.segments,
 			added: diff.added,
 			removed: diff.removed,

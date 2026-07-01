@@ -75,6 +75,35 @@ suite('LivingDoc PM decoration mapping', () => {
 		});
 	});
 
+	test('a wrapped (multi-line) paragraph anchor is whitespace-collapsed so it matches the rendered node text', () => {
+		// House style wraps each sentence on its own physical line. CommonMark renders soft wraps as single
+		// spaces, so the live ProseMirror node's textContent is single-spaced. The decoration bundle places
+		// the inline diff by EXACT match of anchorText against that textContent, so the anchor must collapse
+		// its internal whitespace too - otherwise a wrapped paragraph never decorates and the change shows
+		// only in the rail (the plan-19 baseline bug).
+		const wrappedMd = [
+			'## Visual identity',
+			'',
+			'The primary colour is blue. It anchors the logo, primary buttons, and',
+			'links across every surface. The blue is reserved for the single most',
+			'important action on a screen.',
+		].join('\n') + '\n';
+		const doc = parseLivingDoc(wrappedMd);
+		const block = doc.blocks.find(b => b.text.startsWith('The primary colour'))!;
+		// Sanity: the parsed block text really does carry the hard newlines from the wrapped source.
+		assert.ok(block.text.includes('\n'), 'expected the wrapped block text to contain newlines');
+
+		const pending = [change({ blockId: block.id, oldText: block.text, newText: 'The primary colour is red.' })];
+		const spec = buildPmDecorationSpec(doc, pending, new Set());
+
+		assert.strictEqual(spec.edits.length, 1);
+		assert.strictEqual(
+			spec.edits[0].anchorText,
+			'The primary colour is blue. It anchors the logo, primary buttons, and links across every surface. The blue is reserved for the single most important action on a screen.',
+		);
+		assert.ok(!spec.edits[0].anchorText.includes('\n'), 'anchorText must not contain newlines');
+	});
+
 	test('a generative insert maps to an insert decoration anchored after its heading', () => {
 		const doc = parseLivingDoc(DOC_MD);
 		const heading = doc.blocks.find(b => b.type === 'heading')!;
