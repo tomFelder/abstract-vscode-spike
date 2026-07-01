@@ -421,7 +421,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return children
 			.filter(c => !c.isDirectory)
 			.map(c => basename(c.resource))
-			.filter(name => /\.(md|csv|json)$/i.test(name) && !/\.lock\.json$/i.test(name) && name !== 'agents.json' && !/\.(export|source)\.md$/i.test(name) && name !== self)
+			.filter(name => /\.(md|csv|json|txt)$/i.test(name) && !/\.lock\.json$/i.test(name) && name !== 'agents.json' && !/\.(export|source)\.md$/i.test(name) && name !== self)
 			.sort((a, b) => a.localeCompare(b));
 	}
 
