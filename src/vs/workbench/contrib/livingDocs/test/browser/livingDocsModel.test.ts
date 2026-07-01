@@ -5,13 +5,17 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { IProposedChange, nextPendingDocId, summariseProjectRun } from '../../common/livingDocsModel.js';
+import { groupDecisions, IProposedChange, nextPendingDocId, summariseProjectRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
 		id, docId, docTitle: docId, blockId: '', blockLabel: '', oldText: '', newText: '',
 		kind: 'meaning', confidence: 0.8, rationale: '', sourceCells: [],
 	};
+}
+
+function grounded(docId: string, id: string, rationale: string, sourceQuote?: string, sourceLine?: number): IProposedChange {
+	return { ...change(docId, id), rationale, sourceQuote, sourceLine };
 }
 
 suite('LivingDoc model - nextPendingDocId', () => {
@@ -94,5 +98,58 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 1,
 			unchangedDocs: 0,
 		});
+	});
+});
+
+suite('LivingDoc model - groupDecisions', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('groups grounded changes by their source line, counting distinct documents affected', () => {
+		// Two documents changed by the same MFA decision (line 2) + one by a separate TLS decision (line 19).
+		const pending = [
+			grounded('a', '1', 'MFA required', 'multi-factor authentication is now REQUIRED', 2),
+			grounded('b', '2', 'MFA required', 'multi-factor authentication is now REQUIRED', 2),
+			grounded('c', '3', 'TLS 1.2+', 'data in transit must use TLS 1.2 or higher', 19),
+		];
+		assert.deepStrictEqual(groupDecisions(pending), [
+			{ quote: 'multi-factor authentication is now REQUIRED', sourceLine: 2, docsAffected: 2, changeCount: 2, grounded: true },
+			{ quote: 'data in transit must use TLS 1.2 or higher', sourceLine: 19, docsAffected: 1, changeCount: 1, grounded: true },
+		]);
+	});
+
+	test('groups by quote when the model gave a quote but no line (no fabricated line)', () => {
+		const pending = [
+			grounded('a', '1', 'BYOD', 'personal devices may access email and calendar only'),
+			grounded('b', '2', 'BYOD', 'personal devices may access email and calendar only'),
+		];
+		assert.deepStrictEqual(groupDecisions(pending), [
+			{ quote: 'personal devices may access email and calendar only', docsAffected: 2, changeCount: 2, grounded: true },
+		]);
+	});
+
+	test('degrades honestly to rationale grouping when no change carries a source grounding', () => {
+		const pending = [
+			grounded('a', '1', 'Tidy the intro'),
+			grounded('b', '2', 'Tidy the intro'),
+			grounded('c', '3', 'Fix the heading'),
+		];
+		assert.deepStrictEqual(groupDecisions(pending), [
+			{ quote: 'Tidy the intro', docsAffected: 2, changeCount: 2, grounded: false },
+			{ quote: 'Fix the heading', docsAffected: 1, changeCount: 1, grounded: false },
+		]);
+	});
+
+	test('counts a document once per decision even when it has several changes from that decision', () => {
+		const pending = [
+			grounded('a', '1', 'MFA', 'MFA is required', 2),
+			grounded('a', '2', 'MFA', 'MFA is required', 2),
+		];
+		assert.deepStrictEqual(groupDecisions(pending), [
+			{ quote: 'MFA is required', sourceLine: 2, docsAffected: 1, changeCount: 2, grounded: true },
+		]);
+	});
+
+	test('returns an empty list when there are no pending changes', () => {
+		assert.deepStrictEqual(groupDecisions([]), []);
 	});
 });

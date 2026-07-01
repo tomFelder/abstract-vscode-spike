@@ -210,6 +210,13 @@ export interface IProposedChange {
 	readonly confidence: number;    // 0..1
 	readonly rationale: string;
 	readonly sourceCells: readonly string[];
+	// The SOURCE GROUNDING for a project-wide fan-out change (plan 23.4, decision #77): the verbatim
+	// decision line the change was derived from (`sourceQuote`) and its line number in the attached
+	// source (`sourceLine`), where determinable. Both are OPTIONAL - a change with no grounding (a
+	// non-fan-out edit, or a model reply that omitted them) leaves them undefined. `sourceLine` is only
+	// ever a REAL line (the model's number or a verified lookup of the quote), never fabricated.
+	readonly sourceQuote?: string;
+	readonly sourceLine?: number;
 	// Set by the Review-impact pass (Item 5): which lock claim this edit re-anchors, the context
 	// sources it reviews (so approval can mark them reviewed), and whether the model/heuristic produced
 	// it. `relink` marks a loud-failure prompt: the claim's anchor no longer confidently matches the
@@ -305,6 +312,65 @@ export function summariseProjectRun(
 		changedDocs,
 		unchangedDocs: tiles.length - changedDocs,
 	};
+}
+
+/**
+ * One "decision understood" in the C4 decisions column (plan 23.4). A decision groups the pending
+ * changes that share a source grounding: the verbatim decision `quote`, its `sourceLine` in the source
+ * where known (omitted when the model gave a quote but no line - NEVER fabricated), the number of
+ * distinct documents that decision affects (`docsAffected`), and the raw change count. `grounded` is
+ * true when the group was keyed on a real source quote/line; false when the run produced no source
+ * grounding and the changes were grouped honestly by their free-text rationale instead (the degraded
+ * state - the card then shows no source-line chip).
+ */
+export interface IDecisionGroup {
+	readonly quote: string;
+	readonly sourceLine?: number;
+	readonly docsAffected: number;
+	readonly changeCount: number;
+	readonly grounded: boolean;
+}
+
+/**
+ * Group the pending changes into decisions for the C4 "decisions understood" column. Changes are
+ * grouped by their source line when present, else by their verbatim quote, else - when no change in the
+ * run carries any source grounding - honestly by their free-text rationale (marked `grounded:false` so
+ * the renderer omits the source-line chip rather than fabricate one). Groups preserve first-appearance
+ * order; `docsAffected` counts distinct documents (a doc with several changes from one decision counts
+ * once). Pure so it can be unit-tested directly and reused by the screen renderer.
+ */
+export function groupDecisions(pending: readonly IProposedChange[]): IDecisionGroup[] {
+	const order: string[] = [];
+	const groups = new Map<string, { quote: string; sourceLine?: number; docs: Set<string>; changeCount: number; grounded: boolean }>();
+	for (const c of pending) {
+		const quote = c.sourceQuote?.trim();
+		const grounded = !!quote;
+		// Key on the real line when the model supplied one, else the quote text, else the rationale
+		// (the honest degrade). Distinct decisions with the same quote but different lines stay separate.
+		const key = typeof c.sourceLine === 'number'
+			? `line:${c.sourceLine}`
+			: (quote ? `quote:${quote.toLowerCase()}` : `rationale:${(c.rationale || '').trim().toLowerCase()}`);
+		const label = grounded ? quote! : (c.rationale || '').trim();
+		let group = groups.get(key);
+		if (!group) {
+			group = { quote: label, sourceLine: typeof c.sourceLine === 'number' ? c.sourceLine : undefined, docs: new Set(), changeCount: 0, grounded };
+			groups.set(key, group);
+			order.push(key);
+		}
+		group.docs.add(c.docId);
+		group.changeCount++;
+	}
+	return order.map(key => {
+		const g = groups.get(key)!;
+		const out: { quote: string; sourceLine?: number; docsAffected: number; changeCount: number; grounded: boolean } = {
+			quote: g.quote,
+			docsAffected: g.docs.size,
+			changeCount: g.changeCount,
+			grounded: g.grounded,
+		};
+		if (typeof g.sourceLine === 'number') { out.sourceLine = g.sourceLine; }
+		return out;
+	});
 }
 
 export interface IAuditEntry {

@@ -9,7 +9,7 @@
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
-import { IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IProjectRunSummary } from '../common/livingDocsModel.js';
+import { IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary } from '../common/livingDocsModel.js';
 import { ILivingDocSummary } from '../common/livingDocs.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run';
@@ -81,6 +81,15 @@ export interface IProjectRunScreenState {
 	 * finishes) it drops out of this set. Empty once the run settles.
 	 */
 	readonly working?: readonly string[];
+	/**
+	 * The decisions the agent understood (C4 left column, plan 23.4): the pending changes grouped by
+	 * their source grounding via `groupDecisions(getAllPending())`. Each group carries the verbatim
+	 * decision quote, its source line where known, and the count of distinct documents it affects.
+	 * The attached source name (`source`) labels the transcript chip on each card. Absent/empty until a
+	 * run has produced grounded changes; when the model omitted grounding the groups degrade to a
+	 * rationale grouping (`grounded:false`) and the card omits the line chip.
+	 */
+	readonly decisions?: readonly IDecisionGroup[];
 }
 
 function esc(s: string): string {
@@ -575,7 +584,7 @@ function renderProjectRun(state: IScreenState): string {
 	const workingSet = new Set(run?.working ?? []);
 	const runBody = summary
 		? `<div style="flex:1;display:flex;overflow:hidden;min-height:0">
-		${decisionsRail()}
+		${decisionsRail(run?.decisions ?? [], run?.source, !!run?.inFlight)}
 		${swarmPane(summary, workingSet)}
 	</div>`
 		: idleBody;
@@ -600,17 +609,45 @@ function renderProjectRun(state: IScreenState): string {
 	return `<div class="screen">${runTopBar}${commandStrip}${runBody}${bottomBar}</div>`;
 }
 
-// The left "decisions understood" rail (360px). The decisions-with-source-line data (transcript ·
-// line N -> N documents affected) is plan 23.4 - the model output does not yet capture a decision's
-// source line (decision #77). Until then this renders a truthful placeholder rather than the comp's
-// illustrative decisions, keeping the real-data guardrail (plan-17 "never fabricate").
-function decisionsRail(): string {
-	return `<div style="width:360px;flex:none;border-right:1px solid #eef0f3;background:#fafbfc;padding:22px;overflow:hidden;display:flex;flex-direction:column">
-		<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#5661c9;margin-bottom:16px">Decisions Understood</div>
-		<div style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#a3a8b2">
-			<p style="margin:0;font:400 13px/1.6 system-ui;max-width:240px">The decisions the agent extracted, each traced to its line in the source, will appear here.</p>
-		</div>
-	</div>`;
+// The left "decisions understood" rail (360px, C4 left column, plan 23.4). One card per decision the
+// agent extracted, grouped from the REAL pending changes by their source grounding (`groupDecisions`).
+// Each card shows the decision (the verbatim source quote in reading type), a source chip
+// (`transcript . line N`, mono - the line is OMITTED when unknown so nothing is fabricated) and
+// `-> N documents affected` (distinct docs sharing that decision). When the run is still in flight and
+// nothing has grounded yet, a calm reading state; when a run produced changes but the model gave no
+// grounding, the cards degrade honestly (grouped by rationale, no line chip).
+function decisionsRail(decisions: readonly IDecisionGroup[], source: string | undefined, inFlight: boolean): string {
+	// The source label for the chip: the attached source name (e.g. `Security Review - 3 Mar.txt`),
+	// else the neutral `transcript`. Kept short so the mono chip does not wrap.
+	const sourceName = source ? esc(source) : 'transcript';
+	const header = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#5661c9;margin-bottom:16px">Decisions Understood</div>`;
+	const shell = (body: string) => `<div style="width:360px;flex:none;border-right:1px solid #eef0f3;background:#fafbfc;padding:22px;overflow:hidden;display:flex;flex-direction:column">${header}${body}</div>`;
+
+	if (!decisions.length) {
+		const message = inFlight
+			? 'Reading the source and extracting the decisions across the project&hellip;'
+			: 'No decisions were grounded in the source for this run.';
+		return shell(`<div style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#a3a8b2">
+			<p style="margin:0;font:400 13px/1.6 system-ui;max-width:240px">${message}</p>
+		</div>`);
+	}
+
+	const cards = decisions.map(d => {
+		// The source chip: `transcript . line N` in mono; the line clause is dropped entirely when the
+		// decision has no verified line (a quote-without-line, or the degraded rationale grouping).
+		const chip = d.grounded
+			? `<span style="display:inline-flex;align-items:center;gap:5px;font:500 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:6px;padding:3px 8px">${sourceName}${typeof d.sourceLine === 'number' ? ` &middot; line ${d.sourceLine}` : ''}</span>`
+			: '';
+		const docs = d.docsAffected;
+		return `<div style="background:#fff;border:1px solid #eceef2;border-radius:12px;padding:14px 15px;margin-bottom:10px;box-shadow:0 1px 2px rgba(20,22,26,.03)">
+			<p style="margin:0 0 10px;font:400 14px/1.5 system-ui;color:#26292f">${esc(d.quote)}</p>
+			<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+				${chip}
+				<span style="font:500 12px/1 system-ui;color:#52575f">&#8594; ${docs} ${docs === 1 ? 'document' : 'documents'} affected</span>
+			</div>
+		</div>`;
+	}).join('');
+	return shell(`<div style="flex:1;overflow:auto;min-height:0">${cards}</div>`);
 }
 
 // The right sub-agent swarm pane (C4): a progress header + bar, then a 4-column grid of one tile per
