@@ -216,6 +216,23 @@ the whole labeled-nav row (plan 25, the item flagged as most likely to need core
 iterations at **0 new core patches**. The residual coupling it adds is the codicon-class DOM reach
 (fragile-on-rename, but hygiene-clean) — appearance wiring, not a behavioural fork.
 
+### Redesign round — plan 25 iter 3 (regression sweep + design polish): 0 ADDED core patches
+
+**Final iter: the regression sweep (all surfaces at 76px), two small design-polish CSS rules, and the
+desktop-smoke decision. NO new core patch.** Both polish gaps closed in `studio.css` only.
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 25-3a | Close the inactive-glyph colour gap: `#606060` (the `activityBar.css :not(.checked)` `!important` rule, tied at (0,9,0) and winning on source order) -> `#868B95` (comp C1). Added the real `.composite-bar` ancestor to the studio inactive-glyph selector to reach (0,10,0) and win outright | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | Appearance-only. Re-pin if the composite-bar class name changes. No core edit. |
+| 25-3b | Add the 1px divider after Editor: a `34px x 1px` `#E4E6EA` hairline with `4px` vertical margin, rendered as a `::before` on the Templates item (matched by its stable `codicon-living-docs-templates` class, mirroring the workspace-hide rule); the Templates item is made `display:flex; flex-direction:column; align-items:center` so the divider centres above its label | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | Appearance-only; matches the comp's `<div style="width:34px;height:1px;background:#e4e6ea;margin:4px 0">`. Re-pin if the icon id or nav grouping changes. No core edit. |
+
+**Core-patch count is unchanged by plan 25 iter 3: still 5 total.** The whole plan-25 stack (iters 1-3,
+the row flagged as most likely to need core work) landed at **0 new core patches** — the one seam it
+needs (the 76px `ACTIVITYBAR_WIDTH`) was paid once in v2 iter 9. **Desktop real-disk smoke: deferred**
+(matching decision 71's precedent) — iter 3 changed only appearance CSS, and driving the Electron build
+is impractical from the browser-bound chrome-devtools session; a 2-minute manual desktop check should
+confirm the 76px labeled nav + active chip render in the packaged workbench.
+
 ## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
