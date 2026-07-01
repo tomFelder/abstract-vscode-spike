@@ -88,3 +88,24 @@ Open gaps (deferred / by-design):
 - The chip shows the full real source name (`Security Review - 3 Mar.txt · line N`) rather than the comp's short `transcript · line N` — more truthful, slightly longer.
 - Real data differs from the comp's illustrative 3 decisions / 24 docs / "N docs affected > 1" (required by the real-data guardrail): each cheap-model decision grounded to one policy, so cards read "→ 1 document affected". The grouping *does* fold multiple docs onto one decision when they share a source line (proven by `groupDecisions` tests); the cheap model just did not produce a shared-line decision this run.
 - "Review across the project →" still routes to the Review rail as the plan-24 interim.
+
+### Cross-document review — screen + 292px doc-nav rail + change cards (plan 24 iters 1+2, READ-ONLY) — 93%
+
+Scope: the C5 cross-document review surface — the 48px topbar, the LEFT 292px doc-nav rail (count header + progress bar + per-doc `✓`/`●`/`○` rows + counts) and the CENTRE review column (doc title + per-change cards: the change in context + `decision · line NN` source chip + `● High`/`◐ Inferred` confidence chip). Per-change Accept/Tweak/Reject and the batch bar are RENDERED but inert this iteration (TODO 24.2); the entry from the plan-23 fan-out is 24.3.
+
+Built this iteration:
+- `review-project` registered as a new `ScreenId` rendered by the existing `ScreenEditor` webview (mirrors plan-23 `project-run`); a second presentation of the SAME review model the C6 rail consumes — `ScreenEditor._reviewProjectState()` reads `getAllPending()` live each render, grouped by the new pure `groupPendingByDoc()` helper.
+- The 292px rail: `N documents · M changes` header, a green (`ok`) progress bar, `X of N reviewed`, then one row per changed doc with a `✓ reviewed`/`● current`(accent tint + 3px accent bar)/`○ pending` glyph + mono count — all real from the pending set.
+- The centre column: `DOCUMENT n OF m` mono eyebrow, doc title, `N changes proposed · review each in context`, then a card per change — the change in context (addition/removal tokens; insert = pure additions), a `decision · line NN` chip (line omitted when unknown, never fabricated), and the D24-A confidence chip. Bottom bar reports the attention count + `Accept All N Here` / `Next: <doc> →` (inert).
+- D24-A settled + TDD'd: `reviewConfidence(change)` — a `meaning` change `< 0.8` → `inferred`, else `high` (pure, 1 boundary snapshot test). `groupPendingByDoc` TDD'd (2 tests). 17 model tests pass.
+
+Verified live (ISMS throwaway :8082, 1440×900): a whole-project chat fan-out (`@Security Review - 3 Mar.txt`) produced 3 real pending changes across 3 docs (Access Control/MFA line 2, Logging & Monitoring/retention line 7, Change Management/emergency changes line 30). Opened `review-project` via the palette command; the rail showed `3 documents · 3 changes` + progress bar + `0 of 3 reviewed` + the three docs with `●`/`○` + real counts; the centre showed the change in context + real `decision · line NN` chip + `● High` chip; clicking a rail row switched the centre column (local navigation works). Cross-checked the C6 Review rail: both read 3 changes across 3 docs (rail untouched, still works). See `24-1-review-live.png`, `24-1-cards.png`, comp `24-1-comp.png`.
+
+Observed confidence range: gpt-4o-mini emitted a uniform 0.85 on every meaning change → all `● High`; the `◐ Inferred` path is proven by the unit test (the model produced no sub-0.8 change this run).
+
+Open gaps (deferred / by-design):
+- Accept / Tweak / Reject + `Accept all here` / `Next` / `Accept all remaining` are RENDERED but INERT — real wiring is plan 24.2. (The single biggest in-scope gap, deliberate.)
+- Reading type stays UI sans; the comp uses Newsreader serif for the doc title + change prose (handoff Part B/F decision 4b — handoff wins; consistent with plans 22/23). The one systematic visual difference vs the comp.
+- The topbar source pill was absent this run (the chat-driven fan-out did not carry a `reviewSource` into screen state; the entry wiring in 24.3 will pass the run's transcript name). Layout is ready for it.
+- Real data differs from the comp's illustrative 12 docs / 38 changes / a `◐ Inferred` example (real-data guardrail): the cheap model produced 3 confident changes, so no `◐ Inferred` card rendered live (the amber path is test-proven).
+- A reviewed doc's `✓` row shows the doc id (URI string), since the reviewed-set is populated only in 24.2 when a doc empties in-session and the title is looked up there; empty this read-only iter, so not exercised live.
