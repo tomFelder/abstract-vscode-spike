@@ -150,7 +150,7 @@ function renderHome(state: IScreenState): string {
 	const pendingDocs = docs.filter(d => d.pendingCount > 0).sort((a, b) => b.pendingCount - a.pendingCount);
 	const totalPending = pendingDocs.reduce((n, d) => n + d.pendingCount, 0);
 	const summary = pendingDocs.length
-		? `${pendingDocs.length} document${pendingDocs.length === 1 ? '' : 's'} need${pendingDocs.length === 1 ? 's' : ''} your review across this project &mdash; <strong style="font-weight:600;color:#8a6d1a">${totalPending} change${totalPending === 1 ? '' : 's'} to approve</strong>.`
+		? `${pendingDocs.length} document${pendingDocs.length === 1 ? '' : 's'} need${pendingDocs.length === 1 ? 's' : ''} your review across this project. <strong style="font-weight:600;color:#8a6d1a">${totalPending} change${totalPending === 1 ? '' : 's'} to approve</strong>.`
 		: 'Everything is in sync.';
 
 	// One NEEDS-YOU card per document with pending work: accent top-border, a 2.4s pulse dot, the doc
