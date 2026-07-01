@@ -11,6 +11,7 @@ a short gap backlog, and the iteration that closed each gap.
 | Surface (plan) | Comp region | Baseline % | Final % | PR | Notes |
 |---|---|---|---|---|---|
 | Project home — greeting + NEEDS YOU (plan 22 iter 1) | Home dashboard | ~62 | **93** | redesign-22-1-home-needsyou | Greeting H1 + real-pending summary line; NEEDS-YOU section (up to 2 cards, top-2 by real `pendingCount`) with accent top-border, 2.4s pulse dot, per-doc avatar, amber `N TO APPROVE` chip (attention tokens), full-width accent Review; hidden + "Everything is in sync." when nothing pends. 0 core patches. |
+| Project home — ALL PROJECTS grid + empty state (plan 22 iter 2) | Home dashboard | ~93 | **88** | redesign-22-2-allprojects | ALL PROJECTS 3-col grid (D22-A: current folder + recent folders); 24px/7px-radius avatar (Part B palette, deterministic hash); `ok` green dot for in-sync, amber number chip for pending (attention tokens, no text label — matches comp exactly); mono `N docs · M sources` counts from real `listDocuments()` + distinct sources set; recent folders deferred (real-data guardrail); empty state = single calm "Open a folder to begin." + Open folder button. `IWorkspacesService.getRecentlyOpened()` injected into `ScreenEditor`. 0 core patches. |
 
 ## Per-surface gap backlogs
 
