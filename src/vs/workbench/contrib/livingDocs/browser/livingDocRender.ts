@@ -70,6 +70,12 @@ export interface ILivingDocRenderInput {
 	 * renders to the LEFT of the document inside the one surface - never a second editor group.
 	 */
 	readonly sourcePeek?: ISourcePeekRender;
+	/**
+	 * The next document (other than this one) that still has pending changes, if any (plan 19 iter 4).
+	 * Drives the editor action bar's "Next document with changes" button - shown only when there is
+	 * somewhere to advance to. Computed by the editor pane (which sees workspace-wide pending).
+	 */
+	readonly nextChangedDocTitle?: string;
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -165,6 +171,15 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .etoolbar .tb-b.ic{font:400 14px/1 system-ui}
 .etoolbar .tb-saved{margin-left:auto;display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8}
 .etoolbar .tb-saved .sdot{width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)}
+/* Editor action bar (plan 19 iter 4): when this document has pending changes the calm "Saved" status is
+ * replaced by a review cluster - a count, "Approve all in this doc", and (when there is somewhere to go)
+ * "Next document with changes". Lives in the in-webview toolbar (decision E-B) - no editor-chrome core patch. */
+.etoolbar .tb-review{margin-left:auto;display:flex;align-items:center;gap:8px}
+.etoolbar .tb-review .tb-rev-count{font:500 11.5px/1 system-ui;color:#9a6b16;background:oklch(0.97 0.04 75);border:1px solid oklch(0.9 0.05 75);border-radius:999px;padding:5px 9px}
+.etoolbar .tb-review .tb-rev-next{border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 12px/1 system-ui;cursor:pointer;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.etoolbar .tb-review .tb-rev-next:hover{background:#f4f5f7}
+.etoolbar .tb-review .tb-rev-approve{border:none;border-radius:7px;padding:7px 13px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+.etoolbar .tb-review .tb-rev-approve:hover{background:oklch(0.5 0.13 255)}
 .hint-raw{border:none;background:none;padding:0;margin-left:5px;color:#8a93c4;font:500 12px/1.6 system-ui;cursor:pointer;text-decoration:underline}
 .hint-raw:hover{color:oklch(0.5 0.13 255)}
 /* Source-peek / Sync-across banner. */
@@ -303,6 +318,8 @@ root.addEventListener('click', e => {
 	let el;
 	if (el = e.target.closest('[data-approve]')) { e.stopPropagation(); return vscode.postMessage({ type: 'approve', id: el.getAttribute('data-approve') }); }
 	if (el = e.target.closest('[data-reject]')) { e.stopPropagation(); return vscode.postMessage({ type: 'reject', id: el.getAttribute('data-reject') }); }
+	if (el = e.target.closest('[data-approve-all-doc]')) { return vscode.postMessage({ type: 'approveAllDoc' }); }
+	if (el = e.target.closest('[data-next-doc]')) { return vscode.postMessage({ type: 'nextDoc' }); }
 	if (el = e.target.closest('[data-refresh]')) { return vscode.postMessage({ type: 'refresh' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
@@ -396,6 +413,23 @@ export interface ILivingDocContent {
 	readonly pmDeco: IPmDecoPayload | null;
 }
 
+// The right side of the in-webview toolbar (plan 19 iter 4). With no pending changes it is the calm
+// "Saved" status; with pending it becomes the editor action bar: a count, "Approve all in this doc", and
+// "Next document with changes" when another changed document exists to step to.
+function docToolbarReview(pendingCount: number, nextChangedDocTitle: string | undefined): string {
+	if (pendingCount <= 0) {
+		return `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`;
+	}
+	const next = nextChangedDocTitle
+		? `<button class="tb-rev-next" data-next-doc title="Go to ${esc(nextChangedDocTitle)}">Next document &rarr;</button>`
+		: '';
+	return `<span class="tb-review">`
+		+ `<span class="tb-rev-count">${pendingCount} change${pendingCount === 1 ? '' : 's'} here</span>`
+		+ `<button class="tb-rev-approve" data-approve-all-doc>Approve all in this doc</button>`
+		+ next
+		+ `</span>`;
+}
+
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
 	const { doc, pending, dirty, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
@@ -447,7 +481,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `<button class="tb-b ic" data-pmcmd="bullet_list" title="Bulleted list">&#8803;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="ordered_list" title="Numbered list">&#8862;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="blockquote" title="Quote">&#10077;</button>`
-		+ `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`
+		+ docToolbarReview(pending.length, input.nextChangedDocTitle)
 		+ `</div>`
 		: '';
 
