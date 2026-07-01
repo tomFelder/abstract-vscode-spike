@@ -69,3 +69,22 @@ Open gaps (deferred / by-design):
 - Comp button reads "Review changes across the project"; ours is "Review Across the Project" (house title-caps UI-label rule).
 - The whole-project fan-out is a SINGLE model call, so per-document progress is all-or-nothing (the whole swarm spins together, then settles) rather than tiles trickling in one at a time — truthful to the architecture; per-doc trickle would need per-doc model calls (not this plan).
 - The cheap test model (gpt-4o-mini) touches only the docs whose decisions clearly map (6/14 here) — truthful, never padded with fake changed tiles.
+
+### Project-wide agent run — decisions-understood column from grounded source lines (plan 23 iter 4) — 93%
+
+Scope: the FULL C4 screen now exists — command strip + LEFT decisions-understood column (this iteration) + RIGHT swarm grid + progress + real bottom-bar totals. This closes plan 23.
+
+Closed this iteration:
+- The fan-out model output carries a SOURCE GROUNDING per change: `_chatRespondMulti`'s JSON schema + prompt now ask the model to ground each edit/insert in a specific decision line from the attached source and return a verbatim `sourceQuote` + (where determinable) a `sourceLine`. The parser (`parseMultiChatResponse`) normalises each edit/insert and reads the optional fields; a missing/non-numeric field degrades to `undefined` with no fabricated keys (TDD, 8 parser tests).
+- `findQuoteLine(sourceText, quote)` looks up a quote's TRUE line in the real source when the model gives a quote but no number (whitespace/case-insensitive, tolerant of a source that wraps a decision across lines and prints its own line-number tokens); returns `undefined` when not found so the card shows the quote with no line chip. A line number is NEVER fabricated (TDD, 3 tests).
+- `IProposedChange` gains optional `sourceQuote?`/`sourceLine?`; `_queueChatEdit`/`_queueChatInsert` populate them via `_resolveSourceGrounding` (model line, else verified lookup, else quote-only).
+- `groupDecisions(pending)` (pure, TDD, 5 tests) groups the pending changes into decisions by source line, else quote, else — when nothing grounded — honestly by rationale (`grounded:false`, no line chip); `docsAffected` counts distinct documents (a doc with several changes from one decision counts once).
+- `decisionsRail()` renders real cards matching the comp: a `N decisions understood` mono/accent header, and per decision a `Security Review - 3 Mar.txt · line N` mono chip on top, the decision quote in reading type, then `→ N documents affected` in accent (`#4650b8`, 600). Truthful empty (`No decisions were grounded in the source for this run.`) / in-flight (`Reading the source and extracting the decisions…`) states; the idle body is unchanged when no run.
+
+Verified live (ISMS throwaway :8082, 1440×900, both rails hidden): Agents → "Run Across the Project" → the swarm spins 14 tiles `reviewing…` (0/14), then settles. The decisions column populated with REAL decisions each carrying a source line that matches `Security Review - 3 Mar.txt`: MFA → line 2, log retention → line 7, BYOD → line 15, incident 1-hour → line 23, patch cadence → line 27, change approval → line 30 (all cross-checked against the transcript's printed line-number column). Bottom bar + Review rail cross-check exactly (e.g. "6 changes proposed in 6 documents" ↔ "Review 6 / 6 changes need approval across 6 documents"). The cheap model (gpt-4o-mini) RELIABLY emitted `sourceLine` this loop — the quote-lookup/degrade path is exercised by tests and is the honest fallback, but did not need to fire live.
+
+Open gaps (deferred / by-design):
+- Reading type stays UI sans; the comp uses Newsreader serif for the instruction + decision quotes (handoff Part B/F decision 4b — handoff wins; consistent with iters 2/3). The single systematic visual difference vs the comp.
+- The chip shows the full real source name (`Security Review - 3 Mar.txt · line N`) rather than the comp's short `transcript · line N` — more truthful, slightly longer.
+- Real data differs from the comp's illustrative 3 decisions / 24 docs / "N docs affected > 1" (required by the real-data guardrail): each cheap-model decision grounded to one policy, so cards read "→ 1 document affected". The grouping *does* fold multiple docs onto one decision when they share a source line (proven by `groupDecisions` tests); the cheap model just did not produce a shared-line decision this run.
+- "Review across the project →" still routes to the Review rail as the plan-24 interim.

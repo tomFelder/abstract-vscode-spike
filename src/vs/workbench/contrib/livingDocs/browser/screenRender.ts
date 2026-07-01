@@ -620,7 +620,11 @@ function decisionsRail(decisions: readonly IDecisionGroup[], source: string | un
 	// The source label for the chip: the attached source name (e.g. `Security Review - 3 Mar.txt`),
 	// else the neutral `transcript`. Kept short so the mono chip does not wrap.
 	const sourceName = source ? esc(source) : 'transcript';
-	const header = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#5661c9;margin-bottom:16px">Decisions Understood</div>`;
+	// Header carries a count when decisions exist ("6 decisions understood"), matching the comp's
+	// "N decisions understood"; the idle/empty state keeps the bare label.
+	const count = decisions.length;
+	const headerLabel = count ? `${count} ${count === 1 ? 'decision' : 'decisions'} understood` : 'Decisions understood';
+	const header = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#5661c9;margin-bottom:16px">${headerLabel}</div>`;
 	const shell = (body: string) => `<div style="width:360px;flex:none;border-right:1px solid #eef0f3;background:#fafbfc;padding:22px;overflow:hidden;display:flex;flex-direction:column">${header}${body}</div>`;
 
 	if (!decisions.length) {
@@ -632,22 +636,23 @@ function decisionsRail(decisions: readonly IDecisionGroup[], source: string | un
 		</div>`);
 	}
 
+	// One card per decision, matching the comp's structure: the source chip on top (`transcript .
+	// line N`, mono), then the decision in reading type, then `-> N documents affected` in accent. The
+	// line clause and whole chip are dropped when the decision has no verified line / grounding (the
+	// honest degrade) - never a fabricated line. Reading type stays UI sans per handoff Part B/F
+	// (decision 4b: the handoff wins over the comp's Newsreader serif - a deliberate, logged departure).
 	const cards = decisions.map(d => {
-		// The source chip: `transcript . line N` in mono; the line clause is dropped entirely when the
-		// decision has no verified line (a quote-without-line, or the degraded rationale grouping).
 		const chip = d.grounded
-			? `<span style="display:inline-flex;align-items:center;gap:5px;font:500 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:6px;padding:3px 8px">${sourceName}${typeof d.sourceLine === 'number' ? ` &middot; line ${d.sourceLine}` : ''}</span>`
+			? `<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;margin-bottom:7px">${sourceName}${typeof d.sourceLine === 'number' ? ` &middot; line ${d.sourceLine}` : ''}</div>`
 			: '';
 		const docs = d.docsAffected;
-		return `<div style="background:#fff;border:1px solid #eceef2;border-radius:12px;padding:14px 15px;margin-bottom:10px;box-shadow:0 1px 2px rgba(20,22,26,.03)">
-			<p style="margin:0 0 10px;font:400 14px/1.5 system-ui;color:#26292f">${esc(d.quote)}</p>
-			<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-				${chip}
-				<span style="font:500 12px/1 system-ui;color:#52575f">&#8594; ${docs} ${docs === 1 ? 'document' : 'documents'} affected</span>
-			</div>
+		return `<div style="background:#fff;border:1px solid #e6e8ec;border-radius:13px;padding:15px 16px">
+			${chip}
+			<div style="font:400 15.5px/1.4 system-ui;color:#1a1c20;margin-bottom:10px">${esc(d.quote)}</div>
+			<div style="font:600 12px/1 system-ui;color:#4650b8">&#8594; ${docs} ${docs === 1 ? 'document' : 'documents'} affected</div>
 		</div>`;
 	}).join('');
-	return shell(`<div style="flex:1;overflow:auto;min-height:0">${cards}</div>`);
+	return shell(`<div style="flex:1;overflow:auto;min-height:0;display:flex;flex-direction:column;gap:12px">${cards}</div>`);
 }
 
 // The right sub-agent swarm pane (C4): a progress header + bar, then a 4-column grid of one tile per
