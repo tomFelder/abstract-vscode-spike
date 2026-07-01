@@ -295,9 +295,13 @@ export function summariseProjectRun(
 		};
 	});
 	const changedDocs = tiles.filter(t => t.status === 'changed').length;
+	// Count only changes attributable to a document in this project's tile set, so totalChanges
+	// always equals the sum of the tile counts. A pending change whose docId is not in `docs`
+	// (a stale snapshot / a doc removed mid-run) has no tile and must not inflate the bottom-bar total.
+	const totalChanges = tiles.reduce((sum, t) => sum + t.changeCount, 0);
 	return {
 		tiles,
-		totalChanges: pending.length,
+		totalChanges,
 		changedDocs,
 		unchangedDocs: tiles.length - changedDocs,
 	};

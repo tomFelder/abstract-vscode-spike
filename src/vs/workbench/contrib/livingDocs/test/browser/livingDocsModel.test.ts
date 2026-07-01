@@ -82,4 +82,17 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 3,
 		});
 	});
+
+	test('ignores pending changes for documents outside the project so totalChanges equals the tile sum', () => {
+		// A stale snapshot / a doc removed mid-run can leave a pending change whose docId has no tile.
+		// It must not inflate totalChanges, which the bottom bar reports as "N changes in M documents".
+		const pending = [change('a', '1'), change('ghost', '2'), change('ghost', '3')];
+		const summary = summariseProjectRun([{ docId: 'a', docTitle: 'Access Control' }], pending);
+		assert.deepStrictEqual(summary, {
+			tiles: [{ docId: 'a', docTitle: 'Access Control', status: 'changed', changeCount: 1 }],
+			totalChanges: 1,
+			changedDocs: 1,
+			unchangedDocs: 0,
+		});
+	});
 });
