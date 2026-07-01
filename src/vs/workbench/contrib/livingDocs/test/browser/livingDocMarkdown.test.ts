@@ -381,5 +381,12 @@ suite('LivingDoc bind-link format', () => {
 		test('returns undefined when the quote is not in the source (never guesses a line)', () => {
 			assert.strictEqual(findQuoteLine(transcript, 'a decision that was never made'), undefined);
 		});
+
+		test('does not false-match a short source line inside a longer unrelated quote', () => {
+			// A brief source line must not be claimed by a longer quote that merely contains its words -
+			// that would assign a wrong-but-real line and break the decisions column's provenance.
+			const short = ['1  MFA required.', '2  Logs are retained for six months.'].join('\n');
+			assert.strictEqual(findQuoteLine(short, 'MFA required for all cloud systems and third-party integrations'), undefined);
+		});
 	});
 });

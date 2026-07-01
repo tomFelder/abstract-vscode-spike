@@ -394,7 +394,13 @@ export function findQuoteLine(sourceText: string, quote: string): number | undef
 	// ("...REQUIRED for all administrative access,\n including cloud consoles...") still resolves to its
 	// first line. The needle only needs its leading portion to match for a wrapped sentence.
 	for (let i = 0; i < clean.length; i++) {
-		if (clean[i] && (clean[i].includes(needle) || needle.includes(clean[i]))) { return i + 1; }
+		if (!clean[i]) { continue; }
+		// Whole-line containment either way, but only treat the line as a match when the model's quote
+		// extends slightly past it (needle.includes(line)) if the line is nearly as long as the needle -
+		// otherwise a short source line ("MFA required.") would false-match a longer, unrelated quote and
+		// assign a wrong-but-real line, which would break the provenance the decisions column promises.
+		if (clean[i].includes(needle)) { return i + 1; }
+		if (needle.includes(clean[i]) && clean[i].length >= needle.length * 0.8) { return i + 1; }
 	}
 	for (let i = 0; i < clean.length - 1; i++) {
 		const joined = `${clean[i]} ${clean[i + 1]}`.trim();
