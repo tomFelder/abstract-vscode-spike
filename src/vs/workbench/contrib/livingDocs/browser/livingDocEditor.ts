@@ -343,7 +343,9 @@ export class LivingDocEditor extends EditorPane {
 	private _openNextChangedDoc(): void {
 		if (!this._resource) { return; }
 		const nextId = nextPendingDocId(this._livingDocs.getAllPending(), this._resource.toString());
-		if (nextId) { void this._editorService.openEditor({ resource: URI.parse(nextId) }); }
+		// Open in this pane's own group so a split layout advances the document the action came from,
+		// rather than falling back to whichever group happens to be active.
+		if (nextId) { void this._editorService.openEditor({ resource: URI.parse(nextId) }, this.group); }
 	}
 
 	// Post the pending rail-to-editor focus target once the webview is ready (the body + its inline-diff
