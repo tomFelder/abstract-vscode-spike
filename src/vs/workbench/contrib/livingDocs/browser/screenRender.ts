@@ -9,10 +9,10 @@
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
-import { IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary } from '../common/livingDocsModel.js';
+import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, reviewConfidence } from '../common/livingDocsModel.js';
 import { ILivingDocSummary } from '../common/livingDocs.js';
 
-export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run';
+export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project';
 
 export type AgentFilter = 'all' | 'scheduled' | 'event' | 'needs-approval';
 
@@ -53,6 +53,29 @@ export interface IScreenState {
 	 * the real run when one is kicked; the swarm grid + decisions column (23.3/23.4) layer on later.
 	 */
 	readonly projectRun?: IProjectRunScreenState;
+	/**
+	 * Cross-document review (C5, plan 24): the project-scale second presentation of the SAME review model
+	 * the C6 rail consumes. Absent on non-review screens. Carries the live pending set + the local
+	 * navigation state (current doc + which docs were reviewed this session). Iter 1/2 is read-only.
+	 */
+	readonly reviewProject?: IReviewProjectScreenState;
+}
+
+/**
+ * The cross-document review screen's state (plan 24, C5). `pending` is the live `getAllPending()` set,
+ * grouped by document in the renderer for the doc-nav rail and the centre change cards. `currentDocId`
+ * is the doc shown in the centre column (local screen navigation, not an engine action - defaults to the
+ * first changed doc). `reviewedDocIds` are the documents that had changes THIS session and now have zero
+ * pending (the check "reviewed" glyph); tracked by the editor across re-renders. `source` labels the run's
+ * attached transcript for the topbar chip. Nothing is fabricated - all counts derive from `pending`.
+ */
+export interface IReviewProjectScreenState {
+	readonly pending: readonly IProposedChange[];
+	readonly currentDocId?: string;
+	readonly reviewedDocIds?: readonly string[];
+	readonly source?: string;
+	/** The project's folder name, for the topbar crumb + avatar. */
+	readonly folderName?: string;
 }
 
 /**
@@ -179,6 +202,7 @@ export function renderScreenHtml(screen: ScreenId, state: IScreenState): string 
 		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge'));
 		case 'agents': return page(withTopBar(renderAgents(state), 'Agents'));
 		case 'project-run': return page(renderProjectRun(state));
+		case 'review-project': return page(renderReviewProject(state));
 	}
 }
 
@@ -698,5 +722,193 @@ function swarmTile(_docId: string, title: string, status: 'changed' | 'no-change
 	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
 		<div style="display:flex;align-items:center;gap:6px"><span style="color:#cfd3da;font-size:12px">&middot;</span><span style="${nameStyle};color:#a3a8b2">${name}</span></div>
 		<span style="font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#cfd3da">no change</span>
+	</div>`;
+}
+
+
+// ---- Cross-document review (C5, plan 24). A SECOND presentation of the existing review model at
+// project scale: the live pending changes (getAllPending) grouped by document. Left = a 292px doc-nav
+// rail (count header + progress bar + one row per changed doc with a check "reviewed" / filled-dot
+// "current" / hollow-dot "pending" glyph + count); centre = the current document's change cards, each
+// showing the change in context, a `decision . line NN` source chip, and a filled-dot "High" / half-dot
+// "Inferred" confidence chip (D24-A). READ-ONLY this
+// iteration: Accept / Tweak / Reject are rendered (so the layout matches the comp) but inert - the real
+// wiring to approve/reject/approveAll is plan 24.2 (see TODO(24.2) below). The C6 Review rail is untouched.
+function renderReviewProject(state: IScreenState): string {
+	const rp = state.reviewProject;
+	const pending = rp?.pending ?? [];
+	const groups = groupPendingByDoc(pending);
+	const folderName = rp?.folderName ?? 'Project';
+	const projectAv = avatar(folderName);
+	const reviewed = new Set(rp?.reviewedDocIds ?? []);
+
+	// The 48px topbar: project avatar + name crumb + `Review project update` + the attached source pill.
+	// The right side reports the session totals from the reviewed set - honest zeros when nothing has been
+	// reviewed yet. `Accept all remaining` is rendered but inert this iter (wired in 24.2).
+	const sourcePill = rp?.source
+		? `<span style="font:500 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:4px 10px">${esc(rp.source)}</span>`
+		: '';
+	const totalRemaining = pending.length;
+	const topBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
+		<span style="width:20px;height:20px;border-radius:6px;background:#3b4d8f;display:flex;align-items:center;justify-content:center;color:#fff;font:600 10px/1 system-ui">${projectAv.text}</span>
+		<span style="font:600 13px/1 system-ui;color:#1a1c20">${esc(folderName)}</span><span style="color:#cfd3da">/</span><span style="font:500 13px/1 system-ui;color:#868b95">Review project update</span>
+		${sourcePill}
+		<div style="margin-left:auto;display:flex;align-items:center;gap:12px"><span style="font:400 13px/1 system-ui;color:#a3a8b2">${reviewed.size} reviewed</span><span style="font:600 12.5px/1 system-ui;color:#5661c9;border:1px solid #d9d7fb;border-radius:9px;padding:7px 13px">Accept All Remaining${totalRemaining ? ` (${totalRemaining})` : ''}</span></div>
+	</div>`;
+
+	// The reviewed end-state: nothing pending. A calm confirmation rather than an empty rail/column.
+	if (!groups.length) {
+		return `<div class="screen">${topBar}<div style="flex:1;display:flex;align-items:center;justify-content:center;background:#f8f9fb;padding:40px">
+			<div style="text-align:center;max-width:420px">
+				<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:12px;background:#eef7f0;border:1px solid #d7ecdc;display:flex;align-items:center;justify-content:center;font-size:20px;color:#2c8159">&#10003;</div>
+				<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">All reviewed</h2>
+				<p style="margin:0;font:400 14px/1.6 system-ui;color:#696e78">Nothing is waiting across the project. Every proposed change has been actioned.</p>
+			</div>
+		</div></div>`;
+	}
+
+	// The current document = the selected doc if it still has changes, else the first changed doc. This
+	// is local screen navigation (clicking a rail row posts `reviewDoc`), not an engine action.
+	const current = groups.find(g => g.docId === rp?.currentDocId) ?? groups[0];
+	const currentIndex = groups.findIndex(g => g.docId === current.docId);
+
+	return `<div class="screen">${topBar}<div style="flex:1;display:flex;overflow:hidden;min-height:0">${reviewRail(groups, current.docId, reviewed)}${reviewColumn(current.changes, current.docTitle, currentIndex, groups)}</div></div>`;
+}
+
+// The 292px doc-nav rail (C5): a header count `N docs . M changes`, a green progress bar (reviewed /
+// total docs seen this session), then one row per document WITH pending changes. Each row carries a
+// status glyph - check "reviewed" (a doc reviewed this session, now 0 pending - only ever appears once a
+// doc empties, so in a fresh run every changed doc is hollow-dot "pending" or filled-dot "current"),
+// filled-dot "current" (the selected doc, accent tint + 3px accent bar), hollow-dot "pending" (still has
+// changes, not selected) - and its count.
+function reviewRail(groups: readonly { docId: string; docTitle: string; changes: readonly IProposedChange[] }[], currentDocId: string, reviewed: ReadonlySet<string>): string {
+	const changeTotal = groups.reduce((n, g) => n + g.changes.length, 0);
+	const docTotal = groups.length + reviewed.size;
+	const reviewedCount = reviewed.size;
+	const pct = docTotal > 0 ? Math.round((reviewedCount / docTotal) * 100) : 0;
+	const header = `<div style="padding:17px 18px;border-bottom:1px solid #eef0f3">
+		<div style="font:600 13px/1 system-ui;color:#1a1c20;margin-bottom:10px">${docTotal} document${docTotal === 1 ? '' : 's'} &middot; ${changeTotal} change${changeTotal === 1 ? '' : 's'}</div>
+		<div style="height:5px;background:#e9eaee;border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:oklch(0.6 0.13 150);border-radius:3px"></div></div>
+		<div style="font:400 11.5px/1 system-ui;color:#a3a8b2;margin-top:7px">${reviewedCount} of ${docTotal} reviewed</div>
+	</div>`;
+
+	// Reviewed docs (0 pending) come first as muted check rows, then the still-pending docs. A reviewed doc has
+	// no changes left, so it is not in `groups` - it only shows here once the editor moves its id into the
+	// reviewed set. This iter is read-only so the reviewed set stays empty; the row style is ready for 24.2.
+	const reviewedRows = [...reviewed].map(docId => `<div style="display:flex;align-items:center;gap:9px;padding:8px 10px">
+		<span style="color:#2c8159;font-size:12px;width:13px;text-align:center">&#10003;</span>
+		<span style="font:500 12px/1 system-ui;color:#a3a8b2;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(docId)}</span>
+	</div>`).join('');
+
+	const rows = groups.map(g => {
+		const isCurrent = g.docId === currentDocId;
+		const count = g.changes.length;
+		if (isCurrent) {
+			return `<div data-msg="reviewDoc" data-arg="${esc(g.docId)}" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;background:#eef0fb;border:1px solid #e0e5fb;position:relative;cursor:pointer">
+				<span style="position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:3px;background:${ACCENT}"></span>
+				<span style="width:13px;display:flex;justify-content:center"><span style="width:7px;height:7px;border-radius:50%;background:${ACCENT}"></span></span>
+				<span style="font:600 12px/1 system-ui;color:#2a2f60;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(g.docTitle)}</span>
+				<span style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8">${count}</span>
+			</div>`;
+		}
+		return `<div data-msg="reviewDoc" data-arg="${esc(g.docId)}" style="display:flex;align-items:center;gap:9px;padding:8px 10px;cursor:pointer">
+			<span style="color:#cfd3da;font-size:12px;width:13px;text-align:center">&#9675;</span>
+			<span style="font:500 12px/1 system-ui;color:#3a3f49;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(g.docTitle)}</span>
+			<span style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95">${count}</span>
+		</div>`;
+	}).join('');
+
+	return `<div style="width:292px;flex:none;background:#fafbfc;border-right:1px solid #e9eaee;display:flex;flex-direction:column;overflow:hidden">
+		${header}
+		<div style="flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:1px">${reviewedRows}${rows}</div>
+	</div>`;
+}
+
+// The centre review column (C5): the current document's title + a per-change card list. Each card shows
+// the change IN CONTEXT (old struck through -> new added, reusing the addition/removal tokens the rail +
+// editor use; an insertion has no oldText so it renders as pure additions), a `decision . line NN` source
+// chip (from sourceQuote/sourceLine, plan 23.4 - the line is OMITTED when unknown so nothing is
+// fabricated), and a filled-dot "High" / half-dot "Inferred" confidence chip per D24-A. The bottom bar reports the
+// still-attention count + the batch controls. Accept / Tweak / Reject + the batch buttons are RENDERED to
+// match the comp but INERT this iteration; TODO(24.2): wire Accept->approve(id), Reject->reject(id),
+// Tweak->focusChange navigate, Accept all here->approveAll(docId), Next->advance current doc.
+function reviewColumn(changes: readonly IProposedChange[], docTitle: string, currentIndex: number, groups: readonly { docTitle: string }[]): string {
+	const total = groups.length;
+	const eyebrow = `<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:#a3a8b2;margin-bottom:7px">Document ${currentIndex + 1} of ${total}</div>`;
+	const cards = changes.map(reviewCard).join('');
+	const inferredCount = changes.filter(c => reviewConfidence(c) === 'inferred').length;
+
+	// TODO(24.2): the buttons below are inert this iteration (read-only). `Accept all N here` will call
+	// approveAll(docId); `Next` will advance to the next changed document.
+	const next = groups[currentIndex + 1] ?? groups[0];
+	const nextLabel = total > 1 ? `Next: ${esc(next.docTitle)} &#8594;` : 'Next &#8594;';
+	const attention = inferredCount
+		? `${inferredCount} change${inferredCount === 1 ? '' : 's'} need${inferredCount === 1 ? 's' : ''} your eyes`
+		: 'All changes look confident';
+	const bottomBar = `<div style="flex:none;height:64px;border-top:1px solid #eef0f3;background:#fafbfc;display:flex;align-items:center;padding:0 40px;gap:14px">
+		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${attention}</span>
+		<div style="margin-left:auto;display:flex;gap:10px">
+			<button style="font:600 13px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:9px;padding:10px 16px;cursor:default">Accept All ${changes.length} Here</button>
+			<button style="font:600 13px/1 system-ui;color:#fff;background:#1a1c20;border:none;border-radius:9px;padding:10px 18px;cursor:default">${nextLabel}</button>
+		</div>
+	</div>`;
+
+	return `<div style="flex:1;overflow:hidden;background:#fff;display:flex;flex-direction:column">
+		<div style="flex:1;overflow:auto;padding:30px 40px 30px">
+			<div style="max-width:720px">
+				${eyebrow}
+				<h1 style="font:600 28px/1.12 system-ui;letter-spacing:-.02em;color:#14161a;margin:0 0 3px">${esc(docTitle)}</h1>
+				<p style="font:400 13.5px/1 system-ui;color:#868b95;margin:0 0 24px">${changes.length} change${changes.length === 1 ? '' : 's'} proposed &middot; review each in context</p>
+				${cards}
+			</div>
+		</div>
+		${bottomBar}
+	</div>`;
+}
+
+// One change card. The prose renders the change in context: `oldText` struck through with the removal
+// tokens, then `newText` with the addition tokens (an insertion has no oldText -> pure additions). Below,
+// the source chip + confidence chip + inert Accept / Tweak / Reject (24.2). An `inferred` change gets the
+// attention-tinted card (bg #fffdf8, border #e4dccb) + the amber half-dot "Inferred . needs your eyes" chip.
+function reviewCard(change: IProposedChange): string {
+	const level = reviewConfidence(change);
+	const inferred = level === 'inferred';
+	const cardStyle = inferred
+		? 'border:1px solid #e4dccb;border-radius:13px;padding:16px 18px;margin-bottom:13px;background:#fffdf8'
+		: 'border:1px solid #e6e8ec;border-radius:13px;padding:16px 18px;margin-bottom:13px';
+
+	// The change in context: removal (struck) then addition. Additions use the `ok` tokens (#e9f6ee /
+	// #2c8159); removals the `removed` tokens (#fbeeee / #b5514b strike). An insertion (`insert`) has no
+	// oldText, so only the addition renders. Text is escaped - this is prose, not markup.
+	const removal = !change.insert && change.oldText.trim()
+		? ` <span style="background:#fbeeee;color:#b5514b;text-decoration:line-through;text-decoration-color:#cf5a53;border-radius:3px;padding:0 3px">${esc(change.oldText)}</span>`
+		: '';
+	const addition = change.newText.trim()
+		? `<span style="background:#e9f6ee;color:#2c8159;border-radius:3px;padding:0 3px">${esc(change.newText)}</span>`
+		: '';
+	const prose = `<p style="font:400 16px/1.7 system-ui;color:#26292f;margin:0 0 12px">${addition}${removal}</p>`;
+
+	// The source chip: `decision . line NN` when a real line is known, else just `decision` (never a
+	// fabricated line). The verbatim decision quote (sourceQuote), when present, is the chip's hover title.
+	const hasLine = typeof change.sourceLine === 'number';
+	const chipTitle = change.sourceQuote ? ` title="${esc(change.sourceQuote)}"` : '';
+	const sourceChip = `<span${chipTitle} style="display:inline-flex;align-items:center;gap:5px;font:500 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:4px 10px"><span style="width:5px;height:5px;border-radius:50%;background:${ACCENT}"></span>decision${hasLine ? ` &middot; line ${change.sourceLine}` : ''}</span>`;
+
+	// The confidence chip (D24-A): filled-dot "High" (ok/accent) or half-dot "Inferred . needs your eyes" (attention).
+	const confChip = inferred
+		? `<span style="font:600 11px/1 system-ui;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:999px;padding:5px 10px">&#9680; Inferred &middot; needs your eyes</span>`
+		: `<span style="font:600 11px/1 system-ui;color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:5px 10px">&#9679; High</span>`;
+
+	// TODO(24.2): wire Accept->approve(change.id), Tweak->focusChange navigate, Reject->reject(change.id).
+	// Rendered inert this iteration (cursor:default) so the layout matches the comp without acting.
+	const actions = `<div style="margin-left:auto;display:flex;gap:7px">
+		<button style="font:600 12px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:8px;padding:8px 14px;cursor:default">Accept</button>
+		<button style="font:600 12px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:8px;padding:8px 12px;cursor:default">Tweak</button>
+		<button style="font:600 12px/1 system-ui;color:#a3a8b2;background:none;border:none;padding:8px 4px;cursor:default">Reject</button>
+	</div>`;
+
+	return `<div style="${cardStyle}">
+		${prose}
+		<div style="display:flex;align-items:center;gap:8px">${sourceChip}${confChip}${actions}</div>
 	</div>`;
 }

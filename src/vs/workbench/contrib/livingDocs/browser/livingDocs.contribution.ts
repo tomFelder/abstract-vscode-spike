@@ -303,6 +303,25 @@ for (const entry of SCREEN_NAV) {
 	});
 }
 
+// Cross-document review (C5, plan 24) is a project-scale destination reached FROM a project-wide run, not
+// a top-level nav item, so it is not in SCREEN_NAV. Register a palette command to open it directly - the
+// real in-product entry (the fan-out's "Review across the project ->") is wired in plan 24.3.
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.open.review-project',
+			title: localize2('livingDocs.openReviewProject', "Review Across the Project"),
+			category: localize2('livingDocs.category', "Abstract"),
+			f1: true,
+		});
+	}
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const editorService = accessor.get(IEditorService);
+		const instantiationService = accessor.get(IInstantiationService);
+		await editorService.openEditor(instantiationService.createInstance(ScreenEditorInput, 'review-project'), { pinned: true });
+	}
+});
+
 // --- first-run flow: launch reads as a document app, not an IDE ---
 // The Welcome / Getting Started editor is the last IDE tell on launch. Close it so the workspace
 // lands on the Documents home (sidebar) with a clean editor area, and reveal the Studio right panel

@@ -23,7 +23,7 @@ import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocSummary, ILivingDocsService } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
-import { AgentFilter, IProjectRunScreenState, IRecentProject, renderScreenHtml, ScreenId } from './screenRender.js';
+import { AgentFilter, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -45,6 +45,14 @@ interface IScreenEditorState {
 	// The project's documents at run-kick time (id + title), used to build every swarm tile so a doc the
 	// run did not touch still renders as a `no change` tile. Fetched once when the run is kicked.
 	projectRunDocs?: readonly { readonly docId: string; readonly docTitle: string }[];
+	// Cross-document review (C5, plan 24): the doc selected in the centre column (local navigation) and the
+	// documents reviewed THIS session (they emptied while the screen was open -> the check glyph). The pending
+	// set + counts are read live from the service each render, so these are the only bits of local state.
+	reviewCurrentDocId?: string;
+	reviewReviewedDocIds?: readonly string[];
+	// The attached source name for the review topbar chip, carried over from the run that produced the
+	// changes (undefined when the screen is opened directly, e.g. from the palette, with no run context).
+	reviewSource?: string;
 }
 
 // Webview editor that hosts one Abstract screen (Templates / Knowledge / Agents) in the
@@ -222,9 +230,19 @@ export class ScreenEditor extends EditorPane {
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'agents'), { pinned: true });
 				break;
 			// Project-run bottom bar: "Review across the project" routes to the Review rail as the
-			// interim target. TODO(plan-24): retarget to the cross-document review surface once it lands.
+			// interim target. TODO(plan-24.3): retarget to open the cross-document review screen on the
+			// first changed doc (the screen itself + rail + cards land in 24.1/24.2; the entry wiring is 24.3).
 			case 'reviewProject':
 				this._livingDocs.focusPanel('review');
+				break;
+			// Cross-document review (C5): clicking a doc row in the 292px doc-nav rail makes it the current
+			// document in the centre column. Local screen navigation (not an engine action), so it only
+			// updates the selected id and re-renders; the pending set is still read live from the service.
+			case 'reviewDoc':
+				if (message.arg) {
+					this._state = { ...this._state, reviewCurrentDocId: message.arg };
+					this._render();
+				}
 				break;
 			case 'openFolder':
 				void this._livingDocs.openFolder();
@@ -316,10 +334,26 @@ export class ScreenEditor extends EditorPane {
 		this._webview?.setHtml(renderScreenHtml(this._screen, {
 			...this._state,
 			projectRun: this._projectRunState(),
+			reviewProject: this._reviewProjectState(folderName),
 			agents: this._livingDocs.getAgents(),
 			hasFolder: !!folderName,
 			folderName,
 		}));
+	}
+
+	// Recompute the cross-document review screen state (C5, plan 24) from the LIVE service each render: the
+	// pending set is `getAllPending()` (the SAME model the C6 rail consumes - this is a second presentation,
+	// not a re-derivation), grouped by document in the renderer for the rail + cards. Only the current-doc
+	// selection + the reviewed-this-session set are local state; the counts + confidence are all live/real.
+	private _reviewProjectState(folderName: string | undefined): IReviewProjectScreenState | undefined {
+		if (this._screen !== 'review-project') { return undefined; }
+		return {
+			pending: this._livingDocs.getAllPending(),
+			currentDocId: this._state.reviewCurrentDocId,
+			reviewedDocIds: this._state.reviewReviewedDocIds,
+			source: this._state.reviewSource,
+			folderName,
+		};
 	}
 
 	// Recompute the project-run screen state from the LIVE service each render, so the swarm grid, the
