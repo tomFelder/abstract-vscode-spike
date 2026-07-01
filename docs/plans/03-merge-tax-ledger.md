@@ -173,6 +173,27 @@ our own deregister list*, not by patching core.
 
 _Residual to retire in build-order #1:_ the 367KB bundle is re-inlined on every webview render (blank-on-reopen); moving it to a webview resource (`asWebviewUri`) removes the re-inline and is still our-surface.
 
+### Redesign round — plan 25 iter 1 (the labeled 76px nav + Editor entry): 0 ADDED core patches
+
+**D25-A outcome — CSS/styleOverrides + settings, NO new core patch.** The plan flagged the labeled
+76px nav as "the one item expected to need a core patch." On audit, the core patch it would take
+**already exists**: `ActivitybarPart.ACTIVITYBAR_WIDTH = 76` (`activitybarPart.ts:52`) landed in **v2
+iter 9** (see that entry above), and the label layer is the `styleOverrides` `studio.css`
+`::after { content: attr(aria-label) }` rule. So iter 1 needed **zero new core touches** — the width
+seam was paid for once, in v2. Everything iter 1 changed sits in the cheap tiers:
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 25-1a | Re-pin the nav tokens to Part B/C1: `panel` bg `#F6F7F9`, 60px item, 18px glyph, 10px label | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | Extends the existing `.style-override-studio .part.activitybar` block (bg + `width:60px` + `::before{font-size:18px}`); appearance-only, fail-soft. No core edit. |
+| 25-1b | Register the **Editor** nav item (container + launcher view + palette command), ordered first-after-Home; screens re-ordered to 1/3/4/5 around it | additive-contribution | `livingDocs/browser/livingDocs.contribution.ts`, `livingDocs/browser/editorNavLauncherView.ts` (new) | New activity-bar view container + view via the public registry + a `registerAction2`, exactly like the existing Home/Templates/Knowledge/Agents entries. D25-B open logic reuses `IEditorService`/`IHistoryService`/`ILivingDocsService.listDocuments()`. No core edit. |
+| 25-1c | Give the `:8080` brief root its own `.vscode/settings.json` (mirror of the parent sample) so the shell (activity bar / modernUI) renders as designed | settings | `living-docs-sample/brief/.vscode/settings.json` (new) | Sample content only; a subfolder opened as its own root does not inherit the parent workspace settings, so the served brief root needed its own copy. Reversible; no app/core code. |
+
+**Core-patch count is unchanged by plan 25 iter 1: still 5 total** (the 76px width patch is one of those
+5, from v2 iter 9 — not double-counted here). **Greenfield evidence (Q3):** the item the plan singled
+out as the most likely fresh core patch cost **0 new core** this iteration — the one seam it needs was
+already paid, and the labeled layout + the new Editor nav ride entirely on styleOverrides CSS + additive
+contributions.
+
 ## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
