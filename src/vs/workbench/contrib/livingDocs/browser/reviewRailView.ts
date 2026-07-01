@@ -514,8 +514,8 @@ export class ReviewRailView extends ViewPane {
 		// runSkillCheck path. Only available when a living document is active (same gate as the disclosure).
 		const skillReport = doc ? this._livingDocs.getSkillReport(doc) : [];
 		const skillBtn = append(bar, $('button')) as HTMLButtonElement;
-		// Comp: chip style is muted (#868b95), border #e6e8ec, 7px radius (Part B controls 8-9px).
-		skillBtn.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:5px 9px;background:transparent;color:#868b95;font:500 11px/1 system-ui;cursor:pointer';
+		// Comp: chip text is slate #52575F (Part B secondary text / quiet buttons), border #e6e8ec, 8px radius.
+		skillBtn.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:5px 9px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer';
 		skillBtn.textContent = '+ Skill';
 		skillBtn.disabled = !doc || !skillReport.length;
 		if (!doc || !skillReport.length) { skillBtn.style.opacity = '0.45'; }
@@ -526,7 +526,7 @@ export class ReviewRailView extends ViewPane {
 
 		// @ Mention: inserts a bare "@" into the composer so the user can type-to-autocomplete a file.
 		const mentionBtn = append(bar, $('button')) as HTMLButtonElement;
-		mentionBtn.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:5px 9px;background:transparent;color:#868b95;font:500 11px/1 system-ui;cursor:pointer';
+		mentionBtn.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:5px 9px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer';
 		mentionBtn.textContent = '@ Mention';
 		mentionBtn.disabled = !doc;
 		if (!doc) { mentionBtn.style.opacity = '0.45'; }
