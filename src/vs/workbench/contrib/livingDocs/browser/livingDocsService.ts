@@ -122,6 +122,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
 	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
 
+	private readonly _onDidRequestFocusChange = this._register(new Emitter<{ docId: string; changeId: string }>());
+	readonly onDidRequestFocusChange: Event<{ docId: string; changeId: string }> = this._onDidRequestFocusChange.event;
+
 	private readonly _docs = new Map<string, IDocState>();
 	// Raw source text by `${docUri}::${source}`, cached during resolution so getSourcePeek (sync) can
 	// build the comp's raw CSV grid for the in-surface source-peek pane.
@@ -324,6 +327,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidRequestPanel.fire(tab);
 		// Reveal the right panel; take focus only for Chat so the user can type straight away.
 		this._views.openView(REVIEW_RAIL_VIEW_ID, tab === 'chat').catch(e => this._log.warn('[livingDocs] focusPanel failed', e));
+	}
+
+	focusChange(changeId: string): void {
+		// Look up the change's document so the editor pane showing it can scroll to the right inline diff.
+		// A stale id (already approved/rejected) is a no-op - nothing to focus.
+		const change = this.getAllPending().find(c => c.id === changeId);
+		if (change) {
+			this._onDidRequestFocusChange.fire({ docId: change.docId, changeId });
+		}
 	}
 
 	// --- the "Documents" home ---

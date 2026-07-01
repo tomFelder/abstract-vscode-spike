@@ -44,6 +44,10 @@ export class LivingDocEditor extends EditorPane {
 	// model-driven change such as an accepted proposal - NOT the user's own typing, which is saved silently
 	// and never re-renders) resets the PM doc to disk truth via `pmReset` (plan 15 iter 4).
 	private _pmBody: string | undefined;
+	// The change the rail asked us to scroll to (plan 19 iter 2). Held until the webview is ready and the
+	// body (with its inline-diff decorations) has rendered, then posted as a 'focusChange' message and
+	// cleared. Navigate-only: revealing a change never approves it.
+	private _pendingFocusChangeId: string | undefined;
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -76,8 +80,16 @@ export class LivingDocEditor extends EditorPane {
 		this._webviewReady = false;
 		this._pendingContent = undefined;
 		this._pmBody = undefined;
+		this._pendingFocusChangeId = undefined;
 		this._createWebview();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
+		// Rail-to-editor navigation: when a change for THIS document is asked to be focused, scroll to it.
+		this._inputDisposables.add(this._livingDocs.onDidRequestFocusChange(e => {
+			if (this._resource && e.docId === this._resource.toString()) {
+				this._pendingFocusChangeId = e.changeId;
+				this._flushFocusChange();
+			}
+		}));
 		await this._livingDocs.loadDocument(input.resource);
 		this._render();
 	}
@@ -114,6 +126,8 @@ export class LivingDocEditor extends EditorPane {
 					void this._webview?.postMessage({ type: 'lwdRender', html: this._pendingContent.html, pmMd: this._pendingContent.pmMd, pmDeco: this._pendingContent.pmDeco });
 					this._pendingContent = undefined;
 				}
+				// The body (with its inline-diff decorations) is now live; reveal any pending focus target.
+				this._flushFocusChange();
 				break;
 			case 'pmEdit':
 				// The ProseMirror editing surface serialized its current state back to Markdown. Persist it
@@ -290,6 +304,15 @@ export class LivingDocEditor extends EditorPane {
 			void this._webview.postMessage({ type: 'lwdRender', html: content.html, pmMd: content.pmMd, pmDeco: content.pmDeco, pmReset });
 		} else {
 			this._pendingContent = content;
+		}
+	}
+
+	// Post the pending rail-to-editor focus target once the webview is ready (the body + its inline-diff
+	// decorations are live by then). The RUNTIME scrolls that change's widget into view and flashes it.
+	private _flushFocusChange(): void {
+		if (this._webviewReady && this._webview && this._pendingFocusChangeId) {
+			void this._webview.postMessage({ type: 'focusChange', id: this._pendingFocusChangeId });
+			this._pendingFocusChangeId = undefined;
 		}
 	}
 

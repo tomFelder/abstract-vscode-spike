@@ -180,6 +180,10 @@ export class ReviewRailView extends ViewPane {
 				tag.textContent = 'MEANING CHANGE';
 
 				const diff = append(card, $('div.ldr-diff'));
+				// Click the diff to jump the editor to this change in full document context (navigate-only).
+				diff.style.cursor = 'pointer';
+				diff.title = 'Open in the document';
+				this._renderDisposables.add(addDisposableListener(diff, 'click', () => void this._navigateToChange(change)));
 				const o = append(diff, $('div.ldr-o'));
 				o.textContent = change.oldText;
 				const n = append(diff, $('div.ldr-n'));
@@ -222,6 +226,14 @@ export class ReviewRailView extends ViewPane {
 			groups.set(change.docId, list);
 		}
 		return groups;
+	}
+
+	// Navigate-only rail-to-editor jump (plan 19, E-A): open the change's document and ask its editor to
+	// scroll to + flash that change's inline diff. Clicking a card body NEVER approves - the user reads the
+	// change in full context and then approves wherever they like (the inline widget or the rail buttons).
+	private async _navigateToChange(change: IProposedChange): Promise<void> {
+		await this._editors.openEditor({ resource: URI.parse(change.docId) });
+		this._livingDocs.focusChange(change.id);
 	}
 
 	// After a per-document "Approve all", open the next document that still has pending changes so the
@@ -436,8 +448,11 @@ export class ReviewRailView extends ViewPane {
 				where.style.cssText = 'color:#868b95;font-weight:400';
 				where.textContent = isInsert ? `after ${change.blockLabel}` : change.blockLabel;
 				const preview = append(card, $('div'));
-				preview.style.cssText = 'padding:2px 12px 9px;font:400 12.5px/1.5 system-ui;color:#52575f;white-space:pre-wrap;max-height:96px;overflow:hidden';
+				preview.style.cssText = 'padding:2px 12px 9px;font:400 12.5px/1.5 system-ui;color:#52575f;white-space:pre-wrap;max-height:96px;overflow:hidden;cursor:pointer';
+				preview.title = 'Open in the document';
 				preview.textContent = change.newText.length > 240 ? change.newText.slice(0, 240) + '\u2026' : change.newText;
+				// Click the preview to read this change inline in the document (navigate-only; Apply still applies).
+				this._renderDisposables.add(addDisposableListener(preview, 'click', () => void this._navigateToChange(change)));
 				const actions = append(card, $('div'));
 				actions.style.cssText = 'display:flex;gap:7px;padding:9px 12px;border-top:1px solid #eef0f3';
 				const approve = append(actions, $('button')) as HTMLButtonElement;
