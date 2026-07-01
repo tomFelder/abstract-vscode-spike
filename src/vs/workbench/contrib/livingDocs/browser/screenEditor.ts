@@ -380,7 +380,7 @@ export class ScreenEditor extends EditorPane {
 		this._webview?.setHtml(renderScreenHtml(this._screen, {
 			...this._state,
 			projectRun: this._projectRunState(),
-			reviewProject: this._reviewProjectState(folderName),
+			reviewProject: this._updateAndGetReviewProjectState(folderName),
 			agents: this._livingDocs.getAgents(),
 			hasFolder: !!folderName,
 			folderName,
@@ -391,7 +391,9 @@ export class ScreenEditor extends EditorPane {
 	// pending set is `getAllPending()` (the SAME model the C6 rail consumes - this is a second presentation,
 	// not a re-derivation), grouped by document in the renderer for the rail + cards. Only the current-doc
 	// selection + the reviewed-this-session set are local state; the counts + confidence are all live/real.
-	private _reviewProjectState(folderName: string | undefined): IReviewProjectScreenState | undefined {
+	// Named "updateAndGet": besides returning the state it also folds the currently-pending docs into the
+	// carried `reviewSeenDocs` map (so an emptied doc keeps its reviewed row) - a deliberate per-render update.
+	private _updateAndGetReviewProjectState(folderName: string | undefined): IReviewProjectScreenState | undefined {
 		if (this._screen !== 'review-project') { return undefined; }
 		const pending = this._livingDocs.getAllPending();
 		// Accumulate the docs seen with pending changes this session (docId -> human title). A doc that was

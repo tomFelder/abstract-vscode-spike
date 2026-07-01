@@ -65,7 +65,7 @@ export interface IScreenState {
  * The cross-document review screen's state (plan 24, C5). `pending` is the live `getAllPending()` set,
  * grouped by document in the renderer for the doc-nav rail and the centre change cards. `currentDocId`
  * is the doc shown in the centre column (local screen navigation, not an engine action - defaults to the
- * first changed doc). `reviewedDocIds` are the documents that had changes THIS session and now have zero
+ * first changed doc). `reviewedDocs` are the documents that had changes THIS session and now have zero
  * pending (the check "reviewed" glyph); tracked by the editor across re-renders. `source` labels the run's
  * attached transcript for the topbar chip. Nothing is fabricated - all counts derive from `pending`.
  */
@@ -736,9 +736,9 @@ function swarmTile(_docId: string, title: string, status: 'changed' | 'no-change
 // rail (count header + progress bar + one row per changed doc with a check "reviewed" / filled-dot
 // "current" / hollow-dot "pending" glyph + count); centre = the current document's change cards, each
 // showing the change in context, a `decision . line NN` source chip, and a filled-dot "High" / half-dot
-// "Inferred" confidence chip (D24-A). READ-ONLY this
-// iteration: Accept / Tweak / Reject are rendered (so the layout matches the comp) but inert - the real
-// wiring to approve/reject/approveAll is plan 24.2 (see TODO(24.2) below). The C6 Review rail is untouched.
+// "Inferred" confidence chip (D24-A). Accept / Tweak / Reject per card and the sticky bar (Accept all here /
+// Next / Accept all remaining) post messages the editor routes to the EXISTING engine
+// (approve/reject/approveAll/approveAllPending); the C6 Review rail consumes the same model and stays in sync.
 function renderReviewProject(state: IScreenState): string {
 	const rp = state.reviewProject;
 	const pending = rp?.pending ?? [];
