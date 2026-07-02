@@ -373,6 +373,52 @@ export function groupDecisions(pending: readonly IProposedChange[]): IDecisionGr
 	});
 }
 
+/**
+ * The confidence a change carries in the cross-document review surface (plan 24, C5), mapped to the two
+ * comp states: `high` renders a filled-dot "High" (`ok`/accent tokens) and `inferred` renders a half-dot "Inferred"
+ * (`attention` tokens - "needs your eyes").
+ *
+ * D24-A - confidence mapping rule: a `meaning` change with `confidence < 0.8` is `inferred`; every other
+ * change (any `figure` change, or a `meaning` change with `confidence >= 0.8`) is `high`. Figure changes
+ * are deterministic source substitutions so they are always `high`; a meaning change is a rewrite of
+ * prose, so only a confident one reads as `high` and a low-confidence one is flagged for the writer's eyes.
+ */
+export type ReviewConfidence = 'high' | 'inferred';
+
+export function reviewConfidence(change: Pick<IProposedChange, 'kind' | 'confidence'>): ReviewConfidence {
+	return change.kind === 'meaning' && change.confidence < 0.8 ? 'inferred' : 'high';
+}
+
+/**
+ * One document group in the cross-document review doc-nav rail (plan 24, C5). Groups the pending changes
+ * by their document, preserving first-appearance order, and carries the count so the rail header
+ * (`N docs . M changes`), the progress bar and each doc row derive from one pass over the real pending set.
+ * Pure so it can be unit-tested directly and reused by the screen renderer.
+ */
+export interface IReviewDocGroup {
+	readonly docId: string;
+	readonly docTitle: string;
+	readonly changes: readonly IProposedChange[];
+}
+
+export function groupPendingByDoc(pending: readonly IProposedChange[]): IReviewDocGroup[] {
+	const order: string[] = [];
+	const groups = new Map<string, { docTitle: string; changes: IProposedChange[] }>();
+	for (const c of pending) {
+		let group = groups.get(c.docId);
+		if (!group) {
+			group = { docTitle: c.docTitle, changes: [] };
+			groups.set(c.docId, group);
+			order.push(c.docId);
+		}
+		group.changes.push(c);
+	}
+	return order.map(docId => {
+		const g = groups.get(docId)!;
+		return { docId, docTitle: g.docTitle, changes: g.changes };
+	});
+}
+
 export interface IAuditEntry {
 	readonly time: string;
 	readonly docTitle: string;

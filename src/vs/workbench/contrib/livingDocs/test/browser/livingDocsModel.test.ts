@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { groupDecisions, IProposedChange, nextPendingDocId, summariseProjectRun } from '../../common/livingDocsModel.js';
+import { groupDecisions, groupPendingByDoc, IProposedChange, nextPendingDocId, reviewConfidence, summariseProjectRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
@@ -151,5 +151,47 @@ suite('LivingDoc model - groupDecisions', () => {
 
 	test('returns an empty list when there are no pending changes', () => {
 		assert.deepStrictEqual(groupDecisions([]), []);
+	});
+});
+
+suite('LivingDoc model - reviewConfidence (D24-A)', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	function withKind(kind: 'figure' | 'meaning', confidence: number): IProposedChange {
+		return { ...change('a', '1'), kind, confidence };
+	}
+
+	test('a meaning change below 0.8 is Inferred; every other change is High', () => {
+		assert.deepStrictEqual(
+			[
+				reviewConfidence(withKind('meaning', 0.79)),
+				reviewConfidence(withKind('meaning', 0.8)),
+				reviewConfidence(withKind('meaning', 0.95)),
+				reviewConfidence(withKind('meaning', 0.5)),
+				reviewConfidence(withKind('figure', 0.4)),
+				reviewConfidence(withKind('figure', 0.99)),
+			],
+			['inferred', 'high', 'high', 'inferred', 'high', 'high'],
+		);
+	});
+});
+
+suite('LivingDoc model - groupPendingByDoc', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('groups changes by document in first-appearance order, keeping every change', () => {
+		const pending = [change('a', '1'), change('b', '2'), change('a', '3'), change('c', '4')];
+		assert.deepStrictEqual(
+			groupPendingByDoc(pending).map(g => ({ docId: g.docId, docTitle: g.docTitle, ids: g.changes.map(c => c.id) })),
+			[
+				{ docId: 'a', docTitle: 'a', ids: ['1', '3'] },
+				{ docId: 'b', docTitle: 'b', ids: ['2'] },
+				{ docId: 'c', docTitle: 'c', ids: ['4'] },
+			],
+		);
+	});
+
+	test('returns an empty list when there are no pending changes', () => {
+		assert.deepStrictEqual(groupPendingByDoc([]), []);
 	});
 });
