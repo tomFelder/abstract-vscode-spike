@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { IProposedChange, nextPendingDocId } from '../../common/livingDocsModel.js';
+import { IProposedChange, nextPendingDocId, summariseProjectRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
@@ -44,5 +44,55 @@ suite('LivingDoc model - nextPendingDocId', () => {
 
 	test('returns undefined when there are no pending changes at all', () => {
 		assert.strictEqual(nextPendingDocId([], 'a'), undefined);
+	});
+});
+
+suite('LivingDoc model - summariseProjectRun', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const docs = [
+		{ docId: 'a', docTitle: 'Access Control' },
+		{ docId: 'b', docTitle: 'Acceptable Use' },
+		{ docId: 'c', docTitle: 'Cryptography' },
+	];
+
+	test('aggregates pending changes by document into changed / no-change tiles with totals', () => {
+		const pending = [change('a', '1'), change('a', '2'), change('b', '3')];
+		assert.deepStrictEqual(summariseProjectRun(docs, pending), {
+			tiles: [
+				{ docId: 'a', docTitle: 'Access Control', status: 'changed', changeCount: 2 },
+				{ docId: 'b', docTitle: 'Acceptable Use', status: 'changed', changeCount: 1 },
+				{ docId: 'c', docTitle: 'Cryptography', status: 'no-change', changeCount: 0 },
+			],
+			totalChanges: 3,
+			changedDocs: 2,
+			unchangedDocs: 1,
+		});
+	});
+
+	test('reports every document as no-change and zero totals when nothing is pending', () => {
+		assert.deepStrictEqual(summariseProjectRun(docs, []), {
+			tiles: [
+				{ docId: 'a', docTitle: 'Access Control', status: 'no-change', changeCount: 0 },
+				{ docId: 'b', docTitle: 'Acceptable Use', status: 'no-change', changeCount: 0 },
+				{ docId: 'c', docTitle: 'Cryptography', status: 'no-change', changeCount: 0 },
+			],
+			totalChanges: 0,
+			changedDocs: 0,
+			unchangedDocs: 3,
+		});
+	});
+
+	test('ignores pending changes for documents outside the project so totalChanges equals the tile sum', () => {
+		// A stale snapshot / a doc removed mid-run can leave a pending change whose docId has no tile.
+		// It must not inflate totalChanges, which the bottom bar reports as "N changes in M documents".
+		const pending = [change('a', '1'), change('ghost', '2'), change('ghost', '3')];
+		const summary = summariseProjectRun([{ docId: 'a', docTitle: 'Access Control' }], pending);
+		assert.deepStrictEqual(summary, {
+			tiles: [{ docId: 'a', docTitle: 'Access Control', status: 'changed', changeCount: 1 }],
+			totalChanges: 1,
+			changedDocs: 1,
+			unchangedDocs: 0,
+		});
 	});
 });

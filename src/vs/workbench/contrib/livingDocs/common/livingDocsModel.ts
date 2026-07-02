@@ -249,6 +249,64 @@ export function nextPendingDocId(pending: readonly IProposedChange[], currentDoc
 	return undefined;
 }
 
+/**
+ * One document tile in the project-wide fan-out swarm grid (plan 23, C4). A completed run aggregates
+ * the service's pending changes by document into `changed` (N pending) or `no-change` (nothing queued).
+ * The live `working` (spinner) state is set by the orchestrator while a document is still being
+ * processed and is layered on top of this aggregation by the caller - the pure selector below only
+ * distinguishes changed vs no-change, which is all `getAllPending()` can tell after a run.
+ */
+export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working';
+
+export interface IProjectRunDocTile {
+	readonly docId: string;
+	readonly docTitle: string;
+	readonly status: ProjectRunDocStatus;
+	readonly changeCount: number;
+}
+
+/**
+ * The whole-project fan-out summary (plan 23, C4): one tile per project document plus the bottom-bar
+ * totals, derived purely from the run's pending changes grouped by document. `docs` is the full set of
+ * project documents (id + title) so documents the run did not touch still render as `no-change` tiles;
+ * `pending` is `ILivingDocsService.getAllPending()`. Tiles preserve the order of `docs`. Pure so it can
+ * be unit-tested directly and reused by the screen renderer.
+ */
+export interface IProjectRunSummary {
+	readonly tiles: readonly IProjectRunDocTile[];
+	readonly totalChanges: number;      // pending changes across every document
+	readonly changedDocs: number;       // documents with at least one pending change
+	readonly unchangedDocs: number;     // documents with no pending change
+}
+
+export function summariseProjectRun(
+	docs: readonly { readonly docId: string; readonly docTitle: string }[],
+	pending: readonly IProposedChange[],
+): IProjectRunSummary {
+	const counts = new Map<string, number>();
+	for (const c of pending) { counts.set(c.docId, (counts.get(c.docId) ?? 0) + 1); }
+	const tiles: IProjectRunDocTile[] = docs.map(d => {
+		const changeCount = counts.get(d.docId) ?? 0;
+		return {
+			docId: d.docId,
+			docTitle: d.docTitle,
+			status: changeCount > 0 ? 'changed' : 'no-change',
+			changeCount,
+		};
+	});
+	const changedDocs = tiles.filter(t => t.status === 'changed').length;
+	// Count only changes attributable to a document in this project's tile set, so totalChanges
+	// always equals the sum of the tile counts. A pending change whose docId is not in `docs`
+	// (a stale snapshot / a doc removed mid-run) has no tile and must not inflate the bottom-bar total.
+	const totalChanges = tiles.reduce((sum, t) => sum + t.changeCount, 0);
+	return {
+		tiles,
+		totalChanges,
+		changedDocs,
+		unchangedDocs: tiles.length - changedDocs,
+	};
+}
+
 export interface IAuditEntry {
 	readonly time: string;
 	readonly docTitle: string;
