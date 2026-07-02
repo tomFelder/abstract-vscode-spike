@@ -8,7 +8,7 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
-import { groupDecisions, IAgentRun, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
+import { groupDecisions, groupPendingByDoc, IAgentRun, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
@@ -232,11 +232,11 @@ export class ScreenEditor extends EditorPane {
 			case 'goAgents':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'agents'), { pinned: true });
 				break;
-			// Project-run bottom bar: "Review across the project" routes to the Review rail as the
-			// interim target. TODO(plan-24.3): retarget to open the cross-document review screen on the
-			// first changed doc (the screen itself + rail + cards land in 24.1/24.2; the entry wiring is 24.3).
+			// Project-run bottom bar: "Review across the project" opens the cross-document review screen (C5,
+			// plan 24) landing on the FIRST document that still has pending changes - this is where a
+			// project-wide run (plan 23) lands. Closes the plan-23 interim Review-rail route (24.5).
 			case 'reviewProject':
-				this._livingDocs.focusPanel('review');
+				void this._openReviewProject();
 				break;
 			// Cross-document review (C5): clicking a doc row in the 292px doc-nav rail makes it the current
 			// document in the centre column. Local screen navigation (not an engine action), so it only
@@ -353,6 +353,23 @@ export class ScreenEditor extends EditorPane {
 		this._render();
 		// Fire-and-await the fan-out; the finally block flips isChatBusy off and fires onDidChange -> re-render.
 		await this._livingDocs.sendChatMessage(anchor, sent);
+	}
+
+	// Plan-24 entry (24.5): open the cross-document review screen (C5) landing on the FIRST document that
+	// still has pending changes. The first changed doc is `groupPendingByDoc(getAllPending())[0]` - the same
+	// live model + grouping the screen renders. We seed `reviewCurrentDocId` so the centre column opens on
+	// that doc, and carry the run's source label into `reviewSource` so the review topbar context is
+	// populated. Set the selection state BEFORE opening so the very first render lands on the right doc.
+	private async _openReviewProject(): Promise<void> {
+		const groups = groupPendingByDoc(this._livingDocs.getAllPending());
+		const firstChangedDocId = groups.length > 0 ? groups[0].docId : undefined;
+		const runSource = this._state.projectRun?.source;
+		this._state = {
+			...this._state,
+			reviewCurrentDocId: firstChangedDocId ?? this._state.reviewCurrentDocId,
+			reviewSource: runSource ?? this._state.reviewSource,
+		};
+		await this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'review-project'), { pinned: true });
 	}
 
 	// Tweak a change (24.2): open its document and focus its inline diff for hand-editing, reusing the
