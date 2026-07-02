@@ -419,6 +419,28 @@ export function groupPendingByDoc(pending: readonly IProposedChange[]): IReviewD
 	});
 }
 
+export interface IReviewedDoc {
+	readonly docId: string;
+	readonly title: string;
+}
+
+/**
+ * The documents reviewed THIS session (cross-document review, C5, plan 24): a document that was seen with
+ * pending changes and now has none. `seen` is the running map of every doc id -> human title that has
+ * carried a pending change while the review screen was open (the editor records the title at first sight
+ * so the reviewed row shows the human title, not the raw docId URI). `pendingDocIds` is the set of doc ids
+ * that still have pending changes right now. A seen doc no longer pending is reviewed. Ordered by the
+ * insertion order of `seen` so the reviewed list is stable across re-renders. Pure so it can be
+ * unit-tested and reused by the screen renderer.
+ */
+export function reviewedDocsFromSeen(seen: ReadonlyMap<string, string>, pendingDocIds: ReadonlySet<string>): IReviewedDoc[] {
+	const reviewed: IReviewedDoc[] = [];
+	for (const [docId, title] of seen) {
+		if (!pendingDocIds.has(docId)) { reviewed.push({ docId, title }); }
+	}
+	return reviewed;
+}
+
 export interface IAuditEntry {
 	readonly time: string;
 	readonly docTitle: string;

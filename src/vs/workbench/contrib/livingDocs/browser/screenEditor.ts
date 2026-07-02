@@ -8,7 +8,7 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
-import { groupDecisions, IAgentRun, summariseProjectRun } from '../common/livingDocsModel.js';
+import { groupDecisions, IAgentRun, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
@@ -45,11 +45,14 @@ interface IScreenEditorState {
 	// The project's documents at run-kick time (id + title), used to build every swarm tile so a doc the
 	// run did not touch still renders as a `no change` tile. Fetched once when the run is kicked.
 	projectRunDocs?: readonly { readonly docId: string; readonly docTitle: string }[];
-	// Cross-document review (C5, plan 24): the doc selected in the centre column (local navigation) and the
-	// documents reviewed THIS session (they emptied while the screen was open -> the check glyph). The pending
-	// set + counts are read live from the service each render, so these are the only bits of local state.
+	// Cross-document review (C5, plan 24): the doc selected in the centre column (local navigation). The
+	// pending set + counts are read live from the service each render, so this is the only navigation state.
 	reviewCurrentDocId?: string;
-	reviewReviewedDocIds?: readonly string[];
+	// The docs SEEN with pending changes while the review screen has been open, keyed by docId -> human
+	// title. A seen doc that now has zero pending is "reviewed this session" (its human title, not the raw
+	// docId URI, then shows in the rail). Recomputed each render from the live pending set; carried across
+	// renders so a doc that emptied does not vanish once its changes leave the pending set.
+	reviewSeenDocs?: ReadonlyMap<string, string>;
 	// The attached source name for the review topbar chip, carried over from the run that produced the
 	// changes (undefined when the screen is opened directly, e.g. from the palette, with no run context).
 	reviewSource?: string;
@@ -244,6 +247,39 @@ export class ScreenEditor extends EditorPane {
 					this._render();
 				}
 				break;
+			// Cross-document review per-change actions (24.2): every one drives the EXISTING engine. The
+			// service fires onDidChange after each, which the setInput subscription re-renders - so the
+			// centre cards, the doc-nav rail counts/glyphs AND the C6 Review rail all resync (shared model).
+			case 'reviewAccept':
+				if (message.arg) { void this._livingDocs.approve(message.arg); }
+				break;
+			case 'reviewReject':
+				if (message.arg) { this._livingDocs.reject(message.arg); }
+				break;
+			// Tweak: open the change's document and focus its inline diff for hand-editing (reuse the plan-19
+			// navigate-to-inline path). The card carries only the change id, so resolve its docId from the
+			// live pending set, then open the doc + focusChange (never approves - navigate-only).
+			case 'reviewTweak':
+				if (message.arg) { void this._tweakChange(message.arg); }
+				break;
+			// Sticky doc action bar: `Accept All N Here` -> approveAll(docId) for the current document.
+			case 'reviewAcceptAllHere':
+				if (message.arg) { void this._livingDocs.approveAll(message.arg); }
+				break;
+			// `Next` -> advance the current document to the next one that still has pending changes.
+			case 'reviewNext':
+				if (message.arg) {
+					const next = nextPendingDocId(this._livingDocs.getAllPending(), message.arg);
+					if (next) {
+						this._state = { ...this._state, reviewCurrentDocId: next };
+						this._render();
+					}
+				}
+				break;
+			// Topbar `Accept All Remaining` -> approveAllPending() across every document.
+			case 'reviewAcceptAllRemaining':
+				void this._livingDocs.approveAllPending();
+				break;
 			case 'openFolder':
 				void this._livingDocs.openFolder();
 				break;
@@ -319,6 +355,16 @@ export class ScreenEditor extends EditorPane {
 		await this._livingDocs.sendChatMessage(anchor, sent);
 	}
 
+	// Tweak a change (24.2): open its document and focus its inline diff for hand-editing, reusing the
+	// plan-19 navigate-to-inline path (openEditor + focusChange). Resolves the docId from the live pending
+	// set by change id. Navigate-only - it never approves; the user then edits/approves in the document.
+	private async _tweakChange(changeId: string): Promise<void> {
+		const change = this._livingDocs.getAllPending().find(c => c.id === changeId);
+		if (!change) { return; }
+		await this._editors.openEditor({ resource: URI.parse(change.docId), options: { pinned: true } });
+		this._livingDocs.focusChange(change.id);
+	}
+
 	// Templates "Export" lands the user on a real document, where the Present/export modal lives.
 	private async _openFirstDocument(): Promise<void> {
 		const docs = await this._livingDocs.listDocuments();
@@ -334,7 +380,7 @@ export class ScreenEditor extends EditorPane {
 		this._webview?.setHtml(renderScreenHtml(this._screen, {
 			...this._state,
 			projectRun: this._projectRunState(),
-			reviewProject: this._reviewProjectState(folderName),
+			reviewProject: this._updateAndGetReviewProjectState(folderName),
 			agents: this._livingDocs.getAgents(),
 			hasFolder: !!folderName,
 			folderName,
@@ -345,12 +391,23 @@ export class ScreenEditor extends EditorPane {
 	// pending set is `getAllPending()` (the SAME model the C6 rail consumes - this is a second presentation,
 	// not a re-derivation), grouped by document in the renderer for the rail + cards. Only the current-doc
 	// selection + the reviewed-this-session set are local state; the counts + confidence are all live/real.
-	private _reviewProjectState(folderName: string | undefined): IReviewProjectScreenState | undefined {
+	// Named "updateAndGet": besides returning the state it also folds the currently-pending docs into the
+	// carried `reviewSeenDocs` map (so an emptied doc keeps its reviewed row) - a deliberate per-render update.
+	private _updateAndGetReviewProjectState(folderName: string | undefined): IReviewProjectScreenState | undefined {
 		if (this._screen !== 'review-project') { return undefined; }
+		const pending = this._livingDocs.getAllPending();
+		// Accumulate the docs seen with pending changes this session (docId -> human title). A doc that was
+		// seen and now has zero pending is "reviewed" - `reviewedDocsFromSeen` derives that with the human
+		// title carried here, so the reviewed rail row is legible (not the raw docId URI). The seen map is
+		// carried across renders so a doc that emptied keeps its reviewed row.
+		const seen = new Map(this._state.reviewSeenDocs ?? []);
+		for (const c of pending) { seen.set(c.docId, c.docTitle); }
+		this._state = { ...this._state, reviewSeenDocs: seen };
+		const pendingDocIds = new Set(pending.map(c => c.docId));
 		return {
-			pending: this._livingDocs.getAllPending(),
+			pending,
 			currentDocId: this._state.reviewCurrentDocId,
-			reviewedDocIds: this._state.reviewReviewedDocIds,
+			reviewedDocs: reviewedDocsFromSeen(seen, pendingDocIds),
 			source: this._state.reviewSource,
 			folderName,
 		};
