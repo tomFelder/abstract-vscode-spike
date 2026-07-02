@@ -8,7 +8,7 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
-import { IAgentRun } from '../common/livingDocsModel.js';
+import { IAgentRun, summariseProjectRun } from '../common/livingDocsModel.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
@@ -36,8 +36,15 @@ interface IScreenEditorState {
 	// Home: recently-opened folders from the workbench history (D22-A); fetched async alongside docs.
 	recentFolders?: readonly IRecentProject[];
 	// Project-run (C4): the live/last whole-project fan-out state, or undefined for the truthful idle
-	// state. Iter 2 leaves this undefined (idle) - the run-kick + swarm/decisions data land in 23.3/23.4.
+	// state. The run-kick sets this (23.3); the swarm summary + live working overlay are recomputed at
+	// render time from the service (`summariseProjectRun` + `isChatBusy`) so tiles update as the run runs.
 	projectRun?: IProjectRunScreenState;
+	// The document the whole-project chat is anchored on (the working set + chat key). Held so each
+	// re-render can read the live `isChatBusy(anchor)` and the pending set to refresh the swarm.
+	projectRunAnchor?: URI;
+	// The project's documents at run-kick time (id + title), used to build every swarm tile so a doc the
+	// run did not touch still renders as a `no change` tile. Fetched once when the run is kicked.
+	projectRunDocs?: readonly { readonly docId: string; readonly docTitle: string }[];
 }
 
 // Webview editor that hosts one Abstract screen (Templates / Knowledge / Agents) in the
@@ -253,11 +260,45 @@ export class ScreenEditor extends EditorPane {
 	// D23-B entry point: open the project-run screen (C4) via the SAME open-screen path every other
 	// Abstract screen uses (a singleton ScreenEditorInput opened through the editor service). Iter 2
 	// lands on the truthful idle state; the whole-project chat fan-out that fills the swarm is 23.3.
-	private async _openProjectRun(): Promise<void> {
-		// TODO(23.3): kick the whole-project chat fan-out here - addFolderToWorkingSet(active doc)
-		// + sendChatMessage(instruction) - and carry the run's instruction/source into this._state.projectRun
-		// so the command strip and the live swarm reflect the REAL run rather than the idle state.
+	private async _openProjectRun(instruction?: string, source?: string): Promise<void> {
+		// Open the screen first (idle) so the user lands immediately, then kick the run and let the
+		// onDidChange listener re-render the live swarm as the fan-out proceeds and settles.
 		await this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'project-run'), { pinned: true });
+		await this._kickProjectRun(instruction, source);
+	}
+
+	// Kick the whole-project chat fan-out (D23-A/#77): the whole-project run IS the chat working-set path.
+	// Pick an anchor document, load it (sendChatMessage requires a loaded anchor state), add every folder
+	// document to that anchor's working set, then send ONE instruction so `_chatRespondMulti` fans it out
+	// across the project in a single model call. The run is in flight while `isChatBusy(anchor)` is true;
+	// the finally block of `sendChatMessage` fires onDidChange, which re-renders and settles the swarm.
+	private async _kickProjectRun(instruction?: string, source?: string): Promise<void> {
+		const docs = await this._livingDocs.listDocuments();
+		if (docs.length === 0) { return; }
+		const runInstruction = instruction ?? 'Extract the decisions from the 3 March security review and apply the required changes across every affected policy.';
+		// The anchor is any project document (the chat key + working-set owner); the first one is fine. Load
+		// it first so its folder files are scanned - `getMentionableFiles` needs the loaded state (so the
+		// transcript source is resolvable) and `sendChatMessage` requires a loaded anchor to fan out.
+		const anchor = docs[0].resource;
+		await this._livingDocs.loadDocument(anchor);
+		await this._livingDocs.addFolderToWorkingSet(anchor);
+		// Default to the real security-review transcript source when the caller named none (the Agents
+		// "Run across the project" action passes none today). Resolved against the loaded anchor's
+		// mentionable folder files - never fabricated: undefined when the project ships no such source.
+		const mentionable = new Set(this._livingDocs.getMentionableFiles(anchor));
+		const runSource = source ?? [...mentionable].find(f => /review/i.test(f) && /\.txt$/i.test(f));
+		// Reference the transcript by @mention so the fan-out reads it as a shared source (only when the
+		// source is a real mentionable folder file - never invent a mention the model cannot resolve).
+		const sent = runSource && mentionable.has(runSource) ? `${runInstruction} @${runSource}` : runInstruction;
+		this._state = {
+			...this._state,
+			projectRunAnchor: anchor,
+			projectRunDocs: docs.map(d => ({ docId: d.resource.toString(), docTitle: d.title })),
+			projectRun: { instruction: runInstruction, source: runSource, inFlight: true },
+		};
+		this._render();
+		// Fire-and-await the fan-out; the finally block flips isChatBusy off and fires onDidChange -> re-render.
+		await this._livingDocs.sendChatMessage(anchor, sent);
 	}
 
 	// Templates "Export" lands the user on a real document, where the Present/export modal lives.
@@ -272,7 +313,29 @@ export class ScreenEditor extends EditorPane {
 	private _render(): void {
 		// Inject the live agent registry + the open-folder state at render time so Home/Agents reflect current state.
 		const folderName = this._livingDocs.getWorkspaceFolderName();
-		this._webview?.setHtml(renderScreenHtml(this._screen, { ...this._state, agents: this._livingDocs.getAgents(), hasFolder: !!folderName, folderName }));
+		this._webview?.setHtml(renderScreenHtml(this._screen, {
+			...this._state,
+			projectRun: this._projectRunState(),
+			agents: this._livingDocs.getAgents(),
+			hasFolder: !!folderName,
+			folderName,
+		}));
+	}
+
+	// Recompute the project-run screen state from the LIVE service each render, so the swarm grid, the
+	// progress bar and the bottom-bar totals track the fan-out as it runs and settles. The tiles + totals
+	// come from the pure `summariseProjectRun(projectDocs, getAllPending())` selector; the `working`
+	// overlay is every project document while `isChatBusy(anchor)` is true (the whole-project fan-out is a
+	// single model call, so the whole swarm is in flight together), and empty once the run settles.
+	private _projectRunState(): IProjectRunScreenState | undefined {
+		const run = this._state.projectRun;
+		if (!run) { return undefined; }
+		const anchor = this._state.projectRunAnchor;
+		const inFlight = !!anchor && this._livingDocs.isChatBusy(anchor);
+		const docs = this._state.projectRunDocs ?? [];
+		const summary = summariseProjectRun(docs, this._livingDocs.getAllPending());
+		const working = inFlight ? docs.map(d => d.docId) : [];
+		return { ...run, inFlight, summary, working };
 	}
 
 	layout(dimension: Dimension): void {

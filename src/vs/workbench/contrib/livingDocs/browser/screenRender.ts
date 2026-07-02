@@ -9,7 +9,7 @@
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
-import { IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger } from '../common/livingDocsModel.js';
+import { IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IProjectRunSummary } from '../common/livingDocsModel.js';
 import { ILivingDocSummary } from '../common/livingDocs.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run';
@@ -65,8 +65,22 @@ export interface IProjectRunScreenState {
 	readonly instruction: string;
 	/** The attached source chip label (e.g. `Security Review - 3 Mar.txt`), if a source was named. */
 	readonly source?: string;
-	/** True while the fan-out is still in flight (isChatBusy) - drives the "Live" pill (23.3). */
+	/** True while the fan-out is still in flight (isChatBusy) - drives the "Live" pill + tile spinners. */
 	readonly inFlight?: boolean;
+	/**
+	 * The whole-project fan-out summary derived from `summariseProjectRun(listDocuments, getAllPending())`
+	 * (plan 23, C4): one tile per project document + the real bottom-bar totals. Absent until the run's
+	 * document set has been fetched. The `working` (spinner) tile state is a live overlay the renderer
+	 * applies while `inFlight` is true - the selector itself only distinguishes changed / no-change.
+	 */
+	readonly summary?: IProjectRunSummary;
+	/**
+	 * Documents still being processed by the in-flight fan-out (their tiles render the spinner +
+	 * `reviewing…`). While the run is live and nothing has settled yet, every no-change tile is treated
+	 * as `working` so the grid reads as a busy swarm; once a doc settles (a change lands or the run
+	 * finishes) it drops out of this set. Empty once the run settles.
+	 */
+	readonly working?: readonly string[];
 }
 
 function esc(s: string): string {
@@ -104,6 +118,7 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 ::-webkit-scrollbar-thumb{background:#d7d9df;border:3px solid transparent;background-clip:content-box;border-radius:8px}
 ::-webkit-scrollbar-thumb:hover{background:#c2c5cd;background-clip:content-box}
 @keyframes lwdPulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes lwdSpin{to{transform:rotate(360deg)}}
 .screen{height:100vh;display:flex;flex-direction:column;min-height:0;background:#fff}
 .scr-head{flex:none;display:flex;align-items:center;gap:16px;padding:18px 28px;border-bottom:1px solid #eef0f3}
 .scr-title{margin:0 0 4px;font:600 18px/1.2 system-ui;color:#15171c}
@@ -535,7 +550,7 @@ function renderProjectRun(state: IScreenState): string {
 		? `<span style="font:500 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:6px;padding:2px 8px">${esc(run.source)}</span>`
 		: '';
 	const instruction = run?.instruction
-		? `From ${sourceChip ? sourceChip + ' ' : ''}the agent applies your instruction across the project: &ldquo;${esc(run.instruction)}&rdquo;`
+		? `${sourceChip ? 'From ' + sourceChip + ', ' : ''}&ldquo;${esc(run.instruction)}&rdquo;`
 		: 'No project run in progress. Start one from Agents or ask across the whole project in Chat.';
 	const instructionColor = run?.instruction ? '#26292f' : '#868b95';
 	const commandStrip = `<div style="flex:none;padding:18px 28px;border-bottom:1px solid #eef0f3;display:flex;align-items:center;gap:16px">
@@ -544,9 +559,8 @@ function renderProjectRun(state: IScreenState): string {
 		<span style="flex:none;font:600 12.5px/1 system-ui;color:#fff;background:${ACCENT};border-radius:8px;padding:8px 14px">Whole Project</span>
 	</div>`;
 
-	// Truthful idle / placeholder body (guardrail): no fabricated numbers. When a run starts, the
-	// swarm grid + decisions column (23.3/23.4) will fill this region; today it says so honestly.
-	const body = `<div style="flex:1;overflow:auto;background:#f8f9fb;display:flex;align-items:center;justify-content:center;padding:40px">
+	// Truthful idle body (guardrail): no fabricated numbers, shown only when no run has started.
+	const idleBody = `<div style="flex:1;overflow:auto;background:#f8f9fb;display:flex;align-items:center;justify-content:center;padding:40px">
 		<div style="text-align:center;max-width:460px">
 			<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:12px;background:#f4f5fd;border:1px solid #e0e5fb;display:flex;align-items:center;justify-content:center;font-size:20px;color:${ACCENT}">&#10022;</div>
 			<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">No project run in progress</h2>
@@ -555,13 +569,92 @@ function renderProjectRun(state: IScreenState): string {
 		</div>
 	</div>`;
 
-	// Bottom bar with the route stub. Totals are idle (0) this iteration - real totals come in 23.3.
-	// The primary "Review across the project" opens the Review rail as the interim target (TODO plan-24).
+	// The live fan-out body (C4): the decisions-understood rail (a truthful 23.4 placeholder for now)
+	// on the left, and the sub-agent swarm grid + progress bar on the right - all from REAL run data.
+	const summary = run?.summary;
+	const workingSet = new Set(run?.working ?? []);
+	const runBody = summary
+		? `<div style="flex:1;display:flex;overflow:hidden;min-height:0">
+		${decisionsRail()}
+		${swarmPane(summary, workingSet)}
+	</div>`
+		: idleBody;
+
+	// Bottom-bar totals. When a run is active they read from the REAL summary (`summariseProjectRun`) +
+	// the live working count; idle shows honest zeros. The primary "Review across the project" opens the
+	// Review rail as the interim target (TODO(plan-24): retarget at the cross-document review surface).
+	const changed = summary?.totalChanges ?? 0;
+	const changedDocs = summary?.changedDocs ?? 0;
+	const workingCount = summary ? workingSet.size : 0;
+	// Unchanged = documents that have settled with no change. While the run is live, a working tile has
+	// not settled yet, so it is not counted as unchanged; the selector's unchangedDocs includes them, so
+	// subtract the live working count to keep the three buckets (changed + working + unchanged) truthful.
+	const unchangedDocs = summary ? Math.max(0, summary.unchangedDocs - workingCount) : 0;
+	const numeral = (n: number) => `<strong style="font:500 20px/1 system-ui;color:#14161a">${n}</strong>`;
 	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid #eef0f3;background:#fbfbfc;display:flex;align-items:center;padding:0 28px;gap:18px">
-		<span style="font:400 14px/1 system-ui;color:#3a3f49"><strong style="font:500 20px/1 system-ui;color:#14161a">0</strong> changes proposed in <strong style="font:500 20px/1 system-ui;color:#14161a">0</strong> documents</span>
-		<span style="font:400 13px/1 system-ui;color:#a3a8b2">&middot; 0 still working &middot; 0 unchanged</span>
+		<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>
+		<span style="font:400 13px/1 system-ui;color:#a3a8b2">&middot; ${workingCount} working &middot; ${unchangedDocs} unchanged</span>
 		<button data-msg="reviewProject" style="margin-left:auto;font:600 14px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:10px;padding:12px 22px;cursor:pointer">Review Across the Project &#8594;</button>
 	</div>`;
 
-	return `<div class="screen">${runTopBar}${commandStrip}${body}${bottomBar}</div>`;
+	return `<div class="screen">${runTopBar}${commandStrip}${runBody}${bottomBar}</div>`;
+}
+
+// The left "decisions understood" rail (360px). The decisions-with-source-line data (transcript ·
+// line N -> N documents affected) is plan 23.4 - the model output does not yet capture a decision's
+// source line (decision #77). Until then this renders a truthful placeholder rather than the comp's
+// illustrative decisions, keeping the real-data guardrail (plan-17 "never fabricate").
+function decisionsRail(): string {
+	return `<div style="width:360px;flex:none;border-right:1px solid #eef0f3;background:#fafbfc;padding:22px;overflow:hidden;display:flex;flex-direction:column">
+		<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#5661c9;margin-bottom:16px">Decisions Understood</div>
+		<div style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#a3a8b2">
+			<p style="margin:0;font:400 13px/1.6 system-ui;max-width:240px">The decisions the agent extracted, each traced to its line in the source, will appear here.</p>
+		</div>
+	</div>`;
+}
+
+// The right sub-agent swarm pane (C4): a progress header + bar, then a 4-column grid of one tile per
+// project document. Every tile's status comes from the REAL run: `changed` (accent tint + check +
+// `N changes`) from `summariseProjectRun`, `working` (spinner + `reviewing...`) layered on live while
+// the fan-out is in flight, and settled `no-change` (muted `no change`). Nothing is fabricated.
+function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>): string {
+	const total = summary.tiles.length;
+	// A document is "done" once it has settled - it is no longer in the live working set. Progress counts
+	// settled docs (X) against the whole project (Y), matching the comp's "21 / 24 done".
+	const done = summary.tiles.filter(t => !working.has(t.docId)).length;
+	const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+	const busy = working.size > 0;
+	const heading = busy
+		? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Orchestrating ${total} sub-agents</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">reading every document in parallel</span>`
+		: `<span style="font:600 15px/1 system-ui;color:#1a1c20">${total} sub-agents finished</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">every document read across the project</span>`;
+	const progress = `<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">${heading}<span style="margin-left:auto;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f">${done} / ${total} done</span></div>
+		<div style="height:5px;background:#e9eaee;border-radius:3px;margin-bottom:18px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${ACCENT};border-radius:3px"></div></div>`;
+	const tiles = summary.tiles.map(t => swarmTile(t.docId, t.docTitle, t.status, t.changeCount, working.has(t.docId))).join('');
+	return `<div style="flex:1;overflow:hidden;padding:22px 28px;display:flex;flex-direction:column">
+		${progress}
+		<div style="flex:1;display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:1fr;gap:9px;overflow:auto">${tiles}</div>
+	</div>`;
+}
+
+// One document tile. The live `isWorking` overlay wins over the selector's changed/no-change status so
+// an in-flight document reads as a spinning sub-agent even before its edits (if any) have landed.
+function swarmTile(_docId: string, title: string, status: 'changed' | 'no-change' | 'working', count: number, isWorking: boolean): string {
+	const name = esc(title);
+	const nameStyle = 'font:500 11.5px/1.2 system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+	if (isWorking || status === 'working') {
+		return `<div style="background:#fff;border:1.5px solid #c9cff5;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+			<div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border:2px solid #c9cff5;border-top-color:${ACCENT};border-radius:50%;animation:lwdSpin .8s linear infinite;flex:none"></span><span style="${nameStyle};color:#26292f">${name}</span></div>
+			<span style="font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;font-style:italic">reviewing&hellip;</span>
+		</div>`;
+	}
+	if (status === 'changed') {
+		return `<div style="background:#f4f5fd;border:1px solid #e0e5fb;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:#2c8159;font-size:11px">&#10003;</span><span style="${nameStyle};color:#26292f">${name}</span></div>
+			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8">${count} ${count === 1 ? 'change' : 'changes'}</span>
+		</div>`;
+	}
+	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+		<div style="display:flex;align-items:center;gap:6px"><span style="color:#cfd3da;font-size:12px">&middot;</span><span style="${nameStyle};color:#a3a8b2">${name}</span></div>
+		<span style="font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#cfd3da">no change</span>
+	</div>`;
 }
