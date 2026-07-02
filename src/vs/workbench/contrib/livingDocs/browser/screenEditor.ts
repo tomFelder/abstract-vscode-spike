@@ -8,7 +8,7 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
-import { IAgentRun, summariseProjectRun } from '../common/livingDocsModel.js';
+import { groupDecisions, IAgentRun, summariseProjectRun } from '../common/livingDocsModel.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
@@ -333,9 +333,15 @@ export class ScreenEditor extends EditorPane {
 		const anchor = this._state.projectRunAnchor;
 		const inFlight = !!anchor && this._livingDocs.isChatBusy(anchor);
 		const docs = this._state.projectRunDocs ?? [];
-		const summary = summariseProjectRun(docs, this._livingDocs.getAllPending());
+		const pending = this._livingDocs.getAllPending();
+		const summary = summariseProjectRun(docs, pending);
 		const working = inFlight ? docs.map(d => d.docId) : [];
-		return { ...run, inFlight, summary, working };
+		// Decisions column (23.4): group the LIVE pending changes by their source grounding. Restrict to
+		// changes for documents in this run's tile set so a stale change from another surface never leaks
+		// into the run's decisions (mirrors summariseProjectRun's tile-set restriction).
+		const runDocIds = new Set(docs.map(d => d.docId));
+		const decisions = groupDecisions(pending.filter(c => runDocIds.has(c.docId)));
+		return { ...run, inFlight, summary, working, decisions };
 	}
 
 	layout(dimension: Dimension): void {
