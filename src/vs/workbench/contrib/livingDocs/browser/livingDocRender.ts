@@ -243,8 +243,14 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .prose table{border-collapse:collapse;margin:0 0 14px;font-size:13px}
 .prose th,.prose td{border:1px solid #ececf0;padding:7px 12px;text-align:left}
 .prose img{max-width:100%}
-/* Plain-Markdown ProseMirror editor (F2): the document IS the writing surface (reuses .prose type). */
-.pmwrap{max-width:760px;margin:0 auto;padding:32px 40px 90px}
+/* Plain-Markdown ProseMirror editor (F2): the document IS the writing surface (reuses .prose type).
+ * Layout (plan 21 iter 1 / C2): a flex row that centres a reading group of [30px provenance gutter][720px
+ * reading column]. The gutter is a real reserved column (via the prose column's 30px left padding) so
+ * provenance markers live to the LEFT of the prose and the prose NEVER shifts when markers toggle.
+ * The .prose element is content-box with max-width:720px (the reading text) + padding-left:30px (the
+ * reserved gutter lane), giving a total element width of 750px. */
+.pmwrap{display:flex;justify-content:center;padding:32px 40px 90px}
+.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px;padding-right:0;box-sizing:content-box;position:relative}
 .pmwrap .ProseMirror{outline:none;min-height:60vh;white-space:pre-wrap;word-wrap:break-word;-webkit-font-smoothing:antialiased}
 .pmwrap .ProseMirror:focus{outline:none}
 .pmwrap .ProseMirror p.is-editor-empty:first-child::before{color:#bcc0c8;content:attr(data-placeholder);float:left;pointer-events:none;height:0}
@@ -262,12 +268,19 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pm-list{width:300px;flex:none;border-right:1px solid #eef0f3;background:#fbfbfc;overflow-y:auto;padding:14px}
 .pm-detail{flex:1;min-width:0;overflow-y:auto;padding:22px}
 .pmwrap .ProseMirror span.bound{cursor:pointer}
-/* Provenance gutter in the PM surface as real ProseMirror node decorations (plan 15 iter 4, G5 - replaces
- * the iter-3 CSS accent): a source-bound block gets a detached dot in the left margin; a recently-applied
- * block flashes amber. The dot sits in the pmwrap's left padding so it never indents the prose. */
+/* Provenance gutter (plan 21 iter 1 / C2): markers are ProseMirror node decorations that paint into the
+ * real 30px gutter column reserved by .prose's 30px left padding (so the prose is never shifted). A
+ * source-bound block gets a 9px accent dot vertically centred on its line; a recently-applied block
+ * flashes attention. Hovering a marker opens the source-peek drawer (wired in the RUNTIME). */
 .pmwrap .ProseMirror .pm-gutter{position:relative}
-.pmwrap .ProseMirror .pm-gutter::before{content:"";position:absolute;left:-20px;top:.6em;width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.1 255);cursor:pointer}
+.pmwrap .ProseMirror .pm-gutter::before{content:"";position:absolute;left:-21px;top:.62em;width:9px;height:9px;border-radius:50%;background:oklch(0.55 0.13 255);cursor:pointer;transition:transform .15s ease}
+.pmwrap .ProseMirror .pm-gutter:hover::before{transform:scale(1.25)}
 .pmwrap .ProseMirror .pm-gutter-recent::before{background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(220,150,60,.14);animation:flash 1.6s ease}
+/* A multi-line edited paragraph hangs a 3px attention bar in the gutter spanning the diff-text rows
+ * only (the .editp), so it does not overspill into the Approve/Reject control row below.
+ * The bar is placed on .pm-edit-bar .editp rather than the outer .editblock to cap its extent. */
+.pmwrap .ProseMirror .pm-edit-bar .editp{position:relative}
+.pmwrap .ProseMirror .pm-edit-bar .editp::before{content:"";position:absolute;left:-22px;top:2px;bottom:2px;width:3px;border-radius:999px;background:oklch(0.66 0.16 45);cursor:pointer}
 /* A block with a pending meaning-change is hidden; the diff + accept/reject widget renders in its place. */
 .pmwrap .ProseMirror .pm-orig-hidden{display:none}
 /* The diff / insert widgets are host-rendered with the renderDoc markup (.editblock/.insertblock/.ctrl),
@@ -351,6 +364,23 @@ root.addEventListener('keydown', e => {
 	const b = e.target.closest('[data-block]');
 	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
 });
+// Hovering a provenance gutter marker opens source-peek for that binding (plan 21 iter 1 / C2). A dot
+// sits on a .pm-gutter block that contains the bound figure; fire the same 'reveal' message the bound
+// figure's click already fires, keyed by that figure's data-key. Delegated on root so it survives the
+// innerHTML swaps (mount-once-then-message). Only fires when the marker's ::before is under the pointer
+// (the gutter column), not the whole prose line, so reading text stays quiet.
+// The last-revealed key is tracked so the 'reveal' fires once per marker entry, not on every sub-pixel
+// mouse movement while the pointer stays within the same gutter marker (mouseover fires continuously).
+function gutterKeyFor(node){ const bound = node.querySelector('span.bound[data-key]'); return bound ? bound.getAttribute('data-key') : null; }
+let _gutterLastKey = null;
+root.addEventListener('mouseover', e => {
+	const g = e.target.closest && e.target.closest('.pm-gutter');
+	if (!g) { _gutterLastKey = null; return; }
+	const box = g.getBoundingClientRect();
+	if (e.clientX > box.left) { _gutterLastKey = null; return; }
+	const key = gutterKeyFor(g);
+	if (key && key !== _gutterLastKey) { _gutterLastKey = key; vscode.postMessage({ type: 'reveal', cells: [key] }); }
+});
 root.addEventListener('focusout', e => {
 	const b = e.target.closest('[data-block]');
 	if (b) { const text = b.innerText.replace(/\\s+/g, ' ').trim(); if (text !== b.getAttribute('data-orig')) { vscode.postMessage({ type: 'edit', blockId: b.getAttribute('data-block'), text: text }); } }
@@ -383,12 +413,15 @@ function renderDiffSegments(segments: readonly IPmDiffSegment[]): string {
 
 // The inline diff + accept/reject control row for a pending meaning-change (reuses the renderDoc editblock
 // markup minus the grid gutter cell, since the PM gutter is a separate node decoration).
-function pmEditWidgetHtml(e: IPmEditDecoration): string {
+function pmEditWidgetHtml(e: IPmEditDecoration, bar: boolean): string {
 	// Provenance reads cleanly with or without a source: a bound/source-driven doc shows "Suggested edit
 	// from <source>"; a plain doc (e.g. a chat rewrite) just shows "Suggested edit" - never a dangling
 	// "from" with an empty source after it.
 	const origin = e.source ? `Suggested edit from <span class="src">${esc(e.source)}</span>` : 'Suggested edit';
-	return `<div class="pcell editblock">`
+	// A multi-line edited paragraph carries the `attention` provenance bar (C2): it hangs a 3px bar in the
+	// gutter column spanning the widget's rows. Single-line edits get no bar (nothing to span).
+	const barClass = bar ? ' pm-edit-bar' : '';
+	return `<div class="pcell editblock${barClass}">`
 		+ `<p class="editp">${renderDiffSegments(e.segments)}</p>`
 		+ `<div class="ctrl"><span class="cdot"></span>`
 		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
@@ -409,8 +442,11 @@ function pmInsertWidgetHtml(ins: IPmInsertDecoration): string {
 // Build the decoration payload for the PM surface: the pure spec (TDD'd) augmented with widget HTML.
 function renderPmDeco(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>): IPmDecoPayload {
 	const spec = buildPmDecorationSpec(doc, pending, recent);
+	// The gutter bar for a multi-line edited paragraph hangs off that edit's visible widget (the original
+	// node is hidden), so map the bar anchors onto the edit ids they belong to.
+	const barAnchors = new Set(spec.gutters.filter(g => g.kind === 'bar').map(g => g.anchorText));
 	return {
-		edits: spec.edits.map(e => ({ id: e.id, anchorText: e.anchorText, html: pmEditWidgetHtml(e) })),
+		edits: spec.edits.map(e => ({ id: e.id, anchorText: e.anchorText, html: pmEditWidgetHtml(e, barAnchors.has(e.anchorText)) })),
 		inserts: spec.inserts.map(ins => ({ id: ins.id, afterText: ins.afterText, html: pmInsertWidgetHtml(ins) })),
 		gutters: spec.gutters,
 	};
