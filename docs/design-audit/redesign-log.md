@@ -10,52 +10,19 @@ a short gap backlog, and the iteration that closed each gap.
 
 | Surface (plan) | Comp region | Baseline % | Final % | PR | Notes |
 |---|---|---|---|---|---|
-| Labeled 76px icon-nav (plan 25 iter 1) | C1 icon-nav / comp "ICON NAV 76px" block | ~85% (nav was hidden on the brief root) | ~93% | (PR pending) | Width/item/glyph/label/panel-bg/order all exact vs the comp (76 / 60 / 18px / 10px·500 / `#F6F7F9` / Home·Editor·Templates·Knowledge·Agents). Editor entry added + opens a Living Document. Deltas are 25.2/later scope. |
+| Provenance gutter (plan 21 iter 1) | Editor / gutter of `Abstract - UI Redesign.dc.html` (the "Redesigned workbench" editor: 30px `flex:none` gutter, 9px accent dot, 3px attention bar) | ~60 (inline `-20px` padding dot, no gutter column, no bar, no hover-to-source) | 94 | #TBD | Real 30px reserved gutter column; 9px accent dot on bound line; 3px attention bar spanning a multi-line edit; no line numbers; prose verifiably not shifted; hover a marker opens source-peek. Remaining -6 = body font / reading ramp (owned by iter 2). |
 
 ## Per-surface gap backlogs
 
-_(appended by the loop as it iterates each surface to ≥ 90%)_
+### Provenance gutter (plan 21 iter 1) — final 94%
 
-### Labeled 76px icon-nav (plan 25 iter 1) — gap backlog
+Closed this iteration:
+- 30px `flex:none` gutter column left of the 720px reading column; prose never shifts when markers toggle (verified: prose text left edge identical across plain / bound / edited paragraphs).
+- 9px accent dot (`oklch(0.55 0.13 255)`) vertically centred on a source-bound line (was an 8px dot at `left:-20px` in the prose padding).
+- 3px attention bar (`oklch(0.66 0.16 45)`) spanning the rows of a multi-line edited paragraph (was absent).
+- Hover a marker → source-peek drawer (same `reveal` message the bound figure fires; was not wired).
+- No line numbers anywhere.
 
-Measured live at 1440x900 against the comp's "ICON NAV 76px" block (offset ~29202 in
-`Abstract - UI Redesign.dc.html`).
-Iter-1 acceptance (bar-width + labels + order) is fully met at pixel spec; the open gaps below are
-explicitly 25.2 / later scope.
-
-- **Active chip** — the comp's active item is a white chip (`#fff`) with an `accent-hover` (`#4650b8`)
-  glyph and an e1 shadow (`0 1px 3px rgba(20,22,28,.08)`). Live still uses the stock activity-bar
-  active treatment. _(25.2, iter 3.)_
-- **Account + settings pinned bottom** — the comp pins a person + gear glyph at the bottom of the rail.
-  Live hides them (studio.css hides the Accounts + Manage global actions). Restoring a calm labeled
-  account/settings at the bottom is _(25.2, iter 4.)_
-- **Divider after Editor** — the comp draws a 34px x 1px hairline (`#e4e6ea`) between Editor and
-  Templates (separating the two "document" entries from the three "surface" entries). Not yet rendered.
-  _(backlog; cheap CSS spacer, fold into 25.2.)_
-- **Extra Workspace + Explorer icons before Home** — the fork keeps the tree-rail ("Workspace") and the
-  native File Explorer as activity-bar containers (deliberate, decision 42), so the live rail shows two
-  icons the comp's clean 5-item list does not. The Explorer's label ("Explorer (Shift+Cmd+E)") also
-  overflows the 60px item. _(pre-existing; out of plan-25 scope, flag for a nav-tidy pass.)_
-
-### Labeled 76px icon-nav (plan 25 iter 2) — design-match 93%, gap backlog
-
-Measured live at 1440x900 against the comp's "ICON NAV 76px" block in
-`Abstract - UI Redesign.dc.html`. Iter 2 closed the three big iter-1 gaps: the **active white chip**,
-the **bottom-pinned account/settings**, and the **stray Workspace/Explorer icons** (nav is now exactly
-Home . Editor . Templates . Knowledge . Agents). Verified live that the chip TRACKS the active surface
-(Home -> Editor moved the chip; glyph `rgb(70,80,184)`=#4650B8, white bg, e1 shadow) and the 264px
-tree-rail still renders + a document opens beneath it.
-
-Score: **93%** (up from ~93% on the iter-1 *slice* — now scoring the whole nav: width + labels + order
-+ active chip + bottom pins + clean 5-item set, all present and matching).
-
-Remaining gaps (diminishing returns; not worth further core-adjacent effort):
-- **Divider after Editor** — the comp draws a 34px x 1px hairline (`#e4e6ea`) between Editor and
-  Templates. Not rendered live. ~3%. _(cheap CSS spacer; the activity bar has no per-item separator slot,
-  so a robust `::after` on the Editor item is the likely route — a small later polish.)_
-- **Inactive glyph colour** — comp inactive glyph is `#868B95`; live computes `#606060` (the inline theme
-  foreground). The `#868B95` override is authored but was not reliably present in the loaded CSS bundle at
-  verify time (a live `<style>` injection of the exact selector DID apply it, confirming the rule is
-  correct) — both are muted greys, visually near-identical. ~2%.
-- **Custom SVG glyphs vs codicons** — the comp uses bespoke 1.8px-stroke SVGs; live uses the nearest
-  codicons (home / edit / layout / library / sync, + accounts / gear). Pre-existing since 25.1. ~2%.
+Remaining gap (deferred to the owning iteration):
+- Reading type ramp: the live body is `system-ui` at 15px/1.7; the comp/handoff want the 4b sans ramp (H1 30/600/-0.02em, H2 16/1.3/600, body 15.5-16/1.7). **Owned by plan 21 iteration 2** (do not fix here).
+- A *bound* multi-line paragraph under a pending edit uses the edit-widget bar (not a node-anchored bar) because PM reports an atom's label as empty text; acceptable and matches how the inline edit widget already anchors. No visible gap.
