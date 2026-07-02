@@ -12,7 +12,7 @@
 import { IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger } from '../common/livingDocsModel.js';
 import { ILivingDocSummary } from '../common/livingDocs.js';
 
-export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents';
+export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run';
 
 export type AgentFilter = 'all' | 'scheduled' | 'event' | 'needs-approval';
 
@@ -47,6 +47,26 @@ export interface IScreenState {
 	 * folder is opened (real-data guardrail: never fabricate counts for unloaded projects).
 	 */
 	readonly recentFolders?: readonly IRecentProject[];
+	/**
+	 * Project-run (C4): the state of the live/last whole-project fan-out, or undefined when no
+	 * run has started (the truthful idle state). Iter 2 populates only `instruction`/`source` from
+	 * the real run when one is kicked; the swarm grid + decisions column (23.3/23.4) layer on later.
+	 */
+	readonly projectRun?: IProjectRunScreenState;
+}
+
+/**
+ * The project-run screen's live state (plan 23, C4). Absent = no run in progress => the truthful
+ * idle body. When present it carries the REAL instruction + attached source of the run so the
+ * command strip reflects the actual fan-out (never the illustrative ISMS numbers from the comp).
+ */
+export interface IProjectRunScreenState {
+	/** The user's whole-project instruction, rendered in reading type in the command strip. */
+	readonly instruction: string;
+	/** The attached source chip label (e.g. `Security Review - 3 Mar.txt`), if a source was named. */
+	readonly source?: string;
+	/** True while the fan-out is still in flight (isChatBusy) - drives the "Live" pill (23.3). */
+	readonly inFlight?: boolean;
 }
 
 function esc(s: string): string {
@@ -134,6 +154,7 @@ export function renderScreenHtml(screen: ScreenId, state: IScreenState): string 
 		case 'templates': return page(withTopBar(renderTemplates(), 'Templates'));
 		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge'));
 		case 'agents': return page(withTopBar(renderAgents(state), 'Agents'));
+		case 'project-run': return page(renderProjectRun(state));
 	}
 }
 
@@ -427,7 +448,7 @@ function renderAgentList(state: IScreenState): string {
 	</div>`).join('');
 	const empty = `<div style="padding:24px 18px;font:400 12.5px/1.5 system-ui;color:#969ba4">No agents match this filter.</div>`;
 	return `<div class="screen">
-	<div class="scr-head"><div><h2 class="scr-title">Agents</h2><div class="scr-sub">Documents talking to documents &mdash; running quietly in the background.</div></div><button class="btn-primary" style="margin-left:auto">&#65291; New agent</button></div>
+	<div class="scr-head"><div><h2 class="scr-title">Agents</h2><div class="scr-sub">Documents talking to documents &mdash; running quietly in the background.</div></div><div style="margin-left:auto;display:flex;align-items:center;gap:8px"><button class="btn-ghost">&#65291; New agent</button><button class="btn-primary" data-msg="runProject">&#10022; Run Across the Project</button></div></div>
 	<div class="scr-body">
 		<div style="max-width:1040px;margin:0 auto;padding:24px 28px 80px">
 			<div style="display:flex;gap:6px;margin-bottom:16px">${chip('all', `All &middot; ${counts.all}`)}${chip('scheduled', `Scheduled &middot; ${counts.scheduled}`)}${chip('event', `Event &middot; ${counts.event}`)}${chip('needs-approval', `Needs approval &middot; ${counts.needs}`, true)}</div>
@@ -480,4 +501,67 @@ function renderAgentCanvas(agent: IAgentDef, state: IScreenState): string {
 		<div style="padding:0 28px 40px;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8">The loop: trigger &#8594; sources &#8594; agent &#8594; verify gate &#8594; policy gate &#8594; documents &#8594; review rail.</div>
 	</div>
 </div>`;
+}
+
+
+// ---- Project-wide agent run (C4, the ceiling surface). One instruction fans out across every
+// document in the project. This iteration (plan 23 iter 2) builds the reachable, TRUTHFUL SHELL:
+// the 48px run topbar, the command strip (avatar + instruction in reading type + source chip +
+// `Whole project` pill), a truthful idle body when no run is active, and the bottom-bar route stub.
+// The decisions column (23.4) and the sub-agent swarm grid (23.3) are deliberately NOT built yet -
+// the placeholder region below says so honestly rather than showing the comp's illustrative
+// 38-changes / 24-doc ISMS numbers (real-data guardrail, plan-17 "never fabricate"). ----
+function renderProjectRun(state: IScreenState): string {
+	const run = state.projectRun;
+	const folderName = state.folderName ?? 'Project';
+	const projectAv = avatar(folderName);
+
+	// The 48px run topbar: navy project avatar + name crumb + `Agent run` label + a Live pulse pill
+	// only while the fan-out is genuinely in flight (isChatBusy). No live run => no Live pill.
+	const livePill = run?.inFlight
+		? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#4650b8"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 1.6s ease-in-out infinite"></span>Live</span>`
+		: '';
+	const runTopBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
+		<span style="width:20px;height:20px;border-radius:6px;background:#3b4d8f;display:flex;align-items:center;justify-content:center;color:#fff;font:600 10px/1 system-ui">${projectAv.text}</span>
+		<span style="font:600 13px/1 system-ui;color:#1a1c20">${esc(folderName)}</span><span style="color:#cfd3da">/</span>
+		<span style="display:inline-flex;align-items:center;gap:7px;font:500 13px/1 system-ui;color:#5661c9">&#10022; Agent run</span>
+		${livePill}
+	</div>`;
+
+	// The command strip (C4): 32px accent avatar + the instruction in reading type + the attached
+	// source chip + a `Whole project` pill. When there is a live/last run, show its REAL instruction
+	// + source; otherwise the strip reflects the idle state with a calm prompt (no fabricated ISMS copy).
+	const sourceChip = run?.source
+		? `<span style="font:500 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:6px;padding:2px 8px">${esc(run.source)}</span>`
+		: '';
+	const instruction = run?.instruction
+		? `From ${sourceChip ? sourceChip + ' ' : ''}the agent applies your instruction across the project: &ldquo;${esc(run.instruction)}&rdquo;`
+		: 'No project run in progress. Start one from Agents or ask across the whole project in Chat.';
+	const instructionColor = run?.instruction ? '#26292f' : '#868b95';
+	const commandStrip = `<div style="flex:none;padding:18px 28px;border-bottom:1px solid #eef0f3;display:flex;align-items:center;gap:16px">
+		<span style="width:32px;height:32px;border-radius:50%;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 12px/1 system-ui;flex:none">TS</span>
+		<div style="flex:1;font:400 18px/1.4 system-ui;color:${instructionColor}">${instruction}</div>
+		<span style="flex:none;font:600 12.5px/1 system-ui;color:#fff;background:${ACCENT};border-radius:8px;padding:8px 14px">Whole Project</span>
+	</div>`;
+
+	// Truthful idle / placeholder body (guardrail): no fabricated numbers. When a run starts, the
+	// swarm grid + decisions column (23.3/23.4) will fill this region; today it says so honestly.
+	const body = `<div style="flex:1;overflow:auto;background:#f8f9fb;display:flex;align-items:center;justify-content:center;padding:40px">
+		<div style="text-align:center;max-width:460px">
+			<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:12px;background:#f4f5fd;border:1px solid #e0e5fb;display:flex;align-items:center;justify-content:center;font-size:20px;color:${ACCENT}">&#10022;</div>
+			<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">No project run in progress</h2>
+			<p style="margin:0 0 22px;font:400 14px/1.6 system-ui;color:#696e78">Start one from Agents or ask across the whole project in Chat. The sub-agent swarm and the decisions the agent understands will appear here as the run proceeds.</p>
+			<button data-msg="goAgents" style="border:none;border-radius:10px;padding:11px 20px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer">Go to Agents</button>
+		</div>
+	</div>`;
+
+	// Bottom bar with the route stub. Totals are idle (0) this iteration - real totals come in 23.3.
+	// The primary "Review across the project" opens the Review rail as the interim target (TODO plan-24).
+	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid #eef0f3;background:#fbfbfc;display:flex;align-items:center;padding:0 28px;gap:18px">
+		<span style="font:400 14px/1 system-ui;color:#3a3f49"><strong style="font:500 20px/1 system-ui;color:#14161a">0</strong> changes proposed in <strong style="font:500 20px/1 system-ui;color:#14161a">0</strong> documents</span>
+		<span style="font:400 13px/1 system-ui;color:#a3a8b2">&middot; 0 still working &middot; 0 unchanged</span>
+		<button data-msg="reviewProject" style="margin-left:auto;font:600 14px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:10px;padding:12px 22px;cursor:pointer">Review Across the Project &#8594;</button>
+	</div>`;
+
+	return `<div class="screen">${runTopBar}${commandStrip}${body}${bottomBar}</div>`;
 }
