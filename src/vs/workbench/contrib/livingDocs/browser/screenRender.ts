@@ -42,6 +42,23 @@ function esc(s: string): string {
 const ACCENT = 'oklch(0.55 0.13 255)';
 const ACCENT_DK = 'oklch(0.5 0.13 255)';
 
+// Project-avatar palette (Part B): blue / navy / teal / purple / amber, all with #fff text. A
+// document's colour is picked deterministically from its title so the same doc always looks the same.
+const AVATAR_COLORS = ['oklch(0.55 0.13 255)', '#3b4d8f', '#0e7c66', '#5a3ea8', '#b5642a'];
+
+// A stable 2-letter avatar (initials of the first two words, else the first two letters) and its
+// palette colour, derived only from the title - no stored/fabricated identity.
+function avatar(title: string): { readonly text: string; readonly color: string } {
+	const words = title.trim().split(/\s+/).filter(Boolean);
+	const letters = words.length >= 2
+		? (words[0][0] + words[1][0])
+		: (title.replace(/\s+/g, '').slice(0, 2) || '?');
+	let hash = 0;
+	for (let i = 0; i < title.length; i++) { hash = (hash * 31 + title.charCodeAt(i)) | 0; }
+	const color = AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+	return { text: esc(letters.toUpperCase()), color };
+}
+
 // Shared webview head: same font stack, selection colour and scrollbar treatment as the comp shell.
 const HEAD = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
@@ -126,6 +143,34 @@ function renderHome(state: IScreenState): string {
 
 	const docs = state.docs ?? [];
 	const folderName = state.folderName ?? 'Workspace';
+
+	// NEEDS YOU + the greeting summary are derived from the REAL per-document pending count that
+	// listDocuments() already carries (ILivingDocSummary.pendingCount = the live pending set for that
+	// doc). Never fabricated: if nothing pends the section is absent and the summary is "in sync".
+	const pendingDocs = docs.filter(d => d.pendingCount > 0).sort((a, b) => b.pendingCount - a.pendingCount);
+	const totalPending = pendingDocs.reduce((n, d) => n + d.pendingCount, 0);
+	const summary = pendingDocs.length
+		? `${pendingDocs.length} document${pendingDocs.length === 1 ? '' : 's'} need${pendingDocs.length === 1 ? 's' : ''} your review across this project. <strong style="font-weight:600;color:#8a6d1a">${totalPending} change${totalPending === 1 ? '' : 's'} to approve</strong>.`
+		: 'Everything is in sync.';
+
+	// One NEEDS-YOU card per document with pending work: accent top-border, a 2.4s pulse dot, the doc
+	// name, the amber `N TO APPROVE` chip (attention tokens), and a primary Review that opens the doc.
+	const needsCard = (d: ILivingDocSummary) => {
+		const av = avatar(d.title);
+		const n = d.pendingCount;
+		return `<div style="flex:1;min-width:0;max-width:520px;background:#fff;border:1px solid #e0e5fb;border-radius:15px;padding:20px 22px;box-shadow:0 12px 30px -20px rgba(86,97,201,.45);position:relative">
+			<div style="position:absolute;top:0;left:22px;right:22px;height:3px;background:${ACCENT};border-radius:0 0 3px 3px"></div>
+			<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:${av.color};color:#fff;font:600 11px/28px system-ui;text-align:center">${av.text}</span><span style="font:600 16px/1.2 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.title)}</span><span style="margin-left:auto;flex:none;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:4px 7px">${n} TO APPROVE</span></div>
+			<div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:16px;padding-left:38px">${d.sources.length ? `${d.sources.length} source${d.sources.length === 1 ? '' : 's'}` : 'Living document'}</div>
+			<div style="display:flex;gap:8px;margin-bottom:16px"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.66 0.16 45);margin-top:5px;flex:none;animation:lwdPulse 2.4s ease-in-out infinite"></span><span style="font:400 12.5px/1.5 system-ui;color:#52575f"><strong style="color:#1a1c20;font-weight:600">${n} change${n === 1 ? '' : 's'}</strong> from a source refresh ${n === 1 ? 'is' : 'are'} waiting for your review.</span></div>
+			<button data-msg="openDoc" data-arg="${esc(d.resource.toString())}" style="width:100%;font:600 13px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:9px;padding:11px;cursor:pointer">Review ${n} change${n === 1 ? '' : 's'}</button>
+		</div>`;
+	};
+	const needsYou = pendingDocs.length
+		? `<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#5661c9;margin-bottom:14px;display:flex;align-items:center;gap:8px"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 2.4s ease-in-out infinite"></span>NEEDS YOU</div>
+			<div style="display:flex;gap:16px;margin-bottom:34px;flex-wrap:wrap">${pendingDocs.slice(0, 2).map(needsCard).join('')}</div>`
+		: '';
+
 	const livingCount = docs.filter(d => d.isLiving).length;
 	const countLabel = `${docs.length} document${docs.length === 1 ? '' : 's'}${livingCount ? ` &middot; ${livingCount} living` : ''}`;
 
@@ -146,7 +191,9 @@ function renderHome(state: IScreenState): string {
 
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><button data-msg="openFolder" style="flex:none;border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div>
-		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#696e78"><strong style="font-weight:600;color:#3a3f49">${esc(folderName)}</strong> &mdash; ${countLabel}.</p>
+		<p style="margin:0 0 4px;font:400 14.5px/1.5 system-ui;color:#696e78"><strong style="font-weight:600;color:#3a3f49">${esc(folderName)}</strong> &mdash; ${countLabel}.</p>
+		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
+		${needsYou}
 		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">QUICK START</div>
 		<div style="display:flex;gap:12px;margin-bottom:34px;flex-wrap:wrap">
 			${quick('newDocument', ACCENT, '#fff', '&#65291;', 'New document', 'Start writing, link sources later', true)}
