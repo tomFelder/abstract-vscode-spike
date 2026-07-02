@@ -16,6 +16,14 @@ export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents';
 
 export type AgentFilter = 'all' | 'scheduled' | 'event' | 'needs-approval';
 
+/** One entry in the ALL PROJECTS grid for recently-opened folders (no counts - not yet loaded). */
+export interface IRecentProject {
+	/** Basename of the folder, used as the project name. */
+	readonly name: string;
+	/** Stringified URI used as the `openFolder` arg so the host can re-open it. */
+	readonly folderUri: string;
+}
+
 export interface IScreenState {
 	/** Knowledge: which scope tab is selected. */
 	readonly knScope: 'org' | 'project';
@@ -33,6 +41,12 @@ export interface IScreenState {
 	readonly folderName?: string;
 	/** Home: the documents discovered in the open folder (all Markdown, living flagged for the badge). */
 	readonly docs?: readonly ILivingDocSummary[];
+	/**
+	 * Home: recently-opened folders from the workbench history (D22-A). Each is shown as an
+	 * additional tile in ALL PROJECTS with name + avatar only - counts are deferred until a
+	 * folder is opened (real-data guardrail: never fabricate counts for unloaded projects).
+	 */
+	readonly recentFolders?: readonly IRecentProject[];
 }
 
 function esc(s: string): string {
@@ -123,10 +137,20 @@ export function renderScreenHtml(screen: ScreenId, state: IScreenState): string 
 	}
 }
 
+// Health indicator for a project tile. Comp pattern: In Sync = small `ok`-token green dot (no text);
+// pending = amber chip with just the count number (attention tokens). Matches Part B tokens exactly.
+function healthIndicator(pending: number): string {
+	if (pending === 0) {
+		// `ok` green dot: 6px, `oklch(0.6 0.13 150)` = #2C8159 approx
+		return `<span style="display:flex;align-items:center;gap:5px;font:500 11px/1 system-ui;color:#5d8a66;flex:none"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)"></span></span>`;
+	}
+	// `attention` amber chip: just the number, no "to approve" text (matches comp exactly)
+	return `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:3px 6px;flex:none">${pending}</span>`;
+}
+
 // ---- Home: the landing dashboard. The open folder IS the project (decision #39): an empty state when no
 // folder is open, otherwise the folder's name + every Markdown document (living ones badged). ----
 function renderHome(state: IScreenState): string {
-	const quick = (msg: string, iconBg: string, iconFg: string, icon: string, title: string, sub: string, primary: boolean) => `<button data-msg="${msg}" style="flex:1;min-width:200px;text-align:left;border:1px solid ${primary ? '#e0e6ff' : '#e9eaee'};background:${primary ? '#f7f9ff' : '#fff'};border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;flex:none;border-radius:9px;background:${iconBg};color:${iconFg};font-size:${primary ? '17px' : '16px'};display:flex;align-items:center;justify-content:center">${icon}</span><span><span style="display:block;font:600 13.5px/1.2 system-ui;color:#1a1c20;margin-bottom:3px">${title}</span><span style="font:400 12px/1.3 system-ui;color:#868b95">${sub}</span></span></button>`;
 	const scroll = (inner: string) => `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">${inner}</div></div>`;
 
 	// No folder open: a single calm invitation to open one (the on-ramp).
@@ -171,37 +195,57 @@ function renderHome(state: IScreenState): string {
 			<div style="display:flex;gap:16px;margin-bottom:34px;flex-wrap:wrap">${pendingDocs.slice(0, 2).map(needsCard).join('')}</div>`
 		: '';
 
-	const livingCount = docs.filter(d => d.isLiving).length;
-	const countLabel = `${docs.length} document${docs.length === 1 ? '' : 's'}${livingCount ? ` &middot; ${livingCount} living` : ''}`;
+	// ALL PROJECTS grid (D22-A): the current folder prominently + recent folders as additional tiles.
+	// Counts for the current folder are REAL (from the live listDocuments() data + distinct sources).
+	// Counts for recent folders are DEFERRED (not yet loaded) - show name + avatar only, per the
+	// real-data guardrail (never fabricate counts for unloaded projects).
+	const distinctSources = new Set<string>();
+	for (const d of docs) { for (const s of d.sources) { distinctSources.add(s); } }
+	const docCount = docs.length;
+	const srcCount = distinctSources.size;
+	const countsLabel = srcCount > 0
+		? `${docCount} doc${docCount === 1 ? '' : 's'} &middot; ${srcCount} source${srcCount === 1 ? '' : 's'}`
+		: `${docCount} doc${docCount === 1 ? '' : 's'}`;
 
-	const livingBadge = `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;color:${ACCENT_DK};background:#eef2ff;border-radius:999px;padding:5px 9px"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT}"></span>Living</span>`;
-	const docCard = (d: ILivingDocSummary) => {
-		const sub = d.isLiving
-			? (d.sources.length ? `${d.sources.length} source${d.sources.length === 1 ? '' : 's'}: ${esc(d.sources.join(', '))}` : 'Living document')
-			: 'Markdown';
-		return `<button data-msg="openDoc" data-arg="${esc(d.resource.toString())}" style="text-align:left;background:#fff;border:1px solid #e9eaee;border-radius:13px;padding:16px 17px;cursor:pointer;display:flex;flex-direction:column;gap:6px">
-			<div style="display:flex;align-items:center;gap:10px"><span style="width:26px;height:26px;flex:none;border-radius:7px;background:${d.isLiving ? '#eef2ff' : '#f1f2f5'};color:${d.isLiving ? ACCENT_DK : '#868b95'};font-size:13px;display:flex;align-items:center;justify-content:center">&#9636;</span><span style="font:600 14.5px/1.2 system-ui;color:#15171c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.title)}</span>${d.isLiving ? livingBadge : ''}</div>
-			<div style="font:400 11.5px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;padding-left:36px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sub}</div>
+	// Current-project tile (comp: 1px border, 14px radius, 17x18px padding, 24px avatar/7px-radius).
+	// The current project tile gets the same uniform border as the comp (no 2px accent outline) but
+	// a subtle accent-tint background so the active project reads as distinct from recent ones.
+	const currentAv = avatar(folderName);
+	const currentTile = `<button data-msg="openFirstDoc" style="text-align:left;background:#f7f9ff;border:1px solid #e0e5fb;border-radius:14px;padding:17px 18px;cursor:pointer;display:flex;flex-direction:column;gap:12px;width:100%">
+		<div style="display:flex;align-items:center;gap:9px">
+			<span style="width:24px;height:24px;flex:none;border-radius:7px;background:${currentAv.color};color:#fff;font:600 10px/24px system-ui;text-align:center">${currentAv.text}</span>
+			<span style="font:600 14px/1 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(folderName)}</span>
+			${healthIndicator(totalPending)}
+		</div>
+		<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${countsLabel}</div>
+	</button>`;
+
+	// Recent-folder tiles (D22-A): name + avatar only, "Open" affordance instead of counts.
+	// Filter out the current folder so it does not appear twice.
+	const recents = (state.recentFolders ?? []).filter(r => r.name !== folderName);
+	const recentTile = (r: IRecentProject) => {
+		const av = avatar(r.name);
+		return `<button data-msg="openRecentFolder" data-arg="${esc(r.folderUri)}" style="text-align:left;background:#fff;border:1px solid #e9eaee;border-radius:14px;padding:17px 18px;cursor:pointer;display:flex;flex-direction:column;gap:12px;width:100%">
+			<div style="display:flex;align-items:center;gap:9px">
+				<span style="width:24px;height:24px;flex:none;border-radius:7px;background:${av.color};color:#fff;font:600 10px/24px system-ui;text-align:center">${av.text}</span>
+				<span style="font:600 14px/1 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(r.name)}</span>
+				<span style="font:500 10px/1 system-ui;color:#a3a8b2;flex:none">Open &#8599;</span>
+			</div>
+			<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#c2c5cd">Open to see counts</div>
 		</button>`;
 	};
 
-	const grid = docs.length
-		? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${docs.map(docCard).join('')}</div>`
-		: `<div style="background:#fff;border:1px dashed #d7dae1;border-radius:13px;padding:34px;text-align:center"><div style="font:600 14.5px/1.3 system-ui;color:#3a3f49;margin-bottom:6px">No documents yet</div><div style="font:400 13px/1.5 system-ui;color:#868b95;margin-bottom:16px">This folder has no Markdown documents. Create one to get started.</div><button data-msg="newDocument" style="border:none;border-radius:9px;padding:10px 18px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer">New document</button></div>`;
+	const allTiles = [currentTile, ...recents.map(recentTile)];
+	// 3-column grid for >= 3 tiles; 2-column for fewer (comp uses 3-col).
+	const cols = allTiles.length >= 3 ? 3 : (allTiles.length === 2 ? 2 : 1);
+	const projectsGrid = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:14px">${allTiles.join('')}</div>`;
 
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><button data-msg="openFolder" style="flex:none;border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div>
-		<p style="margin:0 0 4px;font:400 14.5px/1.5 system-ui;color:#696e78"><strong style="font-weight:600;color:#3a3f49">${esc(folderName)}</strong> &mdash; ${countLabel}.</p>
 		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
 		${needsYou}
-		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">QUICK START</div>
-		<div style="display:flex;gap:12px;margin-bottom:34px;flex-wrap:wrap">
-			${quick('newDocument', ACCENT, '#fff', '&#65291;', 'New document', 'Start writing, link sources later', true)}
-			${quick('goTemplates', '#eef1f6', '#52575f', '&#9636;', 'New doc from template', 'Weekly report, Quote, SOP&hellip;', false)}
-			${quick('openFolder', '#eef1f6', '#52575f', '&#128193;', 'Open another folder', 'Switch the project', false)}
-		</div>
-		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:12px">DOCUMENTS</div>
-		${grid}
+		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
+		${projectsGrid}
 	</div>`);
 }
 

@@ -7,20 +7,23 @@ import { $, Dimension } from '../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
+import { basename } from '../../../../base/common/resources.js';
 import { IAgentRun } from '../common/livingDocsModel.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
+import { isRecentFolder, IWorkspacesService } from '../../../../platform/workspaces/common/workspaces.js';
 import { EditorPane } from '../../../browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocSummary, ILivingDocsService } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
-import { AgentFilter, renderScreenHtml, ScreenId } from './screenRender.js';
+import { AgentFilter, IRecentProject, renderScreenHtml, ScreenId } from './screenRender.js';
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -30,6 +33,8 @@ interface IScreenEditorState {
 	lastRun?: IAgentRun;
 	// Home: the documents discovered in the open folder (fetched async; the folder name is read live at render).
 	docs?: readonly ILivingDocSummary[];
+	// Home: recently-opened folders from the workbench history (D22-A); fetched async alongside docs.
+	recentFolders?: readonly IRecentProject[];
 }
 
 // Webview editor that hosts one Abstract screen (Templates / Knowledge / Agents) in the
@@ -59,6 +64,8 @@ export class ScreenEditor extends EditorPane {
 		@IEditorService private readonly _editors: IEditorService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+		@IWorkspacesService private readonly _workspaces: IWorkspacesService,
+		@IHostService private readonly _host: IHostService,
 	) {
 		super(ScreenEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -75,9 +82,13 @@ export class ScreenEditor extends EditorPane {
 		this._screen = input.screen;
 		// Reset per-screen state on (re)open so each visit starts from the default view.
 		this._state = { knScope: 'org', filter: 'all' };
-		// Home reflects the open folder: fetch its documents before the first render so there is no flash.
+		// Home reflects the open folder: fetch its documents + recent folders before the first render so there is no flash.
 		if (this._screen === 'home') {
-			this._state = { ...this._state, docs: await this._livingDocs.listDocuments() };
+			const [docs, recentFolders] = await Promise.all([
+				this._livingDocs.listDocuments(),
+				this._fetchRecentFolders(),
+			]);
+			this._state = { ...this._state, docs, recentFolders };
 		}
 		this._inputDisposables.clear();
 		// Re-render when agent status / the document set changes (e.g. a run completes, a doc is created).
@@ -95,8 +106,36 @@ export class ScreenEditor extends EditorPane {
 	}
 
 	private async _refreshHome(): Promise<void> {
-		this._state = { ...this._state, docs: await this._livingDocs.listDocuments() };
+		const [docs, recentFolders] = await Promise.all([
+			this._livingDocs.listDocuments(),
+			this._fetchRecentFolders(),
+		]);
+		this._state = { ...this._state, docs, recentFolders };
 		this._render();
+	}
+
+	// Fetch the workbench recently-opened folder list for the ALL PROJECTS grid (D22-A). Maps each
+	// IRecentFolder to a plain { name, folderUri } object that the renderer can serialize safely into
+	// HTML without holding a live URI reference inside a pure render function.
+	// Name resolution order: (1) the stored human label (set when VSCode knows a display name),
+	// (2) the last non-empty path segment of the folderUri (e.g. "/Users/tom/brief" -> "brief"),
+	// (3) basename() from the resource module. Entries that produce only a single letter or an
+	// empty name after this are skipped - they are FSA mount stubs with no useful display name.
+	private async _fetchRecentFolders(): Promise<readonly IRecentProject[]> {
+		try {
+			const { workspaces } = await this._workspaces.getRecentlyOpened();
+			return workspaces
+				.filter(isRecentFolder)
+				.map(r => {
+					const segments = r.folderUri.path.split('/').filter(Boolean);
+					const lastName = segments[segments.length - 1] ?? '';
+					const name = r.label ?? (lastName.length > 1 ? lastName : basename(r.folderUri));
+					return { name, folderUri: r.folderUri.toString() };
+				})
+				.filter(r => r.name.length > 1);
+		} catch {
+			return [];
+		}
 	}
 
 	// Recreate the webview fresh and render the current screen into it. Called on setInput and whenever
@@ -170,6 +209,16 @@ export class ScreenEditor extends EditorPane {
 				break;
 			case 'openDoc':
 				if (message.arg) { void this._editors.openEditor({ resource: URI.parse(message.arg), options: { pinned: true } }); }
+				break;
+			// Home ALL PROJECTS: the current folder tile focuses its first document (it is already open).
+			case 'openFirstDoc':
+				void this._openFirstDocument();
+				break;
+			// Home ALL PROJECTS: re-open a recently-used folder as the workspace (D22-A).
+			case 'openRecentFolder':
+				if (message.arg) {
+					void this._host.openWindow([{ folderUri: URI.parse(message.arg) }], { forceReuseWindow: true });
+				}
 				break;
 		}
 	}
