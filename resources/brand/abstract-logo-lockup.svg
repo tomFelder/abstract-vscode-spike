@@ -1,23 +1,7 @@
-<svg width="1600" height="512" viewBox="0 0 1600 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
+<svg width="1300" height="430" viewBox="0 0 1300 430" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
 	<title id="title">Abstract logo</title>
-	<defs>
-		<linearGradient id="abstractLogoPurple" x1="252" y1="78" x2="252" y2="228" gradientUnits="userSpaceOnUse">
-			<stop stop-color="#8F86F7"/>
-			<stop offset="1" stop-color="#706BE2"/>
-		</linearGradient>
-		<linearGradient id="abstractLogoCoral" x1="108" y1="272" x2="226" y2="424" gradientUnits="userSpaceOnUse">
-			<stop stop-color="#FF6548"/>
-			<stop offset="1" stop-color="#F05A3E"/>
-		</linearGradient>
-		<linearGradient id="abstractLogoTeal" x1="356" y1="272" x2="284" y2="424" gradientUnits="userSpaceOnUse">
-			<stop stop-color="#159582"/>
-			<stop offset="1" stop-color="#0F8177"/>
-		</linearGradient>
-	</defs>
-	<g>
-		<path d="M204 99C218 73 255 64 282 78C295 85 305 97 313 112L391 263C399 279 387 296 370 293C333 287 295 284 256 284C217 284 179 287 142 293C125 296 113 279 121 263L204 99Z" fill="url(#abstractLogoPurple)"/>
-		<path d="M102 306C113 284 145 283 157 304C190 360 224 405 261 436C273 446 266 466 250 466H113C83 466 58 442 57 412C56 399 59 386 66 374L102 306Z" fill="url(#abstractLogoCoral)"/>
-		<path d="M355 304C367 283 399 284 410 306L446 374C453 386 456 399 455 412C454 442 429 466 399 466H262C246 466 239 446 251 436C288 405 322 360 355 304Z" fill="url(#abstractLogoTeal)"/>
-	</g>
-	<text x="610" y="324" fill="#1F2A37" font-family="Inter, SF Pro Display, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="188" font-weight="700" letter-spacing="-7">Abstract</text>
+	<path d="M215.212 177.66C235.162 177.66 269.946 184.957 290.815 189.795C297.261 191.29 302.499 184.3 299.191 178.566L252.37 97.4731C235.862 68.8423 194.563 68.8423 178.054 97.473L131.234 178.566C127.926 184.3 133.164 191.29 139.609 189.795C160.478 184.957 195.262 177.66 215.212 177.66Z" fill="#47A4EB"/>
+	<path d="M276.246 283.119C266.457 300.073 243.192 326.056 228.843 341.418C224.412 346.163 227.779 354.042 234.271 354.042L326.121 354.019C358.539 354.029 378.802 318.932 362.584 290.863L316.68 211.307C313.433 205.684 304.926 206.708 303.033 212.918C296.903 233.026 286.034 266.165 276.246 283.119Z" fill="#FFCE48"/>
+	<path d="M154.378 282.399C144.448 265.2 133.422 231.582 127.204 211.184C125.283 204.884 116.653 203.845 113.36 209.549L66.792 290.255C50.3398 318.729 70.8958 354.333 103.782 354.323L196.959 354.347C203.545 354.347 206.961 346.354 202.465 341.54C187.909 325.956 164.308 299.598 154.378 282.399Z" fill="#FD7C5C"/>
+	<text x="494" y="270" fill="#1F2937" font-family="Inter, SF Pro Display, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="168" font-weight="700" letter-spacing="-6">Abstract</text>
 </svg>
