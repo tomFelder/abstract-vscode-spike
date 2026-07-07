@@ -234,3 +234,30 @@ Concrete call:
    not because the fork is too expensive to de-IDE. On the evidence here, it isn't.
 
 _Recommendation (keep-fork vs rebuild-on-web) is written at Item H, grounded in the final count._
+
+## Upstream merge log
+
+Each upstream version bump records here exactly what re-pinned, so this ledger stays a living runbook (per [../11-upstream-sync.md](../11-upstream-sync.md) Phase 4).
+
+### 1.127.0 (merged 2026-07-07, branch `upstream-sync-1.127`)
+
+Assessed in [11-upstream-sync-phase1-report.md](11-upstream-sync-phase1-report.md) (GO). True merge-base `06d84f5a8c` (post-1.126 `main`), so the real replay was ~`main -> 1.127.0` (1,111 files, ~86k insertions). **Clean auto-merge, 0 conflicts.**
+
+Re-pin result per seam - nothing needed hand-editing; verified post-merge:
+
+| Seam | Upstream touched it? | Re-pin outcome |
+|------|----------------------|----------------|
+| builtin denylist (`builtinExtensionsScannerService.ts`) | no | intact (3 ids + filter) |
+| activity-bar width 76 (`activitybarPart.ts` + guard test) | no | intact (const 76; test 14/14 pass) |
+| palette keybinding removed (`commandsQuickAccess.ts`) | no | intact (`f1: false`) |
+| quick-open keybinding removed (`quickAccessActions.ts`) | no | intact (`f1: false`) |
+| sash lock (`sash.ts` + call site) | no | intact (`lockAllSashes`) |
+| contrib imports (`workbench.common.main.ts`) | yes (+4, 2 hunks at L145/L392) | **auto-merged** - our livingDocs (L304) + styleOverrides (L342) preserved alongside upstream's agentHostConnectionsService + onboarding imports |
+| HIGH-risk deregister list (explorer/search/scm/debug/extensions) | no | all 5 `VIEWLET_ID` consts still resolve to the exact strings; icons did NOT reappear (verified live) |
+| theme manifest (`theme-defaults/package.json`) | no | intact |
+| Agent Host dep (`chat.agentHost.enabled`) | subsystem expanded, key unchanged | verified live (chat rail present) |
+| studio.css DOM selectors | target classes still present | verified live (calm shell holds) |
+
+Verification: `typecheck-client` 0, `valid-layers-check` 0, LivingDocs suite 66/66, ActivitybarPart 14/14; live web drive - branded calm shell, 76px nav, no IDE containers, full PM editor with bound figures, no living-docs console errors (G6).
+
+**Known pre-existing noise (not a regression, not fixed here):** the hidden Extensions view container throws two console errors on boot (`viewsExtensionPoint` / `extensionsViewlet` -> `viewDescriptorService`) because we deregister its container while the extensions viewlet still registers views into it. All three files are byte-identical to our pre-merge base, so this is a byproduct of the 0-core-patch de-IDE seam (amplified by the incomplete web build - `watch` not `watch-web`), present before 1.127. Candidate cleanup: guard `ExtensionsViewletViewsContribution` when its container is absent, tracked separately from version bumps.

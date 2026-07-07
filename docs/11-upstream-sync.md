@@ -7,12 +7,18 @@ The immediate job is the 1.126.0 -> 1.127.0 bump; the procedure is written to be
 Companion: [plans/03-merge-tax-ledger.md](plans/03-merge-tax-ledger.md) is the authoritative catalogue of every core patch and seam this merge must protect.
 This spec references it rather than duplicating it.
 
-## Current state (as of 2026-07-05)
+## Current state (as of 2026-07-07)
 
-- Our fork is based on VS Code **1.126.0** (merge-base commit `0a9d0e4c40d`, dated 2026-06-15).
-- Latest upstream **stable** is **1.127.0** - we are exactly one release behind.
-- There is **no `upstream` remote** configured; only the personal `origin` fork (`tomFelder/abstract-vscode-spike`).
-- The full `microsoft/vscode` history is present in the repo (the base "Hello Code" commit is reachable), so the 1.127.0 tag can be fetched and merged directly.
+- Our fork is now based on VS Code **1.127.0** (merged 2026-07-07 on branch `upstream-sync-1.127`; `package.json` reads `1.127.0`).
+- The true merge-base was **`06d84f5a8c`** (2026-06-19), an upstream `main` commit a few days *after* the 1.126.0 tag - so the fork never sat on the 1.126.0 *stable* tag, and the merge replayed roughly `main -> 1.127.0`, not a clean `1.126 -> 1.127`. See the Phase 1 report ([plans/11-upstream-sync-phase1-report.md](plans/11-upstream-sync-phase1-report.md)) for the corrected base analysis.
+- The `upstream` remote (`https://github.com/microsoft/vscode.git`) is now configured; the 1.127.0 tag was fetched from it.
+- The merge was a **clean auto-merge, 0 conflicts**; all 5 core patches + the HIGH-risk deregister list re-pinned and verified (see the 1.127 ledger entry).
+
+### Prior state (before this sync)
+
+- Fork based on a post-1.126.0 `main` commit; latest upstream stable was 1.127.0 (one release ahead).
+- No `upstream` remote configured; only the personal `origin` fork (`tomFelder/abstract-vscode-spike`).
+- Full `microsoft/vscode` history present in the repo, so the 1.127.0 tag was fetchable and mergeable directly.
 
 ## Goal and non-goals
 
