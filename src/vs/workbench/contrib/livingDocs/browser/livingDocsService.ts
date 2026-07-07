@@ -283,6 +283,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// folder changes, so the project name resolves truthfully even under the web/memfs "mount" label.
 		void this._readProjectNameMarker();
 		this._register(this._workspace.onDidChangeWorkspaceFolders(() => void this._readProjectNameMarker()));
+		// (debt: sample root mount) In the web build the workspace folder's file-system provider (memfs /
+		// vscode-test-web) can register AFTER this service constructs. The startup read above then fails with
+		// no-provider, and because `onDidChangeWorkspaceFolders` never fires for a folder that was already
+		// open at startup, the marker would never be retried - stranding the sample ROOT on its "mount" stub
+		// (and the first documents scan on "0 docs"). Re-read once the folder's provider becomes available so
+		// the root resolves its `.abstract-name` truthfully; the read's `onDidChange` also refreshes the Home
+		// document list, so a scan that raced the provider is retried too.
+		this._register(this._files.onDidChangeFileSystemProviderRegistrations(e => {
+			const folder = this._workspace.getWorkspace().folders[0]?.uri;
+			if (folder && e.added && e.scheme === folder.scheme) {
+				void this._readProjectNameMarker();
+			}
+		}));
 	}
 
 	// Read the `.abstract-name` marker in the open folder, if any, into the cache. A missing/unreadable
