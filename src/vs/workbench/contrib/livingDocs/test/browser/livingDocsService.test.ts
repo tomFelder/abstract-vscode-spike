@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { bufferToStream, VSBuffer } from '../../../../../base/common/buffer.js';
-import { Event } from '../../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
@@ -200,6 +200,7 @@ suite('LivingDocsService', () => {
 		if (opts.template) { files.set(TEMPLATE.toString(), WEEKLY_TEMPLATE_MD); }
 
 		const fileService = {
+			onDidChangeFileSystemProviderRegistrations: Event.None,
 			readFile: async (resource: URI) => {
 				const content = files.get(resource.toString());
 				if (content === undefined) { throw new Error(`not found: ${resource.toString()}`); }
@@ -1785,5 +1786,109 @@ suite('LivingDocsService', () => {
 		await service.restoreSnapshot(WEEKLY, original.id);
 
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'pending changes were rejected by the restore');
+	});
+
+	// (debt: sample root mount) Reproduce the web/memfs "mount" scenario for the SAMPLE ROOT: a single
+	// workspace folder labelled with a mount stub ("mount"), shipping an `.abstract-name` marker at its
+	// root AND holding documents both at the top level and inside a subfolder. The project name must
+	// resolve to the marker ("Living Docs Sample") - not the stub - and the top-level + nested documents
+	// must all be listed (the root is NOT "0 docs").
+	function createMountService(opts: { folderName?: string; marker?: string; withDocs?: boolean; lateProvider?: boolean } = {}): { service: LivingDocsService; files: Map<string, string>; registerProvider: () => void } {
+		const mountRoot = URI.parse('vscode-test-web://mount/');
+		const files = new Map<string, string>();
+		if (opts.marker !== undefined) {
+			files.set(URI.parse('vscode-test-web://mount/.abstract-name').toString(), opts.marker);
+		}
+		if (opts.withDocs) {
+			// Two top-level documents + one inside a `brief/` subfolder, mirroring the shipped sample root.
+			files.set(URI.parse('vscode-test-web://mount/Board Note.md').toString(), PLAIN_MD);
+			files.set(URI.parse('vscode-test-web://mount/Team Notes.md').toString(), PLAIN_MD);
+			files.set(URI.parse('vscode-test-web://mount/brief/Project Brief.md').toString(), PLAIN_MD);
+		}
+		// Model the web-build race: until the file-system provider registers, reads/scans on the mount fail
+		// with a no-provider error (matching the real `ENOPRO`). `registerProvider()` fires the registration
+		// event the service listens to, so a test can prove the marker + document scan retry once it arrives.
+		const registrations = new Emitter<{ added: boolean; scheme: string }>();
+		let providerReady = !opts.lateProvider;
+		const assertProvider = (resource: URI) => {
+			if (!providerReady && resource.scheme === mountRoot.scheme) { throw new Error(`ENOPRO: no provider for ${resource.toString()}`); }
+		};
+		const fileService = {
+			onDidChangeFileSystemProviderRegistrations: registrations.event,
+			readFile: async (resource: URI) => {
+				assertProvider(resource);
+				const content = files.get(resource.toString());
+				if (content === undefined) { throw new Error(`not found: ${resource.toString()}`); }
+				return { value: VSBuffer.fromString(content) };
+			},
+			writeFile: async (resource: URI, buffer: VSBuffer) => { files.set(resource.toString(), buffer.toString()); },
+			resolve: async (resource: URI) => {
+				assertProvider(resource);
+				const prefix = resource.toString().replace(/\/+$/, '') + '/';
+				const children: { resource: URI; isDirectory: boolean }[] = [];
+				const dirs = new Set<string>();
+				for (const key of files.keys()) {
+					if (!key.startsWith(prefix)) { continue; }
+					const rest = key.slice(prefix.length);
+					const slash = rest.indexOf('/');
+					if (slash < 0) { children.push({ resource: URI.parse(key), isDirectory: false }); }
+					else { dirs.add(prefix + rest.slice(0, slash)); }
+				}
+				for (const dir of dirs) { children.push({ resource: URI.parse(dir), isDirectory: true }); }
+				return { children };
+			},
+		} as unknown as IFileService;
+		store.add(registrations);
+		const registerProvider = () => { providerReady = true; registrations.fire({ added: true, scheme: mountRoot.scheme }); };
+		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const viewsService = { openView: async () => null } as unknown as IViewsService;
+		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
+		const notificationService = { info: () => undefined } as unknown as INotificationService;
+		const requestService = { request: async () => ({ res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString('{}')) }) } as unknown as IRequestService;
+		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: mountRoot, name: opts.folderName ?? 'mount' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
+		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
+		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
+		store.add(service);
+		return { service, files, registerProvider };
+	}
+
+	test('the sample ROOT mount resolves its `.abstract-name` marker (not the "mount" stub)', async () => {
+		const { service } = createMountService({ marker: 'Living Docs Sample\n', withDocs: true });
+		// The marker is read asynchronously in the constructor; let that microtask settle.
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.strictEqual(service.getProjectDisplayName(), 'Living Docs Sample');
+	});
+
+	test('the sample ROOT mount lists its top-level AND nested documents (not "0 docs")', async () => {
+		const { service } = createMountService({ marker: 'Living Docs Sample\n', withDocs: true });
+		const docs = await service.listDocuments();
+		const titles = docs.map(d => d.resource.path);
+		assert.strictEqual(docs.length, 3, `expected 3 documents, got ${docs.length}: ${titles.join(', ')}`);
+	});
+
+	test('a mount folder that ships NO marker still shows its honest stub name (never fabricated)', async () => {
+		const { service } = createMountService({ withDocs: true });
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.strictEqual(service.getProjectDisplayName(), 'mount');
+	});
+
+	test('the sample ROOT marker resolves once the mount provider registers late (the web-build race)', async () => {
+		// The provider is not ready at construction, so the startup marker read fails - the crumb is the
+		// bare stub, exactly the reported "mount / 0 docs" symptom.
+		const { service, registerProvider } = createMountService({ marker: 'Living Docs Sample\n', withDocs: true, lateProvider: true });
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.strictEqual(service.getProjectDisplayName(), 'mount', 'stub shown while the provider is unavailable');
+
+		// When the mount provider registers, the marker is re-read and the name resolves truthfully.
+		registerProvider();
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.strictEqual(service.getProjectDisplayName(), 'Living Docs Sample', 'marker resolves after the provider arrives');
+		// The same registration retries the document scan, so the root is no longer "0 docs".
+		assert.strictEqual((await service.listDocuments()).length, 3);
 	});
 });
