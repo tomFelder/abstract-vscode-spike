@@ -311,6 +311,10 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/contrib/onboarding",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/contrib/welcomePage",
 			"project": "vscode-workbench"
 		},
@@ -709,6 +713,14 @@
 			"project": "vscode-sessions"
 		},
 		{
+			"name": "vs/sessions/contrib/github",
+			"project": "vscode-sessions"
+		},
+		{
+			"name": "vs/sessions/contrib/layout",
+			"project": "vscode-sessions"
+		},
+		{
 			"name": "vs/sessions/contrib/logs",
 			"project": "vscode-sessions"
 		},
@@ -718,6 +730,10 @@
 		},
 		{
 			"name": "vs/sessions/contrib/sessions",
+			"project": "vscode-sessions"
+		},
+		{
+			"name": "vs/sessions/contrib/sessionInputBanners",
 			"project": "vscode-sessions"
 		},
 		{
@@ -742,6 +758,10 @@
 		},
 		{
 			"name": "vs/sessions/contrib/editor",
+			"project": "vscode-sessions"
+		},
+		{
+			"name": "vs/sessions/contrib/onboardingTours",
 			"project": "vscode-sessions"
 		}
 	]
