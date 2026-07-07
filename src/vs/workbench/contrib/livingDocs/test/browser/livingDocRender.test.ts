@@ -210,6 +210,28 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		});
 	});
 
+	// Plan 26 iter 4: the toolbar save/version chip is honest. It reads a plain "Saved" when the document
+	// has no snapshots, and "Saved &middot; vN" where N is the REAL snapshot count - never the fabricated v14.
+	test('the toolbar chip shows a plain "Saved" and no version number when there are no snapshots', () => {
+		const input: ILivingDocRenderInput = {
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'pm', rawText: '', present: { open: false, choice: 'html' }, syncDiff: [], snapshotCount: 0,
+		};
+		const h = renderLivingDocHtml(input);
+		assert.ok(h.includes('class="tb-saved-text">Saved</span>'), 'plain Saved with no version suffix');
+		assert.ok(!h.includes('v14') && !h.includes('&middot; v'), 'no fabricated version number');
+	});
+
+	test('the toolbar chip shows the real snapshot count as "Saved &middot; vN"', () => {
+		const input: ILivingDocRenderInput = {
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'pm', rawText: '', present: { open: false, choice: 'html' }, syncDiff: [], snapshotCount: 3,
+		};
+		const h = renderLivingDocHtml(input);
+		assert.ok(h.includes('Saved &middot; v3'), 'the chip reflects the real snapshot count');
+		assert.ok(!h.includes('v14'), 'the fabricated v14 is gone');
+	});
+
 	test('raw mode is reachable and offers the way back to the editor without a separate "rendered" mode', () => {
 		const raw = renderLivingDocContent({
 			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),

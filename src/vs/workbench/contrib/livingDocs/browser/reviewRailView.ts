@@ -15,12 +15,14 @@ import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IChatMessage, IChatStep, ILivingDocsService, ISkillCheck } from '../common/livingDocs.js';
-import { bulkApproveConfirm, IAuditEntry, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
+import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
+import { historyHtml } from './historyRender.js';
 
 type PanelTab = 'chat' | 'review' | 'history';
 
@@ -67,6 +69,7 @@ export class ReviewRailView extends ViewPane {
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 		@IEditorService private readonly _editors: IEditorService,
 		@IDialogService private readonly _dialogService: IDialogService,
+		@IQuickInputService private readonly _quickInput: IQuickInputService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -102,7 +105,6 @@ export class ReviewRailView extends ViewPane {
 		clearNode(root);
 
 		const pending = this._livingDocs.getAllPending();
-		const audit = this._livingDocs.getAudit();
 
 		// --- tab strip ---
 		const tabs = append(root, $('div.ldp-tabs'));
@@ -126,7 +128,7 @@ export class ReviewRailView extends ViewPane {
 		if (this._activeTab === 'chat') {
 			this._renderChat(content, pending.length);
 		} else if (this._activeTab === 'history') {
-			this._renderHistory(content, audit);
+			this._renderHistory(content);
 		} else {
 			this._renderReview(content, pending);
 		}
@@ -280,13 +282,44 @@ export class ReviewRailView extends ViewPane {
 		return { added, removed };
 	}
 
-	private _renderHistory(content: HTMLElement, audit: readonly IAuditEntry[]): void {
-		// A document generated from a template records its origin in frontmatter (`template: <name>`,
-		// read back as `fromTemplate`); surface it as a real timeline origin row (plan 28, iter 3) so the
-		// comp's "Created from <name> template" line is driven by actual provenance, not a static sample.
+	// The truthful version timeline (plan 26 iter 3): real snapshots (restorable versions) interleaved with
+	// the real audit entries recorded since each one, all read from THIS document's lock - never a fabricated
+	// sample. The header is the live document title; a manual "Save version" takes a snapshot on demand; each
+	// version row carries a quiet Restore that confirms then routes through the one restoreSnapshot path.
+	private _renderHistory(content: HTMLElement): void {
 		const resource = this._activeDoc();
-		const doc = resource && this._livingDocs.getDoc(resource);
-		content.innerHTML = historyHtml(audit, doc ? doc.fromTemplate : undefined);
+		const doc = resource ? this._livingDocs.getDoc(resource) : undefined;
+		const lock = resource ? this._livingDocs.getLock(resource) : undefined;
+		const snapshots = resource ? this._livingDocs.getSnapshots(resource) : [];
+		const audit = lock ? lock.audit : [];
+		content.innerHTML = historyHtml(snapshots, audit, doc?.title, doc?.fromTemplate);
+		if (!resource) { return; }
+
+		// Delegated click handling: "Save version" snapshots the current body under a user-supplied label;
+		// each "Restore" confirms (native dialog) then routes through restoreSnapshot (the one approve path -
+		// rejects pending, writes the body, audits it, re-flags staleness). No bypass write.
+		this._renderDisposables.add(addDisposableListener(content, 'click', async e => {
+			let el = e.target as HTMLElement | null;
+			while (el && el !== content) {
+				if (el.getAttribute('data-save-version') !== null) {
+					const label = await this._quickInput.input({ prompt: 'Name this version', placeHolder: 'e.g. Before the board edits', value: '' });
+					if (label && label.trim()) { await this._livingDocs.saveSnapshot(resource, label.trim(), 'manual'); }
+					return;
+				}
+				const restoreId = el.getAttribute('data-restore');
+				if (restoreId) {
+					const snap = snapshots.find(s => s.id === restoreId);
+					const { confirmed } = await this._dialogService.confirm({
+						message: `Restore "${snap ? snap.label : 'this version'}"?`,
+						detail: 'Replaces the current body. Pending changes will be rejected. This is recorded in the audit trail.',
+						primaryButton: 'Restore',
+					});
+					if (confirmed) { await this._livingDocs.restoreSnapshot(resource, restoreId); }
+					return;
+				}
+				el = el.parentElement;
+			}
+		}));
 	}
 
 	private _appendChecks(parent: HTMLElement): void {
@@ -816,44 +849,9 @@ export class ReviewRailView extends ViewPane {
 	}
 }
 
-// ---- Static comp-faithful bodies (History, and the document-checks section folded into Review).
-// Light colours match the registered "Abstract" theme, so hardcoding them here reproduces the
-// comp exactly. (Chat is now a live DOM surface in _renderChat, not a static string.) ----
-
-function timelineRow(dot: string, title: string, badge: string, body: string, meta: string, last: boolean): string {
-	const connector = last ? '' : `<span style="flex:1;width:2px;background:#e6e8ed"></span>`;
-	return `<div style="display:flex;gap:11px"><div style="flex:none;display:flex;flex-direction:column;align-items:center">${dot}${connector}</div>`
-		+ `<div style="flex:1;padding-bottom:${last ? '0' : '18px'}"><div style="display:flex;align-items:center;gap:7px"><span style="font:600 12.5px/1 system-ui;color:#1a1c20">${title}</span>${badge}</div>`
-		+ `<div style="font:400 12.5px/1.5 system-ui;color:#52575f;margin:5px 0 3px">${body}</div><div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${meta}</div></div></div>`;
-}
-
-function historyHtml(audit: readonly IAuditEntry[], fromTemplate?: string): string {
-	const dot = (color: string) => `<span style="width:10px;height:10px;border-radius:50%;background:${color}"></span>`;
-	const head = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;padding:0 2px 14px">VERSION HISTORY &middot; WEEKLY SUMMARY.MD</div>`;
-	// A real origin row for a template-generated document (plan 28, iter 3): driven by the document's own
-	// `fromTemplate` provenance so the string is truthful, not the comp's sample line. It sits at the base
-	// of the timeline (oldest), beneath any real audit entries.
-	const origin = fromTemplate
-		? timelineRow(`<span style="font-size:12px;color:oklch(0.66 0.16 45)">&#9733;</span>`, `Created from ${esc(fromTemplate)} template`, `<span style="font:500 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:3px 6px">FROM TEMPLATE</span>`, 'This document was generated from a template.', `${esc(fromTemplate)}.template.md`, true)
-		: '';
-	// Seed the timeline with the real audit entries when present (most recent first), then the comp's
-	// earlier sample versions for context.
-	const real = audit.slice().reverse().slice(0, 4).map((e, i, arr) => {
-		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'approved' ? 'Approved' : 'Auto-applied';
-		const badge = i === 0 ? `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:3px 6px">CURRENT</span>` : '';
-		return timelineRow(dot(i === 0 ? 'oklch(0.55 0.13 255)' : '#cfd3da'), `${verb}`, badge, `${esc(e.docTitle)} / ${esc(e.blockId)}`, `${esc(e.via)} &middot; ${esc(e.time.slice(11, 19))}`, false);
-	}).join('');
-	// A template-generated document shows its real timeline (audit entries above the origin row), never
-	// the sample - so the provenance line is honest end to end.
-	if (origin) { return head + real + origin; }
-	const sample = [
-		timelineRow(dot('oklch(0.55 0.13 255)'), 'v14', `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:3px 6px">CURRENT</span>`, 'Approved commentary rewrite', 'just now &middot; Tom', false),
-		timelineRow(dot('#cfd3da'), 'v13', '', 'Auto-refresh: MRR, signups updated', `<span style="color:oklch(0.55 0.13 255)">&#10227;</span> 2m ago &middot; Weekly refresh`, false),
-		timelineRow(dot('#cfd3da'), 'v12', '', 'Edited "What to watch"', 'yesterday 18:00 &middot; Tom', false),
-		timelineRow(`<span style="font-size:12px;color:oklch(0.66 0.16 45)">&#9733;</span>`, 'v11', `<span style="font:500 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:3px 6px">SNAPSHOT</span>`, 'Created from Weekly report template', 'Jun 12 &middot; Tom', true),
-	].join('');
-	return head + (real || sample);
-}
+// ---- Static comp-faithful bodies (the document-checks section folded into Review). Light colours match
+// the registered "Abstract" theme, so hardcoding them here reproduces the comp exactly. (Chat is a live DOM
+// surface in _renderChat; the History timeline moved to the pure historyRender module.) ----
 
 // The on-demand "Document agents" disclosure at the bottom of Review (v4 iter 4): a single calm toggle row
 // (so the Review tab matches the "Workbench v2" comp, which dropped the always-on panel) that expands to

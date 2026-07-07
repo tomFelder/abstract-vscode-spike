@@ -331,6 +331,7 @@ export class LivingDocEditor extends EditorPane {
 			nextChangedDocTitle,
 			totalPendingCount: allPending.length,
 			provenance,
+			snapshotCount: this._livingDocs.getSnapshots(resource).length,
 		};
 		const content = renderLivingDocContent(input);
 		// Reset the live PM doc only when the fresh body changed from a model-driven source (an accepted

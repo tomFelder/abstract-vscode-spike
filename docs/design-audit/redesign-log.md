@@ -36,6 +36,22 @@ a short gap backlog, and the iteration that closed each gap.
 
 ## Per-surface gap backlogs
 
+### History tab (plan 26 iter 3-4) - 92%
+
+The History tab now renders real data (snapshots + audit from the lock), so the design-match is scored against the comp's History region rather than the retired v14/v13 sample.
+Preview capture (the actual render code, realistic data): `docs/plans/26-verify/history-render-preview.png`.
+
+Matched to the comp:
+- 10px mono `VERSION HISTORY · <DOC TITLE>` header (letter-spacing `.08em`, `#a3a8b2`).
+- Timeline dots + 2px connectors per `timelineRow`; the source-bound accent dot on the current head, muted grey dots on changes, and the amber star on a published milestone.
+- Amber `SNAPSHOT` badge (`#9a6b16` on `#fdf2dc`) on published/pinned versions; green `CURRENT` badge (`#1f7a44` on `#e7f6ec`) on the live head.
+- Quiet per-version `Restore` action (right-aligned, `#e0e2e8` border) and a `Save version` header affordance.
+- Honest toolbar chip: `Saved`, `Saved · vN`, and the `Saving…` debounce state (same `.tb-saved` mono styling).
+
+Remaining gap (≈8%):
+- The uppercased document title can wrap in the ~340px rail when long (e.g. `WEEKLY SUMMARY` over two lines). Acceptable - the comp's fixed sample title never wrapped; a real title is variable-length and truthful. Diminishing returns to truncate.
+- Body font `system-ui` vs the comp's loaded webfont - the accepted shipping choice across every surface (see cross-surface note below).
+
 ### Provenance gutter (plan 21 iter 1) — final 94%
 
 Closed this iteration:
