@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../../../base/common/buffer.js';
-import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
+import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -20,14 +21,16 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourcePeek, ISourcePeekRow, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { extractBindLinks, findQuoteLine, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, SourceKind } from '../common/livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISnapshotEntry, SNAPSHOT_CAP, SnapshotVia, SourceKind } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
+import { projectDisplayName } from '../common/projectDisplayName.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
 interface IGradeResult {
@@ -73,6 +76,38 @@ function sourceKind(source: string): SourceKind {
 	return /^https?:\/\//.test(source) ? 'api' : 'file';
 }
 
+// An `api` frontmatter source may name a proxy-side secret so an authenticated endpoint resolves without the
+// credential ever reaching the renderer (plan 29, iter 4, D29-C): `https://crm.example.com/data auth=crm-token`.
+// The URL is the source identity (label/hash); `auth` (when present) is only the secret NAME - the value lives
+// in the proxy. Splitting is done here so the rest of the service (and the Knowledge registry) sees a clean URL.
+function parseApiSpec(source: string): { url: string; auth?: string } {
+	const m = /^(.*?)\s+auth=(\S+)\s*$/.exec(source);
+	return m ? { url: m[1].trim(), auth: m[2] } : { url: source.trim() };
+}
+
+// An inline `mcp` binding is a bind key of the shape `<name>@mcp:<server>.<tool>/<field>` (D29-B), e.g.
+// `pipeline@mcp:demo.query/total`. Parse the server/tool/field so the proxy can spawn the server and call the
+// tool; a key without the `@mcp:` marker is a plain file/api binding and returns undefined (resolved as before).
+function parseMcpKey(key: string): { server: string; tool: string; field: string } | undefined {
+	const at = key.indexOf('@mcp:');
+	if (at < 0) { return undefined; }
+	const spec = key.slice(at + '@mcp:'.length);
+	const slash = spec.indexOf('/');
+	const target = slash >= 0 ? spec.slice(0, slash) : spec;
+	const field = slash >= 0 ? spec.slice(slash + 1) : '';
+	const dot = target.indexOf('.');
+	if (dot < 0) { return undefined; }
+	return { server: target.slice(0, dot), tool: target.slice(dot + 1), field };
+}
+
+// The single freshness compare (spec 3.4), shared by the per-document dirty-bit recompute and the source
+// registry projection (plan 29, iter 1): a resolved source value is fresh when its current hash still
+// matches the hash the lock recorded at last sync. A value we can no longer resolve (undefined) is not
+// counted stale here - the caller decides how an unreadable source is presented.
+function bindingIsFresh(current: IResolution | undefined, entry: IBindingEntry): boolean {
+	return !current || current.sourceHash === entry.sourceHash;
+}
+
 // Model-backed features (Review-impact rewrites, the Strategy grader) call Claude through a local
 // OAuth proxy (scripts/lwd-anthropic-proxy.js) so no credential ever reaches the renderer. These are
 // the request defaults; the proxy base URL is configurable via livingDocs.modelProxyUrl.
@@ -88,6 +123,14 @@ const MODEL_PROBE_TTL_MS = 30_000;
 function sourceAlias(source: string): string {
 	const name = source.split('/').pop() ?? source;
 	return name.replace(/\.[^.]+$/, '');
+}
+
+// The human display label for a source in the Knowledge registry (plan 29): a file source shows its name
+// (already the frontmatter value, e.g. "metrics.csv"); an api source shows its host (e.g. "api.example.com"),
+// falling back to the raw URL when it does not parse.
+function sourceLabel(id: string, kind: SourceKind): string {
+	if (kind !== 'api') { return id; }
+	try { return new URL(id).host || id; } catch { return id; }
 }
 
 function tokenize(s: string): string[] {
@@ -113,6 +156,37 @@ function similarity(a: string, b: string): number {
 // newline (not a 0-byte file) gives ProseMirror one empty paragraph to land the caret in.
 const NEW_DOCUMENT_TEMPLATE = `\n`;
 
+// The seed content for New Template (plan 28, iter 2). A template is honest Markdown: `template: true`
+// frontmatter plus a human name/description, a declared source, and a body showing the two authoring
+// devices - a `{{slot:hint}}` the model fills from the sources at generation time, and a `bind:` link
+// that copies through verbatim so a generated document is born bound. HTML-comment lines explain each
+// device without appearing in the generated draft (the skeleton strips them). Australian English.
+const NEW_TEMPLATE_TEMPLATE = [
+	'---',
+	'template: true',
+	'name: Untitled Template',
+	'description: Describe what this template produces and when to use it.',
+	'sources:',
+	'  - metrics.csv',
+	'---',
+	'',
+	'# {{slot:document title}}',
+	'',
+	'<!-- A {{slot:hint}} is filled from the sources when a draft is generated. -->',
+	'',
+	'## Summary',
+	'',
+	'<!-- Write the instruction for this section as prose; the model reads it as the brief. -->',
+	'Summarise the latest figures and call out anything notable this period.',
+	'',
+	'## Numbers',
+	'',
+	'<!-- A bind: link copies through verbatim, so the generated document is born bound to its source. -->',
+	'MRR is [pending](bind:metrics.mrr) on [pending](bind:metrics.signups) new signups.',
+	'',
+].join('\n');
+
+
 export class LivingDocsService extends Disposable implements ILivingDocsService {
 	declare readonly _serviceBrand: undefined;
 
@@ -122,6 +196,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
 	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
 
+	// Fires per delta / tool step while a chat reply streams (plan 27 iter 3), so the rail appends to the
+	// live turn without a full re-render (preserving the composer caret + scroll). Carries the document URI.
+	private readonly _onDidStreamChat = this._register(new Emitter<URI>());
+	readonly onDidStreamChat: Event<URI> = this._onDidStreamChat.event;
+
 	private readonly _onDidRequestFocusChange = this._register(new Emitter<{ docId: string; changeId: string }>());
 	readonly onDidRequestFocusChange: Event<{ docId: string; changeId: string }> = this._onDidRequestFocusChange.event;
 
@@ -129,6 +208,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Raw source text by `${docUri}::${source}`, cached during resolution so getSourcePeek (sync) can
 	// build the comp's raw CSV grid for the in-surface source-peek pane.
 	private readonly _rawSourceCache = new Map<string, string>();
+	// The raw response payload per resolved non-file bind key (plan 29, iter 4): the MCP tool result or the
+	// api JSON, cached during resolution so source-peek can show the real payload with the extracted field
+	// highlighted (closing the "provenance falls back to the CSV" gap for api/mcp kinds).
+	private readonly _payloadRawCache = new Map<string, string>();
 	private _pending: IProposedChange[] = [];
 	private readonly _lockStore: ILockStore;
 	// The orchestration engine: agent registry + dependency-graph event-bus (+ triggers/policy/verify).
@@ -148,12 +231,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// "working" indicator. Kept in the service so the rail survives re-renders and tab switches.
 	private readonly _chats = new Map<string, IChatMessage[]>();
 	private readonly _chatBusy = new Set<string>();
+	// The cancellation source for each document's in-flight streaming reply (plan 27), keyed like _chats.
+	// Present only while a reply streams; cancelChat cancels it, sendChatMessage disposes it in its finally.
+	private readonly _chatCancellers = new Map<string, CancellationTokenSource>();
+	// The in-flight streaming turn per document (plan 27 iter 3): the prose accumulated so far + the tool
+	// steps as they settle, so the rail can render a live assistant turn and the salvage on cancel reads it.
+	// Present only while a reply streams (set at the start of _deliverChatReply, cleared in its finally).
+	private readonly _chatStreaming = new Map<string, { text: string; steps: IChatStep[] }>();
 	// The chat's working set (plan 18): the documents one instruction fans out across, keyed by the
 	// active document the chat belongs to (mirrors the per-document _chats keying). Empty by default,
 	// so with no set added the chat stays single-doc (decision 61).
 	private readonly _workingSets = new Map<string, IWorkingSetDoc[]>();
 	// The figure diff from each document's last "Sync across", for the editor's synced banner.
 	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
+
+	// (plan 33 iter 2, L5) The contents of the folder's `.abstract-name` marker, if it ships one. Read once
+	// at startup + on folder change and cached so `getWorkspaceFolderName()` can stay synchronous. Only ever
+	// used to override a web/memfs mount-stub folder label ("mount"/"static"); a real folder shows its real
+	// basename. `undefined` = not read yet / no marker.
+	private _projectNameMarker: string | undefined;
 
 	constructor(
 		@IFileService private readonly _files: IFileService,
@@ -183,6 +279,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// Probe the model proxy once at startup so the Skills rail reflects model availability without
 		// waiting for the first model call. Failures are swallowed (the no-model fallback stays intact).
 		void this._probeModel();
+		// (plan 33 iter 2, L5) Read the folder's `.abstract-name` marker once at startup + whenever the open
+		// folder changes, so the project name resolves truthfully even under the web/memfs "mount" label.
+		void this._readProjectNameMarker();
+		this._register(this._workspace.onDidChangeWorkspaceFolders(() => void this._readProjectNameMarker()));
+	}
+
+	// Read the `.abstract-name` marker in the open folder, if any, into the cache. A missing/unreadable
+	// marker leaves the cache undefined (the folder then shows its real name/basename - never fabricated).
+	private async _readProjectNameMarker(): Promise<void> {
+		const folder = this._workspace.getWorkspace().folders[0]?.uri;
+		if (!folder) { this._projectNameMarker = undefined; return; }
+		try {
+			const content = (await this._files.readFile(joinPath(folder, '.abstract-name'))).value.toString();
+			this._projectNameMarker = content;
+		} catch {
+			this._projectNameMarker = undefined;
+		}
+		// A late marker read should refresh any open Home/crumb.
+		this._onDidChange.fire();
 	}
 
 	/** The orchestration engine (agent registry, graph event-bus, triggers, policy, verify gate). */
@@ -360,8 +475,222 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return summaries;
 	}
 
+	// --- templates (plan 28) ---
+
+	// Discover and parse every `*.template.md` in the open folder (plan 28, D28-A). Piggybacks on the same
+	// bounded folder scan `listDocuments` uses (a shared `_collect` walk), so templates and documents are
+	// found by one traversal contract; templates are simply the `.template.md` branch. Each is parsed with
+	// the SAME `parseLivingDoc` frontmatter parser (no second parser) into an ITemplateInfo card model.
+	// Sorted by name so the screen order is stable; an unreadable/malformed file is skipped, never faked.
+	async listTemplates(): Promise<readonly ITemplateInfo[]> {
+		const found = new Map<string, URI>();
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectTemplates(folder.uri, found, 0);
+		}
+		const templates: ITemplateInfo[] = [];
+		for (const uri of found.values()) {
+			try {
+				const raw = (await this._files.readFile(uri)).value.toString();
+				const doc = parseLivingDoc(raw);
+				if (!doc.isTemplate) { continue; } // a `.template.md` with no `template: true` is not a template
+				templates.push({
+					uri,
+					name: doc.templateName ?? doc.title,
+					description: doc.templateDescription ?? '',
+					sources: doc.sources,
+					body: doc.body,
+				});
+			} catch (e) {
+				this._log.trace('[livingDocs] template parse skipped', e instanceof Error ? e.message : String(e));
+			}
+		}
+		templates.sort((a, b) => a.name.localeCompare(b.name));
+		return templates;
+	}
+
+	// --- the source registry (plan 29, iter 1): the Knowledge screen's real source library ---
+
+	// The project's source registry (D29-A): a pure projection over every project document's declared
+	// `sources:`/`context:` and its lock, folded by source identity. Discovers documents exactly as
+	// `listDocuments` does (loaded + on-disk, so the screen reflects the real folder even before anything is
+	// opened), then for each living document reads its lock + current source values to answer, per source:
+	// which documents depend on it (+ the bind keys they resolve), when it was last synced, and whether it is
+	// still fresh. No new persistence - `syncedAt`/`fresh` come straight from the recorded lock hashes.
+	async listSources(): Promise<readonly ISourceInfo[]> {
+		const found = new Map<string, URI>();
+		for (const state of this._docs.values()) { found.set(state.uri.toString(), state.uri); }
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectDocs(folder.uri, found, 0);
+		}
+		// source id -> the accumulating registry row.
+		interface IRegistryRow {
+			kind: SourceKind;
+			label: string;
+			syncedAt: string | undefined;
+			fresh: boolean;
+			usedBy: Map<string, { doc: URI; title: string; keys: Set<string>; context: boolean }>;
+		}
+		const acc = new Map<string, IRegistryRow>();
+		const ensure = (id: string, kind: SourceKind): IRegistryRow => {
+			let row = acc.get(id);
+			if (!row) { row = { kind, label: sourceLabel(id, kind), syncedAt: undefined, fresh: true, usedBy: new Map() }; acc.set(id, row); }
+			return row;
+		};
+		for (const uri of found.values()) {
+			const projection = await this._sourceProjection(uri);
+			if (!projection) { continue; }
+			const { doc, lock, resolution, contextHashes, title } = projection;
+			const docId = uri.toString();
+			// Every bind key the document actually authors, so `usedBy` keys are the real dependency (not
+			// every column the source happens to expose).
+			const docKeys = new Set<string>();
+			for (const block of doc.blocks) { for (const b of block.binds) { docKeys.add(b.key); } }
+			// Value sources (frontmatter `sources:`): a source's keys are the document's bind keys under the
+			// source's alias ("metrics.csv" -> alias "metrics" -> keys "metrics.*").
+			for (const source of doc.sources) {
+				const kind = sourceKind(source);
+				const alias = sourceAlias(source);
+				const row = ensure(source, kind);
+				const keys = [...docKeys].filter(k => k.split('.')[0] === alias);
+				const usage = { doc: uri, title, keys: new Set(keys), context: false };
+				row.usedBy.set(docId, usage);
+				// Fold freshness + last-sync from the lock for exactly this document's keys.
+				for (const key of keys) {
+					const entry = lock.bindings[key];
+					if (!entry) { continue; }
+					if (!bindingIsFresh(resolution.get(key), entry)) { row.fresh = false; }
+					if (!row.syncedAt || entry.syncedAt > row.syncedAt) { row.syncedAt = entry.syncedAt; }
+				}
+			}
+			// Context sources (frontmatter `context:`): influence edges - no bind keys; freshness compares the
+			// current source hash to the lock's reviewedHash, last-sync is the reviewedAt.
+			for (const file of doc.context) {
+				const kind = sourceKind(file);
+				const row = ensure(file, kind);
+				const existing = row.usedBy.get(docId);
+				if (existing) { existing.context = true; } else { row.usedBy.set(docId, { doc: uri, title, keys: new Set(), context: true }); }
+				const entry = lock.context[file];
+				if (entry) {
+					if (contextHashes.get(file) !== entry.reviewedHash) { row.fresh = false; }
+					if (!row.syncedAt || entry.reviewedAt > row.syncedAt) { row.syncedAt = entry.reviewedAt; }
+				}
+			}
+		}
+		const sources: ISourceInfo[] = [];
+		for (const [id, row] of acc) {
+			const usedBy: ISourceUsage[] = [...row.usedBy.values()]
+				.map(u => ({ doc: u.doc, title: u.title, keys: [...u.keys].sort((a, b) => a.localeCompare(b)), context: u.context }))
+				.sort((a, b) => a.title.localeCompare(b.title));
+			sources.push({ id, kind: row.kind, label: row.label, syncedAt: row.syncedAt, fresh: row.fresh, usedBy });
+		}
+		sources.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+		return sources;
+	}
+
+	// Read one document's projection for the source registry: its parsed doc, its lock (from the loaded state
+	// or the sidecar), the freshly-resolved value of every bind key, and the current hash of every context
+	// file - all without mutating the loaded-document map or writing anything. Returns undefined for an
+	// unreadable or non-living document (it contributes no sources).
+	private async _sourceProjection(uri: URI): Promise<{ doc: ILivingDoc; title: string; lock: ILivingDocLock; resolution: Map<string, IResolution>; contextHashes: Map<string, string> } | undefined> {
+		const id = uri.toString();
+		let state = this._docs.get(id);
+		if (!state) {
+			let rawText: string;
+			try {
+				rawText = (await this._files.readFile(uri)).value.toString();
+			} catch (e) {
+				this._log.trace('[livingDocs] source projection unreadable', e instanceof Error ? e.message : String(e));
+				return undefined;
+			}
+			const doc = parseLivingDoc(rawText);
+			if (!doc.isLiving) { return undefined; }
+			const lock = (await this._lockStore.read(uri)) ?? emptyLock();
+			state = { uri, doc, rawText, lock, recent: new Set(), staleBindings: new Set(), staleContext: new Set(), status: '', folderFiles: [] };
+		}
+		if (!state.doc.isLiving) { return undefined; }
+		const resolution = await this._resolveCurrent(state);
+		const contextHashes = new Map<string, string>();
+		for (const file of state.doc.context) { contextHashes.set(file, await this._hashContext(state, file)); }
+		return { doc: state.doc, title: state.doc.title, lock: state.lock, resolution, contextHashes };
+	}
+
+	// Recursively collect every `*.template.md` under a folder, mirroring `_collectDocs`' bounded, hidden-dir
+	// skipping walk (the folder is the project; templates may live anywhere, e.g. under `templates/`).
+	private async _collectTemplates(dir: URI, found: Map<string, URI>, depth: number): Promise<void> {
+		if (depth > 4) { return; }
+		let children;
+		try {
+			children = (await this._files.resolve(dir)).children ?? [];
+		} catch (e) {
+			this._log.trace('[livingDocs] templates scan skipped', e instanceof Error ? e.message : String(e));
+			return;
+		}
+		for (const child of children) {
+			const name = basename(child.resource);
+			if (child.isDirectory) {
+				if (name.startsWith('.') || name === 'node_modules' || name === 'out') { continue; }
+				await this._collectTemplates(child.resource, found, depth + 1);
+			} else if (this._isTemplateFile(child.resource)) {
+				found.set(child.resource.toString(), child.resource);
+			}
+		}
+	}
+
+	// New Template (plan 28, iter 2): write an `untitled.template.md` (uniquified) seeded with the commented
+	// example and open it in the normal editor - it is just Markdown, so it round-trips on disk with no new
+	// format. Fires onDidChange so an open Templates screen refreshes its card grid.
+	async createTemplate(): Promise<URI | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) {
+			this._notify.info('Open a folder to create a template.');
+			return undefined;
+		}
+		const target = await this._uniqueTemplateUri(folder.uri);
+		try {
+			await this._files.writeFile(target, VSBuffer.fromString(NEW_TEMPLATE_TEMPLATE));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } });
+			this._onDidChange.fire();
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] create template failed', e);
+			return undefined;
+		}
+	}
+
+	// Pick a non-colliding `untitled.template.md` name in the folder (mirrors `_uniqueDocUri`).
+	private async _uniqueTemplateUri(folder: URI): Promise<URI> {
+		const existing = new Set<string>();
+		try {
+			for (const child of (await this._files.resolve(folder)).children ?? []) {
+				existing.add(basename(child.resource));
+			}
+		} catch {
+			// An unreadable folder just means no collisions to avoid.
+		}
+		let name = 'untitled.template.md';
+		for (let n = 2; existing.has(name); n++) {
+			name = `untitled ${n}.template.md`;
+		}
+		return joinPath(folder, name);
+	}
+
 	getWorkspaceFolderName(): string | undefined {
 		return this._workspace.getWorkspace().folders[0]?.name;
+	}
+
+	// (plan 33 iter 2, L5) The truthful project display name for Home, the topbar crumb and the ALL PROJECTS
+	// current-folder tile. In the web build the workbench labels the memfs mount "mount" (a mount-point
+	// artefact, not a project name); `projectDisplayName` overrides that ONLY when the sample ships an
+	// `.abstract-name` marker (cached in `_projectNameMarker`), and otherwise shows the real folder
+	// name/basename. Synchronous (reads the pre-read marker cache) so the renderer can call it inline.
+	getProjectDisplayName(): string | undefined {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder?.uri) { return undefined; }
+		return projectDisplayName({
+			folderName: folder.name,
+			basename: basename(folder.uri),
+			markerContent: this._projectNameMarker,
+		});
 	}
 
 	// The data files (csv/json) sitting alongside the document that are not already bound and are not lock
@@ -381,6 +710,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			.map(c => basename(c.resource))
 			// Exclude system json (lock sidecars + the agents registry) - they are not user data sources.
 			.filter(name => /\.(csv|json)$/i.test(name) && !/\.lock\.json$/i.test(name) && name !== 'agents.json' && !bound.has(name))
+			.sort((a, b) => a.localeCompare(b));
+	}
+
+	// The project folder's data files (csv/json) for the Knowledge Add-source picker (plan 29, iter 2).
+	// Scans the workspace folder root (the samples are flat); excludes lock sidecars + the agents registry.
+	async getFolderDataFiles(): Promise<readonly string[]> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) { return []; }
+		let children;
+		try {
+			children = (await this._files.resolve(folder.uri)).children ?? [];
+		} catch {
+			return [];
+		}
+		return children
+			.filter(c => !c.isDirectory)
+			.map(c => basename(c.resource))
+			.filter(name => /\.(csv|json)$/i.test(name) && !/\.lock\.json$/i.test(name) && name !== 'agents.json')
 			.sort((a, b) => a.localeCompare(b));
 	}
 
@@ -451,13 +798,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	async createDocument(): Promise<URI | undefined> {
+	async createDocument(name?: string): Promise<URI | undefined> {
 		const folder = this._workspace.getWorkspace().folders[0];
 		if (!folder) {
 			this._notify.info('Open a folder to create a document.');
 			return undefined;
 		}
-		const target = await this._uniqueDocUri(folder.uri);
+		// A provided name is born titled (`<name>.md`); an empty name keeps decision 56's `Untitled.md`
+		// name-on-first-save escape hatch. Path-hostile characters are stripped so the name is a safe stem.
+		const stem = LivingDocsService._safeStem(name);
+		const target = await this._uniqueDocUri(folder.uri, stem || 'Untitled');
 		try {
 			await this._files.writeFile(target, VSBuffer.fromString(NEW_DOCUMENT_TEMPLATE));
 			await this._editors.openEditor({ resource: target, options: { pinned: true } });
@@ -467,6 +817,59 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._log.warn('[livingDocs] create document failed', e);
 			return undefined;
 		}
+	}
+
+	// Reduce a free-text document name to a safe filename stem: drop path separators and characters no OS
+	// allows in a name, collapse whitespace. An empty result signals "no name" (the caller keeps Untitled).
+	private static _safeStem(name: string | undefined): string {
+		return (name ?? '').replace(/[\/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+	}
+
+	// Generate a draft document from a template (plan 28, iter 3): write the static skeleton (headings +
+	// verbatim bind links + `template:` provenance), open it, then drive the SAME chat path every generation
+	// uses so the prose lands as reviewable insertion proposals (decision 17) - no new approve/apply path.
+	// With no model reachable the skeleton is still created and a status line explains it needs the model
+	// (honest empty state, never fake prose). Returns the new document's URI.
+	async generateFromTemplate(templateUri: URI, docName: string, note: string): Promise<URI | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) {
+			this._notify.info('Open a folder to create a document.');
+			return undefined;
+		}
+		let template: ILivingDoc;
+		try {
+			template = parseLivingDoc((await this._files.readFile(templateUri)).value.toString());
+		} catch (e) {
+			this._log.warn('[livingDocs] template unreadable for generation', e);
+			this._notify.info('That template could not be read.');
+			return undefined;
+		}
+		const templateName = template.templateName || basename(templateUri).replace(/\.template\.md$/, '');
+		const requested = LivingDocsService._safeStem(docName) || LivingDocsService._safeStem(templateName) || 'Untitled';
+		const skeleton = buildTemplateSkeleton(template.body, requested, templateName, template.sources);
+		const target = await this._uniqueDocUri(folder.uri, requested);
+		try {
+			await this._files.writeFile(target, VSBuffer.fromString(skeleton));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } });
+		} catch (e) {
+			this._log.warn('[livingDocs] generate skeleton write failed', e);
+			return undefined;
+		}
+		// Load so the skeleton's copied binds resolve on disk and the doc has state to chat over.
+		await this.loadDocument(target);
+		if (!await this._hasModel()) {
+			// Honest no-model state: the skeleton is real and bound, but the prose draft needs the model.
+			const state = this._docs.get(target.toString());
+			if (state) { state.status = 'Draft skeleton created - connect a model to fill it from the sources'; }
+			this._notify.info(`Created "${requested}" from the ${templateName} template. Start the local model proxy to draft its prose.`);
+			this._onDidChange.fire();
+			return target;
+		}
+		// Drive the existing generative chat path with the composed brief: the model's output arrives as
+		// insertion proposals in the review rail, exactly like any chat generation.
+		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
+		await this.sendChatMessage(target, instruction);
+		return target;
 	}
 
 	// Recursively collect every Markdown document under a folder (the folder is the project), skipping
@@ -491,11 +894,20 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// A document is any `.md` file; generated `.export.md` / `.source.md` views are skipped. Whether it is
-	// "living" (declares sources/context or carries bind links) is resolved per-summary for the badge.
+	// A document is any `.md` file; generated `.export.md` / `.source.md` views are skipped, and template
+	// files (`*.template.md`, plan 28 D28-A) are excluded so they never appear in the Reports list, the
+	// tree-rail or the Home documents grid - they show only on the Templates screen (but stay on disk).
+	// Whether a document is "living" (declares sources/context or carries bind links) is resolved
+	// per-summary for the badge.
 	private _isDocFile(resource: URI): boolean {
 		const path = resource.path;
-		return path.endsWith('.md') && !path.endsWith('.export.md') && !path.endsWith('.source.md');
+		return path.endsWith('.md') && !path.endsWith('.export.md') && !path.endsWith('.source.md') && !path.endsWith('.template.md');
+	}
+
+	// A template file is any `*.template.md` (plan 28, D28-A). Discovered anywhere in the folder (including
+	// a `templates/` subfolder); parsed for the Templates screen but never listed as a Report.
+	private _isTemplateFile(resource: URI): boolean {
+		return resource.path.endsWith('.template.md');
 	}
 
 	// A `.md` is a Living Document when its content declares sources/context or carries bind links.
@@ -534,7 +946,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	private async _uniqueDocUri(folder: URI): Promise<URI> {
+	private async _uniqueDocUri(folder: URI, stem: string = 'Untitled'): Promise<URI> {
 		const existing = new Set<string>();
 		try {
 			for (const child of (await this._files.resolve(folder)).children ?? []) {
@@ -543,9 +955,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		} catch {
 			// An unreadable folder just means no collisions to avoid.
 		}
-		let name = 'Untitled.md';
+		let name = `${stem}.md`;
 		for (let n = 2; existing.has(name); n++) {
-			name = `Untitled ${n}.md`;
+			name = `${stem} ${n}.md`;
 		}
 		return joinPath(folder, name);
 	}
@@ -649,7 +1061,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const resolution = await this._resolveCurrent(state);
 			for (const key of Object.keys(state.lock.bindings)) {
 				const cur = resolution.get(key);
-				if (cur && cur.sourceHash !== state.lock.bindings[key].sourceHash) { staleBindings.add(key); }
+				if (cur && !bindingIsFresh(cur, state.lock.bindings[key])) { staleBindings.add(key); }
 			}
 			for (const file of state.doc.context) {
 				const entry = state.lock.context[file];
@@ -716,12 +1128,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// top-level fields. Influence (`context:`) sources are not value-resolved here (see Item 5).
 	private async _resolveCurrent(state: IDocState): Promise<Map<string, IResolution>> {
 		const resolved = new Map<string, IResolution>();
+		// Inline `mcp` bindings (bind:key@mcp:server.tool/field, D29-B) resolve through the proxy, which owns the
+		// server process + credentials (decision 14) - the web build cannot spawn, so the proxy does the spawning
+		// and the same code path works on web and desktop. A server that is down leaves the key unresolved (the
+		// binding flags stale, the document still renders) rather than throwing.
+		for (const block of state.doc.blocks) {
+			for (const bind of block.binds) {
+				const mcp = parseMcpKey(bind.key);
+				if (mcp) { await this._resolveMcpSource(bind.key, mcp, resolved); }
+			}
+		}
 		for (const source of state.doc.sources) {
-			const alias = sourceAlias(source);
 			if (sourceKind(source) === 'api') {
-				await this._resolveApiSource(source, alias, resolved);
+				// Strip any ` auth=<name>` marker before deriving the alias/URL, so an authenticated source's
+				// bind keys (metrics.arr) and identity are the clean URL, not the credential spec.
+				const spec = parseApiSpec(source);
+				await this._resolveApiSource(spec.url, sourceAlias(spec.url), resolved, spec.auth);
 				continue;
 			}
+			const alias = sourceAlias(source);
 			const uri = joinPath(dirname(state.uri), source);
 			let text: string;
 			try {
@@ -797,19 +1222,67 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return undefined;
 	}
 
-	private async _resolveApiSource(url: string, alias: string, resolved: Map<string, IResolution>): Promise<void> {
+	private async _resolveApiSource(url: string, alias: string, resolved: Map<string, IResolution>, auth?: string): Promise<void> {
 		try {
-			const context = await this._request.request({ type: 'GET', url, callSite: 'livingDocs.apiSource' }, CancellationToken.None);
-			const json = await asJson<Record<string, unknown>>(context);
+			// An authenticated source is fetched THROUGH the proxy (POST /proxy/fetch), which injects the named
+			// secret's Bearer header server-side (plan 29, iter 4) - the renderer only ever names the secret, never
+			// holds it. An unauthenticated source keeps the original direct IRequestService GET (byte-identical).
+			const json = auth
+				? await this._proxyFetchJson(url, auth)
+				: await asJson<Record<string, unknown>>(await this._request.request({ type: 'GET', url, callSite: 'livingDocs.apiSource' }, CancellationToken.None));
 			if (!json) { return; }
 			const hash = hashString(JSON.stringify(json));
+			// Cache the pretty-printed payload so source-peek can show the real api response (field highlighted).
+			const pretty = JSON.stringify(json, null, 2);
 			for (const key of Object.keys(json)) {
 				const value = json[key];
 				const text = typeof value === 'number' ? value.toLocaleString('en-US') : String(value);
 				resolved.set(`${alias}.${key}`, { value: text, sourceHash: hash, source: `${url}#${key}` });
+				this._payloadRawCache.set(`${alias}.${key}`, pretty);
 			}
 		} catch (e) {
 			this._log.warn('[livingDocs] api source failed', e instanceof Error ? e.message : String(e));
+		}
+	}
+
+	// Fetch an authenticated JSON endpoint through the proxy so the credential never reaches the renderer
+	// (plan 29, iter 4). The proxy reads the named secret from ~/.abstract/secrets.json and injects the header.
+	private async _proxyFetchJson(url: string, auth: string): Promise<Record<string, unknown> | null> {
+		const context = await this._request.request({
+			type: 'POST',
+			url: `${this._proxyUrl()}/proxy/fetch`,
+			headers: { 'content-type': 'application/json' },
+			data: JSON.stringify({ url, auth }),
+			callSite: 'livingDocs.apiSourceAuth',
+		}, CancellationToken.None);
+		return asJson<Record<string, unknown>>(context);
+	}
+
+	// Resolve one inline `mcp` binding through the proxy's /mcp/resolve route (plan 29, iter 4). The proxy
+	// spawns/reuses the configured MCP server (stdio JSON-RPC) and extracts the requested field; a failure
+	// (server down, unknown tool, timeout) leaves the key unresolved so the binding flags stale and the
+	// document still renders - never an error toast. The lock's `source` records the mcp origin for provenance.
+	private async _resolveMcpSource(fullKey: string, mcp: { server: string; tool: string; field: string }, resolved: Map<string, IResolution>): Promise<void> {
+		try {
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/mcp/resolve`,
+				headers: { 'content-type': 'application/json' },
+				data: JSON.stringify({ server: mcp.server, tool: mcp.tool, args: {}, field: mcp.field }),
+				callSite: 'livingDocs.mcpSource',
+			}, CancellationToken.None);
+			const json = await asJson<{ value?: string; raw?: string; error?: { message?: string } }>(context);
+			if (!json || json.error || typeof json.value !== 'string' || json.value.length === 0) {
+				this._log.warn('[livingDocs] mcp source unresolved', fullKey, json?.error?.message ?? '');
+				return;
+			}
+			// Cache the raw MCP payload so source-peek can show the real response with the field highlighted
+			// (closing the "falls back to the CSV" gap for non-file kinds).
+			this._payloadRawCache.set(fullKey, json.raw ?? json.value);
+			const origin = `${mcp.server}.${mcp.tool}#${mcp.field}`;
+			resolved.set(fullKey, { value: json.value, sourceHash: hashString(json.raw ?? json.value), source: origin });
+		} catch (e) {
+			this._log.warn('[livingDocs] mcp source failed', fullKey, e instanceof Error ? e.message : String(e));
 		}
 	}
 
@@ -1024,7 +1497,68 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.lock.pins = [...versions].map(([source, version]) => ({ source, version }));
 		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `published ${at}`, 'heuristic'));
 		await this._lockStore.write(state.uri, state.lock);
+		// Publishing is a milestone: snapshot the published body so it is a restorable version.
+		await this.saveSnapshot(resource, 'Published', 'publish');
 		this._notify.info(`Published "${state.doc.title}" - pinned to ${state.lock.pins.length} source version${state.lock.pins.length === 1 ? '' : 's'}.`);
+		this._onDidChange.fire();
+	}
+
+	// --- versions / snapshots (plan 26 iter 2) ---
+
+	getSnapshots(resource: URI): readonly ISnapshotEntry[] {
+		const snapshots = this._docs.get(resource.toString())?.lock.snapshots ?? [];
+		// Newest first for the History tab; the lock keeps them in creation order.
+		return [...snapshots].reverse();
+	}
+
+	// Take a snapshot of the document's body under a label. Capped at SNAPSHOT_CAP with oldest-eviction
+	// so the lock never grows without bound (D26-A). The body is verbatim Markdown (defaults to the
+	// current on-disk text; callers that snapshot a pre-change state pass it explicitly); `auditIndex`
+	// is the audit length now, so the History tab can group later changes.
+	async saveSnapshot(resource: URI, label: string, via: SnapshotVia, body?: string): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const entry: ISnapshotEntry = {
+			id: generateUuid(),
+			label,
+			at: new Date().toISOString(),
+			via,
+			body: body ?? state.rawText,
+			auditIndex: state.lock.audit.length,
+		};
+		state.lock.snapshots.push(entry);
+		while (state.lock.snapshots.length > SNAPSHOT_CAP) {
+			state.lock.snapshots.shift();
+		}
+		await this._lockStore.write(state.uri, state.lock);
+		this._onDidChange.fire();
+	}
+
+	// Restore an earlier version through the one approve path (no bypass write): reject any pending
+	// changes first, write the snapshot body back, record it on the audit as an applied change, then
+	// recompute freshness so bindings that are now stale re-flag (correct and visible - the restored
+	// figures may be behind the current sources).
+	async restoreSnapshot(resource: URI, snapshotId: string): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const snapshot = state.lock.snapshots.find(s => s.id === snapshotId);
+		if (!snapshot) { return; }
+		const oldBody = state.rawText;
+		if (oldBody === snapshot.body) {
+			// Nothing to restore (already the current body); do not write a no-op audit entry.
+			return;
+		}
+		// Reject any pending changes for this document first - restoring resets the body, so unreviewed
+		// proposals against the old body no longer apply.
+		await this.rejectAll(resource.toString());
+		// Write the snapshot body back through the existing persist path (parse -> disk -> lock).
+		state.doc = parseLivingDoc(snapshot.body);
+		state.rawText = snapshot.body;
+		state.status = `Restored "${snapshot.label}"`;
+		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'approved', oldBody, snapshot.body, 'restore'));
+		await this._persist(state);
+		await this._recomputeFreshness(state);
+		this._notify.info(`Restored "${state.doc.title}" to "${snapshot.label}".`);
 		this._onDidChange.fire();
 	}
 
@@ -1100,7 +1634,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			let state = this._docs.get(uri.toString());
 			if (!state) { state = await this._loadState(uri); }
 			if (!state || !state.doc.isLiving) { continue; }
-			await this._syncLockWithDiff(state);
+			// Snapshot the pre-refresh body BEFORE syncing writes the new one, but only keep it if the
+			// sync actually re-derived a figure (D26-B: one snapshot per run that applied a change). A
+			// no-op refresh leaves no version. `saveSnapshot` reads `state.rawText`, so capture here.
+			const beforeBody = state.rawText;
+			const changes = await this._syncLockWithDiff(state);
+			const afterBody = serializeLivingDoc(state.doc);
+			if (changes.length && beforeBody !== afterBody) {
+				await this.saveSnapshot(state.uri, 'Before refresh', 'refresh', beforeBody);
+			}
 			await this._persist(state);
 			// The value bindings are now in sync, so their dirty bits clear (context stays stale until
 			// a Review-impact pass, Item 5).
@@ -1131,8 +1673,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (agent.trigger.kind === 'event' || agent.trigger.kind === 'lifecycle') { return { applied: 0, queued: 0 }; }
 		let applied = 0;
 		let queued = 0;
+		let skipped = 0;
 		let blocked: string | undefined;
-		for (const uri of context.docs) {
+		const docs = context.docs;
+		for (let i = 0; i < docs.length; i++) {
+			// A per-run Stop leaves every remaining document unprocessed and honestly skipped (plan 27 iter 4);
+			// documents already processed keep whatever they applied/queued (reviewable work, not partial writes).
+			if (context.token?.isCancellationRequested) { skipped = docs.length - i; break; }
+			const uri = docs[i];
 			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
 			if (!state || !state.doc.isLiving) { continue; }
 			state.recent = new Set<string>();
@@ -1146,7 +1694,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (agent.trigger.kind === 'heartbeat') { this._orchestrator.clearDirty(uri); }
 		}
 		this._onDidChange.fire();
-		return { applied, queued, blocked };
+		return { applied, queued, blocked, skipped };
 	}
 
 	// --- the Review-impact pass (expensive, on-demand): spec 3.6 ---
@@ -1354,6 +1902,76 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return text;
 	}
 
+	// Streaming variant of the model call (plan 27, decision D27-A). POSTs with `stream: true` and reads
+	// the proxy's SSE response with a `fetch` + `ReadableStream` reader (the request service does not expose
+	// a stream), accumulating and emitting each `content_block_delta` text as it arrives; resolves with the
+	// full text so the EXISTING end-of-stream parse (parseChatResponse) is unchanged - proposals are only
+	// ever committed from the complete response, never from a partial. On `token` cancellation the fetch is
+	// aborted and a distinguishable CancellationError is thrown so the caller can salvage the streamed prose
+	// (D27-B) rather than treating it as a failure. The credential stays in the proxy (decision 14).
+	private async _callModelStream(system: string, user: string, onDelta: (text: string) => void, token: CancellationToken): Promise<string> {
+		const controller = new AbortController();
+		const sub = token.onCancellationRequested(() => controller.abort());
+		try {
+			if (token.isCancellationRequested) { throw new CancellationError(); }
+			const body = JSON.stringify({
+				model: this._modelName(),
+				max_tokens: MODEL_MAX_TOKENS,
+				thinking: { type: 'adaptive' },
+				output_config: { effort: 'low' },
+				stream: true,
+				system,
+				messages: [{ role: 'user', content: user }],
+			});
+			const response = await fetch(`${this._proxyUrl()}/v1/messages`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body,
+				signal: controller.signal,
+			});
+			if (!response.ok || !response.body) { throw new Error(`model proxy http ${response.status}`); }
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+			let full = '';
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) { break; }
+				buffer += decoder.decode(value, { stream: true });
+				const result = parseSseChunk(buffer);
+				buffer = result.remainder;
+				for (const delta of result.deltas) {
+					full += delta;
+					onDelta(delta);
+				}
+				if (result.done) { break; }
+			}
+			if (token.isCancellationRequested) { throw new CancellationError(); }
+			if (!full.trim()) { throw new Error('model returned no text'); }
+			return full;
+		} catch (e) {
+			// An aborted fetch (name 'AbortError') or a cancelled token both mean the user stopped the reply.
+			if (token.isCancellationRequested || (e instanceof Error && e.name === 'AbortError')) { throw new CancellationError(); }
+			throw e;
+		} finally {
+			sub.dispose();
+		}
+	}
+
+	// The chat model-call ladder (plan 27 iter 2): stream first; on a NON-cancel stream failure fall back once
+	// to the buffered _callModel (which itself keeps the decision-58 single silent retry); a genuine failure
+	// there propagates to the caller's honest heuristic fallback. Cancellation is re-thrown untouched so the
+	// streamed prose can be salvaged (D27-B) rather than being retried or masked as an error.
+	private async _chatModelCall(system: string, user: string, onDelta: (text: string) => void, token: CancellationToken): Promise<string> {
+		try {
+			return await this._callModelStream(system, user, onDelta, token);
+		} catch (e) {
+			if (isCancellationError(e)) { throw e; }
+			this._log.info('[livingDocs] streaming chat call failed, falling back to buffered call', e instanceof Error ? e.message : String(e));
+			return await this._callModel(system, user);
+		}
+	}
+
 	private async _proposeImpact(diff: string, contextFiles: string[], oldText: string, modelAvailable: boolean): Promise<{ newText: string; kind: 'figure' | 'meaning'; confidence: number; rationale: string; via: 'model' | 'heuristic' }> {
 		if (modelAvailable) {
 			try {
@@ -1491,7 +2109,52 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 		const mentions = this._parseMentions(resource, trimmed);
 		history.push({ role: 'user', content: trimmed, mentions: mentions.length ? mentions : undefined });
+		await this._deliverChatReply(resource, trimmed, mentions);
+	}
+
+	getStreamingChat(resource: URI): { readonly text: string; readonly steps: readonly IChatStep[] } | undefined {
+		return this._chatStreaming.get(resource.toString());
+	}
+
+	retryChat(resource: URI): void {
+		const id = resource.toString();
+		const history = this._chats.get(id);
+		// Never retry while a reply is in flight, or when there is nothing to retry.
+		if (!history || !history.length || this._chatBusy.has(id)) { return; }
+		// Drop the failed assistant turn(s) so the retry REPLACES them (the user turn is kept and re-run - no
+		// duplicate user message). Only retry a genuinely failed turn; a stopped / guidance turn is left alone.
+		if (history[history.length - 1].role !== 'assistant' || !history[history.length - 1].failed) { return; }
+		while (history.length && history[history.length - 1].role === 'assistant') { history.pop(); }
+		const last = history[history.length - 1];
+		if (!last || last.role !== 'user') { return; }
+		const mentions = last.mentions ? [...last.mentions] : this._parseMentions(resource, last.content);
+		void this._deliverChatReply(resource, last.content, mentions);
+	}
+
+	// The shared chat-turn delivery (plan 27 iters 2-3): sets busy, opens a per-document cancellation source,
+	// streams the reply into a live turn (onDelta appends prose, onStep appends tool steps as they settle),
+	// then pushes the final assistant turn. A cancel keeps the salvaged prose as a muted "stopped" turn
+	// (D27-B); a genuine failure pushes a "failed" turn the rail offers Retry on. The user turn is already the
+	// last history entry (pushed by sendChatMessage, or kept by retryChat), so the transcript reads correctly.
+	private async _deliverChatReply(resource: URI, trimmed: string, mentions: string[]): Promise<void> {
+		const id = resource.toString();
+		const history = this._chats.get(id) ?? [];
+		this._chats.set(id, history);
 		this._chatBusy.add(id);
+		// One cancellation source per in-flight reply (plan 27); cancelChat cancels it, this method disposes it.
+		const cancellers = this._chatCancellers;
+		cancellers.get(id)?.dispose();
+		const cts = new CancellationTokenSource();
+		cancellers.set(id, cts);
+		// The live turn the rail renders while the reply streams; the salvage on cancel reads its `text`.
+		const streaming = { text: '', steps: [] as IChatStep[] };
+		this._chatStreaming.set(id, streaming);
+		// Accumulate the raw model text but SHOW the human `reply` prose, so the live turn reads as words
+		// rather than the raw `{"reply":"..."}` envelope (plan 27 iter 3). The end-of-stream parse still runs
+		// over the complete raw text (returned by _callModelStream), so the proposal contract is unchanged.
+		let rawStream = '';
+		const onDelta = (delta: string) => { rawStream += delta; streaming.text = extractStreamingReply(rawStream); this._onDidStreamChat.fire(resource); };
+		const onStep = (step: IChatStep) => { streaming.steps.push(step); this._onDidStreamChat.fire(resource); };
 		this._onDidChange.fire();
 
 		try {
@@ -1511,21 +2174,36 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// with no set the chat stays single-doc against the active document (decision 61).
 			const workingSet = this.getWorkingSet(resource);
 			const reply = workingSet.length
-				? await this._chatRespondMulti(state, trimmed, mentions, workingSet)
-				: await this._chatRespond(state, trimmed, mentions);
+				? await this._chatRespondMulti(state, trimmed, mentions, workingSet, onDelta, onStep, cts.token)
+				: await this._chatRespond(state, trimmed, mentions, onDelta, onStep, cts.token);
 			history.push(reply);
 		} catch (e) {
-			this._log.info('[livingDocs] chat failed, honest fallback', e instanceof Error ? e.message : String(e));
-			history.push({ role: 'assistant', via: 'fallback', content: 'I could not complete that just now (the agent model errored). The proxy may be down - try again once it is back.' });
+			// A cancel is NOT a failure: keep the prose streamed so far as a muted "stopped" turn and queue no
+			// proposals (they are only ever committed from the complete response). Everything else is honest error.
+			if (isCancellationError(e)) {
+				const salvage = streaming.text.trim();
+				history.push({ role: 'assistant', via: 'model', content: salvage, stopped: true });
+			} else {
+				this._log.info('[livingDocs] chat failed, honest fallback', e instanceof Error ? e.message : String(e));
+				// A genuine model error offers Retry (plan 27 iter 3): the rail re-sends this same user message.
+				history.push({ role: 'assistant', via: 'fallback', failed: true, content: 'The model call failed.' });
+			}
 		} finally {
+			cts.dispose();
+			if (cancellers.get(id) === cts) { cancellers.delete(id); }
+			this._chatStreaming.delete(id);
 			this._chatBusy.delete(id);
 			this._onDidChange.fire();
 		}
 	}
 
+	cancelChat(resource: URI): void {
+		this._chatCancellers.get(resource.toString())?.cancel();
+	}
+
 	// Build the model prompt from the document (figures resolved) + the @mentioned and context sources,
 	// ask for a reply plus optional prose edits, render tool-steps, and queue any edits into the rail.
-	private async _chatRespond(state: IDocState, text: string, mentions: string[]): Promise<IChatMessage> {
+	private async _chatRespond(state: IDocState, text: string, mentions: string[], onDelta: (text: string) => void, onStep: (step: IChatStep) => void, token: CancellationToken): Promise<IChatMessage> {
 		const docText = this._serializeDocForChat(state);
 		const sourceFiles = mentions.length ? mentions : [...state.doc.sources, ...state.doc.context];
 		const sources = await this._readContext(state, sourceFiles);
@@ -1540,21 +2218,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			+ 'Propose changes only when the user asks to write, generate or revise; otherwise return empty arrays. Keep reply concise.';
 		const transcript = this._chatTranscript(state.uri);
 		const user = `Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nHeadings: ${headings.join(' | ') || '(none)'}\n\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
-		const raw = await this._callModel(system, user);
+		const raw = await this._chatModelCall(system, user, onDelta, token);
 		// Tolerant parse (plan 16 iter 5): a non-JSON / truncated / prose-wrapped reply degrades to a plain
 		// chat answer instead of throwing (which used to surface as a false "the agent model errored").
 		const json = parseChatResponse(raw);
 
 		const steps: IChatStep[] = [];
 		const proposedIds: string[] = [];
-		if (sourceFiles.length) { steps.push({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
+		// Emit each tool step to the live turn as it settles (plan 27 iter 3), as well as collecting it for
+		// the final message - so the rail shows the steps appearing rather than all at once at stream end.
+		const addStep = (step: IChatStep) => { steps.push(step); onStep(step); };
+		if (sourceFiles.length) { addStep({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
 		for (const edit of json.edits) {
 			const queued = this._queueChatEdit(state, edit);
-			if (queued) { steps.push({ label: `Proposed edit: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+			if (queued) { addStep({ label: `Proposed edit: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 		}
 		for (const insert of json.inserts) {
 			const queued = this._queueChatInsert(state, insert);
-			if (queued) { steps.push({ label: `Proposed new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+			if (queued) { addStep({ label: `Proposed new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 		}
 		// What the bubble shows: the model's reply when it gave one; nothing when proposals carry the meaning
 		// (their cards speak); otherwise a neutral honest line. `parseChatResponse` already routed a non-JSON
@@ -1573,7 +2254,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// doc's edits/inserts are routed into the existing proposal queue tagged with that doc's id, so the
 	// Review rail's per-document grouping + approve/reject loop is reused unchanged. Plain and living docs
 	// flow through the same path (decision 63).
-	private async _chatRespondMulti(active: IDocState, text: string, mentions: string[], workingSet: readonly IWorkingSetDoc[]): Promise<IChatMessage> {
+	private async _chatRespondMulti(active: IDocState, text: string, mentions: string[], workingSet: readonly IWorkingSetDoc[], onDelta: (text: string) => void, onStep: (step: IChatStep) => void, token: CancellationToken): Promise<IChatMessage> {
 		// Ensure every target document is loaded so it can be serialized for the prompt and edited.
 		for (const wsDoc of workingSet) {
 			if (!this._docs.get(wsDoc.resource.toString())) { await this.loadDocument(wsDoc.resource); }
@@ -1598,12 +2279,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			+ 'The "doc" field MUST be the exact document title shown below. Use "edits" to rewrite an existing paragraph (oldText must quote the current prose). Use "inserts" to add NEW content after the named heading (empty afterHeading = end of that document). Keep reply concise.';
 		const transcript = this._chatTranscript(active.uri);
 		const user = `Working set (${states.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
-		const raw = await this._callModel(system, user);
+		const raw = await this._chatModelCall(system, user, onDelta, token);
 		const json = parseMultiChatResponse(raw);
 
 		const steps: IChatStep[] = [];
 		const proposedIds: string[] = [];
-		if (sourceFiles.length) { steps.push({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
+		const addStep = (step: IChatStep) => { steps.push(step); onStep(step); };
+		if (sourceFiles.length) { addStep({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
 		// Match each returned doc entry to a working-set document by title, then queue its edits/inserts
 		// against that document's own state (so proposals carry the right docId for the rail grouping).
 		const byTitle = new Map(states.map(s => [s.doc.title.trim().toLowerCase(), s]));
@@ -1612,11 +2294,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (!target) { continue; }
 			for (const edit of entry.edits) {
 				const queued = this._queueChatEdit(target, edit, sources);
-				if (queued) { steps.push({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+				if (queued) { addStep({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 			}
 			for (const insert of entry.inserts) {
 				const queued = this._queueChatInsert(target, insert, sources);
-				if (queued) { steps.push({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+				if (queued) { addStep({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 			}
 		}
 		const content = json.reply || (proposedIds.length ? '' : 'I did not find anything to change across those documents.');
@@ -1646,11 +2328,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		let best: ILivingDocBlock | undefined;
 		let bestScore = 0.5;
 		for (const block of state.doc.blocks) {
-			if (block.type === 'heading' || block.binds.length) { continue; }
-			const score = similarity(block.text, oldText);
+			if (block.type === 'heading') { continue; }
+			// A wholly-bound block (a figure paragraph) is never chat-editable. A LIST block may carry a bind
+			// in one item while other items are plain prose the agent can revise, so lists stay candidates and
+			// the per-item bind guard below protects the bound item (decision-68 fix, plan 31 iter 1).
+			if (block.binds.length && listItems(block.text).length < 2) { continue; }
+			// Score against the item the edit targets, not the whole block, so a single-item edit to a long
+			// list can still select that list block (the whole-list token set otherwise dilutes the match).
+			const score = similarity(scopeBlockEdit(block.text, oldText).oldText, oldText);
 			if (score > bestScore) { bestScore = score; best = block; }
 		}
-		if (!best || best.text.trim() === newText) { return undefined; }
+		if (!best) { return undefined; }
+		// Anchor the edit at the targeted list item's boundary (or the whole block for prose). Storing the
+		// scoped `oldText` is what makes approve splice just this item and keep its siblings byte-identical.
+		const scoped = scopeBlockEdit(best.text, oldText);
+		// Never touch a bound figure: if the targeted range still carries a bind link, skip this edit.
+		if (extractBindLinks(scoped.oldText).length) { return undefined; }
+		if (scoped.oldText.trim() === newText) { return undefined; }
 		const label = this._blockLabel(state.doc, best.id);
 		const id = generateUuid();
 		const grounding = this._resolveSourceGrounding(edit.sourceQuote, edit.sourceLine, sourceText);
@@ -1660,7 +2354,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			docTitle: state.doc.title,
 			blockId: best.id,
 			blockLabel: label,
-			oldText: best.text,
+			oldText: scoped.oldText,
 			newText,
 			kind: 'meaning',
 			confidence: 0.85,
@@ -1745,6 +2439,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// --- approve / reject (the review rail) ---
 
+	// Tweak (amend-before-approve, plan 31 iter 3, D31-B): replace a pending change's proposed `newText` with
+	// the reviewer's hand-edit and flag it `tweaked`, then fire onDidChange so every surface re-renders the
+	// amended proposal as still-pending. The subsequent approve() reads `tweaked` to record the audit
+	// `via: 'tweaked'`. Guarded: figures come from sources (not hand-editable), and an empty/no-op amendment
+	// is ignored. No new persist path - the amended text lands through the existing approve() serialisation.
+	amendChange(changeId: string, newText: string): void {
+		const idx = this._pending.findIndex(c => c.id === changeId);
+		if (idx < 0) { return; }
+		const change = this._pending[idx];
+		if (change.kind === 'figure') { return; }
+		const next = String(newText ?? '').trim();
+		if (!next || next === change.newText) { return; }
+		this._pending[idx] = { ...change, newText: next, tweaked: true };
+		this._onDidChange.fire();
+	}
+
 	async approve(changeId: string): Promise<void> {
 		const change = this._pending.find(c => c.id === changeId);
 		if (!change) { return; }
@@ -1761,8 +2471,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			state.recent.add(newBlock.id);
 		} else if (block && !change.relink) {
 			// A re-link prompt re-anchors the claim to the current best-match prose without rewriting it;
-			// a normal impact change applies its rewrite to the block.
-			block.text = change.newText; block.binds = extractBindLinks(change.newText); state.recent.add(block.id);
+			// a normal impact change applies its rewrite to the block. `applyBlockEdit` splices at the change's
+			// anchor: a whole-block `oldText` replaces the block (prose), a scoped `oldText` (one list item) is
+			// spliced in place so sibling list items survive (decision-68 data-loss fix, plan 31 iter 1).
+			const nextText = applyBlockEdit(block.text, change.oldText, change.newText);
+			block.text = nextText; block.binds = extractBindLinks(nextText); state.recent.add(block.id);
 		}
 		if (change.claimId) {
 			const prior = state.lock.claims[change.claimId];
@@ -1774,7 +2487,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			};
 		}
 		this._pending = this._pending.filter(c => c.id !== changeId);
-		state.lock.audit.push(this._entry(change.blockId, 'approved', change.oldText, change.newText, change.via ?? 'model'));
+		// A tweaked change records `via: 'tweaked'` so the trail shows the human amended the agent's words
+		// (plan 31 iter 3, D31-B); otherwise the change's own provenance (model/heuristic) stands.
+		state.lock.audit.push(this._entry(change.blockId, 'approved', change.oldText, change.newText, change.tweaked ? 'tweaked' : (change.via ?? 'model')));
 		await this._markContextReviewed(state, change.contextReviewed);
 		state.status = `Change approved - applied to ${change.docTitle}`;
 		await this._persist(state);
@@ -1786,6 +2501,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// order; each approve re-resolves its anchor by stable block id, so insertions stay correctly placed.
 	async approveAll(docId: string): Promise<void> {
 		const ids = this._pending.filter(c => c.docId === docId).map(c => c.id);
+		if (!ids.length) { return; }
+		// Snapshot the pre-approve body ONCE per bulk approve (D26-B) so the run is restorable to the
+		// state before the batch landed. Individual approve() calls do not snapshot.
+		const state = this._docs.get(docId);
+		if (state) {
+			await this.saveSnapshot(state.uri, 'Before bulk approve', 'bulk-approve');
+		}
 		for (const id of ids) {
 			await this.approve(id);
 		}
@@ -1862,7 +2584,29 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			.map(s => s.doc.title);
 		const raw = this._rawSourceCache.get(`${resource.toString()}::${source}`);
 		const grid = raw && source.endsWith('.csv') ? buildSourceGrid(raw) : undefined;
-		return { source, rows, referencedBy, grid };
+		// When the clicked value is an api/mcp binding, surface its real response payload (field highlighted)
+		// instead of the CSV grid - closing the "provenance falls back to the CSV" gap for non-file kinds.
+		const payload = this._sourcePayloadFor(cells[0], state);
+		return { source, rows, referencedBy, grid, payload };
+	}
+
+	// Build the raw-payload view for a clicked api/mcp bind key (plan 29, iter 4), or undefined for a file
+	// binding (which uses the CSV grid) / an unresolved key. Reads the payload cached during resolution.
+	private _sourcePayloadFor(key: string | undefined, state: IDocState): ISourcePayload | undefined {
+		if (!key) { return undefined; }
+		const rawPayload = this._payloadRawCache.get(key);
+		if (!rawPayload) { return undefined; }
+		const mcp = parseMcpKey(key);
+		if (mcp) { return { source: `${mcp.server}.${mcp.tool}`, raw: rawPayload, field: mcp.field, kind: 'mcp' }; }
+		const entry = state.lock.bindings[key];
+		if (entry && /^https?:\/\//.test(entry.source)) {
+			const hashIdx = entry.source.indexOf('#');
+			const field = hashIdx >= 0 ? entry.source.slice(hashIdx + 1) : '';
+			let host = entry.source;
+			try { host = new URL(hashIdx >= 0 ? entry.source.slice(0, hashIdx) : entry.source).host; } catch { /* keep raw */ }
+			return { source: host, raw: rawPayload, field, kind: 'api' };
+		}
+		return undefined;
 	}
 
 	// "Sync across": re-derive this one document's bound figures from its current sources and return the

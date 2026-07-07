@@ -8,7 +8,8 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
-import { groupDecisions, groupPendingByDoc, IAgentRun, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
+import { bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAgentRun, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
@@ -21,7 +22,7 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ILivingDocSummary, ILivingDocsService } from '../common/livingDocs.js';
+import { ILivingDocSummary, ILivingDocsService, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { AgentFilter, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
 
@@ -33,6 +34,15 @@ interface IScreenEditorState {
 	lastRun?: IAgentRun;
 	// Home: the documents discovered in the open folder (fetched async; the folder name is read live at render).
 	docs?: readonly ILivingDocSummary[];
+	// Templates: the `*.template.md` files discovered in the open folder (plan 28); fetched async on open and
+	// re-fetched on onDidChange so a New Template (or one edited on disk) shows without reopening the screen.
+	templates?: readonly ITemplateInfo[];
+	// Knowledge (plan 29): the project's real source registry, fetched async on open + re-fetched on change
+	// (so an add/detach/source-edit re-projects); the selected source drives the detail drawer; the folder's
+	// data files feed the Add-source picker.
+	sources?: readonly ISourceInfo[];
+	knSelectedSource?: string;
+	dataFiles?: readonly string[];
 	// Home: recently-opened folders from the workbench history (D22-A); fetched async alongside docs.
 	recentFolders?: readonly IRecentProject[];
 	// Project-run (C4): the live/last whole-project fan-out state, or undefined for the truthful idle
@@ -87,6 +97,7 @@ export class ScreenEditor extends EditorPane {
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 		@IWorkspacesService private readonly _workspaces: IWorkspacesService,
 		@IHostService private readonly _host: IHostService,
+		@IDialogService private readonly _dialogService: IDialogService,
 	) {
 		super(ScreenEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -102,14 +113,30 @@ export class ScreenEditor extends EditorPane {
 		await super.setInput(input, options, context, token);
 		this._screen = input.screen;
 		// Reset per-screen state on (re)open so each visit starts from the default view.
-		this._state = { knScope: 'org', filter: 'all' };
-		// Home reflects the open folder: fetch its documents + recent folders before the first render so there is no flash.
+		this._state = { knScope: 'project', filter: 'all' };
+		// Home reflects the open folder: fetch its documents + recent folders + templates before the first
+		// render so there is no flash (templates seed the New-document sheet's template rows, iter 4).
 		if (this._screen === 'home') {
-			const [docs, recentFolders] = await Promise.all([
+			const [docs, recentFolders, templates] = await Promise.all([
 				this._livingDocs.listDocuments(),
 				this._fetchRecentFolders(),
+				this._livingDocs.listTemplates(),
 			]);
-			this._state = { ...this._state, docs, recentFolders };
+			this._state = { ...this._state, docs, recentFolders, templates };
+		}
+		// Templates reflects the open folder's `*.template.md` files (plan 28): fetch before first render.
+		if (this._screen === 'templates') {
+			this._state = { ...this._state, templates: await this._livingDocs.listTemplates() };
+		}
+		// Knowledge reflects the project's real source registry (plan 29): fetch the sources, the documents
+		// (Add-source target list) and the folder's data files (the picker) before the first render.
+		if (this._screen === 'knowledge') {
+			const [sources, docs, dataFiles] = await Promise.all([
+				this._livingDocs.listSources(),
+				this._livingDocs.listDocuments(),
+				this._livingDocs.getFolderDataFiles(),
+			]);
+			this._state = { ...this._state, sources, docs, dataFiles };
 		}
 		this._inputDisposables.clear();
 		// Re-render when agent status / the document set changes (e.g. a run completes, a doc is created).
@@ -117,21 +144,44 @@ export class ScreenEditor extends EditorPane {
 		this._mountWebview();
 	}
 
-	// A document or agent changed: re-fetch the Home document list (so a new/removed doc shows), else re-render.
+	// A document or agent changed: re-fetch the Home document list (so a new/removed doc shows), re-fetch the
+	// Templates list (so a New Template appears), else re-render.
 	private _onDidChange(): void {
 		if (this._screen === 'home') {
 			void this._refreshHome();
+		} else if (this._screen === 'templates') {
+			void this._refreshTemplates();
+		} else if (this._screen === 'knowledge') {
+			void this._refreshKnowledge();
 		} else {
 			this._render();
 		}
 	}
 
+	private async _refreshTemplates(): Promise<void> {
+		this._state = { ...this._state, templates: await this._livingDocs.listTemplates() };
+		this._render();
+	}
+
+	// Re-project the source registry after an add/detach or an on-disk source edit, so the SOURCES table, the
+	// freshness dots and the detail drawer all resync from the live locks.
+	private async _refreshKnowledge(): Promise<void> {
+		const [sources, docs, dataFiles] = await Promise.all([
+			this._livingDocs.listSources(),
+			this._livingDocs.listDocuments(),
+			this._livingDocs.getFolderDataFiles(),
+		]);
+		this._state = { ...this._state, sources, docs, dataFiles };
+		this._render();
+	}
+
 	private async _refreshHome(): Promise<void> {
-		const [docs, recentFolders] = await Promise.all([
+		const [docs, recentFolders, templates] = await Promise.all([
 			this._livingDocs.listDocuments(),
 			this._fetchRecentFolders(),
+			this._livingDocs.listTemplates(),
 		]);
-		this._state = { ...this._state, docs, recentFolders };
+		this._state = { ...this._state, docs, recentFolders, templates };
 		this._render();
 	}
 
@@ -187,7 +237,7 @@ export class ScreenEditor extends EditorPane {
 		}
 	}
 
-	private _onMessage(message: { type?: string; arg?: string }): void {
+	private _onMessage(message: { type?: string; arg?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string }): void {
 		switch (message?.type) {
 			case 'setKnOrg':
 				this._state = { ...this._state, knScope: 'org' };
@@ -196,6 +246,26 @@ export class ScreenEditor extends EditorPane {
 			case 'setKnProject':
 				this._state = { ...this._state, knScope: 'project' };
 				this._render();
+				break;
+			// Knowledge (plan 29): select a source to open its detail drawer (local screen navigation - the
+			// counts stay live). Clicking the selected source again is harmless (re-selects the same id).
+			case 'selectSource':
+				this._state = { ...this._state, knSelectedSource: message.arg };
+				this._render();
+				break;
+			// Add a source to a target document: a folder data file (arg) or an API URL (apiurl), bound to the
+			// document chosen in the sheet (target). Loads the doc first so the frontmatter write path has its
+			// text, then writes through the existing addSource; onDidChange re-projects the registry.
+			case 'addSource':
+				if (message.target && message.arg) { void this._addSource(message.target, message.arg); }
+				break;
+			case 'addSourceApi':
+				if (message.target && message.apiurl) { void this._addSource(message.target, message.apiurl); }
+				break;
+			// Detach a source from one document (edits that document's frontmatter). The button carries a JSON
+			// arg { doc, source, context } so the right list (sources vs context) is rewritten.
+			case 'detachSource':
+				if (message.arg) { void this._detachSource(message.arg); }
 				break;
 			case 'setFilter':
 				this._state = { ...this._state, filter: (message.arg as AgentFilter) ?? 'all' };
@@ -228,6 +298,14 @@ export class ScreenEditor extends EditorPane {
 			case 'runProject':
 				void this._openProjectRun();
 				break;
+			// Stop the in-flight whole-project fan-out (plan 27 iter 4): cancel the single model call anchored
+			// on the run's anchor document. The finally of the underlying chat delivery flips isChatBusy off and
+			// fires onDidChange -> re-render, so the swarm settles into truthful changed/skipped tiles.
+			case 'stopProjectRun': {
+				const anchor = this._state.projectRunAnchor;
+				if (anchor) { this._livingDocs.cancelChat(anchor); }
+				break;
+			}
 			// Project-run screen idle-state affordance: jump to the Agents screen (the run entry point).
 			case 'goAgents':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'agents'), { pinned: true });
@@ -262,9 +340,21 @@ export class ScreenEditor extends EditorPane {
 			case 'reviewTweak':
 				if (message.arg) { void this._tweakChange(message.arg); }
 				break;
+			// Tweak in-card (plan 31 iter 3, D31-A): the reviewer hand-edited the proposed text, then Save &
+			// Approve. Amend the pending change then approve through the one engine path (no parallel apply).
+			case 'reviewTweakSave':
+				if (message.arg && typeof message.text === 'string') {
+					const id = message.arg;
+					this._livingDocs.amendChange(id, message.text);
+					void this._livingDocs.approve(id);
+				}
+				break;
 			// Sticky doc action bar: `Accept All N Here` -> approveAll(docId) for the current document.
 			case 'reviewAcceptAllHere':
-				if (message.arg) { void this._livingDocs.approveAll(message.arg); }
+				if (message.arg) {
+					const docId = message.arg;
+					void this._confirmBulkApprove(this._livingDocs.getAllPending().filter(c => c.docId === docId), () => this._livingDocs.approveAll(docId));
+				}
 				break;
 			// `Next` -> advance the current document to the next one that still has pending changes.
 			case 'reviewNext':
@@ -278,16 +368,33 @@ export class ScreenEditor extends EditorPane {
 				break;
 			// Topbar `Accept All Remaining` -> approveAllPending() across every document.
 			case 'reviewAcceptAllRemaining':
-				void this._livingDocs.approveAllPending();
+				void this._confirmBulkApprove(this._livingDocs.getAllPending(), () => this._livingDocs.approveAllPending());
 				break;
 			case 'openFolder':
 				void this._livingDocs.openFolder();
 				break;
+			// New document on-ramp (plan 28, iter 4): the name-or-template sheet posts a name; a blank name
+			// keeps decision 56's Untitled name-on-first-save escape hatch. The service handles both.
 			case 'newDocument':
-				void this._livingDocs.createDocument();
+				void this._livingDocs.createDocument(message.name);
 				break;
 			case 'openDoc':
 				if (message.arg) { void this._editors.openEditor({ resource: URI.parse(message.arg), options: { pinned: true } }); }
+				break;
+			// Templates screen (plan 28, iter 2): Edit opens the `.template.md` in the normal editor - it is
+			// just Markdown, so it round-trips on disk with no new format.
+			case 'editTemplate':
+				if (message.arg) { void this._editors.openEditor({ resource: URI.parse(message.arg), options: { pinned: true } }); }
+				break;
+			// New Template: create an untitled.template.md seeded with a commented example and open it; the
+			// service fires onDidChange so the card grid refreshes.
+			case 'newTemplate':
+				void this._livingDocs.createTemplate();
+				break;
+			// Use Template (primary, plan 28 iter 3): the D28-B generate sheet posts the template URI + the
+			// document name + an optional note. Generation writes the skeleton and drives the review engine.
+			case 'generateFromTemplate':
+				if (message.arg) { void this._generateFromTemplate(message.arg, message.name, message.note); }
 				break;
 			// Home ALL PROJECTS: the current folder tile focuses its first document (it is already open).
 			case 'openFirstDoc':
@@ -299,6 +406,35 @@ export class ScreenEditor extends EditorPane {
 					void this._host.openWindow([{ folderUri: URI.parse(message.arg) }], { forceReuseWindow: true });
 				}
 				break;
+		}
+	}
+
+	// Bind a source to a target document (plan 29 iter 2). The document may not be loaded (the Knowledge
+	// screen is project-level), so load it first - `addSource` rewrites the frontmatter through `getRawText`,
+	// which needs the loaded state - then write. The service fires onDidChange, which re-projects the registry.
+	private async _addSource(docUri: string, source: string): Promise<void> {
+		const uri = URI.parse(docUri);
+		await this._livingDocs.loadDocument(uri);
+		await this._livingDocs.addSource(uri, source);
+	}
+
+	// Detach a source from one document (plan 29 iter 2): the button's JSON arg says which document, which
+	// source, and whether it is a context reference (so the right frontmatter list is rewritten). Any bind
+	// links that referenced a removed value source flag as unresolved in the editor (the stale-binding path).
+	private async _detachSource(arg: string): Promise<void> {
+		let parsed: { doc?: string; source?: string; context?: boolean };
+		try {
+			parsed = JSON.parse(arg);
+		} catch {
+			return;
+		}
+		if (!parsed.doc || !parsed.source) { return; }
+		const uri = URI.parse(parsed.doc);
+		await this._livingDocs.loadDocument(uri);
+		if (parsed.context) {
+			await this._livingDocs.removeContextFile(uri, parsed.source);
+		} else {
+			await this._livingDocs.removeSource(uri, parsed.source);
 		}
 	}
 
@@ -375,11 +511,31 @@ export class ScreenEditor extends EditorPane {
 	// Tweak a change (24.2): open its document and focus its inline diff for hand-editing, reusing the
 	// plan-19 navigate-to-inline path (openEditor + focusChange). Resolves the docId from the live pending
 	// set by change id. Navigate-only - it never approves; the user then edits/approves in the document.
+	// Bulk-approve safety net (plan 31 iter 4): confirm before a bulk approve whose set includes any meaning
+	// change; the confirm mentions the pre-approve snapshot (plan 26). Figures-only bulk approves stay
+	// one-click. Applies only after the user confirms (or when no confirm was needed).
+	private async _confirmBulkApprove(changes: readonly { readonly kind: 'figure' | 'meaning' }[], apply: () => Promise<void>): Promise<void> {
+		const confirm = bulkApproveConfirm(changes, true);
+		if (confirm.needed) {
+			const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: 'Approve all' });
+			if (!confirmed) { return; }
+		}
+		await apply();
+	}
+
 	private async _tweakChange(changeId: string): Promise<void> {
 		const change = this._livingDocs.getAllPending().find(c => c.id === changeId);
 		if (!change) { return; }
 		await this._editors.openEditor({ resource: URI.parse(change.docId), options: { pinned: true } });
 		this._livingDocs.focusChange(change.id);
+	}
+
+	// Generate a draft from a template (plan 28, iter 3): the service writes the skeleton, opens the new
+	// document, and drives the chat path so the prose lands as insertion proposals. Reveal the review rail
+	// so the pending draft is where the user expects it (the same rail every generation lands in).
+	private async _generateFromTemplate(templateUri: string, name?: string, note?: string): Promise<void> {
+		const target = await this._livingDocs.generateFromTemplate(URI.parse(templateUri), name ?? '', note ?? '');
+		if (target) { this._livingDocs.focusPanel('review'); }
 	}
 
 	// Templates "Export" lands the user on a real document, where the Present/export modal lives.
@@ -393,7 +549,9 @@ export class ScreenEditor extends EditorPane {
 
 	private _render(): void {
 		// Inject the live agent registry + the open-folder state at render time so Home/Agents reflect current state.
-		const folderName = this._livingDocs.getWorkspaceFolderName();
+		// (plan 33 iter 2, L5) Use the truthful DISPLAY name (resolves the web/memfs "mount" stub via the
+		// sample's `.abstract-name` marker) for every user-facing project label - Home, the crumb and tiles.
+		const folderName = this._livingDocs.getProjectDisplayName();
 		this._webview?.setHtml(renderScreenHtml(this._screen, {
 			...this._state,
 			projectRun: this._projectRunState(),
@@ -442,14 +600,19 @@ export class ScreenEditor extends EditorPane {
 		const inFlight = !!anchor && this._livingDocs.isChatBusy(anchor);
 		const docs = this._state.projectRunDocs ?? [];
 		const pending = this._livingDocs.getAllPending();
-		const summary = summariseProjectRun(docs, pending);
+		// A settled run was STOPPED (plan 27 iter 4) when the anchor's last chat turn is a "stopped" salvage
+		// (the whole-project fan-out is that anchor's chat call). When stopped, docs with no change are honestly
+		// skipped, not no-change. Never treat an in-flight run as stopped.
+		const chat = anchor ? this._livingDocs.getChatMessages(anchor) : [];
+		const stopped = !inFlight && chat.length > 0 && !!chat[chat.length - 1].stopped;
+		const summary = summariseProjectRun(docs, pending, stopped);
 		const working = inFlight ? docs.map(d => d.docId) : [];
 		// Decisions column (23.4): group the LIVE pending changes by their source grounding. Restrict to
 		// changes for documents in this run's tile set so a stale change from another surface never leaks
 		// into the run's decisions (mirrors summariseProjectRun's tile-set restriction).
 		const runDocIds = new Set(docs.map(d => d.docId));
 		const decisions = groupDecisions(pending.filter(c => runDocIds.has(c.docId)));
-		return { ...run, inFlight, summary, working, decisions };
+		return { ...run, inFlight, stopped, summary, working, decisions };
 	}
 
 	layout(dimension: Dimension): void {

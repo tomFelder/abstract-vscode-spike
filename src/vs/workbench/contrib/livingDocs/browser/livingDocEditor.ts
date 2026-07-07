@@ -7,6 +7,7 @@ import { $, Dimension } from '../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
@@ -17,10 +18,11 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
-import { nextPendingDocId } from '../common/livingDocsModel.js';
+import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
+import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
-import { ILivingDocContent, ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml, ShareScope } from './livingDocRender.js';
+import { ILivingDocContent, ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -31,7 +33,7 @@ export class LivingDocEditor extends EditorPane {
 	// PM is the single editing surface for every document (plan 15 iter 5): a doc opens in ProseMirror.
 	private _mode: LivingDocViewMode = 'pm';
 	private _resource: URI | undefined;
-	private _present: IPresentState = { open: false, choice: 'gdoc', scope: 'internal' };
+	private _present: IPresentState = { open: false, choice: 'html' };
 	// In-surface source-peek state (the comp's "Sync across" pane). Held on the editor, NOT opened as a
 	// second editor group - this is the v2 fix for the split-pane / blank-pane abrasion.
 	private _sourcePeek: { cells: readonly string[]; synced: boolean; syncedCount: number } | undefined;
@@ -60,6 +62,7 @@ export class LivingDocEditor extends EditorPane {
 		@IWebviewService private readonly _webviewService: IWebviewService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 		@IEditorService private readonly _editorService: IEditorService,
+		@IDialogService private readonly _dialogService: IDialogService,
 	) {
 		super(LivingDocEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -74,7 +77,7 @@ export class LivingDocEditor extends EditorPane {
 	override async setInput(input: LivingDocEditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
 		this._mode = 'pm';
-		this._present = { open: false, choice: 'gdoc', scope: 'internal' };
+		this._present = { open: false, choice: 'html' };
 		this._sourcePeek = undefined;
 		this._resource = input.resource;
 		// Dispose the previous input's webview (registered to `_inputDisposables`) and build a fresh one.
@@ -118,6 +121,19 @@ export class LivingDocEditor extends EditorPane {
 		this._inputDisposables.add(webview.onMessage(e => this._onMessage(e.message)));
 		this._inputDisposables.add(webview);
 		this._webview = webview;
+	}
+
+	// Bulk-approve safety net (plan 31 iter 4): confirm before applying a bulk approve whose set contains any
+	// meaning change. Figures-only bulk approves stay one-click. The confirm mentions the pre-approve snapshot
+	// (plan 26's autosnapshot on bulk approve is real) so the reviewer knows it is restorable. Runs `apply`
+	// only after the user confirms (or when no confirm was needed).
+	private async _confirmBulkApprove(changes: readonly { readonly kind: 'figure' | 'meaning' }[], apply: () => Promise<void>): Promise<void> {
+		const confirm = bulkApproveConfirm(changes, true);
+		if (confirm.needed) {
+			const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: 'Approve all' });
+			if (!confirmed) { return; }
+		}
+		await apply();
 	}
 
 	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string }): void {
@@ -165,12 +181,6 @@ export class LivingDocEditor extends EditorPane {
 					this._render();
 				}
 				break;
-			case 'presentScope':
-				if (typeof message.scope === 'string') {
-					this._present = { ...this._present, scope: message.scope as ShareScope };
-					this._render();
-				}
-				break;
 			case 'presentCta':
 				void this._runPresent();
 				break;
@@ -180,13 +190,25 @@ export class LivingDocEditor extends EditorPane {
 			case 'reject':
 				if (typeof message.id === 'string') { this._livingDocs.reject(message.id); }
 				break;
+			case 'amendApprove':
+				// Tweak (plan 31 iter 3): the reviewer hand-edited the proposed text, then Save & Approve. Amend
+				// the pending change then approve it through the one approve path (no parallel apply route).
+				if (typeof message.id === 'string' && typeof message.text === 'string') {
+					const id = message.id;
+					this._livingDocs.amendChange(id, message.text);
+					void this._livingDocs.approve(id);
+				}
+				break;
 			case 'approveAllDoc':
 				// Editor action bar: accept every pending change in THIS document at once (plan 19 iter 4).
-				if (this._resource) { void this._livingDocs.approveAll(this._resource.toString()); }
+				if (this._resource) {
+					const docId = this._resource.toString();
+					void this._confirmBulkApprove(this._livingDocs.getPendingForDoc(this._resource), () => this._livingDocs.approveAll(docId));
+				}
 				break;
 			case 'approveAllEverywhere':
 				// Editor action bar: accept every pending change across ALL documents (plan 19 iter 5).
-				void this._livingDocs.approveAllPending();
+				void this._confirmBulkApprove(this._livingDocs.getAllPending(), () => this._livingDocs.approveAllPending());
 				break;
 			case 'nextDoc':
 				// Editor action bar: step the editor pane to the next document that still has pending changes.
@@ -238,15 +260,16 @@ export class LivingDocEditor extends EditorPane {
 		}
 	}
 
-	// The Present/export CTA maps each destination onto the export the spike actually produces:
-	// the hosted web page reuses the self-contained HTML export; the file/doc destinations produce
-	// the clean resolved Markdown. Then the modal closes.
+	// The Present/export CTA maps each real destination onto the export Abstract actually writes:
+	// "Web page" -> the self-contained HTML export; "Markdown" -> the clean resolved Markdown. The
+	// native-format / cloud destinations are "Soon" and non-selectable, so only these two reach here.
 	private async _runPresent(): Promise<void> {
 		if (!this._resource) { return; }
-		if (this._present.choice === 'site') {
-			await this._livingDocs.exportDocument(this._resource);
-		} else {
+		if (this._present.choice === 'markdown') {
 			await this._livingDocs.exportMarkdown(this._resource);
+		} else {
+			// 'html' (and any defensive fallthrough) -> the self-contained HTML page.
+			await this._livingDocs.exportDocument(this._resource);
 		}
 		this._present = { ...this._present, open: false };
 		this._render();
@@ -286,6 +309,13 @@ export class LivingDocEditor extends EditorPane {
 		const allPending = this._livingDocs.getAllPending();
 		const nextId = nextPendingDocId(allPending, resource.toString());
 		const nextChangedDocTitle = nextId ? allPending.find(c => c.docId === nextId)?.docTitle : undefined;
+		// Per-key provenance for the figure/gutter hover tooltip (plan 29 iter 3): fold this document's lock
+		// bindings + its live staleness set into { source, location, synced, fresh }. Empty when the document
+		// is not living / has no lock, so the tooltip stays silent on a plain Markdown doc.
+		const lock = this._livingDocs.getLock(resource);
+		const provenance = lock
+			? buildFigureProvenance(lock, new Set(this._livingDocs.getFreshness(resource).staleBindings))
+			: [];
 		const input: ILivingDocRenderInput = {
 			doc: this._livingDocs.getDoc(resource),
 			pending: this._livingDocs.getPendingForDoc(resource),
@@ -300,6 +330,7 @@ export class LivingDocEditor extends EditorPane {
 			sourcePeek,
 			nextChangedDocTitle,
 			totalPendingCount: allPending.length,
+			provenance,
 		};
 		const content = renderLivingDocContent(input);
 		// Reset the live PM doc only when the fresh body changed from a model-driven source (an accepted

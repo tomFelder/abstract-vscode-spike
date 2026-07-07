@@ -10,7 +10,7 @@ Tiers, cheapest first: `settings` -> `theme` -> `styleOverrides-CSS` -> `additiv
 | A | "Documents" view container + view (default primary sidebar) | additive-contribution | `livingDocs/browser/documentsView.ts`, `livingDocs.contribution.ts` | New container/view; no core edit |
 | A | Hide the built-in File Explorer | additive-contribution | `livingDocs.contribution.ts` (`HideExplorerContribution`) | `deregisterViewContainer('workbench.view.explorer')` via the public registry — no patch to the files contrib |
 | A | Workspace discovery + create (`listDocuments`, `createDocument`) | our-surface | `livingDocs/browser/livingDocsService.ts`, `common/livingDocs.ts` | Service additions only |
-| B | "Opportunity OS" color theme (full hi-fi palette) | theme | `extensions/theme-defaults/themes/opportunity-os-color-theme.json`, `theme-defaults/package.json` | Registered theme; no per-key hacks |
+| B | "Abstract" color theme (full hi-fi palette) | theme | `extensions/theme-defaults/themes/abstract-color-theme.json`, `theme-defaults/package.json` | Registered theme; no per-key hacks |
 | B | Set workspace theme; delete `colorCustomizations` | settings | `living-docs-sample/.vscode/settings.json` | Retired the accent-keys hack |
 | C | Hide residual IDE chrome (watermark, editor group title, aux-bar title) | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` (+ catalog entry) | New gated module; no core patch |
 | C | Chat/Review/History tabbed right panel; branded doc header | our-surface | `livingDocs/browser/reviewRailView.ts`, `livingDocRender.ts` | Our webview/view surfaces |
@@ -173,6 +173,111 @@ our own deregister list*, not by patching core.
 
 _Residual to retire in build-order #1:_ the 367KB bundle is re-inlined on every webview render (blank-on-reopen); moving it to a webview resource (`asWebviewUri`) removes the re-inline and is still our-surface.
 
+### Redesign round — plan 25 iter 1 (the labeled 76px nav + Editor entry): 0 ADDED core patches
+
+**D25-A outcome — CSS/styleOverrides + settings, NO new core patch.** The plan flagged the labeled
+76px nav as "the one item expected to need a core patch." On audit, the core patch it would take
+**already exists**: `ActivitybarPart.ACTIVITYBAR_WIDTH = 76` (`activitybarPart.ts:52`) landed in **v2
+iter 9** (see that entry above), and the label layer is the `styleOverrides` `studio.css`
+`::after { content: attr(aria-label) }` rule. So iter 1 needed **zero new core touches** — the width
+seam was paid for once, in v2. Everything iter 1 changed sits in the cheap tiers:
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 25-1a | Re-pin the nav tokens to Part B/C1: `panel` bg `#F6F7F9`, 60px item, 18px glyph, 10px label | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | Extends the existing `.style-override-studio .part.activitybar` block (bg + `width:60px` + `::before{font-size:18px}`); appearance-only, fail-soft. No core edit. |
+| 25-1b | Register the **Editor** nav item (container + launcher view + palette command), ordered first-after-Home; screens re-ordered to 1/3/4/5 around it | additive-contribution | `livingDocs/browser/livingDocs.contribution.ts`, `livingDocs/browser/editorNavLauncherView.ts` (new) | New activity-bar view container + view via the public registry + a `registerAction2`, exactly like the existing Home/Templates/Knowledge/Agents entries. D25-B open logic reuses `IEditorService`/`IHistoryService`/`ILivingDocsService.listDocuments()`. No core edit. |
+| 25-1c | Give the `:8080` brief root its own `.vscode/settings.json` (mirror of the parent sample) so the shell (activity bar / modernUI) renders as designed | settings | `living-docs-sample/brief/.vscode/settings.json` (new) | Sample content only; a subfolder opened as its own root does not inherit the parent workspace settings, so the served brief root needed its own copy. Reversible; no app/core code. |
+
+**Core-patch count is unchanged by plan 25 iter 1: still 5 total** (the 76px width patch is one of those
+5, from v2 iter 9 — not double-counted here). **Greenfield evidence (Q3):** the item the plan singled
+out as the most likely fresh core patch cost **0 new core** this iteration — the one seam it needs was
+already paid, and the labeled layout + the new Editor nav ride entirely on styleOverrides CSS + additive
+contributions.
+
+### Redesign round — plan 25 iter 2 (active chip + bottom pins + nav tidy): 0 ADDED core patches
+
+**C1 finish — the active white chip, the bottom-pinned account/settings, and the clean 5-item nav all
+landed our-surface. NO new core patch.** The active-chip driver was the only place a core touch was
+plausible (marking an activity-bar item as active), but it was avoidable: the item's own `.checked`
+state tracks the sidebar container (always the bounced-back Workspace rail), so it was the wrong signal
+anyway. A tiny contribution reads `IEditorService` and toggles a class instead — no `activitybarpart`
+edit.
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 25-2a | Active white chip driven by the active editor: `ActiveNavChipContribution` toggles `lwd-nav-active` on the matching nav `.action-item`; `studio.css` paints white chip + `#4650B8` glyph + e1 off that class | additive-contribution + styleOverrides-CSS | `livingDocs/browser/livingDocs.contribution.ts`, `styleOverrides/browser/media/studio.css` | Reads `IEditorService.onDidActiveEditorChange` + the activity-bar part container via `IWorkbenchLayoutService.getContainer(mainWindow, Parts.ACTIVITYBAR_PART)`, then walks its descendants via `element.children` and matches by the known `codicon-living-docs-<id>` classes + `.closest('.action-item')` (activity bar has no per-item API). Avoids the banned query APIs (`querySelector`/`getElementsByClassName`/`getElementsByTagName`), so hygiene is clean. Re-pin if the `living-docs-<id>` icon ids move. No core edit. |
+| 25-2b | Account + settings styled + confirmed pinned bottom (reverses 25.1's hide of them) | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | The core `GlobalCompositeBar` already renders them as `.content`'s last child, floated down by the core `.composite-bar{margin-bottom:auto}` — CSS only styles them (44px, faint glyph, no label). Functionality untouched. No core edit. |
+| 25-2c | **Nav tidy (W1/D25-C):** deregister the Explorer container; hide the Workspace container's activity-bar icon (keep the container) | additive-contribution + styleOverrides-CSS | `livingDocs/browser/livingDocs.contribution.ts` (`+'workbench.view.explorer'` in `IDE_VIEW_CONTAINER_IDS`), `styleOverrides/browser/media/studio.css` (`:has(codicon-living-docs-workspace){display:none}`) | **Revises decision 42 / ledger row V6-1** (which had re-added the Explorer icon). Uses the existing `HideIdeContainersContribution` for Explorer (public registry `deregisterViewContainer`) — so the Explorer now rejoins the HIGH-risk "fails-unsafely on id rename" set (see note below). The Workspace icon is hidden by CSS only; its container stays `isDefault`, so the 264px tree-rail is unaffected (verified live). No core edit. |
+| 25-2d | Minors from 25.1 review: (M1) distinct `livingDocs.editorIcon` NLS key for the Editor icon; (M3) drop the `_register(...)` wrapper on the fire-and-forget `disposableTimeout` in `editorNavLauncherView` (was leaking one dead disposable per visibility change) | our-surface | `livingDocs/browser/livingDocs.contribution.ts`, `livingDocs/browser/editorNavLauncherView.ts` | Correctness/hygiene only. No core edit. |
+
+**Core-patch count is unchanged by plan 25 iter 2: still 5 total.** The C1 finish (chip + pins + tidy)
+rode entirely on styleOverrides CSS + two small additive contributions. **Greenfield evidence (Q3):**
+the whole labeled-nav row (plan 25, the item flagged as most likely to need core work) landed across two
+iterations at **0 new core patches**. The residual coupling it adds is the codicon-class DOM reach
+(fragile-on-rename, but hygiene-clean) — appearance wiring, not a behavioural fork.
+
+### Redesign round — plan 25 iter 3 (regression sweep + design polish): 0 ADDED core patches
+
+**Final iter: the regression sweep (all surfaces at 76px), two small design-polish CSS rules, and the
+desktop-smoke decision. NO new core patch.** Both polish gaps closed in `studio.css` only.
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 25-3a | Close the inactive-glyph colour gap: `#606060` (the `activityBar.css :not(.checked)` `!important` rule, tied at (0,9,0) and winning on source order) -> `#868B95` (comp C1). Added the real `.composite-bar` ancestor to the studio inactive-glyph selector to reach (0,10,0) and win outright | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | Appearance-only. Re-pin if the composite-bar class name changes. No core edit. |
+| 25-3b | Add the 1px divider after Editor: a `34px x 1px` `#E4E6EA` hairline with `4px` vertical margin, rendered as a `::before` on the Templates item (matched by its stable `codicon-living-docs-templates` class, mirroring the workspace-hide rule); the Templates item is made `display:flex; flex-direction:column; align-items:center` so the divider centres above its label | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | Appearance-only; matches the comp's `<div style="width:34px;height:1px;background:#e4e6ea;margin:4px 0">`. Re-pin if the icon id or nav grouping changes. No core edit. |
+
+**Core-patch count is unchanged by plan 25 iter 3: still 5 total.** The whole plan-25 stack (iters 1-3,
+the row flagged as most likely to need core work) landed at **0 new core patches** — the one seam it
+needs (the 76px `ACTIVITYBAR_WIDTH`) was paid once in v2 iter 9. **Desktop real-disk smoke: deferred**
+(matching decision 71's precedent) — iter 3 changed only appearance CSS, and driving the Electron build
+is impractical from the browser-bound chrome-devtools session; a 2-minute manual desktop check should
+confirm the 76px labeled nav + active chip render in the packaged workbench.
+
+### Shell-integrity round — plan 33 iters 1-2 (title-bar identity + project naming): 0 ADDED core patches
+
+Plan 33's own cap was "at most 1 new core patch (the title-bar command centre, if settings cannot fully
+remove it)". Settings reached everything, so **iters 1-2 took 0 core patches** (patch budget untouched;
+count stays 5 total). Decisions #95-#96.
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 33-1a | Hide the residual title-bar chrome on the screen surfaces (command-centre "Review Project" pill, layout-toggle icons, editor-group action icons) by adding `window.commandCenter:false`, `workbench.layoutControl.enabled:false`, `workbench.editor.editorActionsLocation:'hidden'` to the decision-54 `registerDefaultConfigurations` block | settings (additive config-default) | `livingDocs/browser/livingDocs.contribution.ts` | Real user-overridable settings; keys verified against `layoutService.ts` (`LayoutSettings.COMMAND_CENTER`/`LAYOUT_ACTIONS`) + `parts/editor/editor.ts` (`editorActionsLocation` enum). No core edit. Re-pin if VS Code renames these settings. |
+| 33-1b | Window/tab title template `${activeEditorShort}` -> `${rootName}${separator}Abstract` (project name then brand; collapses to "Abstract" with no folder) | settings (additive config-default) | `livingDocs/browser/livingDocs.contribution.ts` | Standard `window.title` token template. No core edit. |
+| 33-1c | Fix the residual old-brand leak in the two sample settings files: drop the stale `window.title:"Opportunity OS"` (the new default applies) and correct `workbench.colorTheme:"Opportunity OS"` -> `"Abstract"` (the theme was renamed to "Abstract" in `theme-defaults/package.json`; the old label no longer resolved) | sample content | `living-docs-sample/.vscode/settings.json`, `living-docs-sample/brief/.vscode/settings.json` | Sample data, not core. |
+| 33-2a | Truthful project display name: new pure `projectDisplayName` helper + a `getProjectDisplayName()` service getter reading a cached `.abstract-name` marker; used by `ScreenEditor._render` for the user-facing folder name so the web/memfs "mount" stub shows the sample's real name | our-surface (`common/` helper + service getter + render call) | `livingDocs/common/projectDisplayName.ts` (new), `livingDocs/common/livingDocs.ts`, `livingDocs/browser/livingDocsService.ts`, `livingDocs/browser/screenEditor.ts` | No core edit. The marker read is fail-soft (missing marker -> real folder name, never fabricated). |
+| 33-2b | Ship the `.abstract-name` marker in both samples + add `**/.abstract-name` to the `files.exclude` config-default so it stays invisible plumbing | sample content + settings | `living-docs-sample/.abstract-name`, `.../brief/.abstract-name`, `livingDocs/browser/livingDocs.contribution.ts` | Sample data + an additive object-merge exclude (same route as `.lock.json`/`agents.json`). No core edit. |
+
+**Core-patch count is unchanged by plan 33 iters 1-2: still 5 total.** The one item the plan pre-flagged
+as possibly needing a core patch (the title-bar command centre) was fully removed by the `window.commandCenter`
+setting — no patch needed. **Desktop window-title verification deferred** (matching decision 71/93's
+precedent): the web build cannot exercise the OS-level window title bar, and driving the packaged Electron
+build is impractical from the browser-bound chrome-devtools session; the title template + settings are
+correct by construction, and web verifies the on-surface chrome removal. Iters 3-4 (keyboard/menu audit,
+Present honesty, the seam-check script) are out of scope for this work unit.
+
+### Shell-integrity round — plan 33 iters 3-4 (keyboard/menu audit + Present honesty + the seam gate): 0 ADDED core patches
+
+Plan 33's cap for the whole plan was at most 3 new core patches. Iters 1-2 took 0; **iters 3-4 also take 0**
+(count stays 5 total). The keyboard neutralisation is an additive contribution (a public registry call from
+our own module), not a decision-30-style core edit, so the plan's "extend decision-30 if a chord is
+core-registered and user-visible" branch was not needed. Decisions #110-#111.
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 33-3a | Neutralise 8 residual IDE chords (`Cmd+J` panel, `Ctrl+`` `` ` terminal, `Cmd+Alt+B` secondary side bar, `Cmd+Shift+E/F/G/X/M` view-container switches) by shadowing each with the built-in `noop` command via `KeybindingsRegistry.registerKeybindingRule` at weight 1000 | additive contribution (public keybinding registry) | `livingDocs/browser/livingDocs.contribution.ts` (`NEUTRALISED_IDE_CHORDS`) | No core edit. `Cmd+B` (side-bar / Bold) deliberately KEPT. Guarded by check-seams seam 8. Re-pin if upstream changes a default chord (the audit cites each source). |
+| 33-3b | Keyboard + context-menu audit doc with a verdict per chord and the L7 context-menu findings (webviews show no IDE items; title-bar OS chrome recorded as accepted desktop-only residue) | docs | `docs/plans/33-verify/keyboard-audit.md` | Documentation only. |
+| 33-4a | Present honesty (L8): the `↗ Present` modal now offers only the two exports Abstract genuinely writes - a self-contained HTML page and clean Markdown - each wired to a real writer (`exportDocument`/`exportMarkdown`); the four native-format/cloud destinations are shown honestly as non-selectable "Soon" rows. Removes the fabricated hosting/shareable-URL/access-scope UI (which also carried an old-brand `opportunity-os.live` string) | our-surface (render + editor) | `livingDocs/browser/livingDocRender.ts`, `livingDocs/browser/livingDocEditor.ts` | No core edit. Defensive: a "Soon" choice that somehow arrives falls back to the HTML export, never a dead end. |
+| 33-4b | The executable seam gate: `scripts/check-seams.sh` mechanically asserts every ledger shell seam (the 5 deregistered container ids still exist upstream + stay deregistered, `ACTIVITYBAR_WIDTH===76`, the builtin denylist, the palette/quick-open `f1:false` absence + no re-added keybinding, the sash-lock fn + call site, the `studio.css` selectors, the iter-1/2 identity defaults, the chord neutralisation). Exits non-zero naming the first broken seam | tooling (shell script) | `scripts/check-seams.sh` | Run next to `valid-layers-check`. Passes clean on this branch; verified to fail loud (exit 1, named seam) when a hide-list id is renamed. |
+
+**Core-patch count is unchanged by plan 33 iters 3-4: still 5 total.** The whole of plan 33 (iters 1-4)
+added **0 core patches** against a 3-patch cap - every leak was reachable through settings, our-surface, and
+additive-contribution tiers.
+
+**Running the seam gate (validation step, next to `valid-layers-check`):** `./scripts/check-seams.sh` -
+exit 0 = all shell seams intact; exit 1 names the broken seam(s) to re-pin per this ledger. Wire it into the
+per-PR validation alongside `npm run typecheck-client` and `npm run valid-layers-check` for any change that
+touches the de-IDE seams.
+
 ## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
@@ -194,7 +299,9 @@ this phase," not "0 in the feature." Everything else landed through the cheap ti
 
 ### Where the residual tax actually lives (per-seam fragility)
 Zero added core patches does not mean zero upstream coupling. The additive route leans on internal seams
-a VS Code rebase could break, ordered worst → best:
+a VS Code rebase could break, ordered worst → best.
+**Every seam below is now asserted mechanically by `scripts/check-seams.sh` (plan 33 iter 4)** - run it
+after a rebase; it exits non-zero naming the first broken seam so re-pinning is executable, not tribal.
 - **HIGH / fails *unsafely* — `deregisterViewContainer(...)` for Explorer, Search, SCM, Debug, Extensions.**
   These fail toward *showing the IDE*: if upstream renames/restructures any of these containers, that icon
   silently reappears in the activity bar. Order-dependent on `WorkbenchPhase.BlockRestore`. A miss is a visible
@@ -261,3 +368,19 @@ Re-pin result per seam - nothing needed hand-editing; verified post-merge:
 Verification: `typecheck-client` 0, `valid-layers-check` 0, LivingDocs suite 66/66, ActivitybarPart 14/14; live web drive - branded calm shell, 76px nav, no IDE containers, full PM editor with bound figures, no living-docs console errors (G6).
 
 **Known pre-existing noise (not a regression, not fixed here):** the hidden Extensions view container throws two console errors on boot (`viewsExtensionPoint` / `extensionsViewlet` -> `viewDescriptorService`) because we deregister its container while the extensions viewlet still registers views into it. All three files are byte-identical to our pre-merge base, so this is a byproduct of the 0-core-patch de-IDE seam (amplified by the incomplete web build - `watch` not `watch-web`), present before 1.127. Candidate cleanup: guard `ExtensionsViewletViewsContribution` when its container is absent, tracked separately from version bumps.
+### Redesign round - plans 21-24 + the rails follow-up: 0 ADDED core patches
+
+For completeness alongside the plan-25 entries above: **plans 21, 22, 23 and 24 added nothing to this
+ledger** - every surface (provenance gutter, reading ramp, ＋Skill composer, project Home, the
+project-wide fan-out + ISMS sample, and the cross-document review) landed entirely in the `livingDocs`
+contribution / `livingDocRender` webview / `screenRender` / the service, plus `styleOverrides` CSS. The
+review engine was reused, not rebuilt (no new approve/reject logic; `reviewRailView.ts` untouched by the
+cross-doc surface). The post-redesign **rails-are-editor-companions** change (PR #85,
+`RailVisibilityContribution`) is likewise our-surface only - it reads the active editor and toggles part
+visibility via `IWorkbenchLayoutService`, no `activitybarpart` / core edit.
+
+**Whole Abstract UI Redesign (plans 21-25 + rails): 0 NEW core patches; the count stays 5 total** - all
+pre-existing, the newest being the v2-iter-9 76px `ACTIVITYBAR_WIDTH`. This is the headline Q3 datapoint:
+the redesign that was expected to force a core seam (the labeled nav) needed none. The fork resisted far
+less than predicted; the residual coupling the redesign adds is appearance wiring (the codicon-class DOM
+reach for the nav chip/tidy, fails-soft/cosmetic on rename), not behavioural forks.

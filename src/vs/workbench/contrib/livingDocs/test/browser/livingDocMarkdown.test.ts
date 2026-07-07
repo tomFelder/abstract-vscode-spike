@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { extractBindLinks, findQuoteLine, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, serializeLivingDoc, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, countTemplateSlots, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSlotHints, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -69,6 +69,184 @@ suite('LivingDoc bind-link format', () => {
 
 	test('a clean .md with bind links round-trips through parse -> serialize unchanged', () => {
 		assert.strictEqual(serializeLivingDoc(parseLivingDoc(WEEKLY_MD)), WEEKLY_MD);
+	});
+
+	// Plan 28, iter 1: the SAME frontmatter parser reads template metadata. A `template: true` file exposes
+	// its name/description; the slots and bind links live in the body verbatim.
+	test('parses template frontmatter (template flag, name, description) and keeps the body verbatim', () => {
+		const TEMPLATE_MD = [
+			'---',
+			'template: true',
+			'name: Weekly report',
+			'description: A weekly operating summary bound to metrics.csv.',
+			'sources:',
+			'  - metrics.csv',
+			'---',
+			'',
+			'# {{slot:report title}}',
+			'',
+			'Revenue is [pending](bind:metrics.mrr) MRR.',
+		].join('\n') + '\n';
+		const doc = parseLivingDoc(TEMPLATE_MD);
+		assert.deepStrictEqual(
+			{ isTemplate: doc.isTemplate, name: doc.templateName, description: doc.templateDescription, sources: doc.sources, fromTemplate: doc.fromTemplate },
+			{ isTemplate: true, name: 'Weekly report', description: 'A weekly operating summary bound to metrics.csv.', sources: ['metrics.csv'], fromTemplate: '' },
+		);
+		assert.ok(doc.body.includes('[pending](bind:metrics.mrr)'), 'bind links are kept verbatim in the body');
+	});
+
+	// A template's `name:` falls back to the derived title when none is authored.
+	test('a template with no name falls back to the derived title', () => {
+		const doc = parseLivingDoc(['---', 'template: true', '---', '', '# Meeting notes', '', 'body'].join('\n') + '\n');
+		assert.strictEqual(doc.templateName, 'Meeting notes');
+	});
+
+	// An ordinary document is NOT a template - the template fields stay at their inert defaults.
+	test('an ordinary document is not a template', () => {
+		const doc = parseLivingDoc(WEEKLY_MD);
+		assert.strictEqual(doc.isTemplate, false, 'a report is not a template');
+		assert.strictEqual(doc.fromTemplate, '', 'no provenance on a hand-authored report');
+	});
+
+	// A generated document records `template: <name>` as provenance - a STRING value, not the boolean flag,
+	// so it is NOT itself treated as a template (plan 28, D28-C provenance line for iter 3).
+	test('template: <name> on a generated document reads as provenance, not a template flag', () => {
+		const doc = parseLivingDoc(['---', 'title: Week 24', 'template: Weekly report', '---', '', 'body'].join('\n') + '\n');
+		assert.strictEqual(doc.isTemplate, false, 'a provenance line does not make the document a template');
+		assert.strictEqual(doc.fromTemplate, 'Weekly report', 'the originating template name is recorded as provenance');
+	});
+
+	// countTemplateSlots underpins the honest `N slots` count on the template card (plan 28, D28-C).
+	test('countTemplateSlots counts {{slot}} / {{slot:hint}} placeholders and ignores bind links', () => {
+		const body = '# {{slot:title}}\n\nWeek {{slot:week}} - {{date}}\n\nMRR is [pending](bind:metrics.mrr).';
+		assert.strictEqual(countTemplateSlots(body), 3);
+		assert.strictEqual(countTemplateSlots('No slots here, just [x](bind:metrics.mrr).'), 0);
+	});
+
+	// Slots inside an HTML comment are illustrative scaffolding (the New Template seed carries a
+	// `<!-- {{slot:hint}} -->` example), not real slots, so the card must not count them (D28-C, PR #88 debt).
+	test('countTemplateSlots ignores {{slot}} placeholders inside HTML comments', () => {
+		assert.strictEqual(countTemplateSlots('<!-- {{slot:hint}} -->'), 0);
+		assert.strictEqual(countTemplateSlots('# {{slot:title}}\n\n<!-- example: {{slot:hint}} -->'), 1);
+		assert.strictEqual(countTemplateSlots('<!--\n{{slot:a}}\n{{slot:b}}\n-->\n{{slot:c}}'), 1);
+		// An unclosed comment (no terminating `-->`) matches nothing, so trailing slots stay counted - the same
+		// lenient behaviour buildTemplateSkeleton relies on.
+		assert.strictEqual(countTemplateSlots('<!-- oops {{slot:still counted}}'), 1);
+	});
+
+	// The Weekly report starter (plan 28): H1 slot, a slot-only subtitle line, a bound Highlights line, and
+	// two instruction-prose sections. The skeleton keeps headings + the bind line verbatim, sets the H1 to
+	// the document name, strips slots, and drops the instruction prose (it becomes the model brief).
+	const WEEKLY_TEMPLATE_BODY = [
+		'# {{slot:report title}}',
+		'',
+		'Week {{slot:week number}} - {{slot:date range}}',
+		'',
+		'## Highlights',
+		'',
+		'Revenue is [pending](bind:metrics.mrr) MRR, up [pending](bind:metrics.mrr.delta) week-on-week, on [pending](bind:metrics.signups) new signups.',
+		'',
+		'## Commentary',
+		'',
+		'Summarise how the week went from the numbers above.',
+		'',
+		'## What to watch',
+		'',
+		'Call out the one metric to keep an eye on next week.',
+		'',
+	].join('\n');
+
+	test('templateSlotHints returns the slot hints in order, deduped, slot: prefix stripped', () => {
+		assert.deepStrictEqual(templateSlotHints('# {{slot:report title}}\n{{week number}}\n{{slot:report title}}'), ['report title', 'week number']);
+		assert.deepStrictEqual(templateSlotHints('No slots [x](bind:metrics.mrr)'), []);
+		// Slots inside HTML comments are illustrative, so they never reach the model brief (aligns with the count
+		// and skeleton, D28-C).
+		assert.deepStrictEqual(templateSlotHints('# {{slot:report title}}\n<!-- {{slot:example}} -->'), ['report title']);
+	});
+
+	// buildTemplateSkeleton is the review-engine-safe scaffold (plan 28, iter 3): bind links copied verbatim
+	// (born bound), slots stripped, the H1 becomes the document name, instruction prose dropped, and the
+	// frontmatter records `template:` provenance + the declared sources so the copied binds resolve on load.
+	test('buildTemplateSkeleton keeps headings + verbatim bind links, strips slots, records provenance', () => {
+		const skeleton = buildTemplateSkeleton(WEEKLY_TEMPLATE_BODY, 'Week 24 report', 'Weekly report', ['metrics.csv']);
+		assert.strictEqual(skeleton, [
+			'---',
+			'template: Weekly report',
+			'sources:',
+			'  - metrics.csv',
+			'---',
+			'',
+			'# Week 24 report',
+			'',
+			'## Highlights',
+			'',
+			'Revenue is [pending](bind:metrics.mrr) MRR, up [pending](bind:metrics.mrr.delta) week-on-week, on [pending](bind:metrics.signups) new signups.',
+			'',
+			'## Commentary',
+			'',
+			'## What to watch',
+			'',
+		].join('\n'));
+		// The skeleton round-trips: it parses back as a document bound to the template's source, born from it.
+		const doc = parseLivingDoc(skeleton);
+		assert.strictEqual(doc.title, 'Week 24 report');
+		assert.strictEqual(doc.fromTemplate, 'Weekly report');
+		assert.deepStrictEqual(doc.sources, ['metrics.csv']);
+		assert.deepStrictEqual(extractBindLinks(doc.body).map(b => b.key), ['metrics.mrr', 'metrics.mrr.delta', 'metrics.signups']);
+		assert.strictEqual(countTemplateSlots(doc.body), 0, 'no slots survive into the generated document');
+	});
+
+	// A template with no sources and no bind links (e.g. Client update) yields a headings-only skeleton with
+	// the H1 named after the document; HTML-comment guidance is stripped and never reaches disk.
+	test('buildTemplateSkeleton on a prose-only template yields a headings-only skeleton, comments stripped', () => {
+		const body = [
+			'# {{slot:client name}} - Progress update',
+			'',
+			'<!-- guidance the model reads, not the reader -->',
+			'## What we shipped',
+			'',
+			'Summarise the work completed this period.',
+			'',
+			'## What is next',
+			'',
+			'Outline the next milestone.',
+			'',
+		].join('\n');
+		assert.strictEqual(buildTemplateSkeleton(body, 'Acme update', 'Client update', []), [
+			'---',
+			'template: Client update',
+			'---',
+			'',
+			'# Acme update',
+			'',
+			'## What we shipped',
+			'',
+			'## What is next',
+			'',
+		].join('\n'));
+	});
+
+	// The composed instruction is what drives the EXISTING chat path (plan 28, iter 3): a deterministic brief
+	// carrying the template body, its slot hints, and the user's note. Snapshot so the prompt stays stable.
+	test('composeTemplateInstruction composes a stable brief from the body, slot hints and note', () => {
+		const instruction = composeTemplateInstruction('Weekly report', WEEKLY_TEMPLATE_BODY, 'Week 24 report', 'Focus on the churn dip.');
+		assert.strictEqual(instruction, [
+			'Generate the first draft of "Week 24 report" from the "Weekly report" template.',
+			'Write the prose for each section as new content inserted after its heading, following the template brief below. Do not change any bound figures.',
+			'',
+			'Template brief:',
+			WEEKLY_TEMPLATE_BODY.trim(),
+			'',
+			'Fill these slots from the sources: report title, week number, date range.',
+			'',
+			'Specific request for this document: Focus on the churn dip.',
+		].join('\n'), 'the composed brief is stable (the note is passed through verbatim, no forced punctuation)');
+	});
+
+	test('composeTemplateInstruction omits the note line when no note is given', () => {
+		const instruction = composeTemplateInstruction('Client update', '# {{slot:client name}}\n\n## What we shipped\n\nSummarise.', 'Acme update', '');
+		assert.ok(!instruction.includes('Specific request'), 'no note line without a note');
+		assert.ok(instruction.includes('Fill these slots from the sources: client name.'));
 	});
 
 	test('reconcileBindLinks rewrites visible cache to the resolved value (lock wins), keeping the key', () => {
@@ -289,6 +467,34 @@ suite('LivingDoc bind-link format', () => {
 		});
 	});
 
+	// --- extractStreamingReply: show the human prose live, not the raw JSON envelope (plan 27 iter 3) ---
+
+	test('extractStreamingReply shows the growing reply prose from a partial envelope, not the raw JSON', () => {
+		assert.strictEqual(extractStreamingReply('{"reply":"Access to systems is grante'), 'Access to systems is grante');
+	});
+
+	test('extractStreamingReply returns the reply and drops the trailing envelope once the value closes', () => {
+		assert.strictEqual(extractStreamingReply('{"reply":"All done.","edits":[]}'), 'All done.');
+	});
+
+	test('extractStreamingReply unescapes quotes and newlines inside the streamed reply', () => {
+		assert.strictEqual(extractStreamingReply('{"reply":"He said \\"hi\\"\\nthen left'), 'He said "hi"\nthen left');
+	});
+
+	test('extractStreamingReply returns empty while the reply value has not started (stays on Thinking)', () => {
+		assert.strictEqual(extractStreamingReply('{"re'), '');
+		assert.strictEqual(extractStreamingReply('{'), '');
+	});
+
+	test('extractStreamingReply passes a plain-text (non-envelope) reply through unchanged', () => {
+		assert.strictEqual(extractStreamingReply('Just a plain answer, no JSON.'), 'Just a plain answer, no JSON.');
+	});
+
+	test('extractStreamingReply waits on a trailing backslash rather than mis-escaping across chunks', () => {
+		// The delta split mid-escape ("...hi\\") must not swallow the next real character.
+		assert.strictEqual(extractStreamingReply('{"reply":"hi\\'), 'hi');
+	});
+
 	// plan 18 (D-C): one model call returns a per-document edit map for the working set.
 	test('parseMultiChatResponse extracts a reply plus per-document edits/inserts keyed by doc', () => {
 		const raw = '{"reply":"Changed blue to red.","docs":[{"doc":"Project Brief","edits":[{"oldText":"blue","newText":"red"}]},{"doc":"Appendix","inserts":[{"afterHeading":"","newText":"Primary is red."}]}]}';
@@ -387,6 +593,70 @@ suite('LivingDoc bind-link format', () => {
 			// that would assign a wrong-but-real line and break the decisions column's provenance.
 			const short = ['1  MFA required.', '2  Logs are retained for six months.'].join('\n');
 			assert.strictEqual(findQuoteLine(short, 'MFA required for all cloud systems and third-party integrations'), undefined);
+		});
+	});
+
+	// The apply-layer of the decision-68 data-loss fix (plan 31 iter 1): a chat edit that targets ONE item
+	// of a list block must anchor + splice at that item's boundary so sibling items are never destroyed.
+	suite('list-item anchoring (decision-68 data loss)', () => {
+		const FOUR_ITEM = ['- Expand the free trial', '- Win back churned accounts', '- Launch an annual plan', '- Improve onboarding'].join('\n');
+
+		test('listItems splits a list block into per-line items; returns [] for prose', () => {
+			assert.deepStrictEqual(listItems(FOUR_ITEM).map(i => i.text), [
+				'- Expand the free trial', '- Win back churned accounts', '- Launch an annual plan', '- Improve onboarding',
+			]);
+			assert.deepStrictEqual(listItems('Just a prose paragraph, not a list.'), []);
+		});
+
+		test('scopeBlockEdit narrows a single-item quote to that item; keeps the whole block for prose', () => {
+			const scoped = scopeBlockEdit(FOUR_ITEM, '- Win back churned accounts');
+			assert.strictEqual(scoped.oldText, '- Win back churned accounts');
+			// A prose block (or a quote that spans the whole list) is left as the whole block.
+			assert.strictEqual(scopeBlockEdit('A single prose block.', 'A single prose block.').oldText, 'A single prose block.');
+		});
+
+		test('applyBlockEdit splices ONE item and leaves siblings byte-identical (the data-loss repro)', () => {
+			const next = applyBlockEdit(FOUR_ITEM, '- Win back churned accounts', '- Win back churned accounts with a targeted email campaign');
+			assert.strictEqual(next, [
+				'- Expand the free trial',
+				'- Win back churned accounts with a targeted email campaign',
+				'- Launch an annual plan',
+				'- Improve onboarding',
+			].join('\n'));
+			// The pre-fix behaviour (whole-block replace with the one rewritten item) would have dropped the
+			// three siblings; assert they are all still present.
+			assert.ok(next.includes('- Expand the free trial') && next.includes('- Launch an annual plan') && next.includes('- Improve onboarding'), 'siblings preserved');
+		});
+
+		test('applyBlockEdit replaces the whole block for a prose edit (oldText === block)', () => {
+			assert.strictEqual(applyBlockEdit('Growth remained steady this week.', 'Growth remained steady this week.', 'Growth accelerated this week.'), 'Growth accelerated this week.');
+		});
+
+		test('ordered lists: editing item 2 of 4 preserves the numbered siblings', () => {
+			const ordered = ['1. First lever', '2. Second lever', '3. Third lever', '4. Fourth lever'].join('\n');
+			const next = applyBlockEdit(ordered, '2. Second lever', '2. Second lever, now with a metric');
+			assert.strictEqual(next, ['1. First lever', '2. Second lever, now with a metric', '3. Third lever', '4. Fourth lever'].join('\n'));
+		});
+
+		test('nested lists (one level): editing a parent item leaves its nested children untouched', () => {
+			const nested = ['- Growth', '  - trial expansion', '  - annual plan', '- Retention', '- Activation'].join('\n');
+			const next = applyBlockEdit(nested, '- Retention', '- Retention and win-back');
+			assert.strictEqual(next, ['- Growth', '  - trial expansion', '  - annual plan', '- Retention and win-back', '- Activation'].join('\n'));
+			// The nested children of the untouched "Growth" item are byte-identical.
+			assert.ok(next.includes('  - trial expansion') && next.includes('  - annual plan'), 'nested children preserved');
+		});
+
+		test('a list item containing a bound figure atom stays byte-identical when a sibling is edited', () => {
+			const withFigure = ['- Revenue grew this quarter', '- Costs stayed flat this quarter', '- Margin improved', '- Cash balance is [$48.6k](bind:metrics.mrr)'].join('\n');
+			const next = applyBlockEdit(withFigure, '- Costs stayed flat this quarter', '- Costs fell sharply this quarter');
+			assert.ok(next.includes('- Cash balance is [$48.6k](bind:metrics.mrr)'), 'the bound figure item is untouched, bind link intact');
+			assert.strictEqual(next.split('\n').length, 4, 'no item added or dropped');
+		});
+
+		test('fail-soft: a scoped oldText no longer present leaves the block unchanged (never wholesale-replaces)', () => {
+			// The anchor item was already edited away; applyBlockEdit must NOT fall back to a whole-block
+			// replace (that is the exact sibling-destroying data loss this guards against).
+			assert.strictEqual(applyBlockEdit(FOUR_ITEM, '- An item that is not here', '- rewritten'), FOUR_ITEM);
 		});
 	});
 });

@@ -39,6 +39,102 @@ export function reconcileBindLinks(text: string, resolved: ReadonlyMap<string, s
 	});
 }
 
+// Count the `{{slot}}` / `{{slot:hint}}` placeholders in a template body (plan 28, D28-C). Used for the
+// honest `N slots` count on the template card; the same slots become the model brief at generation time.
+// A slot is any `{{ ... }}` run; the result is the number of occurrences in document order. Slots inside an
+// HTML comment are illustrative scaffolding (e.g. the New Template seed's `<!-- {{slot:hint}} -->`), not real
+// slots, so they are stripped first - the same comment-strip the skeleton uses (D28-C). Pure + tested.
+const SLOT_RE = /\{\{\s*[^}]+\}\}/g;
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+// Drop every `<!-- ... -->` comment. An unclosed `<!--` (no terminating `-->`) matches nothing and is left
+// intact, so slots after it stay counted - the same lenient behaviour the skeleton builder relies on.
+function stripHtmlComments(text: string): string {
+	return text.replace(HTML_COMMENT_RE, '');
+}
+export function countTemplateSlots(body: string): number {
+	return (stripHtmlComments(body).match(SLOT_RE) ?? []).length;
+}
+
+// Strip every `{{slot:hint}}` / `{{slot}}` run from a line (leaving the surrounding literal text intact).
+function stripSlots(text: string): string {
+	return text.replace(SLOT_RE, '');
+}
+
+// The human hints a template's slots carry, in document order: `{{slot:executive summary}}` -> "executive
+// summary"; a bare `{{week number}}` (no `slot:` prefix) -> "week number". Deduped, used as the model brief.
+// Slots inside HTML comments are illustrative, not real, so they are stripped first to match the count and
+// skeleton (D28-C).
+export function templateSlotHints(body: string): string[] {
+	const hints: string[] = [];
+	const seen = new Set<string>();
+	for (const m of stripHtmlComments(body).matchAll(SLOT_RE)) {
+		const inner = m[0].replace(/^\{\{\s*|\s*\}\}$/g, '').replace(/^slot:\s*/i, '').trim();
+		if (inner && !seen.has(inner.toLowerCase())) { seen.add(inner.toLowerCase()); hints.push(inner); }
+	}
+	return hints;
+}
+
+// Build the STATIC skeleton for a document generated from a template (plan 28, iter 3, D28-C). The
+// skeleton is the scaffold the review engine then fills: the template's headings (the H1 becomes the
+// document's own name), and any line carrying a `bind:` link copied through VERBATIM so the generated
+// document is born bound to its sources. Slots and the template's instruction prose are dropped here - they
+// become the model brief (see `composeTemplateInstruction`), never fake prose written to disk. The
+// frontmatter records the originating template's name as provenance (`template: <name>`, read back as
+// `fromTemplate`) plus the template's declared `sources:` so the copied binds resolve on first load. Pure.
+export function buildTemplateSkeleton(body: string, docName: string, templateName: string, sources: readonly string[]): string {
+	const title = docName.trim() || templateName.trim() || 'Untitled';
+	const clean = stripHtmlComments(body);
+	const blocks: string[] = [];
+	let usedH1 = false;
+	for (const raw of clean.split(/\r?\n/)) {
+		const line = raw.trim();
+		if (!line) { continue; }
+		const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+		if (heading) {
+			let text = stripSlots(heading[2]).replace(/\s{2,}/g, ' ').trim();
+			if (heading[1].length === 1 && !usedH1) { text = title; usedH1 = true; }
+			if (!text) { continue; }
+			blocks.push(`${heading[1]} ${text}`);
+			continue;
+		}
+		if (/\]\(bind:/.test(line)) {
+			const kept = stripSlots(line).replace(/\s{2,}/g, ' ').trim();
+			if (kept) { blocks.push(kept); }
+			continue;
+		}
+		// Instruction prose and slot-only lines are the brief for the model, not skeleton content: drop them.
+	}
+	if (!usedH1) { blocks.unshift(`# ${title}`); }
+
+	const fm = ['---', `template: ${templateName.trim() || title}`];
+	if (sources.length) { fm.push('sources:', ...sources.map(s => `  - ${s}`)); }
+	fm.push('---');
+	return `${fm.join('\n')}\n\n${blocks.join('\n\n')}\n`;
+}
+
+// Compose the instruction the generate flow sends through the EXISTING chat path (plan 28, iter 3): the
+// template body is the brief (its instruction prose + slot hints), the document is already named, and the
+// user's optional note is appended. The model answers with insertion proposals that land in the review
+// rail - generation never writes prose directly (decision 17). Deterministic, so it is snapshot-testable.
+export function composeTemplateInstruction(templateName: string, body: string, docName: string, note: string): string {
+	const name = docName.trim() || templateName.trim();
+	const hints = templateSlotHints(body);
+	const lines = [
+		`Generate the first draft of "${name}" from the "${templateName}" template.`,
+		`Write the prose for each section as new content inserted after its heading, following the template brief below. Do not change any bound figures.`,
+		'',
+		'Template brief:',
+		body.trim(),
+	];
+	if (hints.length) {
+		lines.push('', `Fill these slots from the sources: ${hints.join(', ')}.`);
+	}
+	if (note.trim()) {
+		lines.push('', `Specific request for this document: ${note.trim()}`);
+	}
+	return lines.join('\n');
+}
+
 function slug(s: string): string {
 	return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'section';
 }
@@ -48,12 +144,24 @@ interface IFrontmatter {
 	subtitle: string;
 	sources: string[];
 	context: string[];
+	// Template metadata (plan 28, D28-A): a `*.template.md` declares `template: true` plus a human `name:`
+	// and `description:`. These are inert on an ordinary document (the fields stay at their defaults), so the
+	// same single frontmatter parser serves both a document and a template - there is no second parser.
+	template: boolean;
+	name: string;
+	description: string;
+	// The originating template's `name:`, recorded on a generated document's frontmatter as provenance
+	// (`template: Weekly report`) so the audit trail can read "Created from Weekly report template".
+	fromTemplate: string;
 }
 
-// Parse the YAML-ish frontmatter: `title`/`subtitle` scalars and `sources:` / `context:` block
-// lists (`- item` lines). Returns the frontmatter values and the body that follows.
+// Parse the YAML-ish frontmatter: `title`/`subtitle`/`name`/`description` scalars, the `template:` flag,
+// and `sources:` / `context:` block lists (`- item` lines). Returns the frontmatter values and the body
+// that follows. The `template:` scalar is truthy only on the literal `true` (a generated doc records the
+// template it came from as a `template: <name>` STRING, which reads as `fromTemplate` provenance - not a
+// template file itself).
 function parseFrontmatter(text: string): { fm: IFrontmatter; body: string } {
-	const fm: IFrontmatter = { title: '', subtitle: '', sources: [], context: [] };
+	const fm: IFrontmatter = { title: '', subtitle: '', sources: [], context: [], template: false, name: '', description: '', fromTemplate: '' };
 	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
 	if (!match) {
 		return { fm, body: text };
@@ -74,6 +182,13 @@ function parseFrontmatter(text: string): { fm: IFrontmatter; body: string } {
 		listInto = undefined;
 		if (key === 'title') { fm.title = value; }
 		else if (key === 'subtitle') { fm.subtitle = value; }
+		else if (key === 'name') { fm.name = value; }
+		else if (key === 'description') { fm.description = value; }
+		else if (key === 'template') {
+			// `template: true` marks a template file; `template: <name>` on a generated document is provenance.
+			if (value === 'true') { fm.template = true; }
+			else if (value) { fm.fromTemplate = value; }
+		}
 		else if (key === 'sources') { listInto = fm.sources; if (value) { fm.sources.push(value); } }
 		else if (key === 'context') { listInto = fm.context; if (value) { fm.context.push(value); } }
 	}
@@ -127,6 +242,11 @@ export function parseLivingDoc(text: string): ILivingDoc {
 		blocks,
 		isLiving,
 		body: cleanBody,
+		isTemplate: fm.template,
+		// A template's card title is its `name:` if authored, else the derived title.
+		templateName: fm.name || title,
+		templateDescription: fm.description,
+		fromTemplate: fm.fromTemplate,
 	};
 }
 
@@ -208,6 +328,93 @@ export function withReplacedBody(text: string, newBody: string): string {
 	return text.slice(0, match[0].length).replace(/\r?\n*$/, '\n') + '\n' + body;
 }
 
+// --- List-item anchoring (plan 31 iter 1, decision-68 data-loss fix) --------------------------------
+//
+// A bulleted / numbered list with no blank lines between items parses as a SINGLE block whose `text` is the
+// whole list (`parseLivingDoc` splits blocks on blank lines). A chat edit that targets ONE item must be
+// anchored and applied at that item's boundary; otherwise approving it replaces the entire block with the
+// single rewritten item and every sibling item is silently destroyed. These pure helpers make each list item
+// its own searchable / replaceable unit.
+
+const LIST_MARKER_RE = /^(\s*)([-*+]|\d+[.)])\s+\S/;
+
+/**
+ * The list items in a block as exact substrings with their [start, end) character ranges. An item is one
+ * list-marker line (top-level or nested); its range covers that physical line only, so splicing one item
+ * never disturbs a sibling or a nested child on another line. Returns [] when the block is not a list.
+ */
+export function listItems(blockText: string): { text: string; start: number; end: number }[] {
+	const items: { text: string; start: number; end: number }[] = [];
+	let offset = 0;
+	for (const rawLine of blockText.split('\n')) {
+		const line = rawLine.replace(/\r$/, '');
+		if (LIST_MARKER_RE.test(line)) {
+			items.push({ text: line, start: offset, end: offset + line.length });
+		}
+		offset += rawLine.length + 1; // + the newline that split() consumed
+	}
+	return items;
+}
+
+// The comparable content of a list item: marker stripped, whitespace collapsed, lower-cased.
+function listItemContent(line: string): string {
+	return line.replace(/^(\s*)([-*+]|\d+[.)])\s+/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// Jaccard token overlap of two strings, used to locate the single item an edit targets.
+function listTokenOverlap(a: string, b: string): number {
+	const ta = new Set(a.match(/[a-z0-9]+/g) ?? []);
+	const tb = new Set(b.match(/[a-z0-9]+/g) ?? []);
+	if (ta.size === 0 || tb.size === 0) { return 0; }
+	let inter = 0;
+	for (const t of ta) { if (tb.has(t)) { inter++; } }
+	return inter / (ta.size + tb.size - inter);
+}
+
+/**
+ * Scope an edit to the single list item it targets. When `blockText` is a multi-item list and `quote` (the
+ * model's quoted oldText, or the proposed newText when locating the changed item) clearly matches ONE item,
+ * returns that item's exact slice and range; otherwise returns the whole block unchanged. This is what lets a
+ * one-item edit anchor and splice at the `<li>` boundary and leave sibling items byte-identical.
+ */
+export function scopeBlockEdit(blockText: string, quote: string): { oldText: string; start: number; end: number } {
+	const whole = { oldText: blockText, start: 0, end: blockText.length };
+	const q = (quote ?? '').trim();
+	if (!q) { return whole; }
+	const items = listItems(blockText);
+	if (items.length < 2) { return whole; }
+	const target = listItemContent(q);
+	if (!target) { return whole; }
+	let best: { text: string; start: number; end: number } | undefined;
+	let bestScore = 0;
+	for (const item of items) {
+		const content = listItemContent(item.text);
+		const score = content === target ? 1 : (content.includes(target) || target.includes(content) ? 0.9 : listTokenOverlap(content, target));
+		if (score > bestScore) { bestScore = score; best = item; }
+	}
+	if (best && bestScore >= 0.5 && best.text.trim() !== blockText.trim()) {
+		return { oldText: blockText.slice(best.start, best.end), start: best.start, end: best.end };
+	}
+	return whole;
+}
+
+/**
+ * Apply an approved edit to a block's raw text. When `oldText` is the whole block (a prose rewrite) the block
+ * becomes `newText`. When `oldText` is a scoped sub-span (one list item) `newText` is spliced over exactly
+ * that range, so every sibling line stays byte-identical. Fail-soft: if a scoped `oldText` is no longer
+ * present (the block changed since the proposal was queued) the block is returned unchanged rather than
+ * destroying sibling content with a whole-block replace - the exact data loss this guards against.
+ */
+export function applyBlockEdit(blockText: string, oldText: string, newText: string): string {
+	const old = oldText ?? '';
+	if (!old || old === blockText || old.trim() === blockText.trim()) { return newText; }
+	const at = blockText.indexOf(old);
+	if (at >= 0) {
+		return blockText.slice(0, at) + newText + blockText.slice(at + old.length);
+	}
+	return blockText;
+}
+
 export function serializeLivingDoc(doc: ILivingDoc): string {
 	const body = doc.blocks.map(serializeBlock).join('\n\n');
 
@@ -286,6 +493,33 @@ function extractBalancedJsonObject(raw: string): string | undefined {
 		out += ch;
 	}
 	return undefined; // never balanced (truncated) -> plain answer
+}
+
+// Best-effort extraction of the human `reply` prose from a PARTIAL chat-response JSON while it streams
+// (plan 27 iter 3), so the live turn shows words rather than the raw `{"reply":"..."}` envelope. The chat
+// contract emits `reply` first, so this reads its string value from `"reply":"` up to the closing
+// unescaped quote (or the end of the partial buffer when it has not arrived yet), unescaping the common
+// JSON string escapes. A reply that is NOT a JSON envelope (the tolerant plain-text path) is returned
+// unchanged; an envelope whose reply value has not started yet returns '' (the turn stays on "Thinking").
+export function extractStreamingReply(raw: string): string {
+	const s = raw.replace(/^[\s\uFEFF]+/, '');
+	if (!s.startsWith('{')) { return raw; }
+	const key = /"reply"\s*:\s*"/.exec(s);
+	if (!key) { return ''; }
+	let out = '';
+	for (let i = key.index + key[0].length; i < s.length; i++) {
+		const ch = s[i];
+		if (ch === '\\') {
+			const next = s[i + 1];
+			if (next === undefined) { break; } // a trailing backslash - wait for the next delta
+			out += next === 'n' ? '\n' : next === 't' ? '\t' : next === 'r' ? '\r' : next;
+			i++;
+			continue;
+		}
+		if (ch === '"') { break; } // the closing quote of the reply value
+		out += ch;
+	}
+	return out;
 }
 
 export function parseChatResponse(raw: string): IParsedChatResponse {

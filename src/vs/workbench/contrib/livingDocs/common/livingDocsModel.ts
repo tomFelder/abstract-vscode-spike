@@ -62,6 +62,17 @@ export interface ILivingDoc {
 	// Clean Markdown body after the frontmatter, used to render plain documents and as the raw
 	// editing view. Reconstructable from `blocks`.
 	readonly body: string;
+	// True when the file's frontmatter declares `template: true` (plan 28, D28-A): a `*.template.md` file
+	// that seeds new documents rather than being a report itself. Templates are excluded from the Reports
+	// list and shown only on the Templates screen. Optional so hand-built test docs default to a non-template.
+	readonly isTemplate?: boolean;
+	// A template's human `name:` (falls back to the derived title), shown as the template card title.
+	readonly templateName?: string;
+	// A template's `description:` frontmatter, shown as the template card subtitle.
+	readonly templateDescription?: string;
+	// The originating template's name, recorded on a GENERATED document as `template: <name>` provenance
+	// so the audit trail reads "Created from <name> template" (empty on hand-authored documents).
+	readonly fromTemplate?: string;
 }
 
 // figure  -> low risk, auto-applies
@@ -125,6 +136,28 @@ export interface IAddedContext {
 	readonly detail?: string;
 }
 
+// What caused a snapshot to be taken (plan 26, D26-B): an agent/refresh run that applied at least one
+// change, a bulk approve, a publish, or a user's manual "Save Version" action. It labels the version
+// row in the History tab and lets restore explain provenance.
+export type SnapshotVia = 'refresh' | 'bulk-approve' | 'publish' | 'manual';
+
+// A named, restorable version of the document body (plan 26 iter 2). The body is the full serialised
+// Markdown at the moment of the snapshot; `auditIndex` is the length of the audit trail at that moment,
+// so the History tab can group the changes that happened since each version. Lives in the lock so the
+// `.md` stays the canonical document: deleting the lock loses history but never the document.
+export interface ISnapshotEntry {
+	readonly id: string;
+	readonly label: string;
+	readonly at: string;
+	readonly via: SnapshotVia;
+	readonly body: string;
+	readonly auditIndex: number;
+}
+
+// Snapshots are capped with oldest-eviction so the lock never grows without bound (D26-A); at ~1-5 KB
+// each for beachhead docs, 50 versions is well under a megabyte.
+export const SNAPSHOT_CAP = 50;
+
 export interface ILivingDocLock {
 	version: number;
 	bindings: Record<string, IBindingEntry>;
@@ -137,10 +170,13 @@ export interface ILivingDocLock {
 	// User-added context (pasted text / images / company knowledge), kept here so the clean .md stays
 	// just prose + frontmatter file sources.
 	contextItems: IAddedContext[];
+	// Named, restorable versions of the body (plan 26 iter 2). Additive field: absent on older locks =
+	// no versions yet; LOCK_VERSION stays 1.
+	snapshots: ISnapshotEntry[];
 }
 
 export function emptyLock(): ILivingDocLock {
-	return { version: LOCK_VERSION, bindings: {}, context: {}, claims: {}, pins: [], audit: [], contextItems: [] };
+	return { version: LOCK_VERSION, bindings: {}, context: {}, claims: {}, pins: [], audit: [], contextItems: [], snapshots: [] };
 }
 
 // --- orchestration: agents, triggers, policy, runs (spec 09) ---
@@ -233,6 +269,10 @@ export interface IProposedChange {
 	// into the document rather than rewriting an existing one; the inline diff renders it all-additions.
 	readonly insert?: boolean;
 	readonly afterBlockId?: string;
+	// The reviewer hand-edited the agent's proposed `newText` before approving (Tweak, plan 31 iter 3,
+	// D31-B). Set by `amendChange`; the subsequent approve records the audit `via: 'tweaked'` so the trail
+	// shows a human modified the agent's words - a trust signal, not bookkeeping.
+	readonly tweaked?: boolean;
 }
 
 /**
@@ -263,7 +303,11 @@ export function nextPendingDocId(pending: readonly IProposedChange[], currentDoc
  * processed and is layered on top of this aggregation by the caller - the pure selector below only
  * distinguishes changed vs no-change, which is all `getAllPending()` can tell after a run.
  */
-export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working';
+// `skipped` (plan 27 iter 4): a document the fan-out never settled a result for because the user stopped
+// the run. The whole-project run is a single model call, so a mid-flight Stop means every not-yet-changed
+// document is honestly `skipped` (it never produced a change), while any document that already had a change
+// keeps it. Truthful per-tile state, matching plan 23's honesty rule.
+export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working' | 'skipped';
 
 export interface IProjectRunDocTile {
 	readonly docId: string;
@@ -283,25 +327,26 @@ export interface IProjectRunSummary {
 	readonly tiles: readonly IProjectRunDocTile[];
 	readonly totalChanges: number;      // pending changes across every document
 	readonly changedDocs: number;       // documents with at least one pending change
-	readonly unchangedDocs: number;     // documents with no pending change
+	readonly unchangedDocs: number;     // documents with no pending change (0 when the run was stopped)
+	readonly skippedDocs: number;       // documents the stopped run never settled (plan 27 iter 4)
 }
 
+// `stopped` (plan 27 iter 4): the run was cancelled mid-flight, so a document with no pending change is
+// honestly `skipped` (it never got to run) rather than `no-change` (it ran and produced nothing).
 export function summariseProjectRun(
 	docs: readonly { readonly docId: string; readonly docTitle: string }[],
 	pending: readonly IProposedChange[],
+	stopped = false,
 ): IProjectRunSummary {
 	const counts = new Map<string, number>();
 	for (const c of pending) { counts.set(c.docId, (counts.get(c.docId) ?? 0) + 1); }
 	const tiles: IProjectRunDocTile[] = docs.map(d => {
 		const changeCount = counts.get(d.docId) ?? 0;
-		return {
-			docId: d.docId,
-			docTitle: d.docTitle,
-			status: changeCount > 0 ? 'changed' : 'no-change',
-			changeCount,
-		};
+		const status: ProjectRunDocStatus = changeCount > 0 ? 'changed' : (stopped ? 'skipped' : 'no-change');
+		return { docId: d.docId, docTitle: d.docTitle, status, changeCount };
 	});
 	const changedDocs = tiles.filter(t => t.status === 'changed').length;
+	const skippedDocs = tiles.filter(t => t.status === 'skipped').length;
 	// Count only changes attributable to a document in this project's tile set, so totalChanges
 	// always equals the sum of the tile counts. A pending change whose docId is not in `docs`
 	// (a stale snapshot / a doc removed mid-run) has no tile and must not inflate the bottom-bar total.
@@ -310,7 +355,8 @@ export function summariseProjectRun(
 		tiles,
 		totalChanges,
 		changedDocs,
-		unchangedDocs: tiles.length - changedDocs,
+		unchangedDocs: tiles.length - changedDocs - skippedDocs,
+		skippedDocs,
 	};
 }
 
@@ -390,6 +436,66 @@ export function reviewConfidence(change: Pick<IProposedChange, 'kind' | 'confide
 }
 
 /**
+ * The self-explaining framing every review surface renders for one proposal (plan 31 iter 2): the kind tag,
+ * the truthful confidence chip, the model's rationale (empty when it gave none - surfaces then show nothing,
+ * never "AI suggested this" filler), and a source chip. Built once here so the inline widget, the review rail
+ * and the cross-document cards read identically for the same change. Confidence follows {@link reviewConfidence}
+ * (D24-A) so the framing never disagrees with the cross-doc chip that already ships.
+ */
+export interface IReviewFraming {
+	/** 'MEANING CHANGE · needs your call' for a meaning change; 'FIGURE' for a figure. */
+	readonly kindLabel: string;
+	/** True for a meaning change (attention tokens); false for a figure (ok tokens). */
+	readonly kindAttention: boolean;
+	readonly confidence: ReviewConfidence;
+	/** The confidence chip label (High / Inferred), matching the cross-doc chip glyphs. */
+	readonly confidenceLabel: string;
+	/** The model's rationale, trimmed; '' when the model supplied none (the surface then omits the line). */
+	readonly rationale: string;
+	/** 'metrics.csv · line 12' when a real source line is known, else the bare source, else '' (never fabricated). */
+	readonly sourceLabel: string;
+}
+
+export function reviewFraming(change: Pick<IProposedChange, 'kind' | 'confidence' | 'rationale' | 'sourceLine'>, source: string): IReviewFraming {
+	const confidence = reviewConfidence(change);
+	const kindAttention = change.kind === 'meaning';
+	const src = (source || '').trim();
+	const hasLine = typeof change.sourceLine === 'number';
+	return {
+		kindLabel: kindAttention ? 'MEANING CHANGE · needs your call' : 'FIGURE',
+		kindAttention,
+		confidence,
+		// allow-any-unicode-next-line
+		confidenceLabel: confidence === 'high' ? '● High' : '◐ Inferred',
+		rationale: (change.rationale || '').trim(),
+		sourceLabel: src ? (hasLine ? `${src} · line ${change.sourceLine}` : src) : '',
+	};
+}
+
+/**
+ * The bulk-approve safety net (plan 31 iter 4): a one-line confirm shown ONLY when a bulk approve's set
+ * contains at least one `meaning` change. A figures-only bulk approve stays one-click (the auto-apply class
+ * does not deserve friction). `snapshot` adds the honest "a version snapshot is taken first" reassurance -
+ * plan 26 landed the autosnapshot on bulk approve, so the copy can promise it. Counts are REAL (from the
+ * passed set); an empty set or a figures-only set returns `needed: false`. Pure so it is unit-tested directly.
+ */
+export interface IBulkApproveConfirm {
+	readonly needed: boolean;
+	readonly message: string;
+}
+
+export function bulkApproveConfirm(changes: readonly Pick<IProposedChange, 'kind'>[], snapshot = false): IBulkApproveConfirm {
+	const total = changes.length;
+	const meaning = changes.filter(c => c.kind === 'meaning').length;
+	if (total === 0 || meaning === 0) { return { needed: false, message: '' }; }
+	const changeWord = total === 1 ? 'change' : 'changes';
+	const meaningWord = meaning === 1 ? 'meaning change' : 'meaning changes';
+	let message = `Approve ${total} ${changeWord} including ${meaning} ${meaningWord}?`;
+	if (snapshot) { message += ' A version snapshot is taken first, so you can restore.'; }
+	return { needed: true, message };
+}
+
+/**
  * One document group in the cross-document review doc-nav rail (plan 24, C5). Groups the pending changes
  * by their document, preserving first-appearance order, and carries the count so the rail header
  * (`N docs . M changes`), the progress bar and each doc row derive from one pass over the real pending set.
@@ -448,5 +554,9 @@ export interface IAuditEntry {
 	readonly action: 'auto-applied' | 'approved' | 'rejected';
 	readonly oldText: string;
 	readonly newText: string;
-	readonly via: 'model' | 'heuristic' | 'api';
+	// 'restore' records a snapshot restore: the body was replaced with an earlier saved version through
+	// the one approve path, so the change is on the record like any other applied edit (plan 26 iter 2).
+	// 'tweaked' records that the reviewer hand-edited the agent's proposed text before approving (plan 31
+	// iter 3, D31-B): the applied `newText` is the human's amendment, not the agent's original.
+	readonly via: 'model' | 'heuristic' | 'api' | 'restore' | 'tweaked';
 }

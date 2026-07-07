@@ -7,8 +7,8 @@ import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
-import { ILivingDoc, IProposedChange } from '../common/livingDocsModel.js';
-import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration } from '../common/livingDocPmDecorations.js';
+import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
+import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
 // The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
@@ -42,13 +42,15 @@ const EMPTY_RESOLVED: ReadonlyMap<string, string> = new Map<string, string>();
 // Markdown textarea, reachable from the editor for hand-editing source.
 export type LivingDocViewMode = 'raw' | 'pm';
 
-export type PresentChoice = 'gdoc' | 'gsheet' | 'docx' | 'xlsx' | 'site';
-export type ShareScope = 'internal' | 'link' | 'public';
+// (plan 33 iter 4, L8) Present only offers what Abstract actually produces today: a self-contained
+// HTML page and clean portable Markdown. The native-format / cloud destinations (Google Docs, Google
+// Sheets, Word, Excel) are real product goals but not built yet, so they are shown honestly as "Soon"
+// (non-selectable) rather than fabricating a format - the plan-17 rule against dead-end affordances.
+export type PresentChoice = 'html' | 'markdown' | 'gdoc' | 'gsheet' | 'docx' | 'xlsx';
 
 export interface IPresentState {
 	readonly open: boolean;
 	readonly choice: PresentChoice;
-	readonly scope: ShareScope;
 }
 
 export interface ILivingDocRenderInput {
@@ -78,6 +80,12 @@ export interface ILivingDocRenderInput {
 	readonly nextChangedDocTitle?: string;
 	/** Total pending changes across EVERY document (plan 19 iter 5) - drives "Approve all everywhere". */
 	readonly totalPendingCount?: number;
+	/**
+	 * Per-bind-key provenance for the figure/gutter hover tooltip (plan 29, iter 3): where each bound value
+	 * came from, when it synced, and whether it is still fresh. Built by the editor pane from the lock +
+	 * freshness; empty for a plain (non-living) document. Real data only - never a fabricated sync state.
+	 */
+	readonly provenance?: readonly IPmProvenance[];
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -102,7 +110,6 @@ function renderGenericMarkdown(body: string): string {
 }
 
 const ACCENT = 'oklch(0.55 0.13 255)';
-const ACCENT_DK = 'oklch(0.45 0.13 255)';
 
 // Style and script are single left-aligned template literals so source indentation stays tab-only.
 const STYLE = `*{box-sizing:border-box}
@@ -225,6 +232,10 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .srcdrawer table.sp-grid th,.srcdrawer table.sp-grid td{padding:5px 7px;white-space:nowrap}
 .srcdrawer .sp-refs{margin-top:18px;border-top:1px solid #eef0f3;padding-top:14px}
 .srcdrawer .sp-refs-h{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;margin-bottom:10px}
+/* api/mcp raw response payload (plan 29 iter 4): the actual JSON / tool result, with the extracted field
+ * highlighted, so non-file provenance shows the real payload instead of a pretend CSV. */
+.srcdrawer .sp-payload{margin:0 0 8px;padding:12px 14px;background:#f7f8fa;border:1px solid #eceef2;border-radius:8px;font:400 11.5px/1.6 'JetBrains Mono',ui-monospace,monospace;color:#2c2f36;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:220px}
+.srcdrawer .sp-field{background:#fef0d6;box-shadow:inset 0 -1px 0 oklch(0.66 0.16 45);border-radius:2px;padding:0 2px;font-weight:600;color:#8a5a12}
 .srcdrawer .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
 .prose{max-width:720px;margin:0 auto;padding:24px 40px 80px;font:400 15.5px/1.7 system-ui;color:#2a2a31}
 .prose h1{font:600 30px/1.12 system-ui;letter-spacing:-.02em;color:#15151a;margin:24px 0 12px}
@@ -289,9 +300,39 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 /* Inline review prominence (plan 19 iter 3): hovering a pending change lifts its accept/reject row so it
  * reads as one actionable unit you can approve while reading, without adding permanent chrome. */
 .pmwrap .ProseMirror .editblock:hover .ctrl,.pmwrap .ProseMirror .insertblock:hover .ctrl{border-color:oklch(0.66 0.16 45 / .45);box-shadow:0 1px 6px oklch(0.66 0.16 45 / .14)}
+/* Self-explaining framing line above the diff (plan 31 iter 2): a quiet row carrying the kind tag, the
+ * confidence chip, the model's rationale and a source chip - read-first context before the word-diff. */
+.pmwrap .ProseMirror .frame{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:0 0 8px;font:500 11px/1.4 system-ui}
+.pmwrap .ProseMirror .fr-kind{text-transform:uppercase;letter-spacing:.04em;font-weight:600;font-size:10.5px;border-radius:999px;padding:3px 9px}
+.pmwrap .ProseMirror .fr-kind.attn{color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4}
+.pmwrap .ProseMirror .fr-kind.ok{color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc}
+.pmwrap .ProseMirror .fr-conf{font-weight:600;font-size:10.5px;border-radius:999px;padding:3px 9px}
+.pmwrap .ProseMirror .fr-conf.high{color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc}
+.pmwrap .ProseMirror .fr-conf.inferred{color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb}
+.pmwrap .ProseMirror .fr-why{color:#5b616b;font-weight:400}
+.pmwrap .ProseMirror .fr-src{color:#5661c9;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:6px;padding:2px 8px;font:500 10.5px/1.3 'JetBrains Mono',ui-monospace,monospace}
+/* Tweak (plan 31 iter 3): the in-place editor is hidden until Edit is pressed; then the diff hides, the
+ * contenteditable shows, and the action row swaps Approve/Reject for Save & Approve / Cancel. */
+.pmwrap .ProseMirror .tweakwrap{display:none;margin:0 0 10px}
+.pmwrap .ProseMirror .tweakedit{border:1px solid oklch(0.66 0.16 45 / .5);border-radius:8px;padding:8px 11px;font:400 15px/1.6 system-ui;color:#26292f;background:#fffdf8;outline:none}
+.pmwrap .ProseMirror .tweakacts{display:none}
+.pmwrap .ProseMirror .editblock.tweaking .editp{display:none}
+.pmwrap .ProseMirror .editblock.tweaking .tweakwrap{display:block}
+.pmwrap .ProseMirror .editblock.tweaking .normacts{display:none}
+.pmwrap .ProseMirror .editblock.tweaking .tweakacts{display:inline-flex}
+.pmwrap .ProseMirror .tweak{border:1px solid #e0e2e8;background:#fff;color:#52575f;border-radius:7px;padding:5px 11px;font:600 12px/1 system-ui;cursor:pointer}
 /* Rail-to-editor navigation (plan 19 iter 2): the change the rail sent us to gets a brief calm ring +
  * tint so the eye lands on it, then fades - no permanent chrome. */
-.pmwrap .ProseMirror .lwd-focus-flash{box-shadow:0 0 0 3px oklch(0.66 0.16 45 / .5);background:oklch(0.97 0.03 70)}`;
+.pmwrap .ProseMirror .lwd-focus-flash{box-shadow:0 0 0 3px oklch(0.66 0.16 45 / .5);background:oklch(0.97 0.03 70)}
+/* Figure/gutter hover provenance tooltip (plan 29 iter 3): a quiet floating card that answers "where from,
+ * how fresh" for a bound figure without shifting layout - it is fixed-position and pointer-events:none so it
+ * floats over the prose and never intercepts a click (the click still opens the source drawer). */
+.lwd-tip{position:fixed;z-index:80;max-width:300px;pointer-events:none;background:#1f2229;color:#f4f5f7;border-radius:8px;padding:8px 11px;box-shadow:0 8px 24px rgba(15,22,40,.28);font:400 12px/1.5 system-ui;opacity:0;transition:opacity .1s ease}
+.lwd-tip.show{opacity:1}
+.lwd-tip .tip-src{font:600 12px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#fff;word-break:break-all}
+.lwd-tip .tip-meta{color:#b7bcc6;margin-top:1px}
+.lwd-tip .tip-stale{display:flex;align-items:center;gap:6px;margin-top:5px;color:#f0b968;font-weight:500}
+.lwd-tip .tip-stale::before{content:"";width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -302,8 +343,29 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 const RUNTIME = `const vscode = acquireVsCodeApi();
 const root = document.getElementById('lwd-root');
 let pmView = null, pmTimer = 0;
+// Per-key provenance for the hover tooltip (plan 29 iter 3), refreshed from every decoration payload so the
+// tooltip always reads the current lock state (a source edit that flips freshness re-renders the payload).
+let _prov = Object.create(null);
+function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance) { for (let i = 0; i < spec.provenance.length; i++) { _prov[spec.provenance[i].key] = spec.provenance[i]; } } }
 function pmOnChange(){ clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
-function pmDeco(spec){ if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }
+function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }
+// A single reused tooltip element (created lazily), floated over the prose with pointer-events:none so it
+// never intercepts the click that opens the source drawer. esc keeps any source/location text inert markup.
+let _tip = null;
+function tipEsc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function showTip(el, key){ const p = _prov[key]; if (!p) { return; } if (!_tip) { _tip = document.createElement('div'); _tip.className = 'lwd-tip'; document.body.appendChild(_tip); }
+	const loc = p.location ? (tipEsc(p.location) + ' &middot; ') : '';
+	const stale = p.fresh ? '' : '<div class="tip-stale">Source changed since last sync</div>';
+	_tip.innerHTML = '<div class="tip-src">' + tipEsc(p.source) + '</div><div class="tip-meta">' + loc + tipEsc(p.synced) + '</div>' + stale;
+	const box = el.getBoundingClientRect();
+	// Measure then place above the figure (or below when it would clip the top of the viewport).
+	_tip.classList.add('show');
+	const th = _tip.getBoundingClientRect().height;
+	let top = box.top - th - 8; if (top < 6) { top = box.bottom + 8; }
+	let left = box.left; if (left + 300 > window.innerWidth) { left = Math.max(6, window.innerWidth - 306); }
+	_tip.style.left = left + 'px'; _tip.style.top = top + 'px';
+}
+function hideTip(){ if (_tip) { _tip.classList.remove('show'); } }
 function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); focusPm(); } }
 // plan 16 iter 3 (decision 56): land the caret in the document on first mount so a freshly-opened (or
 // freshly-created blank) doc is immediately writable -- "one click -> cursor ready", no extra click to
@@ -339,6 +401,12 @@ root.addEventListener('change', e => {
 });
 root.addEventListener('click', e => {
 	let el;
+	// Tweak (plan 31 iter 3): Edit opens the in-place editor over the proposed text; Save & Approve amends the
+	// pending change then approves through the one path; Cancel restores. The contenteditable lives inside the
+	// widget DOM (never the PM document), so the doc stays read-only until approval - no undo-stack coupling.
+	if (el = e.target.closest('[data-tweak]')) { e.stopPropagation(); const card = el.closest('[data-editcard]'); if (card) { card.classList.add('tweaking'); const ed = card.querySelector('.tweakedit'); if (ed) { ed.focus(); } } return; }
+	if (el = e.target.closest('[data-tweak-cancel]')) { e.stopPropagation(); const card = el.closest('[data-editcard]'); if (card) { card.classList.remove('tweaking'); const ed = card.querySelector('.tweakedit'); if (ed) { ed.textContent = ed.getAttribute('data-orig') || ''; } } return; }
+	if (el = e.target.closest('[data-tweak-save]')) { e.stopPropagation(); const card = el.closest('[data-editcard]'); const ed = card && card.querySelector('.tweakedit'); const text = ed ? ed.innerText.replace(/\\s+/g, ' ').trim() : ''; return vscode.postMessage({ type: 'amendApprove', id: el.getAttribute('data-tweak-save'), text: text }); }
 	if (el = e.target.closest('[data-approve]')) { e.stopPropagation(); return vscode.postMessage({ type: 'approve', id: el.getAttribute('data-approve') }); }
 	if (el = e.target.closest('[data-reject]')) { e.stopPropagation(); return vscode.postMessage({ type: 'reject', id: el.getAttribute('data-reject') }); }
 	if (el = e.target.closest('[data-approve-all-doc]')) { return vscode.postMessage({ type: 'approveAllDoc' }); }
@@ -347,12 +415,12 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-refresh]')) { return vscode.postMessage({ type: 'refresh' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
+	if (el = e.target.closest('.pm-gutter')) { const key = gutterKeyFor(el); if (key) { return vscode.postMessage({ type: 'reveal', cells: [key] }); } }
 	if (el = e.target.closest('[data-to-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
 	if (el = e.target.closest('[data-source-close]')) { return vscode.postMessage({ type: 'closeSource' }); }
 	if (el = e.target.closest('[data-sync]')) { return vscode.postMessage({ type: 'sync' }); }
 	if (el = e.target.closest('[data-present-open]')) { return vscode.postMessage({ type: 'presentOpen' }); }
 	if (el = e.target.closest('[data-present-choice]')) { return vscode.postMessage({ type: 'presentChoice', choice: el.getAttribute('data-present-choice') }); }
-	if (el = e.target.closest('[data-present-scope]')) { return vscode.postMessage({ type: 'presentScope', scope: el.getAttribute('data-present-scope') }); }
 	if (el = e.target.closest('[data-present-cta]')) { return vscode.postMessage({ type: 'presentCta' }); }
 	// The modal closes from the backdrop or the X (both data-present-close); a click inside the card
 	// (data-present-stop) does not. Walk to whichever ancestor comes first and close only if it is a close.
@@ -364,22 +432,26 @@ root.addEventListener('keydown', e => {
 	const b = e.target.closest('[data-block]');
 	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
 });
-// Hovering a provenance gutter marker opens source-peek for that binding (plan 21 iter 1 / C2). A dot
-// sits on a .pm-gutter block that contains the bound figure; fire the same 'reveal' message the bound
-// figure's click already fires, keyed by that figure's data-key. Delegated on root so it survives the
-// innerHTML swaps (mount-once-then-message). Only fires when the marker's ::before is under the pointer
-// (the gutter column), not the whole prose line, so reading text stays quiet.
-// The last-revealed key is tracked so the 'reveal' fires once per marker entry, not on every sub-pixel
-// mouse movement while the pointer stays within the same gutter marker (mouseover fires continuously).
+// Hovering a bound figure (or its provenance gutter dot) floats a quiet tooltip answering "where from, how
+// fresh" (plan 29 iter 3): the source file/endpoint, the cell within it, the relative sync time, and an amber
+// "source changed" line when stale. Click still opens the source drawer (unchanged) - the tooltip is
+// pointer-events:none so it never intercepts that click. Delegated on root so it survives the innerHTML swaps.
+// A gutter dot carries no data-key itself; resolve the key from the bound figure inside its block, and only
+// fire when the pointer is over the dot's gutter column (clientX left of the block), so reading text stays quiet.
 function gutterKeyFor(node){ const bound = node.querySelector('span.bound[data-key]'); return bound ? bound.getAttribute('data-key') : null; }
-let _gutterLastKey = null;
 root.addEventListener('mouseover', e => {
+	const fig = e.target.closest && e.target.closest('span.bound[data-key]');
+	if (fig) { return showTip(fig, fig.getAttribute('data-key')); }
 	const g = e.target.closest && e.target.closest('.pm-gutter');
-	if (!g) { _gutterLastKey = null; return; }
+	if (!g) { return; }
 	const box = g.getBoundingClientRect();
-	if (e.clientX > box.left) { _gutterLastKey = null; return; }
+	if (e.clientX > box.left) { return; }
 	const key = gutterKeyFor(g);
-	if (key && key !== _gutterLastKey) { _gutterLastKey = key; vscode.postMessage({ type: 'reveal', cells: [key] }); }
+	if (key) { showTip(g, key); }
+});
+root.addEventListener('mouseout', e => {
+	const from = e.target.closest && (e.target.closest('span.bound[data-key]') || e.target.closest('.pm-gutter'));
+	if (from) { hideTip(); }
 });
 root.addEventListener('focusout', e => {
 	const b = e.target.closest('[data-block]');
@@ -401,6 +473,8 @@ export interface IPmDecoPayload {
 	readonly edits: readonly IPmDecoEdit[];
 	readonly inserts: readonly IPmDecoInsert[];
 	readonly gutters: readonly IPmGutterMarker[];
+	/** Per-key provenance the RUNTIME reads to build the hover tooltip (plan 29, iter 3); [] for plain docs. */
+	readonly provenance: readonly IPmProvenance[];
 }
 
 // Render the word-diff runs to the same inline add/del markup the renderDoc surface uses (one look).
@@ -409,6 +483,19 @@ function renderDiffSegments(segments: readonly IPmDiffSegment[]): string {
 		const t = esc(s.text);
 		return s.t === 'del' ? `<span class="d-o">${t}</span>` : s.t === 'ins' ? `<span class="d-n">${t}</span>` : t;
 	}).join(' ');
+}
+
+// The quiet self-explaining framing line above the diff (plan 31 iter 2): kind tag (attention for a meaning
+// change, ok for a figure) + confidence chip (High / Inferred, the truthful reviewConfidence rule) +
+// the model's rationale sentence when present (nothing when absent - no filler) + a source chip linking the
+// grounding line. Rendered identically here, on the rail and on the cross-doc cards from `reviewFraming`.
+function pmFramingHtml(f: IReviewFraming): string {
+	const kindClass = f.kindAttention ? 'fr-kind attn' : 'fr-kind ok';
+	const confClass = f.confidence === 'inferred' ? 'fr-conf inferred' : 'fr-conf high';
+	const rationale = f.rationale ? `<span class="fr-why">${esc(f.rationale)}</span>` : '';
+	const src = f.sourceLabel ? `<span class="fr-src">${esc(f.sourceLabel)}</span>` : '';
+	return `<div class="frame"><span class="${kindClass}">${esc(f.kindLabel)}</span>`
+		+ `<span class="${confClass}">${esc(f.confidenceLabel)}</span>${rationale}${src}</div>`;
 }
 
 // The inline diff + accept/reject control row for a pending meaning-change (reuses the renderDoc editblock
@@ -421,17 +508,34 @@ function pmEditWidgetHtml(e: IPmEditDecoration, bar: boolean): string {
 	// A multi-line edited paragraph carries the `attention` provenance bar (C2): it hangs a 3px bar in the
 	// gutter column spanning the widget's rows. Single-line edits get no bar (nothing to span).
 	const barClass = bar ? ' pm-edit-bar' : '';
-	return `<div class="pcell editblock${barClass}">`
+	const framing = pmFramingHtml(reviewFraming(e, e.source));
+	// Tweak (amend-before-approve, plan 31 iter 3, D31-A): a pencil beside Approve/Reject opens an in-place
+	// editor over the proposed text. `Save & Approve` amends the pending change then approves it through the
+	// one approve path; `Cancel` restores. Hidden for a figure (figures come from sources; not hand-editable).
+	const canTweak = e.kind !== 'figure';
+	const tweakBtn = canTweak ? `<button class="tweak" data-tweak="${esc(e.id)}" title="Edit the proposed text">Edit</button>` : '';
+	const editor = canTweak
+		? `<div class="tweakwrap"><div class="tweakedit" contenteditable="true" data-orig="${esc(e.newText)}">${esc(e.newText)}</div></div>`
+		: '';
+	const tweakActs = canTweak
+		? `<span class="acts tweakacts"><button class="approve" data-tweak-save="${esc(e.id)}">Save &amp; Approve</button>`
+		+ `<button class="reject" data-tweak-cancel="${esc(e.id)}">Cancel</button></span>`
+		: '';
+	return `<div class="pcell editblock${barClass}" data-editcard="${esc(e.id)}">`
+		+ framing
 		+ `<p class="editp">${renderDiffSegments(e.segments)}</p>`
+		+ editor
 		+ `<div class="ctrl"><span class="cdot"></span>`
 		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
-		+ `<span class="acts"><button class="approve" data-approve="${esc(e.id)}">Approve changes</button>`
-		+ `<button class="reject" data-reject="${esc(e.id)}">Reject</button></span></div></div>`;
+		+ `<span class="acts normacts">${tweakBtn}<button class="approve" data-approve="${esc(e.id)}">Approve changes</button>`
+		+ `<button class="reject" data-reject="${esc(e.id)}">Reject</button></span>${tweakActs}</div></div>`;
 }
 
 // The all-additions widget for a generative insertion (reuses the renderDoc insertblock markup).
 function pmInsertWidgetHtml(ins: IPmInsertDecoration): string {
+	const framing = pmFramingHtml(reviewFraming(ins, 'Chat'));
 	return `<div class="pcell insertblock">`
+		+ framing
 		+ `<div class="insertbody">${renderGenericMarkdown(ins.newText)}</div>`
 		+ `<div class="ctrl"><span class="cdot add"></span>`
 		+ `<span class="lbl">New content from <span class="src">Chat</span> &middot; <span class="add">inserted after ${esc(ins.blockLabel)}</span> &middot; ${Math.round(ins.confidence * 100)}% confidence</span>`
@@ -440,7 +544,7 @@ function pmInsertWidgetHtml(ins: IPmInsertDecoration): string {
 }
 
 // Build the decoration payload for the PM surface: the pure spec (TDD'd) augmented with widget HTML.
-function renderPmDeco(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>): IPmDecoPayload {
+function renderPmDeco(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>, provenance: readonly IPmProvenance[]): IPmDecoPayload {
 	const spec = buildPmDecorationSpec(doc, pending, recent);
 	// The gutter bar for a multi-line edited paragraph hangs off that edit's visible widget (the original
 	// node is hidden), so map the bar anchors onto the edit ids they belong to.
@@ -449,6 +553,7 @@ function renderPmDeco(doc: ILivingDoc, pending: readonly IProposedChange[], rece
 		edits: spec.edits.map(e => ({ id: e.id, anchorText: e.anchorText, html: pmEditWidgetHtml(e, barAnchors.has(e.anchorText)) })),
 		inserts: spec.inserts.map(ins => ({ id: ins.id, afterText: ins.afterText, html: pmInsertWidgetHtml(ins) })),
 		gutters: spec.gutters,
+		provenance,
 	};
 }
 
@@ -594,7 +699,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	// (an accepted proposal) mutates blocks + persists but leaves the cached doc.body stale, so the live
 	// surface must reset to the reparsed body, not the stale cache.
 	const pmMd = pmSurface && doc ? parseLivingDoc(rawText).body : null;
-	const pmDeco = pmSurface && doc ? renderPmDeco(doc, pending, recent) : null;
+	const pmDeco = pmSurface && doc ? renderPmDeco(doc, pending, recent, input.provenance ?? []) : null;
 	// Floating review bar: rendered directly below the formatting toolbar, present ONLY when there are
 	// pending changes in this document or another (plan 19 iter 7). It is distinct from the formatting
 	// chrome - it floats under it with a warm tint - so review never lives inside the WYSIWYG header.
@@ -635,6 +740,13 @@ function renderSourceDrawer(peek: ISourcePeekRender): string {
 		+ grid.rows.map((r, i) => `<tr class="${i === grid.latestIndex ? 'sel' : ''}">${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')
 		+ `</tbody></table>`
 		: '';
+	// For an api/mcp bound value: show the REAL response payload with the extracted field highlighted, so the
+	// source-peek stops pretending non-file sources are a CSV (plan 29 iter 4). Highlighting is a safe,
+	// escape-on-render match of the field name in the escaped payload text (no markup ever injected).
+	const payloadHtml = peek.payload
+		? `<div class="sp-sec">${esc(peek.payload.source)} &middot; ${peek.payload.kind === 'mcp' ? 'MCP result' : 'API response'} &middot; field <span class="sp-field">${esc(peek.payload.field)}</span></div>`
+		+ `<pre class="sp-payload">${highlightField(peek.payload.raw, peek.payload.field)}</pre>`
+		: '';
 	const refs = peek.referencedBy.length
 		? `<div class="sp-refs"><div class="sp-refs-h">REFERENCED BY &middot; ${peek.referencedBy.length} DOCUMENT${peek.referencedBy.length === 1 ? '' : 'S'}</div>`
 		+ peek.referencedBy.map(t => `<div class="sp-ref">&#9636; ${esc(t)}</div>`).join('') + `</div>`
@@ -649,48 +761,57 @@ function renderSourceDrawer(peek: ISourcePeekRender): string {
 		+ `<div class="sd-head"><span class="sd-name">&#8862; ${esc(peek.source)}</span>`
 		+ `<span class="sd-meta">source &middot; ${rowCount} row${rowCount === 1 ? '' : 's'}</span>`
 		+ `<span class="sd-actions">${action}<button class="sd-x" data-source-close title="Close source">&#10005;</button></span></div>`
-		+ `<div class="sd-body">${gridHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
+		+ `<div class="sd-body">${gridHtml}${payloadHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
 	return drawer;
 }
 
-// The Present & export modal: a destination list (Google Docs / Sheets / Word / Excel / hosted page)
-// and a detail pane with the live-behaviour blurb, a document preview and the export CTA. Ported from
-// the comp; share scope appears only for the hosted-page destination.
-interface IPresentDef { label: string; accent: string; cta: string; live: string; icon: string; tint: string }
+// Render a raw response payload, escaping ALL of it (the [04] injection invariant: MCP/API payloads are
+// text, never markup), then wrapping each occurrence of the extracted field name in a highlight span. The
+// highlight operates on the already-escaped text, so nothing the source returns can break out as markup.
+function highlightField(raw: string, field: string): string {
+	const safe = esc(raw);
+	if (!field) { return safe; }
+	const needle = esc(field);
+	// Split on the escaped field and rejoin with the highlight span, so only literal text is ever emitted.
+	return safe.split(needle).join(`<span class="sp-field">${needle}</span>`);
+}
+
+// The Present & export modal. Only the two destinations Abstract genuinely produces are selectable - a
+// self-contained HTML page and clean portable Markdown - each mapped in `_runPresent` to a real writer.
+// The native-format / cloud destinations are shown honestly as "Soon" (non-selectable) so the affordance
+// never fabricates an export it cannot make (plan 33 L8; plan-17 no-dead-ends rule).
+interface IPresentDef { label: string; accent: string; cta: string; live: string; icon: string; tint: string; soon?: boolean }
 const PRESENT_DEFS: Record<PresentChoice, IPresentDef> = {
-	gdoc: { label: 'Google Docs', accent: '#2a6fdb', cta: 'Export to Google Docs', live: 'Editable copy &middot; text &amp; tables formatted natively', icon: 'G', tint: '#eaf1fd' },
-	gsheet: { label: 'Google Sheets', accent: '#1f8a5b', cta: 'Export to Google Sheets', live: 'Tables become live sheets &middot; links to source kept as a snapshot', icon: 'G', tint: '#e7f5ee' },
-	docx: { label: 'Microsoft Word', accent: '#2b579a', cta: 'Download .docx', live: 'Offline file &middot; styles preserved, data values frozen at export', icon: 'W', tint: '#eaf0fa' },
-	xlsx: { label: 'Microsoft Excel', accent: '#217346', cta: 'Download .xlsx', live: 'Tables only &middot; one sheet per linked table', icon: 'X', tint: '#e7f3ec' },
-	site: { label: 'Hosted web page', accent: ACCENT, cta: 'Publish web page', live: 'Live page that re-renders when the source updates', icon: '&#9673;', tint: '#eef1ff' },
+	html: { label: 'Web page', accent: ACCENT, cta: 'Export web page', live: 'Self-contained HTML file &middot; opens in any browser, no Abstract needed', icon: '&#9673;', tint: '#eef1ff' },
+	markdown: { label: 'Markdown', accent: '#3a3f4a', cta: 'Export Markdown', live: 'Clean portable Markdown &middot; bound values inlined, opens in any editor', icon: 'M&#8595;', tint: '#eef0f3' },
+	gdoc: { label: 'Google Docs', accent: '#2a6fdb', cta: 'Coming soon', live: 'Editable copy with text &amp; tables formatted natively.', icon: 'G', tint: '#eaf1fd', soon: true },
+	gsheet: { label: 'Google Sheets', accent: '#1f8a5b', cta: 'Coming soon', live: 'Linked tables become live sheets.', icon: 'G', tint: '#e7f5ee', soon: true },
+	docx: { label: 'Microsoft Word', accent: '#2b579a', cta: 'Coming soon', live: 'Offline .docx with styles preserved.', icon: 'W', tint: '#eaf0fa', soon: true },
+	xlsx: { label: 'Microsoft Excel', accent: '#217346', cta: 'Coming soon', live: 'Linked tables as an .xlsx workbook.', icon: 'X', tint: '#e7f3ec', soon: true },
 };
-const PRESENT_ORDER: readonly PresentChoice[] = ['gdoc', 'gsheet', 'docx', 'xlsx', 'site'];
+// Real destinations first, then the honest "Soon" group.
+const PRESENT_ORDER: readonly PresentChoice[] = ['html', 'markdown', 'gdoc', 'gsheet', 'docx', 'xlsx'];
 
 function renderPresentModal(present: IPresentState, title: string): string {
-	const pc = PRESENT_DEFS[present.choice];
+	// Guard: never let a "Soon" destination be the selected one (defensive - the rows are non-selectable).
+	const activeChoice: PresentChoice = PRESENT_DEFS[present.choice].soon ? 'html' : present.choice;
+	const pc = PRESENT_DEFS[activeChoice];
 	const rows = PRESENT_ORDER.map(k => {
 		const d = PRESENT_DEFS[k];
-		const sel = k === present.choice;
-		const rowStyle = sel ? 'border:1.5px solid ' + ACCENT + ';background:#f7f9ff' : 'border:1px solid #e9eaee;background:#fff';
-		return `<button class="pm-row" data-present-choice="${k}" style="text-align:left;border-radius:10px;padding:11px 12px;cursor:pointer;display:flex;align-items:center;gap:11px;${rowStyle}">`
+		const sel = k === activeChoice;
+		// Soon rows are shown but not selectable - no data-present-choice, muted, with a "Soon" pill.
+		const rowStyle = d.soon
+			? 'border:1px solid #edeef1;background:#fbfbfc;opacity:.72;cursor:default'
+			: (sel ? 'border:1.5px solid ' + ACCENT + ';background:#f7f9ff;cursor:pointer' : 'border:1px solid #e9eaee;background:#fff;cursor:pointer');
+		const choiceAttr = d.soon ? '' : ` data-present-choice="${k}"`;
+		const soonPill = d.soon ? `<span style="margin-left:auto;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;background:#f1f2f5;border-radius:5px;padding:4px 6px">SOON</span>` : '';
+		return `<button class="pm-row"${choiceAttr}${d.soon ? ' disabled aria-disabled="true"' : ''} style="text-align:left;border-radius:10px;padding:11px 12px;display:flex;align-items:center;gap:11px;${rowStyle}">`
 			+ `<span style="width:30px;height:30px;flex:none;border-radius:7px;background:${d.tint};color:${d.accent};font:700 13px/1 system-ui;display:flex;align-items:center;justify-content:center">${d.icon}</span>`
-			+ `<span style="min-width:0"><span style="display:block;font:600 13px/1.2 system-ui;color:#1a1c20">${d.label}</span></span></button>`;
+			+ `<span style="min-width:0"><span style="display:block;font:600 13px/1.2 system-ui;color:#1a1c20">${d.label}</span></span>${soonPill}</button>`;
 	}).join('');
 
-	const scopeStyle = (on: boolean) => on
-		? 'border:1.5px solid ' + ACCENT + ';background:#f4f6ff;color:' + ACCENT_DK
-		: 'border:1px solid #e0e2e8;background:#fff;color:#696e78';
-	const scopeBtn = (scope: ShareScope, label: string) => `<button class="pm-scope" data-present-scope="${scope}" style="border-radius:8px;padding:9px 12px;font:500 12px/1 system-ui;cursor:pointer;${scopeStyle(present.scope === scope)}">${label}</button>`;
-	// WHO CAN ACCESS applies to every export (the comp shows it for all destinations, not only the
-	// hosted page): the scope sets who may open the copy. The shareable-URL row only makes sense once
-	// the scope is beyond the workspace (anyone-with-link / public), so it is gated on that.
-	const showUrl = present.scope !== 'internal';
-	const urlRow = showUrl
-		? `<div style="display:flex;align-items:center;gap:8px;border:1px solid #e6e8ed;border-radius:8px;padding:9px 11px;background:#fcfcfd"><span style="font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">opportunity-os.live/weekly-summary</span><button class="pm-copy" style="border:1px solid #e0e2e8;background:#fff;border-radius:6px;padding:6px 10px;font:500 11px/1 system-ui;color:#52575f;cursor:pointer">Copy</button></div>`
-		: '';
-	const siteScope = `<div style="margin-bottom:18px"><div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">WHO CAN ACCESS</div>`
-		+ `<div style="display:flex;gap:7px;margin-bottom:${showUrl ? '12px' : '0'}">${scopeBtn('internal', '&#128274; Workspace only')}${scopeBtn('link', '&#128279; Anyone with link')}${scopeBtn('public', '&#127760; Public')}</div>`
-		+ `${urlRow}</div>`;
+	// The export writes a file next to the document (honest - no fabricated hosting or shareable URL).
+	const destNote = `<div style="margin-bottom:18px;border:1px solid #eceef2;border-radius:8px;padding:10px 12px;background:#fafbfc;font:400 12px/1.5 system-ui;color:#696e78">The exported file is saved beside your document and opens for review.</div>`;
 
 	return `<div class="pm-overlay" data-present-close>`
 		+ `<div class="pm-card" data-present-stop>`
@@ -701,7 +822,7 @@ function renderPresentModal(present: IPresentState, title: string): string {
 		+ `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><h3 style="margin:0;font:600 17px/1.2 system-ui;color:#15171c">${pc.label}</h3></div>`
 		+ `<p style="margin:0 0 18px;font:400 13.5px/1.55 system-ui;color:#696e78">${pc.live}</p>`
 		+ `<div style="border:1px solid #eceef2;border-radius:10px;overflow:hidden;margin-bottom:18px"><div style="padding:13px 15px;border-bottom:1px solid #f4f5f7"><div style="font:600 13px/1.3 system-ui;color:#23262c;margin-bottom:5px">${esc(title)}</div><div style="font:400 11px/1.5 system-ui;color:#969ba4">Highlights &middot; KPI table &middot; Commentary &middot; What to watch</div></div><div style="display:flex;align-items:center;gap:8px;padding:10px 15px;background:#fafbfc;font:400 11.5px/1.4 system-ui;color:#52575f"><span style="width:7px;height:7px;border-radius:50%;background:${ACCENT}"></span>4 source-linked blocks included</div></div>`
-		+ siteScope
+		+ destNote
 		+ `<button class="pm-cta" data-present-cta style="width:100%;border:none;border-radius:9px;padding:12px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;cursor:pointer">${pc.cta}</button>`
 		+ `<div style="margin-top:11px;font:400 11px/1.5 system-ui;color:#bcc0c8;text-align:center">Provenance &amp; approval history are retained on export.</div>`
 		+ `</div></div></div></div>`;

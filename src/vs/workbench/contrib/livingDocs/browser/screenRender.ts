@@ -9,8 +9,9 @@
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
-import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, reviewConfidence } from '../common/livingDocsModel.js';
-import { ILivingDocSummary } from '../common/livingDocs.js';
+import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
+import { countTemplateSlots } from '../common/livingDocMarkdown.js';
+import { ILivingDocSummary, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project';
 
@@ -25,8 +26,14 @@ export interface IRecentProject {
 }
 
 export interface IScreenState {
-	/** Knowledge: which scope tab is selected. */
+	/** Knowledge: which scope tab is selected (`project` = the real source registry; `org` = the honest "Soon"). */
 	readonly knScope: 'org' | 'project';
+	/** Knowledge: the project's real source registry (plan 29, D29-A), driving the SOURCES table + drawer. */
+	readonly sources?: readonly ISourceInfo[];
+	/** Knowledge: the source id whose detail drawer is open (the dependency fan-in), or none. */
+	readonly knSelectedSource?: string;
+	/** Knowledge: the project's data files (csv/json) offered by the Add-source picker, and the docs to bind to. */
+	readonly dataFiles?: readonly string[];
 	/** Agents: the live registry (drives the table + canvas). */
 	readonly agents: readonly IAgentDef[];
 	/** Agents: the agent whose workflow canvas is open (vs the list). */
@@ -41,6 +48,8 @@ export interface IScreenState {
 	readonly folderName?: string;
 	/** Home: the documents discovered in the open folder (all Markdown, living flagged for the badge). */
 	readonly docs?: readonly ILivingDocSummary[];
+	/** Templates: the `*.template.md` files discovered in the open folder (plan 28), driving the card grid. */
+	readonly templates?: readonly ITemplateInfo[];
 	/**
 	 * Home: recently-opened folders from the workbench history (D22-A). Each is shown as an
 	 * additional tile in ALL PROJECTS with name + avatar only - counts are deferred until a
@@ -96,6 +105,11 @@ export interface IProjectRunScreenState {
 	/** True while the fan-out is still in flight (isChatBusy) - drives the "Live" pill + tile spinners. */
 	readonly inFlight?: boolean;
 	/**
+	 * True when the run was stopped mid-flight (plan 27 iter 4): the swarm's not-yet-changed tiles render
+	 * as honest `skipped` (never `no change`), and the topbar shows a calm "Stopped" state instead of "Live".
+	 */
+	readonly stopped?: boolean;
+	/**
 	 * The whole-project fan-out summary derived from `summariseProjectRun(listDocuments, getAllPending())`
 	 * (plan 23, C4): one tile per project document + the real bottom-bar totals. Absent until the run's
 	 * document set has been fetched. The `working` (spinner) tile state is a live overlay the renderer
@@ -144,6 +158,26 @@ function avatar(title: string): { readonly text: string; readonly color: string 
 	return { text: esc(letters.toUpperCase()), color };
 }
 
+// A modal sheet (plan 28): a name field + optional note + a body of action rows, hidden until a
+// `data-sheet-open` button reveals it client-side. `id` matches the opener's `data-sheet-open` value; the
+// SCRIPT plumbing gathers the fields and posts one message. Kept minimal + calm (decision D28-B).
+function sheet(id: string, opts: { title: string; sub?: string; nameLabel: string; namePlaceholder: string; note?: boolean; body: string }): string {
+	const note = opts.note
+		? `<label class="sheet-label" style="margin-top:14px">Anything specific for this one?</label>
+			<input class="sheet-input" data-field="note" placeholder="Optional - a focus, a tone, a detail to include">`
+		: '';
+	return `<div class="sheet-back" id="sheet-${id}" data-sheet="${id}">
+		<div class="sheet-card" role="dialog" aria-modal="true">
+			<h2 class="sheet-title">${opts.title}</h2>
+			${opts.sub ? `<p class="sheet-sub">${opts.sub}</p>` : ''}
+			<label class="sheet-label">${esc(opts.nameLabel)}</label>
+			<input class="sheet-input" data-field="name" data-autofocus placeholder="${esc(opts.namePlaceholder)}">
+			${note}
+			${opts.body}
+		</div>
+	</div>`;
+}
+
 // Shared webview head: same font stack, selection colour and scrollbar treatment as the comp shell.
 const HEAD = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
@@ -163,6 +197,15 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 .scr-body{flex:1;overflow-y:auto;background:#f8f9fb}
 .btn-primary{border:none;border-radius:8px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer}
 .btn-ghost{border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer}
+.sheet-back{display:none;position:fixed;inset:0;z-index:40;background:rgba(20,23,28,.32);align-items:flex-start;justify-content:center}
+.sheet-card{margin-top:12vh;width:460px;max-width:calc(100vw - 40px);background:#fff;border:1px solid #e6e8ed;border-radius:16px;box-shadow:0 24px 60px -24px rgba(20,23,28,.5);padding:22px 24px 20px}
+.sheet-title{font:600 16px/1.25 system-ui;color:#15171c;margin:0 0 3px}
+.sheet-sub{font:400 12.5px/1.5 system-ui;color:#696e78;margin:0 0 16px}
+.sheet-label{display:block;font:600 11px/1 system-ui;color:#52575f;margin:0 0 6px}
+.sheet-input{width:100%;border:1px solid #dfe1e7;border-radius:9px;padding:11px 12px;font:400 14px/1.3 system-ui;color:#1a1c20;background:#fff;outline:none}
+.sheet-input:focus{border-color:${ACCENT};box-shadow:0 0 0 3px rgba(80,110,235,.14)}
+.sheet-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:#fff;border:1px solid #ececf0;border-radius:10px;padding:11px 13px;cursor:pointer;margin-top:8px}
+.sheet-row:hover{background:#f7f8fb;border-color:#dfe1e7}
 .topbar{flex:none;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc}
 .brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
 .logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
@@ -176,9 +219,66 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 </style>`;
 
 // Generic message bridge: any element with data-msg posts {type:<msg>, arg:<data-arg>} to the host.
+// Sheet plumbing (plan 28): a modal sheet gathers a name + optional note before posting one message, so a
+// generate/new-doc action carries the typed values. A sheet is opened client-side (no host round-trip, no
+// flash), and its submit buttons collect the sheet's fields; template-row submits carry their own data-arg.
 const SCRIPT = `const vscode = acquireVsCodeApi();
 for (const el of document.querySelectorAll('[data-msg]')) {
+	if (el.hasAttribute('data-sheet-open') || el.hasAttribute('data-sheet-submit')) { continue; }
 	el.addEventListener('click', () => vscode.postMessage({ type: el.getAttribute('data-msg'), arg: el.getAttribute('data-arg') || undefined }));
+}
+function lwdSheet(id) { return document.getElementById('sheet-' + id); }
+function lwdClose(id) { const s = lwdSheet(id); if (s) { s.style.display = 'none'; } }
+function lwdOpen(id, arg, name) {
+	const s = lwdSheet(id); if (!s) { return; }
+	s.dataset.arg = arg || '';
+	const nameEl = s.querySelector('[data-field=name]');
+	if (nameEl) { nameEl.value = name || ''; }
+	const noteEl = s.querySelector('[data-field=note]');
+	if (noteEl) { noteEl.value = ''; }
+	s.style.display = 'flex';
+	const focus = s.querySelector('[data-autofocus]');
+	if (focus) { focus.focus(); if (focus.select) { focus.select(); } }
+}
+function lwdSubmit(el) {
+	const s = el.closest('[data-sheet]'); if (!s) { return; }
+	const nameEl = s.querySelector('[data-field=name]');
+	const noteEl = s.querySelector('[data-field=note]');
+	const targetEl = s.querySelector('[data-field=target]');
+	const apiEl = s.querySelector('[data-field=apiurl]');
+	vscode.postMessage({
+		type: el.getAttribute('data-msg'),
+		arg: el.getAttribute('data-arg') || s.dataset.arg || undefined,
+		name: nameEl ? nameEl.value.trim() : undefined,
+		note: noteEl ? noteEl.value.trim() : undefined,
+		target: targetEl ? targetEl.value : undefined,
+		apiurl: apiEl ? apiEl.value.trim() : undefined,
+	});
+	lwdClose(s.getAttribute('data-sheet'));
+}
+for (const el of document.querySelectorAll('[data-sheet-open]')) {
+	el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); lwdOpen(el.getAttribute('data-sheet-open'), el.getAttribute('data-arg'), el.getAttribute('data-name')); });
+}
+for (const el of document.querySelectorAll('[data-sheet-close]')) {
+	el.addEventListener('click', () => lwdClose(el.getAttribute('data-sheet-close')));
+}
+for (const el of document.querySelectorAll('[data-sheet-submit]')) {
+	el.addEventListener('click', () => lwdSubmit(el));
+}
+for (const el of document.querySelectorAll('[data-field=name]')) {
+	el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const s = el.closest('[data-sheet]'); const def = s && s.querySelector('[data-sheet-default]'); if (def) { def.click(); } } });
+}
+// Tweak (amend-before-approve, plan 31 iter 3): Edit opens the in-card contenteditable over the proposed
+// text; Save & Approve posts reviewTweakSave (the host amends then approves through the one engine path);
+// Cancel restores. The editor lives inside the card DOM only (never persisted until approval).
+for (const el of document.querySelectorAll('[data-tweak-open]')) {
+	el.addEventListener('click', () => { const card = el.closest('.rv-card'); if (!card) { return; } card.querySelector('.rv-tweakwrap').style.display = 'block'; card.querySelector('.rv-normacts').style.display = 'none'; card.querySelector('.rv-tweakacts').style.display = 'flex'; const ed = card.querySelector('.rv-tweakedit'); if (ed) { ed.focus(); } });
+}
+for (const el of document.querySelectorAll('[data-tweak-cancel]')) {
+	el.addEventListener('click', () => { const card = el.closest('.rv-card'); if (!card) { return; } const ed = card.querySelector('.rv-tweakedit'); if (ed) { ed.textContent = ed.getAttribute('data-orig') || ''; } card.querySelector('.rv-tweakwrap').style.display = 'none'; card.querySelector('.rv-normacts').style.display = 'flex'; card.querySelector('.rv-tweakacts').style.display = 'none'; });
+}
+for (const el of document.querySelectorAll('[data-tweak-save]')) {
+	el.addEventListener('click', () => { const card = el.closest('.rv-card'); const ed = card && card.querySelector('.rv-tweakedit'); const text = ed ? ed.innerText.replace(/\\s+/g, ' ').trim() : ''; vscode.postMessage({ type: 'reviewTweakSave', arg: el.getAttribute('data-arg') || undefined, text: text }); });
 }`;
 
 function page(body: string): string {
@@ -203,7 +303,7 @@ function withTopBar(html: string, crumb: string): string {
 export function renderScreenHtml(screen: ScreenId, state: IScreenState): string {
 	switch (screen) {
 		case 'home': return page(withTopBar(renderHome(state), 'Home'));
-		case 'templates': return page(withTopBar(renderTemplates(), 'Templates'));
+		case 'templates': return page(withTopBar(renderTemplates(state), 'Templates'));
 		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge'));
 		case 'agents': return page(withTopBar(renderAgents(state), 'Agents'));
 		case 'project-run': return page(renderProjectRun(state));
@@ -314,110 +414,285 @@ function renderHome(state: IScreenState): string {
 	const cols = allTiles.length >= 3 ? 3 : (allTiles.length === 2 ? 2 : 1);
 	const projectsGrid = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:14px">${allTiles.join('')}</div>`;
 
+	// New-document on-ramp (plan 28, iter 4): a "New document" primary + a name-or-template sheet. Blank
+	// (Enter/default) makes a titled `<name>.md` - or an Untitled name-on-save doc when the name is empty
+	// (decision 56); the template rows reach the iter-3 generate flow with that same typed name.
+	const newDocSheet = renderNewDocSheet(state.templates ?? []);
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
-		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><button data-msg="openFolder" style="flex:none;border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div>
+		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
 		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
 		${needsYou}
 		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
 		${projectsGrid}
+		${newDocSheet}
 	</div>`);
 }
 
-// ---- Templates: run a template -> fill from sources -> review the diff. ----
-function renderTemplates(): string {
-	const step = (n: string, label: string, extra: string, inner: string) => `<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px">`
-		+ `<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="width:20px;height:20px;border-radius:50%;background:${ACCENT};color:#fff;font:600 11px/20px system-ui;text-align:center">${n}</span><span style="font:600 13px/1 system-ui">${label}</span>${extra}</div>${inner}</div>`;
-	const green = (t: string) => `<span style="background:#e7f6ec;color:#1f5a36;padding:0 4px;border-radius:3px;font-weight:600">${t}</span>`;
-	const srcChip = (t: string) => `<span style="display:flex;align-items:center;gap:6px;font:500 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:999px;padding:6px 10px"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT}"></span>${t}</span>`;
+// The name-or-template sheet (plan 28, iter 4, D28-B shape): a name field, a Blank-document default row
+// (Enter), and each real template as a secondary row that routes to the iter-3 generate flow with the same
+// typed name. Real data only: the template rows come from `listTemplates()`; with none, only Blank shows.
+function renderNewDocSheet(templates: readonly ITemplateInfo[]): string {
+	const blankRow = `<button class="sheet-row" data-sheet-submit data-sheet-default data-msg="newDocument" style="background:#f7f8ff;border-color:#dfe1e7">
+		<span style="width:30px;height:30px;flex:none;border-radius:8px;background:#eef1ff;color:${ACCENT_DK};font:600 15px/30px system-ui;text-align:center">&#65291;</span>
+		<span style="flex:1;min-width:0"><span style="display:block;font:600 13px/1.3 system-ui;color:#1a1c20">Blank document</span><span style="display:block;font:400 11.5px/1.4 system-ui;color:#868b95">Start from an empty page - press Enter</span></span>
+	</button>`;
+	const templateRow = (t: ITemplateInfo) => {
+		const av = avatar(t.name);
+		const slots = countTemplateSlots(t.body);
+		const meta = `${slots} slot${slots === 1 ? '' : 's'} &middot; ${t.sources.length} source${t.sources.length === 1 ? '' : 's'}`;
+		return `<button class="sheet-row" data-sheet-submit data-msg="generateFromTemplate" data-arg="${esc(t.uri.toString())}">
+			<span style="width:30px;height:30px;flex:none;border-radius:8px;background:${av.color};color:#fff;font:600 12px/30px system-ui;text-align:center">${av.text}</span>
+			<span style="flex:1;min-width:0"><span style="display:block;font:600 13px/1.3 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</span><span style="display:block;font:400 11px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${meta}</span></span>
+		</button>`;
+	};
+	const templateSection = templates.length
+		? `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin:18px 0 2px">OR START FROM A TEMPLATE</div>${templates.map(templateRow).join('')}`
+		: '';
+	return sheet('newdoc', {
+		title: 'New document',
+		sub: 'Name it and start blank, or pick a template to generate a first draft through review.',
+		nameLabel: 'Document Name',
+		namePlaceholder: 'Name this document (optional)',
+		body: `<div style="margin-top:18px">${blankRow}${templateSection}</div>
+			<div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end"><button class="btn-ghost" data-sheet-close="newdoc">Cancel</button></div>`,
+	});
+}
+
+// ---- Templates (plan 28): the real template library. A card grid of the `*.template.md` files discovered
+// in the project (plus the starters we ship), each with a Use Template + Edit action, and New Template. An
+// empty folder shows a calm invitation. Real data only: cards + counts come from listTemplates(). ----
+function renderTemplates(state: IScreenState): string {
+	const templates = state.templates ?? [];
+
+	// One paper card per template (comp style: 2-letter avatar, name, description, mono `N slots · M sources`
+	// count line, Use Template primary + Edit ghost). Counts are TRUE - slots from the body, sources from the
+	// declared `sources:` list. The description falls back to a calm neutral line only when none was authored.
+	const card = (t: ITemplateInfo) => {
+		const av = avatar(t.name);
+		const slots = countTemplateSlots(t.body);
+		const srcCount = t.sources.length;
+		const counts = `${slots} slot${slots === 1 ? '' : 's'} &middot; ${srcCount} source${srcCount === 1 ? '' : 's'}`;
+		const desc = t.description.trim() || 'A reusable starting point for a new document.';
+		const uri = esc(t.uri.toString());
+		return `<div style="display:flex;flex-direction:column;background:#fff;border:1px solid #e9eaee;border-radius:14px;padding:20px 20px 16px;gap:12px">
+			<div style="display:flex;align-items:center;gap:10px">
+				<span style="width:34px;height:34px;flex:none;border-radius:9px;background:${av.color};color:#fff;font:600 13px/34px system-ui;text-align:center">${av.text}</span>
+				<span style="font:600 15px/1.25 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</span>
+			</div>
+			<div style="font:400 13px/1.5 system-ui;color:#52575f;flex:1;min-height:38px">${esc(desc)}</div>
+			<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${counts}</div>
+			<div style="display:flex;gap:8px;margin-top:4px">
+				<button class="btn-primary" style="flex:1;padding:10px;font:600 13px/1 system-ui" data-msg="generateFromTemplate" data-sheet-open="generate" data-arg="${uri}" data-name="">Use Template</button>
+				<button class="btn-ghost" style="padding:9px 14px;font:500 12px/1 system-ui" data-msg="editTemplate" data-arg="${uri}">Edit</button>
+			</div>
+		</div>`;
+	};
+
+	// The calm empty state (real-data guardrail): no templates on disk -> one line + a single primary action.
+	if (templates.length === 0) {
+		return `<div class="screen">
+	<div class="scr-head" style="display:block"><h2 class="scr-title">Templates</h2><div class="scr-sub">Reusable starting points for new documents.</div></div>
+	<div class="scr-body"><div style="flex:1;min-height:60vh;display:flex;align-items:center;justify-content:center">
+		<div style="text-align:center;max-width:420px;padding:40px">
+			<div style="font-size:40px;line-height:1;margin-bottom:16px">&#9636;</div>
+			<div style="font:600 17px/1.3 system-ui;color:#15171c;margin-bottom:8px">No templates yet</div>
+			<p style="margin:0 0 22px;font:400 13.5px/1.6 system-ui;color:#52575f">A template is an ordinary Markdown file in this project with a structure, sources and a brief. Create one to start new documents from it.</p>
+			<button class="btn-primary" style="padding:11px 18px;font:600 13px/1 system-ui" data-msg="newTemplate">Create your first template</button>
+		</div>
+	</div></div>
+</div>`;
+	}
+
+	const grid = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">${templates.map(card).join('')}</div>`;
+	// The D28-B generate sheet: one calm prompt (document name + an optional note), shared across cards - the
+	// card that opened it carries its template URI. Generate drafts the document through the review engine.
+	const generateSheet = sheet('generate', {
+		title: 'New document from a template',
+		sub: 'Name it, then generate a first draft. The draft arrives as changes to review - nothing is written for you.',
+		nameLabel: 'Document Name',
+		namePlaceholder: 'e.g. Weekly report - week 24',
+		note: true,
+		body: `<div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
+			<button class="btn-ghost" data-sheet-close="generate">Cancel</button>
+			<button class="btn-primary" data-sheet-submit data-sheet-default data-msg="generateFromTemplate">Generate Draft</button>
+		</div>`,
+	});
 	return `<div class="screen">
-	<div class="scr-head" style="display:block"><h2 class="scr-title">Run template &mdash; Weekly report</h2><div class="scr-sub">Fill from sources, generate a draft, review the diff before it lands.</div></div>
+	<div class="scr-head" style="display:block"><h2 class="scr-title">Templates</h2><div class="scr-sub">Reusable starting points for new documents.</div></div>
 	<div class="scr-body">
-		<div style="max-width:980px;margin:0 auto;padding:26px 28px 80px;display:flex;gap:20px;align-items:flex-start">
-			<div style="width:380px;flex:none;display:flex;flex-direction:column;gap:14px">
-				${step('1', 'Template', '', `<div style="border:1px solid #e6e8ed;border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;font:500 13px/1 system-ui;color:#2c2f36">&#9636; Weekly report<span style="margin-left:auto;color:#a3a8b2">&#9662;</span></div>`)}
-				${step('2', 'Prompt', `<button class="btn-ghost" style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:5px 9px;font:500 11px/1 system-ui">&#127897; Voice</button>`, `<div style="border:1px solid #e6e8ed;border-radius:8px;padding:11px 12px;font:400 13.5px/1.55 system-ui;color:#2c2f36;background:#fcfcfd">Summarise week 24. Flag the signup spike and call out that growth accelerated.</div>`)}
-				${step('3', 'Sources', '', `<div style="display:flex;flex-wrap:wrap;gap:7px">${srcChip('metrics.csv')}${srcChip('crm &middot; api')}<span style="display:flex;align-items:center;gap:6px;font:500 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;background:#fff;border:1px dashed #d4d7de;border-radius:999px;padding:6px 10px">&#65291; add source</span></div>`)}
-				<button class="btn-primary" style="border-radius:10px;padding:13px;font:600 14px/1 system-ui">Generate draft</button>
+		<div style="max-width:1080px;margin:0 auto;padding:28px 36px 80px">
+			<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+				<span style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2">${templates.length} TEMPLATE${templates.length === 1 ? '' : 'S'}</span>
+				<button class="btn-primary" style="padding:9px 15px;font:600 12.5px/1 system-ui" data-msg="newTemplate">New Template</button>
 			</div>
-			<div style="flex:1;min-width:0;background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden">
-				<div style="display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid #f1f2f5"><span style="font:600 12px/1 system-ui;color:#2c2f36">Draft preview</span><span style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:4px 8px">ALL SLOTS RESOLVED</span><div style="margin-left:auto;display:flex;gap:7px"><button class="btn-ghost" style="padding:6px 11px;font:500 12px/1 system-ui" data-msg="goReview">Review diff &#8594;</button><button class="btn-ghost" style="padding:6px 11px;font:500 12px/1 system-ui" data-msg="present">Export</button></div></div>
-				<div style="padding:28px 32px">
-					<h1 style="margin:0 0 4px;font:600 23px/1.2 system-ui;color:#15171c">Weekly Operating Summary</h1>
-					<div style="font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:24px">Week ${green('24')} &middot; Jun 15&ndash;19</div>
-					<h2 style="margin:0 0 10px;font:600 16px/1.3 system-ui;color:#23262c">Highlights</h2>
-					<p style="margin:0 0 20px;font:400 15px/1.7 system-ui;color:#2c2f36">Revenue grew ${green('18%')} to ${green('$48.6k')} MRR on ${green('427')} new signups.</p>
-					<h2 style="margin:0 0 10px;font:600 16px/1.3 system-ui;color:#23262c">Commentary</h2>
-					<p style="margin:0;font:400 15px/1.7 system-ui;color:#2c2f36">Growth ${green('accelerated sharply')} &mdash; fastest pace this quarter. The signup spike is the headline; watch activation next week.</p>
-					<div style="margin-top:22px;padding-top:16px;border-top:1px dashed #e6e8ed;font:400 11.5px/1.6 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8"><span style="color:#1f7a44">green</span> = filled from source &middot; grey template slots all resolved</div>
-				</div>
-			</div>
+			${grid}
 		</div>
 	</div>
+	${generateSheet}
 </div>`;
 }
 
-// ---- Knowledge: the decision stack (Org enduring / Project directional) agents align to. ----
+// ---- Knowledge: the project's real source library (plan 29, D29-A). The Project tab is a SOURCES table
+// (every bound source + its freshness + the documents that depend on it) with a per-source detail drawer;
+// the Organization tab is an honest "Soon" until a real org store exists (never fabricated). ----
+
+// A truthful relative "last synced" label from a lock timestamp. Undefined = referenced but never synced
+// (the honest idle state), never a fabricated freshness.
+function relativeSynced(iso: string | undefined): string {
+	if (!iso) { return 'Not yet synced'; }
+	const t = Date.parse(iso);
+	if (Number.isNaN(t)) { return 'Not yet synced'; }
+	const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+	if (s < 60) { return 'Synced just now'; }
+	const m = Math.floor(s / 60);
+	if (m < 60) { return `Synced ${m} min ago`; }
+	const h = Math.floor(m / 60);
+	if (h < 24) { return `Synced ${h} h ago`; }
+	const d = Math.floor(h / 24);
+	return `Synced ${d} day${d === 1 ? '' : 's'} ago`;
+}
+
+// Kind glyph for a source row (source-hygiene: non-ASCII written as HTML entities).
+const SOURCE_KIND_ICON: Record<string, string> = { file: '&#9635;', api: '&#127760;', mcp: '&#9670;' };
+
 function renderKnowledge(state: IScreenState): string {
 	const isOrg = state.knScope === 'org';
+	const sources = state.sources ?? [];
+	const docs = state.docs ?? [];
+	const dataFiles = state.dataFiles ?? [];
 	const tabStyle = (on: boolean) => on
 		? 'background:#fff;color:#1a1c20;box-shadow:0 1px 2px rgba(0,0,0,.06)'
 		: 'background:transparent;color:#868b95';
-	const card = (border: string, label: string, labelColor: string, inner: string) => `<div style="background:#fff;border:1px solid #e9eaee;${border};border-radius:11px;padding:18px 20px;margin-bottom:11px"><div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:${labelColor};margin-bottom:8px">${label}</div>${inner}</div>`;
-	const krBar = (label: string, val: string, valColor: string, pct: string, barColor: string) => `<div><div style="display:flex;justify-content:space-between;font:400 12.5px/1.4 system-ui;color:#52575f;margin-bottom:5px"><span>${label}</span><span style="font-weight:600;color:${valColor}">${val}</span></div><div style="height:6px;border-radius:999px;background:#eef0f3;overflow:hidden"><div style="width:${pct};height:100%;background:${barColor}"></div></div></div>`;
-	const metric = (label: string, val: string, sub: string, subColor: string) => `<div style="flex:1;background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:15px 16px"><div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">${label}</div><div style="font:600 22px/1 system-ui;color:#1d1b16;margin-bottom:4px">${val}</div><div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:${subColor}">${sub}</div></div>`;
-	const value = (t: string) => `<span style="font:500 12px/1 system-ui;color:#52575f;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:999px;padding:6px 11px">${t}</span>`;
-	const principle = (n: string, t: string) => `<div style="display:flex;gap:10px"><span style="font:600 12px/1.5 system-ui;color:oklch(0.6 0.13 60)">${n}</span><span style="font:400 14px/1.5 system-ui;color:#2f2c26">${t}</span></div>`;
-	const arrow = (t: string) => `<div style="display:flex;gap:10px"><span style="color:${ACCENT};font:600 13px/1.5 system-ui">&#8594;</span><span style="font:400 14px/1.5 system-ui;color:#2f2c26">${t}</span></div>`;
 
-	const org = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#bcb199;margin:0 0 12px">ENDURING &middot; WHY WE EXIST</div>
-		${card('border-left:3px solid oklch(0.6 0.13 60)', 'MISSION', '#a99b78', `<p style="margin:0;font:500 19px/1.4 system-ui;color:#1d1b16;letter-spacing:-.01em">Make every business document trustworthy by default.</p>`)}
-		${card('border-left:3px solid oklch(0.6 0.13 60)', 'VISION', '#a99b78', `<p style="margin:0;font:400 16px/1.55 system-ui;color:#2f2c26">A world where teams act on the documents in front of them without ever having to re-check the numbers or the wording.</p>`)}
-		<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#bcb199;margin:20px 0 12px">HOW WE OPERATE</div>
-		<div style="display:flex;gap:11px;margin-bottom:11px"><div style="flex:1;background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:16px 18px"><div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:11px">VALUES</div><div style="display:flex;flex-wrap:wrap;gap:7px">${value('Truth over polish')}${value('Auditability')}${value('Calm software')}${value('Customer proximity')}</div></div></div>
-		<div style="background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:16px 18px"><div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:11px">PRINCIPLES</div><div style="display:flex;flex-direction:column;gap:10px">${principle('01', `Never ship a change a human can't trace back to its source.`)}${principle('02', 'Automate the safe, escalate the meaningful.')}${principle('03', 'Default to the calm path: fewer surfaces, clearer diffs.')}</div></div>`;
+	// The honest "Soon" body for the Organization scope: no org store exists yet, so nothing is fabricated.
+	const orgBody = `<div style="flex:1;min-height:52vh;display:flex;align-items:center;justify-content:center">
+		<div style="text-align:center;max-width:430px;padding:40px">
+			<div style="font-size:38px;line-height:1;margin-bottom:14px">&#127970;</div>
+			<div style="font:600 17px/1.3 system-ui;color:#15171c;margin-bottom:8px">Organization knowledge <span style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:4px 8px;vertical-align:middle">SOON</span></div>
+			<p style="margin:0;font:400 13.5px/1.6 system-ui;color:#52575f">An org-wide store of shared sources and decisions is not connected yet. This project's own sources are on the Project tab.</p>
+		</div>
+	</div>`;
 
-	const project = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#bcb199;margin:0 0 12px">DIRECTIONAL &middot; HOW WE WIN</div>
-		${card('border-left:3px solid ' + ACCENT, 'PRODUCT STRATEGY', '#8a93c4', `<div style="display:flex;flex-direction:column;gap:10px">${arrow('<strong style="font-weight:600">Wedge:</strong> land on recurring, data-linked reports &mdash; the painful work that repeats.')}${arrow('<strong style="font-weight:600">Moat:</strong> provenance + approval trail nobody can retrofit onto a chatbot.')}${arrow('<strong style="font-weight:600">Expand:</strong> from one bound report outward to quotes, SOPs and trackers.')}</div>`)}
-		<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#bcb199;margin:20px 0 12px">MEASURABLE &middot; WHAT WE TRACK</div>
-		<div style="background:#fff;border:1px solid #e9eaee;border-radius:11px;padding:16px 18px;margin-bottom:11px"><div style="display:flex;align-items:center;gap:9px;margin-bottom:13px"><span style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2">Q3 OKRs</span><span style="font:600 10px/1 system-ui;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:4px 8px">OBJECTIVE 2</span></div><p style="margin:0 0 14px;font:500 15px/1.4 system-ui;color:#1d1b16">Prove the report wedge with real recurring usage.</p><div style="display:flex;flex-direction:column;gap:12px">${krBar('KR1 &middot; 25 weekly reports live', '18 / 25', '#1f7a44', '72%', 'oklch(0.55 0.14 150)')}${krBar('KR2 &middot; +20% MRR from reporting tier', '+13%', '#9a6b16', '65%', 'oklch(0.7 0.14 70)')}${krBar('KR3 &middot; 90% changes reviewed in &lt;1 day', '94%', '#1f7a44', '94%', 'oklch(0.55 0.14 150)')}</div></div>
-		<div style="display:flex;gap:11px">${metric('ACTIVATION', '61%', 'target 55% &#10003;', '#1f7a44')}${metric('NET RETENTION', '118%', 'target 110% &#10003;', '#1f7a44')}${metric('TIME-TO-TRUST', '2.1d', 'target 1d', '#9a6b16')}</div>`;
+	// The freshness dot + label: green when the source still matches the lock, amber "Source changed" when a
+	// dependent binding is stale (the always-on dirty signal, truthful per source).
+	const freshCell = (fresh: boolean) => fresh
+		? `<span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px/1 system-ui;color:#5d8a66"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Fresh</span>`
+		: `<span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px/1 system-ui;color:#9a6b16"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.66 0.16 45)"></span>Source changed</span>`;
+
+	// One SOURCES table row: kind icon, label, kind, last-synced, freshness, used-by count. Selecting it
+	// opens the detail drawer (local screen navigation; the counts stay live/real).
+	const row = (s: ISourceInfo) => {
+		const on = state.knSelectedSource === s.id;
+		const av = avatar(s.label);
+		return `<button data-msg="selectSource" data-arg="${esc(s.id)}" style="display:grid;grid-template-columns:26px 1fr 62px 128px 128px 84px;align-items:center;gap:12px;width:100%;text-align:left;background:${on ? '#f4f6ff' : '#fff'};border:1px solid ${on ? '#d5ddff' : '#edeef2'};border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer">
+			<span style="width:26px;height:26px;flex:none;border-radius:7px;background:${av.color};color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center">${SOURCE_KIND_ICON[s.kind] ?? SOURCE_KIND_ICON.file}</span>
+			<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 13px/1.3 system-ui;color:#1a1c20">${esc(s.label)}</span>
+			<span style="font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;text-transform:uppercase;color:#868b95">${s.kind}</span>
+			<span style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${relativeSynced(s.syncedAt)}</span>
+			<span>${freshCell(s.fresh)}</span>
+			<span style="font:500 11.5px/1 system-ui;color:#52575f">${s.usedBy.length} doc${s.usedBy.length === 1 ? '' : 's'}</span>
+		</button>`;
+	};
+
+	// The empty registry: no source is referenced by any document in this folder (the honest empty state).
+	const table = sources.length === 0
+		? `<div style="background:#fff;border:1px dashed #dfe1e7;border-radius:12px;padding:40px 24px;text-align:center">
+				<div style="font-size:34px;line-height:1;margin-bottom:12px">&#9635;</div>
+				<div style="font:600 15px/1.3 system-ui;color:#15171c;margin-bottom:6px">No sources yet</div>
+				<p style="margin:0 auto;max-width:360px;font:400 13px/1.6 system-ui;color:#52575f">When a document in this project binds a CSV, JSON or an API, it appears here with its freshness and the documents that depend on it.</p>
+			</div>`
+		: `<div style="display:grid;grid-template-columns:26px 1fr 62px 128px 128px 84px;gap:12px;padding:0 14px 8px;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2"><span></span><span>SOURCE</span><span>KIND</span><span>LAST SYNCED</span><span>FRESHNESS</span><span>USED BY</span></div>
+			${sources.map(row).join('')}`;
+
+	// The per-source detail drawer: the documents (and bind keys) that depend on the selected source, each
+	// with jump-to-doc and a Detach action that edits that document's frontmatter through the service.
+	const selected = sources.find(s => s.id === state.knSelectedSource);
+	const usageRow = (s: ISourceInfo, u: ISourceInfo['usedBy'][number]) => {
+		const av = avatar(u.title);
+		const detachArg = esc(JSON.stringify({ doc: u.doc.toString(), source: s.id, context: u.context }));
+		const keys = u.context
+			? `<span style="font:400 11px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">Context reference</span>`
+			: (u.keys.length
+				? `<span style="font:400 11px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#8a93c4">${u.keys.map(esc).join(' &middot; ')}</span>`
+				: `<span style="font:400 11px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">Bound source</span>`);
+		return `<div style="background:#fff;border:1px solid #edeef2;border-radius:10px;padding:12px 13px;margin-bottom:8px">
+			<div style="display:flex;align-items:center;gap:9px;margin-bottom:7px">
+				<span style="width:24px;height:24px;flex:none;border-radius:7px;background:${av.color};color:#fff;font:600 10px/24px system-ui;text-align:center">${av.text}</span>
+				<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12.5px/1.3 system-ui;color:#1a1c20">${esc(u.title)}</span>
+			</div>
+			<div style="margin:0 0 9px 33px">${keys}</div>
+			<div style="display:flex;gap:7px;margin-left:33px">
+				<button data-msg="openDoc" data-arg="${esc(u.doc.toString())}" style="border:1px solid #e0e2e8;background:#fff;border-radius:7px;padding:6px 11px;font:500 11.5px/1 system-ui;color:#52575f;cursor:pointer">Open document &#8599;</button>
+				<button data-msg="detachSource" data-arg="${detachArg}" style="border:1px solid #ecdede;background:#fff;border-radius:7px;padding:6px 11px;font:500 11.5px/1 system-ui;color:#a4453f;cursor:pointer">Detach</button>
+			</div>
+		</div>`;
+	};
+	const drawer = selected
+		? `<div style="background:#fbfbfc;border:1px solid #e9eaee;border-radius:12px;padding:16px 16px 14px">
+				<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:4px">SOURCE</div>
+				<div style="font:600 15px/1.3 system-ui;color:#15171c;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(selected.label)}</div>
+				<div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:14px">${selected.kind} &middot; ${relativeSynced(selected.syncedAt)}</div>
+				<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">USED BY ${selected.usedBy.length} DOCUMENT${selected.usedBy.length === 1 ? '' : 'S'}</div>
+				${selected.usedBy.map(u => usageRow(selected, u)).join('')}
+			</div>`
+		: `<div style="background:#fbfbfc;border:1px solid #e9eaee;border-radius:12px;padding:22px 18px;text-align:center">
+				<div style="font:400 12.5px/1.6 system-ui;color:#868b95">Select a source to see the documents that depend on it.</div>
+			</div>`;
+
+	// The Add-source sheet (plan 29 iter 2): bind a folder data file or an API URL to a target document,
+	// through the existing frontmatter write path. Real data only - the file rows are the folder's actual
+	// csv/json, and the document rows are the project's real documents.
+	const addSheet = renderAddSourceSheet(docs, dataFiles);
+
+	const projectBody = `<div style="max-width:1080px;margin:0 auto;padding:24px 28px 80px">
+		<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+			<span style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2">${sources.length} SOURCE${sources.length === 1 ? '' : 'S'}</span>
+			<button class="btn-primary" style="padding:9px 15px;font:600 12.5px/1 system-ui" data-sheet-open="addsource">&#65291; Add source</button>
+		</div>
+		<div style="display:flex;gap:20px;align-items:flex-start">
+			<div style="flex:1;min-width:0">${table}</div>
+			<div style="width:300px;flex:none">${drawer}</div>
+		</div>
+	</div>`;
 
 	return `<div class="screen">
 	<div class="scr-head">
-		<div><h2 class="scr-title">Knowledge</h2><div class="scr-sub">The decision stack &mdash; what agents and documents align to.</div></div>
+		<div><h2 class="scr-title">Knowledge</h2><div class="scr-sub">Every source your documents depend on &mdash; where it comes from, how fresh it is.</div></div>
 		<div style="margin-left:auto;display:flex;gap:5px;background:#f1f2f5;border-radius:9px;padding:3px">
+			<button data-msg="setKnProject" style="border:none;border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;${tabStyle(!isOrg)}">Project</button>
 			<button data-msg="setKnOrg" style="border:none;border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;${tabStyle(isOrg)}">Organization</button>
-			<button data-msg="setKnProject" style="border:none;border-radius:7px;padding:7px 13px;font:500 12px/1 system-ui;cursor:pointer;${tabStyle(!isOrg)}">Project &middot; Abstract</button>
-		</div>
-		<button class="btn-ghost">Edit</button>
-	</div>
-	<div class="scr-body">
-		<div style="max-width:1040px;margin:0 auto;padding:26px 28px 80px;display:flex;gap:22px;align-items:flex-start">
-			<div style="flex:1;min-width:0">${isOrg ? org : project}</div>
-			<div style="width:288px;flex:none">
-				<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px 17px;margin-bottom:14px">
-					<div style="font:600 11px/1 system-ui;color:#1a1c20;margin-bottom:10px">How this is used</div>
-					<p style="margin:0 0 14px;font:400 12.5px/1.55 system-ui;color:#696e78">This is the decision stack teams align to. Agents read it; documents inherit it; reviews check against it.</p>
-					<div style="display:flex;flex-direction:column;gap:9px">
-						<div style="display:flex;gap:9px;align-items:flex-start"><span style="width:24px;height:24px;flex:none;border-radius:7px;background:#fdf2dc;color:#9a6b16;font-size:12px;display:flex;align-items:center;justify-content:center">&#9672;</span><span style="font:400 12px/1.45 system-ui;color:#52575f"><strong style="font-weight:600">Strategy agent</strong> tests document claims against this.</span></div>
-						<div style="display:flex;gap:9px;align-items:flex-start"><span style="width:24px;height:24px;flex:none;border-radius:7px;background:#eef1ff;color:${ACCENT_DK};font-size:12px;display:flex;align-items:center;justify-content:center">&#9635;</span><span style="font:400 12px/1.45 system-ui;color:#52575f">Auto-attached to <strong style="font-weight:600">6 documents</strong> as context.</span></div>
-						<div style="display:flex;gap:9px;align-items:flex-start"><span style="width:24px;height:24px;flex:none;border-radius:7px;background:#e7f6ec;color:#1f7a44;font-size:12px;display:flex;align-items:center;justify-content:center">&#10003;</span><span style="font:400 12px/1.45 system-ui;color:#52575f">Last reviewed <strong style="font-weight:600">2 weeks ago</strong> by Tom.</span></div>
-					</div>
-				</div>
-				<div style="background:#fdfaf2;border:1px solid #e4dccb;border-radius:12px;padding:14px 16px">
-					<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a99b78;margin-bottom:9px">DECISION STACK</div>
-					<div style="display:flex;flex-direction:column;gap:6px;font:500 12px/1.4 system-ui">
-						<div style="background:#fff;border:1px solid #efe7d6;border-radius:7px;padding:8px 10px;color:#1d1b16">Mission &amp; Vision <span style="font-weight:400;color:#a99b78">&mdash; enduring</span></div>
-						<div style="text-align:center;color:#cdbf9f;font-size:11px">&#8595;</div>
-						<div style="background:#fff;border:1px solid #efe7d6;border-radius:7px;padding:8px 10px;color:#1d1b16">Strategy <span style="font-weight:400;color:#a99b78">&mdash; directional</span></div>
-						<div style="text-align:center;color:#cdbf9f;font-size:11px">&#8595;</div>
-						<div style="background:#fff;border:1px solid #efe7d6;border-radius:7px;padding:8px 10px;color:#1d1b16">OKRs &amp; KPIs <span style="font-weight:400;color:#a99b78">&mdash; measurable</span></div>
-					</div>
-				</div>
-			</div>
 		</div>
 	</div>
+	<div class="scr-body">${isOrg ? orgBody : projectBody}</div>
+	${addSheet}
 </div>`;
+}
+
+// The Add-source sheet body (plan 29 iter 2): a target-document picker + a file/API source picker. The file
+// rows are the folder's real data files (decision 40's in-app picker), and an API URL row covers the api
+// kind; both submit `addSource` with the chosen document + source through the service write path.
+function renderAddSourceSheet(docs: readonly ILivingDocSummary[], dataFiles: readonly string[]): string {
+	const docOptions = docs.map(d => `<option value="${esc(d.resource.toString())}">${esc(d.title)}</option>`).join('');
+	const fileRows = dataFiles.length
+		? dataFiles.map(f => `<button class="sheet-row" data-sheet-submit data-msg="addSource" data-arg="${esc(f)}"><span style="width:28px;height:28px;flex:none;border-radius:7px;background:#eef1ff;color:${ACCENT_DK};font-size:12px;display:flex;align-items:center;justify-content:center">&#9635;</span><span style="flex:1;min-width:0;font:600 12.5px/1.3 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f)}</span></button>`).join('')
+		: `<div style="font:400 12px/1.5 system-ui;color:#a3a8b2;padding:8px 2px">No unused data files in this folder.</div>`;
+	const body = `<label class="sheet-label" style="margin-top:14px">Bind to document</label>
+		<select class="sheet-input" data-field="target">${docOptions}</select>
+		<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin:16px 0 2px">FOLDER DATA FILES</div>
+		${fileRows}
+		<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin:16px 0 8px">OR AN API ENDPOINT</div>
+		<div style="display:flex;gap:8px">
+			<input class="sheet-input" data-field="apiurl" placeholder="https://api.example.com/metrics" style="flex:1">
+			<button class="btn-primary" data-sheet-submit data-msg="addSourceApi" style="flex:none;padding:0 15px;font:600 12.5px/1 system-ui">Add</button>
+		</div>
+		<div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end"><button class="btn-ghost" data-sheet-close="addsource">Cancel</button></div>`;
+	return `<div class="sheet-back" id="sheet-addsource" data-sheet="addsource">
+		<div class="sheet-card" role="dialog" aria-modal="true">
+			<h2 class="sheet-title">Add a source</h2>
+			<p class="sheet-sub">Bind a data file or an API endpoint to a document. It joins the document's sources and its figures resolve against it.</p>
+			${body}
+		</div>
+	</div>`;
 }
 
 // ---- Agents: the live registry table, and the workflow canvas for one agent. ----
@@ -570,10 +845,13 @@ function renderProjectRun(state: IScreenState): string {
 	const projectAv = avatar(folderName);
 
 	// The 48px run topbar: navy project avatar + name crumb + `Agent run` label + a Live pulse pill
-	// only while the fan-out is genuinely in flight (isChatBusy). No live run => no Live pill.
+	// only while the fan-out is genuinely in flight (isChatBusy). A stopped run shows a calm "Stopped" pill
+	// (plan 27 iter 4) instead; no live/stopped run => no pill.
 	const livePill = run?.inFlight
 		? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#4650b8"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 1.6s ease-in-out infinite"></span>Live</span>`
-		: '';
+		: run?.stopped
+			? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f6f7f9;border:1px solid #e6e8ec;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#868b95"><span style="width:6px;height:6px;border-radius:50%;background:#b4332f"></span>Stopped</span>`
+			: '';
 	const runTopBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
 		<span style="width:20px;height:20px;border-radius:6px;background:#3b4d8f;display:flex;align-items:center;justify-content:center;color:#fff;font:600 10px/1 system-ui">${projectAv.text}</span>
 		<span style="font:600 13px/1 system-ui;color:#1a1c20">${esc(folderName)}</span><span style="color:#cfd3da">/</span>
@@ -591,9 +869,15 @@ function renderProjectRun(state: IScreenState): string {
 		? `${sourceChip ? 'From ' + sourceChip + ', ' : ''}&ldquo;${esc(run.instruction)}&rdquo;`
 		: 'No project run in progress. Start one from Agents or ask across the whole project in Chat.';
 	const instructionColor = run?.instruction ? '#26292f' : '#868b95';
+	// A Stop run control while the fan-out is in flight (plan 27 iter 4): cancels the whole-project model
+	// call; docs that never settled a change are marked skipped honestly. Only shown while genuinely live.
+	const stopRun = run?.inFlight
+		? `<button data-msg="stopProjectRun" style="flex:none;display:inline-flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#b4332f;background:#fff;border:1px solid #e7c9c6;border-radius:8px;padding:8px 14px;cursor:pointer"><span style="width:9px;height:9px;border-radius:2px;background:#b4332f"></span>Stop run</button>`
+		: '';
 	const commandStrip = `<div style="flex:none;padding:18px 28px;border-bottom:1px solid #eef0f3;display:flex;align-items:center;gap:16px">
 		<span style="width:32px;height:32px;border-radius:50%;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 12px/1 system-ui;flex:none">TS</span>
 		<div style="flex:1;font:400 18px/1.4 system-ui;color:${instructionColor}">${instruction}</div>
+		${stopRun}
 		<span style="flex:none;font:600 12.5px/1 system-ui;color:#fff;background:${ACCENT};border-radius:8px;padding:8px 14px">Whole Project</span>
 	</div>`;
 
@@ -614,7 +898,7 @@ function renderProjectRun(state: IScreenState): string {
 	const runBody = summary
 		? `<div style="flex:1;display:flex;overflow:hidden;min-height:0">
 		${decisionsRail(run?.decisions ?? [], run?.source, !!run?.inFlight)}
-		${swarmPane(summary, workingSet)}
+		${swarmPane(summary, workingSet, !!run?.stopped)}
 	</div>`
 		: idleBody;
 
@@ -626,12 +910,17 @@ function renderProjectRun(state: IScreenState): string {
 	const workingCount = summary ? workingSet.size : 0;
 	// Unchanged = documents that have settled with no change. While the run is live, a working tile has
 	// not settled yet, so it is not counted as unchanged; the selector's unchangedDocs includes them, so
-	// subtract the live working count to keep the three buckets (changed + working + unchanged) truthful.
+	// subtract the live working count to keep the buckets (changed + working + unchanged + skipped) truthful.
 	const unchangedDocs = summary ? Math.max(0, summary.unchangedDocs - workingCount) : 0;
+	// A stopped run's not-yet-changed docs are skipped, not unchanged (plan 27 iter 4) - reported honestly.
+	const skippedDocs = summary?.skippedDocs ?? 0;
 	const numeral = (n: number) => `<strong style="font:500 20px/1 system-ui;color:#14161a">${n}</strong>`;
+	const tail = skippedDocs
+		? `&middot; ${workingCount} working &middot; ${unchangedDocs} unchanged &middot; ${skippedDocs} skipped`
+		: `&middot; ${workingCount} working &middot; ${unchangedDocs} unchanged`;
 	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid #eef0f3;background:#fbfbfc;display:flex;align-items:center;padding:0 28px;gap:18px">
 		<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>
-		<span style="font:400 13px/1 system-ui;color:#a3a8b2">&middot; ${workingCount} working &middot; ${unchangedDocs} unchanged</span>
+		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${tail}</span>
 		<button data-msg="reviewProject" style="margin-left:auto;font:600 14px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:10px;padding:12px 22px;cursor:pointer">Review Across the Project &#8594;</button>
 	</div>`;
 
@@ -688,16 +977,20 @@ function decisionsRail(decisions: readonly IDecisionGroup[], source: string | un
 // project document. Every tile's status comes from the REAL run: `changed` (accent tint + check +
 // `N changes`) from `summariseProjectRun`, `working` (spinner + `reviewing...`) layered on live while
 // the fan-out is in flight, and settled `no-change` (muted `no change`). Nothing is fabricated.
-function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>): string {
+function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, stopped = false): string {
 	const total = summary.tiles.length;
 	// A document is "done" once it has settled - it is no longer in the live working set. Progress counts
 	// settled docs (X) against the whole project (Y), matching the comp's "21 / 24 done".
 	const done = summary.tiles.filter(t => !working.has(t.docId)).length;
 	const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 	const busy = working.size > 0;
+	// A stopped run reports honestly (plan 27 iter 4): how many settled with a change vs were skipped, not
+	// "every document read" (which never happened). A live run and a fully-completed run keep their headings.
 	const heading = busy
 		? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Orchestrating ${total} sub-agents</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">reading every document in parallel</span>`
-		: `<span style="font:600 15px/1 system-ui;color:#1a1c20">${total} sub-agents finished</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">every document read across the project</span>`;
+		: stopped
+			? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run stopped</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed before you stopped &middot; ${summary.skippedDocs} skipped</span>`
+			: `<span style="font:600 15px/1 system-ui;color:#1a1c20">${total} sub-agents finished</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">every document read across the project</span>`;
 	const progress = `<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">${heading}<span style="margin-left:auto;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f">${done} / ${total} done</span></div>
 		<div style="height:5px;background:#e9eaee;border-radius:3px;margin-bottom:18px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${ACCENT};border-radius:3px"></div></div>`;
 	const tiles = summary.tiles.map(t => swarmTile(t.docId, t.docTitle, t.status, t.changeCount, working.has(t.docId))).join('');
@@ -709,7 +1002,7 @@ function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>): s
 
 // One document tile. The live `isWorking` overlay wins over the selector's changed/no-change status so
 // an in-flight document reads as a spinning sub-agent even before its edits (if any) have landed.
-function swarmTile(_docId: string, title: string, status: 'changed' | 'no-change' | 'working', count: number, isWorking: boolean): string {
+function swarmTile(_docId: string, title: string, status: ProjectRunDocStatus, count: number, isWorking: boolean): string {
 	const name = esc(title);
 	const nameStyle = 'font:500 11.5px/1.2 system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
 	if (isWorking || status === 'working') {
@@ -722,6 +1015,14 @@ function swarmTile(_docId: string, title: string, status: 'changed' | 'no-change
 		return `<div style="background:#f4f5fd;border:1px solid #e0e5fb;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
 			<div style="display:flex;align-items:center;gap:6px"><span style="color:#2c8159;font-size:11px">&#10003;</span><span style="${nameStyle};color:#26292f">${name}</span></div>
 			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8">${count} ${count === 1 ? 'change' : 'changes'}</span>
+		</div>`;
+	}
+	// A skipped tile (plan 27 iter 4): the run stopped before this document ran. A dashed border + honest
+	// "skipped" label distinguishes it from a document that ran and settled with no change.
+	if (status === 'skipped') {
+		return `<div style="background:#fafbfc;border:1px dashed #dcdfe6;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:#b4332f;font-size:11px">&#9723;</span><span style="${nameStyle};color:#9a9ea7">${name}</span></div>
+			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#b0b4bc">skipped</span>
 		</div>`;
 	}
 	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
@@ -906,6 +1207,17 @@ function reviewCard(change: IProposedChange): string {
 		: '';
 	const prose = `<p style="font:400 16px/1.7 system-ui;color:#26292f;margin:0 0 12px">${addition}${removal}</p>`;
 
+	// The self-explaining framing (plan 31 iter 2): the kind tag + the model's rationale, so the cross-doc
+	// card reads with the same kind / confidence / rationale / source order the inline widget and rail do.
+	const framing = reviewFraming(change, '');
+	const kindChip = framing.kindAttention
+		? `<span style="font:600 10.5px/1 system-ui;letter-spacing:.04em;text-transform:uppercase;color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:999px;padding:4px 9px">${esc(framing.kindLabel)}</span>`
+		: `<span style="font:600 10.5px/1 system-ui;letter-spacing:.04em;text-transform:uppercase;color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:4px 9px">${esc(framing.kindLabel)}</span>`;
+	// Rationale only when the model supplied one (no filler, plan 31 iter 2).
+	const why = framing.rationale
+		? `<p style="font:400 12.5px/1.5 system-ui;color:#5b616b;margin:0 0 12px">${esc(framing.rationale)}</p>`
+		: '';
+
 	// The source chip: `decision . line NN` when a real line is known, else just `decision` (never a
 	// fabricated line). The verbatim decision quote (sourceQuote), when present, is the chip's hover title.
 	const hasLine = typeof change.sourceLine === 'number';
@@ -917,17 +1229,37 @@ function reviewCard(change: IProposedChange): string {
 		? `<span style="font:600 11px/1 system-ui;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:999px;padding:5px 10px">&#9680; Inferred &middot; needs your eyes</span>`
 		: `<span style="font:600 11px/1 system-ui;color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:5px 10px">&#9679; High</span>`;
 
-	// Actions wired to the EXISTING engine (24.2): Accept -> approve(id), Reject -> reject(id), Tweak ->
-	// open the change's document and focus its inline diff (focusChange). The editor resolves the docId
-	// from the change id, so the card only carries the change id.
-	const actions = `<div style="margin-left:auto;display:flex;gap:7px">
+	// Tweak (amend-before-approve, plan 31 iter 3, D31-A): the same in-place editor the inline widget offers.
+	// Edit opens a contenteditable over the proposed text; Save & Approve amends the pending change then
+	// approves through the one engine path (reviewTweakSave); Cancel restores. Hidden for a figure (figures
+	// come from sources). The secondary "Open in document" navigate-through is kept as a card link (D31-A).
+	const canTweak = change.kind !== 'figure';
+	const editor = canTweak
+		? `<div class="rv-tweakwrap" style="display:none;margin:0 0 12px"><div class="rv-tweakedit" contenteditable="true" data-orig="${esc(change.newText)}" style="border:1px solid #d9b98e;border-radius:9px;padding:10px 13px;font:400 16px/1.6 system-ui;color:#26292f;background:#fffdf8;outline:none">${esc(change.newText)}</div></div>`
+		: '';
+	const tweakBtn = canTweak
+		? `<button data-tweak-open style="font:600 12px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:8px;padding:8px 12px;cursor:pointer">Edit</button>`
+		: '';
+	// Actions wired to the EXISTING engine (24.2): Accept -> approve(id), Reject -> reject(id).
+	const normalActs = `<span class="rv-normacts" style="display:flex;gap:7px">
+		${tweakBtn}
 		<button data-msg="reviewAccept" data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:8px;padding:8px 14px;cursor:pointer">Accept</button>
-		<button data-msg="reviewTweak" data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:8px;padding:8px 12px;cursor:pointer">Tweak</button>
 		<button data-msg="reviewReject" data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#a3a8b2;background:none;border:none;padding:8px 4px;cursor:pointer">Reject</button>
-	</div>`;
+	</span>`;
+	const tweakActs = canTweak
+		? `<span class="rv-tweakacts" style="display:none;gap:7px">
+		<button data-tweak-save data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:8px;padding:8px 14px;cursor:pointer">Save &amp; Approve</button>
+		<button data-tweak-cancel style="font:600 12px/1 system-ui;color:#a3a8b2;background:none;border:none;padding:8px 4px;cursor:pointer">Cancel</button>
+	</span>`
+		: '';
+	const openLink = `<button data-msg="reviewTweak" data-arg="${esc(change.id)}" style="font:500 11.5px/1 system-ui;color:#8a8f99;background:none;border:none;padding:8px 4px;cursor:pointer" title="Open in the document">Open in document &#8599;</button>`;
+	const actions = `<div style="margin-left:auto;display:flex;align-items:center;gap:7px">${openLink}${normalActs}${tweakActs}</div>`;
 
-	return `<div style="${cardStyle}">
+	return `<div class="rv-card" style="${cardStyle}">
+		<div style="display:flex;align-items:center;gap:8px;margin:0 0 10px">${kindChip}</div>
 		${prose}
+		${why}
+		${editor}
 		<div style="display:flex;align-items:center;gap:8px">${sourceChip}${confChip}${actions}</div>
 	</div>`;
 }
