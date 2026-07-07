@@ -22,16 +22,18 @@ The chat-path service tests reach the model through `_callModelStream`, which us
 A stale proxy from a prior session was left listening on 8090, so the streaming path returned real model prose instead of the test stub and ~14 tests failed.
 With 8090 free (the intended unit-test condition), the streaming fetch is refused, the service falls back to the stub, and the whole suite is green.
 
-## Live verification (BLOCKED - not fabricated)
+## Live verification (PARTIAL - pending-proposal widgets unverified)
 
 The plan requires a live in-app pass for iter 3 (chat -> propose -> Tweak -> approve) plus screenshots of iter 2's framing and iter 4's confirm.
-This was **not achievable in this environment**, blocked by two independent constraints:
+The app itself builds and runs fine: the PR #100 validator served it live on `:8080` and confirmed Home, the editor and the rails render correctly.
+The single genuine blocker was the **unreachable model backend (no credits)**, which prevents surfacing the pending meaning proposals - so the framing line, the Tweak editor and the meaning-confirm dialog are the only widgets left visually unverified.
 
-1. **No model-backend credits.** The chat -> propose flow needs a real model call to produce a proposal; there is no deterministic proposal fallback.
+1. **No model-backend credits (the genuine blocker).** The chat -> propose flow needs a real model call to produce a proposal; there is no deterministic proposal fallback.
    - Anthropic backend: `/v1/messages` returns `invalid_request_error - "Your credit balance is too low to access the Anthropic API."`
    - OpenRouter backend: `proxy_error - "OPENROUTER_API_KEY (or OPENROUTER_API_KEY_FILE) is not set"`.
-2. **The web bundle cannot build here.** `scripts/code-web.sh` serves the compiled web workbench, but `npm run watch-web` aborts building the extension esbuild bundles with `Cannot find module 'esbuild'` - `esbuild` is absent from the (symlinked) `node_modules`, so `workbench.web.main.{js,css}` is never produced (the served page 404s on it).
+   Without a proposal the pending-review widgets have nothing to render, so iter 2's framing, iter 3's Tweak editor and iter 4's confirm dialog could not be exercised live.
+2. **esbuild was a resolvable node_modules layout quirk, not unbuildable code.** `npm run watch-web` first reported `Cannot find module 'esbuild'` because `esbuild` sat in `build/node_modules` rather than the root `node_modules`; symlinking it into the root resolves the layout quirk and the web bundle builds and serves normally (as the PR #100 validator confirmed on `:8080`).
 
-No screenshots were produced and none were fabricated.
-A prior session (plan 31 iter 1, merged via PR #93) did have working model access, so this is an environment regression, not a defect in the iter 2-4 work.
-The behaviour is fully covered by the unit assertions listed above.
+No screenshots were fabricated.
+A prior session (plan 31 iter 1, merged via PR #93) did have working model access, so the missing pending-proposal screenshots reflect an environment credit regression, not a defect in the iter 2-4 work.
+The behaviour is fully covered by the unit assertions listed above, and the surrounding app was verified rendering live by the PR #100 validator.
