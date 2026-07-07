@@ -204,6 +204,33 @@ function f(x: number, y: string): void { }
 
 ## Git & PR workflow
 
+> [!DANGER]
+> ### NEVER open a PR against upstream `microsoft/vscode`. This repo is a PRIVATE FORK.
+>
+> This repository (`tomFelder/abstract-vscode-spike`) is a **fork of `microsoft/vscode`** and
+> contains **proprietary work** (`livingDocs`/`styleOverrides` contribs, the Opportunity OS theme,
+> Abstract branding). A PR targeting `microsoft/vscode` **publicly leaks all of it** — the diff stays
+> visible on the upstream PR URL even after the PR is closed, and only GitHub Support can purge it.
+> This has already happened once (microsoft/vscode#324681) and must never happen again.
+>
+> **The trap:** `gh pr create` and GitHub's post-push "Create a pull request" link both **default the
+> base repository to the fork's PARENT** (`microsoft/vscode`). If you don't override it, the PR goes
+> upstream.
+>
+> **Mandatory rules — no exceptions:**
+> 1. **Every** PR MUST target this fork. Always create PRs with the base repo pinned explicitly:
+>    `gh pr create --repo tomFelder/abstract-vscode-spike --base main --head <branch>`
+> 2. **Never** run a bare `gh pr create` (it will prompt for / default to the upstream base repo).
+> 3. **Never** click the "Create a pull request for … by visiting https://github.com/…/pull/new/…"
+>    link that `git push` prints without first switching the base repository away from `microsoft/vscode`.
+> 4. **Verify before trusting any PR:** `gh pr view <n> --repo tomFelder/abstract-vscode-spike
+>    --json isCrossRepository,baseRefName` — `isCrossRepository` MUST be `false` and the base must be
+>    this fork. If a PR ever appears under `github.com/microsoft/vscode/pull/...`, treat it as an
+>    incident.
+> 5. **If it happens anyway:** immediately `gh pr close <n> --repo microsoft/vscode`, scan the exposed
+>    diff for secrets (rotate any that appear), delete the head branch, and tell the owner to file a
+>    GitHub Support request to purge the PR/diff (Support is the only way to remove it).
+
 - **Commits are welcome — be liberal.** You do not need to ask before committing work in progress;
   commit at natural checkpoints with clear messages. (Still branch off `main` rather than committing
   directly to it.)
