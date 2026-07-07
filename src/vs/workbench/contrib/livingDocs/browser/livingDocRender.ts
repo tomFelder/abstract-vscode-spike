@@ -86,6 +86,11 @@ export interface ILivingDocRenderInput {
 	 * freshness; empty for a plain (non-living) document. Real data only - never a fabricated sync state.
 	 */
 	readonly provenance?: readonly IPmProvenance[];
+	/**
+	 * The number of saved versions (snapshots) recorded for this document (plan 26 iter 4): drives the
+	 * toolbar's honest `Saved &middot; vN` chip. Absent/0 => a plain `Saved` (no fabricated version number).
+	 */
+	readonly snapshotCount?: number;
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -347,7 +352,10 @@ let pmView = null, pmTimer = 0;
 // tooltip always reads the current lock state (a source edit that flips freshness re-renders the payload).
 let _prov = Object.create(null);
 function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance) { for (let i = 0; i < spec.provenance.length; i++) { _prov[spec.provenance[i].key] = spec.provenance[i]; } } }
-function pmOnChange(){ clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
+// While the user is typing, the toolbar chip reads "Saving..." for the length of the 300ms debounce; when
+// the edit persists the server re-renders the chip back to its honest "Saved [&middot; vN]" (plan 26 iter 4).
+function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
+function pmOnChange(){ setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
 function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }
 // A single reused tooltip element (created lazily), floated over the prose with pointer-events:none so it
 // never intercepts the click that opens the source drawer. esc keeps any source/location text inert markup.
@@ -657,7 +665,10 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `<button class="tb-b ic" data-pmcmd="bullet_list" title="Bulleted list">&#8803;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="ordered_list" title="Numbered list">&#8862;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="blockquote" title="Quote">&#10077;</button>`
-		+ `<span class="tb-saved"><span class="sdot"></span>Saved &middot; v14</span>`
+		// Honest save/version chip (plan 26 iter 4): `Saved` after persist (the RUNTIME flips it to
+		// `Saving...` during the 300ms debounce window), plus `&middot; vN` when the document has saved
+		// versions - N is the real snapshot count from the lock, never the fabricated v14.
+		+ `<span class="tb-saved"><span class="sdot"></span><span class="tb-saved-text">Saved${(input.snapshotCount ?? 0) > 0 ? ` &middot; v${input.snapshotCount}` : ''}</span></span>`
 		+ `</div>`
 		: '';
 
