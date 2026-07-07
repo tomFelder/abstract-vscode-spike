@@ -353,7 +353,8 @@ let pmView = null, pmTimer = 0;
 let _prov = Object.create(null);
 function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance) { for (let i = 0; i < spec.provenance.length; i++) { _prov[spec.provenance[i].key] = spec.provenance[i]; } } }
 // While the user is typing, the toolbar chip reads "Saving..." for the length of the 300ms debounce; when
-// the edit persists the server re-renders the chip back to its honest "Saved [&middot; vN]" (plan 26 iter 4).
+// the edit persists the server re-renders the chip back to its honest saved state, with an optional version
+// suffix when a snapshot exists (plan 26 iter 4).
 function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
 function pmOnChange(){ setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
 function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }

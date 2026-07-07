@@ -36,7 +36,7 @@ a short gap backlog, and the iteration that closed each gap.
 
 ## Per-surface gap backlogs
 
-### History tab (plan 26 iter 3-4) — 92%
+### History tab (plan 26 iter 3-4) - 92%
 
 The History tab now renders real data (snapshots + audit from the lock), so the design-match is scored against the comp's History region rather than the retired v14/v13 sample.
 Preview capture (the actual render code, realistic data): `docs/plans/26-verify/history-render-preview.png`.
@@ -49,8 +49,8 @@ Matched to the comp:
 - Honest toolbar chip: `Saved`, `Saved · vN`, and the `Saving…` debounce state (same `.tb-saved` mono styling).
 
 Remaining gap (≈8%):
-- The uppercased document title can wrap in the ~340px rail when long (e.g. `WEEKLY SUMMARY` over two lines). Acceptable — the comp's fixed sample title never wrapped; a real title is variable-length and truthful. Diminishing returns to truncate.
-- Body font `system-ui` vs the comp's loaded webfont — the accepted shipping choice across every surface (see cross-surface note below).
+- The uppercased document title can wrap in the ~340px rail when long (e.g. `WEEKLY SUMMARY` over two lines). Acceptable - the comp's fixed sample title never wrapped; a real title is variable-length and truthful. Diminishing returns to truncate.
+- Body font `system-ui` vs the comp's loaded webfont - the accepted shipping choice across every surface (see cross-surface note below).
 
 ### Provenance gutter (plan 21 iter 1) — final 94%
 
