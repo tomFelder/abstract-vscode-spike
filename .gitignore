@@ -48,3 +48,6 @@ dist
 .github/prompts/*.local.prompt.md
 .agents/skills/.local/
 .github/skills/.local/
+
+# Plan 30 generated scale fixture (throwaway performance folder; only the generator is tracked)
+/living-docs-scale-sample/

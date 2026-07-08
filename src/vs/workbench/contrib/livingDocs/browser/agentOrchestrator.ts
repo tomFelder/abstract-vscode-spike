@@ -174,6 +174,16 @@ export class AgentOrchestrator extends Disposable {
 		return dirtied;
 	}
 
+	/**
+	 * The documents that bind `source` as a VALUE source (plan 30, track 1): a reverse-edge lookup used by
+	 * the scoped refresh to fan out to the co-dependents of a changed source (a CSV shared by many reports).
+	 * Matched by final path segment, like the rest of the graph, so a relative `sources:` entry resolves.
+	 */
+	async docsBoundToSource(source: string): Promise<URI[]> {
+		const edges = (await this._buildReverseEdges()).get(pathKey(source));
+		return edges ? [...edges.value] : [];
+	}
+
 	// --- the trigger layer (spec 3): event + scheduled (cron/heartbeat) + manual ---
 
 	// Start the scheduler: a single periodic tick checks which cron/heartbeat agents are due. Idempotent.
