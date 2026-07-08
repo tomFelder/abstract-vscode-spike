@@ -378,8 +378,14 @@ export interface ILivingDocsService {
 	 */
 	editBlock(resource: URI, blockId: string, text: string): Promise<void>;
 
-	/** Re-derive bound blocks across every bound document from the latest source values. */
-	refreshFromSources(): Promise<void>;
+	/**
+	 * Re-derive bound blocks across bound documents from the latest source values (plan 30, track 1).
+	 * With no argument this is the project-wide refresh: it scopes to the documents whose sources' hashes
+	 * actually changed (a cheap hash check first), so an unchanged folder does no derivation work. Pass a
+	 * `resource` to scope to a single document (the doc toolbar's Refresh) plus the documents that share a
+	 * changed source with it. Shared sources are read once per pass (a CSV bound by 20 docs is read once).
+	 */
+	refreshFromSources(resource?: URI): Promise<void>;
 
 	/**
 	 * The expensive, on-demand impact pass (spec 3.6): read the changed context sources against the

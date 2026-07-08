@@ -165,7 +165,9 @@ export class LivingDocEditor extends EditorPane {
 				}
 				break;
 			case 'refresh':
-				void this._livingDocs.refreshFromSources();
+				// The doc toolbar Refresh scopes to THIS document (plan 30, track 1): it re-derives the open
+				// document plus the co-dependents of any source that actually changed, not the whole folder.
+				void this._livingDocs.refreshFromSources(this._resource);
 				break;
 			case 'presentOpen':
 				this._present = { ...this._present, open: true };
