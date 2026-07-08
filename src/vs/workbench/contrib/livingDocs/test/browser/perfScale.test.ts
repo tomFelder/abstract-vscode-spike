@@ -299,6 +299,73 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		assert.ok(fetches > afterFirst, 'after the cooldown window the host is fetched again');
 	});
 
+	// Build a service whose documents can drive REAL model calls: each doc declares a `context:` file (the
+	// Strategy grader's decision stack) and carries prose claims, and the request mock reports a healthy
+	// proxy (`/healthz` -> ok) while deferring `/v1/messages` on a shared gate so a test can observe the
+	// in-flight peak. Proves the MODEL limiter (2), the way apiFanoutService proves the source limiter (4).
+	function modelFanoutService(docs: number, gate: DeferredPromise<void>, onModel: () => void, offModel: () => void) {
+		const seed = new Map<string, string>();
+		seed.set(URI.file('/ws/notes.md').toString(), '# Decision stack\n\nGrow ARR by focusing on activation.\n');
+		for (let i = 0; i < docs; i++) {
+			const md = [
+				'---', `title: Brief ${i}`, 'sources:', '  - metrics.csv', 'context:', '  - notes.md', '---', '',
+				'## Commentary', '', `Momentum is steady in area ${i} this week.`,
+			].join('\n') + '\n';
+			seed.set(URI.file(`/ws/brief-${i}.md`).toString(), md);
+		}
+		seed.set(URI.file('/ws/metrics.csv').toString(), 'week,mrr\n23,41200\n24,48600\n');
+		const harness = makeFiles(seed);
+		const requestService = {
+			request: async (options: { url?: string }) => {
+				const url = options.url ?? '';
+				let payload: object = {};
+				if (url.includes('/healthz')) { payload = { ok: true }; }
+				else if (url.includes('/v1/messages')) {
+					onModel();
+					await gate.p;
+					offModel();
+					payload = { content: [{ type: 'text', text: '{"pass": true}' }] };
+				}
+				return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))) };
+			},
+		} as unknown as IRequestService;
+		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const viewsService = { openView: async () => null } as unknown as IViewsService;
+		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
+		const notificationService = { info: () => undefined } as unknown as INotificationService;
+		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: WS, name: 'ws' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
+		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
+		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
+		service.setClock(new FakeClock());
+		store.add(service);
+		return { service };
+	}
+
+	test('model calls are bounded to at most 2 in flight across a fan-out', async () => {
+		const gate = new DeferredPromise<void>();
+		let inFlight = 0;
+		let peak = 0;
+		const { service } = modelFanoutService(6, gate, () => { inFlight++; peak = Math.max(peak, inFlight); }, () => { inFlight--; });
+		// Load all six documents, then fire their model-backed Strategy checks CONCURRENTLY - each one makes
+		// a real (mocked) /v1/messages call through _callModel, which the model limiter must cap at 2.
+		const uris: URI[] = [];
+		for (let i = 0; i < 6; i++) {
+			const uri = docUri(`brief-${i}.md`);
+			await service.loadDocument(uri);
+			uris.push(uri);
+		}
+		const runs = uris.map(uri => service.runSkillCheck(uri, 'strategy'));
+		// Yield real macrotasks so the healthz probe settles and the limiter admits its first batch of 2.
+		for (let i = 0; i < 20 && peak < 2; i++) { await new Promise(r => setTimeout(r, 1)); }
+		assert.ok(peak <= 2, `peak model calls in flight was ${peak} - the model limiter caps it at 2`);
+		assert.strictEqual(peak, 2, `the limiter should admit exactly 2 concurrent model calls (saw ${peak})`);
+		gate.complete();
+		await Promise.all(runs);
+		// Every check completed (nothing starved behind the limiter).
+		assert.strictEqual(inFlight, 0, 'all model calls drained');
+	});
+
 	test('a rejecting source fetch fails only its document; the others still derive', async () => {
 		const { service, harness } = scaleService(8);
 		await service.loadDocument(docUri('report-0.md'));

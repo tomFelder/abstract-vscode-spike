@@ -34,7 +34,7 @@ The doc-toolbar Refresh scopes to its one document plus the co-dependents of any
 
 ## Tests (all measured/asserted; run via the contrib unit suite)
 
-`test/browser/perfScale.test.ts` - 7 tests, all passing:
+`test/browser/perfScale.test.ts` - 8 tests, all passing:
 
 1. `makeScaleFixture` generates the asserted shape (50 docs over 4 shared CSVs).
 2. 50-doc full refresh: each shared CSV read exactly once per pass; timing recorded.
@@ -42,7 +42,8 @@ The doc-toolbar Refresh scopes to its one document plus the co-dependents of any
 4. A shared CSV bound by many docs is read once per pass.
 5. Source fetches bounded to ≤ 4 in flight (deferred-fetch peak assertion).
 6. Per-host cooldown suppresses an identical fetch within 30 s and admits it after (fake clock).
-7. A rejecting source fetch fails only its document; the others still derive (failure isolation).
+7. Model calls bounded to ≤ 2 in flight across a fan-out: six concurrent Strategy-grader checks against a mocked healthy proxy whose `/v1/messages` defers on a gate; the observed peak is asserted to be exactly 2, and all six drain.
+8. A rejecting source fetch fails only its document; the others still derive (failure isolation).
 
 Regression guard: the full pre-existing `livingDocsService.test.ts` (91 assertions) and `agentOrchestrator.test.ts` (12) were re-run against the concurrent/incremental path with **zero assertion regressions** (the only failing lines in the ad-hoc esbuild runner are its own cross-test disposable-tracker bleed, identical on the pre-plan-30 baseline; the real mocha suite isolates the tracker per test).
 
