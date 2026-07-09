@@ -12,21 +12,26 @@ function delta(text: string): string {
 	return `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })}\n\n`;
 }
 const STOP = `event: message_stop\ndata: {"type":"message_stop"}\n\n`;
+// The proxy's spent-budget signal (plan 35 iter 3): a message_delta carrying stop_reason "pause".
+const PAUSE = `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"pause"}}\n\n`;
 
 // Drive the parser the way the service does: keep a rolling buffer, feed it chunk by chunk, collect the
-// deltas, and stop once `done` is seen. Returns the accumulated text and whether the stream terminated.
-function drive(chunks: string[]): { text: string; done: boolean } {
+// deltas, and stop once `done` is seen. Returns the accumulated text, whether the stream terminated, and
+// whether a pause was signalled (the spent-budget marker the service turns into a paused run).
+function drive(chunks: string[]): { text: string; done: boolean; paused: boolean } {
 	let buffer = '';
 	let text = '';
 	let done = false;
+	let paused = false;
 	for (const chunk of chunks) {
 		buffer += chunk;
 		const result = parseSseChunk(buffer);
 		buffer = result.remainder;
 		for (const d of result.deltas) { text += d; }
+		if (result.paused) { paused = true; }
 		if (result.done) { done = true; break; }
 	}
-	return { text, done };
+	return { text, done, paused };
 }
 
 suite('livingDocSse - parseSseChunk', () => {
@@ -35,7 +40,7 @@ suite('livingDocSse - parseSseChunk', () => {
 
 	test('accumulates text deltas across a whole stream and reports done at message_stop', () => {
 		const result = drive([delta('Hello '), delta('world'), STOP]);
-		assert.deepStrictEqual(result, { text: 'Hello world', done: true });
+		assert.deepStrictEqual(result, { text: 'Hello world', done: true, paused: false });
 	});
 
 	test('reassembles an event split across network chunks (remainder is carried forward)', () => {
@@ -43,12 +48,19 @@ suite('livingDocSse - parseSseChunk', () => {
 		// Split at a byte that lands mid-event, so the first parse must hold an incomplete line as remainder.
 		const cut = Math.floor(whole.length * 0.4);
 		const result = drive([whole.slice(0, cut), whole.slice(cut) + STOP]);
-		assert.deepStrictEqual(result, { text: 'Access control', done: true });
+		assert.deepStrictEqual(result, { text: 'Access control', done: true, paused: false });
 	});
 
 	test('treats the SSE [DONE] sentinel as terminal (OpenRouter-style)', () => {
 		const result = drive([delta('done via sentinel'), 'data: [DONE]\n\n']);
-		assert.deepStrictEqual(result, { text: 'done via sentinel', done: true });
+		assert.deepStrictEqual(result, { text: 'done via sentinel', done: true, paused: false });
+	});
+
+	test('flags paused when the proxy streams a stop_reason "pause" (spent daily budget, plan 35 iter 3)', () => {
+		// The plain-words cap prose still streams as normal text; the pause marker rides alongside so the
+		// service keeps the prose but pauses the run rather than parsing proposals from it.
+		const result = drive([delta("You've used today's included usage"), PAUSE, STOP]);
+		assert.deepStrictEqual(result, { text: "You've used today's included usage", done: true, paused: true });
 	});
 
 	test('ignores malformed data lines, keep-alive comments and non-text events without throwing', () => {

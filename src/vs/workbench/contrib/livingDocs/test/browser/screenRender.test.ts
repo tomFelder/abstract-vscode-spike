@@ -386,6 +386,52 @@ suite('livingDocs screenRender', () => {
 		assert.ok(done.includes('1 flagged') && done.includes('1 passed'), 'the strip summarises the real tallies');
 	});
 
+	// --- Settings: the model-access provider picker + onboarding survey (plan 35 iter 4) ---
+
+	test('the provider picker offers "Sign in with ChatGPT" (primary) and "Use the included model" (secondary)', () => {
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } });
+		assert.ok(html.includes('Sign in with ChatGPT') && /data-msg="signInChatGpt"/.test(html), 'the primary door signs in with ChatGPT');
+		assert.ok(html.includes('Use the included model') && /data-msg="useIncludedModel"/.test(html), 'the secondary door uses the included model');
+	});
+
+	test('a signed-in ChatGPT tier shows the signed-in state + a Sign out control', () => {
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'chatgpt', signedIn: true, dailyBudgetUsd: 1 }, signInStage: 'signed-in' });
+		assert.ok(html.includes('Signed in to ChatGPT'), 'the signed-in state is shown');
+		assert.ok(/data-msg="signOutChatGpt"/.test(html), 'a Sign out control is wired');
+		assert.ok(html.includes('Your ChatGPT subscription'), 'the "serving you now" line names the subscription door');
+	});
+
+	test('the included tier shows today\'s usage in plain words with a D19 usage ring', () => {
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.6 } });
+		assert.ok(html.includes("Today&#39;s included usage"), 'the usage block is labelled in plain words');
+		assert.ok(html.includes('US$0.60 of US$1.00 used today'), 'the real spend against the budget is shown');
+		assert.ok(html.includes('<svg') && html.includes('60%'), 'a usage ring reflects the 60% spent fraction');
+	});
+
+	test('a pending sign-in shows the "waiting for your browser" state, and an error shows plain-words copy', () => {
+		const pending = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'pending' });
+		assert.ok(/waiting for your browser/i.test(pending), 'the pending state tells the user to complete sign-in in the browser');
+		const errored = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'error', signInError: 'Sign-in did not complete - please try again.' });
+		assert.ok(errored.includes('Sign-in did not complete'), 'a sign-in error is surfaced in plain words');
+	});
+
+	test('the onboarding survey captures the three questions and saves once (thank-you state after)', () => {
+		const form = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } });
+		assert.ok(form.includes('Which frontier model is your daily driver?') && form.includes('Which subscriptions do you own?') && form.includes('What do you make each week?'), 'all three survey questions are present');
+		assert.ok(/data-survey-save/.test(form), 'the survey has a Save action');
+		const saved = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, surveySaved: true });
+		assert.ok(saved.includes('Thanks') && !/data-survey-save/.test(saved), 'once saved, a thank-you replaces the form');
+	});
+
+	test('the Settings screen uses plain words only (no "OAuth", "token" or "rate limit")', () => {
+		const html = (
+			renderScreenHtml('settings', { ...state, providerStatus: { provider: 'chatgpt', signedIn: true, dailyBudgetUsd: 1 }, signInStage: 'signed-in' })
+			+ renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.9 } })
+			+ renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } })
+		).toLowerCase();
+		assert.ok(!html.includes('oauth') && !html.includes('rate limit') && !/\btoken\b/.test(html), 'no jargon leaks into the user-facing copy (P5)');
+	});
+
 	// --- Lifecycle gate: the export/present modal surfaces a failed before-export gate (plan 32 iter 4) ---
 	// (Asserted on the document-editor present modal via its own render module in livingDocRender.test.ts.)
 
