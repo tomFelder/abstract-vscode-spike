@@ -51,6 +51,16 @@ Suggested order: 26 → 27 → 31 → 28 → 29 → 30 → 32 → 33 (hard depen
 | [33-shell-integrity-loop.md](33-shell-integrity-loop.md) | Shell integrity: the leak inventory (command centre, window title, `mount` naming, stray keybindings), Present honesty, and `scripts/check-seams.sh` making the merge-tax checklist executable. |
 | [RUN-p0-p1-completion-loop.md](RUN-p0-p1-completion-loop.md) | **The master loop prompt for the P0/P1 set.** Paste into a fresh session: a Fable 5 orchestrator fans out Opus 4.8 implementer + independent Opus 4.8 validator sub-agents across plans 26-29/31/33, unattended, max 30 iterations, PRs with screenshots, stacked merges permitted. |
 
+### Beta gate (the live set — from the planning spine)
+
+Motivated and sequenced by [../18-beta-plan.md](../18-beta-plan.md) (the gate: "a stranger can bring a real folder and hit the aha without Tom in the room"); strategy of record is [../14-product-strategy.md](../14-product-strategy.md). Plan 34 runs first (it produces the work list); 35 and 36 can run in parallel with it. Plan 37 (journey robustness) is authored by plan 34's output; the onboarding/feedback-verb loop follows as 38.
+
+| File | What it is |
+|---|---|
+| [34-journey-walk-loop.md](34-journey-walk-loop.md) | **Assessment, not build.** Walk all 26 journeys off-path included, grade WALKABLE/FRAGILE/BLOCKED/MISSING with evidence, write aha-path specs with acceptance criteria, re-baseline the map's chips, and emit the prioritised fix list that becomes plan 37. |
+| [35-model-access-loop.md](35-model-access-loop.md) | Beta model access per doc 18 §2.1: strip the Anthropic usage path, Sign in with ChatGPT (subscription BYO via the Codex-token flow), and the founder-funded OpenRouter fallback on a good model with an enforced ~$1/user/day cap that pauses gracefully. |
+| [36-analytics-loop.md](36-analytics-loop.md) | PostHog per doc 15: consent-first capture, the full event dictionary mirrored off the audit trail, session replay with document text masked (canary-tested), and the four dashboards incl. the trust guardrails. |
+
 ## How to use a handoff
 Paste the relevant file into a fresh Claude Code session. The handoffs are self-contained: repo /
 branch / build / conventions / design source / ordered work items / verification. Plans 06–14 are
