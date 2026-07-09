@@ -404,4 +404,95 @@ suite('AgentOrchestrator', () => {
 		await orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
 		assert.strictEqual(orch.getLatestFailure(), undefined, 'a subsequent clean run clears the Home failure line');
 	});
+
+	// --- plan 32 iter 3: registry editing (create / duplicate / pause) + inline policy/trigger edits ---
+
+	test('createAgent appends a new agent with a unique id and persists (plan 32 iter 3)', async () => {
+		const { orch, written } = createOrchestrator();
+		await orch.ensureLoaded();
+		const before = orch.getAgents().length;
+
+		const created = await orch.createAgent();
+		assert.strictEqual(orch.getAgents().length, before + 1, 'the new agent joins the registry');
+		assert.ok(orch.getAgent(created.id), 'the created agent is retrievable by id');
+		assert.strictEqual(created.policy, 'draft-only', 'a new agent defaults to the safest policy');
+		assert.ok(written.registry && written.registry.agents.some(a => a.id === created.id), 'the create is persisted to agents.json');
+	});
+
+	test('duplicateAgent clones an agent as a fresh copy with its own id and no shared run history', async () => {
+		const { orch } = createOrchestrator();
+		await orch.ensureLoaded();
+
+		const copy = await orch.duplicateAgent('weekly-refresh');
+		assert.ok(copy, 'the duplicate is created');
+		assert.notStrictEqual(copy!.id, 'weekly-refresh', 'the copy has a distinct id');
+		assert.strictEqual(copy!.policy, 'auto-figures', 'the copy inherits the source policy');
+		assert.strictEqual(copy!.trigger.kind, 'cron', 'the copy inherits the source trigger');
+		assert.ok(copy!.name.includes('copy'), 'the copy name marks it as a duplicate');
+		assert.strictEqual(orch.getRunsForAgent(copy!.id).length, 0, 'the copy starts with no runs of its own');
+	});
+
+	test('a paused (disabled) agent is skipped by the scheduler but still runs manually (plan 32 iter 3)', async () => {
+		const clock = new FakeClock(MONDAY_0900);
+		const { orch, runs } = createOrchestrator({ clock });
+		await orch.ensureLoaded();
+
+		await orch.setAgentDisabled('weekly-refresh', true);
+		await orch.runDueAgents();
+		assert.strictEqual(runs.filter(r => r.trigger === 'cron').length, 0, 'the paused cron agent does not fire at its scheduled time');
+
+		// A manual Run now is still honoured on a paused agent (explicit user intent).
+		await orch.runAgent('weekly-refresh', 'manual', [WEEKLY]);
+		assert.strictEqual(runs.filter(r => r.trigger === 'manual').length, 1, 'Run now still executes a paused agent');
+	});
+
+	test('resuming a paused agent re-admits it to the scheduler (plan 32 iter 3)', async () => {
+		const clock = new FakeClock(MONDAY_0900);
+		const { orch, runs } = createOrchestrator({ clock });
+		await orch.ensureLoaded();
+
+		await orch.setAgentDisabled('weekly-refresh', true);
+		await orch.runDueAgents();
+		assert.strictEqual(runs.filter(r => r.trigger === 'cron').length, 0, 'the paused cron agent stays quiet');
+
+		await orch.setAgentDisabled('weekly-refresh', false);
+		await orch.runDueAgents();
+		assert.strictEqual(runs.filter(r => r.trigger === 'cron').length, 1, 'resuming re-admits the agent to the scheduler at its scheduled time');
+	});
+
+	test('a paused event agent does not fire on a source change', async () => {
+		const { orch, runs } = createOrchestrator();
+		await orch.ensureLoaded();
+		await orch.setAgentDisabled('source-watcher', true);
+
+		await orch.onSourceChanged('/ws/metrics.csv');
+		assert.strictEqual(runs.filter(r => r.trigger === 'event').length, 0, 'the paused event agent stays quiet on a source change');
+		// Propagation (the cheap dirty flagging) still happens - only the agent run is suppressed.
+		assert.ok(orch.isDirty(WEEKLY), 'the dependency graph still flags the dirtied doc');
+	});
+
+	test('setAgentPolicy writes a valid policy and rejects an invalid one', async () => {
+		const { orch } = createOrchestrator();
+		await orch.ensureLoaded();
+
+		await orch.setAgentPolicy('freshness-sweep', 'auto-figures');
+		assert.strictEqual(orch.getAgent('freshness-sweep')!.policy, 'auto-figures', 'the inline policy edit lands');
+
+		await orch.setAgentPolicy('freshness-sweep', 'nonsense' as never);
+		assert.strictEqual(orch.getAgent('freshness-sweep')!.policy, 'auto-figures', 'an invalid policy is rejected, leaving the prior value');
+	});
+
+	test('setAgentTrigger replaces the trigger and the scheduler honours the new cadence', async () => {
+		const clock = new FakeClock(MONDAY_0900 + 7 * 3_600_000); // 16:00 Monday - the old Mon 09:00 cron is not due
+		const { orch, runs } = createOrchestrator({ clock });
+		await orch.ensureLoaded();
+
+		await orch.runDueAgents();
+		assert.strictEqual(runs.filter(r => r.trigger === 'cron').length, 0, 'the original cron is not due at 16:00');
+
+		// Retarget the cron to Mon 16:00 and confirm it now fires.
+		await orch.setAgentTrigger('weekly-refresh', { kind: 'cron', cron: 'Mon 16:00' });
+		await orch.runDueAgents();
+		assert.strictEqual(runs.filter(r => r.trigger === 'cron').length, 1, 'the retargeted cron fires at its new time');
+	});
 });

@@ -7,7 +7,7 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDocSummary, ISourceInfo, ITemplateInfo } from '../../common/livingDocs.js';
-import { summariseProjectRun } from '../../common/livingDocsModel.js';
+import { IAgentDef, IAgentRun, ISkillRunSummary, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 import { IScreenState, renderScreenHtml, ScreenId } from '../../browser/screenRender.js';
 
 suite('livingDocs screenRender', () => {
@@ -307,6 +307,87 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('1 too large'), 'the bottom bar reports the oversize bucket with the real count');
 		assert.ok(!html.includes('reviewing&hellip;'), 'an oversize tile never renders as a spinning sub-agent');
 	});
+
+	// --- Agents screen: the list + the detail drawer (plan 32 iter 3) ---
+
+	function agent(over: Partial<IAgentDef> = {}): IAgentDef {
+		return { id: 'weekly-refresh', name: 'Weekly refresh', trigger: { kind: 'cron', cron: 'Mon 09:00' }, flow: { sources: [], docs: [] }, policy: 'auto-figures', status: 'idle', ...over };
+	}
+	function run(over: Partial<IAgentRun> = {}): IAgentRun {
+		return { agentId: 'weekly-refresh', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), applied: 0, queued: 0, via: 'cron', ...over };
+	}
+
+	test('the Agents list wires New agent to create and shows a PAUSED chip for a disabled agent', () => {
+		const agents = [agent(), agent({ id: 'sweep', name: 'Freshness sweep', trigger: { kind: 'heartbeat', everyHours: 6 }, policy: 'draft-only', disabled: true })];
+		const html = renderScreenHtml('agents', { ...state, agents });
+		assert.ok(/data-msg="createAgent"/.test(html), 'New agent is wired to createAgent');
+		assert.ok(html.includes('PAUSED'), 'a disabled agent shows a PAUSED chip in the list');
+	});
+
+	test('the detail drawer shows the read-only canvas strip and the inline policy select with the three levels', () => {
+		const html = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: [] });
+		// The read-only canvas strip (D32-B): the loop nodes.
+		assert.ok(html.includes('Policy gate') && html.includes('Verify') && html.includes('Review rail'), 'the read-only canvas strip renders the loop');
+		// The inline policy select posts setAgentPolicy on change and carries exactly the three levels.
+		assert.ok(/data-change-msg="setAgentPolicy"[^>]*data-arg="weekly-refresh"/.test(html), 'the policy select posts setAgentPolicy for this agent');
+		assert.ok(html.includes('value="auto-figures"') && html.includes('value="ask-before-apply"') && html.includes('value="draft-only"'), 'exactly the three policy levels are offered');
+		assert.ok(/value="auto-figures" selected/.test(html), 'the current policy is pre-selected');
+	});
+
+	test('the detail drawer trigger editor offers a cron day/time picker and a Save trigger action', () => {
+		const html = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: [] });
+		assert.ok(/data-trigger-box/.test(html), 'a trigger editor box is present');
+		assert.ok(/data-tfield="day"/.test(html) && /data-tfield="time"/.test(html), 'a cron day + time picker is offered');
+		assert.ok(/data-tfield="hours"/.test(html), 'a heartbeat-hours field is offered');
+		assert.ok(/data-trigger-save[^>]*data-arg="weekly-refresh"/.test(html), 'a Save trigger action carries the agent id');
+	});
+
+	test('the run log renders relative time, via and outcome-count columns, with an "N queued" review link', () => {
+		const runs = [run({ via: 'cron', docsTouched: 2, applied: 1, queued: 3 })];
+		const html = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: runs });
+		assert.ok(/WHEN/.test(html) && /VIA/.test(html) && /OUTCOME/.test(html), 'the run-log columns are present');
+		assert.ok(html.includes('2 docs') && html.includes('1 applied') && html.includes('3 queued'), 'the outcome counts render');
+		assert.ok(/data-msg="goReview"[^>]*>3 queued/.test(html), 'a run that queued changes links to the review surface');
+	});
+
+	test('the run log truthfully shows a failed run and a still-running skip (no fabricated success)', () => {
+		const runs = [run({ error: 'metrics.csv unreadable', failed: 1 }), run({ skippedReason: 'still-running', applied: 0, queued: 0 })];
+		const html = renderScreenHtml('agents', { ...state, agents: [agent({ status: 'error' })], openAgentId: 'weekly-refresh', openAgentRuns: runs });
+		assert.ok(html.includes('Failed') && html.includes('metrics.csv unreadable'), 'a failed run shows the grader reason');
+		assert.ok(html.includes('Skipped') && html.includes('still running'), 'a skipped run reads "still running"');
+	});
+
+	test('the run log shows a truthful empty state when the agent has never run', () => {
+		const html = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: [] });
+		assert.ok(html.includes('No runs yet'), 'the empty run log states there are no runs');
+		assert.ok(!/data-msg="goReview"/.test(html), 'no fabricated review link when nothing ran');
+	});
+
+	test('the detail drawer offers Duplicate + Pause (Resume when paused) and the run-now action', () => {
+		const active = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: [] });
+		assert.ok(/data-msg="duplicateAgent"[^>]*data-arg="weekly-refresh"/.test(active), 'Duplicate is wired');
+		assert.ok(/data-msg="pauseAgent"[^>]*data-arg="weekly-refresh"/.test(active), 'an enabled agent offers Pause');
+		assert.ok(/data-msg="runWf"[^>]*data-arg="weekly-refresh"/.test(active), 'Run now is wired');
+		const paused = renderScreenHtml('agents', { ...state, agents: [agent({ disabled: true })], openAgentId: 'weekly-refresh', openAgentRuns: [] });
+		assert.ok(/data-msg="resumeAgent"[^>]*data-arg="weekly-refresh"/.test(paused), 'a paused agent offers Resume');
+		assert.ok(paused.includes('the scheduler skips this agent'), 'a paused agent explains the scheduler skips it, but Run now still works');
+	});
+
+	test('the cross-project skill run affordance is present, and after a run shows a per-doc flag/pass strip', () => {
+		const idle = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: [] });
+		assert.ok(/data-msg="runSkillProject"[^>]*data-arg="formatting"/.test(idle), 'a Run Formatting across project affordance is wired');
+		const skillRun: ISkillRunSummary = summariseSkillRun('formatting', 'Formatting agent', [
+			{ docId: 'a', docTitle: 'Access Control', status: 'flag', detail: '2 heading-case fixes suggested.' },
+			{ docId: 'b', docTitle: 'Acceptable Use', status: 'pass', detail: 'All headings follow house style.' },
+		]);
+		const done = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: [], skillRun });
+		assert.ok(done.includes('Access Control') && done.includes('Acceptable Use'), 'each project document shows a row');
+		assert.ok(done.includes('Flag') && done.includes('Pass'), 'the per-doc grade is the real verdict');
+		assert.ok(done.includes('1 flagged') && done.includes('1 passed'), 'the strip summarises the real tallies');
+	});
+
+	// --- Lifecycle gate: the export/present modal surfaces a failed before-export gate (plan 32 iter 4) ---
+	// (Asserted on the document-editor present modal via its own render module in livingDocRender.test.ts.)
 
 	// The renderer escapes the same way the screen does, so a uri assertion matches the emitted attribute.
 	function esc(s: string): string {

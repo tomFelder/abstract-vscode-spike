@@ -152,6 +152,10 @@ export interface ISnapshotEntry {
 	readonly via: SnapshotVia;
 	readonly body: string;
 	readonly auditIndex: number;
+	// How many source versions this snapshot pinned (plan 32 iter 4): set only on a `publish` snapshot, so the
+	// History row can render the real pin count ("pinned 3 source versions") beside the SNAPSHOT badge instead
+	// of the comp's mock. Absent on non-publish snapshots and on older locks (they read as no pins recorded).
+	readonly pinnedSources?: number;
 }
 
 // Snapshots are capped with oldest-eviction so the lock never grows without bound (D26-A); at ~1-5 KB
@@ -211,11 +215,16 @@ export interface IAgentFlow {
 export interface IAgentDef {
 	readonly id: string;
 	readonly name: string;
-	readonly trigger: IAgentTrigger;
+	trigger: IAgentTrigger;
 	readonly flow: IAgentFlow;
-	readonly policy: AgentPolicy;
+	policy: AgentPolicy;
 	lastRun?: string;
 	status: AgentStatus;
+	// Paused (plan 32 iter 3): a disabled agent stays in the registry and its history but the scheduler
+	// skips it - a due cron/heartbeat/event tick never fires a disabled agent. Default absent (= enabled);
+	// only ever set true so an older persisted registry with no flag reads as enabled. A manual "Run now"
+	// on the detail drawer is deliberately still honoured (the user explicitly asked), the scheduler is not.
+	disabled?: boolean;
 }
 
 // One execution of an agent, recorded for the History/observability trace and the Agents-screen run log
@@ -248,6 +257,46 @@ export interface IAgentRun {
 // The run log is capped with oldest-eviction so `agents.json` never grows without bound (D32-A,
 // decision 150): the last 50 runs across all agents, shown newest-first on the Agents screen.
 export const AGENT_RUN_CAP = 50;
+
+/**
+ * One document's result in a cross-project skill run (plan 32 iter 3, the P3 gap): the skill grade run over
+ * every folder document through the plan-23 fan-out surface. `status` mirrors the per-document `ISkillCheck`
+ * verdict for the run's skill (`pass` / `flag`), and `detail` carries the grader's one-line reason so the run
+ * strip reads the true finding per document (never a fabricated summary). Real data only - a document the run
+ * could not grade (not living, or a model-backed skill with no model) is honestly `skipped`.
+ */
+export type SkillRunDocStatus = 'pass' | 'flag' | 'skipped';
+
+export interface ISkillRunDocResult {
+	readonly docId: string;
+	readonly docTitle: string;
+	readonly status: SkillRunDocStatus;
+	readonly detail: string;
+}
+
+/**
+ * The whole-project skill-run summary (plan 32 iter 3): every folder document's grade for one skill, plus the
+ * flagged/passed/skipped tallies. Pure so the run strip and its tests derive from the same real per-doc results.
+ */
+export interface ISkillRunSummary {
+	readonly skillId: 'financial' | 'strategy' | 'formatting';
+	readonly skillName: string;
+	readonly results: readonly ISkillRunDocResult[];
+	readonly flagged: number;
+	readonly passed: number;
+	readonly skipped: number;
+}
+
+export function summariseSkillRun(skillId: ISkillRunSummary['skillId'], skillName: string, results: readonly ISkillRunDocResult[]): ISkillRunSummary {
+	return {
+		skillId,
+		skillName,
+		results,
+		flagged: results.filter(r => r.status === 'flag').length,
+		passed: results.filter(r => r.status === 'pass').length,
+		skipped: results.filter(r => r.status === 'skipped').length,
+	};
+}
 
 // One document's dirty bits in the workspace queue, split by edge kind (the heartbeat drains this).
 export interface IDirtyEntry {
@@ -594,5 +643,7 @@ export interface IAuditEntry {
 	// the one approve path, so the change is on the record like any other applied edit (plan 26 iter 2).
 	// 'tweaked' records that the reviewer hand-edited the agent's proposed text before approving (plan 31
 	// iter 3, D31-B): the applied `newText` is the human's amendment, not the agent's original.
-	readonly via: 'model' | 'heuristic' | 'api' | 'restore' | 'tweaked';
+	// 'override' records that the user exported/published a document PAST a failed before-export gate (plan 32
+	// iter 4): the gate is never a silent block and never a silent override - the override is on the record.
+	readonly via: 'model' | 'heuristic' | 'api' | 'restore' | 'tweaked' | 'override';
 }

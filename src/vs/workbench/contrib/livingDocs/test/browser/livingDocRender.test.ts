@@ -46,6 +46,25 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		assert.ok(!h.includes('opportunity-os'), 'no old-brand fabricated shareable URL');
 	});
 
+	// --- Before-export gate surface (plan 32 iter 4): no silent block, no silent override ---
+
+	test('a failed before-export gate is SHOWN with its one-line reason plus Export anyway + Fix first', () => {
+		const h = html({ open: true, choice: 'html', gate: { pass: false, flag: '1 of 4 figures do not reconcile: metrics.mrr.' } });
+		assert.ok(h.includes('Before-export check failed'), 'the gate failure is surfaced, not silent');
+		assert.ok(h.includes('1 of 4 figures do not reconcile: metrics.mrr.'), 'the grader reason is shown verbatim');
+		// The two-choice row button markup (not the runtime script handler) carries both actions.
+		assert.ok(/<button[^>]*data-present-cta-force/.test(h), 'an Export anyway (override) button is offered');
+		assert.ok(/<button[^>]*data-present-fix-first/.test(h), 'a Fix first button jumps to the flagged block');
+		assert.ok(h.includes('Export anyway') && h.includes('Fix first'), 'both actions read plainly');
+	});
+
+	test('a passing gate shows the normal export CTA and no gate banner (clean path unchanged)', () => {
+		const h = html({ open: true, choice: 'html', gate: { pass: true } });
+		assert.ok(!h.includes('Before-export check failed'), 'no gate banner on a clean document');
+		assert.ok(/<button[^>]*data-present-cta[^-]/.test(h), 'the normal single export CTA button is present');
+		assert.ok(!/<button[^>]*data-present-cta-force/.test(h), 'no Export-anyway override button when the gate passes');
+	});
+
 	test('the editor top bar carries the user avatar, matching the screens and the comp', () => {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',

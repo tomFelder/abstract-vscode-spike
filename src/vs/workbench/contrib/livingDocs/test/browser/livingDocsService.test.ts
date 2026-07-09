@@ -1760,6 +1760,75 @@ suite('LivingDocsService', () => {
 		assert.ok(pins.some(p => p.source === 'metrics.csv' && !!p.version), `pinned to the source version: ${JSON.stringify(pins)}`);
 	});
 
+	// --- plan 32 iter 4: the gate is visible + override-audited; publish pins surface ---
+
+	test('previewExportGate surfaces the failed grader reason so the export flow can show it (no silent block)', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+		const gate = service.previewExportGate(BADBIND);
+		assert.strictEqual(gate.pass, false, 'the gate reports the failure to the surface');
+		assert.ok(gate.flag && /reconcile/i.test(gate.flag), 'the one-line grader reason is available for the modal');
+	});
+
+	test('exporting PAST a failed gate with force writes the file AND audits the override (no silent override)', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+
+		// Without force the gate blocks (existing behaviour); with force the export proceeds and is audited.
+		assert.strictEqual(await service.exportMarkdown(BADBIND), undefined, 'unforced export is still blocked at the gate');
+		const target = await service.exportMarkdown(BADBIND, true);
+		assert.ok(target, 'the forced export writes the file');
+		assert.ok(service.getAudit().some(e => e.via === 'override'), 'the override lands on the audit trail via:override');
+	});
+
+	test('publishing PAST a failed gate with force publishes and audits the override', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+		assert.strictEqual(service.getLock(BADBIND)!.pins.length, 0, 'not published yet');
+
+		await service.publishDocument(BADBIND); // blocked, no pins
+		assert.strictEqual(service.getLock(BADBIND)!.pins.length, 0, 'an unforced publish past a failed gate does nothing');
+
+		await service.publishDocument(BADBIND, true);
+		assert.ok(service.getAudit().some(e => e.via === 'override'), 'the forced publish audits the override');
+	});
+
+	test('a publish records the real pin count on its snapshot so History can name it', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		await service.publishDocument(WEEKLY);
+
+		const published = service.getSnapshots(WEEKLY).find(s => s.via === 'publish');
+		assert.ok(published, 'a publish snapshot is recorded');
+		assert.strictEqual(published!.pinnedSources, service.getLock(WEEKLY)!.pins.length, 'the snapshot carries the true pin count for the History row');
+		assert.ok(published!.pinnedSources! > 0, 'the sample doc pins at least one source version');
+	});
+
+	test('source-peek shows the pinned version line on a published document (plan 32 iter 4)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		await service.publishDocument(WEEKLY);
+
+		const peek = service.getSourcePeek(WEEKLY, ['metrics.mrr']);
+		assert.ok(peek, 'source-peek is available');
+		assert.ok(peek!.pinnedLabel && /pinned at v/.test(peek!.pinnedLabel), `the pinned version line is surfaced: ${peek!.pinnedLabel}`);
+	});
+
+	// --- plan 32 iter 3: run a Skill across every project document (the P3 gap) ---
+
+	test('runSkillAcrossProject fans the grade over every living document with a real per-doc verdict', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+		await service.loadDocument(BOARD);
+
+		const summary = await service.runSkillAcrossProject('financial', 'Financial agent');
+		assert.strictEqual(summary.skillId, 'financial');
+		// Every living document in the folder is graded (WEEKLY + BOARD; the plain README is not living).
+		assert.ok(summary.results.length >= 2, `every living doc is graded: ${summary.results.map(r => r.docTitle).join(', ')}`);
+		assert.ok(summary.results.every(r => r.status === 'pass' || r.status === 'flag' || r.status === 'skipped'), 'each result is a real grade');
+		assert.strictEqual(summary.flagged + summary.passed + summary.skipped, summary.results.length, 'the tallies cover every result');
+	});
+
 	test('on-open freshness shows a changed source as stale without a manual refresh', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);

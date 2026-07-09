@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { bulkApproveConfirm, groupDecisions, groupPendingByDoc, IProposedChange, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun } from '../../common/livingDocsModel.js';
+import { bulkApproveConfirm, groupDecisions, groupPendingByDoc, IProposedChange, ISkillRunDocResult, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
@@ -317,5 +317,29 @@ suite('LivingDoc model - bulkApproveConfirm (plan 31 iter 4)', () => {
 
 	test('an empty set needs no confirm', () => {
 		assert.strictEqual(bulkApproveConfirm([], true).needed, false);
+	});
+});
+
+suite('LivingDoc model - summariseSkillRun (plan 32 iter 3)', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	function res(docId: string, status: ISkillRunDocResult['status'], detail = ''): ISkillRunDocResult {
+		return { docId, docTitle: docId, status, detail };
+	}
+
+	test('tallies flagged, passed and skipped from the real per-doc results', () => {
+		const results = [res('a', 'flag', '2 headings'), res('b', 'pass'), res('c', 'skipped', 'not living'), res('d', 'flag')];
+		const summary = summariseSkillRun('formatting', 'Formatting agent', results);
+		assert.strictEqual(summary.skillId, 'formatting');
+		assert.strictEqual(summary.skillName, 'Formatting agent');
+		assert.strictEqual(summary.flagged, 2, 'two documents flagged');
+		assert.strictEqual(summary.passed, 1, 'one passed');
+		assert.strictEqual(summary.skipped, 1, 'one skipped');
+		assert.strictEqual(summary.results.length, 4, 'the per-doc results are carried verbatim');
+	});
+
+	test('an empty project run has zero tallies (truthful empty state)', () => {
+		const summary = summariseSkillRun('financial', 'Financial agent', []);
+		assert.deepStrictEqual({ flagged: summary.flagged, passed: summary.passed, skipped: summary.skipped }, { flagged: 0, passed: 0, skipped: 0 });
 	});
 });

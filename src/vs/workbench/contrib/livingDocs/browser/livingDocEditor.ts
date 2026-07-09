@@ -151,7 +151,9 @@ export class LivingDocEditor extends EditorPane {
 				void this._livingDocs.refreshFromSources(this._resource);
 				break;
 			case 'presentOpen':
-				this._present = { ...this._present, open: true };
+				// Compute the before-export gate as the modal opens (plan 32 iter 4), so a failed grader is SHOWN
+				// with "Export anyway" + "Fix first" rather than silently blocking the export write.
+				this._present = { ...this._present, open: true, gate: this._resource ? this._livingDocs.previewExportGate(this._resource) : undefined };
 				this._render();
 				break;
 			case 'presentClose':
@@ -165,7 +167,18 @@ export class LivingDocEditor extends EditorPane {
 				}
 				break;
 			case 'presentCta':
-				void this._runPresent();
+				void this._runPresent(false);
+				break;
+			// "Export anyway" past a failed gate (plan 32 iter 4): proceed with force so the override is audited.
+			case 'presentCtaForce':
+				void this._runPresent(true);
+				break;
+			// "Fix first": close the modal and jump to the flagged block so the user can reconcile it. The
+			// financial gate flags on the unresolved bound blocks, so focusing the first bound block is the jump.
+			case 'presentFixFirst':
+				this._present = { ...this._present, open: false };
+				this._render();
+				this._focusFirstBoundBlock();
 				break;
 			case 'approve':
 				if (typeof message.id === 'string') { void this._livingDocs.approve(message.id); }
@@ -246,15 +259,27 @@ export class LivingDocEditor extends EditorPane {
 	// The Present/export CTA maps each real destination onto the export Abstract actually writes:
 	// "Web page" -> the self-contained HTML export; "Markdown" -> the clean resolved Markdown. The
 	// native-format / cloud destinations are "Soon" and non-selectable, so only these two reach here.
-	private async _runPresent(): Promise<void> {
+	private async _runPresent(force: boolean): Promise<void> {
 		if (!this._resource) { return; }
 		if (this._present.choice === 'markdown') {
-			await this._livingDocs.exportMarkdown(this._resource);
+			await this._livingDocs.exportMarkdown(this._resource, force);
 		} else {
 			// 'html' (and any defensive fallthrough) -> the self-contained HTML page.
-			await this._livingDocs.exportDocument(this._resource);
+			await this._livingDocs.exportDocument(this._resource, force);
 		}
 		this._present = { ...this._present, open: false };
+		this._render();
+	}
+
+	// "Fix first" (plan 32 iter 4): jump to the block the gate flagged. The Financial gate flags on the
+	// bound blocks whose figures do not reconcile, so open the in-surface source pane on the first bound
+	// block's keys - the reconciliation UI - rather than a dead scroll. A no-op if the doc has no bound block.
+	private _focusFirstBoundBlock(): void {
+		if (!this._resource) { return; }
+		const doc = this._livingDocs.getDoc(this._resource);
+		const bound = doc?.blocks.find(b => b.binds.length > 0);
+		if (!bound) { return; }
+		this._sourcePeek = { cells: bound.binds.map(b => b.key), synced: false, syncedCount: 0 };
 		this._render();
 	}
 
