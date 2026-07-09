@@ -324,6 +324,93 @@ Candidates probed: **2c (ask-the-project, D24 critical v1)** - the read-only "an
 
 **Grade rationale.** A doc-scoped sources panel exists and is useful, but the defining 1y feature - watched documents with change-hooks proposing knock-on edits through the review grammar - is not built, and the binding-lightup verb is absent. Graded MISSING for the journey's actual subject (watched-doc hooks), with the honest note that the linked-sources half is real. (Softer than MISSING on the sources half; recorded MISSING because the change-hook mechanism, the reason 1y is its own journey, does not exist.)
 
+## Group E - Living documents, agents & automation (1q-1t, 1z)
+
+### 1q - Put a document on a schedule · FRAGILE
+
+**What was walked.** Opening an agent (Agents → Weekly refresh → open) reveals the full scheduling+policy machinery: a TRIGGER control with plain-language options ("Schedule (cron) / Heartbeat / On source change / Manual only"), a day dropdown (Mon-Sun) and a time picker (no cron strings), a "Save trigger" button, and a POLICY dial ("Auto-apply figures / Ask before applying / Draft only") with the honest one-liner "Figures may auto-apply; prose waits for approval; draft-only never auto-lands". The confirmation of blast radius is expressed in the flow diagram ("all sources → all documents / workspace docs"). "▶ Run now" executed a real run (see 1t). Screenshot `1t-1-agent-flow-schedule-policy.png`.
+
+**Probe results.**
+- Golden path (schedule + policy decided together, plain-language, blast radius named): the mechanism exists and is good - trigger types, day/time, and the reused 1g policy dial are all here, matching 1q frames 2-3.
+- Doc-header entry point (frame 1: "✦ Keep current" in the document header): **absent** - the document header carries only Present + the formatting toolbar + the Saved chip. Automation does not start "from the document"; it starts from the Agents nav. This is the specific 1q on-ramp gap.
+- Autonomous firing (the map's own note: source-watch → graph-walk → dirty-marking not wired): not verifiable in a short web session; I confirmed on-demand "Run now" works, not that a cron/source-change trigger fires unattended.
+
+**Grade rationale.** The schedule+policy surface is real and well-built in the Agents editor, but the doc-header "Keep current" on-ramp (the journey's frame-1 promise that automation begins from the document) is missing, and unattended firing is unproven. FRAGILE.
+
+### 1r - The morning inbox, 90 seconds to done · PARTIAL
+
+**What was walked.** Home is the landing surface and, in its current state, shows "Good morning, Tom / Everything is in sync / ALL PROJECTS" with per-project cards ("Living Docs Sample · 7 docs · 1 source"). This is the inbox in its all-clear state.
+
+**Probe results.**
+- Golden path (only what deserves a human; auto-applied reported, not queued; one click lands inside the first proposal): the per-document breakdown the 1r frames describe - "Two documents need you · Weekly Summary 2 waiting · 11 auto-applied overnight ✓ · Review →" - does not appear. Home rolls up to a project-level "everything in sync", not a document-level needs-you queue with counts.
+- OS notification with counts (frame 1), badge counts, and the cross-project queue: not present (the map lists these as the gap; confirmed).
+- The "all clear in ~N min" promotion (D14, via Project Home 1w): 1w is MISSING (iteration 1), so this promise has no home either.
+
+**Grade rationale.** Home-as-landing exists and shows an honest all-clear, but the document-level waiting/auto-applied inbox with counts and notifications - the actual 1r habit surface - is not built. PARTIAL.
+
+### 1s - Watch, cancel, recover · FRAGILE
+
+**What was walked.** During a fan-out run the "Stop run" button (and, in chat, the "■ Stop") is present live - so the run is visible and a cancel affordance exists. I attempted a mid-flight cancel twice, but the sample's 7-doc runs complete near-instantly in the web build, so the "Cancelled at N of M · 14 proposals kept · 10 untouched · nothing half-applied" recovery state (frame 2) could not be triggered. To probe error-recovery I killed the model proxy and ran the fan-out.
+
+**Probe results.**
+- Cancel affordance: present (Stop run / ■ Stop). The safe-cancel recovery states (frames 2-3) were not reachable in the fast web runs - a web-timing limit, noted honestly, not graded as a product pass or fail on the recovery UI itself.
+- Model error naming (frame 3: "◇ kpi endpoint timed out for: Weekly Summary · Board Note … Retry failed only"): **FAILS**. With the proxy down, the fan-out reported "7 sub-agents finished · 7/7 done · no change · 0 changes proposed" and "No decisions were grounded in the source" - i.e. a model outage renders **identically to a run where nothing needed changing**. The error is swallowed, not named; there is no "the model was unreachable" signal, no failed-doc list, no surgical retry. (Contrast: the single-doc chat rail *does* name this error - iteration 1's "The agent model is not reachable" - so the gap is specific to the fan-out/agent-run path.) Screenshot `1s-1-proxy-down-swallowed-as-nochange.png`.
+
+**Grade rationale.** A cancel control exists, but the recovery half - errors that name the source and offer surgical retry - is absent on the fan-out path, and a model outage is silently indistinguishable from "no changes needed". That is a trust failure for the safety journey. FRAGILE.
+
+### 1t - Manage a project's agents & workflows · WALKABLE
+
+**What was walked.** The Agents roster is a real table: 5 agents (Weekly refresh, Source-change watcher, Freshness sweep, Before-export gate, On-publish snapshot) with AGENT / TRIGGER / FLOW / LAST RUN / STATUS columns, filter tabs (All·5 / Scheduled·2 / Event·3 / Needs approval·0), "+ New agent" and "✦ Run Across the Project". Opening an agent shows a real workflow flow diagram (Trigger → Sources → Agent [read·diff·rewrite] → Verify [Financial·Strategy·Formatting] → Policy gate [auto-figures] → Documents → Review rail - i.e. source → agent+policy-gate → docs, D16 simple graph), a RUN LOG, and Pause / Run now / Duplicate verbs. "Run now" produced a real run: RUN LOG went from "No runs yet" to "RUN LOG · 1" with a truthful row (WHEN "just now" / VIA "manual" / OUTCOME "2 docs · 0 applied · 0 queued"), and the roster's LAST RUN updated to "1m ago". Screenshots `1t-1-agent-flow-schedule-policy.png`, `1t-2-run-now-log-entry.png`.
+
+**Probe results.**
+- Golden path (roster with trigger/scope/policy/last-run; paused state; workflow graph; run→audit): works - the roster, the D16 flow graph, the run log with real entries, and pause/run verbs are all real. Every run links to a truthful log entry.
+- Paused state that reads as paused (frame 1): a Pause verb exists; a pre-paused agent ("Quarterly review · paused" in the map) was not in this sample's roster, but the control is present.
+- Persistence: the run-log entry survived within the session and updated the roster; like all writes it is subject to X1 across a hard reload.
+
+**Grade rationale.** The roster, the simple flow graph (the decided D16 v1 scope), and truthful run logs are all built. WALKABLE.
+
+### 1z - Usage, cost & the starved run · MISSING
+
+**What was walked.** I looked for the Settings usage meter (D19: session usage, context window, budget used) and the in-chat context-window ring with session spend (frame 4). The "Manage" menu is the stock VS Code gear menu (Command Palette, Profiles, Settings, Extensions…) with no Abstract-native usage surface. Across many chat interactions no context-window ring and no "$0.40 · ctx 68%" spend indicator ever appeared in the composer.
+
+**Probe results.**
+- Golden path (a usage meter; spend by agent/chat; a starved run that pauses safely and resumes): none of it exists - no Settings usage page, no per-agent/per-chat cost, no context-window ring, no pause/resume-on-starvation surface.
+- The starved-run pause/resume (frames 2-3) shares machinery with 1s Cancel, which itself has no reachable recovery UI.
+
+**Grade rationale.** The usage/cost surface (D19) is not built anywhere in the Abstract UI. MISSING.
+
+## Group F - Work goes out (1u-1v)
+
+### 1u - Present, export, publish · FRAGILE
+
+**What was walked.** "↗ Present" opens a "Present & export" panel: "SEND A COPY TO" with ◉ Web page and M↓ Markdown (both enabled), and Google Docs / Google Sheets / Microsoft Word / Microsoft Excel all shown as "SOON" (disabled). The Web page option describes "Self-contained HTML file · opens in any browser, no Abstract needed · 4 source-linked blocks included · Provenance & approval history are retained on export". "Export web page" produced a real file: a notification "Exported 'Board Note' to Board Note.export.html." and the HTML opened in an editor. Screenshot `1u-1-present-export-panel.png`.
+
+**Probe results.**
+- Golden path (hand it to a URL / a Word person / present it): HTML and Markdown export work and produce a file. This matches the map ("HTML export is built and verified").
+- Word first (frame 2, the beachhead): **.docx and Google Docs are "SOON" (disabled)** - the audience that lives in Word cannot be served yet. This is the map's known gap, confirmed live.
+- Present mode (frame 1: full-screen, read-only, beautifully typeset): the "Present" button opens an *export* panel, not a distinct full-screen presentation mode - the two are conflated under one button.
+- Publish = a live URL (frame 3): no publish-to-web-URL option exists in the panel - only file export ("SEND A COPY TO"). Per D17 published artifacts are static anyway, but the "publish to a shareable URL" act (even as a static stamped page) is not present.
+- Provenance footer (D17 "verified as of {date}"): the panel asserts "provenance & approval history are retained on export"; I could not cheaply read the exported HTML's footer in the virtualised editor to confirm the "verified as of" stamp text.
+- Persistence: the export file is written to the in-memory web FS, not the real folder on disk (same X1 web limitation) - the notification says "saved beside your document" but on disk `living-docs-sample/` has no `Board Note.export.html`.
+
+**Grade rationale.** HTML/Markdown export works, but the beachhead .docx/Docs are disabled, there is no distinct Present mode, and there is no publish-to-URL act. FRAGILE.
+
+### 1v - Interrogate the audit trail · MISSING
+
+**What was walked.** Per D18, v1 is LIGHT (last-changed + numeric +added/−removed inline, not the full conversational audit). I still probed the conversational half: in the chat rail I asked "What changed in this document recently, and who approved it? Just answer, do not propose any edits." The agent answered in plain prose (no proposal generated - good) but said: "I added a one-sentence Momentum note… **I have no information about who approved it — this editor doesn't surface an approvals or change-log trail.**" It answered from its own session memory (and slightly misquoted the inserted text), not from the lock audit. Screenshot `1v-1-audit-question-no-receipts.png`.
+
+**Probe results.**
+- Golden path (ask in plain language → a list of receipts, each linking to a version): does not exist. The conversational audit has **no data source** - the real audit that History *does* hold (I saw "Approved · Board Note / b-3 · model" earlier) is not wired into the chat's context, so the agent cannot produce receipts or version links.
+- D18 light-audit scope (inline last-changed + numeric deltas): the proposal cards do show "+N added / −N removed" inline during review, which is the *decided* v1 light-audit surface - so the numeric-delta half exists in the review flow. But the journey 1v surface (conversational receipts linking to 1h versions) is absent, and it depends on 1h persistence, which fails under X1.
+
+**Grade rationale.** Graded against the decided v1 scope, the inline numeric-delta light audit exists in the review cards, but the journey 1v itself - interrogating the trail conversationally and getting version-linked receipts - is not built (the chat has no audit data source). MISSING for the journey's surface; the D18 light-audit inline deltas are noted as the part that does exist.
+
+## Candidate probes (2b, 2c)
+
+**2c - Ask the project (D24, critical v1): PARTIAL.** The read-only Q&A mode exists in a basic form - the chat answered a plain question without generating a proposal card (the read-only sibling of 1e). But it fell short of D24 in two ways: it answered **document-scoped**, not "whole-project scope by default"; and it answered from model memory without file citations or a receipts list, and even slightly misquoted the document. A true "ask the project → answer with file citations, no proposals" surface (the huge daily "what did we decide about X?" surface) is not a distinct, cited mode yet. There is a "Whole Project" scope label on the agent-run screen and a "+ Add documents" scope control, so whole-project scoping is reachable, but the Home-chat "ask the project" default (D21/D24) is not built (the only chat is the per-document rail; iteration 1 confirmed no whole-project chat composer on any front door).
+
+**2b - First-run orientation ("the agent reads your folder"): MISSING.** Nothing orients on a fresh or messy folder open. Iteration 1's messy-folder probe confirmed the opposite of the 2b wow moment: structure is flattened, non-markdown files are dropped, odd-formatted titles become "Untitled", and there is no "I found 14 numbers that look like they come from a spreadsheet — link them?" proposal. The empty-folder open has no orientation either (iteration 1: an empty project cannot even be entered from Home). 2b is a wireframe-next-pass candidate (the map's own disposition) and nothing of it exists today.
+
 ## Evidence index (screenshots in shots/)
 
 - `00-home-initial.png`, `1a-1-switch-folder.png` - taken against the broken `?folder=/static/mount` entry (environment gotcha, see environment.md), retained as evidence of the gotcha only.
@@ -335,4 +422,18 @@ Candidates probed: **2c (ask-the-project, D24 critical v1)** - the read-only "an
 - `1g-1-document-agents.png` - 1g document-agents surface.
 - `1h-1-history-after-approve.png`, `1h-2-after-undo.png`, `1h-3-history-fabricated-stack.png` - 1h history/undo/fabricated stack.
 - `1x-1-new-template-scaffold.png` - 1x new-template opens a manual scaffold, not the wizard.
+
+### Iteration-2 evidence (fresh build)
+
+- `reverify-1-history-empty-honest.png`, `reverify-2-history-real-entry.png`, `reverify-3-reload-reverted-x1.png`, `reverify-4-tweak-applied.png`, `reverify-5-bulk-approve-confirm.png`, `reverify-6-history-snapshot-restore.png` - Part 1 re-verify: honest empty History, real approve row, X1 reload-revert, Tweak applied, bulk-approve confirm dialog, snapshot+Restore in History.
+- `1i-1-multidoc-ledger.png`, `1k-1-perdoc-approve-drained.png`, `1k-2-crossdoc-review-pass.png` - 1i per-file ledger, per-doc approve draining the count, the cross-doc review pass screen.
+- `1j-1-swarm-live.png`, `1j-2-swarm-complete.png` - 1j fan-out swarm live and complete.
+- `1l-1-single-thread-no-tabs.png` - 1l, single chat thread, no rail tabs.
+- `1o-1-knowledge-add-source.png` - 1o Knowledge add-source dialog (file/URL only, no connector catalogue).
+- `1p-1-source-drawer-provenance.png` - 1p in-doc source drawer with bound figures + referenced-by.
+- `1y-1-sources-context-rail.png` - 1y doc sources/context rail (linked sources + referenced files).
+- `1t-1-agent-flow-schedule-policy.png`, `1t-2-run-now-log-entry.png` - 1t/1q agent flow graph + schedule/policy, real run-log entry.
+- `1s-1-proxy-down-swallowed-as-nochange.png` - 1s, model outage rendered as "no change" (error swallowed).
+- `1u-1-present-export-panel.png` - 1u Present & export panel (.docx/Docs SOON).
+- `1v-1-audit-question-no-receipts.png` - 1v, chat has no audit data source ("no approvals or change-log trail").
 </content>
