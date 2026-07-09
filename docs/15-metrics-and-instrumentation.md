@@ -90,6 +90,7 @@ Implementation notes (for the plan that wires this):
 | `undo_after_approve` | depth |
 | `this_was_wrong_reported` | free-text ref (id only) |
 | `model_configured` | provider (openai-oauth / openrouter-fallback), onboarding survey answers (daily-driver model, owned plans) |
+| `model_spend` | provider, cost, running daily total, cap_hit? - enforces the fallback's ~$1/user/day fair-usage cap (doc 18 §2.1) and measures cap-hit frequency as a BYO-conversion signal |
 
 ### 3.2 Dashboards (one per tree layer)
 

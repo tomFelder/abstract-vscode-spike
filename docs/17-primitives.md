@@ -49,7 +49,7 @@ These are ordinary skill.md files: visible, editable, forkable, deletable - the 
 
 Decided boundaries:
 
-- The **slot, packaging and principle are decided**; the design of the individual skills is a separate founder exercise and is deliberately **not** sketched here or elsewhere until that exercise happens.
+- The **slot, packaging and principle are decided**; §6.1 offers candidate skills as starting points, but the design of the individual skills remains a founder exercise and the founder's pass is the final word.
 - Thinking skills produce document changes like everything else: **through the review engine**. A stress-test that wants to rewrite your weakest paragraph proposes a diff; a brainstorm that wants to append options proposes an insertion. No side-channel outputs.
 - "The thinking session" is killer flow ④; `skill_invoked` events (thinking skills flagged) feed the metric tree (doc 15 §3.1).
 
@@ -73,7 +73,47 @@ Honest inventory, so the gap is a work list rather than a surprise:
 - **Templates**: nav destination built (plan 28); the from-examples wizard (1x/D4) is designed, unbuilt.
 - **Org library**: nothing; slot reserved per §4.
 
-## 6. Principles applied to this layer
+## 6. Suggested starter catalogue
+
+Concrete candidates for the default catalogue, added 9 Jul 2026 at the founder's request. These are suggestions to curate, not commitments; the thinking-skills entries in particular are starting points for the founder's own design pass, which remains the final word on their content.
+
+### 6.1 Thinking skills (the default pack, killer flow ④)
+
+| Skill | What it does |
+|---|---|
+| `/interview-me` | Interviews the author one question at a time, with a recommendation attached to each, until the idea's who/why/success/constraints are sharp - then writes the confirmed intent into the document as proposals. (The process that produced this doc set.) |
+| `/brainstorm` | Diverges first (options, angles, analogies drawn from the project's own corpus), then converges to a ranked shortlist with rationale; appends as a proposal, never overwrites. |
+| `/stress-test` | Adversarially attacks the document's argument: hidden assumptions, missing counter-cases, the strongest opposing view - each finding anchored to the paragraph it challenges. |
+| `/summarise-my-thinking` | Reads a set of notes/drafts (the working set) and proposes the one-page synthesis: what you believe, what changed, what is still open. |
+| `/devils-advocate` | Argues the opposite of the document's central claim as persuasively as the corpus allows, so the author meets the best version of the other side. |
+| `/first-principles` | Rebuilds the document's conclusion from its bound data upward, flagging every step that relies on an unbound (unsourced) claim. |
+
+### 6.2 Document and trust skills (the wedge)
+
+| Skill | What it does |
+|---|---|
+| `/numbers-audit` | Deterministically recomputes every derived figure (percentages, deltas, sums) from bound raw values and flags arithmetic drift (doc 12 §3.1). |
+| `/fact-check` | Grades each quantitative claim as source-backed / inferred / unbound; proposes bindings where a source exists. |
+| `/consistency-check` | Cross-document: finds claims that disagree across the working set (dates, figures, decisions) and raises each as a conflict proposal with both provenances. |
+| `/tighten` | Prose economy pass - shorter, plainer, same meaning; every change a reviewable diff. |
+| `/tone` | Rewrites toward the project's (later: org library's) tone rules, with the rule cited in each proposal's rationale. |
+| `/executive-summary` | Derives the summary section from the document body with line-level provenance, so the summary is a living block, not a stale copy. |
+
+### 6.3 Starter agents (skills given triggers)
+
+| Agent | Composition |
+|---|---|
+| Weekly refresh | source-sync + `/numbers-audit`, every Monday 7am, scope: docs bound to changed sources, policy: figures auto-apply (the morning all-clear engine, 1r) |
+| Staleness sentinel | freshness check on open + heartbeat; raises "may be affected" only when a cited value actually moved (semantic staleness, doc 12 §3.1) |
+| Meeting decisions | watches a transcript folder; on new file, extracts decisions with line provenance and fans out to affected docs (the flagship demo, 1j) |
+| Policy sync | `/consistency-check` on source change across a policies folder, policy: draft everything, apply nothing |
+| Coverage grader | weekly `/fact-check` roll-up to Project Home: what share of the project's claims are source-backed, trending |
+
+### 6.4 Model tools (what skills and agents may call)
+
+The tool surface skills/agents compose from, all mediated by the review engine for writes: `read_document`, `read_source` (with freshness), `peek_binding` (value + provenance for a bound atom), `list_dependents` (the graph's reverse lookup), `search_project` (the 2c ask-the-project substrate), `propose_edit` (the ONE write path - every mutation goes through it), `query_audit` (read-only over lock audit + snapshots, the D18 later layer), `save_snapshot`, and `run_skill` (composition - a skill invoking a skill). No tool writes a document directly; `propose_edit` emitting proposals is what makes P3 structurally true rather than a convention.
+
+## 7. Principles applied to this layer
 
 - A skill or agent must never be able to bypass review, whatever tools it holds (P3, engineering §3).
 - An agent's policy dial is set where the schedule is set - permission and cadence are one decision (1q frame 3, D9).
