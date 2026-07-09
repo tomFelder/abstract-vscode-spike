@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#efede8;font-family:system-ui,-apple-system,sans-serif;color:#26251f}
+a{color:#4a4fc0;text-decoration:none}a:hover{color:#33379a;text-decoration:underline}
+.dv-turn{padding:38px 48px 34px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}
+.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 18px}
+.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}
+.dv-tname{font:600 13px/1.2 system-ui,sans-serif;color:#1a1a1a}
+.dv-oid{font:700 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none;flex:none}
+.dv-opt{scroll-margin-top:16px}
+.dv-opt:target .dv-oid{background:#4a4fc0;color:#fff}
+.dv-next{margin:26px 0 0;font:12px/1.5 system-ui,sans-serif;color:rgba(0,0,0,.5)}
+h1{font:600 32px/1.1 system-ui;margin:0 0 8px;letter-spacing:-.02em}
+.sub{font:11.5px/1.6 ui-monospace,Menlo,monospace;color:#8a877d;margin:0 0 20px;max-width:900px}
+.hand{font-family:Caveat,cursive;font-weight:600;color:#4a4a42}
+.lead-note{font:600 19px/1.35 Caveat,cursive;color:#54513f;max-width:880px;margin:0 0 22px}
+.mece{display:flex;align-items:stretch;margin:6px 0 24px;flex-wrap:wrap;row-gap:12px}
+.mbox{border:1.5px solid #2b2a24;background:#fff;border-radius:6px;padding:11px 14px 10px;width:236px;box-shadow:2px 2px 0 rgba(0,0,0,.10);display:flex;flex-direction:column;gap:4px}
+.mkey{font:700 9.5px ui-monospace;letter-spacing:.08em;color:#fff;background:#2b2a24;border-radius:3px;padding:2px 6px;align-self:flex-start}
+.mt{font:700 12.5px system-ui;color:#26251f}
+.ms{font:600 14.5px/1.2 Caveat,cursive;color:#6a675c}
+.marr{align-self:center;padding:0 7px;font-size:15px;color:#9a968a}
+.leg{display:flex;gap:20px;flex-wrap:wrap;align-items:center;font:10.5px ui-monospace;color:#57544a;border-top:1px dashed #cfcbbe;padding-top:14px}
+.leg .li{display:flex;align-items:center;gap:6px}
+.st{font:700 8.5px ui-monospace;letter-spacing:.07em;padding:2.5px 7px;border-radius:3px;flex:none}
+.st.built{background:#d7e9d3;color:#2c5e2e}.st.part{background:#f4e5bd;color:#7a5c12}.st.gap{background:#f3d2cd;color:#8c3327}
+.ghead{display:flex;align-items:baseline;gap:12px;margin:0}
+.gkey{font:700 11px ui-monospace;letter-spacing:.08em;color:#fff;background:#2b2a24;border-radius:4px;padding:3px 8px}
+.gtitle{font:700 19px system-ui;letter-spacing:-.01em}
+.gsub{font:600 17px Caveat,cursive;color:#6a675c}
+.jrow{display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start;margin-top:20px}
+.jcard{background:#fff;border:1.5px solid #2b2a24;border-radius:7px;padding:15px 17px 13px;box-shadow:3px 3px 0 rgba(0,0,0,.10)}
+.jhd{display:flex;align-items:center;gap:9px;margin-bottom:1px}
+.jtitle{font:700 14.5px system-ui}
+.job{font:600 16px/1.25 Caveat,cursive;color:#5b584c;margin:3px 0 12px}
+.frames{display:flex;gap:12px;align-items:flex-start}
+.fs{width:184px;display:flex;flex-direction:column;gap:5px}
+.fr{height:130px;border:1.5px solid #4c4a42;border-radius:3px;background:#fff;display:flex;overflow:hidden}
+.fr.col{flex-direction:column}
+.fr.dim{background:#e7e5df}
+.cap{font:9.5px/1.5 ui-monospace;color:#6b685e}
+.cap b{color:#2f2e28}
+.notes{margin-top:12px;border-top:1px dashed #d8d4c8;padding-top:8px;display:flex;flex-direction:column;gap:2px}
+.note{font:600 15.5px/1.3 Caveat,cursive;color:#4f4c42}
+.note.q{color:#a3542d}
+.note.d{color:#25694a}
+.brief{margin:0 0 22px;border:1.5px solid #2b2a24;background:#fffdf4;border-radius:7px;padding:16px 18px 14px;box-shadow:3px 3px 0 rgba(0,0,0,.10);max-width:1290px}
+.brief h2{font:700 14px system-ui;margin:0 0 3px}
+.brief .bh{font:600 16.5px/1.35 Caveat,cursive;color:#54513f;margin:0 0 4px}
+.dlog{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 28px;margin:10px 0 0}
+.dl{font:10.5px/1.55 ui-monospace,Menlo,monospace;color:#4c4a42}
+.dl b{color:#25694a}
+.dl b.p{color:#3d3a8a}
+.st.cand{background:#ddd8f0;color:#3d3a8a}
+.ibox{background:#fff;border:1.5px solid #2b2a24;border-radius:7px;padding:14px 16px 12px;box-shadow:3px 3px 0 rgba(0,0,0,.10)}
+.ibox h3{font:700 13px system-ui;margin:0 0 2px}
+.ibox .ih{font:600 16px/1.3 Caveat,cursive;color:#6a675c;margin:0 0 8px}
+.il{font:10.5px/1.55 ui-monospace,Menlo,monospace;color:#4c4a42;margin:0 0 5px}
+.il b{color:#26251f}
+.p{display:flex;flex-direction:column;gap:3px;padding:4px;min-width:0}
+.pl{width:26%;background:#f6f4ef;border-right:1px solid #dcd8cd;flex:none}
+.pc{flex:1}
+.pr{width:35%;background:#fbfaf6;border-left:1px solid #dcd8cd;flex:none}
+.tl{height:3.5px;border-radius:2px;background:#d9d5ca;flex:none}
+.tl.hd{height:5.5px;background:#b6b1a3}
+.tl.add{background:#8cc79b}
+.tl.del{background:#e6a49e}
+.w2{width:20%}.w3{width:30%}.w4{width:40%}.w5{width:50%}.w6{width:60%}.w7{width:70%}.w8{width:80%}.w9{width:90%}.wf{width:100%}
+.t{font:7.5px/1.4 ui-monospace;color:#77746a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}
+.t.b{color:#2f2e28;font-weight:700}
+.t.g{color:#3f7a46}.t.r{color:#a04338}.t.i{color:#4a4fc0}.t.o{color:#a3542d}.t.wr{white-space:normal}
+.row{display:flex;align-items:center;gap:3px;flex:none;min-width:0}
+.btn{font:700 6.5px ui-monospace;border:1px solid #8f8b7e;border-radius:3px;padding:1.5px 4px;color:#4c4a42;flex:none;background:#fff}
+.btn.pri{background:#4a4fc0;border-color:#4a4fc0;color:#fff}
+.chip{font:700 6.5px ui-monospace;background:#e9e8f7;color:#3d41a8;border-radius:3px;padding:1.5px 4px;flex:none}
+.chip.g{background:#e3f0e4;color:#2c5e2e}.chip.y{background:#f8eecf;color:#7a5c12}.chip.r{background:#f6ddd8;color:#8c3327}
+.card{border:1px solid #d4d0c4;border-radius:3px;background:#fff;padding:3.5px;display:flex;flex-direction:column;gap:2.5px;flex:none;min-width:0}
+.card.warn{border-color:#e0bd74;background:#fdf8ec}
+.card.diff{border-color:#c5bfe6;background:#fbfbfe}
+.card.sel{border-color:#4a4fc0;box-shadow:0 0 0 1px #4a4fc0}
+.dot{width:5px;height:5px;border-radius:50%;background:#4a4fc0;flex:none}
+.dot.g{background:#5aa568}.dot.r{background:#c25e52}.dot.y{background:#d9a23f}.dot.k{background:#b3afa3}
+.sp{flex:1}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:2.5px;padding:4px}
+.cell{border:1px solid #ddd9cd;border-radius:2px;height:13px;display:flex;align-items:center;gap:2px;padding:0 2.5px;font:700 5.8px ui-monospace;color:#8a8679;overflow:hidden;white-space:nowrap}
+.cell.done{background:#eaf4ec;border-color:#b7d6be;color:#3f7a46}
+.cell.run{background:#fdf6e7;border-color:#e4cd94;color:#7a5c12}
+</style>
+</helmet>
+
+<section class="dv-turn" id="t1" data-screen-label="Journey map header">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Abstract — the crucial customer journeys · low-fi map v4 — final comments resolved · ready for documentation + design</span></div>
+<h1>26 customer journeys, one canvas — a to z.</h1>
+<p class="sub">GROUNDED IN: tomFelder/abstract-vscode-spike (docs 00 · 08 · 09 · 11 · 12, plans 26–33) + abstractdocs.com · JULY 2026.<br>PURPOSE: the thinking surface for the design exercise — map the whole product as jobs, wireframe each, mark what the build already proves vs. where the gaps are, then take each journey to hi-fi and verify against the product.<br>V2 · 8 JUL: TOM’S 18 REVIEW DECISIONS FOLDED IN AS GREEN ✔ NOTES (D1–D18, LOGGED IN THE AGENT BRIEF BELOW) · 4 NEW JOURNEYS <a href="#1w">1w</a>–<a href="#1z">1z</a> · AFFECTED FRAMES REDRAWN.<br>V3 · 9 JUL: D19–D21 FOLDED IN · PRODUCT PRINCIPLES P1–P10 · FIRST-PRINCIPLES PASS (<a href="#g0">Ø</a>): PERSONA, KILLER FLOWS, 6 CANDIDATE JOURNEYS <a href="#2a">2a</a>–<a href="#2f">2f</a>, GAP AUDIT.<br>V4 · 9 JUL: FINAL COMMENTS RESOLVED — TRUST ELEVATED TO P0 · D22–D26 · OPEN-TEST LOG T1–T5 STARTED · Ø CANDIDATES SETTLED. HANDED TO DOCUMENTATION + DESIGN.</p>
+<p class="lead-note">Read left → right as a lifecycle: work comes <b>in</b>, you work the <b>core loop</b> on one document, then <b>across documents</b> (the differentiator), always on visible <b>context &amp; trust</b>, until the agent runs it <b>for</b> you, and the work goes <b>out</b>. Each journey is one job-to-be-done — mutually exclusive; the six groups together cover the product surface.</p>
+<div class="mece">
+<div class="mbox"><span class="mkey">A</span><span class="mt">Get work in</span><span class="ms">projects, files, the on-ramp · <a href="#1a">1a</a>–<a href="#1d">1d</a> · <a href="#1w">1w</a> <a href="#1x">1x</a></span></div>
+<span class="marr">→</span>
+<div class="mbox"><span class="mkey">B</span><span class="mt">The core loop</span><span class="ms">one doc, chat, diff, approve · <a href="#1e">1e</a>–<a href="#1h">1h</a></span></div>
+<span class="marr">→</span>
+<div class="mbox"><span class="mkey">C</span><span class="mt">Across documents</span><span class="ms">the wedge — multi-doc agency · <a href="#1i">1i</a>–<a href="#1l">1l</a></span></div>
+<span class="marr">→</span>
+<div class="mbox"><span class="mkey">D</span><span class="mt">Context &amp; trust</span><span class="ms">what it knows, where numbers live · <a href="#1m">1m</a>–<a href="#1p">1p</a> · <a href="#1y">1y</a></span></div>
+<span class="marr">→</span>
+<div class="mbox"><span class="mkey">E</span><span class="mt">Living documents</span><span class="ms">agents, schedules, the inbox · <a href="#1q">1q</a>–<a href="#1t">1t</a> · <a href="#1z">1z</a></span></div>
+<span class="marr">→</span>
+<div class="mbox"><span class="mkey">F</span><span class="mt">Work goes out</span><span class="ms">export, present, interrogate · <a href="#1u">1u</a>–<a href="#1v">1v</a></span></div>
+</div>
+<div class="brief" id="brief">
+<h2>Brief — for the agent carrying this into the repo</h2>
+<p class="bh">Three tasks, in order: ① ratify the decision log below into the repo’s decision log + the affected plan/spec docs · ② expand every journey (1a–1z) into a detailed spec — steps, states, empty/error cases, and per-journey acceptance criteria we can validate builds against · ③ build the feature work around those journeys; the BUILT / PARTIAL / GAP chips here are the current truth — keep them updated as builds land. If a decision below conflicts with an existing repo doc, flag the conflict; don’t silently overwrite. Test every spec against the product principles (P0–P10, below) and the persona in <a href="#g0">Ø</a>.</p>
+<div class="dlog" style="margin-top:12px;border-top:1px dashed #cfcbbe;padding-top:10px">
+<div class="dl" style="grid-column:1/-1"><b style="color:#7a5c12">OPEN TESTS</b> — validation work to log alongside decisions (Tom, 9 Jul: “start logging open tests here too”). Each needs pass/fail criteria in the spec phase:</div>
+<div class="dl"><b style="color:#7a5c12">T1</b> Editor fundamentals (<a href="#2d">2d</a>) — paste from Word with fidelity, tables, images, headings, find-and-replace. A disqualifier if weak (P10); audit before beta.</div>
+<div class="dl"><b style="color:#7a5c12">T2</b> Migration in (<a href="#2e">2e</a>) — .docx/.doc/Google Docs/Notion → markdown with structure preserved; measure fidelity on real beachhead documents.</div>
+<div class="dl"><b style="color:#7a5c12">T3</b> Folder open with mixed formats (<a href="#1a">1a</a>) — a real folder containing .doc/.docx must be gracefully interpreted/converted/imported on open, not skipped. Resolve the strategy (in-place read vs convert-on-import).</div>
+<div class="dl"><b style="color:#7a5c12">T4</b> Aha metric — instrument “first approved AGENT change on the user’s OWN file (not sample data)” and confirm it predicts retention.</div>
+<div class="dl"><b style="color:#7a5c12">T5</b> Onboarding flow (D26) — demo-CSV → report → one inline-diff iteration; measure time-to-first-approve in the first session.</div>
+</div>
+<div class="dlog">
+<div class="dl"><b>D1</b> <a href="#1a">1a</a> — projects nest: a folder-of-folders opens as ONE tree; any subfolder can also open as its own project with its own knowledge/agents/skills (e.g. /policies for a cross-department crawl, /policies/IT to work one department alone).</div>
+<div class="dl"><b>D2</b> <a href="#1a">1a</a>/<a href="#1w">1w</a> — opening a project lands on PROJECT HOME (what ran, what’s stale, recent files), not the editor.</div>
+<div class="dl"><b>D3</b> <a href="#1a">1a</a> — the first screen is a quick-start modal (recents + open folder), not “Home”.</div>
+<div class="dl"><b>D4</b> <a href="#1b">1b</a>/<a href="#1x">1x</a> — “From sources…” is IN scope; plus a template-creator wizard: N example docs → agent finds commonalities → template (a skill.md with success examples underneath).</div>
+<div class="dl"><b>D5</b> <a href="#1c">1c</a> — local-first reality: agents likely only run while the project is open; local server / cloud agent runner is an open architecture question for later.</div>
+<div class="dl"><b>D6</b> <a href="#1d">1d</a> — deleting a doc with dependents: warn + list them; if the user proceeds, orphan gracefully — never block.</div>
+<div class="dl"><b>D7</b> <a href="#1e">1e</a> — proposals stack like unstaged changes; approve = the commit; a newer proposal may supersede a pending one on the same span; no approval needed before re-prompting.</div>
+<div class="dl"><b>D8</b> <a href="#1i">1i</a> — editing text inside a pending proposal folds the edit INTO the proposal — no rebase, no invalidation.</div>
+<div class="dl"><b>D9</b> <a href="#1j">1j</a> — autonomy is user-dialled: human-in-loop for everything at launch, then modes aligned with frontier-platform norms (plan mode / auto-accept, à la Claude Code).</div>
+<div class="dl"><b>D10</b> <a href="#1k">1k</a> — cross-doc review is ordered BY DOCUMENT — least context-switching; confidence flags still gate within each doc.</div>
+<div class="dl"><b>D11</b> <a href="#1l">1l</a> — chats are scoped per-task; conflict UI deferred past v1 — collisions resolve chronologically (later proposal lands), history keeps both.</div>
+<div class="dl"><b>D12</b> <a href="#1n">1n</a>/<a href="#1y">1y</a> — the doc’s left rail shows its SOURCES (linked data sources + watched docs with change-hooks, each with status/refresh); CONTEXT is per-task and lives with the chat tab.</div>
+<div class="dl"><b>D13</b> <a href="#1o">1o</a> — an ORG LIBRARY sits above projects: brand, values, mission, KPIs, initiatives, tone, formatting rules — present in every project of the workspace.</div>
+<div class="dl"><b>D14</b> <a href="#1r">1r</a>/<a href="#1w">1w</a> — time-to-all-clear is not THE core metric but is promoted in the UX, on Project Home.</div>
+<div class="dl"><b>D15</b> <a href="#1s">1s</a>/<a href="#1z">1z</a> — usage, tokens remaining and cost are visible in Settings; a starved run pauses safely and resumes — never dies.</div>
+<div class="dl"><b>D16</b> <a href="#1t">1t</a> — agent graph view is a beta-period bet: v1 ships the table (or a very simple graph); prove the power version with real customers.</div>
+<div class="dl"><b>D17</b> <a href="#1u">1u</a> — published/exported artifacts are STATIC snapshots (source links end at publish); when the doc changes, prompt to Republish — sync is a human act.</div>
+<div class="dl"><b>D19</b> <a href="#1z">1z</a> — no up-front cost estimates; instead an always-glanceable trio: session usage, context window, budget used. All in Settings; the context window ALSO lives in the chat as a filling ring, so users manage context at a glance.</div>
+<div class="dl"><b>D20</b> <a href="#1x">1x</a>/<a href="#1q">1q</a> — no recurring scheduled document GENERATION until users ask: creating the same doc from a template every N weeks already works — don’t build a duplicate pathway (P2).</div>
+<div class="dl"><b>D21</b> <a href="#1w">1w</a> — Project Home carries chat: users can talk to the WHOLE project and ask questions of it from the front door.</div>
+<div class="dl"><b>D22</b> gap audit — the customer is always right: the user can ALWAYS edit a doc while a chat/run is in flight (the Cursor workflow); their keystrokes and pending proposals coexist, edits fold in per D8.</div>
+<div class="dl"><b>D23</b> <a href="#2f">2f</a> — mobile is out of scope for v1, but confirmed as the direction: approving from your phone must work eventually, so the review/approve API is designed as a portable act from day one.</div>
+<div class="dl"><b>D24</b> <a href="#2c">2c</a>/<a href="#1w">1w</a> — “Ask the project” is a critical v1 use case; the Home chat defaults to WHOLE-PROJECT scope in v1.</div>
+<div class="dl"><b>D25</b> <a href="#2a">2a</a> — collaboration v1: publish, and readers add comments on the published doc; the author sees them back in their surface and can feed each comment into the chat as a prompt to resolve. Full multiplayer editing comes later.</div>
+<div class="dl"><b>D26</b> Ø onboarding — drive to the provenance peek via a DEMO CSV: chat generates a report from it, then onboarding prompts one iteration on the doc so the user also sees a single inline diff (<a href="#1e">1e</a>) in their first ten minutes.</div>
+<div class="dl"><b>D18</b> <a href="#1v">1v</a> — audit v1 is LIGHT: last-changed + numeric +added/−removed inline; no full diff-interrogation while the human is deeply in the loop.</div>
+</div>
+</div>
+<div class="brief" id="principles" style="background:#f7f6ff">
+<h2 data-comment-anchor="0df97fc8d9-h2">Product principles — P0–P10 <span class="hand" style="font-size:15px;font-weight:600">(P0–P2 Tom’s, 9 Jul; P3–P10 drawn from the decisions — ratified)</span></h2>
+<div class="dl" style="margin:6px 0 8px;padding:8px 10px;border:1.5px solid #25694a;border-radius:5px;background:#f0f7f1"><b class="p" style="color:#25694a">P0</b> <b>Trust above all.</b> The generation must be correct — and feel MORE reliable than Claude Desktop or ChatGPT. That is the bar, and it is why every other principle exists: grounding in sources (P4), receipts (P8), review gates (P3), and honest confidence labels. When correctness and speed conflict, correctness wins. When correctness and delight conflict, correctness IS the delight.</div>
+<div class="dlog">
+<div class="dl"><b class="p">P1</b> <b>Progressive disclosure.</b> Surface a capability only when the user’s situation calls for it. Depth is earned, never dumped.</div>
+<div class="dl"><b class="p">P2</b> <b>No duplicate pathways.</b> If a job already has a clean route, don’t build a second one for v1 (e.g. D20: templates already cover recurring creation).</div>
+<div class="dl"><b class="p">P3</b> <b>Everything routes through review.</b> Chat, fan-out, agents, hooks — one proposal grammar, no second-class writes.</div>
+<div class="dl"><b class="p">P4</b> <b>No hidden context.</b> What the agent sees is always inspectable before it acts (task context in the tab, doc sources in the rail).</div>
+<div class="dl"><b class="p">P5</b> <b>Plain words.</b> “While I’m away…”, not cron; “heavy context”, not token counts. Git-shaped mechanics stay internal (D7’s commit is a metaphor, never UI copy).</div>
+<div class="dl"><b class="p">P6</b> <b>Files are the truth.</b> Plain, portable, rebuildable — the user can always walk away with their folder.</div>
+<div class="dl"><b class="p">P7</b> <b>Calm by default.</b> Mechanical work happens silently with receipts; only judgement calls interrupt a human.</div>
+<div class="dl"><b class="p">P8</b> <b>Receipts over promises.</b> Every change carries who/what/why/when; undo works everywhere, including across approves.</div>
+<div class="dl"><b class="p">P9</b> <b>The human dials autonomy.</b> Trust is granted per doc and per agent (D9), never assumed — and can be taken back.</div>
+<div class="dl"><b class="p">P10</b> <b>Boring excellence first.</b> The editor must feel Word-grade (paste, tables, images) before any magic matters — weakness here disqualifies everything else.</div>
+</div>
+</div>
+<div class="leg">
+<span class="li"><span class="st built">BUILT</span> verified in the spike</span>
+<span class="li"><span class="st part">PARTIAL</span> exists, with named gaps</span>
+<span class="li"><span class="st gap">GAP</span> designed / promised, unbuilt</span>
+<span class="li"><span class="tl add" style="width:26px"></span> proposed addition</span>
+<span class="li"><span class="tl del" style="width:26px"></span> deletion</span>
+<span class="li"><span class="dot"></span> bound figure / provenance</span>
+<span class="li">✦ agent &nbsp;·&nbsp; ◇ source</span>
+<span class="li"><span class="hand" style="font-size:15px">handwriting = rationale · <span style="color:#25694a">✔ green = decided (Tom, 8 Jul)</span> · orange = open question</span></span>
+</div>
+</section>
+
+<section class="dv-turn" id="g0" data-screen-label="Group Ø — First principles">
+<div class="ghead"><span class="gkey">Ø</span><span class="gtitle">First principles — who wins, what hooks them, what’s still missing</span><span class="gsub">“The insight pass before documentation: embody the most valuable customer and test the surface against them.”</span></div>
+<div class="jrow">
+
+<div class="ibox" style="width:376px">
+<h3>The customer — “the accountable operator”</h3>
+<p class="ih">One person, three faces. They don’t want a document tool; they want to stop being afraid of their own documents.</p>
+<div class="il"><b>Compliance manager</b> (the ISMS sample) — 24 policies, quarterly audits, decisions land in meetings and must ripple through everything. Fear: an auditor finds a stale clause.</div>
+<div class="il"><b>Fund ops / IR lead</b> — LP letters and board notes where every number is checkable by someone with money at stake. Fear: shipping last quarter’s figure.</div>
+<div class="il"><b>Chief of staff / ops generalist</b> — the weekly pack: assembles other people’s numbers into recurring narrative. Fear: Sunday night.</div>
+<div class="notes" style="border-top:1px dashed #d8d4c8;margin-top:10px;padding-top:8px">
+<div class="note">↳ Shared traits: owns RECURRING docs whose numbers live elsewhere · pays in reputation, not time · lives in Word · not technical — every git/token concept costs us a user (P5).</div>
+<div class="note">↳ Success in their words: “I never ship a stale number” · “Monday takes 90 seconds, not Sunday night” · “I can prove any figure on demand.”</div>
+</div>
+</div>
+
+<div class="ibox" style="width:376px">
+<h3>The killer flows — rank order</h3>
+<p class="ih">Three moments carry the product. Everything else must not embarrass them.</p>
+<div class="il"><b>① The morning all-clear</b> (<a href="#1w">1w</a>+<a href="#1r">1r</a>) — the HABIT. Overnight work → 90-second review → “all clear”. This is why they come back tomorrow.</div>
+<div class="il"><b>② Transcript fan-out → cross-doc review</b> (<a href="#1j">1j</a>→<a href="#1k">1k</a>) — the DEMO. One meeting recording updates 24 policies with receipts. This is why they tell their boss.</div>
+<div class="il"><b>③ The provenance peek</b> (<a href="#1p">1p</a>) — the TRUST moment. Hover a number, see its source and freshness. This is what they show a colleague first — it demos in 5 seconds.</div>
+<div class="notes" style="border-top:1px dashed #d8d4c8;margin-top:10px;padding-top:8px">
+<div class="note">↳ Delight = relief, not fireworks: the product’s emotional payload is “nothing is silently wrong”. Design ① to feel like inbox-zero, ③ to feel like x-ray vision.</div>
+<div class="note d" data-comment-anchor="0ecd6211dd-div">✔ Decided (Tom, 9 Jul): onboarding = demo CSV → chat generates a report from it (③ provenance from minute one) → then prompts ONE iteration on the doc so the user also sees a single inline diff (<a href="#1e">1e</a>). Two wow moments, ten minutes, no setup. → D26, test T5</div>
+</div>
+</div>
+
+<div class="ibox" style="width:376px">
+<h3>Adoption &amp; love — the levers</h3>
+<p class="ih">Usable → valuable → loveable is a sequence, not a menu. Each stage has one lever.</p>
+<div class="il"><b>Usable:</b> first 10 minutes — open folder → agent orients (<a href="#2b">2b</a>) → first approved change in &lt;3 min. No account-config wall, no empty states that lecture.</div>
+<div class="il"><b>Valuable:</b> the first Monday — a schedule set in week 1 (<a href="#1q">1q</a>) pays out as ① within 7 days. Design the week-one arc, not just screens.</div>
+<div class="il"><b>Adoptable:</b> zero lock-in anxiety — files stay theirs (P6), export to Word keeps colleagues happy (<a href="#1u">1u</a>). The escape hatch IS the sales pitch.</div>
+<div class="il"><b>Loveable:</b> receipts + calm (P7/P8) — the product never nags, never surprises, always shows its work.</div>
+<div class="notes" style="border-top:1px dashed #d8d4c8;margin-top:10px;padding-top:8px">
+<div class="note d" data-comment-anchor="800e2088b8-div">✔ Agreed (Tom, 9 Jul): aha metric = first approved AGENT change on the user’s OWN file (not sample data). Measure to confirm it predicts retention — logged as T4.</div>
+</div>
+</div>
+
+<div class="ibox" style="width:812px">
+<h3>Candidate journeys — not yet on the map <span class="st cand" style="margin-left:6px">CANDIDATE</span></h3>
+<p class="ih">Found by walking the persona through a full quarter. Strike what doesn’t fit; anything kept gets full wireframes next pass.</p>
+<div class="dlog">
+<div class="dl" id="2a"><b class="p">2a</b> <b>A colleague in the loop.</b> Share a doc for review; their comments and suggested edits arrive as proposals in the SAME review grammar (P3). V1 stance: single-player + export covers it — but the review engine should be designed so a human suggester slots in later without a new pattern. <span class="hand" style="color:#25694a" data-comment-anchor="d0cbe06eb0-span">✔ Decided (Tom, 9 Jul): early version = publish, readers comment on the published doc; the author sees the comments back in their surface and feeds each one into the chat as a prompt to resolve. Full multiplayer later. → D25</span></div>
+<div class="dl" id="2b" data-comment-anchor="d00581c964-div"><b class="p">2b</b> <b>First-run orientation — “the agent reads your folder”.</b> Drop a messy real folder → agent maps doc types, spots candidate figures, proposes bindings (“I found 14 numbers that look like they come from a spreadsheet — link them?”). Converts the empty-start problem into the wow moment. Feeds <a href="#1a">1a</a>/<a href="#1o">1o</a>. <span class="hand" style="color:#25694a">✔ Keep (Tom, 9 Jul): “an excellent early exercise” — wireframe next pass.</span></div>
+<div class="dl" id="2c" data-comment-anchor="6b00643498-div"><b class="p">2c</b> <b>Ask the project — research without editing.</b> D21’s chat, generalised: plain questions, answers with file citations, no proposals generated. The read-only sibling of <a href="#1e">1e</a> — cheap to build, huge daily surface (“what did we decide about X?”). <span class="hand" style="color:#25694a">✔ Decided (Tom, 9 Jul): critical v1 use case; the Home chat defaults to whole-project scope. → D24</span></div>
+<div class="dl" id="2d" data-comment-anchor="6cb4ee7fcf-div"><b class="p">2d</b> <b>Editor fundamentals.</b> Paste from Word with fidelity, tables, images, headings, find-and-replace. Not a feature — a disqualifier if weak (P10). <span class="hand" style="color:#25694a">✔ (Tom, 9 Jul): must test — logged as T1 in the brief’s open-test log.</span></div>
+<div class="dl" id="2e" data-comment-anchor="02930aaee4-div"><b class="p">2e</b> <b>Migration in.</b> The beachhead’s documents live in .docx / Google Docs / Notion today. Import-to-markdown with structure preserved is the bridge INTO P6’s folder — without it, “open a folder” only works for people who already have one. <span class="hand" style="color:#25694a">✔ (Tom, 9 Jul): important — test logged as T2; mixed-format folder open is T3.</span></div>
+<div class="dl" id="2f" data-comment-anchor="7a1960c9b5-div"><b class="p">2f</b> <b>Approve from anywhere.</b> The ① notification lands on a phone; two meaning changes should be approvable from it. Not v1 — but the review API should be designed so approval is a portable act, not an editor feature. <span class="hand" style="color:#25694a">✔ Decided (Tom, 9 Jul): mobile out of scope for v1, but confirmed — “you should be able to use your phone”. → D23</span></div>
+</div>
+</div>
+
+<div class="ibox" style="width:812px">
+<h3>Gap audit — holes inside journeys already on the map</h3>
+<p class="ih">Where the happy path is drawn but the unhappy path will decide whether they trust us.</p>
+<div class="dlog">
+<div class="dl"><b>Trust failure</b> (<a href="#1f">1f</a>/<a href="#1p">1p</a>) — the user approves, then discovers the agent was wrong. Where do they report it, and what does the system learn? A “this was wrong” verb on any applied change may matter more than confidence labels.</div>
+<div class="dl"><b>The big-folder first open</b> (<a href="#1a">1a</a>) — 300 files: how long is orientation, what does the user see meanwhile, what works before indexing finishes?</div>
+<div class="dl" data-comment-anchor="d5569821e4-div"><b>Doc busy during a run</b> (<a href="#1j">1j</a>/<a href="#1l">1l</a>) — <span class="hand" style="color:#25694a">✔ Decided (Tom, 9 Jul): “the customer is always right” — the doc is ALWAYS editable while a chat/run is in flight, exactly the Cursor workflow; keystrokes and pending proposals coexist, edits fold in per D8. Spec the merge explicitly so it never becomes a data-loss bug. → D22</span></div>
+<div class="dl"><b>Source silently rotten</b> (<a href="#1o">1o</a>/<a href="#1y">1y</a>) — auth expired for 3 weeks and nobody opened the project: how loudly does staleness escalate? (P7 says calmly — but silence here breaks “never ship a stale number”.)</div>
+<div class="dl"><b>Search</b> — no journey finds a doc by content yet; at 24+ files the tree stops scaling. Likely a thin ⌘K over files + <a href="#2c">2c</a> for semantic asks — cheap, and it protects the multitasking story.</div>
+<div class="dl"><b>Week-one offboarding risk</b> (<a href="#1b">1b</a>) — if the first template a user builds is wrong, do they edit it, fork it, or abandon? Template EDITING is implied by <a href="#1x">1x</a> but never drawn.</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="dv-turn" id="ga" data-screen-label="Group A — Get work in">
+<div class="ghead"><span class="gkey">A</span><span class="gtitle">Get work in</span><span class="gsub">“Open a folder. No migration, no import — the folder is the project.”</span></div>
+<div class="jrow">
+
+<div class="dv-opt" id="1a">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1a">1a</a><span class="jtitle">Open a project for the first time</span><span class="st built">BUILT</span></div>
+<p class="job">Job: “I have a folder of real documents — get me working on it in one click.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col"><div class="p" style="gap:4px">
+<div class="row"><span class="t b">A Abstract</span><span class="sp"></span><span class="btn pri">Open folder</span></div>
+<div class="tl hd w7"></div><div class="t">Good morning, Tom</div>
+<div class="t b" style="margin-top:2px">RECENT</div>
+<div class="card"><div class="row"><span class="dot k"></span><span class="t b">ISMS</span><span class="sp"></span><span class="t">24 docs</span></div></div>
+<div class="card"><div class="row"><span class="dot k"></span><span class="t b">Opportunity OS</span><span class="sp"></span><span class="t">6 docs</span></div></div>
+<div class="card"><div class="row"><span class="dot k"></span><span class="t b">Fund III — LP</span><span class="sp"></span><span class="t">4 docs</span></div></div>
+</div></div><div class="cap" data-comment-anchor="862bc80e0d-div">1 · The <b>quick-start modal</b> — recent projects or <b>Open folder</b>. This is the launch door only; “Home” is per-project (→ <a href="#1w">1w</a>).</div></div>
+<div class="fs"><div class="fr dim col" style="align-items:center;justify-content:center" data-comment-anchor="dd264a4a21-div"><div class="card" style="width:70%">
+<div class="row"><span class="t b">Choose a folder</span></div>
+<div class="row"><span class="dot k"></span><span class="t">~/Work/ISMS</span></div>
+<div class="row"><span class="dot k"></span><span class="t">~/Work/Clients</span></div>
+<div class="row"><span class="sp"></span><span class="btn pri">Open</span></div>
+</div></div><div class="cap">2 · Native OS picker — point at real files on disk. Markdown opens as-is; <b>.doc/.docx are gracefully interpreted or converted on open</b> (strategy TBD — test T3), never skipped.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="row"><span class="t b">ISMS — PROJECT HOME</span></div>
+<div class="card warn"><div class="row"><span class="t b">✦ Weekly refresh ran</span><span class="chip y">2 waiting</span></div></div>
+<div class="card"><div class="row"><span class="dot y"></span><span class="t">◇ metrics.csv changed · 3 docs stale</span></div></div>
+<div class="t b">RECENT</div>
+<div class="row" style="gap:4px"><div class="card" style="flex:1"><div class="t">Access Policy</div></div><div class="card" style="flex:1"><div class="t">Backup Policy</div></div></div>
+</div></div><div class="cap" data-comment-anchor="88b0620283-div">3 · Opening lands on <b>Project Home</b> (→ <a href="#1w">1w</a>) — what ran, what’s stale, recent files. The editor is one click deeper, via a file.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:5px">
+<div class="card"><div class="row"><span class="t b">▤ single file</span><span class="sp"></span><span class="t">memo.md</span></div></div>
+<div class="card"><div class="row"><span class="t b">▸ folder</span><span class="sp"></span><span class="t">= one project</span></div><div class="tl w7"></div><div class="tl w5"></div></div>
+<div class="card"><div class="row"><span class="t b">▸▸ folder of folders</span><span class="sp"></span><span class="t">= portfolio</span></div><div class="tl w6"></div><div class="tl w7"></div><div class="tl w4"></div></div>
+</div></div><div class="cap">4 · All three shapes open cleanly: a single file, a flat folder, a directory of projects.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ “No migration” is the promise — plain Markdown + a rebuildable lock sidecar, so the user can always walk away with their files. (repo: decision 39, format spec doc 08)</div>
+<div class="note d" data-comment-anchor="f3797d8cc2-div">✔ Decided (Tom, 8 Jul): a folder of folders — one openable tree, with subfolders for normal organisation; AND any subfolder can open as its own project in a separate instance, with its own knowledge, agents and skills. E.g. open /policies to crawl every department’s reviews due, or open /policies/IT alone and work IT without treading on other departments. Scope for <a href="#1j">1j</a> = whatever tree is open. → D1</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1b">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1b">1b</a><span class="jtitle">Create a new document — the template on-ramp</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “Start my weekly report the way it should be born — structure, bindings and skills included.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pl">
+<div class="row"><span class="t b">FILES</span><span class="sp"></span><span class="chip">＋ New</span></div>
+<div class="tl w8"></div><div class="tl w6"></div>
+</div><div class="p pc"><div class="card sel" style="width:80%">
+<div class="t b">Blank document</div><div class="t b i">From template…</div><div class="t b">From sources…</div>
+</div></div>
+</div><div class="cap">1 · <b>＋ New</b> offers three births: blank, from a template, or derived from sources.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:4px">
+<div class="t b">TEMPLATES</div>
+<div class="row" style="gap:4px">
+<div class="card" style="flex:1"><div class="tl hd w8"></div><div class="tl w9"></div><div class="tl w7"></div><div class="chip">bindings ×3</div><div class="t">Weekly summary</div></div>
+<div class="card" style="flex:1"><div class="tl hd w7"></div><div class="tl w8"></div><div class="tl w6"></div><div class="chip">bindings ×5</div><div class="t">Board note</div></div>
+</div>
+<div class="row" style="gap:4px">
+<div class="card" style="flex:1"><div class="tl hd w6"></div><div class="tl w8"></div><div class="chip">skills ×2</div><div class="t">LP letter</div></div>
+<div class="card" style="flex:1"><div class="tl hd w8"></div><div class="tl w7"></div><div class="chip">policy</div><div class="t">ISMS policy</div></div>
+</div>
+</div></div><div class="cap">2 · A template = structure + bindings + skills — precisely how a recurring report is born.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:82%">
+<div class="t b">Bind sources</div>
+<div class="row"><span class="dot g"></span><span class="t">◇ metrics.csv</span><span class="chip g">file</span></div>
+<div class="row"><span class="dot y"></span><span class="t">◇ kpi endpoint</span><span class="chip y">api</span></div>
+<div class="row"><span class="dot k"></span><span class="t">◇ CRM</span><span class="chip">mcp</span></div>
+<div class="row"><span class="sp"></span><span class="btn">Skip</span><span class="btn pri">Create</span></div>
+</div></div><div class="cap">3 · Wizard step: attach the sources the template expects. Skippable — never a wall.</div></div>
+<div class="fs"><div class="fr"><div class="p pl"><div class="tl w8"></div><div class="tl w6"></div><div class="tl add w7"></div></div>
+<div class="p pc">
+<div class="row"><div class="card sel" style="flex:1"><div class="t b i">Weekly Summary — Wk 28</div></div></div>
+<div class="tl hd w6"></div>
+<div class="row"><span class="dot"></span><span class="tl w5"></span></div>
+<div class="tl wf"></div><div class="tl w8"></div>
+<div class="row"><span class="dot"></span><span class="tl w4"></span></div>
+<div class="tl w9"></div>
+</div>
+</div><div class="cap">4 · Name first (Word/Docs muscle memory), bound blocks already dotted <span class="dot" style="display:inline-block"></span> and live.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Today: Templates nav is a “Soon” stub and new-doc is a blank file named on first save — Word/Docs users expect name-or-template FIRST. (repo: P0-3, plan 28, decision 56)</div>
+<div class="note">↳ The beachhead is recurring data-linked reports — this journey is where recurrence is set up, so it feeds <a href="#1q">1q</a> (schedule) directly.</div>
+<div class="note d" data-comment-anchor="115ff3064e-div">✔ Decided (Tom, 8 Jul): IN scope — a prime on-ramp, especially prompting the document into being from a source. Plus a second door: the template-creator wizard (<a href="#1x">1x</a>) — upload N example docs, the agent finds the commonalities and proposes a template (a skill.md with success examples underneath). → D4</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1c">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1c" data-comment-anchor="2c469a998d-a">1c</a><span class="jtitle">Switch between projects from Home</span><span class="st built">BUILT</span></div>
+<p class="job">Job: “Five projects, one glance — take me to the one that needs me.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col"><div class="p" style="gap:4px">
+<div class="tl hd w7"></div>
+<div class="t b">NEEDS YOU</div>
+<div class="card warn"><div class="row"><span class="t b">ISMS</span><span class="chip r">12 TO APPROVE</span></div><div class="tl w8"></div><div class="row"><span class="btn pri">Review 38</span><span class="btn">Open</span></div></div>
+<div class="card warn"><div class="row"><span class="t b">Opportunity OS</span><span class="chip y">1 TO APPROVE</span></div><div class="tl w7"></div></div>
+<div class="row" style="gap:4px"><div class="t b" style="flex:none">ALL</div><div class="card" style="flex:1"><div class="t">Acme Co</div></div><div class="card" style="flex:1"><div class="t">Fund III</div></div></div>
+</div></div><div class="cap">1 · Home splits <b>NEEDS YOU</b> (attention queue with counts) from <b>ALL PROJECTS</b> (calm shelf).</div></div>
+<div class="fs"><div class="fr"><div class="p pl"><div class="t b">ISMS /</div><div class="tl w8"></div><div class="tl w7"></div><div class="tl w6"></div><div class="tl w8"></div><div class="tl w5"></div></div>
+<div class="p pc"><div class="row"><span class="t">ISMS / Access Control Policy</span></div><div class="tl hd w7"></div><div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div></div>
+<div class="p pr"><div class="t b">Review</div><div class="chip r">12</div><div class="tl w8"></div><div class="tl w6"></div></div>
+</div><div class="cap">2 · One click → the workbench swaps whole: tree, breadcrumb, rail badges all scoped to ISMS.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:56%">
+<div class="t b i">⌂ Home</div><div class="t b">▤ Editor</div><div class="t">▦ Templates</div><div class="t">◆ Knowledge</div><div class="t">✦ Agents</div>
+</div></div><div class="cap">3 · Five labelled destinations, always visible. Home is never more than one click away.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Home is the seed of the cross-project inbox (doc 12 §3.2) — see <a href="#1r">1r</a> for the morning ritual it enables.</div>
+<div class="note">↳ Two of five nav destinations are stubs today — 40% of the nav breaks the spell exactly where a design partner looks. (repo: P0-3)</div>
+<div class="note d">✔ Decided (Tom, 8 Jul): keep as built for now — this screen earns its value once cloud-based. Until then, agents likely run only while their project is open; whether a local server (or just the agents in the cloud) can run detached is an open architecture question. → D5</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1d">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1d">1d</a><span class="jtitle">Organise files without breaking anything</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “Rename, move, tidy — and trust that no binding or audit trail snaps.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pl"><div class="tl w8"></div><div class="tl w6"></div><div class="tl w7"></div></div>
+<div class="p pc"><div class="card sel" style="width:74%">
+<div class="t b">Rename</div><div class="t b">Move to…</div><div class="t b">Duplicate</div><div class="t r" style="font-weight:700">Delete</div>
+<div style="border-top:1px dashed #ddd;margin:1px 0"></div>
+<div class="t b i">＋ Add to chat</div><div class="t i">✦ Run agent on this…</div>
+</div></div>
+</div><div class="cap">1 · Right-click a file: plain file ops, plus the two agentic verbs (→ <a href="#1m">1m</a>).</div></div>
+<div class="fs"><div class="fr"><div class="p pl" style="width:60%">
+<div class="t b">POLICIES /</div><div class="tl w8"></div>
+<div style="height:2px;background:#4a4fc0;border-radius:2px;width:90%"></div>
+<div class="card diff"><div class="row"><span class="t b">Backup Policy.md</span></div></div>
+<div class="tl w7"></div><div class="tl w6"></div>
+</div><div class="p pc"><div class="t wr" style="margin-top:38px">dragging → drop line shows target folder</div></div>
+</div><div class="cap">2 · Drag to move — the drop line is the only decoration. No git, no sync concepts, ever.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center">
+<div class="card" style="width:80%"><div class="row"><span class="dot g"></span><span class="t b">Moved · 3 bindings updated</span></div><div class="t">lock sidecar followed the file</div><div class="row"><span class="btn">Undo</span></div></div>
+</div><div class="cap">3 · The lock sidecar travels with the file; the toast proves it and offers undo (→ <a href="#1h">1h</a>).</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Moves/renames must be provenance-safe: bindings, audit and provenance dots survive reorganisation. The lock is rebuildable by design. (repo: doc 08)</div>
+<div class="note d" data-comment-anchor="84f97c2d5a-div">✔ Decided (Tom, 8 Jul): warn the user and list the dependencies; if they choose to go ahead, orphan gracefully — never block. → D6</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1w">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1w">1w</a><span class="jtitle">Project Home — the project’s front door</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “Open the project and know in five seconds: what ran, what’s stale, what to do next.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px" data-comment-anchor="5f8528631b-div">
+<div class="row"><span class="t b">ISMS — PROJECT HOME</span><span class="sp"></span><span class="chip g">all clear in ~4 min</span></div>
+<div class="t b">WHILE YOU WERE AWAY</div>
+<div class="card warn"><div class="row"><span class="t b">✦ Weekly refresh · 7:00</span><span class="chip y">2 waiting</span><span class="sp"></span><span class="btn pri">Review</span></div></div>
+<div class="t b">RECENT</div>
+<div class="row" style="gap:4px"><div class="card" style="flex:1"><div class="t">Weekly Summary</div></div><div class="card" style="flex:1"><div class="t">Access Policy</div></div></div>
+<div class="card sel"><div class="t i">Ask this project anything…</div></div>
+</div></div><div class="cap">1 · The front door: agent activity, needs-you counts, recent files, time-to-all-clear (D14) — and a chat composer scoped to the whole project (D21).</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card warn" style="width:88%">
+<div class="row"><span class="chip y">SOURCE MOVED</span></div>
+<div class="t">◇ metrics.csv changed 7:02 —</div>
+<div class="t b">3 documents reference it</div>
+<div class="row"><span class="chip">Weekly Summary</span><span class="chip">Board Note</span><span class="chip">+1</span></div>
+<div class="row"><span class="btn pri">Update the 3</span><span class="btn">Later</span></div>
+</div></div><div class="cap">2 · Referenced sources/tokens that moved surface here with their blast radius — one verb to act on all of it.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:88%">
+<div class="t b">RECOMMENDED</div>
+<div class="row"><span class="t">✦ run Policy sync —</span></div>
+<div class="t b">4 policies still cite the old DR supplier</div>
+<div class="row"><span class="btn pri">Run</span><span class="btn">Dismiss</span></div>
+</div></div><div class="cap">3 · Home may recommend agents/skills worth running — always with a stated reason, never nagging.</div></div>
+<div class="fs"><div class="fr"><div class="p pl"><div class="t b">FILES</div><div class="tl w8"></div><div class="tl w6"></div><div class="tl w7"></div></div>
+<div class="p pc" style="align-items:center;justify-content:center"><div class="card" style="width:80%"><div class="t b">No file open</div><div class="t i">New from template…</div><div class="t">Blank document</div></div></div>
+<div class="p pr"><div class="sp"></div><div class="card"><div class="t">…or ask me to create one</div></div></div>
+</div><div class="cap">4 · Clicking ▤ Editor with no file = explorer + empty editor suggesting template/blank + chat. Files can be born from the chat too.</div></div>
+</div>
+<div class="notes">
+<div class="note d">✔ Decided (Tom, 8 Jul): opening a project lands HERE, not in the editor — agents that ran, updates needed, moved references, recommendations, recent files. The editor is one click deeper via a file or the ▤ Editor destination. → D2</div>
+<div class="note d">✔ Decided (Tom, 9 Jul): Project Home carries chat — ask questions of the ENTIRE project from the front door; answers cite files (<a href="#2c">2c</a>). Asking for changes from here opens a task tab (<a href="#1l">1l</a>) as normal. → D21</div>
+<div class="note">↳ Absorbs the per-project half of the morning inbox (<a href="#1r">1r</a>); the cross-project quick-start modal (<a href="#1a">1a</a>) stays a thin launcher above it.</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1x">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1x">1x</a><span class="jtitle">Grow a template from examples</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “Here are six past board notes — learn the pattern, make it the template we use from now on.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card sel" style="width:86%">
+<div class="t b">New template — from examples</div>
+<div class="t">drop 3–10 past documents</div>
+<div class="row"><span class="chip">board-05.docx</span><span class="chip">board-06.md</span></div>
+<div class="row"><span class="chip">board-07.md</span><span class="chip">+3</span></div>
+<div class="row"><span class="sp"></span><span class="btn pri">Analyse</span></div>
+</div></div><div class="cap">1 · Feed the wizard the real past documents — .docx and .md alike.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="t b">COMMONALITIES FOUND</div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t">structure: 5 sections shared by 6/6</span></div></div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t">3 recurring figures → suggest bindings</span></div></div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t">tone: formal, first-person plural</span></div></div>
+<div class="row"><span class="btn">Adjust</span><span class="btn pri">Propose template</span></div>
+</div></div><div class="cap">2 · The agent names what repeats — structure, figures worth binding, tone — before proposing anything.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:88%">
+<div class="row"><span class="t b">board-note.skill.md</span><span class="chip">editable</span></div>
+<div class="tl w9"></div><div class="tl w7"></div>
+<div class="t">description · rules · tone notes</div>
+<div class="t g">+ 2 success examples attached</div>
+</div></div><div class="cap">3 · Under the hood it’s a <b>skill.md</b> — description + examples of success. A plain, portable file in the project.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="t b">TEMPLATES</div>
+<div class="card sel"><div class="row"><span class="t b i">Board note</span><span class="chip g">new</span></div><div class="row"><span class="chip">bindings ×3</span><span class="chip">skills ×1</span></div></div>
+<div class="row" style="gap:4px"><div class="card" style="flex:1"><div class="t">Weekly summary</div></div><div class="card" style="flex:1"><div class="t">LP letter</div></div></div>
+</div>
+</div><div class="cap">4 · Saved → it joins the ＋ New picker (<a href="#1b">1b</a>); the next board note is born right.</div></div>
+</div>
+<div class="notes">
+<div class="note d">✔ Decided (Tom, 8 Jul): this wizard is in — upload X documents, the agent analyses for commonalities and suggests a template; behind the scenes a skill.md with a description and examples of success, reusable ever after. → D4</div>
+<div class="note d" data-comment-anchor="1c6ff31b36-div">✔ Decided (Tom, 9 Jul): no — no recurring scheduled document generation until users ask for it. Creating the same doc from the template every six weeks already works; adding a scheduler would be a duplicate pathway and mental friction at adoption time. (P1 progressive disclosure, P2 no duplicate pathways) → D20</div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+
+<section class="dv-turn" id="gb" data-screen-label="Group B — The core loop">
+<div class="ghead"><span class="gkey">B</span><span class="gtitle">The core loop — one document</span><span class="gsub">“Chat proposes, the diff lands in the document, a human decides. Everything routes through review.”</span></div>
+<div class="jrow">
+
+<div class="dv-opt" id="1e">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1e">1e</a><span class="jtitle">Iterate on a document via the chat rail — diff on every turn</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “Talk to the document; see exactly what would change, where it lands, before it lands.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div><div class="tl wf"></div><div class="tl w7"></div></div>
+<div class="p pr"><div class="t b">CHAT</div><div class="tl w7"></div><div class="sp"></div>
+<div class="card sel"><div class="t b">tighten the intro,</div><div class="t b">keep the churn caveat</div></div>
+<div class="row"><span class="chip">this doc</span><span class="sp"></span><span class="btn pri">↑</span></div>
+</div></div><div class="cap">1 · Ask in the rail. Scope chip says what the agent may touch — here, just this doc.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="card diff"><div class="tl del w9"></div><div class="tl del w6"></div><div class="tl add w8"></div></div>
+<div class="tl w8"></div><div class="tl wf"></div></div>
+<div class="p pr"><div class="t g">✓ read document</div><div class="t g">✓ checked churn source</div><div class="t i">✎ drafting rewrite…</div><div class="tl w6"></div><div class="row"><span class="btn">Stop</span></div></div>
+</div><div class="cap">2 · The agent narrates its steps <b>while</b> the red/green diff streams into the exact paragraph.</div></div>
+<div class="fs"><div class="fr" ><div class="p pc" style="justify-content:center">
+<div class="card diff"><div class="row"><span class="chip y">MEANING CHANGE</span><span class="t">needs your call</span></div>
+<div class="tl del wf"></div><div class="tl add w9"></div><div class="tl add w5"></div>
+<div class="t">why: intro repeated the KPI table;</div><div class="t">churn caveat kept verbatim</div>
+<div class="row"><span class="btn pri">Approve</span><span class="btn">Tweak</span><span class="btn">Reject</span></div>
+</div></div>
+<div class="p pr"><div class="tl w7"></div><div class="tl w5"></div><div class="chip y">1 waiting</div></div>
+</div><div class="cap">3 · The proposal card sits <b>in the document</b>, with a one-line rationale. Never a preview pane.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="row"><span class="dot g"></span><span class="tl w9" style="background:#cfe6d4"></span></div>
+<div class="tl w8"></div><div class="tl wf"></div><div class="tl w7"></div></div>
+<div class="p pr"><div class="t g">✓ applied · v15</div><div class="t">audit logged · Tom · 9:41</div><div class="tl w7"></div><div class="sp"></div><div class="card"><div class="t">Ask a follow-up…</div></div></div>
+</div><div class="cap">4 · Approved → clean text, gutter dot for the receipt, chat logs the version. Loop again.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ THE foundational journey — every other journey composes it. Chat never writes directly: each turn emits proposals through the same review engine. (repo: decisions 17/45/52 — “no second-class writes”)</div>
+<div class="note">↳ Gap today: responses hang then dump at once; no cancel. Streaming + Stop is plan 27 (P0-2) — wireframed here as the target state, frame 2.</div>
+<div class="note d" data-comment-anchor="6563317698-div">✔ Decided (Tom, 8 Jul): proposals stack like unstaged changes in a git diff — keep prompting without approving; a newer proposal may supersede a pending one on the same span. Approve (individually or bulk) = the commit; changes after that diff red/green against it. → D7</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1f">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1f">1f</a><span class="jtitle">Judge one proposal: approve · tweak · reject</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “Give me enough to decide in five seconds — and let me edit the proposal, not just veto it.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card diff" style="width:88%">
+<div class="row"><span class="chip y">MEANING</span><span class="chip">◐ Inferred — needs your eyes</span></div>
+<div class="tl del wf"></div><div class="tl add w9"></div>
+<div class="row"><span class="dot"></span><span class="t">◇ metrics.csv · row 24 · 2h old</span></div>
+<div class="t">why: churn fell 3.1 → 2.4 for a 2nd week</div>
+<div class="row"><span class="btn pri">Approve</span><span class="btn">Tweak</span><span class="btn">Reject</span></div>
+</div></div><div class="cap">1 · Anatomy: change kind, honest confidence label, old/new, source + freshness, one-line why.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card sel" style="width:86%">
+<div class="t b">Tweak the proposed text</div>
+<div class="card"><div class="t b i">churn has stabilised at 2.4%|</div></div>
+<div class="t">your edit is applied + audited as “approved with edits”</div>
+<div class="row"><span class="sp"></span><span class="btn">Cancel</span><span class="btn pri">Apply edit</span></div>
+</div></div><div class="cap">2 · <b>Tweak</b> = edit the proposal inline, then apply. Not navigation, not a veto.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center">
+<div class="card" style="width:84%"><div class="row"><span class="dot r"></span><span class="t b">Rejected — text unchanged</span></div><div class="t">reason (optional): “tone too rosy”</div><div class="t">agent learns: rejection + reason land in audit</div></div>
+</div><div class="cap">3 · Reject reverts cleanly; the optional reason becomes context for the next derivation.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Confidence is a label, never a fake percentage: ● “pulled directly” vs ◐ “inferred — needs your eyes”. (site: review demo; repo: plan 31, spec C2)</div>
+<div class="note">↳ Today Tweak just navigates to the doc — the inline-edit version above is the P1-2 fix; also fix the bullet-sibling data-loss bug first (decision 68).</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1g">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1g">1g</a><span class="jtitle">Dial the auto-apply policy</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “Decide, per document, what the agent may do without asking me.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:86%">
+<div class="t b">While I’m away, the agent may…</div>
+<div class="row"><span class="dot k"></span><span class="t">ask me first — always</span></div>
+<div class="row"><span class="dot"></span><span class="t b i">auto-apply figures only</span><span class="chip">default</span></div>
+<div class="row"><span class="dot k"></span><span class="t">auto-apply everything, log it</span></div>
+</div></div><div class="cap">1 · One dial in the doc header. Plain words, three positions — the figure/meaning boundary made visible.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div>
+<div class="row"><span class="dot g"></span><span class="t g b">$48.6k</span><span class="t">↖ ticked in silently</span></div>
+<div class="tl wf"></div>
+<div class="row"><span class="dot g"></span><span class="t g b">18%</span></div>
+<div class="tl w9"></div><div class="tl w7"></div></div>
+<div class="p pr"><div class="t b">All sources synced</div><div class="t">11 figures auto-applied</div><div class="t">each logged + reversible</div></div>
+</div><div class="cap">2 · Figures flow in marked-and-reversible — mechanical work never queues on a human.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="card diff"><div class="tl del w8"></div><div class="tl add w7"></div></div>
+<div class="tl w9"></div></div>
+<div class="p pr"><div class="chip y">Review · 1</div><div class="t">“steady” → “accelerated”</div><div class="t b">waits for you</div></div>
+</div><div class="cap">3 · Meaning changes always wait — whatever the dial says, unless you explicitly opened the gate.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ The figure/meaning boundary is the product’s central mechanic — and it’s policy the user dials, not a black box. (repo: doc 00 core loop, doc 12 principle 2)</div>
+<div class="note">↳ Policy templates per document class come later: “board notes: nothing auto-applies”. (repo: doc 12 §3.1 guardrails; ties to <a href="#1q">1q</a>/<a href="#1t">1t</a>)</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1h">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1h">1h</a><span class="jtitle">Undo, history and versions — the way back</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “I approved 14 changes and one was wrong — get me back, and show me what this doc said last Tuesday.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="row"><span class="tl del w8"></span></div><div class="tl w9"></div></div>
+<div class="p pr" style="justify-content:center"><div class="card"><div class="t b">⌘Z — reverted</div><div class="t">approve of “churn…” · v15→v14</div><div class="row"><span class="btn">Redo</span></div></div></div>
+</div><div class="cap">1 · Cmd+Z works <b>across approves</b>, not just keystrokes. The toast names what came back.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:4px">
+<div class="t b">HISTORY — Weekly Summary</div>
+<div class="card"><div class="row"><span class="dot"></span><span class="t b">v15 · now</span><span class="sp"></span><span class="chip y">approved · Tom</span></div></div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t b">v14 · 9:02</span><span class="sp"></span><span class="chip g">auto · 11 figures</span></div></div>
+<div class="card"><div class="row"><span class="dot"></span><span class="t b">v13 · Mon</span><span class="sp"></span><span class="chip y">approved · Priya</span></div></div>
+<div class="card"><div class="row"><span class="dot k"></span><span class="t b">v12 · Jun 30</span><span class="sp"></span><span class="chip">edited</span></div></div>
+</div></div><div class="cap">2 · History: every version says who/what/why — auto-applies and approvals visibly distinct.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="row"><span class="chip">viewing v13 · read-only</span></div>
+<div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div></div>
+<div class="p pr" style="justify-content:center"><div class="card"><div class="t b">Restore v13?</div><div class="t">creates v16 = v13</div><div class="t">nothing is destroyed</div><div class="row"><span class="btn pri">Restore</span></div></div></div>
+</div><div class="cap">3 · Click a version → see the doc <b>then</b>. Restore is a new version — history is append-only.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="row"><span class="tl hd w5"></span><span class="sp"></span><span class="chip g">Saved · v15</span></div>
+<div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div><div class="tl wf"></div></div>
+</div><div class="cap">4 · The “Saved · vN” chip is the everyday door into history — one click from the toolbar.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Highest-leverage fix in the whole product: today ⌘Z does nothing after approve, and History silently shows FABRICATED versions — the wedge is “trust” and this is where it’s unmet. (repo: P0-1 → plan 26)</div>
+<div class="note">↳ Bulk-approve (<a href="#1i">1i</a>, <a href="#1k">1k</a>) is only shippable once this exists — “no way back” after 14 changes is disqualifying.</div>
+<div class="note">↳ Built at the product layer (snapshots + audit), not deep VS Code undo — survives a greenfield move. (repo: plan 26 portability note)</div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="dv-turn" id="gc" data-screen-label="Group C — Across documents">
+<div class="ghead"><span class="gkey">C</span><span class="gtitle">Across documents</span><span class="gsub">“The differentiator — no other document tool works past a single file.”</span></div>
+<div class="jrow">
+
+<div class="dv-opt" id="1i">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1i">1i</a><span class="jtitle">One chat, three documents changed — review at any granularity</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “Update the strategy and keep the summary and outline in step — then let me approve per-diff, per-file, or all at once.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pl"><div class="tl w8"></div><div class="tl w7"></div><div class="tl w6"></div></div>
+<div class="p pr" style="width:64%"><div class="t b">CHAT</div>
+<div class="row"><span class="chip">strategy.md</span><span class="chip">summary.md</span></div>
+<div class="row"><span class="chip">outline.md</span></div>
+<div class="card sel"><div class="t b">push the launch to Q3 and</div><div class="t b">keep all three consistent</div></div>
+</div>
+</div><div class="cap">1 · Working set = three chips. One instruction is allowed to touch all of them.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:4px">
+<div class="t g">✓ done · 7 changes in 3 documents</div>
+<div class="card"><div class="row"><span class="t b">strategy.md</span><span class="sp"></span><span class="chip y">4 changes</span><span class="btn">Open</span></div></div>
+<div class="card"><div class="row"><span class="t b">summary.md</span><span class="sp"></span><span class="chip y">2 changes</span><span class="btn">Open</span></div></div>
+<div class="card"><div class="row"><span class="t b">outline.md</span><span class="sp"></span><span class="chip y">1 change</span><span class="btn">Open</span></div></div>
+<div class="row"><span class="btn pri">Review all →</span><span class="btn">Approve all 7</span><span class="btn">Reject all</span></div>
+</div></div><div class="cap">2 · The chat answers with a per-file ledger — counts, doors in, and the bulk verbs.</div></div>
+<div class="fs"><div class="fr"><div class="p pl"><div class="tl w8"></div><div class="card diff"><div class="t b">strategy.md</div><div class="chip y">4</div></div><div class="card"><div class="t">summary.md</div><div class="chip y">2</div></div><div class="card"><div class="t">outline.md</div><div class="chip y">1</div></div></div>
+<div class="p pc"><div class="row"><span class="t b">File 1 of 3</span><span class="sp"></span><span class="btn">Accept file</span><span class="btn pri">Next →</span></div>
+<div class="tl wf"></div>
+<div class="card diff"><div class="tl del w9"></div><div class="tl add w8"></div><div class="row"><span class="btn">✓</span><span class="btn">✕</span></div></div>
+<div class="tl w8"></div>
+<div class="card diff"><div class="tl del w6"></div><div class="tl add w7"></div><div class="row"><span class="btn">✓</span><span class="btn">✕</span></div></div>
+</div>
+</div><div class="cap">3 · In the doc: per-diff ✓/✕, per-file Accept, and <b>File n of m</b> wayfinding — the Cursor grammar, for prose.</div></div>
+<div class="fs"><div class="fr"><div class="p pl"><div class="row"><span class="t g">✓</span><span class="t">strategy.md</span></div><div class="row"><span class="t g">✓</span><span class="t">summary.md</span></div><div class="card sel"><div class="t b">outline.md</div><div class="chip y">1 left</div></div></div>
+<div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="card diff"><div class="tl add w8"></div><div class="row"><span class="btn pri">Approve last</span></div></div></div>
+<div class="p pr"><div class="t">6 of 7 approved</div><div class="tl w8"></div><div class="btn">Approve remaining</div></div>
+</div><div class="cap">4 · Explorer badges drain as you go; the rail always shows the remaining count.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Three granularities, user’s choice every time: this diff / this file / everything. Never force doc-by-doc plodding, never force blind bulk. (Cursor’s model, translated to documents)</div>
+<div class="note">↳ “Keep them in step” is a first-class ask — the dependency graph (doc 08) is what makes consistency checkable, not vibes.</div>
+<div class="note d" data-comment-anchor="6318115d3e-div">✔ Decided (Tom, 8 Jul): no rebase — the pending proposal is always visible inline, so adjusting its words just becomes part of the diff. The user’s edit folds INTO the proposal. → D8</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1j">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1j">1j</a><span class="jtitle">Project-wide run — the fan-out swarm</span><span class="st built">BUILT</span></div>
+<p class="job">Job: “Here’s the board transcript — apply what we decided across all 24 documents.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pl"><div class="tl w8"></div><div class="tl w7"></div><div class="tl w6"></div><div class="tl w8"></div></div>
+<div class="p pr" style="width:64%"><div class="row"><span class="chip">whole project</span></div>
+<div class="card sel"><div class="t b">apply the decisions in</div><div class="row"><span class="chip">board-transcript.txt</span></div><div class="t b">across the ISMS</div></div>
+<div class="row"><span class="sp"></span><span class="btn pri">Run</span></div>
+</div>
+</div><div class="cap">1 · Scope: whole project. The instruction cites a source, not prose from memory.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:4px">
+<div class="t b">UNDERSTANDING — 3 decisions found</div>
+<div class="card"><div class="row"><span class="t b">D1 retention 90d→180d</span><span class="sp"></span><span class="chip">→ 4 docs</span></div><div class="t">“…we’ll hold logs for six months” · L112</div></div>
+<div class="card"><div class="row"><span class="t b">D2 quarterly access review</span><span class="sp"></span><span class="chip">→ 6 docs</span></div></div>
+<div class="card"><div class="row"><span class="t b">D3 new DR supplier</span><span class="sp"></span><span class="chip">→ 2 docs</span></div></div>
+<div class="row"><span class="btn">Edit scope</span><span class="btn pri">Proceed</span></div>
+</div></div><div class="cap">2 · Pre-flight: extracted decisions, each with transcript-line provenance and predicted blast radius. Human confirms <b>before</b> anything runs.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:2px"><div class="row"><span class="t b">RUNNING 21 / 24</span><span class="sp"></span><span class="btn">Cancel</span></div></div>
+<div class="grid4" style="padding-top:0">
+<div class="cell done">✓ 2</div><div class="cell done">✓ 1</div><div class="cell done">· 0</div><div class="cell run">…</div>
+<div class="cell done">✓ 3</div><div class="cell done">· 0</div><div class="cell run">…</div><div class="cell done">✓ 1</div>
+<div class="cell done">· 0</div><div class="cell done">✓ 2</div><div class="cell done">· 0</div><div class="cell run">…</div>
+<div class="cell done">✓ 1</div><div class="cell done">· 0</div><div class="cell done">· 0</div><div class="cell done">✓ 2</div>
+</div></div><div class="cap">3 · The swarm grid: one tile per doc, live states. “· 0 — no change” tiles build as much trust as the changed ones.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:86%">
+<div class="t b">Run complete</div>
+<div class="row"><span class="chip y">38 changes</span><span class="chip">12 docs</span><span class="chip g">12 unchanged</span></div>
+<div class="t">grouped by decision, then by doc</div>
+<div class="row"><span class="btn pri">Review across the project →</span></div>
+</div></div><div class="cap">4 · Summary hands off to the cross-doc review pass (<a href="#1k">1k</a>). Nothing has been applied yet.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Built and live-verified in the spike (plan 23, 92% design match) — the demo that sells the product. (site: fan-out demo)</div>
+<div class="note">↳ Gaps behind the curtain: no cancel once started (P0-2), and execution is serial/unbounded — 50 docs will fail today (P2-1 → plan 30).</div>
+<div class="note d" data-comment-anchor="89ea9f0a14-div">✔ Decided (Tom, 8 Jul): the user dials it. Launch with human-in-the-loop for everything; over time add autonomy modes aligned with frontier-platform norms — plan mode, auto-accept, à la Claude Code. → D9</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1k">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1k">1k</a><span class="jtitle">The cross-document review pass</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “38 changes across 12 documents — get me through them with judgement intact and momentum kept.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pl" style="width:44%">
+<div class="row"><span class="t g">✓</span><span class="t">Access Ctrl</span></div>
+<div class="row"><span class="t g">✓</span><span class="t">Backup</span></div>
+<div class="card sel"><div class="t b">Logging</div><div class="chip y">4</div></div>
+<div class="row"><span class="dot k"></span><span class="t">Incident Resp · 3</span></div>
+<div class="row"><span class="dot k"></span><span class="t">Crypto · 2</span></div>
+<div class="t">+7 more…</div>
+</div><div class="p pc"><div class="row"><span class="t b">9 accepted · 29 left</span><span class="sp"></span><span class="btn">Accept all remaining</span></div>
+<div class="tl hd w7"></div><div class="tl wf"></div><div class="tl w9"></div></div>
+</div><div class="cap">1 · Left: the doc checklist with counts. Header: global progress + the honest bulk door.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="card diff"><div class="row"><span class="chip g">● direct</span></div><div class="tl del w8"></div><div class="tl add w9"></div><div class="row"><span class="btn pri">Accept</span><span class="btn">Tweak</span><span class="btn">Reject</span></div></div>
+<div class="tl w9"></div>
+<div class="card diff"><div class="row"><span class="chip g">● direct</span></div><div class="tl del w6"></div><div class="tl add w7"></div></div>
+</div>
+</div><div class="cap">2 · Changes shown in the document’s own context — same card grammar as <a href="#1f">1f</a>, nothing new to learn.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card warn" style="width:86%">
+<div class="row"><span class="chip y">◐ 1 change needs your eyes</span></div>
+<div class="t">inferred: “supplier risk is now LOW”</div>
+<div class="t">— not stated in the transcript</div>
+<div class="row"><span class="btn">Show me</span><span class="btn pri">Decide now</span></div>
+</div></div><div class="cap">3 · Inferred changes are surfaced and gated — bulk-accept never swallows a judgement call.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:86%">
+<div class="row"><span class="btn pri">Accept all 4 here</span><span class="btn">Next: Incident Response →</span></div>
+<div class="tl w8"></div>
+<div class="t">then: 8 docs · 21 changes remaining</div>
+<div class="t g">done → Home logs the run · audit spans all 12 docs</div>
+</div></div><div class="cap">4 · Momentum footer: close this doc, move to the next. Done state returns you to Home.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ One review grammar everywhere — chat edit, fan-out, agent run, (later) human suggestions all land in this same pass. (repo: decision 64 “rails as editor companions”)</div>
+<div class="note d" data-comment-anchor="a0976ff633-div">✔ Decided (Tom, 8 Jul): order by document — least context-switching for the user. Confidence flags (◐) still gate within each doc, as frame 3. → D10</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1l">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1l">1l</a><span class="jtitle">Parallel chats — tabs in the rail</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “A long run is going — let me ask a quick question, or work a second task, without losing either thread.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div></div>
+<div class="p pr"><div class="row"><span class="chip">Q3 rewrite</span><span class="chip g">numbers ✓</span><span class="t b">＋</span></div>
+<div class="tl w8"></div><div class="tl w6"></div>
+<div class="sp"></div><div class="card"><div class="t">Ask…</div></div></div>
+</div><div class="cap">1 · The rail holds tabs — one per task, not per doc. ＋ starts a fresh thread.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div></div>
+<div class="p pr"><div class="row"><span class="chip y">Q3 rewrite …</span><span class="chip sel" style="border:1px solid #4a4fc0">churn Q</span></div>
+<div class="t i">✦ churn is 2.4%, down from</div><div class="t i">3.1% — source: metrics.csv</div>
+<div class="row"><span class="dot"></span><span class="t">view row →</span></div></div>
+</div><div class="cap">2 · Tab 1 keeps running (spinner in the tab); tab 2 answers the quick question now.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl wf"></div><div class="tl w9"></div></div>
+<div class="p pr"><div class="row"><span class="chip g">Q3 rewrite ●</span></div>
+<div class="t g">done — 5 changes in 2 docs</div>
+<div class="row"><span class="btn pri">Review</span></div>
+<div class="t">each tab owns its working set + scope</div></div>
+</div><div class="cap">3 · Done-badge on the tab. Each thread keeps its own working set, scope and proposal ledger.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:88%">
+<div class="row"><span class="chip">V1 · CHRONOLOGICAL</span></div>
+<div class="t">both threads touched summary.md —</div>
+<div class="t b">the later proposal lands on that span</div>
+<div class="t">history keeps both · superseded one logged</div>
+</div></div><div class="cap" data-comment-anchor="fa9b6d36df-div">4 · V1: collisions resolve chronologically (Cursor’s model) — the later proposal supersedes; nothing is lost from history. A richer conflict card is post-v1.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Multitasking is the real workflow the moment runs take minutes (<a href="#1j">1j</a>) — a blocked composer kills the calm promise.</div>
+<div class="note d" data-comment-anchor="e372e14d84-div">✔ Decided (Tom, 8 Jul): per-task — matches how people name work. Each tab = one task with its own working set + scope. → D11</div>
+<div class="note d">✔ Decided (Tom, 8 Jul): conflict handling is NOT a v1 concern — collisions are rare and resolve chronologically. The conflict-proposal grammar (one pattern for source-vs-source and thread-vs-thread) is parked post-v1. → D11</div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="dv-turn" id="gd" data-screen-label="Group D — Context and trust">
+<div class="ghead"><span class="gkey">D</span><span class="gtitle">Context &amp; trust</span><span class="gsub">“The agent only knows what you show it — and every number knows where it came from.”</span></div>
+<div class="jrow">
+
+<div class="dv-opt" id="1m">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1m">1m</a><span class="jtitle">Pull files &amp; folders into the chat</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “This chat needs the market research and the whole policies folder — three ways to say so.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pl" style="width:52%">
+<div class="t b">ISMS /</div>
+<div class="row"><span class="t">▸ policies/</span></div>
+<div class="card sel" style="margin-left:4px"><div class="t b i">＋ Add folder to chat</div><div class="t">12 files · ~9k words</div><div class="t">Run agent on folder…</div></div>
+<div class="tl w7"></div><div class="tl w6"></div>
+</div><div class="p pc"><div class="tl w8"></div><div class="tl w7"></div><div class="tl w9"></div></div>
+</div><div class="cap">1 · Right-click a file or folder → <b>Add to chat</b>. Folders show their cost (files, words) up front.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div></div>
+<div class="p pr" style="width:56%"><div class="sp"></div>
+<div class="card"><div class="t b">compare churn to @mar…</div></div>
+<div class="card sel"><div class="row"><span class="t b">market-research.md</span></div><div class="row"><span class="t">◇ metrics.csv</span></div><div class="row"><span class="t">policies/ (folder)</span></div></div>
+</div>
+</div><div class="cap">2 · Or type <b>@</b> — typeahead over project files, folders AND connected sources (◇).</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl wf"></div><div class="tl w9"></div></div>
+<div class="p pr" style="width:56%"><div class="t b">WORKING SET</div>
+<div class="row"><span class="chip">market-research.md ✕</span></div>
+<div class="row"><span class="chip">policies/ · 12 ✕</span></div>
+<div class="row"><span class="chip g">◇ metrics.csv ✕</span></div>
+<div class="row"><span class="chip">scope: working set ▾</span></div>
+<div class="sp"></div><div class="card"><div class="t">Ask…</div></div></div>
+</div><div class="cap">3 · Everything lands as removable chips above the composer — plus drag-from-tree as the third route.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Three routes, one destination: right-click, @-mention, drag. The working set (chips) is the single source of truth for “what may this chat touch”. (repo: chat rail — @mention + chips built; explorer verbs are the gap)</div>
+<div class="note">↳ The scope chip (this doc / working set / whole project) is what separates <a href="#1e">1e</a> from <a href="#1i">1i</a> from <a href="#1j">1j</a> — one control, three journeys.</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1n">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1n">1n</a><span class="jtitle" data-comment-anchor="47d1a01b8f-span">Inspect the context — what does it see?</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “Before the agent acts, show me precisely what it is looking at — and let me prune it.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="t b">CONTEXT — what the agent sees now</div>
+<div class="card"><div class="row"><span class="dot"></span><span class="t b">Project instructions</span><span class="sp"></span><span class="t">240 w</span><span class="t g">on</span></div></div>
+<div class="card"><div class="row"><span class="dot"></span><span class="t b">market-research.md</span><span class="sp"></span><span class="t">12k w</span><span class="t g">on</span></div></div>
+<div class="card"><div class="row"><span class="dot k"></span><span class="t">old-brand-guide.md</span><span class="sp"></span><span class="t">8k w</span><span class="t r">off</span></div></div>
+<div class="card"><div class="row"><span class="dot"></span><span class="t b">this document</span><span class="sp"></span><span class="t">1.4k w</span><span class="t g">on</span></div></div>
+</div></div><div class="cap">1 · A Context tab lists every input — instructions, knowledge, working set, this doc — each togglable, each sized.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card warn" style="width:88%">
+<div class="row"><span class="chip y">HEAVY CONTEXT</span></div>
+<div class="t">policies/ adds 12 files (~9k words)</div>
+<div class="t">the agent may skim rather than read</div>
+<div class="row"><span class="btn">Trim…</span><span class="btn pri">Keep all</span></div>
+</div></div><div class="cap">2 · Honest budgeting: when context is heavy, say so in words a non-technical user owns — never “tokens”.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:88%">
+<div class="t b">Before this run, the agent will read:</div>
+<div class="row"><span class="chip">24 documents</span><span class="chip g">◇ 3 sources</span><span class="chip">1 transcript</span></div>
+<div class="t">and may propose changes in: whole project</div>
+<div class="row"><span class="sp"></span><span class="btn">Adjust</span><span class="btn pri">Run</span></div>
+</div></div><div class="cap">3 · Pre-flight recap on anything big — reads AND write-scope, confirmed in one card.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Site promise, verbatim intent: “a context panel shows precisely what it is seeing before it does anything.” Trust = no hidden context, ever.</div>
+<div class="note">↳ Nothing exists today — and the engine has no context budgeting either; a 50-doc folder silently truncates (P2-1). UI and engine must land together.</div>
+<div class="note d">✔ Decided (Tom, 8 Jul): context is PER-TASK — this panel lives with the chat tab (<a href="#1l">1l</a>), one context per task. The document’s own always-on inputs (linked sources, watched docs) live in the doc’s left rail instead → <a href="#1y">1y</a>. → D12</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1o">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1o">1o</a><span class="jtitle">Knowledge — the library of sources of truth</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “Manage what the project treats as truth: files, APIs, connectors — their freshness, their reach, their conflicts.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="row"><span class="t b">KNOWLEDGE — ISMS</span><span class="sp"></span><span class="btn pri">＋ Connect</span></div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t b">◇ metrics.csv</span><span class="chip g">file</span><span class="sp"></span><span class="t">2h ago</span></div></div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t b">◇ kpi endpoint</span><span class="chip y">api</span><span class="sp"></span><span class="t">live</span></div></div>
+<div class="card"><div class="row"><span class="dot r"></span><span class="t b">◇ CRM (HubSpot)</span><span class="chip">mcp</span><span class="sp"></span><span class="t r">auth expired</span></div></div>
+<div class="card"><div class="row"><span class="dot"></span><span class="t b">▤ brand-voice.md</span><span class="chip">reference</span><span class="sp"></span><span class="t">pinned</span></div></div>
+</div></div><div class="cap">1 · The library: every source with kind, freshness and health at a glance. References (always-on context) live here too.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:86%">
+<div class="t b">Connect a source</div>
+<div class="row"><span class="chip g">a file</span><span class="chip y">an API</span><span class="chip">a connector ▾</span></div>
+<div class="t">connector catalogue: Sheets · CRM · Stripe…</div>
+<div class="row"><span class="t">auth →</span><span class="t g">test fetch ✓ 412 customers</span></div>
+<div class="row"><span class="sp"></span><span class="btn pri">Add to project</span></div>
+</div></div><div class="cap">2 · Connect flow: pick kind → auth → <b>test fetch shows a real value</b> before anything binds to it.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="t b">◇ metrics.csv — detail</div>
+<div class="t">BOUND BY</div>
+<div class="row"><span class="chip">Weekly Summary · 6</span><span class="chip">Board Note · 3</span></div>
+<div class="t">SYNC HISTORY</div>
+<div class="row"><span class="dot g"></span><span class="t">wk-28 · 11 figures re-derived</span></div>
+<div class="row"><span class="dot g"></span><span class="t">wk-27 · 9 figures</span></div>
+<div class="row"><span class="btn">Refresh now</span><span class="btn">Unbind…</span></div>
+</div></div><div class="cap">3 · Per-source detail answers the reverse question: <b>which documents depend on this?</b></div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card warn" style="width:88%">
+<div class="row"><span class="chip y">SOURCES DISAGREE</span></div>
+<div class="row"><span class="t">◇ CRM says</span><span class="t b">412 customers</span></div>
+<div class="row"><span class="t">◇ billing says</span><span class="t b">407 customers</span></div>
+<div class="t">docs citing “customers” are held until you pick</div>
+<div class="row"><span class="btn">Use CRM</span><span class="btn">Use billing</span><span class="btn pri">Investigate</span></div>
+</div></div><div class="cap">4 · Conflicts become a proposal with both provenances — the agent never silently chooses.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Knowledge is a “Soon” stub today, yet the engine already models all of this (sources/context frontmatter, lock entries) — the screen is the missing half. (repo: P0-3 → plan 29)</div>
+<div class="note">↳ MCP parses but doesn’t resolve; the connector catalogue + auth story is the platform play. (repo: doc 12 §3.4)</div>
+<div class="note d" data-comment-anchor="ee51a47835-div">✔ Decided (Tom, 8 Jul): there IS an org library above projects — brand, values, mission, KPIs, initiatives, tone of voice, formatting rules — present in every project of the workspace. Project Knowledge sits beneath it and can override locally. → D13</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1p">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1p">1p</a><span class="jtitle">Trace a figure to its source — provenance peek</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “Where is this number from, and how fresh is it? Answer on hover; prove it on click.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="row"><span class="t">MRR grew to</span><span class="dot"></span><span class="t b i">$48.6k</span><span class="t">this week…</span></div>
+<div class="card" style="width:78%"><div class="t">◇ metrics.csv · row wk-28 · MRR</div><div class="t g">synced 2h ago · auto-applied</div></div>
+<div class="tl w9"></div><div class="tl w8"></div></div>
+</div><div class="cap">1 · Hover any bound figure: source, cell, freshness, how it landed — no click needed.</div></div>
+<div class="fs"><div class="fr"><div class="p pc" style="width:52%"><div class="tl hd w6"></div><div class="tl wf"></div><div class="row"><span class="dot"></span><span class="t b">$48.6k</span></div><div class="tl w9"></div></div>
+<div class="p pr" style="width:48%"><div class="t b">◇ metrics.csv</div>
+<div class="row"><span class="t">wk-26 · 39.1 · 298</span></div>
+<div class="card sel"><div class="t b i">wk-28 · 48.6 · 427</div></div>
+<div class="row"><span class="t">wk-27 · 41.2 · 312</span></div>
+<div class="t">changed cells highlighted</div></div>
+</div><div class="cap">2 · Click → the source drawer opens <b>on the exact row</b>, changed cells marked. CSV, API and MCP peeks all reach this depth.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:86%">
+<div class="t b">Then vs now</div>
+<div class="row"><span class="t">as approved (wk-27):</span><span class="t b">$41.2k</span></div>
+<div class="row"><span class="t">source now:</span><span class="t b g">$48.6k</span></div>
+<div class="t">this doc was accurate when published</div>
+</div></div><div class="cap">3 · Point-in-time provenance: a published doc can prove what it said, when it said it.</div></div>
+<div class="fs"><div class="fr"><div class="p" style="width:8%;background:#f6f4ef;border-right:1px solid #dcd8cd;align-items:center"><div class="dot g"></div><div class="dot"></div><div class="dot y"></div></div>
+<div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div><div class="tl wf"></div></div>
+<div class="p pr" style="width:38%"><div class="t b">this block</div><div class="t g">✓ auto · wk-28 · 9:02</div><div class="t">✓ approved · Tom · Mon</div><div class="t">● from ◇ kpi api</div></div>
+</div><div class="cap">4 · The gutter: one dot per receipt. Click a dot → that block’s audit trail, right there.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ The wedge in one journey: provenance + freshness on every bound atom. Built at 94% design-match for CSVs — but api falls back to the CSV and mcp doesn’t resolve. Equal-depth peeks per connector is the fix. (repo: P1-1 → plan 29)</div>
+<div class="note">↳ “Then vs now” is cheap (lock already stores resolved + syncedAt) and unlocks the auditor-grade story. (repo: doc 12 §3.1)</div>
+</div>
+</div>
+</div>
+
+
+<div class="dv-opt" id="1y">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1y">1y</a><span class="jtitle">The document’s sources rail — always-on inputs</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “With this doc open, show me everything it draws from — data sources AND watched documents — with status, and one-click refresh.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pl" style="width:44%">
+<div class="t b">THIS DOC DRAWS ON</div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t b">◇ metrics.csv</span></div><div class="t">6 bindings · 2h ago</div></div>
+<div class="card"><div class="row"><span class="dot y"></span><span class="t b">◇ kpi api</span></div><div class="t r">stale · 9d</div></div>
+<div class="card"><div class="row"><span class="dot"></span><span class="t b">▤ strategy.md</span></div><div class="t">watched · hook: “launch date”</div></div>
+</div><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div></div>
+</div><div class="cap">1 · A doc-scoped rail: linked data sources + watched documents, each with binding count, freshness, health.</div></div>
+<div class="fs"><div class="fr"><div class="p pl" style="width:44%">
+<div class="card sel"><div class="row"><span class="dot y"></span><span class="t b">◇ kpi api</span></div>
+<div class="t b i">Refresh now</div><div class="t">View bindings · 3</div><div class="t">Unlink…</div></div>
+<div class="tl w7"></div><div class="tl w6"></div>
+</div><div class="p pc"><div class="tl hd w6"></div><div class="row"><span class="dot y"></span><span class="tl w4" style="background:#f0e2b6"></span></div><div class="tl w9"></div><div class="row"><span class="dot y"></span><span class="tl w3" style="background:#f0e2b6"></span></div></div>
+</div><div class="cap">2 · Per-source verbs on the spot; selecting a source lights up its bindings in the text.</div></div>
+<div class="fs"><div class="fr"><div class="p pl" style="width:44%">
+<div class="card"><div class="row"><span class="dot"></span><span class="t b">▤ strategy.md</span></div><div class="t g">changed 9:12 → hook fired</div></div>
+</div><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="card diff"><div class="tl del w7"></div><div class="tl add w8"></div><div class="row"><span class="btn pri">Approve</span><span class="btn">Reject</span></div></div>
+</div>
+</div><div class="cap">3 · A watched doc changes → its hook proposes the knock-on edit here, through the normal review grammar (<a href="#1f">1f</a>).</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div></div>
+<div class="p pr" style="width:44%"><div class="row"><span class="chip">Q3 task</span></div><div class="t b">TASK CONTEXT</div>
+<div class="row"><span class="chip">market-research.md ✕</span></div>
+<div class="row"><span class="chip">◇ metrics.csv ✕</span></div>
+<div class="t">separate from the doc’s rail ←</div></div>
+</div><div class="cap">4 · Contrast (D12): the chat tab carries its own per-task context — the left rail is the document’s permanent diet.</div></div>
+</div>
+<div class="notes">
+<div class="note d">✔ Decided (Tom, 8 Jul): two homes, cleanly split — the DOC’s left rail lists its linked sources and watched docs (with change-hooks); CONTEXT is per-task and travels with the chat tab (<a href="#1l">1l</a>). → D12</div>
+<div class="note">↳ This rail is the everyday face of Knowledge (<a href="#1o">1o</a>): same objects, scoped to one document, with the reverse-lookup (“which bindings?”) inline.</div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="dv-turn" id="ge" data-screen-label="Group E — Living documents">
+<div class="ghead"><span class="gkey">E</span><span class="gtitle">Living documents — agents &amp; automation</span><span class="gsub">“Remove the Refresh button: the agent works nights, the human keeps the meaning calls.”</span></div>
+<div class="jrow">
+
+<div class="dv-opt" id="1q">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1q">1q</a><span class="jtitle">Put a document on a schedule</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “Keep this report current every Monday — under the policy I set, without me pressing anything.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pc"><div class="row"><span class="tl hd w5"></span><span class="sp"></span><span class="chip">✦ Keep current ▾</span></div>
+<div class="tl wf"></div><div class="tl w9"></div><div class="tl w8"></div></div>
+</div><div class="cap">1 · “✦ Keep current” lives in the doc header — automation starts from the document, not a settings maze.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:88%">
+<div class="t b">Keep this document current…</div>
+<div class="row"><span class="dot"></span><span class="t b i">every Monday at 7am</span></div>
+<div class="row"><span class="dot k"></span><span class="t">whenever ◇ metrics.csv changes</span></div>
+<div class="row"><span class="dot k"></span><span class="t">only when I ask</span></div>
+</div></div><div class="cap">2 · Plain-language triggers: on a day, on a source change, or on demand. No cron strings, ever.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:88%">
+<div class="t b">…and while I’m away it may</div>
+<div class="row"><span class="dot"></span><span class="t b i">auto-apply figures only</span></div>
+<div class="row"><span class="dot k"></span><span class="t">draft everything, apply nothing</span></div>
+<div class="t">meaning changes will wait in Review</div>
+</div></div><div class="cap">3 · The policy step reuses the <a href="#1g">1g</a> dial — schedule and permission are decided together, never apart.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:86%">
+<div class="row"><span class="dot g"></span><span class="t b">Agent created</span></div>
+<div class="t">next run: Mon 7:00 · scope: this doc + 2 dependents</div>
+<div class="t">proposals will wait in Review (<a href="#1r">1r</a>)</div>
+<div class="row"><span class="btn">Run once now</span><span class="btn">Manage agents →</span></div>
+</div></div><div class="cap">4 · Confirmation names the blast radius (dependents come from the graph) and the next run.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ This is the journey that makes documents “living” — today the orchestrator scaffolding exists but source-watch → graph-walk → dirty-marking is not wired; a human must press Refresh. (repo: P2-2 → plan 32)</div>
+<div class="note">↳ Deliberately NOT a no-code automation builder — a small, opinionated trigger set. Zapier is not the competition; trust is. (repo: doc 12 §4)</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1r">
+<div class="jcard" style="width:812px">
+<div class="jhd"><a class="dv-oid" href="#1r">1r</a><span class="jtitle">The morning inbox — 90 seconds to done</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “The agent worked overnight. Show me only what deserves a human, and let me clear it before coffee.”</p>
+<div class="frames">
+<div class="fs"><div class="fr dim col" style="align-items:center;justify-content:center"><div class="card" style="width:82%">
+<div class="row"><span class="t b">A Abstract · 7:04am</span></div>
+<div class="t b">Week-28 data landed</div>
+<div class="t">11 figures auto-applied ·</div>
+<div class="t b i">2 meaning changes waiting</div>
+</div></div><div class="cap">1 · An OS notification with counts — the heartbeat found work and did the mechanical part already.</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:4px">
+<div class="tl hd w8"></div><div class="t">Good morning, Priya. Two documents need you.</div>
+<div class="card warn"><div class="row"><span class="t b">Weekly Summary</span><span class="chip y">2 waiting</span></div><div class="t">11 auto-applied overnight ✓</div><div class="row"><span class="btn pri">Review →</span></div></div>
+<div class="card warn"><div class="row"><span class="t b">Board Note</span><span class="chip y">1 waiting</span></div></div>
+</div></div><div class="cap">2 · Home = the inbox. Auto-applied work is reported, not queued; only meaning calls need her.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="card diff"><div class="row"><span class="chip y">MEANING</span></div><div class="tl del w8"></div><div class="tl add w7"></div><div class="t">churn “elevated” → “stabilised” · why: 2 wks ↓</div><div class="row"><span class="btn pri">Approve</span><span class="btn">Tweak</span></div></div>
+</div>
+</div><div class="cap">3 · One click lands her <b>inside the first proposal, in context</b> — no hunting, rationale attached.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:86%">
+<div class="row"><span class="dot g"></span><span class="t b">All clear — 7:06am</span></div>
+<div class="t">wk-28 refresh · 11 auto · 2 approved by Priya</div>
+<div class="t">history + audit updated · doc is current</div>
+</div></div><div class="cap">4 · Done in ~90 seconds. History records the split: what the agent did vs what Priya decided.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ This is the north-star narrative, frame for frame (doc 12 §1) — the daily habit that makes the product sticky. Home exists; notifications, badge counts and the cross-project queue are the gap. (doc 12 §3.2)</div>
+<div class="note d" data-comment-anchor="736e790a58-div">✔ Decided (Tom, 8 Jul): not THE core metric, but promoted in the UX — Project Home (<a href="#1w">1w</a>) shows “all clear in ~N min” so the user feels the 90-second promise every morning. → D14</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1s">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1s">1s</a><span class="jtitle" data-comment-anchor="2e8e0ca52b-span">Watch, cancel, recover</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “A run is going wrong — stop it safely, see exactly what failed, retry only that.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="row"><span class="t b">RUN · applying D1–D3</span><span class="sp"></span><span class="btn">Cancel</span></div>
+<div class="row"><span class="tl g wf" style="background:#8cc79b;width:60%"></span><span class="t">14/24</span></div>
+<div class="row"><span class="t g">✓ Access Control · 2</span></div>
+<div class="row"><span class="t i">… Logging (reading)</span></div>
+<div class="row"><span class="t">· Backup — queued</span></div>
+</div></div><div class="cap">1 · A live run is always visible and always cancellable — progress, per-doc state, one red door.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:88%">
+<div class="t b">Cancelled at 14 of 24</div>
+<div class="row"><span class="t g">14 docs: proposals kept, waiting</span></div>
+<div class="row"><span class="t">10 docs: untouched</span></div>
+<div class="t b">nothing was half-applied</div>
+<div class="row"><span class="btn">Discard the 14</span><span class="btn pri">Review the 14</span></div>
+</div></div><div class="cap">2 · Cancel is safe by definition: finished proposals kept, in-flight discarded, docs atomic.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card warn" style="width:88%">
+<div class="row"><span class="chip r">2 FAILED</span></div>
+<div class="t">◇ kpi endpoint timed out (30s) for:</div>
+<div class="t b">Weekly Summary · Board Note</div>
+<div class="row"><span class="btn pri">Retry failed only</span><span class="btn">Skip</span></div>
+</div></div><div class="cap">3 · Errors name the source and the docs — never “the agent errored”. Retry is surgical.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Today: no cancel exists, errors are a flat message with one silent retry (~80% recovery). This journey is the safety half of <a href="#1j">1j</a>. (repo: P0-2 → plan 27)</div>
+<div class="note">↳ The atomicity promise (“never half-applied”) must be engine-level truth, not UI copy — proposals are per-doc all-or-nothing.</div>
+<div class="note d">✔ Decided (Tom, 8 Jul): a run starved of usage/tokens pauses safely and resumes when allowance returns — it never dies. Usage + cost live in Settings → <a href="#1z">1z</a>. → D15</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1t">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1t">1t</a><span class="jtitle">Manage a project’s agents &amp; workflows</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “What automation exists here, what touches this doc, when did it last run — and pause it if I need to.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="row"><span class="t b">AGENTS — ISMS</span><span class="sp"></span><span class="btn pri">＋ New</span></div>
+<div class="card"><div class="row"><span class="t b">✦ Weekly refresh</span><span class="chip">Mon 7am</span><span class="sp"></span><span class="btn">Run now</span></div><div class="t">scope: all docs · policy: figures auto</div></div>
+<div class="card"><div class="row"><span class="t b">✦ Policy sync</span><span class="chip g">on source change</span><span class="sp"></span><span class="btn">Run now</span></div></div>
+<div class="card"><div class="row"><span class="t k" style="color:#a5a297">✦ Quarterly review</span><span class="chip">paused</span></div></div>
+</div></div><div class="cap">1 · The roster: trigger, scope, policy, last/next run — and a paused state that reads as paused.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="p" style="width:100%;align-items:center">
+<div class="row" style="gap:8px">
+<div class="card"><div class="t g">◇ metrics.csv</div></div>
+<span class="t">→</span>
+<div class="card sel"><div class="t b i">✦ Weekly refresh</div><div class="t">gate: figures only</div></div>
+<span class="t">→</span>
+<div class="card"><div class="t b">3 docs</div></div>
+</div>
+<div class="row" style="gap:8px;margin-top:6px"><div class="card"><div class="t g">◇ transcript/</div></div><span class="t">→</span><div class="card"><div class="t b">✦ Policy sync</div></div><span class="t">→</span><div class="card"><div class="t b">12 docs</div></div></div>
+</div></div><div class="cap">2 · The workflow graph: source → agent (with its policy gate) → documents. Read-only answer to “what touches what?”</div></div>
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="t b">✦ Weekly refresh — run history</div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t">wk-28 · 11 auto · 2 approved</span><span class="sp"></span><span class="t i">audit →</span></div></div>
+<div class="card"><div class="row"><span class="dot g"></span><span class="t">wk-27 · 9 auto · 1 approved</span></div></div>
+<div class="card"><div class="row"><span class="dot r"></span><span class="t">wk-26 · failed · kpi timeout</span><span class="sp"></span><span class="t i">detail →</span></div></div>
+<div class="row"><span class="btn">Pause</span><span class="btn">Edit schedule</span></div>
+</div></div><div class="cap">3 · Every run links to its audit — automation gets the same receipts as humans do.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Agents are files in the folder (agents.json in the samples) — portable like everything else. Table exists; the canvas is designed but unbuilt. (repo: agents screen partial, plan 32 stretch)</div>
+<div class="note d" data-comment-anchor="3ecd4ddfb5-div">✔ Decided (Tom, 8 Jul): the graph is a beta-period bet — v1 ships the table (or a very simple graph); build the power version with real customers once someone actually has ~10 agents. → D16</div>
+</div>
+</div>
+</div>
+
+
+<div class="dv-opt" id="1z">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1z">1z</a><span class="jtitle">Usage, cost &amp; the starved run</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “Know what the agents are costing me — and when allowance runs out mid-run, lose nothing.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col"><div class="p" style="gap:3.5px">
+<div class="t b">SETTINGS — USAGE</div>
+<div class="row"><span class="t">this month</span><span class="sp"></span><span class="t b">$14.20 · 62% of plan</span></div>
+<div class="row"><span class="tl wf" style="background:#8cc79b;width:62%"></span><span class="tl w3"></span></div>
+<div class="card"><div class="row"><span class="t">✦ Weekly refresh</span><span class="sp"></span><span class="t b">$6.10</span></div></div>
+<div class="card"><div class="row"><span class="t">✦ Policy sync</span><span class="sp"></span><span class="t b">$4.80</span></div></div>
+<div class="card"><div class="row"><span class="t">chats</span><span class="sp"></span><span class="t b">$3.30</span></div></div>
+</div></div><div class="cap">1 · Settings owns the meter: plan remaining, spend by agent and by chat. Costs are per-workflow, not per-token jargon.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card warn" style="width:88%">
+<div class="row"><span class="chip y">PAUSED — out of allowance</span></div>
+<div class="t b">Weekly refresh · 14 of 24 done</div>
+<div class="t">14 proposals kept · nothing lost</div>
+<div class="row"><span class="btn pri">Review the 14 now</span><span class="btn">Top up</span></div>
+</div></div><div class="cap">2 · A starved run pauses safely — finished proposals stay reviewable immediately; the rest waits.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:88%">
+<div class="row"><span class="dot g"></span><span class="t b">Resumed · Mon 00:04</span></div>
+<div class="t">allowance renewed → picked up at doc 15</div>
+<div class="t">run completes · inbox (<a href="#1r">1r</a>) as normal</div>
+</div></div><div class="cap">3 · When allowance returns it resumes from doc 15 — the pause is invisible in the result, visible in the audit.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div></div>
+<div class="p pr" style="width:46%"><div class="row"><span class="chip">Q3 task</span></div>
+<div class="tl w8"></div><div class="tl w6"></div><div class="sp"></div>
+<div class="row"><div style="width:13px;height:13px;border-radius:50%;flex:none;background:conic-gradient(#4a4fc0 0 68%,#e2dfd4 68% 100%)"></div><span class="t">ctx 68%</span><span class="sp"></span><span class="t">$0.40</span></div>
+<div class="card"><div class="t">Ask…</div></div></div>
+</div><div class="cap">4 · In the chat: the context-window ring fills as the task grows, with session spend beside it — glanceable, never a wall of numbers.</div></div>
+</div>
+<div class="notes">
+<div class="note d">✔ Decided (Tom, 8 Jul): usage, tokens remaining and costs are visible in Settings; a run that runs out pauses safely and resumes — it never dies. Same pause/resume machinery as Cancel (<a href="#1s">1s</a>). → D15</div>
+<div class="note d" data-comment-anchor="4528b5b4c7-div">✔ Decided (Tom, 9 Jul): no up-front estimates. Instead, quick glanceability of session usage, context window and budget used — all in Settings, AND a context-window ring in the chat itself (frame 4) so users manage their window at a glance. → D19</div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="dv-turn" id="gf" data-screen-label="Group F — Work goes out">
+<div class="ghead"><span class="gkey">F</span><span class="gtitle">Work goes out</span><span class="gsub">“The document leaves the workbench — and can still prove itself.”</span></div>
+<div class="jrow">
+
+<div class="dv-opt" id="1u">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1u">1u</a><span class="jtitle">Present, export, publish</span><span class="st part">PARTIAL</span></div>
+<p class="job">Job: “Hand this to the board, to a Word person, or to a URL — clean, and verifiably current.”</p>
+<div class="frames">
+<div class="fs"><div class="fr col" style="background:#fbfaf6"><div class="p" style="align-items:center;justify-content:center;height:100%">
+<div class="tl hd w5"></div><div class="tl w8"></div><div class="tl w7"></div><div class="tl w8"></div>
+<div class="t" style="margin-top:4px">— verified as of 7 Jul 2026 —</div>
+</div></div><div class="cap">1 · <b>↗ Present</b>: full-screen, read-only, beautifully typeset — the audit trail as a footer, not chrome.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:82%">
+<div class="t b">Export</div>
+<div class="row"><span class="t">.docx</span><span class="chip">clean</span><span class="chip">footnoted provenance</span></div>
+<div class="row"><span class="t">Google Docs</span></div>
+<div class="row"><span class="t">HTML page · Markdown</span></div>
+</div></div><div class="cap">2 · Word first — the beachhead circulates in .docx. Provenance stripped (clean) or kept (audited), sender’s choice.</div></div>
+<div class="fs"><div class="fr col" style="align-items:center;justify-content:center"><div class="card" style="width:84%">
+<div class="row"><span class="dot g"></span><span class="t b">Published — live page</span></div>
+<div class="t i">abstract.app/p/weekly-summary</div>
+<div class="t">re-renders on every approved change</div>
+<div class="row"><span class="btn">Copy link</span><span class="btn">Unpublish</span></div>
+</div></div><div class="cap">3 · Publish = a URL that stays current — the “living” promise made shareable.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ HTML export is built and verified; Present is unverified; .docx/Docs don’t exist — yet the beachhead audience lives in Word. (repo: item 4; doc 12 §3.3 export fidelity)</div>
+<div class="note d" data-comment-anchor="1a8cf95e19-div">✔ Decided (Tom, 8 Jul): published/exported artifacts are STATIC — source links end at publish; the artifact records “verified as of {date}”. When the source doc changes, prompt the owner to Republish — keeping it in sync is a deliberate human act, not automatic. → D17</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1v">
+<div class="jcard" style="width:616px">
+<div class="jhd"><a class="dv-oid" href="#1v">1v</a><span class="jtitle" data-comment-anchor="ac382b5290-span">Interrogate the audit trail</span><span class="st gap">GAP</span></div>
+<p class="job">Job: “What changed in this document last week, and who approved it? Ask in plain language, get receipts.”</p>
+<div class="frames">
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl hd w6"></div><div class="tl wf"></div><div class="tl w9"></div></div>
+<div class="p pr" style="width:56%"><div class="sp"></div>
+<div class="card sel"><div class="t b">what changed here last</div><div class="t b">week, and who approved it?</div></div>
+</div>
+</div><div class="cap">1 · Same rail, same composer — the trust data becomes conversational.</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="tl wf"></div><div class="tl w9"></div></div>
+<div class="p pr" style="width:60%"><div class="t i">✦ 3 changes in week 27:</div>
+<div class="row"><span class="dot g"></span><span class="t">9 figures · auto · wk-27 sync</span></div>
+<div class="row"><span class="dot"></span><span class="t">churn wording · Priya · Mon</span></div>
+<div class="row"><span class="dot"></span><span class="t">intro rewrite · Tom · Wed</span></div>
+<div class="t i">each links to its version ↗</div></div>
+</div><div class="cap">2 · The answer is a list of receipts, not prose — every line links to a version (<a href="#1h">1h</a>).</div></div>
+<div class="fs"><div class="fr"><div class="p pc"><div class="row"><span class="chip">viewing v13 · Mon</span></div>
+<div class="tl hd w6"></div><div class="tl wf"></div>
+<div class="row"><span class="tl del w7"></span></div><div class="row"><span class="tl add w8"></span></div>
+<div class="tl w9"></div></div>
+</div><div class="cap">3 · Click a receipt → the doc at that version, that diff highlighted. Question answered, provably.</div></div>
+</div>
+<div class="notes">
+<div class="note">↳ Chat is never a destination — it exists to produce reviewable changes and, here, provable answers. Read-only tool over lock audit + snapshots; depends on <a href="#1h">1h</a> shipping. (repo: doc 12 §3.2 + §4)</div>
+<div class="note d">✔ Decided (Tom, 8 Jul): v1 is LIGHT — while the human is deeply in the loop, full diff-interrogation is overkill. Ship last-changed info + numeric deltas shown inline (+added / −removed); the conversational audit above is the later layer. → D18</div>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Handoff: point the repo agent at the <a href="#brief">Brief</a> (D1–D18) → ratify decisions into the decision log · spec each journey 1a–1z with acceptance criteria · build against them. Then: settle the <a href="#g0">Ø</a> candidates (keep/strike <a href="#2a">2a</a>–<a href="#2f">2f</a>) · “take <a class="dv-oid" href="#1i">1i</a> + <a class="dv-oid" href="#1k">1k</a> to hi-fi” · “re-rank by demo value vs build cost”.</p>
+</section>
+</x-dc>
+</body>
+</html>

@@ -63,6 +63,11 @@ fine to keep. This is wired into the next plan as **ITEM G**
 
 ## Q2 — How "real" should the editor be?
 
+> **Update 2026-07-09:** the question is now concrete as open test **T1** (the editor-fundamentals
+> audit, [13-journey-map-ratification.md](13-journey-map-ratification.md) §3): paste from Word with
+> fidelity, tables, images, headings, find-and-replace. Per principle P10, weakness here is a beta
+> disqualifier — the audit runs before the first stranger gets in ([18-beta-plan.md](18-beta-plan.md) §3).
+
 The current editor is a webview preview with `contenteditable` on non-bound prose. It is **not** a
 full WYSIWYG: no rich toolbar, no block insert/move/delete, no list/table editing, no real selection
 model, whole-document re-render on change. Open questions: how much editor do we actually need for
@@ -73,7 +78,15 @@ this is the decision most entangled with Q1 and Q3.
 
 ---
 
-## Q3 — Fork VS Code, or build greenfield? (the decision the whole spike serves)
+## Q3 — Fork VS Code, or build greenfield? (the decision the whole spike serves) — **RESOLVED for v1, 2026-07-09**
+
+> **Resolved** in the founder planning session (see [14-product-strategy.md](14-product-strategy.md) §6):
+> the fork **is** the v1/beta vehicle — "a local, non-technical Cursor for documents" that non-technical
+> users run on their own machine. Greenfield is not discarded; it is re-scoped as **chapter 2**: the
+> post-raise cloud rebuild (cloud agents, cloud document infra, real-time collaboration). The merge-tax
+> ledger discipline continues so that option stays cheap, and features keep being built at the product
+> layer so they port ([16-principles.md](16-principles.md) §3). The original framing below is kept for
+> the reasoning trail.
 
 **The engine is proven on the fork.** **The shell fights the calm/non-technical north star.** The
 spike quantified that the calm look is ~80% free (settings) but the last 20% — the parts users
