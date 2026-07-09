@@ -267,6 +267,63 @@ Candidates probed: **2c (ask-the-project, D24 critical v1)** - the read-only "an
 
 **Grade rationale.** The journey's surface (rail tabs) is not built. MISSING (matches the GAP chip).
 
+## Group D - Context & trust (1m-1p, 1y)
+
+### 1m - Pull files & folders into the chat · WALKABLE
+
+**What was walked.** The chat composer offers @-mention attach buttons (@market-research.md, @metrics.csv, @Team Notes.md, @Weekly Summary.md), a "+ Add documents" / "+ Add" menu ("Add all documents in the folder" + each doc), and a "@ Mention" button. Selected docs land as removable chips above the composer ("Editing: ▤ Weekly Operating Summary × …") - the working set is the single source of truth for what the chat may touch. The menu dedupes already-added docs.
+
+**Probe results.**
+- Golden path (@-mention + chips + add-folder): works - two of the three routes (type-@ mention, add-menu) are real and were exercised in 1i. The chips are removable and scope the run.
+- Right-click "Add to chat" (frame 1, the third route): the explorer verb surface is absent (confirmed under 1d) - so drag-from-tree and right-click Add are the missing routes.
+- Folder cost preview ("12 files · ~9k words"): the add-folder menu offers "Add all documents in the folder" but I did not see the up-front files/words cost the map shows - a polish gap, not a break.
+
+**Grade rationale.** Two routes land the working set reliably and it governs scope; the right-click/drag routes are missing but @-mention fully substitutes. WALKABLE.
+
+### 1n - Inspect the context, what does it see? · PARTIAL (leaning MISSING for the pre-flight/trim frames)
+
+**What was walked.** The "◉ Context" button in the Workspace toolbar opens a doc-scoped panel (see 1y - this is really the 1y sources rail). Per D12, 1n's Context tab is the *per-task* "what the agent sees now, each togglable, each sized" inspector living with the chat tab. That per-task inspector does not exist: there is no list of every input (instructions, knowledge, working set, this doc) with on/off toggles and word-sizes, no "HEAVY CONTEXT · the agent may skim" honest-budgeting warning, and no pre-flight recap card ("before this run the agent will read: 24 documents ◇ 3 sources"). The working-set chips are the closest surface but they only list attached docs, not the full context with sizes or a prune control.
+
+**Probe results.**
+- Golden path (see exactly what it looks at, prune it): the togglable/sized Context tab is not built. Frames 1-3 (togglable inputs, heavy-context warning, pre-flight recap) are absent.
+- What exists is the doc's sources panel (1y), which is a different D12 home.
+
+**Grade rationale.** The per-task context inspector - the actual subject of 1n - is not built; PARTIAL only because the doc's sources panel shows *some* of what feeds the doc. The trust promise ("no hidden context, ever; prune before it acts") is unmet.
+
+### 1o - Knowledge, the library of sources of truth · FRAGILE
+
+**What was walked.** The Knowledge nav is a real library table: "2 SOURCES" with SOURCE / KIND / LAST SYNCED / FRESHNESS / USED BY columns (metrics.csv FILE, Synced 4 min ago, Fresh, 2 docs; market-research.md likewise), Project / Organization tabs, and "+ Add source". Selecting a source shows a real per-source detail: "USED BY 2 DOCUMENTS" listing Board Note and Weekly Operating Summary with their exact bound keys (metrics.mrr, metrics.churn, …) and "Open document ↗" / "Detach" per doc - the reverse-dependency answer (frame 3). The Organization tab is an honest "Organization knowledge SOON" stub (D13 org library, in-scope-as-architecture per conflict C3, not a beta gate). "+ Add source" opens a dialog to bind a folder data file or paste an API endpoint URL to a chosen document. Screenshots `1o-1-knowledge-add-source.png`, and the in-doc source drawer `1p-1-source-drawer-provenance.png`.
+
+**Probe results.**
+- Golden path (see every source with kind/freshness/health; per-source reverse lookup): works - the library, freshness labels, and "which docs depend on this" are all real.
+- Connect flow (frame 2: pick kind → auth → test fetch shows a real value): partial - you can bind a file or paste an API URL, but there is no connector catalogue (Sheets/CRM/Stripe/MCP), no auth step, and no "test fetch shows a real value before it binds". API/MCP depth is not reachable.
+- Conflicts (frame 4: SOURCES DISAGREE → proposal with both provenances): not present - no conflict surface exists.
+- Freshness honesty: labels like "Synced 4 min ago / Fresh" are plausible; the in-doc drawer separately showed "Synced 11 days ago" for the same file (a freshness-labelling inconsistency across surfaces - noted, minor).
+
+**Grade rationale.** The library, freshness and reverse-lookup are genuinely built (far past the GAP chip), but the connect-a-live-source flow is file/URL-only with no auth/test-fetch, and conflict resolution is absent. FRAGILE (the core reads well; the "connect anything" half and conflict half are missing).
+
+### 1p - Trace a figure to its source, provenance peek · WALKABLE
+
+**What was walked.** Clicking a bound figure ($48.6k MRR) in the editor opens a full in-document **source drawer**: "⊞ metrics.csv · source · 12 rows" with a "⟳ Sync to report" action, the complete CSV (weeks 13-24) with the applied latest row (week 24: 48600/427/2.4/205), a "BOUND FIGURES · 6" table mapping each key to its resolved value (metrics.mrr → $48.6k, metrics.mrr.prev → $41.2k, …), a "REFERENCED BY · 2 DOCUMENTS" reverse list (Board Note, Weekly Operating Summary), and a freshness stamp ("metrics.csv · mrr · Synced 11 days ago"). Screenshot `1p-1-source-drawer-provenance.png`.
+
+**Probe results.**
+- Golden path (click a figure → source drawer on the exact row, changed cells, freshness, how it landed): works to CSV depth - the exact bindings, the applied row, and freshness are all shown. This is the wedge in one journey and it is real.
+- Hover peek (frame 1: source/cell/freshness on hover, no click): the click-drawer is confirmed; a hover-only peek was not separately verified this pass (the click depth is the load-bearing one).
+- API / MCP peeks at equal depth (the map's own gap): the sample only has a CSV source; api/mcp equal-depth peeks are not reachable in this folder. Graded against the decided v1 CSV depth, this is met.
+- "Then vs now" point-in-time (frame 3): not separately surfaced in the drawer I opened; the lock stores resolved+syncedAt so it is cheap, but the "as approved vs source now" comparison was not visible.
+
+**Grade rationale.** The click-to-source-drawer provenance peek works at real CSV depth with the reverse lookup inline. WALKABLE for the v1 (CSV) scope.
+
+### 1y - The document's sources rail, always-on inputs · MISSING (a partial sources panel exists)
+
+**What was walked.** The "◉ Context" toolbar button opens a doc-scoped panel: "LINKED SOURCES · 1" (metrics.csv, "live · feeds 1 block", × remove, + Add source) and "REFERENCED FILES · 1" (market-research.md, "current", × remove, + Add context). This is the D12 "doc's left rail lists its linked sources" idea, and it carries binding counts, freshness words, and per-source verbs. Screenshot `1y-1-sources-context-rail.png`.
+
+**Probe results.**
+- Golden path (linked data sources AND watched documents, each with binding count/freshness/health, one-click refresh): partially present - linked sources and referenced files are shown with freshness and a binding count ("feeds 1 block"), and remove/add verbs exist. But **watched documents with change-hooks** (frame 1/3, e.g. "▤ strategy.md · watched · hook: 'launch date'" that fires a proposal) are absent - the rail is sources+references only, no watched-doc-with-hook concept. There is no "View bindings · N → light up the bindings in the text" verb, and no "Refresh now" on a stale source in this panel.
+- The contrast with per-task context (frame 4) holds in the product: this doc panel is separate from the chat working set, matching D12.
+
+**Grade rationale.** A doc-scoped sources panel exists and is useful, but the defining 1y feature - watched documents with change-hooks proposing knock-on edits through the review grammar - is not built, and the binding-lightup verb is absent. Graded MISSING for the journey's actual subject (watched-doc hooks), with the honest note that the linked-sources half is real. (Softer than MISSING on the sources half; recorded MISSING because the change-hook mechanism, the reason 1y is its own journey, does not exist.)
+
 ## Evidence index (screenshots in shots/)
 
 - `00-home-initial.png`, `1a-1-switch-folder.png` - taken against the broken `?folder=/static/mount` entry (environment gotcha, see environment.md), retained as evidence of the gotcha only.
