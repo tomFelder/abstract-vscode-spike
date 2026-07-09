@@ -1,36 +1,29 @@
 # 18 - The beta plan: gate, model access, cohort, onboarding
 
-Decided in the founder planning session of 9 Jul 2026.
-Honest starting point: the waitlist is live and public, the cohort is friends, and the app - despite plans 26-33 all being merged - is a **golden-path alpha**: it works when driven correctly and falls over one step off the path.
-This document defines what must be true before the first person outside the founder's driving gets in.
+Decided in the founder planning session of 9 Jul 2026. Honest starting point: the waitlist is live and public, the cohort is friends, and the app - despite plans 26-33 all being merged - is a **golden-path alpha**: it works when driven correctly and falls over one step off the path. This document defines what must be true before the first person outside the founder's driving gets in.
 
 ## 1. The gate, in one sentence
 
 > **A stranger can bring a real folder and hit the aha moment (T4: first approved agent change on their own file) without Tom in the room.**
 
-Everything below derives from that sentence.
-The gate is explicitly **not** "plans 26-33 complete" (they already are) and not "all journeys done" - it is the smallest set of things that make the aha reachable, observable and survivable.
+Everything below derives from that sentence. The gate is explicitly **not** "plans 26-33 complete" (they already are) and not "all journeys done" - it is the smallest set of things that make the aha reachable, observable and survivable.
 
 ## 2. Gate requirements
 
 ### 2.1 Bring-your-own subscription (model access)
 
-The founder cannot fund API-priced usage for a cohort, and the target user will not credit an API account - subscription is the only mental model they own.
-Decided stance:
+The founder cannot fund API-priced usage for a cohort, and the target user will not credit an API account - subscription is the only mental model they own. Decided stance:
 
 - **Strip the Anthropic usage path.** Anthropic banned subscription OAuth in third-party tools (terms updated Feb 2026, enforced Apr 2026), and the existing Console-billed OAuth burns API credit nobody is funding. Remove it for beta.
 - **Add OpenAI OAuth as the primary path**: users sign in and model calls draw on their own ChatGPT Plus/Pro/Team subscription (the Codex-token pattern; the Hermes agent demonstrates it working today).
 - **Keep OpenRouter as the founder-funded fallback/demo tier** for users without a suitable subscription - but on a *good* model, not the cheapest available: P0 says the bar is "more reliable than ChatGPT", and a bottom-shelf model poisons the one thing the beta must prove. **Fair-usage cap: ~US$1 per user per day** (the founder budget is ~$10/day total, so this holds up to ~10 concurrent fallback users). Hitting the cap must degrade gracefully, never fatally: the run pauses safely via the D15 machinery, the composer says so in plain words ("You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited"), finished proposals stay reviewable, and everything resumes when the day rolls over. Per-user spend is tracked from day one (the `model_spend` event, doc 15 §3.1) so the cap is enforced by data, not hope - and cap-hit frequency itself is a signal about willingness to convert to BYO.
 - **No paste-your-own-API-key.** Rejected: the cohort can obtain keys but won't credit accounts, and it fights the non-technical promise.
 
-**Recorded risk (formally accepted by the founder, 9 Jul 2026):** no OpenAI OAuth surface *officially* sanctions a user's subscription paying for a third-party app's model calls - "Sign in with ChatGPT" is identity-only, and the Codex token is the unofficial exception that currently works.
-Anthropic's ban is the precedent for how fast this can close; the founder judges this an acceptable beta-period risk because the capped OpenRouter fallback keeps every user functional if it does.
-Mitigations: this is a **beta-only stance** (the launch model is metered routing per doc 14 §5, independent of any OAuth); the OpenRouter fallback keeps every user functional if the path closes overnight; and an official BYO-subscription partnership goes on the watch list once there is traction to bring to that conversation.
+**Recorded risk (formally accepted by the founder, 9 Jul 2026):** no OpenAI OAuth surface *officially* sanctions a user's subscription paying for a third-party app's model calls - "Sign in with ChatGPT" is identity-only, and the Codex token is the unofficial exception that currently works. Anthropic's ban is the precedent for how fast this can close; the founder judges this an acceptable beta-period risk because the capped OpenRouter fallback keeps every user functional if it does. Mitigations: this is a **beta-only stance** (the launch model is metered routing per doc 14 §5, independent of any OAuth); the OpenRouter fallback keeps every user functional if the path closes overnight; and an official BYO-subscription partnership goes on the watch list once there is traction to bring to that conversation.
 
 ### 2.2 Product analytics
 
-PostHog wired per [15-metrics-and-instrumentation.md](15-metrics-and-instrumentation.md): the event dictionary, the four dashboards, session replay with document text masked, and a plain-words consent moment in onboarding.
-Without this the beta produces anecdotes instead of learning; it gates.
+PostHog wired per [15-metrics-and-instrumentation.md](15-metrics-and-instrumentation.md): the event dictionary, the four dashboards, session replay with document text masked, and a plain-words consent moment in onboarding. Without this the beta produces anecdotes instead of learning; it gates.
 
 ### 2.3 Journey robustness (the alpha → beta line)
 
@@ -49,13 +42,11 @@ This work is task ② of the Journey Map brief (per-journey specs with acceptanc
 
 ### 2.5 The feedback verb
 
-A "**this was wrong**" action on any applied change (from the map's gap audit) - because a beta whose whole thesis is trust needs an in-product way to report broken trust, and every report is read (doc 15 §2.4).
-A thin version suffices: flag + optional comment, lands in analytics and a founder-visible log.
+A "**this was wrong**" action on any applied change (from the map's gap audit) - because a beta whose whole thesis is trust needs an in-product way to report broken trust, and every report is read (doc 15 §2.4). A thin version suffices: flag + optional comment, lands in analytics and a founder-visible log.
 
 ### 2.6 Thinking-skills pack
 
-The default pack present in new projects ([17-primitives.md](17-primitives.md) §3), pending the founder's skill-design exercise.
-Gates because killer flow ④ should exist from the first cohort - even a two-skill pack makes the ITE story demoable.
+The default pack present in new projects ([17-primitives.md](17-primitives.md) §3), pending the founder's skill-design exercise. Gates because killer flow ④ should exist from the first cohort - even a two-skill pack makes the ITE story demoable.
 
 ## 3. Explicitly not gating (lands during or after beta)
 

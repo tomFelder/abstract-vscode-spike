@@ -1,8 +1,6 @@
 # 17 - The primitives: skills, agents, sources, templates
 
-The agentic layer has been under-designed relative to the document layer - it barely appears in the Journey Map wireframes and has no dedicated repo doc.
-This document fixes that: it defines the ontology, the user-facing vocabulary, and where the thinking layer plugs in.
-Decided in the founder planning session of 9 Jul 2026.
+The agentic layer has been under-designed relative to the document layer - it barely appears in the Journey Map wireframes and has no dedicated repo doc. This document fixes that: it defines the ontology, the user-facing vocabulary, and where the thinking layer plugs in. Decided in the founder planning session of 9 Jul 2026.
 
 ## 1. The four primitives
 
@@ -19,8 +17,7 @@ The composition rule that generates the whole system:
 
 > **agent = skill + trigger + scope + policy (+ tools)**
 
-An agent is not a new kind of thing; it is a skill given autonomy.
-This keeps the mental model small and the files portable, and it means every capability added to skills (better examples, model routing, org-library context) automatically accrues to agents and templates.
+An agent is not a new kind of thing; it is a skill given autonomy. This keeps the mental model small and the files portable, and it means every capability added to skills (better examples, model routing, org-library context) automatically accrues to agents and templates.
 
 The interaction rule that keeps it safe:
 
@@ -30,8 +27,7 @@ The interaction rule that keeps it safe:
 
 **Keep "Skills" and "Agents" as user-facing words for v1**, alongside "Sources" and "Templates".
 
-Rationale: the beta market is AI-fluent - these words are becoming vernacular precisely through Claude Code and ChatGPT, and renaming them would cost clarity ("wait, is a 'routine' an agent?").
-P5's plain-words bar applies to the *mechanics* - no cron strings, no token counts, no git verbs - not to the nouns.
+Rationale: the beta market is AI-fluent - these words are becoming vernacular precisely through Claude Code and ChatGPT, and renaming them would cost clarity ("wait, is a 'routine' an agent?"). P5's plain-words bar applies to the *mechanics* - no cron strings, no token counts, no git verbs - not to the nouns.
 
 Two refinements:
 
@@ -44,8 +40,7 @@ Revisit the nouns only when the floor broadens beyond AI-fluent users.
 
 The category-vs-wedge decision ([14-product-strategy.md](14-product-strategy.md) §1) enters the product here.
 
-**Every new project ships with a default skills pack** - a small set of thinking skills that help with the *act of thinking*: brainstorming, stress-testing, interviewing the author to sharpen an idea, summarising a body of thinking.
-These are ordinary skill.md files: visible, editable, forkable, deletable - the user's first evidence that skills are just files they own.
+**Every new project ships with a default skills pack** - a small set of thinking skills that help with the *act of thinking*: brainstorming, stress-testing, interviewing the author to sharpen an idea, summarising a body of thinking. These are ordinary skill.md files: visible, editable, forkable, deletable - the user's first evidence that skills are just files they own.
 
 Decided boundaries:
 
@@ -59,9 +54,7 @@ Between **skills, sources and agents, the product becomes a genuine thinking pla
 
 A knowledge layer **above** projects: brand, values, mission, KPIs, initiatives, tone of voice, formatting rules - present in every project of the workspace, with project Knowledge beneath it able to override locally.
 
-Status: **ratified as architecture, not a beta gate** (conflict C3 in doc 13).
-What this means practically for v1 engineering: context assembly must be **layered** (org → project → task, per D12's split) even while the org layer is empty, so that adding the org library later is filling a slot, not a refactor.
-The org library becomes product surface in the cloud chapter, where a workspace exists to hang it on.
+Status: **ratified as architecture, not a beta gate** (conflict C3 in doc 13). What this means practically for v1 engineering: context assembly must be **layered** (org → project → task, per D12's split) even while the org layer is empty, so that adding the org library later is filling a slot, not a refactor. The org library becomes product surface in the cloud chapter, where a workspace exists to hang it on.
 
 ## 5. What exists today vs the model
 

@@ -1,16 +1,10 @@
 # 16 - Principles: product, design, engineering
 
-One document for the rules that outrank any individual plan.
-Product principles P0-P10 were ratified in Journey Map v4 ([13-journey-map-ratification.md](13-journey-map-ratification.md)); the design and engineering principles consolidate doc 12 §2, the spike's decision log, and the 9 Jul 2026 planning session.
-New work must not regress any of these; a plan that needs to break one must say so explicitly and get the conflict ratified first.
+One document for the rules that outrank any individual plan. Product principles P0-P10 were ratified in Journey Map v4 ([13-journey-map-ratification.md](13-journey-map-ratification.md)); the design and engineering principles consolidate doc 12 §2, the spike's decision log, and the 9 Jul 2026 planning session. New work must not regress any of these; a plan that needs to break one must say so explicitly and get the conflict ratified first.
 
 ## 1. Product principles (P0-P10, ratified)
 
-**P0 - Trust above all.**
-The generation must be correct - and feel **more reliable than Claude Desktop or ChatGPT**.
-That is the bar, and it is why every other principle exists: grounding in sources (P4), receipts (P8), review gates (P3), honest confidence labels.
-When correctness and speed conflict, correctness wins.
-When correctness and delight conflict, correctness **is** the delight.
+**P0 - Trust above all.** The generation must be correct - and feel **more reliable than Claude Desktop or ChatGPT**. That is the bar, and it is why every other principle exists: grounding in sources (P4), receipts (P8), review gates (P3), honest confidence labels. When correctness and speed conflict, correctness wins. When correctness and delight conflict, correctness **is** the delight.
 
 - **P1 - Progressive disclosure.** Surface a capability only when the user's situation calls for it. Depth is earned, never dumped.
 - **P2 - No duplicate pathways.** If a job already has a clean route, don't build a second one for v1 (e.g. D20: templates already cover recurring creation).
@@ -23,9 +17,7 @@ When correctness and delight conflict, correctness **is** the delight.
 - **P9 - The human dials autonomy.** Trust is granted per doc and per agent (D9), never assumed - and can be taken back.
 - **P10 - Boring excellence first.** The editor must feel Word-grade (paste, tables, images) before any magic matters - weakness here disqualifies everything else (test T1).
 
-**Calibration note (9 Jul 2026):** the P5 bar is set for the eventual mass-market floor.
-The beta cohort is tech-savvy and AI-fluent ([14-product-strategy.md](14-product-strategy.md) §2.1); during beta, power showing through (the words "skills" and "agents", a context ring, a usage meter) is acceptable and even attractive.
-P5 governs *mechanics* (no cron strings, no token counts, no git verbs), not *nouns*.
+**Calibration note (9 Jul 2026):** the P5 bar is set for the eventual mass-market floor. The beta cohort is tech-savvy and AI-fluent ([14-product-strategy.md](14-product-strategy.md) §2.1); during beta, power showing through (the words "skills" and "agents", a context ring, a usage meter) is acceptable and even attractive. P5 governs *mechanics* (no cron strings, no token counts, no git verbs), not *nouns*.
 
 ## 2. Design principles
 
@@ -41,10 +33,7 @@ Consolidated from doc 12 §2, doc 06 and decisions 19-42; binding since the rede
 
 ## 3. Engineering principles
 
-- **Journey-completeness over feature-count.** *(New, 9 Jul 2026 - the broken-alpha lesson.)*
-  Plans 26-33 all merged, yet the app breaks one step off the golden path; plan-completion is not journey-completion.
-  The unit of "done" is a **walkable journey**: empty states, error states, off-path recovery and unhappy paths included, validated against the journey's acceptance criteria (Journey Map task ②).
-  A feature that only works when driven correctly is not shipped; it is staged.
+- **Journey-completeness over feature-count.** *(New, 9 Jul 2026 - the broken-alpha lesson.)* Plans 26-33 all merged, yet the app breaks one step off the golden path; plan-completion is not journey-completion. The unit of "done" is a **walkable journey**: empty states, error states, off-path recovery and unhappy paths included, validated against the journey's acceptance criteria (Journey Map task ②). A feature that only works when driven correctly is not shipped; it is staged.
 - **Everything routes through the review engine.** The engineering mirror of P3: one proposal model, one approve path, one audit trail. No component writes to a document around it.
 - **Build at the product layer, portable by default.** Features (undo, history, snapshots, review API) are built on our own surfaces (PM history + lock + audit), not deep VS Code internals, so they survive the local → cloud rebuild (chapter 2 in doc 14). D23's portable approve-act is the template.
 - **Honest engineering economics.** Core patches are counted, one-line, fail-soft, and logged in the merge-tax ledger (plans/03). The ledger stays live for as long as the fork does.
@@ -56,7 +45,4 @@ Consolidated from doc 12 §2, doc 06 and decisions 19-42; binding since the rede
 
 ## 4. How to use this document
 
-When a plan is drafted: check its scope against P0-P10 and the persona.
-When a design is proposed: check it against §2 and the four killer flows.
-When an implementation is reviewed: check it against §3 - especially journey-completeness, review-engine routing and portability.
-When two principles conflict in practice: P0 wins, then the more specific principle wins; record the tension in the decision log either way.
+When a plan is drafted: check its scope against P0-P10 and the persona. When a design is proposed: check it against §2 and the four killer flows. When an implementation is reviewed: check it against §3 - especially journey-completeness, review-engine routing and portability. When two principles conflict in practice: P0 wins, then the more specific principle wins; record the tension in the decision log either way.

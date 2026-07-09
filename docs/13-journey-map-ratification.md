@@ -1,13 +1,8 @@
 # 13 - Journey Map v4: ratification into the repo
 
-This document ratifies the **"Abstract - the crucial customer journeys" low-fi map v4** (9 Jul 2026) into the repo's documentation set, per the map's own handoff brief.
-The map itself is preserved verbatim as the companion visual: [journey-map-v4.dc.html](journey-map-v4.dc.html).
-It was produced in Claude Design across 8-9 Jul 2026, with Tom's review decisions folded in as D1-D26 and product principles P0-P10 ratified in v3/v4.
+This document ratifies the **"Abstract - the crucial customer journeys" low-fi map v4** (9 Jul 2026) into the repo's documentation set, per the map's own handoff brief. The map itself is preserved verbatim as the companion visual: [journey-map-v4.dc.html](journey-map-v4.dc.html). It was produced in Claude Design across 8-9 Jul 2026, with Tom's review decisions folded in as D1-D26 and product principles P0-P10 ratified in v3/v4.
 
-**What ratification means here:** the decisions and principles in the map are now binding repo truth, on equal footing with [07-decision-log.md](07-decision-log.md).
-Conflicts with existing repo docs are flagged below, not silently overwritten.
-The map's brief mandates three tasks in order: ① ratify the decision log (this document) · ② expand every journey 1a-1z into a detailed spec with acceptance criteria · ③ build against those specs, keeping the BUILT/PARTIAL/GAP chips updated as truth.
-Task ② is future work; see the note on re-baselining below.
+**What ratification means here:** the decisions and principles in the map are now binding repo truth, on equal footing with [07-decision-log.md](07-decision-log.md). Conflicts with existing repo docs are flagged below, not silently overwritten. The map's brief mandates three tasks in order: ① ratify the decision log (this document) · ② expand every journey 1a-1z into a detailed spec with acceptance criteria · ③ build against those specs, keeping the BUILT/PARTIAL/GAP chips updated as truth. Task ② is future work; see the note on re-baselining below.
 
 ## 1. The map in one view
 
@@ -23,13 +18,11 @@ Six MECE journey groups, read left to right as a lifecycle, plus a first-princip
 | E | Living documents (agents, schedules, the inbox) | 1q-1t, 1z |
 | F | Work goes out (export, present, interrogate) | 1u-1v |
 
-The persona, killer flows and aha metric from group Ø are ratified and expanded in [14-product-strategy.md](14-product-strategy.md).
-The principles P0-P10 are ratified and expanded in [16-principles.md](16-principles.md).
+The persona, killer flows and aha metric from group Ø are ratified and expanded in [14-product-strategy.md](14-product-strategy.md). The principles P0-P10 are ratified and expanded in [16-principles.md](16-principles.md).
 
 ## 2. The ratified decisions (D1-D26)
 
-These are Tom's decisions, recorded 8-9 Jul 2026 in the map, now repo truth.
-Where a decision touches an existing repo doc, the affected doc is named.
+These are Tom's decisions, recorded 8-9 Jul 2026 in the map, now repo truth. Where a decision touches an existing repo doc, the affected doc is named.
 
 | # | Decision | Affects |
 |---|---|---|
@@ -83,36 +76,19 @@ All six Ø candidates were settled in v4:
 
 ## 5. Conflicts flagged (per the brief: flag, don't overwrite)
 
-**C1 - Publish: static vs living.**
-D17 says published/exported artifacts are static snapshots with a deliberate human Republish act.
-But journey 1u frame 3 (in the same map) shows a published page that "re-renders on every approved change", doc 12 §3.3 implies the same, and abstractdocs.com markets "publish to web" under the living-documents pillar.
-**Ratified resolution: D17 wins.** Published artifacts are static and stamped "verified as of {date}"; the product prompts Republish when the source doc changes.
-The website copy and doc 12 §3.3 need updating (see [19-website-feedback.md](19-website-feedback.md)).
+**C1 - Publish: static vs living.** D17 says published/exported artifacts are static snapshots with a deliberate human Republish act. But journey 1u frame 3 (in the same map) shows a published page that "re-renders on every approved change", doc 12 §3.3 implies the same, and abstractdocs.com markets "publish to web" under the living-documents pillar. **Ratified resolution: D17 wins.** Published artifacts are static and stamped "verified as of {date}"; the product prompts Republish when the source doc changes. The website copy and doc 12 §3.3 need updating (see [19-website-feedback.md](19-website-feedback.md)).
 
-**C2 - Home: what the first screen is.**
-Docs 11/12 and plan 22 describe the built Home (NEEDS YOU + ALL PROJECTS) as the landing surface.
-D2/D3 restructure this: a thin **quick-start modal** is the launch door; **Project Home** (new, per 1w: while-you-were-away, staleness blast radius, recommendations, project chat) is where opening a project lands; the current cross-project Home earns its keep later, "once cloud-based" (D5).
-**Ratified resolution: D2/D3 win.** The built Home is not wasted - it becomes the seed of the cross-project inbox - but the v1 information architecture is quick-start modal → Project Home → editor.
+**C2 - Home: what the first screen is.** Docs 11/12 and plan 22 describe the built Home (NEEDS YOU + ALL PROJECTS) as the landing surface. D2/D3 restructure this: a thin **quick-start modal** is the launch door; **Project Home** (new, per 1w: while-you-were-away, staleness blast radius, recommendations, project chat) is where opening a project lands; the current cross-project Home earns its keep later, "once cloud-based" (D5). **Ratified resolution: D2/D3 win.** The built Home is not wasted - it becomes the seed of the cross-project inbox - but the v1 information architecture is quick-start modal → Project Home → editor.
 
-**C3 - Org library.**
-D13 introduces a knowledge layer **above** projects (brand, values, mission, KPIs, tone, formatting rules, present in every project).
-No repo doc models this; plan 29's Knowledge is project-scoped.
-**Ratified resolution: in scope as architecture** (the layering must not preclude it) **but not a beta gate.** See [17-primitives.md](17-primitives.md).
+**C3 - Org library.** D13 introduces a knowledge layer **above** projects (brand, values, mission, KPIs, tone, formatting rules, present in every project). No repo doc models this; plan 29's Knowledge is project-scoped. **Ratified resolution: in scope as architecture** (the layering must not preclude it) **but not a beta gate.** See [17-primitives.md](17-primitives.md).
 
-**C4 - Portfolios (folder of folders).**
-D1 extends "the folder is the project" (decision 39) to nesting: any subfolder openable as its own project.
-Doc 08's format spec doesn't address lock-file scoping across nested projects.
-**Flagged for spec work** when portfolios are implemented; not a beta gate.
+**C4 - Portfolios (folder of folders).** D1 extends "the folder is the project" (decision 39) to nesting: any subfolder openable as its own project. Doc 08's format spec doesn't address lock-file scoping across nested projects. **Flagged for spec work** when portfolios are implemented; not a beta gate.
 
 ## 6. Re-baselining the BUILT / PARTIAL / GAP chips
 
-The map's chips describe the product as of ~8 Jul 2026.
-Since then, plans 26-33 have all merged (PRs 88-113): history/undo/snapshots, streaming + cancel, templates, knowledge/MCP, performance, review quality, orchestration and shell integrity all landed with 0 core patches.
-Two truths must be held together when re-baselining:
+The map's chips describe the product as of ~8 Jul 2026. Since then, plans 26-33 have all merged (PRs 88-113): history/undo/snapshots, streaming + cancel, templates, knowledge/MCP, performance, review quality, orchestration and shell integrity all landed with 0 core patches. Two truths must be held together when re-baselining:
 
 1. **The plans are complete** - the features named in many GAP/PARTIAL chips now exist on `main`.
 2. **The journeys are not** - Tom's assessment (9 Jul): the app is a golden-path alpha; one step off the path and it breaks. Plan-completion is not journey-completion.
 
-The re-baseline exercise is therefore not "flip chips to BUILT" but **walk each journey end to end, off-path included, and grade it**.
-That walk is the first act of the map's task ② (journey specs with acceptance criteria) and the core of the beta gate in [18-beta-plan.md](18-beta-plan.md).
-This gap between the two truths is itself ratified as an engineering principle (journey-completeness over feature-count) in [16-principles.md](16-principles.md).
+The re-baseline exercise is therefore not "flip chips to BUILT" but **walk each journey end to end, off-path included, and grade it**. That walk is the first act of the map's task ② (journey specs with acceptance criteria) and the core of the beta gate in [18-beta-plan.md](18-beta-plan.md). This gap between the two truths is itself ratified as an engineering principle (journey-completeness over feature-count) in [16-principles.md](16-principles.md).
