@@ -15,8 +15,10 @@
 //
 // Backends are pluggable behind one interface (see `backends` below):
 //   - `openrouter` - founder-funded fallback tier, budget-metered per user/day (plan 35 iter 3).
-//   - `openai-oauth` - the "Sign in with ChatGPT" subscription path (plan 35 iter 2) - SEAM ONLY here,
-//     the OAuth token flow + OpenAI translation land in that iteration.
+//   - `openai-oauth` - the "Sign in with ChatGPT" subscription path (plan 35 iter 2). The user signs in with
+//     their own ChatGPT subscription (the Codex OAuth token, see scripts/lwd-openai-oauth.js); their model
+//     calls draw on that subscription, so this backend is NOT metered against the founder's budget. The
+//     /auth/openai/* routes below drive sign-in; the credential lives only in this process (decision 14).
 // The Anthropic Console-OAuth backend was removed in plan 35 iter 1 (doc 18 section 2.1): Anthropic
 // banned subscription OAuth in third-party tools and the Console-billed path burned unfunded API credit.
 //
@@ -31,6 +33,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
 const { SpendMeter } = require('./lwd-spend-meter.js');
+const openaiOAuth = require('./lwd-openai-oauth.js');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.LWD_PROXY_PORT || 8090);
@@ -148,6 +151,37 @@ function writeCapStream(res) {
 	res.write(sseEvent('message_delta', { type: 'message_delta', delta: { stop_reason: 'pause' } }));
 	res.write(sseEvent('message_stop', { type: 'message_stop' }));
 	res.end();
+}
+
+// Emit the plain-words re-auth message as a paused SSE stream (same shape as writeCapStream). The renderer
+// reads the prose and pauses the run (D15) rather than erroring or parsing proposals from it.
+function writeReauthStream(res) {
+	writeSseHead(res);
+	res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: REAUTH_MESSAGE } }));
+	res.write(sseEvent('message_delta', { type: 'message_delta', delta: { stop_reason: 'pause' } }));
+	res.write(sseEvent('message_stop', { type: 'message_stop' }));
+	res.end();
+}
+
+// The plain-words body the renderer surfaces when the subscription sign-in has lapsed and a silent refresh
+// could not recover it (plan 35 iter 2; P5: never "OAuth token" or "401"). Shaped like the cap message - a
+// normal Anthropic message the parser reads as prose - with `stop_reason: 'pause'` so the run pauses via D15
+// and keeps proposals, rather than dying. The user's next step is to sign in again (or switch to the included
+// model); this pause is NOT retryable (a retry just refuses again until they re-auth).
+const REAUTH_MESSAGE = "Your ChatGPT sign-in needs a refresh - sign in again to keep going, or switch to the included model.";
+function reauthReached() {
+	return {
+		status: 200,
+		contentType: 'application/json',
+		text: JSON.stringify({
+			id: 'lwd-reauth',
+			type: 'message',
+			role: 'assistant',
+			model: openaiOAuth.OPENAI_MODEL,
+			stop_reason: 'pause',
+			content: [{ type: 'text', text: REAUTH_MESSAGE }],
+		}),
+	};
 }
 
 // --- backend: openrouter ------------------------------------------------------------------------------
@@ -295,10 +329,173 @@ async function openRouterForwardStream(req, res) {
 	});
 }
 
+// --- backend: openai-oauth ("Sign in with ChatGPT") ---------------------------------------------------
+// Serves the engine's Anthropic-Messages requests from the user's OWN ChatGPT subscription via the Codex
+// OAuth token (scripts/lwd-openai-oauth.js). The request translation is SHARED with openrouter -
+// toOpenRouterMessages produces the OpenAI-style role/content messages both need - so the mapping lives once
+// (plan 35 note: extend the existing seam, don't duplicate). The upstream here is OpenAI's Responses API,
+// which takes `instructions` + an `input` array and returns an `output` array; the translation below is the
+// only openai-oauth-specific part. A token near expiry is refreshed silently before the call; a hard auth
+// failure (refresh token revoked/expired) becomes the plain-words re-auth pause, NEVER a 500.
+
+/** A distinguishable auth failure so the caller emits the re-auth pause instead of a generic proxy error. */
+class OpenAiAuthError extends Error {
+	constructor(message) { super(message); this.name = 'OpenAiAuthError'; }
+}
+
+/** Get a valid subscription bearer + account id, refreshing silently; throw OpenAiAuthError on a hard fail. */
+async function openAiAuthHeaders() {
+	let bundle;
+	try {
+		bundle = await openaiOAuth.validBundle();
+	} catch (e) {
+		throw new OpenAiAuthError(e && e.message ? e.message : 'not signed in');
+	}
+	const headers = {
+		'authorization': `Bearer ${bundle.access_token}`,
+		'content-type': 'application/json',
+		'originator': 'codex_cli_rs',
+		'OpenAI-Beta': 'responses=v1',
+	};
+	if (bundle.account_id) { headers['chatgpt-account-id'] = bundle.account_id; }
+	return headers;
+}
+
+// Translate an Anthropic Messages request to an OpenAI Responses request. The system prompt maps to
+// `instructions`; the conversation maps to `input` with typed text parts (an assistant turn uses
+// `output_text`, everything else `input_text`), reusing the shared toOpenRouterMessages flattening.
+function toResponsesRequest(req, stream) {
+	const flattened = toOpenRouterMessages(req);
+	const instructionsParts = flattened.filter(m => m.role === 'system').map(m => m.content);
+	const input = flattened.filter(m => m.role !== 'system').map(m => ({
+		role: m.role,
+		content: [{ type: m.role === 'assistant' ? 'output_text' : 'input_text', text: m.content }],
+	}));
+	const body = {
+		model: openaiOAuth.OPENAI_MODEL,
+		input,
+		max_output_tokens: req.max_tokens || 1024,
+	};
+	if (instructionsParts.length) { body.instructions = instructionsParts.join('\n\n'); }
+	if (stream) { body.stream = true; }
+	return body;
+}
+
+// Pull the assistant text out of a buffered Responses result. Prefer the `output_text` convenience field;
+// otherwise walk the `output` array's message items and concatenate their `output_text` parts.
+function textFromResponses(json) {
+	if (typeof json.output_text === 'string' && json.output_text) { return json.output_text; }
+	const out = Array.isArray(json.output) ? json.output : [];
+	let text = '';
+	for (const item of out) {
+		if (item && item.type === 'message' && Array.isArray(item.content)) {
+			for (const part of item.content) {
+				if (part && (part.type === 'output_text' || part.type === 'text') && typeof part.text === 'string') { text += part.text; }
+			}
+		}
+	}
+	return text;
+}
+
+// Map a Responses stop/status to the Anthropic stop_reason the renderer's parser understands.
+function responsesStopReason(json) {
+	const status = json.status || (json.response && json.response.status);
+	const incompleteReason = (json.incomplete_details && json.incomplete_details.reason)
+		|| (json.response && json.response.incomplete_details && json.response.incomplete_details.reason);
+	if (incompleteReason === 'max_output_tokens') { return 'max_tokens'; }
+	if (status === 'incomplete') { return 'max_tokens'; }
+	return 'end_turn';
+}
+
+async function openAiForward(_body, req) {
+	let headers;
+	try { headers = await openAiAuthHeaders(); }
+	catch (e) { if (e instanceof OpenAiAuthError) { return reauthReached(); } throw e; }
+	const upstream = await fetch(openaiOAuth.RESPONSES_URL, {
+		method: 'POST',
+		headers,
+		body: JSON.stringify(toResponsesRequest(req, false)),
+	});
+	const rawText = await upstream.text();
+	// A 401 means the access token was rejected despite the pre-flight refresh (revoked mid-life): surface the
+	// plain-words re-auth pause rather than a proxy error, so the run pauses cleanly and prompts a sign-in.
+	if (upstream.status === 401 || upstream.status === 403) { return reauthReached(); }
+	let json;
+	try { json = JSON.parse(rawText); } catch { json = undefined; }
+	if (!upstream.ok || !json || json.error) {
+		const message = (json && json.error) ? (json.error.message || 'openai error') : `openai http ${upstream.status}`;
+		return proxyError(message);
+	}
+	const text = textFromResponses(json);
+	const anthropic = {
+		id: json.id || 'oa-msg',
+		type: 'message',
+		role: 'assistant',
+		model: json.model || openaiOAuth.OPENAI_MODEL,
+		stop_reason: responsesStopReason(json),
+		content: [{ type: 'text', text: String(text) }],
+	};
+	// meters:false, so no usage is returned to the meter (a subscription call is not the founder's budget).
+	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic), usage: undefined };
+}
+
+async function openAiForwardStream(req, res) {
+	let headers;
+	try { headers = await openAiAuthHeaders(); }
+	catch (e) { if (e instanceof OpenAiAuthError) { writeReauthStream(res); return { usage: undefined }; } throw e; }
+	const upstream = await fetch(openaiOAuth.RESPONSES_URL, {
+		method: 'POST',
+		headers: Object.assign({}, headers, { 'accept': 'text/event-stream' }),
+		body: JSON.stringify(toResponsesRequest(req, true)),
+	});
+	if (upstream.status === 401 || upstream.status === 403) { writeReauthStream(res); return { usage: undefined }; }
+	if (!upstream.ok || !upstream.body) {
+		const text = await upstream.text().catch(() => '');
+		let message = `openai http ${upstream.status}`;
+		try { const j = JSON.parse(text); if (j && j.error && j.error.message) { message = j.error.message; } } catch { /* keep default */ }
+		setCors(res);
+		res.writeHead(502, { 'content-type': 'application/json' });
+		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }));
+		return { usage: undefined };
+	}
+	writeSseHead(res);
+	const nodeStream = Readable.fromWeb(upstream.body);
+	res.on('close', () => nodeStream.destroy());
+	let buf = '';
+	const endStream = () => { if (!res.writableEnded) { res.write(sseEvent('message_stop', { type: 'message_stop' })); res.end(); } };
+	return await new Promise(resolve => {
+		nodeStream.on('data', chunk => {
+			buf += chunk.toString('utf8');
+			let nl;
+			while ((nl = buf.indexOf('\n')) >= 0) {
+				const line = buf.slice(0, nl).trim();
+				buf = buf.slice(nl + 1);
+				if (!line.startsWith('data:')) { continue; }
+				const payload = line.slice(5).trim();
+				if (payload === '[DONE]') { endStream(); resolve({ usage: undefined }); return; }
+				try {
+					const j = JSON.parse(payload);
+					// The Responses stream emits typed events; translate the text deltas into the Anthropic-shaped
+					// content_block_delta the renderer's SSE parser reads. `response.completed` ends the stream.
+					if (j.type === 'response.output_text.delta' && typeof j.delta === 'string' && j.delta.length) {
+						res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: j.delta } }));
+					} else if (j.type === 'response.completed') {
+						endStream();
+						resolve({ usage: undefined });
+						return;
+					}
+				} catch { /* keep-alive comment or malformed chunk -> ignore */ }
+			}
+		});
+		nodeStream.on('end', () => { endStream(); resolve({ usage: undefined }); });
+		nodeStream.on('error', () => { if (!res.writableEnded) { res.end(); } resolve({ usage: undefined }); });
+	});
+}
+
 // --- backend registry ---------------------------------------------------------------------------------
 // One interface per backend: `isConfigured()` gates /healthz; `forward` (buffered) and `forwardStream`
 // (SSE) do the request/response translation. `meters` marks whether calls draw on the founder-funded
-// budget (openrouter) or the user's own subscription (openai-oauth, iter 2 - not metered).
+// budget (openrouter) or the user's own subscription (openai-oauth - not metered, it is the user's own plan).
 const backends = {
 	openrouter: {
 		name: 'openrouter',
@@ -307,19 +504,14 @@ const backends = {
 		forward: openRouterForward,
 		forwardStream: openRouterForwardStream,
 	},
-	// SEAM for plan 35 iter 2 ("Sign in with ChatGPT"). Reports not-configured so /healthz is honest and the
-	// renderer stays on its heuristic fallback until the OAuth token flow + OpenAI translation land here.
+	// "Sign in with ChatGPT" (plan 35 iter 2). Configured once a subscription token bundle is stored; calls
+	// draw on the user's own ChatGPT plan (meters:false) and translate to OpenAI's Responses API above.
 	'openai-oauth': {
 		name: 'openai-oauth',
 		meters: false,
-		isConfigured: () => false,
-		forward: async () => proxyError('the openai-oauth backend is not implemented yet (plan 35 iter 2)'),
-		forwardStream: async (_req, res) => {
-			setCors(res);
-			res.writeHead(502, { 'content-type': 'application/json' });
-			res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'the openai-oauth backend is not implemented yet (plan 35 iter 2)' } }));
-			return { usage: undefined };
-		},
+		isConfigured: () => openaiOAuth.isSignedIn(),
+		forward: openAiForward,
+		forwardStream: openAiForwardStream,
 	},
 };
 
@@ -555,9 +747,46 @@ const server = http.createServer((req, res) => {
 	}
 	if (req.method === 'GET' && url.startsWith('/healthz')) {
 		setCors(res);
-		// `ok` is true only when the active backend is actually configured (a key present), so the renderer's
-		// probe stays honest and falls back to the heuristic path when no backend is wired.
-		sendJson(res, 200, { ok: activeBackend().isConfigured(), backend: BACKEND });
+		// `ok` is true only when the active backend is actually configured, so the renderer's probe stays honest
+		// and falls back to the heuristic path when no backend is wired. The extra fields feed the Settings
+		// provider + usage display (plan 35 iter 4): which door is active, and - for the metered fallback - how
+		// much of today's included usage is spent. A subscription backend (openai-oauth) is NOT metered, so it
+		// reports no daily figure; today's spend comes from the same authoritative SpendMeter the cap uses.
+		const backend = activeBackend();
+		sendJson(res, 200, {
+			ok: backend.isConfigured(),
+			backend: BACKEND,
+			meters: backend.meters,
+			signedIn: openaiOAuth.isSignedIn(),
+			dailyBudgetUsd: DAILY_BUDGET_USD,
+			dailyTotalUsd: backend.meters ? Number(spendMeter.dailyTotalUsd().toFixed(6)) : undefined,
+		});
+		return;
+	}
+	// --- "Sign in with ChatGPT" OAuth routes (plan 35 iter 2) ---
+	// GET /auth/openai/start -> begins the loopback PKCE flow and returns the authorize URL to open in a
+	// browser. GET /auth/openai/status -> polls signed-out | pending | signed-in | error. POST
+	// /auth/openai/signout -> forgets the token bundle. The renderer only ever sees the authorize URL and a
+	// status string; the token itself never leaves this process (decision 14).
+	if (req.method === 'GET' && url.startsWith('/auth/openai/start')) {
+		setCors(res);
+		try {
+			const { authorizeUrl } = openaiOAuth.start();
+			sendJson(res, 200, { authorizeUrl });
+		} catch (e) {
+			sendJson(res, 502, { error: { type: 'auth_error', message: String(e && e.message ? e.message : e) } });
+		}
+		return;
+	}
+	if (req.method === 'GET' && url.startsWith('/auth/openai/status')) {
+		setCors(res);
+		sendJson(res, 200, openaiOAuth.status());
+		return;
+	}
+	if (req.method === 'POST' && url.startsWith('/auth/openai/signout')) {
+		setCors(res);
+		openaiOAuth.signOut();
+		sendJson(res, 200, { status: 'signed-out' });
 		return;
 	}
 	if (req.method === 'POST' && url.startsWith('/v1/messages')) {
@@ -608,8 +837,8 @@ function killMcpServers() {
 	for (const conn of mcpConns.values()) { try { conn.child.kill(); } catch { /* already gone */ } }
 	mcpConns.clear();
 }
-process.on('SIGINT', () => { killMcpServers(); process.exit(0); });
-process.on('SIGTERM', () => { killMcpServers(); process.exit(0); });
+process.on('SIGINT', () => { killMcpServers(); openaiOAuth.stopPending(); process.exit(0); });
+process.on('SIGTERM', () => { killMcpServers(); openaiOAuth.stopPending(); process.exit(0); });
 
 server.listen(PORT, HOST, () => {
 	const backend = activeBackend();
@@ -618,6 +847,7 @@ server.listen(PORT, HOST, () => {
 		console.log(`[lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$${DAILY_BUDGET_USD}/user`);
 		if (!backend.isConfigured()) { console.log('[lwd-proxy] no OpenRouter key configured - the app runs on its built-in heuristic fallback'); }
 	} else if (backend.name === 'openai-oauth') {
-		console.log('[lwd-proxy] the openai-oauth ("Sign in with ChatGPT") backend is not implemented yet (plan 35 iter 2) - running heuristic fallback');
+		console.log(`[lwd-proxy] "Sign in with ChatGPT" backend; model ${openaiOAuth.OPENAI_MODEL}; token store ${openaiOAuth.STORE_PATH} (0600)`);
+		if (!backend.isConfigured()) { console.log('[lwd-proxy] not signed in - open Abstract Settings and choose "Sign in with ChatGPT", or run on the included model'); }
 	}
 });

@@ -22,9 +22,13 @@ fi
 
 # Backend defaults to the founder-funded OpenRouter fallback tier (plan 35 iter 1). It is metered per user
 # to a small daily budget (LWD_DAILY_BUDGET_USD, default US$1) that pauses gracefully at the cap (iter 3).
+# Set LWD_BACKEND=openai-oauth for the "Sign in with ChatGPT" subscription path (plan 35 iter 2): the user
+# signs in from Abstract Settings, their model calls draw on their own ChatGPT plan (not metered), and the
+# token bundle lives only here in ~/.abstract/openai-oauth.json (0600) - never in the renderer.
 # Override LWD_BACKEND / OPENROUTER_API_KEY_FILE / OPENROUTER_MODEL / LWD_DAILY_BUDGET_USD before running.
 # The renderer is unchanged: it always talks to this proxy's /v1/messages in the Anthropic Messages shape;
-# the proxy translates. With no key the app runs on its built-in heuristic fallback (demoable with zero backends).
+# the proxy translates. With no backend configured the app runs on its built-in heuristic fallback (demoable
+# with zero backends).
 export LWD_BACKEND="${LWD_BACKEND:-openrouter}"
 if [ "$LWD_BACKEND" = "openrouter" ] && [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FILE" ] && [ -f "$HOME/.config/lwd-openrouter.key" ]; then
 	export OPENROUTER_API_KEY_FILE="$HOME/.config/lwd-openrouter.key"
