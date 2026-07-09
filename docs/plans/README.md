@@ -51,6 +51,12 @@ Suggested order: 26 → 27 → 31 → 28 → 29 → 30 → 32 → 33 (hard depen
 | [33-shell-integrity-loop.md](33-shell-integrity-loop.md) | Shell integrity: the leak inventory (command centre, window title, `mount` naming, stray keybindings), Present honesty, and `scripts/check-seams.sh` making the merge-tax checklist executable. |
 | [RUN-p0-p1-completion-loop.md](RUN-p0-p1-completion-loop.md) | **The master loop prompt for the P0/P1 set.** Paste into a fresh session: a Fable 5 orchestrator fans out Opus 4.8 implementer + independent Opus 4.8 validator sub-agents across plans 26-29/31/33, unattended, max 30 iterations, PRs with screenshots, stacked merges permitted. |
 
+### Journey walk (integration polish - runs after 26-33 land)
+
+| File | What it is |
+|---|---|
+| [34-journey-walk-loop.md](34-journey-walk-loop.md) | The first integration loop: assumes plans 26-33 are merged and walks the north-star journeys (daily approval, data refresh + provenance, cross-doc fan-out, templates/knowledge on-ramp) end-to-end in the live build, scoring every surface and every transition, fixing the seams no single feature plan owned. Filmstrips + scorecards to `34-verify/`. |
+
 ## How to use a handoff
 Paste the relevant file into a fresh Claude Code session. The handoffs are self-contained: repo /
 branch / build / conventions / design source / ordered work items / verification. Plans 06–14 are
