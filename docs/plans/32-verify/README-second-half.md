@@ -57,9 +57,9 @@ The suites were executed exactly as the four prior units did - with an **esbuild
 | `historyRender.test.ts` | 10 pass | **2** (a publish names the real pin count; a 0-pin publish reads "no sources to pin") |
 | `livingDocsService.test.ts` | 107 pass | **7** (`previewExportGate` surfaces the failure; a forced export writes the file AND audits `via:override` while the unforced export stays blocked; a forced publish audits the override; the publish snapshot carries the true pin count; source-peek shows the pinned line on a published doc; `runSkillAcrossProject` grades every living doc with a real verdict + covering tallies) |
 
-**30 new tests for the unit** (8 orchestrator + 2 model + 9 screenRender + 2 livingDocRender + 2 historyRender + 7 service).
+**27 new tests for the unit** (7 orchestrator + 2 model + 8 screenRender + 2 livingDocRender + 2 historyRender + 6 service).
 
-The only reported per-suite failures are the **`[teardown]` disposable-leak-tracker complaints** - the known ad-hoc-runner artefact documented in plans 30/32-first-half's verify notes (the shared leak tracker bleeds across tests in this bundled runner; the real mocha suite isolates the tracker per test). Every actual test body, including all 30 new tests, is in the pass set.
+The only reported per-suite failures are the **`[teardown]` disposable-leak-tracker complaints** - the known ad-hoc-runner artefact documented in plans 30/32-first-half's verify notes (the shared leak tracker bleeds across tests in this bundled runner; the real mocha suite isolates the tracker per test). Every actual test body, including all 27 new tests, is in the pass set.
 
 No new machinery needs the model backend: the drawer/run-log/gate/pins states are deterministic. The cross-project skill run's deterministic skills (Financial, Formatting) grade with no model; the model-backed Strategy grade honestly reports `skipped` per document when no model is reachable.
 
