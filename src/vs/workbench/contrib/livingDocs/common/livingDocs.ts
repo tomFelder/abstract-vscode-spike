@@ -214,6 +214,23 @@ export interface IStreamingChat {
 }
 
 /**
+ * The progress of a whole-project fan-out that was packed into context-bounded batches (plan 30, track 3,
+ * D30-B). The fan-out sends the working set in `batchCount` batches; `batchIndex` is the 1-based batch
+ * currently running (0 before the first). The project-run command strip reads this to show `batch K of M`,
+ * and `oversizeDocIds` marks the documents too large for the run so their swarm tiles read the honest
+ * "too large for this run" state rather than being silently dropped. Absent when a run sent a single batch
+ * with no oversize documents (the common small-scale case), so nothing extra is shown then.
+ */
+export interface IFanoutProgress {
+	/** The 1-based index of the batch currently running (0 before the first batch starts). */
+	readonly batchIndex: number;
+	/** The total number of batches the working set was packed into. */
+	readonly batchCount: number;
+	/** The docIds (resource strings) of documents too large for the budget - never sent, reported honestly. */
+	readonly oversizeDocIds: readonly string[];
+}
+
+/**
  * Holds every loaded Living Document and drives the core loop:
  *   source change -> agent proposes edits -> figures auto-apply, meaning-changes queue ->
  *   approve/reject -> audit trail.
@@ -440,6 +457,13 @@ export interface ILivingDocsService {
 	 * assistant turn and reads its `text` for the salvage when the user stops.
 	 */
 	getStreamingChat(resource: URI): IStreamingChat | undefined;
+	/**
+	 * The batch progress of an in-flight (or the last) whole-project fan-out for a document (plan 30,
+	 * track 3, D30-B): which batch of how many is running, and which documents were too large for the
+	 * budget. Undefined when the fan-out ran as a single batch with no oversize documents, so the run
+	 * screen shows nothing extra in the common small-scale case. Read by the project-run command strip.
+	 */
+	getFanoutProgress(resource: URI): IFanoutProgress | undefined;
 	/**
 	 * Send one user message to the document's Chat agent. Parses `@mentions`, gathers the document
 	 * (with resolved figures) plus the mentioned/context sources, and asks the model for a reply that

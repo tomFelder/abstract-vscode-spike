@@ -58,3 +58,53 @@ Regression guard: the full pre-existing `livingDocsService.test.ts` (91 assertio
 
 The refresh-derivation path this unit changes is deterministic and does NOT require the model backend (source-file edit → refresh → figures reconcile).
 See `README.md` in this folder for the live-run status and any blockers.
+
+---
+
+# Plan 30 - tracks 3 + 4 (fan-out context budgeting + editor webview test seams)
+
+Scope of this unit: **track 3** (fan-out context budgeting, D30-B) and **track 4** (the P2-3 webview test-seam debt for the document editor).
+These build on tracks 1 + 2 (merged via PR #110); they do not redo the incremental refresh / concurrency work.
+
+All numbers below are **asserted** by the test suites (deterministic counts), not estimated.
+Fan-out timing is not a meaningful metric here: the batching is a token-budget decision made before any model call, and the mocked model resolves instantly, so there is no wall-time to record - the plan gates track 3 on batching COUNTS and UI truthfulness, which is what the tests assert.
+
+## Track 3 - what the budgeting changes (measured / asserted)
+
+| Behaviour | Before (plan 18, decision 62) | After (track 3, D30-B) |
+|---|---|---|
+| Working set larger than the context budget | sent in ONE call - silent overflow / truncation on a 50-doc folder | packed into ordered BATCHES that each fit `budget - promptOverhead`; a 2-doc set over a 2000-token budget is asserted to send **2 batches, 2 model calls** |
+| Per-batch keyed edits | n/a (single call) | merged with each document in **exactly one batch** - asserted **1 proposal per doc, no double-count** across batches |
+| A document larger than the whole budget | truncated inside the single call | set aside as **oversize** - asserted **never sent** (the fitting docs still change), surfaced as an amber "too large for this run" tile + a `too large for this run` chat step + an `N too large` bottom-bar bucket |
+| Token estimate | none | `chars/4`, asserted (4 chars → 1 token; 5 → 2; rounds up; empty → 0) |
+| Budget | none | `livingDocs.fanoutContextBudget` (default 24000, min 2000) - user-overridable |
+
+The run screen surfaces the batches truthfully: a `Batch K of M` chip in the command strip while a run spans more than one batch, and the swarm tiles read `oversize` for documents too large (excluded from the live working overlay so they never spin).
+
+## Track 3 tests (all asserted; pure + service)
+
+`test/browser/fanoutBudget.test.ts` - 6 pure tests: chars/4 estimate; fits-in-one-batch; ordered split at the boundary with every doc packed exactly once; oversize set aside (never packed); overhead floor keeps a usable budget; empty set.
+`test/browser/livingDocsModel.test.ts` - 1 added test: `summariseProjectRun` flags an oversize document as its own bucket (priority over changed/no-change), plus the 4 pre-existing summary tests updated for the new `oversizeDocs` field.
+`test/browser/livingDocsService.test.ts` - 3 added tests: an over-budget working set is sent in 2 batches with the per-batch edits merged to the right docs one-each (+ `Batch 1/2` and `Batch 2/2` steps + a 2-batch `IFanoutProgress`); a document larger than the whole budget is flagged oversize, never sent, and the others still change; the existing single-doc / no-working-set paths are unaffected.
+
+## Track 4 - the editor webview test seam (P2-3)
+
+The document editor's mount-once-then-message lifecycle is now a pure reducer (`common/editorWebviewProtocol.ts`); `livingDocEditor.ts` is a thin effect-runner.
+No behaviour change - the reducer's effects are the same messages the old inline code posted.
+
+`test/browser/editorWebviewProtocol.test.ts` - 9 pure tests covering exactly the plan's named cases: first-render setHtml-once; a render before ready is HELD and flushed on ready with NO pmReset; a model-driven body change resets the surface while a chrome-only render does not; the user's own typing (`recordPmBody`) suppresses the spurious reset; a null-body render clears the tracked body; a focus request before ready is held + flushed (focus-after-navigate) and after ready is immediate; ready flushes the held render BEFORE the held focus; an empty ready is a no-op.
+
+**Deviation (logged, decision 138):** `screenEditor.ts` was not given a reducer - it uses whole-screen `setHtml` per render (no mount-once message protocol) and routes messages straight to the service, so it has no timing-sensitive lifecycle to extract. The meaningful P2-3 seam is the `livingDocEditor` mount-once path, where the silent-regression risk lives.
+
+## Gates
+
+- `typecheck-client` - clean (only the pre-existing, unrelated `src/vs/platform/agentHost/**` errors remain).
+- `valid-layers-check` - clean.
+- `scripts/check-seams.sh` - OK.
+- **0 core patches** - every change is inside `contrib/livingDocs/`.
+
+## Live verification (tracks 3 + 4)
+
+The batching + merge + oversize path is proven by the deterministic harness (no model backend needed for the packing decision).
+A live in-app multi-batch run on the scale sample (the batch chip + the amber oversize tile) needs BOTH the full web build and a reachable model backend to produce real proposals; in this sandbox the web build is blocked by the pruned node_modules and the model backend is unreachable (no credits), so the live model run was not captured.
+See `README.md` for the blocker detail. No evidence was fabricated.

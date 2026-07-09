@@ -132,6 +132,13 @@ export interface IProjectRunScreenState {
 	 * rationale grouping (`grounded:false`) and the card omits the line chip.
 	 */
 	readonly decisions?: readonly IDecisionGroup[];
+	/**
+	 * The fan-out's batch progress (plan 30, track 3, D30-B): the whole-project run packs the working set
+	 * into `count` context-bounded batches; `index` is the 1-based batch currently running (0 when no batch
+	 * is live). The command strip shows a `batch K of M` chip while a run spans more than one batch. Absent
+	 * when the run fit in a single batch (the common small-scale case), so nothing extra is shown then.
+	 */
+	readonly batch?: { readonly index: number; readonly count: number };
 }
 
 function esc(s: string): string {
@@ -874,9 +881,18 @@ function renderProjectRun(state: IScreenState): string {
 	const stopRun = run?.inFlight
 		? `<button data-msg="stopProjectRun" style="flex:none;display:inline-flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#b4332f;background:#fff;border:1px solid #e7c9c6;border-radius:8px;padding:8px 14px;cursor:pointer"><span style="width:9px;height:9px;border-radius:2px;background:#b4332f"></span>Stop run</button>`
 		: '';
+	// The batch chip (plan 30, track 3, D30-B): the fan-out packs the working set into context-bounded
+	// batches; when a run spans more than one batch the strip reports `Batch K of M` so the user sees the
+	// run proceeding in batches rather than stalling on a large folder. Shown only for a live multi-batch
+	// run (index > 0, count > 1); a single-batch run shows nothing extra (the common small-scale case).
+	const batch = run?.batch;
+	const batchChip = batch && batch.count > 1 && batch.index > 0
+		? `<span style="flex:none;font:600 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:8px;padding:7px 12px">Batch ${batch.index} of ${batch.count}</span>`
+		: '';
 	const commandStrip = `<div style="flex:none;padding:18px 28px;border-bottom:1px solid #eef0f3;display:flex;align-items:center;gap:16px">
 		<span style="width:32px;height:32px;border-radius:50%;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 12px/1 system-ui;flex:none">TS</span>
 		<div style="flex:1;font:400 18px/1.4 system-ui;color:${instructionColor}">${instruction}</div>
+		${batchChip}
 		${stopRun}
 		<span style="flex:none;font:600 12.5px/1 system-ui;color:#fff;background:${ACCENT};border-radius:8px;padding:8px 14px">Whole Project</span>
 	</div>`;
@@ -914,10 +930,13 @@ function renderProjectRun(state: IScreenState): string {
 	const unchangedDocs = summary ? Math.max(0, summary.unchangedDocs - workingCount) : 0;
 	// A stopped run's not-yet-changed docs are skipped, not unchanged (plan 27 iter 4) - reported honestly.
 	const skippedDocs = summary?.skippedDocs ?? 0;
+	// Documents too large for the fan-out budget (plan 30, track 3) are reported as their own honest bucket.
+	const oversizeDocs = summary?.oversizeDocs ?? 0;
 	const numeral = (n: number) => `<strong style="font:500 20px/1 system-ui;color:#14161a">${n}</strong>`;
-	const tail = skippedDocs
-		? `&middot; ${workingCount} working &middot; ${unchangedDocs} unchanged &middot; ${skippedDocs} skipped`
-		: `&middot; ${workingCount} working &middot; ${unchangedDocs} unchanged`;
+	const tailParts = [`&middot; ${workingCount} working`, `&middot; ${unchangedDocs} unchanged`];
+	if (skippedDocs) { tailParts.push(`&middot; ${skippedDocs} skipped`); }
+	if (oversizeDocs) { tailParts.push(`&middot; ${oversizeDocs} too large`); }
+	const tail = tailParts.join(' ');
 	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid #eef0f3;background:#fbfbfc;display:flex;align-items:center;padding:0 28px;gap:18px">
 		<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>
 		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${tail}</span>
@@ -1023,6 +1042,15 @@ function swarmTile(_docId: string, title: string, status: ProjectRunDocStatus, c
 		return `<div style="background:#fafbfc;border:1px dashed #dcdfe6;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
 			<div style="display:flex;align-items:center;gap:6px"><span style="color:#b4332f;font-size:11px">&#9723;</span><span style="${nameStyle};color:#9a9ea7">${name}</span></div>
 			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#b0b4bc">skipped</span>
+		</div>`;
+	}
+	// An oversize tile (plan 30, track 3, D30-B): the document is too large for the fan-out's context budget,
+	// so it was NEVER sent - an amber border + a warning glyph + the honest "too large for this run" label
+	// tells the user why it produced nothing, rather than a silent drop or a false "no change".
+	if (status === 'oversize') {
+		return `<div style="background:#fdf6ec;border:1px solid #f0d9a8;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:#9a6b16;font-size:11px">&#9888;</span><span style="${nameStyle};color:#7a5a13">${name}</span></div>
+			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16">too large for this run</span>
 		</div>`;
 	}
 	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">

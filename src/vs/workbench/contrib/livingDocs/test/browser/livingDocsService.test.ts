@@ -182,7 +182,7 @@ suite('LivingDocsService', () => {
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -233,7 +233,9 @@ suite('LivingDocsService', () => {
 
 		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; } } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
-		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
+		// Most settings the service reads are booleans that default to true (useModel); the fan-out context
+		// budget (plan 30, track 3) is a number a test can lower to force multi-batch packing over few docs.
+		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : true) } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
@@ -246,9 +248,16 @@ suite('LivingDocsService', () => {
 				// assert the renderer only ever names the secret, never carries its value.
 				if (url.includes('/mcp/resolve')) { lastMcpBody = options.data; payload = opts.mcpResponse ?? MCP_RESOLVE_RESPONSE; }
 				else if (url.includes('/proxy/fetch')) { lastProxyFetchBody = options.data; payload = API_AUTH_PAYLOAD; }
-				else if (opts.model) {
+				else if (opts.model || opts.modelSequence) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
-					else if (url.includes('/v1/messages')) { payload = opts.model; lastModelBody = options.data; lastModelCalls++; }
+					else if (url.includes('/v1/messages')) {
+						// A `modelSequence` returns a DIFFERENT canned reply per call (the Nth /v1/messages call
+						// gets the Nth reply), so a multi-batch fan-out can be given one reply per batch; a single
+						// `model` returns the same reply every call. lastModelCalls counts calls either way.
+						payload = opts.modelSequence ? (opts.modelSequence[lastModelCalls] ?? opts.modelSequence[opts.modelSequence.length - 1]) : opts.model!;
+						lastModelBody = options.data;
+						lastModelCalls++;
+					}
 				}
 				return {
 					res: { statusCode: 200, headers: {} },
@@ -1122,6 +1131,82 @@ suite('LivingDocsService', () => {
 			[BOARD.toString(), README.toString(), WEEKLY.toString()].sort(),
 			'proposals are queued across all three working-set documents',
 		);
+	});
+
+	// --- fan-out context budgeting (plan 30, track 3, D30-B): batches to a budget, merges keyed edits ---
+
+	test('a working set over the fan-out budget is sent in BATCHES, and the per-batch edits merge to the right docs', async () => {
+		// Two documents each padded to ~1000 tokens (~4000 chars): together they exceed a 2000-token budget's
+		// usable per-batch space (budget minus the fixed prompt overhead), so the fan-out splits them into two
+		// single-doc batches. Each batch gets its OWN reply (modelSequence): batch 1 edits the Weekly, batch 2
+		// the Board. The merge must queue each batch's edit against its own document - two model calls, two docs.
+		// Padding blocks are blank-line separated so they are their OWN paragraphs - the editable anchor block
+		// ("Growth remained steady this week.") stays short so the edit still matches it, while the doc as a
+		// whole grows past the per-document budget.
+		const padBlocks = Array.from({ length: 40 }, (_, i) => `Background context paragraph ${i} that pads the document body so it approaches the per-document budget.`).join('\n\n');
+		const weeklyBig = WEEKLY_MD.replace('Growth remained steady this week.', `Growth remained steady this week.\n\n${padBlocks}`);
+		const boardBig = BOARD_MD.replace('Momentum is steady this week.', `Momentum is steady this week.\n\n${padBlocks}`);
+		const service = createService([], {
+			boardNote: true,
+			fanoutBudget: 2000,
+			modelSequence: [
+				multiReply('Weekly done.', [{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] }]),
+				multiReply('Board done.', [{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum is now red-themed.', rationale: 'r' }] }]),
+			],
+		});
+		lastFiles!.set(WEEKLY.toString(), weeklyBig);
+		lastFiles!.set(BOARD.toString(), boardBig);
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'change the primary colour from blue to red');
+
+		// Two batches => two model calls (not one over-large call, and not one per attempt).
+		assert.strictEqual(lastModelCalls, 2, 'the over-budget working set is sent in two batches');
+		const docIds = new Set(service.getAllPending().map(c => c.docId));
+		assert.deepStrictEqual(
+			[...docIds].sort(),
+			[BOARD.toString(), WEEKLY.toString()].sort(),
+			'each batch\'s edit is merged against its own document (no drop, no double-count)',
+		);
+		// Exactly one pending change per document - the merge did not double-queue across batches.
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 1, 'the Weekly has exactly its own one proposal');
+		assert.strictEqual(service.getPendingForDoc(BOARD).length, 1, 'the Board has exactly its own one proposal');
+		// The fan-out progress records the two-batch run for the run screen's "batch K of M" chip (no oversize).
+		const progress = service.getFanoutProgress(WEEKLY);
+		assert.strictEqual(progress?.batchCount, 2, 'the run screen sees a two-batch fan-out');
+		assert.deepStrictEqual(progress?.oversizeDocIds, [], 'no document was oversize');
+		// The assistant turn carries the batch steps so the rail shows the run proceeded in batches.
+		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(assistant.steps?.some(s => /Batch 1 of 2/.test(s.label)), 'a Batch 1 of 2 step is surfaced');
+		assert.ok(assistant.steps?.some(s => /Batch 2 of 2/.test(s.label)), 'a Batch 2 of 2 step is surfaced');
+	});
+
+	test('a document larger than the whole budget is flagged oversize, never sent, others still change (no silent drop)', async () => {
+		// README is padded to a large body; the budget (2000) is far smaller, so it cannot fit any batch and
+		// is set aside as oversize. The Weekly still fits and is edited. The oversize doc is reported honestly.
+		const bigBody = `---\ntitle: Team Notes\n---\n\n## Team Notes\n\n${'padding sentence to blow the budget. '.repeat(400)}\n`;
+		const service = createService([], {
+			fanoutBudget: 2000,
+			modelSequence: [
+				multiReply('Weekly done.', [{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] }]),
+			],
+		});
+		lastFiles!.set(README.toString(), bigBody);
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, README]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'change the primary colour from blue to red');
+
+		// Only the fitting document is edited; the oversize document produced no proposal and was never sent.
+		const docIds = new Set(service.getAllPending().map(c => c.docId));
+		assert.deepStrictEqual([...docIds], [WEEKLY.toString()], 'only the fitting document is edited');
+		const progress = service.getFanoutProgress(WEEKLY);
+		assert.deepStrictEqual(progress?.oversizeDocIds, [README.toString()], 'the oversize document is flagged, not dropped silently');
+		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(assistant.steps?.some(s => /too large for this run/.test(s.label)), 'the oversize document reads "too large for this run"');
 	});
 
 	test('with NO working set, chat still edits only the active document (backwards compatible, D-B)', async () => {

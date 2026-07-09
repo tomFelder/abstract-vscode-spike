@@ -22,8 +22,9 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
@@ -270,6 +271,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// active document the chat belongs to (mirrors the per-document _chats keying). Empty by default,
 	// so with no set added the chat stays single-doc (decision 61).
 	private readonly _workingSets = new Map<string, IWorkingSetDoc[]>();
+	// The live batch progress of each document's whole-project fan-out (plan 30, track 3, D30-B): which
+	// batch of how many is running, and which docs were too large for the budget. Keyed like _chats. Set as
+	// the fan-out packs + runs, cleared with the streaming turn in _deliverChatReply's finally.
+	private readonly _fanoutProgress = new Map<string, IFanoutProgress>();
 	// The figure diff from each document's last "Sync across", for the editor's synced banner.
 	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
 
@@ -2355,6 +2360,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._chatStreaming.get(resource.toString());
 	}
 
+	getFanoutProgress(resource: URI): IFanoutProgress | undefined {
+		return this._fanoutProgress.get(resource.toString());
+	}
+
 	retryChat(resource: URI): void {
 		const id = resource.toString();
 		const history = this._chats.get(id);
@@ -2504,10 +2513,6 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 		const sourceFiles = mentions.length ? mentions : [...active.doc.sources, ...active.doc.context];
 		const sources = await this._readContext(active, sourceFiles);
-		const docSections = states.map(s => {
-			const headings = s.doc.blocks.filter(b => b.type === 'heading').map(b => b.text);
-			return `### Document: "${s.doc.title}"\n${this._serializeDocForChat(s)}\nHeadings: ${headings.join(' | ') || '(none)'}`;
-		}).join('\n\n');
 
 		const system = 'You are the agent inside a Living Document editor. The user has selected a WORKING SET of documents and given ONE instruction to apply across ALL of them. '
 			+ 'Apply the instruction to every document where it is relevant; a document that needs no change simply gets empty arrays. Never touch bound figures. '
@@ -2517,35 +2522,102 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			+ '"inserts": [{"afterHeading": string, "newText": string, "rationale": string, "sourceQuote": string, "sourceLine": number}]}]}. '
 			+ 'The "doc" field MUST be the exact document title shown below. Use "edits" to rewrite an existing paragraph (oldText must quote the current prose). Use "inserts" to add NEW content after the named heading (empty afterHeading = end of that document). Keep reply concise.';
 		const transcript = this._chatTranscript(active.uri);
-		const user = `Working set (${states.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
-		const raw = await this._chatModelCall(system, user, onDelta, token);
-		const json = parseMultiChatResponse(raw);
+
+		// D30-B: pack the working set into context-bounded batches instead of sending every document body in
+		// one over-large call. Serialize each document once (the body the model is shown), estimate the fixed
+		// per-call overhead (system + shared sources + transcript, which ride EVERY batch), and let the pure
+		// planner split the docs into batches that fit the configured budget - flagging any single document
+		// too large for the budget as `oversize` (reported honestly, never sent, never truncated).
+		const sectionFor = (s: IDocState) => {
+			const headings = s.doc.blocks.filter(b => b.type === 'heading').map(b => b.text);
+			return `### Document: "${s.doc.title}"\n${this._serializeDocForChat(s)}\nHeadings: ${headings.join(' | ') || '(none)'}`;
+		};
+		const stateByTitle = new Map(states.map(s => [s.doc.title.trim().toLowerCase(), s]));
+		const fanoutDocs: IFanoutDoc[] = states.map(s => ({ id: s.uri.toString(), title: s.doc.title, body: sectionFor(s) }));
+		const budget = this._fanoutContextBudget();
+		// Everything that is NOT a document body but still consumed by every call, so a batch's usable space is
+		// budget - overhead. The `Working set (N documents):` scaffold + the `Shared sources ...` framing are
+		// small and folded into the transcript estimate here.
+		const overhead = estimateTokens(system) + estimateTokens(sources) + estimateTokens(transcript) + estimateTokens(text) + 64;
+		const plan = planFanoutBatches(fanoutDocs, budget, overhead);
 
 		const steps: IChatStep[] = [];
 		const proposedIds: string[] = [];
 		const addStep = (step: IChatStep) => { steps.push(step); onStep(step); };
 		if (sourceFiles.length) { addStep({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
-		// Match each returned doc entry to a working-set document by title, then queue its edits/inserts
-		// against that document's own state (so proposals carry the right docId for the rail grouping).
-		const byTitle = new Map(states.map(s => [s.doc.title.trim().toLowerCase(), s]));
-		for (const entry of json.docs) {
-			const target = byTitle.get(entry.doc.trim().toLowerCase());
-			if (!target) { continue; }
-			for (const edit of entry.edits) {
-				const queued = this._queueChatEdit(target, edit, sources);
-				if (queued) { addStep({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
-			}
-			for (const insert of entry.inserts) {
-				const queued = this._queueChatInsert(target, insert, sources);
-				if (queued) { addStep({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+
+		// Publish the fan-out's batch progress so the project-run command strip can show `batch K of M` and
+		// the oversize documents' tiles read the honest "too large for this run" state. Keyed on the anchor
+		// (this chat's own document), overwritten each batch, and kept after the run settles so a completed
+		// swarm still shows which documents were too large. Fires onDidChange so the run screen re-renders.
+		const anchorId = active.uri.toString();
+		const oversizeDocIds = plan.oversize.map(d => d.id);
+		const publishProgress = (batchIndex: number) => {
+			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds });
+			this._onDidChange.fire();
+		};
+		publishProgress(0);
+		// Announce every oversize document up front (plan-23 honesty rule): a document larger than the whole
+		// budget is NEVER sent - its tile/step says so rather than the run silently dropping it.
+		for (const doc of plan.oversize) {
+			addStep({ label: `${doc.title}: too large for this run`, status: 'queued' });
+		}
+
+		let anyReply = '';
+		// Run the batches in order. Each doc appears in exactly ONE batch (uniqueness by construction), so the
+		// per-batch keyed replies simply concatenate into the pending queue with no double-count or drop. The
+		// first batch STREAMS its prose into the live turn (onDelta); later batches use the buffered call (no
+		// delta) so the live turn is not scrambled by interleaved prose - their steps still settle live. The
+		// buffered `_callModel` is bounded by the plan-30 track-2 model limiter.
+		for (let b = 0; b < plan.batches.length; b++) {
+			if (token.isCancellationRequested) { throw new CancellationError(); }
+			const batch = plan.batches[b];
+			publishProgress(b + 1);
+			if (plan.batchCount > 1) { addStep({ label: `Batch ${b + 1} of ${plan.batchCount} (${batch.docs.length} documents)`, status: 'done' }); }
+			const docSections = batch.docs.map(d => d.body).join('\n\n');
+			const user = `Working set (${batch.docs.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
+			const raw = b === 0
+				? await this._chatModelCall(system, user, onDelta, token)
+				: await this._callModel(system, user);
+			const json = parseMultiChatResponse(raw);
+			if (json.reply && !anyReply) { anyReply = json.reply; }
+			// Match each returned doc entry to a document IN THIS BATCH by title, then queue its edits/inserts
+			// against that document's own state (so proposals carry the right docId for the rail grouping). The
+			// match is restricted to the batch's own documents so a reply that names an out-of-batch doc cannot
+			// route an edit to a document that batch was never shown - keeping "each doc in exactly one batch"
+			// airtight (a document is only ever edited by the one batch that actually contained its body).
+			const batchByTitle = new Map(batch.docs.map(d => [d.title.trim().toLowerCase(), stateByTitle.get(d.title.trim().toLowerCase())]));
+			for (const entry of json.docs) {
+				const target = batchByTitle.get(entry.doc.trim().toLowerCase());
+				if (!target) { continue; }
+				for (const edit of entry.edits) {
+					const queued = this._queueChatEdit(target, edit, sources);
+					if (queued) { addStep({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+				}
+				for (const insert of entry.inserts) {
+					const queued = this._queueChatInsert(target, insert, sources);
+					if (queued) { addStep({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+				}
 			}
 		}
-		const content = json.reply || (proposedIds.length ? '' : 'I did not find anything to change across those documents.');
+		// Mark the fan-out as no longer on a live batch (batchIndex 0) while keeping the batchCount + oversize
+		// set, so the settled run screen still reads "N documents too large" without a spurious live "batch K".
+		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds });
+
+		const content = anyReply || (proposedIds.length ? '' : 'I did not find anything to change across those documents.');
 		return {
 			role: 'assistant', via: 'model', content,
 			steps: steps.length ? steps : undefined,
 			proposedIds: proposedIds.length ? proposedIds : undefined,
 		};
+	}
+
+	// The configured fan-out context budget in tokens (plan 30, track 3, D30-B). Reads the user-overridable
+	// `livingDocs.fanoutContextBudget` (default 24k), floored at a small minimum so a mis-set value can never
+	// produce a budget that packs nothing.
+	private _fanoutContextBudget(): number {
+		const raw = this._config.getValue<number>('livingDocs.fanoutContextBudget');
+		return typeof raw === 'number' && Number.isFinite(raw) && raw >= 2000 ? raw : 24000;
 	}
 
 	// Render the last few turns for the model so a follow-up ("change a couple of them") resolves against
