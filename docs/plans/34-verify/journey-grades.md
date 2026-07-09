@@ -1,5 +1,7 @@
 # Plan 34 - Journey grades (iteration 1: Groups A and B)
 
+> **STALE-BUILD CAVEAT (orchestrator, post-walk):** this walk ran against compiled output from 7 Jul 15:40, which predates the plan 26-33 merges (PRs 88-113). Findings that contradict landed work (fabricated History rows, the Saved-v14 chip, possibly the reload persistence loss) may be artefacts of the stale build. A re-verify against a fresh compile follows; grades will be amended, not silently replaced.
+
 This is the honest, evidence-backed grade for each of the ten aha-path journeys walked in iteration 1 - Group A (1a, 1b, 1c, 1d, 1w, 1x) and Group B (1e, 1f, 1g, 1h). Every grade traces to a real walk in the running web app driven through the chrome-devtools MCP, with screenshots in `docs/plans/34-verify/shots/`. Where a journey's surface does not exist, that is confirmed in the product, not read off the map.
 
 Grades follow the plan rubric: WALKABLE (survives the golden path and the standard off-path probes), FRAGILE (golden path works, an off-path probe breaks it), BLOCKED (cannot complete even on the golden path), MISSING (the surface does not exist). Any data-loss finding is severity-1 regardless of grade.
