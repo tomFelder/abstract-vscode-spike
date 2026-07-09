@@ -9,6 +9,8 @@ import { Emitter, Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
+import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
+import { NullAnalyticsService } from '../../common/analytics.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { IRequestService } from '../../../../../platform/request/common/request.js';
@@ -274,7 +276,7 @@ suite('LivingDocsService', () => {
 		lastProxyFetchBody = undefined;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
 		store.add(service);
 		return service;
 	}
@@ -2033,7 +2035,7 @@ suite('LivingDocsService', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: mountRoot, name: opts.folderName ?? 'mount' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
 		store.add(service);
 		return { service, files, registerProvider };
 	}

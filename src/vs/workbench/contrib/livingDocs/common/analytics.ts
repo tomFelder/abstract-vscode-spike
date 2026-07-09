@@ -176,7 +176,7 @@ export class NullAnalyticsService implements IAnalyticsService {
 	declare readonly _serviceBrand: undefined;
 	readonly hasChosen = true;
 	readonly isEnabled = false;
-	setConsent(): void { /* no-op: the null object never captures. */ }
-	capture(): void { /* no-op. */ }
-	identify(): void { /* no-op. */ }
+	setConsent(_enabled: boolean): void { /* no-op: the null object never captures. */ }
+	capture(_event: AnalyticsEventName, _props?: AnalyticsProps): void { /* no-op. */ }
+	identify(_email: string): void { /* no-op. */ }
 }

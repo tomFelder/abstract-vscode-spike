@@ -578,6 +578,13 @@ export interface ILivingDocsService {
 	 * replacement for the abrasive SIDE_GROUP source open; the pane renders inside the one document surface).
 	 */
 	getSourcePeek(resource: URI, cells: readonly string[]): ISourcePeek | undefined;
+	/**
+	 * Record that the user peeked a source's provenance (plan 36: the provenance_peeked funnel event). `mode`
+	 * distinguishes a click-through on a provenance dot from opening the source pane via the toolbar. Analytics
+	 * only - counts the interaction, never the source or its values; a no-op unless the user consented.
+	 */
+	notePeek(mode: 'click-through' | 'toolbar'): void;
+
 	/** Re-derive this document's bound figures from its current sources, apply them, and return the old -> new diff. */
 	syncFromSources(resource: URI): Promise<readonly IFigureChange[]>;
 	/** The figure diff from the last syncFromSources for a document (for the editor's "synced" banner). */
