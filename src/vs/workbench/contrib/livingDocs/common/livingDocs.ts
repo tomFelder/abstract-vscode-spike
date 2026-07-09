@@ -24,6 +24,54 @@ export const CONTEXT_CONTAINER_ID = 'workbench.viewContainer.livingDocs.context'
 export type LivingDocsPanelTab = 'chat' | 'review' | 'history';
 
 /**
+ * Which model door is serving the user's calls (plan 35 iter 4). `chatgpt` is the user's own ChatGPT
+ * subscription via the OpenAI OAuth backend (not metered); `included` is the founder-funded OpenRouter
+ * fallback (metered to a small daily budget); `none` is the built-in heuristic path when no backend is wired.
+ */
+export type ModelProvider = 'chatgpt' | 'included' | 'none';
+
+/**
+ * The model provider + usage snapshot the Settings provider step renders (plan 35 iter 4). Read from the
+ * proxy's /healthz: the active backend, whether the user is signed in to ChatGPT, and - only for the metered
+ * `included` tier - today's spend against the daily budget. A subscription (`chatgpt`) tier is the user's own
+ * plan, so it carries no daily figure. All real data; never fabricated.
+ */
+export interface IModelProviderStatus {
+	/** The door currently serving calls (see ModelProvider). */
+	readonly provider: ModelProvider;
+	/** True when a ChatGPT subscription is signed in (whichever backend is active). */
+	readonly signedIn: boolean;
+	/** The per-user daily budget in US dollars (the `included` tier's fair-usage cap). */
+	readonly dailyBudgetUsd: number;
+	/** Today's spend on the metered `included` tier in US dollars; undefined for the subscription tier. */
+	readonly dailyTotalUsd?: number;
+}
+
+/** The stage of the "Sign in with ChatGPT" flow the Settings step polls (plan 35 iter 2 + 4). */
+export type ChatGptSignInStage = 'signed-out' | 'pending' | 'signed-in' | 'error';
+
+/** The result of a sign-in poll: the current stage and, on failure, a plain-words reason. */
+export interface IChatGptSignInStatus {
+	readonly stage: ChatGptSignInStage;
+	readonly error?: string;
+}
+
+/**
+ * The onboarding survey captured at the provider step (plan 35 iter 4; doc 18 section 2.4). Free-text, plain
+ * words: which frontier model the user's daily driver is, which subscriptions they own, and what they make
+ * each week. Stored locally as the `model_configured` analytics event's properties (PostHog wiring is plan
+ * 36's job - this only registers the shape and records it to the local event log).
+ */
+export interface IOnboardingSurvey {
+	/** "Which frontier model is your daily driver?" (e.g. "ChatGPT", "Claude", "Gemini"). */
+	readonly dailyDriverModel: string;
+	/** "Which subscriptions do you own?" (free text, e.g. "ChatGPT Plus, Claude Pro"). */
+	readonly ownedSubscriptions: string;
+	/** "What do you make each week?" (free text describing their weekly output). */
+	readonly weeklyOutput: string;
+}
+
+/**
  * A lightweight summary of one document for the "Documents" home list. Built by parsing each
  * discovered file without loading its source, so the home can render before any document is opened.
  */
@@ -276,6 +324,18 @@ export interface ILivingDocsService {
 
 	/** Ask the editor showing a change's document to scroll to and highlight that change's inline diff. */
 	focusChange(changeId: string): void;
+
+	// --- model access: provider picker + survey (plan 35 iter 4) ---
+	/** The current model door + usage snapshot for the Settings provider step (reads the proxy's /healthz). */
+	getModelProviderStatus(): Promise<IModelProviderStatus>;
+	/** Begin "Sign in with ChatGPT": returns the authorize URL to open in a browser (or undefined on failure). */
+	startChatGptSignIn(): Promise<string | undefined>;
+	/** Poll the sign-in flow's stage while the Settings step waits for the browser round-trip to complete. */
+	pollChatGptSignIn(): Promise<IChatGptSignInStatus>;
+	/** Clean sign-out: forget the stored ChatGPT token bundle. */
+	signOutChatGpt(): Promise<void>;
+	/** Record the onboarding survey locally as the `model_configured` event (plan 36 wires it to PostHog). */
+	submitOnboardingSurvey(survey: IOnboardingSurvey): Promise<void>;
 
 	// --- per-document views (the editor renders one document by its resource) ---
 	getDoc(resource: URI): ILivingDoc | undefined;

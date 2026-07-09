@@ -23,7 +23,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
@@ -130,12 +130,33 @@ function bindingIsFresh(current: IResolution | undefined, entry: IBindingEntry):
 	return !current || current.sourceHash === entry.sourceHash;
 }
 
-// Model-backed features (Review-impact rewrites, the Strategy grader) call Claude through a local
-// OAuth proxy (scripts/lwd-anthropic-proxy.js) so no credential ever reaches the renderer. These are
-// the request defaults; the proxy base URL is configurable via livingDocs.modelProxyUrl.
+// Model-backed features (Review-impact rewrites, the Strategy grader, chat) call the model through a local
+// proxy (scripts/lwd-anthropic-proxy.js) so no credential ever reaches the renderer (decision 14). The
+// proxy authenticates against a pluggable backend (plan 35: the founder-funded OpenRouter fallback now, the
+// user's own ChatGPT subscription via OpenAI OAuth next) and speaks the Anthropic Messages shape back, so
+// the renderer/service are backend-agnostic. These are the request defaults; the base URL is configurable
+// via livingDocs.modelProxyUrl.
 const DEFAULT_PROXY_URL = 'http://localhost:8090';
 const DEFAULT_MODEL = 'claude-opus-4-8';
 const MODEL_MAX_TOKENS = 1024;
+
+// The plain-words message the proxy returns when the day's included usage is spent on the founder-funded
+// fallback (plan 35 iter 3; doc 18 section 2.1). Used as the fallback default when the proxy omits its own
+// prose, so the renderer always shows honest words (P5) rather than an error.
+const INCLUDED_USAGE_SPENT_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
+
+// A model call that the proxy paused because the day's included usage is spent (stop_reason "pause"). It is
+// NOT a failure: the caller keeps any prose the proxy returned (the plain-words cap message), queues no
+// proposals, and - inside an agent run - pauses the run via D15 with proposals kept, resuming at day rollover.
+class ModelPausedError extends Error {
+	constructor(message: string) {
+		super(message || INCLUDED_USAGE_SPENT_MESSAGE);
+		this.name = 'ModelPausedError';
+	}
+}
+function isModelPausedError(e: unknown): e is ModelPausedError {
+	return e instanceof ModelPausedError;
+}
 // How long a model-availability probe result is trusted before re-checking (so starting the proxy
 // mid-session is picked up without re-probing on every render).
 const MODEL_PROBE_TTL_MS = 30_000;
@@ -490,8 +511,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (id === 'strategy') {
 			const state = this._docs.get(resource.toString());
 			if (state) {
-				const grade = await this._gradeStrategy(state, []);
-				this._strategyGrades.set(resource.toString(), grade);
+				try {
+					const grade = await this._gradeStrategy(state, []);
+					this._strategyGrades.set(resource.toString(), grade);
+				} catch (e) {
+					// The day's included usage is spent (plan 35 iter 3): an on-demand grade cannot run right now.
+					// Keep the honest pass (never a false FLAG) and tell the user in plain words - no crash.
+					if (isModelPausedError(e)) { this._notify.info(e.message); }
+					else { throw e; }
+				}
 			}
 		}
 		// UI funnel: the user invoked a skill grader. `skill` is the controlled skill id (never document text);
@@ -1588,6 +1616,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 			return { pass: true };
 		} catch (e) {
+			// A spent daily budget must PAUSE the run (D15), not silently pass the gate: let it bubble to the
+			// caller. The on-demand Skills path catches it separately (a paused grade shows NO MODEL, not a crash).
+			if (isModelPausedError(e)) { throw e; }
 			this._log.info('[livingDocs] strategy grade failed, passing', e instanceof Error ? e.message : String(e));
 			return { pass: true };
 		}
@@ -2054,7 +2085,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// to drain, instead of a blanket clear dropping it. Copied so a later propagate cannot mutate it.
 			const dirtyBefore = this._orchestrator.getDirty(uri);
 			const snapshot = dirtyBefore ? { value: [...dirtyBefore.value], influence: [...dirtyBefore.influence] } : undefined;
-			const result = await this._runFiguresByPolicy(state, agent.policy, pass);
+			let result: { applied: number; queued: number; blocked?: string };
+			try {
+				result = await this._runFiguresByPolicy(state, agent.policy, pass);
+			} catch (e) {
+				// The day's included usage is spent mid-run (plan 35 iter 3; doc 18 section 2.1): PAUSE the run via
+				// D15 rather than dying or half-applying. This document and every remaining one are left unprocessed
+				// and honestly skipped (in order); everything already applied/queued stays reviewable, and the run
+				// resumes on its own at day rollover. The composer shows the plain-words message via `blocked`.
+				if (isModelPausedError(e)) { blocked = e.message; skipped = docs.length - i; this._notify.info(e.message); break; }
+				throw e;
+			}
 			applied += result.applied;
 			queued += result.queued;
 			touched++;
@@ -2199,6 +2240,87 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		};
 	}
 
+	// --- model access: provider picker + survey (plan 35 iter 4) ---
+	// All model credentials live in the proxy (decision 14); the renderer only reads status + drives the flow
+	// through the proxy's HTTP routes. Every failure degrades to a safe default (the heuristic path) rather than
+	// surfacing an error - the Settings step must never dead-end.
+
+	// Read the active model door + usage from the proxy's /healthz. `ok` gates whether a backend is actually
+	// serving (a signed-out ChatGPT tier or a key-less included tier reports ok:false -> provider 'none', the
+	// built-in heuristic path). Today's spend is only meaningful for the metered `included` tier.
+	async getModelProviderStatus(): Promise<IModelProviderStatus> {
+		const fallback: IModelProviderStatus = { provider: 'none', signedIn: false, dailyBudgetUsd: 0 };
+		try {
+			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/healthz`, callSite: 'livingDocs.providerStatus', disableCache: true }, CancellationToken.None);
+			const json = await asJson<{ ok?: boolean; backend?: string; meters?: boolean; signedIn?: boolean; dailyBudgetUsd?: number; dailyTotalUsd?: number }>(context);
+			if (!json) { return fallback; }
+			const signedIn = json.signedIn === true;
+			let provider: ModelProvider = 'none';
+			if (json.ok === true) { provider = json.backend === 'openai-oauth' ? 'chatgpt' : 'included'; }
+			return {
+				provider,
+				signedIn,
+				dailyBudgetUsd: typeof json.dailyBudgetUsd === 'number' ? json.dailyBudgetUsd : 0,
+				dailyTotalUsd: json.meters === true && typeof json.dailyTotalUsd === 'number' ? json.dailyTotalUsd : undefined,
+			};
+		} catch {
+			return fallback;
+		}
+	}
+
+	async startChatGptSignIn(): Promise<string | undefined> {
+		try {
+			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/auth/openai/start`, callSite: 'livingDocs.signInStart', disableCache: true }, CancellationToken.None);
+			const json = await asJson<{ authorizeUrl?: string }>(context);
+			return json?.authorizeUrl;
+		} catch (e) {
+			this._log.warn('[livingDocs] ChatGPT sign-in start failed', e instanceof Error ? e.message : String(e));
+			return undefined;
+		}
+	}
+
+	async pollChatGptSignIn(): Promise<IChatGptSignInStatus> {
+		try {
+			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/auth/openai/status`, callSite: 'livingDocs.signInStatus', disableCache: true }, CancellationToken.None);
+			const json = await asJson<{ status?: string; error?: string }>(context);
+			const stage = json?.status === 'signed-in' ? 'signed-in'
+				: json?.status === 'pending' ? 'pending'
+					: json?.status === 'error' ? 'error' : 'signed-out';
+			// A newly-signed-in ChatGPT tier changes what the app can do; refresh model-backed UI once.
+			if (stage === 'signed-in') { void this._probeModel(); this._onDidChange.fire(); }
+			return { stage, error: json?.error };
+		} catch {
+			return { stage: 'signed-out' };
+		}
+	}
+
+	async signOutChatGpt(): Promise<void> {
+		try {
+			await this._request.request({ type: 'POST', url: `${this._proxyUrl()}/auth/openai/signout`, headers: { 'content-type': 'application/json' }, data: '{}', callSite: 'livingDocs.signOut' }, CancellationToken.None);
+			void this._probeModel();
+			this._onDidChange.fire();
+		} catch (e) {
+			this._log.warn('[livingDocs] ChatGPT sign-out failed', e instanceof Error ? e.message : String(e));
+		}
+	}
+
+	// Record the onboarding survey as the local `model_configured` event (doc 18 section 2.4). The proxy owns
+	// the analytics audit sink (~/.abstract/events.log, alongside model-spend.log) so every event lands in one
+	// place for plan 36's PostHog wiring; a failure is best-effort (the survey never blocks onboarding).
+	async submitOnboardingSurvey(survey: IOnboardingSurvey): Promise<void> {
+		try {
+			const body = JSON.stringify({
+				event: 'model_configured',
+				daily_driver_model: survey.dailyDriverModel,
+				owned_subscriptions: survey.ownedSubscriptions,
+				weekly_output: survey.weeklyOutput,
+			});
+			await this._request.request({ type: 'POST', url: `${this._proxyUrl()}/event`, headers: { 'content-type': 'application/json' }, data: body, callSite: 'livingDocs.modelConfigured' }, CancellationToken.None);
+		} catch (e) {
+			this._log.warn('[livingDocs] model_configured event failed', e instanceof Error ? e.message : String(e));
+		}
+	}
+
 	// The local OAuth proxy base URL (coerced - config stubs may return non-strings), trailing slash trimmed.
 	private _proxyUrl(): string {
 		const raw = this._config.getValue<string>('livingDocs.modelProxyUrl');
@@ -2258,6 +2380,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				return await this._callModelOnce(system, user);
 			} catch (e) {
 				if (e instanceof Error && e.message === 'model refused the request') { throw e; }
+				// A paused call (spent daily budget) is not transient - retrying just pauses again; propagate it.
+				if (isModelPausedError(e)) { throw e; }
 				this._log.info('[livingDocs] model call failed, retrying once', e instanceof Error ? e.message : String(e));
 				return await this._callModelOnce(system, user);
 			}
@@ -2286,6 +2410,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (json.error) { throw new Error(json.error.message ?? 'model proxy error'); }
 		if (json.stop_reason === 'refusal') { throw new Error('model refused the request'); }
 		const text = (json.content ?? []).filter(b => b.type === 'text').map(b => b.text ?? '').join('');
+		// The proxy paused this call because the day's included usage is spent (plan 35 iter 3): surface the
+		// plain-words prose it returned as a ModelPausedError so callers keep it, queue no proposals, and pause.
+		if (json.stop_reason === 'pause') { throw new ModelPausedError(text.trim() || INCLUDED_USAGE_SPENT_MESSAGE); }
 		if (!text.trim()) { throw new Error('model returned no text'); }
 		return text;
 	}
@@ -2322,6 +2449,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const decoder = new TextDecoder();
 			let buffer = '';
 			let full = '';
+			let paused = false;
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) { break; }
@@ -2332,9 +2460,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					full += delta;
 					onDelta(delta);
 				}
+				if (result.paused) { paused = true; }
 				if (result.done) { break; }
 			}
 			if (token.isCancellationRequested) { throw new CancellationError(); }
+			// The proxy paused mid-stream because the day's included usage is spent (plan 35 iter 3): the plain-
+			// words cap prose has already streamed to the composer; raise ModelPausedError so no proposals parse.
+			if (paused) { throw new ModelPausedError(full.trim() || INCLUDED_USAGE_SPENT_MESSAGE); }
 			if (!full.trim()) { throw new Error('model returned no text'); }
 			return full;
 		} catch (e) {
@@ -2355,6 +2487,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return await this._callModelStream(system, user, onDelta, token);
 		} catch (e) {
 			if (isCancellationError(e)) { throw e; }
+			// A pause (spent daily budget) is not a stream failure to retry - the buffered path would just pause
+			// again and charge nothing extra; propagate it so the caller shows the plain-words cap turn.
+			if (isModelPausedError(e)) { throw e; }
 			this._log.info('[livingDocs] streaming chat call failed, falling back to buffered call', e instanceof Error ? e.message : String(e));
 			return await this._callModel(system, user);
 		}
@@ -2575,6 +2710,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (isCancellationError(e)) {
 				const salvage = streaming.text.trim();
 				history.push({ role: 'assistant', via: 'model', content: salvage, stopped: true });
+			} else if (isModelPausedError(e)) {
+				// The day's included usage is spent (plan 35 iter 3): show the plain-words cap message as a calm
+				// turn - NOT a failure, NOT retryable (retrying just pauses again), and queue no proposals. It
+				// resumes on its own at day rollover, or immediately once the user signs in with ChatGPT.
+				history.push({ role: 'assistant', via: 'fallback', content: e.message });
 			} else {
 				this._log.info('[livingDocs] chat failed, honest fallback', e instanceof Error ? e.message : String(e));
 				// A genuine model error offers Retry (plan 27 iter 3): the rail re-sends this same user message.

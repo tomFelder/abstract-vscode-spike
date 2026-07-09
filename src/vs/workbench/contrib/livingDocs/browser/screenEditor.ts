@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, Dimension } from '../../../../base/browser/dom.js';
+import { disposableTimeout } from '../../../../base/common/async.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
@@ -12,6 +13,7 @@ import { AgentPolicy, bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAg
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -22,7 +24,7 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ILivingDocSummary, ILivingDocsService, ISkillCheck, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, ISkillCheck, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
 
@@ -73,6 +75,13 @@ interface IScreenEditorState {
 	// Home: the latest failed scheduled run, for the quiet attention line (plan 32 iter 2). Undefined when
 	// nothing failed; rebuilt on open + on every change so a fresh failure surfaces without reopening Home.
 	homeFailure?: IHomeFailure;
+	// Settings (plan 35 iter 4): the live model door + usage snapshot, the sign-in flow stage + any error, and
+	// whether the onboarding survey has been recorded this session. Fetched on open + refreshed while a sign-in
+	// is pending; real data only (the status comes straight from the proxy's /healthz).
+	providerStatus?: IModelProviderStatus;
+	signInStage?: ChatGptSignInStage;
+	signInError?: string;
+	surveySaved?: boolean;
 }
 
 // Weekday names for the Home failure line ("failed on Monday"). Local time - matches when the user saw it.
@@ -91,6 +100,9 @@ export class ScreenEditor extends EditorPane {
 	private _screen: ScreenId = 'templates';
 	private _state: IScreenEditorState = { knScope: 'org', filter: 'all' };
 	private readonly _inputDisposables = this._register(new DisposableStore());
+	// The single in-flight "Sign in with ChatGPT" poll (plan 35 iter 4), replaced each poll so a re-open or a
+	// completed sign-in never leaves a timer running on the class store.
+	private readonly _signInPoll = this._register(new MutableDisposable());
 	// Holds the current webview. The iframe reloads (blank) whenever this pane is hidden by another
 	// editor in the group and later re-shown (DOM re-parent), and the low-level webview does not
 	// re-apply its HTML, so we recreate it fresh each time the pane becomes visible.
@@ -108,6 +120,7 @@ export class ScreenEditor extends EditorPane {
 		@IWorkspacesService private readonly _workspaces: IWorkspacesService,
 		@IHostService private readonly _host: IHostService,
 		@IDialogService private readonly _dialogService: IDialogService,
+		@IOpenerService private readonly _openerService: IOpenerService,
 	) {
 		super(ScreenEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -148,7 +161,14 @@ export class ScreenEditor extends EditorPane {
 			]);
 			this._state = { ...this._state, sources, docs, dataFiles };
 		}
+		// Settings (plan 35 iter 4): fetch the live model door + usage before the first render so the provider
+		// card shows the real state (which door serves you, today's included usage), no flash.
+		if (this._screen === 'settings') {
+			const status = await this._livingDocs.getModelProviderStatus();
+			this._state = { ...this._state, providerStatus: status, signInStage: status.signedIn ? 'signed-in' : 'signed-out' };
+		}
 		this._inputDisposables.clear();
+		this._signInPoll.clear();
 		// Re-render when agent status / the document set changes (e.g. a run completes, a doc is created).
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._onDidChange()));
 		this._mountWebview();
@@ -163,9 +183,18 @@ export class ScreenEditor extends EditorPane {
 			void this._refreshTemplates();
 		} else if (this._screen === 'knowledge') {
 			void this._refreshKnowledge();
+		} else if (this._screen === 'settings') {
+			void this._refreshSettings();
 		} else {
 			this._render();
 		}
+	}
+
+	// Re-read the model door + usage (e.g. after a sign-in/sign-out or a metered call) and re-render Settings.
+	private async _refreshSettings(): Promise<void> {
+		const status = await this._livingDocs.getModelProviderStatus();
+		this._state = { ...this._state, providerStatus: status };
+		this._render();
 	}
 
 	private async _refreshTemplates(): Promise<void> {
@@ -258,7 +287,7 @@ export class ScreenEditor extends EditorPane {
 		}
 	}
 
-	private _onMessage(message: { type?: string; arg?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string; value?: string }): void {
+	private _onMessage(message: { type?: string; arg?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string; value?: string; daily?: string; subs?: string; weekly?: string }): void {
 		switch (message?.type) {
 			case 'setKnOrg':
 				this._state = { ...this._state, knScope: 'org' };
@@ -451,7 +480,83 @@ export class ScreenEditor extends EditorPane {
 					void this._host.openWindow([{ folderUri: URI.parse(message.arg) }], { forceReuseWindow: true });
 				}
 				break;
+			// Settings model access (plan 35 iter 4): begin "Sign in with ChatGPT" - open the authorize URL in
+			// the browser and start polling for the loopback round-trip to complete.
+			case 'signInChatGpt':
+				void this._startChatGptSignIn();
+				break;
+			case 'signOutChatGpt':
+				void this._signOutChatGpt();
+				break;
+			// "Use the included model": flip the proxy backend intent by re-reading status. The proxy's active
+			// backend is set at launch (LWD_BACKEND); here we simply re-assert the included tier in the UI and
+			// re-read the live door so the card reflects reality (a signed-out ChatGPT already falls back).
+			case 'useIncludedModel':
+				void this._refreshSettings();
+				break;
+			// The onboarding survey Save: record the model_configured event locally and show the thank-you state.
+			case 'submitSurvey':
+				void this._submitSurvey(message.daily ?? '', message.subs ?? '', message.weekly ?? '');
+				break;
 		}
+	}
+
+	// Begin "Sign in with ChatGPT": ask the proxy for the authorize URL, open it in the browser, move to the
+	// pending state, and poll the flow until it lands signed-in or errors. Each poll replaces the timer so a
+	// re-open or completion never leaks one.
+	private async _startChatGptSignIn(): Promise<void> {
+		const authorizeUrl = await this._livingDocs.startChatGptSignIn();
+		if (!authorizeUrl) {
+			this._state = { ...this._state, signInStage: 'error', signInError: 'Could not start sign-in - is the model connected?' };
+			this._render();
+			return;
+		}
+		this._openInBrowser(authorizeUrl);
+		this._state = { ...this._state, signInStage: 'pending', signInError: undefined };
+		this._render();
+		this._pollSignIn();
+	}
+
+	// Poll the sign-in status once, then either settle (signed-in / error) or schedule the next poll. The
+	// pending state shows the "waiting for your browser" spinner; a completed sign-in refreshes the door.
+	private _pollSignIn(): void {
+		this._signInPoll.value = disposableTimeout(async () => {
+			const { stage, error } = await this._livingDocs.pollChatGptSignIn();
+			if (stage === 'signed-in') {
+				const status = await this._livingDocs.getModelProviderStatus();
+				this._state = { ...this._state, signInStage: 'signed-in', signInError: undefined, providerStatus: status };
+				this._render();
+				return;
+			}
+			if (stage === 'error') {
+				this._state = { ...this._state, signInStage: 'error', signInError: error ?? 'Sign-in did not complete - please try again.' };
+				this._render();
+				return;
+			}
+			// still pending (or the listener has not seen the callback yet): keep waiting.
+			this._pollSignIn();
+		}, 1200);
+	}
+
+	private async _signOutChatGpt(): Promise<void> {
+		this._signInPoll.clear();
+		await this._livingDocs.signOutChatGpt();
+		const status = await this._livingDocs.getModelProviderStatus();
+		this._state = { ...this._state, signInStage: 'signed-out', signInError: undefined, providerStatus: status };
+		this._render();
+	}
+
+	private async _submitSurvey(daily: string, subs: string, weekly: string): Promise<void> {
+		await this._livingDocs.submitOnboardingSurvey({ dailyDriverModel: daily, ownedSubscriptions: subs, weeklyOutput: weekly });
+		this._state = { ...this._state, surveySaved: true };
+		this._render();
+	}
+
+	// Open the authorize URL in the user's default browser. It must open OUTSIDE the webview (the OpenAI sign-in
+	// page + the localhost:1455 loopback callback both need the real browser), so route through the opener
+	// service (which opens an external http(s) URL in the system browser).
+	private _openInBrowser(url: string): void {
+		void this._openerService.open(URI.parse(url), { openExternal: true });
 	}
 
 	// Bind a source to a target document (plan 29 iter 2). The document may not be loaded (the Knowledge
