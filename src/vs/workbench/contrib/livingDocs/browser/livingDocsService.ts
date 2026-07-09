@@ -1928,6 +1928,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
 			if (!state || !state.doc.isLiving) { continue; }
 			state.recent = new Set<string>();
+			// Snapshot the doc's dirty keys BEFORE the awaited reconcile (plan 32 iter 2 fix, finding 1): a
+			// concurrent source-watcher event can interleave during `_runFiguresByPolicy` and re-mark this doc
+			// dirty; clearing only the snapshotted keys afterwards leaves that freshly-added bit for the heartbeat
+			// to drain, instead of a blanket clear dropping it. Copied so a later propagate cannot mutate it.
+			const dirtyBefore = this._orchestrator.getDirty(uri);
+			const snapshot = dirtyBefore ? { value: [...dirtyBefore.value], influence: [...dirtyBefore.influence] } : undefined;
 			const result = await this._runFiguresByPolicy(state, agent.policy, pass);
 			applied += result.applied;
 			queued += result.queued;
@@ -1935,9 +1941,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (result.blocked) { blocked = result.blocked; }
 			if (result.applied) { await this._persist(state); } else { await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e)); }
 			await this._recomputeFreshness(state, pass);
-			// A queue-draining trigger (heartbeat) or the event agent that just processed this doc clears its
-			// dirty bit: the value bindings are now reconciled/queued, so the sweep must not re-flag it.
-			if (agent.trigger.kind === 'heartbeat' || agent.trigger.kind === 'event') { this._orchestrator.clearDirty(uri); }
+			// A queue-draining trigger (heartbeat) or the event agent that just processed this doc clears the
+			// dirty keys it reconciled: the value bindings are now reconciled/queued, so the sweep must not
+			// re-flag them. Only the snapshotted keys clear, so an interleaved concurrent dirty survives.
+			if (snapshot && (agent.trigger.kind === 'heartbeat' || agent.trigger.kind === 'event')) { this._orchestrator.clearDirtyKeys(uri, snapshot); }
 		}
 		this._onDidChange.fire();
 		return { applied, queued, blocked, skipped, docsTouched: touched };

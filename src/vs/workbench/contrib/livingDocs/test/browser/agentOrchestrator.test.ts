@@ -146,6 +146,33 @@ suite('AgentOrchestrator', () => {
 		assert.deepStrictEqual({ weekly: orch.isDirty(WEEKLY), board: orch.isDirty(BOARD) }, { weekly: false, board: true });
 	});
 
+	test('a dirty key added mid-run survives the run-end clearDirtyKeys (finding 1: interleaved concurrent event not dropped)', async () => {
+		const { orch } = createOrchestrator();
+		// A value source changes; the event-run snapshots the doc's dirty keys before its awaited work.
+		await orch.propagate('/ws/metrics.csv');
+		const snapshot = { value: [...orch.getDirty(WEEKLY)!.value], influence: [...orch.getDirty(WEEKLY)!.influence] };
+		assert.deepStrictEqual(snapshot.value, ['metrics.csv'], 'the run processes the metrics.csv value edge');
+
+		// A SECOND source-watcher event interleaves during the run's await and re-marks the same doc dirty via
+		// its context edge. The overlap guard skips the second event-agent run, so only the first run clears.
+		await orch.propagate('market-research.md');
+		assert.deepStrictEqual(orch.getDirty(WEEKLY)!.influence, ['market-research.md'], 'the interleaved event added an influence bit');
+
+		// The first run clears only the keys it snapshotted; the freshly-added interleaved bit must survive.
+		orch.clearDirtyKeys(WEEKLY, snapshot);
+		assert.ok(orch.isDirty(WEEKLY), 'the doc is still dirty - the interleaved bit was not dropped');
+		assert.deepStrictEqual(orch.getDirty(WEEKLY)!.value, [], 'the processed value key is cleared');
+		assert.deepStrictEqual(orch.getDirty(WEEKLY)!.influence, ['market-research.md'], 'the interleaved influence key survives for the heartbeat to drain');
+	});
+
+	test('clearDirtyKeys removes the entry entirely when no keys remain', async () => {
+		const { orch } = createOrchestrator();
+		await orch.propagate('/ws/metrics.csv');
+		const snapshot = { value: [...orch.getDirty(BOARD)!.value], influence: [] };
+		orch.clearDirtyKeys(BOARD, snapshot);
+		assert.strictEqual(orch.isDirty(BOARD), false, 'the doc drops out of the queue once its last key clears');
+	});
+
 	test('the registry seeds the default automation set when none is stored', async () => {
 		const { orch, written } = createOrchestrator();
 		await orch.ensureLoaded();
@@ -310,6 +337,42 @@ suite('AgentOrchestrator', () => {
 		assert.strictEqual(started, 2, 'the manual run executed');
 		release?.();
 		await first;
+	});
+
+	test('a manual run overlapping a scheduled run keeps the marker up: a second scheduled trigger still skips (finding 2: ref-counted overlap guard)', async () => {
+		// The scheduled run parks in flight; a manual run overlaps and finishes first. With a plain Set the
+		// manual `finally` would clear the marker and let a later scheduled trigger stack - the ref-count keeps
+		// the marker up until the still-parked scheduled run finishes.
+		let releaseScheduled: (() => void) | undefined;
+		let started = 0;
+		let cronRuns = 0;
+		const { orch } = createOrchestrator({
+			runner: async (_agent, context: IAgentRunContext) => {
+				started++;
+				// Only the FIRST cron run parks in flight; the later fresh cron run must resolve immediately so
+				// the test does not deadlock waiting on a second release.
+				if (context.trigger === 'cron' && ++cronRuns === 1) { await new Promise<void>(resolve => { releaseScheduled = resolve; }); }
+				return { applied: 0, queued: 0 };
+			},
+		});
+		await orch.ensureLoaded();
+
+		const scheduled = orch.runAgent('weekly-refresh', 'cron', [WEEKLY]); // parks in flight
+		const manual = await orch.runAgent('weekly-refresh', 'manual', [WEEKLY]); // overlaps, resolves immediately
+		assert.strictEqual(manual?.skippedReason, undefined, 'the manual run was honoured');
+		assert.strictEqual(started, 2, 'both the scheduled and manual runs started');
+
+		// The scheduled run is STILL in flight (manual already finished): a second scheduled trigger must skip.
+		const second = await orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
+		assert.strictEqual(second?.skippedReason, 'still-running', 'the marker survived the manual run finishing, so the second scheduled trigger records a still-running skip');
+		assert.strictEqual(started, 2, 'no third runner call - the second scheduled trigger did not stack');
+
+		releaseScheduled?.();
+		await scheduled;
+
+		// Now the last in-flight run has drained, a fresh scheduled trigger runs normally.
+		const third = await orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
+		assert.strictEqual(third?.skippedReason, undefined, 'once the last in-flight run finishes the marker clears and a new run proceeds');
 	});
 
 	test('a run whose runner throws records the failure string and surfaces via getLatestFailure (iter 2)', async () => {

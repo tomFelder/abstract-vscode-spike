@@ -87,7 +87,10 @@ export class AgentOrchestrator extends Disposable {
 	private _runs: IAgentRun[] = [];
 	// Agents whose run is currently in flight (overlap guard, spec 09 §3, plan 32 iter 2): a due agent whose
 	// previous run has not finished is skipped with a recorded "still running" run rather than stacking.
-	private readonly _inFlight = new Set<string>();
+	// Ref-counted per agentId (finding 2): a manual run bypasses the guard but still counts as in-flight, so
+	// when a manual + scheduled run overlap the marker must clear only when the LAST of them finishes - a
+	// plain Set would clear on the first `finally` and let a scheduled trigger in that window stack.
+	private readonly _inFlight = new Map<string, number>();
 
 	constructor(
 		private readonly _files: IFileService,
@@ -296,7 +299,7 @@ export class AgentOrchestrator extends Disposable {
 			this._onDidChange.fire();
 			return skipped;
 		}
-		this._inFlight.add(agentId);
+		this._inFlight.set(agentId, (this._inFlight.get(agentId) ?? 0) + 1);
 		const startedAt = new Date(this._clock.now()).toISOString();
 		agent.status = 'running';
 		this._onDidChange.fire();
@@ -314,7 +317,10 @@ export class AgentOrchestrator extends Disposable {
 			run.error = e instanceof Error ? e.message : String(e);
 			this._log.warn('[livingDocs] agent run failed', agentId, run.error);
 		} finally {
-			this._inFlight.delete(agentId);
+			// Decrement the ref-count; only the LAST in-flight run for this agent clears the marker (finding 2),
+			// so a scheduled trigger while any run (manual or scheduled) is still going records a still-running skip.
+			const remaining = (this._inFlight.get(agentId) ?? 1) - 1;
+			if (remaining > 0) { this._inFlight.set(agentId, remaining); } else { this._inFlight.delete(agentId); }
 		}
 		run.finishedAt = new Date(this._clock.now()).toISOString();
 		agent.lastRun = run.finishedAt;
@@ -331,5 +337,27 @@ export class AgentOrchestrator extends Disposable {
 	isDirty(resource: URI): boolean { return this._dirty.has(resource.toString()); }
 	clearDirty(resource: URI): void {
 		if (this._dirty.delete(resource.toString())) { this._onDidChange.fire(); }
+	}
+
+	/**
+	 * Clear only the dirty keys a run actually processed (plan 32 iter 2 fix, finding 1): the caller
+	 * snapshots the doc's dirty entry at the moment it starts processing it and passes that snapshot back
+	 * here. Any key added AFTER the snapshot - a concurrent source event that interleaved during the run's
+	 * awaited work - is NOT in the snapshot, so it survives for the heartbeat to drain. Only when the entry
+	 * has no remaining keys is it removed. A blanket `clearDirty` would delete the freshly-added bit and the
+	 * second change would be missed until a later edit.
+	 */
+	clearDirtyKeys(resource: URI, snapshot: IDirtyEntry): void {
+		const id = resource.toString();
+		const current = this._dirty.get(id);
+		if (!current) { return; }
+		const value = current.value.filter(k => !snapshot.value.includes(k));
+		const influence = current.influence.filter(k => !snapshot.influence.includes(k));
+		if (value.length || influence.length) {
+			this._dirty.set(id, { value, influence });
+		} else {
+			this._dirty.delete(id);
+		}
+		this._onDidChange.fire();
 	}
 }
