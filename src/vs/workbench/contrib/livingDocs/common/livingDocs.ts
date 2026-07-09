@@ -332,6 +332,16 @@ export interface ILivingDocsService {
 	/** The registered orchestration agents (for the Agents view). */
 	getAgents(): readonly IAgentDef[];
 
+	/** The persisted run log, newest-first (Agents-screen run log + Home; plan 32 iter 2, D32-A). */
+	getAgentRuns(): readonly IAgentRun[];
+
+	/**
+	 * The most recent agent run that FAILED and is still the latest for its agent, for the Home attention line
+	 * (plan 32 iter 2). Undefined when the newest run of every agent succeeded - truthful automation: a run
+	 * that did not fail says nothing.
+	 */
+	getLatestAgentFailure(): IAgentRun | undefined;
+
 	/** Run an agent now over its flow documents (or the whole workspace if it scopes none). */
 	runAgent(agentId: string): Promise<IAgentRun | undefined>;
 

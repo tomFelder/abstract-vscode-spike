@@ -1686,6 +1686,37 @@ suite('LivingDocsService', () => {
 		assert.deepStrictEqual({ count: pending.length, draft: !!pending[0]?.draft }, { count: 1, draft: true });
 	});
 
+	// --- plan 32 iter 1: policy routing on the EVENT path (a live source edit ripples without a manual Refresh) ---
+
+	function eventAgent(policy: AgentPolicy): IAgentDef {
+		return { id: 'agent', name: 'Watcher', trigger: { kind: 'event', source: '*' }, flow: { sources: [], docs: [] }, policy, status: 'idle' };
+	}
+
+	test('a source event under an auto-figures agent applies figures immediately (no manual Refresh)', async () => {
+		const service = createService([], { agents: [eventAgent('auto-figures')] });
+		await service.loadDocument(WEEKLY);
+
+		// A source change fires the event agent over the dirtied co-dependents (the propagation graph walk).
+		await service.orchestrator.onSourceChanged('/ws/metrics.csv');
+
+		const highlights = blockText(service, WEEKLY, 'h-highlights');
+		assert.ok(highlights.includes('[$48.6k](bind:metrics.mrr)'), `figure landed on the event path: ${highlights}`);
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'auto-figures queues nothing on the event path');
+		assert.ok(service.getAudit().some(e => e.action === 'auto-applied'), 'the event-path auto-apply is audited');
+		assert.ok(!service.orchestrator.isDirty(WEEKLY), 'the event agent drains the dirty bit it processed');
+	});
+
+	test('a source event under a draft-only agent queues drafts and never lands them (event path)', async () => {
+		const service = createService([], { agents: [eventAgent('draft-only')] });
+		await service.loadDocument(WEEKLY);
+
+		await service.orchestrator.onSourceChanged('/ws/metrics.csv');
+
+		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'draft-only leaves the doc untouched on the event path');
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.deepStrictEqual({ count: pending.length, draft: !!pending[0]?.draft }, { count: 1, draft: true }, 'a draft is queued for review');
+	});
+
 	test('the verify gate blocks a run whose figures do not reconcile (Financial flag), applying nothing', async () => {
 		const agent: IAgentDef = { id: 'agent', name: 'Agent', trigger: { kind: 'manual' }, flow: { sources: [], docs: [BADBIND.toString()] }, policy: 'auto-figures', status: 'idle' };
 		const service = createService([], { badBind: true, agents: [agent] });

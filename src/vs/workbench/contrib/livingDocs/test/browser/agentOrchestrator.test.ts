@@ -11,10 +11,10 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
-import { AgentOrchestrator, IAgentRunContext } from '../../browser/agentOrchestrator.js';
-import { IAgentStore } from '../../browser/agentStore.js';
+import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from '../../browser/agentOrchestrator.js';
+import { IAgentRegistry, IAgentStore } from '../../browser/agentStore.js';
 import { IClock } from '../../browser/clock.js';
-import { AgentTriggerKind, IAgentDef } from '../../common/livingDocsModel.js';
+import { AgentTriggerKind, IAgentDef, IAgentRun } from '../../common/livingDocsModel.js';
 
 // A controllable clock: the test sets the wall time and drives the scheduler tick directly.
 class FakeClock implements IClock {
@@ -47,7 +47,7 @@ suite('AgentOrchestrator', () => {
 
 	interface IRunRecord { agentId: string; trigger: AgentTriggerKind; docs: string[] }
 
-	function createOrchestrator(opts: { agents?: IAgentDef[]; clock?: FakeClock } = {}): { orch: AgentOrchestrator; written: { agents?: readonly IAgentDef[] }; runs: IRunRecord[] } {
+	function createOrchestrator(opts: { agents?: IAgentDef[]; runs?: IAgentRun[]; clock?: FakeClock; runner?: (agent: IAgentDef, context: IAgentRunContext) => Promise<IAgentRunResult> } = {}): { orch: AgentOrchestrator; written: { registry?: IAgentRegistry }; runs: IRunRecord[] } {
 		const files = new Map<string, string>([
 			[WEEKLY.toString(), WEEKLY_MD],
 			[BOARD.toString(), BOARD_MD],
@@ -60,17 +60,17 @@ suite('AgentOrchestrator', () => {
 			},
 		} as unknown as IFileService;
 
-		const written: { agents?: readonly IAgentDef[] } = {};
+		const written: { registry?: IAgentRegistry } = {};
 		const agentStore: IAgentStore = {
-			read: async () => opts.agents,
-			write: async agents => { written.agents = agents; },
+			read: async () => opts.agents ? { agents: opts.agents, runs: opts.runs ?? [] } : undefined,
+			write: async registry => { written.registry = { agents: [...registry.agents], runs: [...registry.runs] }; },
 		};
 		const orch = new AgentOrchestrator(fileService, new NullLogService(), agentStore, async () => [WEEKLY, BOARD], opts.clock);
 		const runs: IRunRecord[] = [];
-		orch.setRunner(async (agent, context: IAgentRunContext) => {
+		orch.setRunner(opts.runner ?? (async (agent, context: IAgentRunContext) => {
 			runs.push({ agentId: agent.id, trigger: context.trigger, docs: context.docs.map(u => u.toString()) });
 			return { applied: 0, queued: 0 };
-		});
+		}));
 		store.add(orch);
 		return { orch, written, runs };
 	}
@@ -159,7 +159,7 @@ suite('AgentOrchestrator', () => {
 				{ id: 'on-publish-snapshot', trigger: 'lifecycle', policy: 'auto-figures' },
 			],
 		);
-		assert.ok(written.agents && written.agents.length === 5, 'seeded registry is persisted');
+		assert.ok(written.registry && written.registry.agents.length === 5, 'seeded registry is persisted');
 	});
 
 	test('a stored registry is used as-is (no re-seed)', async () => {
@@ -222,5 +222,123 @@ suite('AgentOrchestrator', () => {
 
 		assert.deepStrictEqual(runs, [{ agentId: 'weekly-refresh', trigger: 'manual', docs: [] }]);
 		assert.ok(orch.getAgent('weekly-refresh')!.lastRun, 'last-run recorded for the History trace');
+	});
+
+	// --- plan 32 iter 2: run persistence (D32-A), overlap-skip, failure surfacing ---
+
+	test('every run is persisted to the registry with its trigger + outcome counts (D32-A)', async () => {
+		const clock = new FakeClock(MONDAY_0900);
+		const { orch, written } = createOrchestrator({
+			clock,
+			runner: async () => ({ applied: 2, queued: 1, docsTouched: 3 }),
+		});
+		await orch.ensureLoaded();
+
+		await orch.runAgent('weekly-refresh', 'manual', [WEEKLY, BOARD]);
+
+		const runs = orch.getRuns();
+		assert.strictEqual(runs.length, 1, 'the run is in the log');
+		assert.deepStrictEqual(
+			{ agentId: runs[0].agentId, via: runs[0].via, applied: runs[0].applied, queued: runs[0].queued, docsTouched: runs[0].docsTouched },
+			{ agentId: 'weekly-refresh', via: 'manual', applied: 2, queued: 1, docsTouched: 3 },
+		);
+		assert.ok(written.registry && written.registry.runs.length === 1, 'the run is persisted to agents.json alongside the agents');
+	});
+
+	test('the run log is capped at the last 50 runs, newest first (D32-A oldest-eviction)', async () => {
+		const { orch } = createOrchestrator({ runner: async () => ({ applied: 0, queued: 0 }) });
+		await orch.ensureLoaded();
+
+		for (let i = 0; i < 55; i++) { await orch.runAgent('weekly-refresh', 'manual', []); }
+
+		const runs = orch.getRuns();
+		assert.strictEqual(runs.length, 50, 'capped at 50');
+		assert.ok(Date.parse(runs[0].startedAt) >= Date.parse(runs[49].startedAt), 'newest first');
+	});
+
+	test('persisted runs are reloaded on ensureLoaded so the log survives a reload', async () => {
+		const prior: IAgentRun[] = [{ agentId: 'weekly-refresh', startedAt: new Date(MONDAY_0900).toISOString(), finishedAt: new Date(MONDAY_0900).toISOString(), applied: 1, queued: 0, via: 'cron' }];
+		const custom: IAgentDef[] = [{ id: 'weekly-refresh', name: 'Weekly', trigger: { kind: 'manual' }, flow: { sources: [], docs: [] }, policy: 'auto-figures', status: 'idle' }];
+		const { orch } = createOrchestrator({ agents: custom, runs: prior });
+		await orch.ensureLoaded();
+
+		assert.strictEqual(orch.getRuns().length, 1, 'the prior run is loaded');
+		assert.strictEqual(orch.getRunsForAgent('weekly-refresh').length, 1);
+	});
+
+	test('a scheduled run whose previous run is still in flight is skipped, not stacked (overlap guard, spec 09 §3)', async () => {
+		const clock = new FakeClock(MONDAY_0900);
+		let release: (() => void) | undefined;
+		let started = 0;
+		const { orch } = createOrchestrator({
+			clock,
+			runner: async () => {
+				started++;
+				await new Promise<void>(resolve => { release = resolve; });
+				return { applied: 0, queued: 0 };
+			},
+		});
+		await orch.ensureLoaded();
+
+		// First run parks inside the runner (in flight). A second cron trigger for the same agent must skip.
+		const first = orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
+		const second = await orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
+		assert.strictEqual(second?.skippedReason, 'still-running', 'the overlapping scheduled run is recorded as skipped');
+		assert.strictEqual(started, 1, 'the runner only ran once (no stacking)');
+
+		release?.();
+		await first;
+		const skips = orch.getRuns().filter(r => r.skippedReason === 'still-running');
+		assert.strictEqual(skips.length, 1, 'exactly one skip recorded');
+	});
+
+	test('a manual Run now is always honoured even while a run is in flight (explicit user intent)', async () => {
+		let release: (() => void) | undefined;
+		let started = 0;
+		const { orch } = createOrchestrator({
+			runner: async () => {
+				started++;
+				if (started === 1) { await new Promise<void>(resolve => { release = resolve; }); }
+				return { applied: 0, queued: 0 };
+			},
+		});
+		await orch.ensureLoaded();
+
+		const first = orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
+		const manual = await orch.runAgent('weekly-refresh', 'manual', [WEEKLY]);
+		assert.strictEqual(manual?.skippedReason, undefined, 'a manual run is not skipped by the overlap guard');
+		assert.strictEqual(started, 2, 'the manual run executed');
+		release?.();
+		await first;
+	});
+
+	test('a run whose runner throws records the failure string and surfaces via getLatestFailure (iter 2)', async () => {
+		const clock = new FakeClock(MONDAY_0900);
+		const { orch } = createOrchestrator({
+			clock,
+			runner: async () => { throw new Error('source metrics.csv unreadable'); },
+		});
+		await orch.ensureLoaded();
+
+		const run = await orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
+		assert.strictEqual(run?.error, 'source metrics.csv unreadable', 'the failure string is recorded on the run');
+		assert.strictEqual(run?.failed, 1);
+		assert.strictEqual(orch.getAgent('weekly-refresh')!.status, 'error', 'the agent status reflects the failure');
+
+		const failure = orch.getLatestFailure();
+		assert.strictEqual(failure?.agentId, 'weekly-refresh', 'the failed run is the latest failure for Home');
+	});
+
+	test('getLatestFailure is undefined once the agent runs cleanly again (truthful automation)', async () => {
+		let attempt = 0;
+		const { orch } = createOrchestrator({
+			runner: async () => { attempt++; if (attempt === 1) { throw new Error('boom'); } return { applied: 0, queued: 0 }; },
+		});
+		await orch.ensureLoaded();
+
+		await orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
+		assert.ok(orch.getLatestFailure(), 'the failure is present after the failed run');
+		await orch.runAgent('weekly-refresh', 'cron', [WEEKLY]);
+		assert.strictEqual(orch.getLatestFailure(), undefined, 'a subsequent clean run clears the Home failure line');
 	});
 });

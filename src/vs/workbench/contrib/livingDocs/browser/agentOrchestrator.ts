@@ -10,7 +10,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { parseLivingDoc } from '../common/livingDocMarkdown.js';
-import { AgentTriggerKind, IAgentDef, IAgentRun, IDirtyEntry } from '../common/livingDocsModel.js';
+import { AGENT_RUN_CAP, AgentTriggerKind, IAgentDef, IAgentRun, IDirtyEntry } from '../common/livingDocsModel.js';
 import { IAgentStore } from './agentStore.js';
 import { IClock, RealClock } from './clock.js';
 
@@ -30,6 +30,9 @@ export interface IAgentRunResult {
 	readonly blocked?: string;
 	// Documents the run did not process because it was cancelled mid-flight (plan 27 iter 4).
 	readonly skipped?: number;
+	// Documents the run actually processed (the run-log "N docs" outcome count, plan 32 iter 2). Optional so
+	// an event/lifecycle runner that touches none can omit it (defaults to the docs handed to the run).
+	readonly docsTouched?: number;
 }
 export type AgentRunner = (agent: IAgentDef, context: IAgentRunContext) => Promise<IAgentRunResult>;
 
@@ -79,7 +82,12 @@ export class AgentOrchestrator extends Disposable {
 	private readonly _dirty = new Map<string, IDirtyEntry>();
 	private _runner: AgentRunner | undefined;
 	private readonly _ticker = this._register(new MutableDisposable());
-	private readonly _lastRuns = new Map<string, IAgentRun>();
+	// The capped run log (D32-A, decision 150), newest-last in memory and persisted to `agents.json`. The
+	// Agents screen renders it newest-first; the last run per agent is derived from it.
+	private _runs: IAgentRun[] = [];
+	// Agents whose run is currently in flight (overlap guard, spec 09 §3, plan 32 iter 2): a due agent whose
+	// previous run has not finished is skipped with a recorded "still running" run rather than stacking.
+	private readonly _inFlight = new Set<string>();
 
 	constructor(
 		private readonly _files: IFileService,
@@ -101,8 +109,9 @@ export class AgentOrchestrator extends Disposable {
 		if (this._loaded) { return; }
 		this._loaded = true;
 		const stored = await this._agentStore.read();
-		if (stored && stored.length) {
-			this._agents = stored;
+		if (stored && stored.agents.length) {
+			this._agents = stored.agents;
+			this._runs = stored.runs.slice(-AGENT_RUN_CAP);
 		} else {
 			this._agents = defaultAgents();
 			await this._persistAgents();
@@ -113,12 +122,33 @@ export class AgentOrchestrator extends Disposable {
 	getAgents(): readonly IAgentDef[] { return this._agents; }
 	getAgent(id: string): IAgentDef | undefined { return this._agents.find(a => a.id === id); }
 
+	// The persisted run log (D32-A), newest-first for the Agents screen. `runsForAgent` filters to one agent.
+	getRuns(): readonly IAgentRun[] { return [...this._runs].reverse(); }
+	getRunsForAgent(agentId: string): readonly IAgentRun[] { return this.getRuns().filter(r => r.agentId === agentId); }
+
+	// The most recent run of ANY agent that failed and is still the latest for that agent (plan 32 iter 2):
+	// the Home attention line. Truthful - undefined when the newest run of every agent succeeded or skipped.
+	getLatestFailure(): IAgentRun | undefined {
+		const latestByAgent = new Map<string, IAgentRun>();
+		for (const run of this._runs) { latestByAgent.set(run.agentId, run); } // in-memory is oldest-first, so last wins
+		for (const run of [...latestByAgent.values()].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))) {
+			if (run.error) { return run; }
+		}
+		return undefined;
+	}
+
 	private async _persistAgents(): Promise<void> {
 		try {
-			await this._agentStore.write(this._agents);
+			await this._agentStore.write({ agents: this._agents, runs: this._runs });
 		} catch (e) {
 			this._log.warn('[livingDocs] agents write failed', e instanceof Error ? e.message : String(e));
 		}
+	}
+
+	// Append a run to the capped log (oldest-eviction) and persist. Used for both executed and skipped runs.
+	private _recordRun(run: IAgentRun): void {
+		this._runs.push(run);
+		if (this._runs.length > AGENT_RUN_CAP) { this._runs = this._runs.slice(-AGENT_RUN_CAP); }
 	}
 
 	// --- the dependency-graph event-bus (spec 4.1) ---
@@ -243,30 +273,52 @@ export class AgentOrchestrator extends Disposable {
 		await this.runAgent(agentId, 'heartbeat', docs);
 	}
 
-	getLastRun(agentId: string): IAgentRun | undefined { return this._lastRuns.get(agentId); }
+	getLastRun(agentId: string): IAgentRun | undefined {
+		const runs = this._runs;
+		for (let i = runs.length - 1; i >= 0; i--) { if (runs[i].agentId === agentId) { return runs[i]; } }
+		return undefined;
+	}
 
 	// Run one agent end-to-end via the host runner (also the manual "Run now" path). Sets status from
 	// the result (blocked / needs-approval / idle) and records the run for the Agents view + History.
+	//
+	// Overlap guard (spec 09 §3, plan 32 iter 2): a scheduled/event trigger for an agent whose previous run is
+	// still in flight is NOT stacked - it records a "skipped (still running)" run and returns. A manual "Run
+	// now" is always honoured (the user explicitly asked). Runs therefore never queue up behind a slow run.
 	async runAgent(agentId: string, trigger: AgentTriggerKind, docs: readonly URI[], token: CancellationToken = CancellationToken.None): Promise<IAgentRun | undefined> {
 		const agent = this.getAgent(agentId);
 		if (!agent || !this._runner) { return undefined; }
+		if (this._inFlight.has(agentId) && trigger !== 'manual') {
+			const at = new Date(this._clock.now()).toISOString();
+			const skipped: IAgentRun = { agentId, startedAt: at, finishedAt: at, applied: 0, queued: 0, via: trigger, docsTouched: 0, skippedReason: 'still-running' };
+			this._recordRun(skipped);
+			await this._persistAgents();
+			this._onDidChange.fire();
+			return skipped;
+		}
+		this._inFlight.add(agentId);
 		const startedAt = new Date(this._clock.now()).toISOString();
 		agent.status = 'running';
 		this._onDidChange.fire();
-		const run: IAgentRun = { agentId, startedAt, applied: 0, queued: 0 };
+		const run: IAgentRun = { agentId, startedAt, applied: 0, queued: 0, via: trigger };
 		try {
 			const result = await this._runner(agent, { trigger, docs, token });
 			run.applied = result.applied;
 			run.queued = result.queued;
 			run.blocked = result.blocked;
+			run.docsTouched = result.docsTouched ?? docs.length;
 			agent.status = result.blocked ? 'blocked' : result.queued > 0 ? 'needs-approval' : 'idle';
 		} catch (e) {
 			agent.status = 'error';
-			this._log.warn('[livingDocs] agent run failed', agentId, e instanceof Error ? e.message : String(e));
+			run.failed = 1;
+			run.error = e instanceof Error ? e.message : String(e);
+			this._log.warn('[livingDocs] agent run failed', agentId, run.error);
+		} finally {
+			this._inFlight.delete(agentId);
 		}
 		run.finishedAt = new Date(this._clock.now()).toISOString();
 		agent.lastRun = run.finishedAt;
-		this._lastRuns.set(agentId, run);
+		this._recordRun(run);
 		await this._persistAgents();
 		this._onDidChange.fire();
 		return run;

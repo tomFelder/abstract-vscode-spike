@@ -364,6 +364,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	get orchestrator(): AgentOrchestrator { return this._orchestrator; }
 
 	getAgents(): readonly IAgentDef[] { return this._orchestrator.getAgents(); }
+	getAgentRuns(): readonly IAgentRun[] { return this._orchestrator.getRuns(); }
+	getLatestAgentFailure(): IAgentRun | undefined { return this._orchestrator.getLatestFailure(); }
 
 	// --- per-document views ---
 
@@ -1899,15 +1901,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._orchestrator.runAgent(agentId, 'manual', docs);
 	}
 
-	// The orchestration host: how an agent does its work once a trigger fires. Event agents only flag
-	// along the graph (propagation already ran); lifecycle hooks fire from the document lifecycle
-	// (Item 5). Everything else re-derives each in-scope document and routes its figure changes through
-	// the verify gate then the per-edge policy (auto-apply / queue / draft). Reports what landed/queued.
+	// The orchestration host: how an agent does its work once a trigger fires. Lifecycle hooks fire from the
+	// document lifecycle (Item 5) and do no re-derive here. EVERY other trigger - cron, heartbeat, manual AND
+	// event (plan 32 iter 1) - re-derives each in-scope document and routes its figure changes through the
+	// verify gate then the per-edge policy (auto-apply / queue / draft). The event path is what makes a live
+	// source edit ripple across the graph without a manual Refresh: propagation dirties the co-dependent docs,
+	// the event agent's policy then decides whether their figures auto-apply (auto-figures) or queue (draft-only).
 	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<IAgentRunResult> {
-		if (agent.trigger.kind === 'event' || agent.trigger.kind === 'lifecycle') { return { applied: 0, queued: 0 }; }
+		if (agent.trigger.kind === 'lifecycle') { return { applied: 0, queued: 0, docsTouched: 0 }; }
 		let applied = 0;
 		let queued = 0;
 		let skipped = 0;
+		let touched = 0;
 		let blocked: string | undefined;
 		const docs = context.docs;
 		// One shared pass across the run's documents (plan 30, track 1): a source bound by many of the run's
@@ -1926,14 +1931,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const result = await this._runFiguresByPolicy(state, agent.policy, pass);
 			applied += result.applied;
 			queued += result.queued;
+			touched++;
 			if (result.blocked) { blocked = result.blocked; }
 			if (result.applied) { await this._persist(state); } else { await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e)); }
 			await this._recomputeFreshness(state, pass);
-			// The heartbeat drains each doc it processed from the dirty queue.
-			if (agent.trigger.kind === 'heartbeat') { this._orchestrator.clearDirty(uri); }
+			// A queue-draining trigger (heartbeat) or the event agent that just processed this doc clears its
+			// dirty bit: the value bindings are now reconciled/queued, so the sweep must not re-flag it.
+			if (agent.trigger.kind === 'heartbeat' || agent.trigger.kind === 'event') { this._orchestrator.clearDirty(uri); }
 		}
 		this._onDidChange.fire();
-		return { applied, queued, blocked, skipped };
+		return { applied, queued, blocked, skipped, docsTouched: touched };
 	}
 
 	// --- the Review-impact pass (expensive, on-demand): spec 3.6 ---
