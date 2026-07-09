@@ -10,7 +10,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { parseLivingDoc } from '../common/livingDocMarkdown.js';
-import { AGENT_RUN_CAP, AgentTriggerKind, IAgentDef, IAgentRun, IDirtyEntry } from '../common/livingDocsModel.js';
+import { AGENT_RUN_CAP, AgentTriggerKind, IAgentDef, IAgentRun, IAgentTrigger, IDirtyEntry } from '../common/livingDocsModel.js';
 import { IAgentStore } from './agentStore.js';
 import { IClock, RealClock } from './clock.js';
 
@@ -129,6 +129,81 @@ export class AgentOrchestrator extends Disposable {
 	getRuns(): readonly IAgentRun[] { return [...this._runs].reverse(); }
 	getRunsForAgent(agentId: string): readonly IAgentRun[] { return this.getRuns().filter(r => r.agentId === agentId); }
 
+	// --- registry editing (plan 32 iter 3): create / duplicate / pause / inline policy + trigger edits ---
+	// The Agents-screen detail drawer edits the registry through these; each persists and fires onDidChange
+	// so the screen re-renders. `agents.json` is the store (decision 150), so every edit survives a reload.
+
+	// Create a new agent from a partial def (the drawer's "New agent" affordance). Fills a unique id + sane
+	// defaults, appends it, persists and returns the created def. Editing/pause happen through the setters below.
+	async createAgent(partial?: Partial<Pick<IAgentDef, 'name' | 'trigger' | 'flow' | 'policy'>>): Promise<IAgentDef> {
+		await this.ensureLoaded();
+		const id = this._uniqueId((partial?.name ?? 'agent'));
+		const agent: IAgentDef = {
+			id,
+			name: partial?.name ?? 'New agent',
+			trigger: partial?.trigger ?? { kind: 'manual' },
+			flow: partial?.flow ?? { sources: [], docs: [] },
+			policy: partial?.policy ?? 'draft-only',
+			status: 'idle',
+		};
+		this._agents.push(agent);
+		await this._persistAgents();
+		this._onDidChange.fire();
+		return agent;
+	}
+
+	// Duplicate an existing agent (the drawer's Duplicate action): a fresh id, a "(copy)" name, the same
+	// trigger/flow/policy, no run history of its own (runs are keyed by agentId), starting idle + enabled.
+	async duplicateAgent(agentId: string): Promise<IAgentDef | undefined> {
+		const source = this.getAgent(agentId);
+		if (!source) { return undefined; }
+		return this.createAgent({
+			name: `${source.name} (copy)`,
+			trigger: { ...source.trigger },
+			flow: { sources: [...source.flow.sources], docs: [...source.flow.docs] },
+			policy: source.policy,
+		});
+	}
+
+	// Pause / resume an agent (the drawer's Pause toggle): sets/clears the `disabled` flag the scheduler
+	// respects. Only ever writes `disabled:true` or deletes it, so an older registry with no flag stays enabled.
+	async setAgentDisabled(agentId: string, disabled: boolean): Promise<void> {
+		const agent = this.getAgent(agentId);
+		if (!agent) { return; }
+		if (disabled) { agent.disabled = true; } else { delete agent.disabled; }
+		await this._persistAgents();
+		this._onDidChange.fire();
+	}
+
+	// Inline policy edit (the drawer's three-level select). Guards against an invalid value so a stray
+	// message can never write a policy the router does not understand.
+	async setAgentPolicy(agentId: string, policy: IAgentDef['policy']): Promise<void> {
+		const agent = this.getAgent(agentId);
+		if (!agent || (policy !== 'auto-figures' && policy !== 'ask-before-apply' && policy !== 'draft-only')) { return; }
+		agent.policy = policy;
+		await this._persistAgents();
+		this._onDidChange.fire();
+	}
+
+	// Inline trigger edit (the drawer's cron day/time picker or heartbeat-hours field). Replaces the whole
+	// trigger; the caller composes it from the picker fields, so this just validates the shape minimally.
+	async setAgentTrigger(agentId: string, trigger: IAgentTrigger): Promise<void> {
+		const agent = this.getAgent(agentId);
+		if (!agent || !trigger || !trigger.kind) { return; }
+		agent.trigger = trigger;
+		await this._persistAgents();
+		this._onDidChange.fire();
+	}
+
+	// A registry-unique agent id derived from a name: a slug plus a numeric suffix when the slug collides.
+	private _uniqueId(name: string): string {
+		const slug = (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent');
+		if (!this._agents.some(a => a.id === slug)) { return slug; }
+		let n = 2;
+		while (this._agents.some(a => a.id === `${slug}-${n}`)) { n++; }
+		return `${slug}-${n}`;
+	}
+
 	// The most recent run of ANY agent that failed and is still the latest for that agent (plan 32 iter 2):
 	// the Home attention line. Truthful - undefined when the newest run of every agent succeeded or skipped.
 	getLatestFailure(): IAgentRun | undefined {
@@ -228,6 +303,9 @@ export class AgentOrchestrator extends Disposable {
 	// fake clock can drive it deterministically in tests.
 	async runDueAgents(): Promise<void> {
 		for (const agent of this._agents) {
+			// A paused agent stays scheduled-in-name but the scheduler skips it (plan 32 iter 3): a due cron/
+			// heartbeat tick never fires while `disabled` is set. Manual "Run now" bypasses this (see runAgent).
+			if (agent.disabled) { continue; }
 			if (agent.trigger.kind === 'cron' && this._cronDue(agent)) {
 				await this.runAgent(agent.id, 'cron', await this._provideDocUris());
 			} else if (agent.trigger.kind === 'heartbeat' && this._heartbeatDue(agent)) {
@@ -261,6 +339,7 @@ export class AgentOrchestrator extends Disposable {
 	async onSourceChanged(changedPath: string): Promise<void> {
 		const dirtied = await this.propagate(changedPath);
 		for (const agent of this._agents) {
+			if (agent.disabled) { continue; } // a paused event agent does not fire on a source change (plan 32 iter 3)
 			const source = agent.trigger.source;
 			if (agent.trigger.kind === 'event' && (source === '*' || (source && pathKey(source) === pathKey(changedPath)))) {
 				await this.runAgent(agent.id, 'event', dirtied);

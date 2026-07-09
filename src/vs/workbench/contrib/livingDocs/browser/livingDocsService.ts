@@ -31,7 +31,7 @@ import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISnapshotEntry, SNAPSHOT_CAP, SnapshotVia, SourceKind } from '../common/livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
 import { projectDisplayName } from '../common/projectDisplayName.js';
 
@@ -365,7 +365,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getAgents(): readonly IAgentDef[] { return this._orchestrator.getAgents(); }
 	getAgentRuns(): readonly IAgentRun[] { return this._orchestrator.getRuns(); }
+	getAgentRunsForAgent(agentId: string): readonly IAgentRun[] { return this._orchestrator.getRunsForAgent(agentId); }
 	getLatestAgentFailure(): IAgentRun | undefined { return this._orchestrator.getLatestFailure(); }
+
+	// Agents-screen detail drawer registry edits (plan 32 iter 3): thin pass-throughs to the orchestrator,
+	// which persists to `agents.json` and fires onDidChange so the screen re-renders.
+	async createAgent(): Promise<void> { await this._orchestrator.createAgent(); }
+	async duplicateAgent(agentId: string): Promise<void> { await this._orchestrator.duplicateAgent(agentId); }
+	async setAgentDisabled(agentId: string, disabled: boolean): Promise<void> { await this._orchestrator.setAgentDisabled(agentId, disabled); }
+	async setAgentPolicy(agentId: string, policy: AgentPolicy): Promise<void> { await this._orchestrator.setAgentPolicy(agentId, policy); }
+	async setAgentTrigger(agentId: string, trigger: IAgentTrigger): Promise<void> { await this._orchestrator.setAgentTrigger(agentId, trigger); }
 
 	// --- per-document views ---
 
@@ -467,6 +476,29 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.status = `Formatting fix applied - ${fixed} heading${fixed === 1 ? '' : 's'} title-cased`;
 		await this._persist(state);
 		this._onDidChange.fire();
+	}
+
+	// Run a Skill across every project document (plan 32 iter 3, the P3 gap): fan the skill grade over the
+	// folder's living documents through the orchestrator's fan surface, and return a per-document summary the
+	// Agents screen renders as a run strip. Skills stay single-doc units - the orchestrator does the fanning.
+	// Real data only: a non-living document, or a model-backed skill with no model, is honestly `skipped`
+	// (never a fabricated pass). The model-backed Strategy grade runs per document (its verdict caches).
+	async runSkillAcrossProject(id: ISkillCheck['id'], skillName: string): Promise<ISkillRunSummary> {
+		const uris = await this._discoverLivingDocUris();
+		const results: ISkillRunDocResult[] = [];
+		for (const uri of uris) {
+			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
+			if (!state || !state.doc.isLiving) { continue; }
+			// A model-backed skill needs its per-document grade run first so the report reflects the live verdict.
+			if (id === 'strategy') { await this.runSkillCheck(uri, 'strategy'); }
+			const check = this.getSkillReport(uri).find(c => c.id === id);
+			const status: SkillRunDocStatus = !check
+				? 'skipped'
+				: check.status === 'flag' ? 'flag' : check.status === 'pass' ? 'pass' : 'skipped';
+			results.push({ docId: uri.toString(), docTitle: state.doc.title, status, detail: check?.detail ?? 'Not gradeable for this document.' });
+		}
+		this._onDidChange.fire();
+		return summariseSkillRun(id, skillName, results);
 	}
 
 	// House style: title-case headings. A heading passes when every significant word (the first word,
@@ -1612,15 +1644,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._gradeFinancial(state, current);
 	}
 
+	// The before-export gate's current verdict, surfaced so the export/present flow can SHOW it (plan 32 iter 4):
+	// no silent blocks. `pass:true` = clean to export; `pass:false` with `flag` = the one-line grader reason the
+	// export sheet renders alongside "Export anyway" (audited override) and "Fix first" (jumps to the flag).
+	previewExportGate(resource: URI): IGradeResult {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return { pass: true }; }
+		return this._beforeExportGate(state);
+	}
+
+	// Record on the audit that the user exported/published PAST a failed gate (plan 32 iter 4): the override is
+	// never silent - it lands as an `override`-via audit entry so the trail shows a human chose to proceed.
+	private _auditGateOverride(state: IDocState, action: 'export' | 'publish', flag: string): void {
+		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `${action} overridden past gate - ${flag}`, 'override'));
+	}
+
 	// On-publish snapshot: pin the document to the current source versions (hashes) so a published doc
 	// stays reproducible even as sources move on (spec 7; uses the pins[] field reserved in plan 06).
-	async publishDocument(resource: URI): Promise<void> {
+	async publishDocument(resource: URI, force = false): Promise<void> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return; }
 		const gate = this._beforeExportGate(state);
 		if (!gate.pass) {
-			this._notify.info(`Cannot publish - ${gate.flag}`);
-			return;
+			// No silent block, no silent override (plan 32 iter 4): without `force` the caller surfaced the gate
+			// and the user chose not to proceed; with `force` the user chose "Publish anyway" and it is audited.
+			if (!force) { this._notify.info(`Cannot publish - ${gate.flag}`); return; }
+			this._auditGateOverride(state, 'publish', gate.flag ?? 'grader flagged');
 		}
 		const versions = new Map<string, string>();
 		for (const key of Object.keys(state.lock.bindings)) {
@@ -1632,8 +1681,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.lock.pins = [...versions].map(([source, version]) => ({ source, version }));
 		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `published ${at}`, 'heuristic'));
 		await this._lockStore.write(state.uri, state.lock);
-		// Publishing is a milestone: snapshot the published body so it is a restorable version.
-		await this.saveSnapshot(resource, 'Published', 'publish');
+		// Publishing is a milestone: snapshot the published body so it is a restorable version, carrying the
+		// real pin count so the History SNAPSHOT row can name the pinned source versions (plan 32 iter 4).
+		await this.saveSnapshot(resource, 'Published', 'publish', undefined, state.lock.pins.length);
 		this._notify.info(`Published "${state.doc.title}" - pinned to ${state.lock.pins.length} source version${state.lock.pins.length === 1 ? '' : 's'}.`);
 		this._onDidChange.fire();
 	}
@@ -1650,7 +1700,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// so the lock never grows without bound (D26-A). The body is verbatim Markdown (defaults to the
 	// current on-disk text; callers that snapshot a pre-change state pass it explicitly); `auditIndex`
 	// is the audit length now, so the History tab can group later changes.
-	async saveSnapshot(resource: URI, label: string, via: SnapshotVia, body?: string): Promise<void> {
+	async saveSnapshot(resource: URI, label: string, via: SnapshotVia, body?: string, pinnedSources?: number): Promise<void> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return; }
 		const entry: ISnapshotEntry = {
@@ -1660,6 +1710,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			via,
 			body: body ?? state.rawText,
 			auditIndex: state.lock.audit.length,
+			// The publish pin count (plan 32 iter 4) so the History SNAPSHOT row names the pinned versions. Only
+			// recorded when a real count was passed (a publish); undefined stays off the entry for other snapshots.
+			...(typeof pinnedSources === 'number' ? { pinnedSources } : {}),
 		};
 		state.lock.snapshots.push(entry);
 		while (state.lock.snapshots.length > SNAPSHOT_CAP) {
@@ -1697,13 +1750,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
-	async exportDocument(resource: URI): Promise<URI | undefined> {
+	async exportDocument(resource: URI, force = false): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
 		const gate = this._beforeExportGate(state);
 		if (!gate.pass) {
-			this._notify.info(`Export blocked - ${gate.flag}`);
-			return undefined;
+			// The export sheet surfaces the gate (plan 32 iter 4); without `force` a failed gate blocks, with
+			// `force` ("Export anyway") it proceeds and the override is audited - never a silent either way.
+			if (!force) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
+			this._auditGateOverride(state, 'export', gate.flag ?? 'grader flagged');
+			await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] override audit write failed', e));
 		}
 		const html = renderExportHtml(state.doc, this.getResolved(resource));
 		const stem = basename(resource).replace(/\.md$/, '');
@@ -1719,13 +1775,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	async exportMarkdown(resource: URI): Promise<URI | undefined> {
+	async exportMarkdown(resource: URI, force = false): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
 		const gate = this._beforeExportGate(state);
 		if (!gate.pass) {
-			this._notify.info(`Export blocked - ${gate.flag}`);
-			return undefined;
+			if (!force) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
+			this._auditGateOverride(state, 'export', gate.flag ?? 'grader flagged');
+			await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] override audit write failed', e));
 		}
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
 		const stem = basename(resource).replace(/\.md$/, '');
@@ -2912,7 +2969,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// When the clicked value is an api/mcp binding, surface its real response payload (field highlighted)
 		// instead of the CSV grid - closing the "provenance falls back to the CSV" gap for non-file kinds.
 		const payload = this._sourcePayloadFor(cells[0], state);
-		return { source, rows, referencedBy, grid, payload };
+		// A published document pins its sources to a version (plan 32 iter 4): when the peeked source is pinned,
+		// surface "pinned at v <short-hash> of <date>" so a reader of a published doc sees the frozen version.
+		const pinnedLabel = this._pinnedLabelFor(state, source);
+		return { source, rows, referencedBy, grid, payload, ...(pinnedLabel ? { pinnedLabel } : {}) };
+	}
+
+	// The pin label for a source when the document is published (plan 32 iter 4). The lock's `pins` freeze each
+	// source to a version hash on publish; the newest `publish` snapshot dates the pin. Undefined when the doc
+	// is not published or this source is not pinned - real data only, never a fabricated "pinned" line.
+	private _pinnedLabelFor(state: IDocState, source: string): string | undefined {
+		const tail = (s: string) => s.split('/').pop() ?? s;
+		const pin = state.lock.pins.find(p => p.source === source || tail(p.source) === tail(source));
+		if (!pin) { return undefined; }
+		const shortHash = pin.version.slice(0, 7);
+		const published = [...state.lock.snapshots].reverse().find(s => s.via === 'publish');
+		const date = published ? new Date(Date.parse(published.at)).toISOString().slice(0, 10) : undefined;
+		return date ? `pinned at v ${shortHash} of ${date}` : `pinned at v ${shortHash}`;
 	}
 
 	// Build the raw-payload view for a clicked api/mcp bind key (plan 29, iter 4), or undefined for a file

@@ -54,6 +54,17 @@ suite('livingDocs History tab (historyHtml)', () => {
 		assert.ok(h.includes('Current version'), 'a current-state head row is shown above the versions');
 	});
 
+	test('a published snapshot names the real pin count beside the SNAPSHOT badge (plan 32 iter 4)', () => {
+		const h = historyHtml([snap({ id: 'p', label: 'Published', via: 'publish', pinnedSources: 3 })], [], 'Doc', undefined, NOW);
+		assert.ok(h.includes('SNAPSHOT'), 'still shows the SNAPSHOT badge');
+		assert.ok(h.includes('pinned 3 source versions'), 'the real pin count is named on the published row');
+	});
+
+	test('a published snapshot with no pinnable sources says so truthfully', () => {
+		const h = historyHtml([snap({ id: 'p', label: 'Published', via: 'publish', pinnedSources: 0 })], [], 'Doc', undefined, NOW);
+		assert.ok(h.includes('no sources to pin'), 'a 0-pin publish reads honestly, never a fabricated count');
+	});
+
 	test('truthful empty state when the document has no versions or changes', () => {
 		const h = historyHtml([], [], 'Fresh Doc', undefined, NOW);
 		assert.ok(h.includes('No versions yet - changes you approve will appear here.'), 'calm one-line empty state');

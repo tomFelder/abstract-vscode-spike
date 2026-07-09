@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { AddedContextKind, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ISourceGrid } from './sourceGrid.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
@@ -171,6 +171,12 @@ export interface ISourcePeek {
 	readonly grid?: ISourceGrid;
 	/** For a clicked api/mcp bound value: the real response payload with the extracted field (plan 29 iter 4). */
 	readonly payload?: ISourcePayload;
+	/**
+	 * The pin label when the document was published and this source is frozen to a version (plan 32 iter 4):
+	 * "pinned at v <short-hash> of <date>". Absent when the document is not published / this source is not
+	 * pinned, so an unpublished document's source-peek shows nothing extra. Real data only - from the lock's pins.
+	 */
+	readonly pinnedLabel?: string;
 }
 
 /**
@@ -287,6 +293,13 @@ export interface ILivingDocsService {
 	runSkillCheck(resource: URI, id: ISkillCheck['id']): Promise<void>;
 	/** Apply a Skill's deterministic fix to the document (e.g. Formatting title-cases the flagged headings). */
 	applySkillFix(resource: URI, id: ISkillCheck['id']): Promise<void>;
+	/**
+	 * Run one Skill across every project document (plan 32 iter 3, the P3 gap): fans the skill grade over the
+	 * folder's living documents and returns the per-document summary the Agents run strip renders. Skills stay
+	 * single-doc units; the orchestrator does the fanning. Real data only - a non-living doc or a model-less
+	 * model-backed skill is honestly skipped.
+	 */
+	runSkillAcrossProject(id: ISkillCheck['id'], skillName: string): Promise<ISkillRunSummary>;
 	/** Re-hash the document's sources and recompute its dirty bits (what the source watcher triggers). */
 	checkSources(resource: URI): Promise<void>;
 	getStatus(resource: URI): string;
@@ -334,6 +347,22 @@ export interface ILivingDocsService {
 
 	/** The persisted run log, newest-first (Agents-screen run log + Home; plan 32 iter 2, D32-A). */
 	getAgentRuns(): readonly IAgentRun[];
+
+	/** The persisted run log for ONE agent, newest-first (the detail drawer's run log; plan 32 iter 3). */
+	getAgentRunsForAgent(agentId: string): readonly IAgentRun[];
+
+	// --- Agents-screen detail drawer registry edits (plan 32 iter 3): create / duplicate / pause / inline
+	// policy + trigger edits. Each persists to `agents.json` and fires onDidChange so the screen re-renders. ---
+	/** Create a new agent (draft-only, manual trigger by default); the drawer then edits it inline. */
+	createAgent(): Promise<void>;
+	/** Duplicate an existing agent as a fresh "(copy)" with its own id and no run history. */
+	duplicateAgent(agentId: string): Promise<void>;
+	/** Pause / resume an agent: the scheduler skips a paused agent; a manual Run now is still honoured. */
+	setAgentDisabled(agentId: string, disabled: boolean): Promise<void>;
+	/** Set an agent's policy inline (the three-level select). */
+	setAgentPolicy(agentId: string, policy: AgentPolicy): Promise<void>;
+	/** Set an agent's trigger inline (the cron day/time picker or heartbeat-hours field). */
+	setAgentTrigger(agentId: string, trigger: IAgentTrigger): Promise<void>;
 
 	/**
 	 * The most recent agent run that FAILED and is still the latest for its agent, for the Home attention line
@@ -422,20 +451,34 @@ export interface ILivingDocsService {
 	 */
 	reviewImpact(resource: URI): Promise<void>;
 
-	/** Export a document's current state to a self-contained HTML page and open it. */
-	exportDocument(resource: URI): Promise<URI | undefined>;
+	/**
+	 * The before-export gate's current verdict (plan 32 iter 4), so the export/present flow can SHOW it -
+	 * no silent block. `pass:true` = clean; `pass:false` carries the one-line grader `flag` the export sheet
+	 * renders alongside "Export anyway" (audited override) and "Fix first" (jump to the flag).
+	 */
+	previewExportGate(resource: URI): { readonly pass: boolean; readonly flag?: string };
+
+	/**
+	 * Export a document's current state to a self-contained HTML page and open it. `force` proceeds PAST a
+	 * failed before-export gate ("Export anyway"), auditing the override (plan 32 iter 4) - never silent.
+	 */
+	exportDocument(resource: URI, force?: boolean): Promise<URI | undefined>;
 
 	/**
 	 * Export a document's *resolved* state to a clean, static Markdown file (no bindings, no
 	 * {cell} placeholders, live values inlined) and open it. The portable share/Obsidian artefact.
+	 * `force` proceeds past a failed before-export gate, auditing the override (plan 32 iter 4).
 	 */
-	exportMarkdown(resource: URI): Promise<URI | undefined>;
+	exportMarkdown(resource: URI, force?: boolean): Promise<URI | undefined>;
 
 	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
 	shareDocument(resource: URI): void;
 
-	/** Publish a document: snapshot (pin) its sources to current versions for reproducibility. */
-	publishDocument(resource: URI): Promise<void>;
+	/**
+	 * Publish a document: snapshot (pin) its sources to current versions for reproducibility. `force`
+	 * publishes PAST a failed before-export gate, auditing the override (plan 32 iter 4) - never silent.
+	 */
+	publishDocument(resource: URI, force?: boolean): Promise<void>;
 
 	// --- versions / snapshots (plan 26 iter 2: the trust spine) ---
 	/** The document's saved versions, newest first (empty until the first snapshot). */

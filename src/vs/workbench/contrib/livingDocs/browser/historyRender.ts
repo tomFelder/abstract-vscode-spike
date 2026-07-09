@@ -89,7 +89,12 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 		const glyph = s.via === 'publish'
 			? `<span style="font-size:12px;color:oklch(0.66 0.16 45)">&#9733;</span>`
 			: dot('#cfd3da');
-		events.push({ at: Date.parse(s.at) || 0, html: last => timelineRow(glyph, title, badge, `${via.label}`, relTime(s.at, now), last, restoreBtn(s.id)) });
+		// A published snapshot names the real pins it froze (plan 32 iter 4), replacing the comp mock. Only
+		// shown when a real count was recorded; a 0-pin publish reads "no sources to pin" truthfully.
+		const body = s.via === 'publish' && typeof s.pinnedSources === 'number'
+			? (s.pinnedSources > 0 ? `${via.label} &middot; pinned ${s.pinnedSources} source version${s.pinnedSources === 1 ? '' : 's'}` : `${via.label} &middot; no sources to pin`)
+			: `${via.label}`;
+		events.push({ at: Date.parse(s.at) || 0, html: last => timelineRow(glyph, title, badge, body, relTime(s.at, now), last, restoreBtn(s.id)) });
 	}
 	// A change row (audit entry): the verb + block, the via + relative time. Not restorable on its own.
 	for (const e of audit) {
