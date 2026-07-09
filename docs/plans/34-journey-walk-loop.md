@@ -9,7 +9,7 @@
 
 ## Hard rule: assess, don't fix
 
-Nothing is fixed during the walk - no matter how tempting the one-liner. Every failure is logged with a repro, a severity and a screenshot. The output IS the work list; fixing-while-walking destroys the honesty and the速度 of both.
+Nothing is fixed during the walk - no matter how tempting the one-liner. Every failure is logged with a repro, a severity and a screenshot. The output IS the work list; fixing-while-walking destroys the honesty and the speed of both.
 (Sole exception: a broken build that prevents walking at all may be repaired, logged as environment work.)
 
 ## Prerequisites
