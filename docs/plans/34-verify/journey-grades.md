@@ -193,6 +193,80 @@ These recur across journeys and are called out once here, then referenced by id 
 - The native OS folder picker (1a frame 2, "Switch folder…") is not reachable in the web build - a browser cannot invoke the macOS folder dialog. Needs a desktop pass.
 - X1 (writes not persisting to disk) may be partly a web-build File System Access limitation rather than a pure product bug; a desktop pass is needed to confirm whether approves and new docs land on disk there. It is recorded as severity-1 because in the environment under test the user's approved work is lost on reload, which is what a user would experience in this build.
 
+# Iteration 2 - Groups C, D, E, F + candidates (fresh build)
+
+Walked on the fresh 9 Jul 22:57 build with the model proxy up. Same rubric. Where a decision defers scope (D16 table-not-graph, D18 light audit, D20 no scheduled generation), the journey is graded against the **decided v1 scope** (doc 13 §2), not the map's fullest frame. X1 (approved work lost on reload) is a cross-cutting severity-1 that recurs wherever a journey writes; it is noted per journey but counted once (it is the same root cause re-verified in Part 1).
+
+## Iteration-2 summary table
+
+| Journey | Title | Grade | Sev-1 |
+|---|---|---|---|
+| 1i | One chat, three docs - review at any granularity | WALKABLE | 0 (X1 applies) |
+| 1j | Project-wide run - the fan-out swarm | WALKABLE | 0 (X1 applies) |
+| 1k | The cross-document review pass | WALKABLE | 0 (X1 applies) |
+| 1l | Parallel chats - tabs in the rail | MISSING | 0 |
+| 1m | Pull files & folders into the chat | WALKABLE | 0 |
+| 1n | Inspect the context - what does it see? | PARTIAL/MISSING (Context tab exists, no pre-flight/trim) | 0 |
+| 1o | Knowledge - the library of sources of truth | FRAGILE | 0 |
+| 1p | Trace a figure to its source - provenance peek | WALKABLE | 0 |
+| 1y | The document's sources rail - always-on inputs | MISSING (sources shown, no doc-scoped rail with verbs) | 0 |
+| 1q | Put a document on a schedule | FRAGILE | 0 |
+| 1r | The morning inbox - 90 seconds to done | PARTIAL | 0 |
+| 1s | Watch, cancel, recover | FRAGILE | 0 |
+| 1t | Manage a project's agents & workflows | WALKABLE | 0 |
+| 1z | Usage, cost & the starved run | MISSING | 0 |
+| 1u | Present, export, publish | FRAGILE | 0 |
+| 1v | Interrogate the audit trail | MISSING | 0 |
+
+Candidates probed: **2c (ask-the-project, D24 critical v1)** - the read-only "answer with citations, no proposals" mode is not a distinct surface; the chat rail always drives toward proposals (see 1v/2c note). **2b (first-run orientation)** - nothing orients on a fresh/messy folder open (see 2b note); this was confirmed in iteration 1's messy-folder probe (flattened, non-md dropped, no "I found N numbers - link them?").
+
+## Group C - Across documents (1i-1l)
+
+### 1i - One chat, three documents changed, review at any granularity · WALKABLE
+
+**What was walked.** On Board Note's chat rail the "Edit across:" / "+ Add documents" control opens a menu ("Add all documents in the folder" + each doc). I built a three-doc working set (Board Note current + Weekly Operating Summary + Team Notes; the chips show "Editing: ▤ Weekly Operating Summary × ▤ Team Notes ×" with a "+ Add"). Sent one instruction ("Add a one-sentence Momentum note to each… keep it consistent"). A live model call produced a **per-file ledger** in the rail: "2 changes across 2 documents", with per-doc rows "▤ Weekly Operating Summary +1 -0 →" and "▤ Team Notes +1 -0 →", plus the three bulk verbs "Accept all / Reject all / Review each". Each change also rendered as an in-doc card with Insert/Reject (per-diff granularity). Clicking a per-doc row navigated into that document with its change shown in context, "1 change here", "Next document →" wayfinding, and "Approve everywhere". Approving one doc drained the ledger to "1 change waiting on you" and the Review tab count from "Review 2" to "Review 1". Screenshots `1i-1-multidoc-ledger.png`, `1k-1-perdoc-approve-drained.png`.
+
+**Probe results.**
+- Golden path (one instruction, three docs, three granularities): works end to end - this diff / this file / everything are all present, exactly the Cursor-for-prose grammar the map describes. Genuinely strong; far past the PARTIAL chip.
+- Honest scoping: the model applied to 2 of the 3 (the current doc Board Note was not given a change) and **said so in plain language** ("the user said 'all three' but only two documents are in the working set") - honest degradation, not silent drop.
+- Empty working set / invalid: not separately broken - a single-doc scope simply behaves as 1e.
+- Persistence: approved cross-doc edits are subject to X1 (lost on reload), same as 1e.
+
+**Grade rationale.** Every granularity works with a live model, the ledger drains truthfully, wayfinding is real. WALKABLE (X1 is the shared persistence caveat, not a 1i-specific break).
+
+### 1j - Project-wide run, the fan-out swarm · WALKABLE
+
+**What was walked.** Agents nav → "✦ Run Across the Project". A dedicated agent-run screen streamed live: header "✦ Agent run · Live", a source-cited instruction ("Extract the decisions from the 3 March security review…"), "1 DECISION UNDERSTOOD" with "transcript · line 14" provenance, "Orchestrating 7 sub-agents reading every document in parallel · 0/7 done", and the **swarm grid** - one tile per document (7 tiles) each moving through "reviewing…". A "Stop run" button was present throughout. On completion: "7 sub-agents finished · 7/7 done", each tile resolved to "no change" (·) or "✓ 1 change", and a summary "1 changes proposed in 1 documents · 0 working · 6 unchanged" with "Review Across the Project →" handing off to 1k. Screenshots `1j-1-swarm-live.png`, `1j-2-swarm-complete.png`.
+
+**Probe results.**
+- Golden path (whole-project fan-out with real per-doc states and source grounding): works, live-verified, matches the plan-23 demo screen and decision 83 (real source line). The "no change" tiles build trust as designed.
+- Cancel mid-run: a "Stop run" control is present live (the safety half, 1s); the sample run finished too fast to catch a mid-flight cancel state this pass - flagged, the affordance exists.
+- Scale: the sample is 7 docs; the map's own note warns 50 docs is serial/unbounded today - not reachable in this folder, not graded here.
+- Persistence: proposals from the run are subject to X1 on reload.
+
+**Grade rationale.** The wedge demo works end to end with a live model, honest per-doc states, real provenance, and a cancel affordance. WALKABLE.
+
+### 1k - The cross-document review pass · WALKABLE
+
+**What was walked.** The 1j "Review Across the Project →" handoff lands in a dedicated review screen ("Review project update"): a left doc checklist with counts ("Team Notes 1", "0 of 1 reviewed"), a global progress header ("1 reviewed") with an honest bulk door ("Accept All Remaining (1)"), "DOCUMENT 1 OF 1" wayfinding, and per-change cards in the document's own context using the **same card grammar as 1f** (MEANING CHANGE, ● High confidence, "decision · line 14" provenance, Open in document ↗ / Edit / Accept / Reject). "Accept All Remaining" fired the decision-132 bulk confirm ("Approve 1 change including 1 meaning change? A version snapshot is taken first…"); approving reached a clean done state ("✓ All changes reviewed - Every proposed change across 1 document has been actioned"). Screenshots `1k-2-crossdoc-review-pass.png`.
+
+**Probe results.**
+- Golden path (order by document, per-diff/per-file/bulk, momentum footer, done→clear): works, matches D10 (order by document) and the 1k frames. The per-card Edit is the decision-131 Tweak affordance inside the cross-doc card, with "Open in document ↗" as the secondary link - exactly as decided.
+- Inferred/low-confidence gating (1k frame 3): this run produced only High-confidence changes ("All changes look confident"), so the ◐ "needs your eyes" gate was not exercised; the confident-path bulk accept is present and honest.
+- Persistence: X1 applies to the approved results.
+
+**Grade rationale.** A real, complete cross-doc review surface with one review grammar everywhere. WALKABLE.
+
+### 1l - Parallel chats, tabs in the rail · MISSING
+
+**What was walked.** The chat rail holds a single continuous thread. There is no tab strip, no "+" to start a second thread, no per-task tabs. The Chat/Review/History sub-buttons are surface toggles, not chat tabs; the working set persists within the one thread. While a run is in flight (the streaming state has a "■ Stop"), the composer is not blocked, but there is no way to open a *second* thread to work a parallel task. Screenshot `1l-1-single-thread-no-tabs.png`.
+
+**Probe results.**
+- Golden path (open a second tab, keep the first running, each with its own working set): the tabs surface does not exist. Frames 1-4 of 1l (tab strip, per-tab spinner, done-badge, chronological collision handling) are all absent.
+- The composer does stay usable during a run (a partial answer to the "blocked composer kills the calm promise" concern), but that is single-thread behaviour, not parallel tabs.
+
+**Grade rationale.** The journey's surface (rail tabs) is not built. MISSING (matches the GAP chip).
+
 ## Evidence index (screenshots in shots/)
 
 - `00-home-initial.png`, `1a-1-switch-folder.png` - taken against the broken `?folder=/static/mount` entry (environment gotcha, see environment.md), retained as evidence of the gotcha only.
