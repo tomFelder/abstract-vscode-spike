@@ -9,7 +9,7 @@
 // our own surfaces (no core patch): the HTML below is ported from the locked design comp, with the
 // comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
 
-import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
+import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { countTemplateSlots } from '../common/livingDocMarkdown.js';
 import { ILivingDocSummary, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 
@@ -23,6 +23,16 @@ export interface IRecentProject {
 	readonly name: string;
 	/** Stringified URI used as the `openFolder` arg so the host can re-open it. */
 	readonly folderUri: string;
+}
+
+/** The Home attention line for a failed scheduled run (plan 32 iter 2). Real data only - built from a run. */
+export interface IHomeFailure {
+	/** The agent's human name, e.g. "Weekly refresh". */
+	readonly agentName: string;
+	/** The weekday the run failed on, e.g. "Monday" (from the run's finished/started timestamp). */
+	readonly day: string;
+	/** The failure string the runner reported (shown on hover / in the details link title). */
+	readonly error: string;
 }
 
 export interface IScreenState {
@@ -42,6 +52,24 @@ export interface IScreenState {
 	readonly filter: AgentFilter;
 	/** Agents: the result of the most recent Run now, for the canvas banner. */
 	readonly lastRun?: IAgentRun;
+	/**
+	 * Agents: the open agent's run log (plan 32 iter 3), newest-first, for the detail drawer's run-log panel
+	 * (relative time, via, outcome counts, the "N queued" review link, failure/skip lines). Real data only -
+	 * from `getAgentRunsForAgent`; empty until the agent has run.
+	 */
+	readonly openAgentRuns?: readonly IAgentRun[];
+	/**
+	 * Agents: the result of the most recent "Run skill across project" (plan 32 iter 3, the P3 gap): every
+	 * folder document's grade for one skill, rendered as a run strip. Absent until a cross-project skill run
+	 * has happened. Real data only - the per-document flag/pass/skip is the grader's true verdict.
+	 */
+	readonly skillRun?: ISkillRunSummary;
+	/**
+	 * Home: the latest agent run that failed, for the quiet attention line above the project grid (plan 32
+	 * iter 2). Absent when nothing failed - truthful automation, no fake activity. Carries the agent's human
+	 * name and the failure day so the copy reads "Weekly refresh failed on Monday - view details".
+	 */
+	readonly homeFailure?: IHomeFailure;
 	/** Home: whether a workspace folder (the "project") is open. */
 	readonly hasFolder?: boolean;
 	/** Home: the open folder's name, shown as the project. */
@@ -132,6 +160,13 @@ export interface IProjectRunScreenState {
 	 * rationale grouping (`grounded:false`) and the card omits the line chip.
 	 */
 	readonly decisions?: readonly IDecisionGroup[];
+	/**
+	 * The fan-out's batch progress (plan 30, track 3, D30-B): the whole-project run packs the working set
+	 * into `count` context-bounded batches; `index` is the 1-based batch currently running (0 when no batch
+	 * is live). The command strip shows a `batch K of M` chip while a run spans more than one batch. Absent
+	 * when the run fit in a single batch (the common small-scale case), so nothing extra is shown then.
+	 */
+	readonly batch?: { readonly index: number; readonly count: number };
 }
 
 function esc(s: string): string {
@@ -279,6 +314,32 @@ for (const el of document.querySelectorAll('[data-tweak-cancel]')) {
 }
 for (const el of document.querySelectorAll('[data-tweak-save]')) {
 	el.addEventListener('click', () => { const card = el.closest('.rv-card'); const ed = card && card.querySelector('.rv-tweakedit'); const text = ed ? ed.innerText.replace(/\\s+/g, ' ').trim() : ''; vscode.postMessage({ type: 'reviewTweakSave', arg: el.getAttribute('data-arg') || undefined, text: text }); });
+}
+// Inline registry editors (Agents detail drawer, plan 32 iter 3): a policy <select> and the trigger fields
+// post their message on change with the element's live value; the host writes it and re-renders.
+for (const el of document.querySelectorAll('[data-change-msg]')) {
+	el.addEventListener('change', () => vscode.postMessage({ type: el.getAttribute('data-change-msg'), arg: el.getAttribute('data-arg') || undefined, value: el.value }));
+}
+// The trigger editor's Save button gathers its sibling picker fields (kind + cron day/time or heartbeat hours)
+// and posts one setAgentTrigger message with a composed value string the host parses.
+for (const el of document.querySelectorAll('[data-trigger-save]')) {
+	el.addEventListener('click', () => {
+		const box = el.closest('[data-trigger-box]'); if (!box) { return; }
+		const kind = box.querySelector('[data-tfield=kind]');
+		const day = box.querySelector('[data-tfield=day]');
+		const time = box.querySelector('[data-tfield=time]');
+		const hours = box.querySelector('[data-tfield=hours]');
+		const source = box.querySelector('[data-tfield=source]');
+		vscode.postMessage({ type: 'setAgentTrigger', arg: el.getAttribute('data-arg') || undefined,
+			value: JSON.stringify({ kind: kind ? kind.value : 'manual', day: day ? day.value : undefined, time: time ? time.value : undefined, hours: hours ? hours.value : undefined, source: source ? source.value : undefined }) });
+	});
+}
+// The trigger kind <select> toggles which picker fields show (cron day/time vs heartbeat hours vs event source).
+for (const el of document.querySelectorAll('[data-tfield=kind]')) {
+	el.addEventListener('change', () => {
+		const box = el.closest('[data-trigger-box]'); if (!box) { return; }
+		for (const g of box.querySelectorAll('[data-tgroup]')) { g.style.display = (g.getAttribute('data-tgroup') === el.value) ? 'flex' : 'none'; }
+	});
 }`;
 
 function page(body: string): string {
@@ -364,6 +425,12 @@ function renderHome(state: IScreenState): string {
 			<button data-msg="openDoc" data-arg="${esc(d.resource.toString())}" style="width:100%;font:600 13px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:9px;padding:11px;cursor:pointer">Review ${n} change${n === 1 ? '' : 's'}</button>
 		</div>`;
 	};
+	// The quiet attention line for a failed scheduled run (plan 32 iter 2): one calm amber row linking to the
+	// Agents screen. Only rendered when a run actually failed (real data) - no fake activity when all is well.
+	const fail = state.homeFailure;
+	const failureLine = fail
+		? `<button data-msg="goAgents" title="${esc(fail.error)}" style="display:flex;align-items:center;gap:9px;width:100%;text-align:left;margin:0 0 26px;padding:11px 14px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:10px;font:500 12.5px/1.4 system-ui;color:#9a6b16;cursor:pointer"><span style="width:7px;height:7px;flex:none;border-radius:50%;background:oklch(0.66 0.16 45)"></span><span style="flex:1">${esc(fail.agentName)} failed on ${esc(fail.day)}</span><span style="font:600 12px/1 system-ui;color:${ACCENT_DK}">View details &#8594;</span></button>`
+		: '';
 	const needsYou = pendingDocs.length
 		? `<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#5661c9;margin-bottom:14px;display:flex;align-items:center;gap:8px"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 2.4s ease-in-out infinite"></span>NEEDS YOU</div>
 			<div style="display:flex;gap:16px;margin-bottom:34px;flex-wrap:wrap">${pendingDocs.slice(0, 2).map(needsCard).join('')}</div>`
@@ -421,6 +488,7 @@ function renderHome(state: IScreenState): string {
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
 		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
+		${failureLine}
 		${needsYou}
 		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
 		${projectsGrid}
@@ -744,6 +812,7 @@ function statusBadge(status: string): string {
 		case 'needs-approval': return `<span style="font:600 11px/1 system-ui;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:5px 10px">Needs approval</span>`;
 		case 'blocked': return `<span style="font:600 11px/1 system-ui;color:#b4332f;background:#fdecec;border-radius:999px;padding:5px 10px">Blocked</span>`;
 		case 'error': return dot('#b4332f', 'Error', '#b4332f');
+		case 'paused': return dot('#cdd1d8', 'Paused', '#868b95');
 		default: return dot('#cdd1d8', 'Idle', '#868b95');
 	}
 }
@@ -767,16 +836,16 @@ function renderAgentList(state: IScreenState): string {
 		|| (state.filter === 'scheduled' && isScheduled(a))
 		|| (state.filter === 'event' && isEvent(a))
 		|| (state.filter === 'needs-approval' && a.status === 'needs-approval'));
-	const rows = shown.map(a => `<div data-msg="openAgent" data-arg="${esc(a.id)}" style="display:flex;align-items:center;padding:15px 18px;border-bottom:1px solid #f1f2f5;font:400 13px/1.4 system-ui;cursor:pointer">
-		<div style="flex:2.4;display:flex;align-items:center;gap:9px"><span style="color:${ACCENT}">${AGENT_ICON[a.trigger.kind] ?? '&#9679;'}</span><span style="font-weight:500">${esc(a.name)}</span><span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#aeb6e0">open &#8599;</span></div>
+	const rows = shown.map(a => `<div data-msg="openAgent" data-arg="${esc(a.id)}" style="display:flex;align-items:center;padding:15px 18px;border-bottom:1px solid #f1f2f5;font:400 13px/1.4 system-ui;cursor:pointer${a.disabled ? ';opacity:.62' : ''}">
+		<div style="flex:2.4;display:flex;align-items:center;gap:9px"><span style="color:${ACCENT}">${AGENT_ICON[a.trigger.kind] ?? '&#9679;'}</span><span style="font-weight:500">${esc(a.name)}</span>${a.disabled ? `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;background:#eef0f3;border-radius:999px;padding:3px 7px">PAUSED</span>` : ''}<span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#aeb6e0">open &#8599;</span></div>
 		<div style="flex:1.4;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#696e78">${triggerLabel(a.trigger)}</div>
 		<div style="flex:2.6;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#868b95">${flowLabel(a.flow)}</div>
 		<div style="flex:1.3;color:#969ba4;font:400 12px/1 system-ui">${relTime(a.lastRun)}</div>
-		<div style="flex:1.4">${statusBadge(a.status)}</div>
+		<div style="flex:1.4">${a.disabled ? statusBadge('paused') : statusBadge(a.status)}</div>
 	</div>`).join('');
 	const empty = `<div style="padding:24px 18px;font:400 12.5px/1.5 system-ui;color:#969ba4">No agents match this filter.</div>`;
 	return `<div class="screen">
-	<div class="scr-head"><div><h2 class="scr-title">Agents</h2><div class="scr-sub">Documents talking to documents &mdash; running quietly in the background.</div></div><div style="margin-left:auto;display:flex;align-items:center;gap:8px"><button class="btn-ghost">&#65291; New agent</button><button class="btn-primary" data-msg="runProject">&#10022; Run Across the Project</button></div></div>
+	<div class="scr-head"><div><h2 class="scr-title">Agents</h2><div class="scr-sub">Documents talking to documents &mdash; running quietly in the background.</div></div><div style="margin-left:auto;display:flex;align-items:center;gap:8px"><button class="btn-ghost" data-msg="createAgent">&#65291; New agent</button><button class="btn-primary" data-msg="runProject">&#10022; Run Across the Project</button></div></div>
 	<div class="scr-body">
 		<div style="max-width:1040px;margin:0 auto;padding:24px 28px 80px">
 			<div style="display:flex;gap:6px;margin-bottom:16px">${chip('all', `All &middot; ${counts.all}`)}${chip('scheduled', `Scheduled &middot; ${counts.scheduled}`)}${chip('event', `Event &middot; ${counts.event}`)}${chip('needs-approval', `Needs approval &middot; ${counts.needs}`, true)}</div>
@@ -790,8 +859,9 @@ function renderAgentList(state: IScreenState): string {
 </div>`;
 }
 
-// The workflow canvas renders the agent as the loop (spec 5): trigger -> sources -> agent -> verify
-// gate -> policy gate -> documents -> review rail. Run state comes from the last run.
+// The detail drawer (plan 32 iter 3, D32-B): the read-only canvas strip (the loop, spec 5) plus the inline
+// controls (policy select, trigger editor), the run log (relative time, via, outcome counts, the "N queued"
+// review link, failure/skip lines), and the create/duplicate/pause + cross-project skill-run actions.
 function renderAgentCanvas(agent: IAgentDef, state: IScreenState): string {
 	const run = state.lastRun && state.lastRun.agentId === agent.id ? state.lastRun : undefined;
 	const node = (label: string, sub: string, accent = false, tint = '#fff') => `<div style="flex:none;width:150px;background:${tint};border:1.5px solid ${accent ? ACCENT : '#e6e8ed'};border-radius:11px;padding:12px 13px;box-shadow:0 1px 3px rgba(0,0,0,.05)"><div style="font:600 12.5px/1.2 system-ui;color:#1a1c20">${label}</div><div style="font:400 10.5px/1.35 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:6px">${sub}</div></div>`;
@@ -817,18 +887,128 @@ function renderAgentCanvas(agent: IAgentDef, state: IScreenState): string {
 			? `<div style="flex:none;display:flex;align-items:center;gap:10px;padding:11px 24px;background:#fdecec;border-bottom:1px solid #f3c9c6;font:500 12.5px/1.4 system-ui;color:#b4332f"><span style="width:8px;height:8px;border-radius:50%;background:#b4332f"></span>Blocked at the verify gate &middot; ${esc(run.blocked)}</div>`
 			: `<div style="flex:none;display:flex;align-items:center;gap:10px;padding:11px 24px;background:#fdf6e9;border-bottom:1px solid #f0e2c4;font:500 12.5px/1.4 system-ui;color:#9a6b16"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.66 0.16 45)"></span>Run complete &middot; ${run.applied} figure update${run.applied === 1 ? '' : 's'} applied &middot; ${run.queued} change${run.queued === 1 ? '' : 's'} queued<button data-msg="goReview" style="margin-left:auto;border:none;background:none;font:600 12.5px/1 system-ui;color:${ACCENT_DK};cursor:pointer">Review &#8594;</button></div>`;
 	}
+	const pauseBtn = agent.disabled
+		? `<button data-msg="resumeAgent" data-arg="${esc(agent.id)}" style="border:1px solid #d4d7dd;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:600 12.5px/1 system-ui;cursor:pointer">&#9654; Resume</button>`
+		: `<button data-msg="pauseAgent" data-arg="${esc(agent.id)}" style="border:1px solid #d4d7dd;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:600 12.5px/1 system-ui;cursor:pointer">&#10073;&#10073; Pause</button>`;
+	const pausedNote = agent.disabled
+		? `<div style="flex:none;display:flex;align-items:center;gap:10px;padding:10px 24px;background:#f4f5f7;border-bottom:1px solid #e9eaee;font:500 12.5px/1.4 system-ui;color:#696e78"><span style="width:8px;height:8px;border-radius:50%;background:#c2c8d4"></span>Paused &middot; the scheduler skips this agent. Run now still works.</div>`
+		: '';
 	return `<div class="screen">
 	<div style="flex:none;display:flex;align-items:center;gap:14px;padding:13px 24px;border-bottom:1px solid #eef0f3">
 		<button class="btn-ghost" data-msg="closeAgent">&#8592; Agents</button>
-		<div><div style="display:flex;align-items:center;gap:8px"><span style="color:${ACCENT}">${AGENT_ICON[agent.trigger.kind] ?? '&#9679;'}</span><h2 style="margin:0;font:600 16px/1.2 system-ui;color:#15171c">${esc(agent.name)}</h2></div><div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:4px">${triggerLabel(agent.trigger)} &middot; ${esc(agent.policy)}</div></div>
-		<div style="margin-left:auto;display:flex;align-items:center;gap:12px">${statusBadge(agent.status)}<button data-msg="runWf" data-arg="${esc(agent.id)}" style="border:none;border-radius:8px;padding:9px 16px;background:oklch(0.55 0.14 150);color:#fff;font:600 13px/1 system-ui;cursor:pointer">&#9654; Run now</button></div>
+		<div><div style="display:flex;align-items:center;gap:8px"><span style="color:${ACCENT}">${AGENT_ICON[agent.trigger.kind] ?? '&#9679;'}</span><h2 style="margin:0;font:600 16px/1.2 system-ui;color:#15171c">${esc(agent.name)}</h2>${agent.disabled ? `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;background:#eef0f3;border-radius:999px;padding:3px 7px">PAUSED</span>` : ''}</div><div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-top:4px">${triggerLabel(agent.trigger)} &middot; ${esc(agent.policy)}</div></div>
+		<div style="margin-left:auto;display:flex;align-items:center;gap:10px">${agent.disabled ? statusBadge('paused') : statusBadge(agent.status)}<button data-msg="duplicateAgent" data-arg="${esc(agent.id)}" style="border:1px solid #d4d7dd;border-radius:8px;padding:9px 14px;background:#fff;color:#52575f;font:600 12.5px/1 system-ui;cursor:pointer">&#10697; Duplicate</button>${pauseBtn}<button data-msg="runWf" data-arg="${esc(agent.id)}" style="border:none;border-radius:8px;padding:9px 16px;background:oklch(0.55 0.14 150);color:#fff;font:600 13px/1 system-ui;cursor:pointer">&#9654; Run now</button></div>
 	</div>
-	${banner}
+	${pausedNote}${banner}
 	<div style="flex:1;overflow:auto;background:#f8f9fb;background-image:radial-gradient(#e2e6ee 1px,transparent 1px);background-size:22px 22px">
-		<div style="display:flex;align-items:stretch;gap:8px;padding:40px 28px;min-width:max-content">${stages}</div>
-		<div style="padding:0 28px 40px;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8">The loop: trigger &#8594; sources &#8594; agent &#8594; verify gate &#8594; policy gate &#8594; documents &#8594; review rail.</div>
+		<div style="display:flex;align-items:stretch;gap:8px;padding:36px 28px 20px;min-width:max-content">${stages}</div>
+		<div style="padding:0 28px 8px;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8">The loop: trigger &#8594; sources &#8594; agent &#8594; verify gate &#8594; policy gate &#8594; documents &#8594; review rail.</div>
+		<div style="padding:8px 28px 40px;display:flex;flex-direction:column;gap:18px;max-width:900px">
+			${renderAgentControls(agent)}
+			${renderAgentRunLog(agent, state.openAgentRuns ?? [])}
+			${renderSkillRunCard(state.skillRun)}
+		</div>
 	</div>
 </div>`;
+}
+
+const POLICY_LABELS: Record<string, string> = {
+	'auto-figures': 'Auto-apply figures',
+	'ask-before-apply': 'Ask before applying',
+	'draft-only': 'Draft only',
+};
+
+// The inline policy select + trigger editor (D32-B): the safety dial has exactly the three levels (spec 09 §4)
+// and the trigger picker composes a cron day/time, a heartbeat cadence, or an event source. Both post on change.
+function renderAgentControls(agent: IAgentDef): string {
+	const card = (title: string, body: string) => `<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px 18px">
+		<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:12px">${title}</div>${body}</div>`;
+	const opt = (v: string) => `<option value="${v}"${agent.policy === v ? ' selected' : ''}>${POLICY_LABELS[v]}</option>`;
+	const policyBody = `<select data-change-msg="setAgentPolicy" data-arg="${esc(agent.id)}" style="font:500 13px/1 system-ui;color:#15181f;padding:9px 12px;border:1px solid #dfe1e6;border-radius:8px;background:#fff;cursor:pointer">${opt('auto-figures')}${opt('ask-before-apply')}${opt('draft-only')}</select>
+		<div style="font:400 11.5px/1.5 system-ui;color:#969ba4;margin-top:9px">Figures may auto-apply; prose waits for approval; draft-only never auto-lands.</div>`;
+	// The trigger picker: a kind select toggling the cron day/time, the heartbeat hours, or the event source.
+	const t = agent.trigger;
+	const kindOpt = (v: string, label: string) => `<option value="${v}"${t.kind === v ? ' selected' : ''}>${label}</option>`;
+	const dayOpt = (v: string) => `<option value="${v}"${(t.cron ?? '').startsWith(v) ? ' selected' : ''}>${v}</option>`;
+	const cronMatch = /^(\w{3})\s+(\d{2}:\d{2})$/.exec(t.cron ?? '');
+	const cronTime = cronMatch ? cronMatch[2] : '09:00';
+	const fld = `font:500 12.5px/1 system-ui;color:#15181f;padding:8px 10px;border:1px solid #dfe1e6;border-radius:7px;background:#fff`;
+	const triggerBody = `<div data-trigger-box style="display:flex;flex-direction:column;gap:10px">
+		<select data-tfield="kind" style="${fld};cursor:pointer;width:max-content">${kindOpt('cron', 'Schedule (cron)')}${kindOpt('heartbeat', 'Heartbeat')}${kindOpt('event', 'On source change')}${kindOpt('manual', 'Manual only')}</select>
+		<div data-tgroup="cron" style="display:${t.kind === 'cron' ? 'flex' : 'none'};gap:8px;align-items:center">
+			<select data-tfield="day" style="${fld};cursor:pointer">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(dayOpt).join('')}</select>
+			<input data-tfield="time" type="time" value="${cronTime}" style="${fld}" />
+		</div>
+		<div data-tgroup="heartbeat" style="display:${t.kind === 'heartbeat' ? 'flex' : 'none'};gap:8px;align-items:center">
+			<input data-tfield="hours" type="number" min="1" value="${t.everyHours ?? 6}" style="${fld};width:70px" /><span style="font:400 12px/1 system-ui;color:#969ba4">hours between sweeps</span>
+		</div>
+		<div data-tgroup="event" style="display:${t.kind === 'event' ? 'flex' : 'none'};gap:8px;align-items:center">
+			<input data-tfield="source" type="text" value="${esc(t.source ?? '*')}" placeholder="* (any source)" style="${fld};width:220px" /><span style="font:400 12px/1 system-ui;color:#969ba4">source path, or * for any</span>
+		</div>
+		<div><button data-trigger-save data-arg="${esc(agent.id)}" style="border:none;border-radius:7px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">Save trigger</button></div>
+	</div>`;
+	return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">${card('POLICY', policyBody)}${card('TRIGGER', triggerBody)}</div>`;
+}
+
+// The run log (plan 32 iter 3): the agent's persisted runs newest-first, each a row of relative time, the
+// trigger `via`, the outcome counts (docs / applied / queued), and a failure or skip line where honest. A run
+// that queued changes carries an "N queued" link into the review surface. Truthful empty state when it never ran.
+function renderAgentRunLog(agent: IAgentDef, runs: readonly IAgentRun[]): string {
+	const head = `<div style="display:flex;align-items:center;padding:10px 16px;background:#f8f9fb;border-bottom:1px solid #eef0f3;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2"><div style="flex:1.4">WHEN</div><div style="flex:1.1">VIA</div><div style="flex:2.6">OUTCOME</div><div style="flex:1.2"></div></div>`;
+	if (!runs.length) {
+		return `<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden"><div style="padding:11px 16px;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;border-bottom:1px solid #eef0f3">RUN LOG</div><div style="padding:22px 16px;font:400 12.5px/1.5 system-ui;color:#969ba4">No runs yet. This agent has not run - Run now, or wait for its ${esc(agent.trigger.kind)} trigger.</div></div>`;
+	}
+	const rows = runs.map(r => {
+		let outcome: string;
+		let outcomeColor = '#52575f';
+		if (r.skippedReason === 'still-running') {
+			outcome = 'Skipped &middot; a previous run was still running';
+			outcomeColor = '#868b95';
+		} else if (r.error) {
+			outcome = `Failed &middot; ${esc(r.error)}`;
+			outcomeColor = '#b4332f';
+		} else {
+			const docs = r.docsTouched ?? 0;
+			outcome = `${docs} doc${docs === 1 ? '' : 's'} &middot; ${r.applied} applied &middot; ${r.queued} queued`;
+		}
+		const reviewLink = (!r.error && !r.skippedReason && r.queued > 0)
+			? `<button data-msg="goReview" style="border:none;background:none;font:600 12px/1 system-ui;color:${ACCENT_DK};cursor:pointer">${r.queued} queued &#8594;</button>`
+			: '';
+		return `<div style="display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid #f4f5f7;font:400 12.5px/1.4 system-ui">
+			<div style="flex:1.4;color:#52575f">${relTime(r.finishedAt ?? r.startedAt)}</div>
+			<div style="flex:1.1;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95">${esc(r.via ?? 'manual')}</div>
+			<div style="flex:2.6;color:${outcomeColor}">${outcome}</div>
+			<div style="flex:1.2;text-align:right">${reviewLink}</div>
+		</div>`;
+	}).join('');
+	return `<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;overflow:hidden"><div style="padding:11px 16px;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;border-bottom:1px solid #eef0f3">RUN LOG &middot; ${runs.length}</div>${head}${rows}</div>`;
+}
+
+// The cross-project skill run strip (plan 32 iter 3, the P3 gap): the "Run skill across project" affordance and,
+// after a run, one row per document with its grade (flag/pass/skipped) and the grader's one-line reason. Real
+// data only - skipped is honest (not living, or a model-backed skill with no model), never a fabricated pass.
+function renderSkillRunCard(summary: ISkillRunSummary | undefined): string {
+	const skillBtn = (id: string, label: string) => `<button data-msg="runSkillProject" data-arg="${id}" style="border:1px solid #d4d7dd;border-radius:8px;padding:8px 13px;background:#fff;color:#52575f;font:600 12px/1 system-ui;cursor:pointer">${label} across project</button>`;
+	const actions = `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${skillBtn('formatting', 'Run Formatting')}${skillBtn('financial', 'Run Financial')}${skillBtn('strategy', 'Run Strategy')}</div>`;
+	let body: string;
+	if (!summary) {
+		body = `<div style="font:400 12.5px/1.5 system-ui;color:#969ba4">Run a Skill grader across every document in the project - results land in the review rail as usual.</div>${actions}`;
+	} else {
+		const rows = summary.results.map(r => {
+			const dot = r.status === 'flag' ? 'oklch(0.66 0.16 45)' : r.status === 'pass' ? 'oklch(0.55 0.14 150)' : '#cdd1d8';
+			const label = r.status === 'flag' ? 'Flag' : r.status === 'pass' ? 'Pass' : 'Skipped';
+			const color = r.status === 'flag' ? '#9a6b16' : r.status === 'pass' ? '#1f7a44' : '#868b95';
+			return `<div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #f4f5f7;font:400 12.5px/1.4 system-ui">
+				<span style="width:7px;height:7px;flex:none;border-radius:50%;background:${dot}"></span>
+				<span style="flex:1.4;font-weight:500;color:#1a1c20">${esc(r.docTitle)}</span>
+				<span style="flex:none;font:600 11px/1 system-ui;color:${color}">${label}</span>
+				<span style="flex:2.4;font:400 11.5px/1.4 system-ui;color:#868b95">${esc(r.detail)}</span>
+			</div>`;
+		}).join('') || `<div style="padding:18px 16px;font:400 12.5px/1.5 system-ui;color:#969ba4">No gradeable documents in this project.</div>`;
+		const summaryLine = `${summary.flagged} flagged &middot; ${summary.passed} passed${summary.skipped ? ` &middot; ${summary.skipped} skipped` : ''}`;
+		body = `<div style="font:400 12.5px/1.5 system-ui;color:#52575f;margin-bottom:2px"><strong style="color:#1a1c20;font-weight:600">${esc(summary.skillName)}</strong> across the project &middot; ${summaryLine}</div>${actions}<div style="margin-top:12px;border:1px solid #eef0f3;border-radius:10px;overflow:hidden">${rows}</div>`;
+	}
+	return `<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px 18px"><div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:12px">RUN A SKILL ACROSS THE PROJECT</div>${body}</div>`;
 }
 
 
@@ -874,9 +1054,18 @@ function renderProjectRun(state: IScreenState): string {
 	const stopRun = run?.inFlight
 		? `<button data-msg="stopProjectRun" style="flex:none;display:inline-flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#b4332f;background:#fff;border:1px solid #e7c9c6;border-radius:8px;padding:8px 14px;cursor:pointer"><span style="width:9px;height:9px;border-radius:2px;background:#b4332f"></span>Stop run</button>`
 		: '';
+	// The batch chip (plan 30, track 3, D30-B): the fan-out packs the working set into context-bounded
+	// batches; when a run spans more than one batch the strip reports `Batch K of M` so the user sees the
+	// run proceeding in batches rather than stalling on a large folder. Shown only for a live multi-batch
+	// run (index > 0, count > 1); a single-batch run shows nothing extra (the common small-scale case).
+	const batch = run?.batch;
+	const batchChip = batch && batch.count > 1 && batch.index > 0
+		? `<span style="flex:none;font:600 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:8px;padding:7px 12px">Batch ${batch.index} of ${batch.count}</span>`
+		: '';
 	const commandStrip = `<div style="flex:none;padding:18px 28px;border-bottom:1px solid #eef0f3;display:flex;align-items:center;gap:16px">
 		<span style="width:32px;height:32px;border-radius:50%;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 12px/1 system-ui;flex:none">TS</span>
 		<div style="flex:1;font:400 18px/1.4 system-ui;color:${instructionColor}">${instruction}</div>
+		${batchChip}
 		${stopRun}
 		<span style="flex:none;font:600 12.5px/1 system-ui;color:#fff;background:${ACCENT};border-radius:8px;padding:8px 14px">Whole Project</span>
 	</div>`;
@@ -914,10 +1103,13 @@ function renderProjectRun(state: IScreenState): string {
 	const unchangedDocs = summary ? Math.max(0, summary.unchangedDocs - workingCount) : 0;
 	// A stopped run's not-yet-changed docs are skipped, not unchanged (plan 27 iter 4) - reported honestly.
 	const skippedDocs = summary?.skippedDocs ?? 0;
+	// Documents too large for the fan-out budget (plan 30, track 3) are reported as their own honest bucket.
+	const oversizeDocs = summary?.oversizeDocs ?? 0;
 	const numeral = (n: number) => `<strong style="font:500 20px/1 system-ui;color:#14161a">${n}</strong>`;
-	const tail = skippedDocs
-		? `&middot; ${workingCount} working &middot; ${unchangedDocs} unchanged &middot; ${skippedDocs} skipped`
-		: `&middot; ${workingCount} working &middot; ${unchangedDocs} unchanged`;
+	const tailParts = [`&middot; ${workingCount} working`, `&middot; ${unchangedDocs} unchanged`];
+	if (skippedDocs) { tailParts.push(`&middot; ${skippedDocs} skipped`); }
+	if (oversizeDocs) { tailParts.push(`&middot; ${oversizeDocs} too large`); }
+	const tail = tailParts.join(' ');
 	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid #eef0f3;background:#fbfbfc;display:flex;align-items:center;padding:0 28px;gap:18px">
 		<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>
 		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${tail}</span>
@@ -1023,6 +1215,15 @@ function swarmTile(_docId: string, title: string, status: ProjectRunDocStatus, c
 		return `<div style="background:#fafbfc;border:1px dashed #dcdfe6;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
 			<div style="display:flex;align-items:center;gap:6px"><span style="color:#b4332f;font-size:11px">&#9723;</span><span style="${nameStyle};color:#9a9ea7">${name}</span></div>
 			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#b0b4bc">skipped</span>
+		</div>`;
+	}
+	// An oversize tile (plan 30, track 3, D30-B): the document is too large for the fan-out's context budget,
+	// so it was NEVER sent - an amber border + a warning glyph + the honest "too large for this run" label
+	// tells the user why it produced nothing, rather than a silent drop or a false "no change".
+	if (status === 'oversize') {
+		return `<div style="background:#fdf6ec;border:1px solid #f0d9a8;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:#9a6b16;font-size:11px">&#9888;</span><span style="${nameStyle};color:#7a5a13">${name}</span></div>
+			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16">too large for this run</span>
 		</div>`;
 	}
 	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">

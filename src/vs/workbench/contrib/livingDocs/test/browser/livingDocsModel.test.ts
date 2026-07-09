@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { bulkApproveConfirm, groupDecisions, groupPendingByDoc, IProposedChange, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun } from '../../common/livingDocsModel.js';
+import { bulkApproveConfirm, groupDecisions, groupPendingByDoc, IProposedChange, ISkillRunDocResult, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
@@ -72,6 +72,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 2,
 			unchangedDocs: 1,
 			skippedDocs: 0,
+			oversizeDocs: 0,
 		});
 	});
 
@@ -86,6 +87,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 0,
 			unchangedDocs: 3,
 			skippedDocs: 0,
+			oversizeDocs: 0,
 		});
 	});
 
@@ -103,6 +105,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 1,
 			unchangedDocs: 0,
 			skippedDocs: 2,
+			oversizeDocs: 0,
 		});
 	});
 
@@ -117,6 +120,25 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 1,
 			unchangedDocs: 0,
 			skippedDocs: 0,
+			oversizeDocs: 0,
+		});
+	});
+
+	test('an oversize document is flagged and reported as its own bucket, priority over changed/no-change (plan 30, track 3)', () => {
+		// doc `b` is too large for the fan-out budget: it was never sent, so its tile is `oversize` even though
+		// it also has no pending change. It must not read `no change` (which would claim it ran and found none).
+		const pending = [change('a', '1')];
+		assert.deepStrictEqual(summariseProjectRun(docs, pending, false, ['b']), {
+			tiles: [
+				{ docId: 'a', docTitle: 'Access Control', status: 'changed', changeCount: 1 },
+				{ docId: 'b', docTitle: 'Acceptable Use', status: 'oversize', changeCount: 0 },
+				{ docId: 'c', docTitle: 'Cryptography', status: 'no-change', changeCount: 0 },
+			],
+			totalChanges: 1,
+			changedDocs: 1,
+			unchangedDocs: 1,
+			skippedDocs: 0,
+			oversizeDocs: 1,
 		});
 	});
 });
@@ -295,5 +317,29 @@ suite('LivingDoc model - bulkApproveConfirm (plan 31 iter 4)', () => {
 
 	test('an empty set needs no confirm', () => {
 		assert.strictEqual(bulkApproveConfirm([], true).needed, false);
+	});
+});
+
+suite('LivingDoc model - summariseSkillRun (plan 32 iter 3)', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	function res(docId: string, status: ISkillRunDocResult['status'], detail = ''): ISkillRunDocResult {
+		return { docId, docTitle: docId, status, detail };
+	}
+
+	test('tallies flagged, passed and skipped from the real per-doc results', () => {
+		const results = [res('a', 'flag', '2 headings'), res('b', 'pass'), res('c', 'skipped', 'not living'), res('d', 'flag')];
+		const summary = summariseSkillRun('formatting', 'Formatting agent', results);
+		assert.strictEqual(summary.skillId, 'formatting');
+		assert.strictEqual(summary.skillName, 'Formatting agent');
+		assert.strictEqual(summary.flagged, 2, 'two documents flagged');
+		assert.strictEqual(summary.passed, 1, 'one passed');
+		assert.strictEqual(summary.skipped, 1, 'one skipped');
+		assert.strictEqual(summary.results.length, 4, 'the per-doc results are carried verbatim');
+	});
+
+	test('an empty project run has zero tallies (truthful empty state)', () => {
+		const summary = summariseSkillRun('financial', 'Financial agent', []);
+		assert.deepStrictEqual({ flagged: summary.flagged, passed: summary.passed, skipped: summary.skipped }, { flagged: 0, passed: 0, skipped: 0 });
 	});
 });

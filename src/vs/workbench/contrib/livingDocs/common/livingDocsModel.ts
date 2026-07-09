@@ -152,6 +152,10 @@ export interface ISnapshotEntry {
 	readonly via: SnapshotVia;
 	readonly body: string;
 	readonly auditIndex: number;
+	// How many source versions this snapshot pinned (plan 32 iter 4): set only on a `publish` snapshot, so the
+	// History row can render the real pin count ("pinned 3 source versions") beside the SNAPSHOT badge instead
+	// of the comp's mock. Absent on non-publish snapshots and on older locks (they read as no pins recorded).
+	readonly pinnedSources?: number;
 }
 
 // Snapshots are capped with oldest-eviction so the lock never grows without bound (D26-A); at ~1-5 KB
@@ -211,14 +215,21 @@ export interface IAgentFlow {
 export interface IAgentDef {
 	readonly id: string;
 	readonly name: string;
-	readonly trigger: IAgentTrigger;
+	trigger: IAgentTrigger;
 	readonly flow: IAgentFlow;
-	readonly policy: AgentPolicy;
+	policy: AgentPolicy;
 	lastRun?: string;
 	status: AgentStatus;
+	// Paused (plan 32 iter 3): a disabled agent stays in the registry and its history but the scheduler
+	// skips it - a due cron/heartbeat/event tick never fires a disabled agent. Default absent (= enabled);
+	// only ever set true so an older persisted registry with no flag reads as enabled. A manual "Run now"
+	// on the detail drawer is deliberately still honoured (the user explicitly asked), the scheduler is not.
+	disabled?: boolean;
 }
 
-// One execution of an agent, recorded for the History/observability trace.
+// One execution of an agent, recorded for the History/observability trace and the Agents-screen run log
+// (D32-A, decision 150). Persisted in `agents.json` (no new file) so the run history survives a reload;
+// the last 50 runs are kept (AGENT_RUN_CAP), oldest evicted.
 export interface IAgentRun {
 	readonly agentId: string;
 	readonly startedAt: string;
@@ -226,6 +237,65 @@ export interface IAgentRun {
 	applied: number;        // figures auto-applied
 	queued: number;         // candidates queued in the review rail
 	blocked?: string;       // the grader flag if the verify gate stopped the run
+	// Which trigger kind fired this run (cron / heartbeat / event / manual), shown as the "via" column
+	// of the run log. Optional so older persisted runs (no `via`) still parse.
+	via?: AgentTriggerKind;
+	// How many documents the run processed (the run-log "N docs" outcome count). Distinct from applied/
+	// queued (per-change counts): a run can touch several docs and change none.
+	docsTouched?: number;
+	// Documents the run failed on (its runner threw). 0 on a clean run; >0 with `error` set on a failure.
+	failed?: number;
+	// The failure string when the run errored (the run-log failure line + the Home attention line). Absent
+	// on a clean run - truthful automation: a run that did not fail says nothing (spec 09; plan 32 iter 2).
+	error?: string;
+	// A run that was NOT started because a previous run of the same agent was still in flight (spec 09 §3
+	// overlap rule, plan 32 iter 2): recorded so runs never silently stack. `applied`/`queued` are 0 and the
+	// run-log renders it as "skipped (still running)". Absent on a run that actually executed.
+	skippedReason?: 'still-running';
+}
+
+// The run log is capped with oldest-eviction so `agents.json` never grows without bound (D32-A,
+// decision 150): the last 50 runs across all agents, shown newest-first on the Agents screen.
+export const AGENT_RUN_CAP = 50;
+
+/**
+ * One document's result in a cross-project skill run (plan 32 iter 3, the P3 gap): the skill grade run over
+ * every folder document through the plan-23 fan-out surface. `status` mirrors the per-document `ISkillCheck`
+ * verdict for the run's skill (`pass` / `flag`), and `detail` carries the grader's one-line reason so the run
+ * strip reads the true finding per document (never a fabricated summary). Real data only - a document the run
+ * could not grade (not living, or a model-backed skill with no model) is honestly `skipped`.
+ */
+export type SkillRunDocStatus = 'pass' | 'flag' | 'skipped';
+
+export interface ISkillRunDocResult {
+	readonly docId: string;
+	readonly docTitle: string;
+	readonly status: SkillRunDocStatus;
+	readonly detail: string;
+}
+
+/**
+ * The whole-project skill-run summary (plan 32 iter 3): every folder document's grade for one skill, plus the
+ * flagged/passed/skipped tallies. Pure so the run strip and its tests derive from the same real per-doc results.
+ */
+export interface ISkillRunSummary {
+	readonly skillId: 'financial' | 'strategy' | 'formatting';
+	readonly skillName: string;
+	readonly results: readonly ISkillRunDocResult[];
+	readonly flagged: number;
+	readonly passed: number;
+	readonly skipped: number;
+}
+
+export function summariseSkillRun(skillId: ISkillRunSummary['skillId'], skillName: string, results: readonly ISkillRunDocResult[]): ISkillRunSummary {
+	return {
+		skillId,
+		skillName,
+		results,
+		flagged: results.filter(r => r.status === 'flag').length,
+		passed: results.filter(r => r.status === 'pass').length,
+		skipped: results.filter(r => r.status === 'skipped').length,
+	};
 }
 
 // One document's dirty bits in the workspace queue, split by edge kind (the heartbeat drains this).
@@ -307,7 +377,10 @@ export function nextPendingDocId(pending: readonly IProposedChange[], currentDoc
 // the run. The whole-project run is a single model call, so a mid-flight Stop means every not-yet-changed
 // document is honestly `skipped` (it never produced a change), while any document that already had a change
 // keeps it. Truthful per-tile state, matching plan 23's honesty rule.
-export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working' | 'skipped';
+// `oversize` (plan 30, track 3, D30-B): a document too large for the fan-out's context budget - it was
+// NEVER sent to the model (it would overflow the call by itself), so its tile reads the honest "too large
+// for this run" state rather than a silent drop or a "no change" that never happened.
+export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working' | 'skipped' | 'oversize';
 
 export interface IProjectRunDocTile {
 	readonly docId: string;
@@ -329,24 +402,35 @@ export interface IProjectRunSummary {
 	readonly changedDocs: number;       // documents with at least one pending change
 	readonly unchangedDocs: number;     // documents with no pending change (0 when the run was stopped)
 	readonly skippedDocs: number;       // documents the stopped run never settled (plan 27 iter 4)
+	readonly oversizeDocs: number;      // documents too large for the fan-out budget (plan 30, track 3)
 }
 
 // `stopped` (plan 27 iter 4): the run was cancelled mid-flight, so a document with no pending change is
 // honestly `skipped` (it never got to run) rather than `no-change` (it ran and produced nothing).
+// `oversizeDocIds` (plan 30, track 3, D30-B): the documents too large for the fan-out's context budget -
+// they were never sent, so their tile is honestly `oversize` regardless of stop state (they take priority
+// over `changed`/`skipped`/`no-change` because "too large to run" is the true reason they produced nothing).
 export function summariseProjectRun(
 	docs: readonly { readonly docId: string; readonly docTitle: string }[],
 	pending: readonly IProposedChange[],
 	stopped = false,
+	oversizeDocIds: readonly string[] = [],
 ): IProjectRunSummary {
 	const counts = new Map<string, number>();
 	for (const c of pending) { counts.set(c.docId, (counts.get(c.docId) ?? 0) + 1); }
+	const oversize = new Set(oversizeDocIds);
 	const tiles: IProjectRunDocTile[] = docs.map(d => {
 		const changeCount = counts.get(d.docId) ?? 0;
-		const status: ProjectRunDocStatus = changeCount > 0 ? 'changed' : (stopped ? 'skipped' : 'no-change');
+		// An oversize document is honestly flagged even if it also shows no change: it never ran, so its
+		// tile must not read `no change` (which claims it ran and found nothing) nor `skipped` (a stop).
+		const status: ProjectRunDocStatus = oversize.has(d.docId)
+			? 'oversize'
+			: changeCount > 0 ? 'changed' : (stopped ? 'skipped' : 'no-change');
 		return { docId: d.docId, docTitle: d.docTitle, status, changeCount };
 	});
 	const changedDocs = tiles.filter(t => t.status === 'changed').length;
 	const skippedDocs = tiles.filter(t => t.status === 'skipped').length;
+	const oversizeDocs = tiles.filter(t => t.status === 'oversize').length;
 	// Count only changes attributable to a document in this project's tile set, so totalChanges
 	// always equals the sum of the tile counts. A pending change whose docId is not in `docs`
 	// (a stale snapshot / a doc removed mid-run) has no tile and must not inflate the bottom-bar total.
@@ -355,8 +439,9 @@ export function summariseProjectRun(
 		tiles,
 		totalChanges,
 		changedDocs,
-		unchangedDocs: tiles.length - changedDocs - skippedDocs,
+		unchangedDocs: tiles.length - changedDocs - skippedDocs - oversizeDocs,
 		skippedDocs,
+		oversizeDocs,
 	};
 }
 
@@ -558,5 +643,7 @@ export interface IAuditEntry {
 	// the one approve path, so the change is on the record like any other applied edit (plan 26 iter 2).
 	// 'tweaked' records that the reviewer hand-edited the agent's proposed text before approving (plan 31
 	// iter 3, D31-B): the applied `newText` is the human's amendment, not the agent's original.
-	readonly via: 'model' | 'heuristic' | 'api' | 'restore' | 'tweaked';
+	// 'override' records that the user exported/published a document PAST a failed before-export gate (plan 32
+	// iter 4): the gate is never a silent block and never a silent override - the override is on the record.
+	readonly via: 'model' | 'heuristic' | 'api' | 'restore' | 'tweaked' | 'override';
 }

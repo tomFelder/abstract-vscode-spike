@@ -10,7 +10,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { parseLivingDoc } from '../common/livingDocMarkdown.js';
-import { AgentTriggerKind, IAgentDef, IAgentRun, IDirtyEntry } from '../common/livingDocsModel.js';
+import { AGENT_RUN_CAP, AgentTriggerKind, IAgentDef, IAgentRun, IAgentTrigger, IDirtyEntry } from '../common/livingDocsModel.js';
 import { IAgentStore } from './agentStore.js';
 import { IClock, RealClock } from './clock.js';
 
@@ -30,6 +30,9 @@ export interface IAgentRunResult {
 	readonly blocked?: string;
 	// Documents the run did not process because it was cancelled mid-flight (plan 27 iter 4).
 	readonly skipped?: number;
+	// Documents the run actually processed (the run-log "N docs" outcome count, plan 32 iter 2). Optional so
+	// an event/lifecycle runner that touches none can omit it (defaults to the docs handed to the run).
+	readonly docsTouched?: number;
 }
 export type AgentRunner = (agent: IAgentDef, context: IAgentRunContext) => Promise<IAgentRunResult>;
 
@@ -79,7 +82,15 @@ export class AgentOrchestrator extends Disposable {
 	private readonly _dirty = new Map<string, IDirtyEntry>();
 	private _runner: AgentRunner | undefined;
 	private readonly _ticker = this._register(new MutableDisposable());
-	private readonly _lastRuns = new Map<string, IAgentRun>();
+	// The capped run log (D32-A, decision 150), newest-last in memory and persisted to `agents.json`. The
+	// Agents screen renders it newest-first; the last run per agent is derived from it.
+	private _runs: IAgentRun[] = [];
+	// Agents whose run is currently in flight (overlap guard, spec 09 §3, plan 32 iter 2): a due agent whose
+	// previous run has not finished is skipped with a recorded "still running" run rather than stacking.
+	// Ref-counted per agentId (finding 2): a manual run bypasses the guard but still counts as in-flight, so
+	// when a manual + scheduled run overlap the marker must clear only when the LAST of them finishes - a
+	// plain Set would clear on the first `finally` and let a scheduled trigger in that window stack.
+	private readonly _inFlight = new Map<string, number>();
 
 	constructor(
 		private readonly _files: IFileService,
@@ -101,8 +112,9 @@ export class AgentOrchestrator extends Disposable {
 		if (this._loaded) { return; }
 		this._loaded = true;
 		const stored = await this._agentStore.read();
-		if (stored && stored.length) {
-			this._agents = stored;
+		if (stored && stored.agents.length) {
+			this._agents = stored.agents;
+			this._runs = stored.runs.slice(-AGENT_RUN_CAP);
 		} else {
 			this._agents = defaultAgents();
 			await this._persistAgents();
@@ -113,12 +125,108 @@ export class AgentOrchestrator extends Disposable {
 	getAgents(): readonly IAgentDef[] { return this._agents; }
 	getAgent(id: string): IAgentDef | undefined { return this._agents.find(a => a.id === id); }
 
+	// The persisted run log (D32-A), newest-first for the Agents screen. `runsForAgent` filters to one agent.
+	getRuns(): readonly IAgentRun[] { return [...this._runs].reverse(); }
+	getRunsForAgent(agentId: string): readonly IAgentRun[] { return this.getRuns().filter(r => r.agentId === agentId); }
+
+	// --- registry editing (plan 32 iter 3): create / duplicate / pause / inline policy + trigger edits ---
+	// The Agents-screen detail drawer edits the registry through these; each persists and fires onDidChange
+	// so the screen re-renders. `agents.json` is the store (decision 150), so every edit survives a reload.
+
+	// Create a new agent from a partial def (the drawer's "New agent" affordance). Fills a unique id + sane
+	// defaults, appends it, persists and returns the created def. Editing/pause happen through the setters below.
+	async createAgent(partial?: Partial<Pick<IAgentDef, 'name' | 'trigger' | 'flow' | 'policy'>>): Promise<IAgentDef> {
+		await this.ensureLoaded();
+		const id = this._uniqueId((partial?.name ?? 'agent'));
+		const agent: IAgentDef = {
+			id,
+			name: partial?.name ?? 'New agent',
+			trigger: partial?.trigger ?? { kind: 'manual' },
+			flow: partial?.flow ?? { sources: [], docs: [] },
+			policy: partial?.policy ?? 'draft-only',
+			status: 'idle',
+		};
+		this._agents.push(agent);
+		await this._persistAgents();
+		this._onDidChange.fire();
+		return agent;
+	}
+
+	// Duplicate an existing agent (the drawer's Duplicate action): a fresh id, a "(copy)" name, the same
+	// trigger/flow/policy, no run history of its own (runs are keyed by agentId), starting idle + enabled.
+	async duplicateAgent(agentId: string): Promise<IAgentDef | undefined> {
+		const source = this.getAgent(agentId);
+		if (!source) { return undefined; }
+		return this.createAgent({
+			name: `${source.name} (copy)`,
+			trigger: { ...source.trigger },
+			flow: { sources: [...source.flow.sources], docs: [...source.flow.docs] },
+			policy: source.policy,
+		});
+	}
+
+	// Pause / resume an agent (the drawer's Pause toggle): sets/clears the `disabled` flag the scheduler
+	// respects. Only ever writes `disabled:true` or deletes it, so an older registry with no flag stays enabled.
+	async setAgentDisabled(agentId: string, disabled: boolean): Promise<void> {
+		const agent = this.getAgent(agentId);
+		if (!agent) { return; }
+		if (disabled) { agent.disabled = true; } else { delete agent.disabled; }
+		await this._persistAgents();
+		this._onDidChange.fire();
+	}
+
+	// Inline policy edit (the drawer's three-level select). Guards against an invalid value so a stray
+	// message can never write a policy the router does not understand.
+	async setAgentPolicy(agentId: string, policy: IAgentDef['policy']): Promise<void> {
+		const agent = this.getAgent(agentId);
+		if (!agent || (policy !== 'auto-figures' && policy !== 'ask-before-apply' && policy !== 'draft-only')) { return; }
+		agent.policy = policy;
+		await this._persistAgents();
+		this._onDidChange.fire();
+	}
+
+	// Inline trigger edit (the drawer's cron day/time picker or heartbeat-hours field). Replaces the whole
+	// trigger; the caller composes it from the picker fields, so this just validates the shape minimally.
+	async setAgentTrigger(agentId: string, trigger: IAgentTrigger): Promise<void> {
+		const agent = this.getAgent(agentId);
+		if (!agent || !trigger || !trigger.kind) { return; }
+		agent.trigger = trigger;
+		await this._persistAgents();
+		this._onDidChange.fire();
+	}
+
+	// A registry-unique agent id derived from a name: a slug plus a numeric suffix when the slug collides.
+	private _uniqueId(name: string): string {
+		const slug = (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent');
+		if (!this._agents.some(a => a.id === slug)) { return slug; }
+		let n = 2;
+		while (this._agents.some(a => a.id === `${slug}-${n}`)) { n++; }
+		return `${slug}-${n}`;
+	}
+
+	// The most recent run of ANY agent that failed and is still the latest for that agent (plan 32 iter 2):
+	// the Home attention line. Truthful - undefined when the newest run of every agent succeeded or skipped.
+	getLatestFailure(): IAgentRun | undefined {
+		const latestByAgent = new Map<string, IAgentRun>();
+		for (const run of this._runs) { latestByAgent.set(run.agentId, run); } // in-memory is oldest-first, so last wins
+		for (const run of [...latestByAgent.values()].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))) {
+			if (run.error) { return run; }
+		}
+		return undefined;
+	}
+
 	private async _persistAgents(): Promise<void> {
 		try {
-			await this._agentStore.write(this._agents);
+			await this._agentStore.write({ agents: this._agents, runs: this._runs });
 		} catch (e) {
 			this._log.warn('[livingDocs] agents write failed', e instanceof Error ? e.message : String(e));
 		}
+	}
+
+	// Append a run to the capped log (oldest-eviction) and persist. Used for both executed and skipped runs.
+	private _recordRun(run: IAgentRun): void {
+		this._runs.push(run);
+		if (this._runs.length > AGENT_RUN_CAP) { this._runs = this._runs.slice(-AGENT_RUN_CAP); }
 	}
 
 	// --- the dependency-graph event-bus (spec 4.1) ---
@@ -174,6 +282,16 @@ export class AgentOrchestrator extends Disposable {
 		return dirtied;
 	}
 
+	/**
+	 * The documents that bind `source` as a VALUE source (plan 30, track 1): a reverse-edge lookup used by
+	 * the scoped refresh to fan out to the co-dependents of a changed source (a CSV shared by many reports).
+	 * Matched by final path segment, like the rest of the graph, so a relative `sources:` entry resolves.
+	 */
+	async docsBoundToSource(source: string): Promise<URI[]> {
+		const edges = (await this._buildReverseEdges()).get(pathKey(source));
+		return edges ? [...edges.value] : [];
+	}
+
 	// --- the trigger layer (spec 3): event + scheduled (cron/heartbeat) + manual ---
 
 	// Start the scheduler: a single periodic tick checks which cron/heartbeat agents are due. Idempotent.
@@ -185,6 +303,9 @@ export class AgentOrchestrator extends Disposable {
 	// fake clock can drive it deterministically in tests.
 	async runDueAgents(): Promise<void> {
 		for (const agent of this._agents) {
+			// A paused agent stays scheduled-in-name but the scheduler skips it (plan 32 iter 3): a due cron/
+			// heartbeat tick never fires while `disabled` is set. Manual "Run now" bypasses this (see runAgent).
+			if (agent.disabled) { continue; }
 			if (agent.trigger.kind === 'cron' && this._cronDue(agent)) {
 				await this.runAgent(agent.id, 'cron', await this._provideDocUris());
 			} else if (agent.trigger.kind === 'heartbeat' && this._heartbeatDue(agent)) {
@@ -218,6 +339,7 @@ export class AgentOrchestrator extends Disposable {
 	async onSourceChanged(changedPath: string): Promise<void> {
 		const dirtied = await this.propagate(changedPath);
 		for (const agent of this._agents) {
+			if (agent.disabled) { continue; } // a paused event agent does not fire on a source change (plan 32 iter 3)
 			const source = agent.trigger.source;
 			if (agent.trigger.kind === 'event' && (source === '*' || (source && pathKey(source) === pathKey(changedPath)))) {
 				await this.runAgent(agent.id, 'event', dirtied);
@@ -233,30 +355,55 @@ export class AgentOrchestrator extends Disposable {
 		await this.runAgent(agentId, 'heartbeat', docs);
 	}
 
-	getLastRun(agentId: string): IAgentRun | undefined { return this._lastRuns.get(agentId); }
+	getLastRun(agentId: string): IAgentRun | undefined {
+		const runs = this._runs;
+		for (let i = runs.length - 1; i >= 0; i--) { if (runs[i].agentId === agentId) { return runs[i]; } }
+		return undefined;
+	}
 
 	// Run one agent end-to-end via the host runner (also the manual "Run now" path). Sets status from
 	// the result (blocked / needs-approval / idle) and records the run for the Agents view + History.
+	//
+	// Overlap guard (spec 09 §3, plan 32 iter 2): a scheduled/event trigger for an agent whose previous run is
+	// still in flight is NOT stacked - it records a "skipped (still running)" run and returns. A manual "Run
+	// now" is always honoured (the user explicitly asked). Runs therefore never queue up behind a slow run.
 	async runAgent(agentId: string, trigger: AgentTriggerKind, docs: readonly URI[], token: CancellationToken = CancellationToken.None): Promise<IAgentRun | undefined> {
 		const agent = this.getAgent(agentId);
 		if (!agent || !this._runner) { return undefined; }
+		if (this._inFlight.has(agentId) && trigger !== 'manual') {
+			const at = new Date(this._clock.now()).toISOString();
+			const skipped: IAgentRun = { agentId, startedAt: at, finishedAt: at, applied: 0, queued: 0, via: trigger, docsTouched: 0, skippedReason: 'still-running' };
+			this._recordRun(skipped);
+			await this._persistAgents();
+			this._onDidChange.fire();
+			return skipped;
+		}
+		this._inFlight.set(agentId, (this._inFlight.get(agentId) ?? 0) + 1);
 		const startedAt = new Date(this._clock.now()).toISOString();
 		agent.status = 'running';
 		this._onDidChange.fire();
-		const run: IAgentRun = { agentId, startedAt, applied: 0, queued: 0 };
+		const run: IAgentRun = { agentId, startedAt, applied: 0, queued: 0, via: trigger };
 		try {
 			const result = await this._runner(agent, { trigger, docs, token });
 			run.applied = result.applied;
 			run.queued = result.queued;
 			run.blocked = result.blocked;
+			run.docsTouched = result.docsTouched ?? docs.length;
 			agent.status = result.blocked ? 'blocked' : result.queued > 0 ? 'needs-approval' : 'idle';
 		} catch (e) {
 			agent.status = 'error';
-			this._log.warn('[livingDocs] agent run failed', agentId, e instanceof Error ? e.message : String(e));
+			run.failed = 1;
+			run.error = e instanceof Error ? e.message : String(e);
+			this._log.warn('[livingDocs] agent run failed', agentId, run.error);
+		} finally {
+			// Decrement the ref-count; only the LAST in-flight run for this agent clears the marker (finding 2),
+			// so a scheduled trigger while any run (manual or scheduled) is still going records a still-running skip.
+			const remaining = (this._inFlight.get(agentId) ?? 1) - 1;
+			if (remaining > 0) { this._inFlight.set(agentId, remaining); } else { this._inFlight.delete(agentId); }
 		}
 		run.finishedAt = new Date(this._clock.now()).toISOString();
 		agent.lastRun = run.finishedAt;
-		this._lastRuns.set(agentId, run);
+		this._recordRun(run);
 		await this._persistAgents();
 		this._onDidChange.fire();
 		return run;
@@ -269,5 +416,27 @@ export class AgentOrchestrator extends Disposable {
 	isDirty(resource: URI): boolean { return this._dirty.has(resource.toString()); }
 	clearDirty(resource: URI): void {
 		if (this._dirty.delete(resource.toString())) { this._onDidChange.fire(); }
+	}
+
+	/**
+	 * Clear only the dirty keys a run actually processed (plan 32 iter 2 fix, finding 1): the caller
+	 * snapshots the doc's dirty entry at the moment it starts processing it and passes that snapshot back
+	 * here. Any key added AFTER the snapshot - a concurrent source event that interleaved during the run's
+	 * awaited work - is NOT in the snapshot, so it survives for the heartbeat to drain. Only when the entry
+	 * has no remaining keys is it removed. A blanket `clearDirty` would delete the freshly-added bit and the
+	 * second change would be missed until a later edit.
+	 */
+	clearDirtyKeys(resource: URI, snapshot: IDirtyEntry): void {
+		const id = resource.toString();
+		const current = this._dirty.get(id);
+		if (!current) { return; }
+		const value = current.value.filter(k => !snapshot.value.includes(k));
+		const influence = current.influence.filter(k => !snapshot.influence.includes(k));
+		if (value.length || influence.length) {
+			this._dirty.set(id, { value, influence });
+		} else {
+			this._dirty.delete(id);
+		}
+		this._onDidChange.fire();
 	}
 }

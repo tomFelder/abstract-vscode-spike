@@ -51,6 +51,13 @@ export type PresentChoice = 'html' | 'markdown' | 'gdoc' | 'gsheet' | 'docx' | '
 export interface IPresentState {
 	readonly open: boolean;
 	readonly choice: PresentChoice;
+	/**
+	 * The before-export gate's verdict (plan 32 iter 4), computed by the editor when the modal opens. When
+	 * `pass:false` the modal SHOWS the grader's one-line `flag` and swaps the export CTA for "Export anyway"
+	 * (audited override) + "Fix first" (jumps to the flagged block) - no silent block, no silent override.
+	 * Absent = not yet computed / clean, so the modal reads as a normal export.
+	 */
+	readonly gate?: { readonly pass: boolean; readonly flag?: string };
 }
 
 export interface ILivingDocRenderInput {
@@ -430,6 +437,8 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-sync]')) { return vscode.postMessage({ type: 'sync' }); }
 	if (el = e.target.closest('[data-present-open]')) { return vscode.postMessage({ type: 'presentOpen' }); }
 	if (el = e.target.closest('[data-present-choice]')) { return vscode.postMessage({ type: 'presentChoice', choice: el.getAttribute('data-present-choice') }); }
+	if (el = e.target.closest('[data-present-cta-force]')) { return vscode.postMessage({ type: 'presentCtaForce' }); }
+	if (el = e.target.closest('[data-present-fix-first]')) { return vscode.postMessage({ type: 'presentFixFirst' }); }
 	if (el = e.target.closest('[data-present-cta]')) { return vscode.postMessage({ type: 'presentCta' }); }
 	// The modal closes from the backdrop or the X (both data-present-close); a click inside the card
 	// (data-present-stop) does not. Walk to whichever ancestor comes first and close only if it is a close.
@@ -768,10 +777,15 @@ function renderSourceDrawer(peek: ISourcePeekRender): string {
 		? `<span class="sd-synced">&#10003; ${peek.syncedCount} synced</span>`
 		: `<button class="sd-sync" data-sync title="Apply the changed cells to the report and show the diff"><span>&#10227;</span>Sync to report</button>`;
 	const rowCount = grid ? grid.rows.length : peek.rows.length;
+	// A published document pins this source to a version (plan 32 iter 4): show the frozen-version line so a
+	// reader of the published doc sees the pinned state, not the moving latest. Only when the source is pinned.
+	const pinned = peek.pinnedLabel
+		? `<span class="sd-meta" style="color:#9a6b16">&#128204; ${esc(peek.pinnedLabel)}</span>`
+		: '';
 	const drawer = `<div class="srcdrawer">`
 		+ `<div class="sd-grip"><span></span></div>`
 		+ `<div class="sd-head"><span class="sd-name">&#8862; ${esc(peek.source)}</span>`
-		+ `<span class="sd-meta">source &middot; ${rowCount} row${rowCount === 1 ? '' : 's'}</span>`
+		+ `<span class="sd-meta">source &middot; ${rowCount} row${rowCount === 1 ? '' : 's'}</span>${pinned}`
 		+ `<span class="sd-actions">${action}<button class="sd-x" data-source-close title="Close source">&#10005;</button></span></div>`
 		+ `<div class="sd-body">${gridHtml}${payloadHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
 	return drawer;
@@ -825,6 +839,17 @@ function renderPresentModal(present: IPresentState, title: string): string {
 	// The export writes a file next to the document (honest - no fabricated hosting or shareable URL).
 	const destNote = `<div style="margin-bottom:18px;border:1px solid #eceef2;border-radius:8px;padding:10px 12px;background:#fafbfc;font:400 12px/1.5 system-ui;color:#696e78">The exported file is saved beside your document and opens for review.</div>`;
 
+	// The before-export gate surface (plan 32 iter 4): when the gate failed, SHOW the grader's one-line reason
+	// and swap the single export CTA for "Export anyway" (audited override, `presentCtaForce`) + "Fix first"
+	// (jumps to the flagged block, `presentFixFirst`). No silent block, no silent override.
+	const gateBlocked = present.gate && !present.gate.pass;
+	const gateBanner = gateBlocked
+		? `<div style="margin-bottom:16px;border:1px solid #f3c9c6;background:#fdecec;border-radius:10px;padding:12px 14px"><div style="display:flex;align-items:center;gap:9px;font:600 12.5px/1.3 system-ui;color:#b4332f"><span style="width:8px;height:8px;flex:none;border-radius:50%;background:#b4332f"></span>Before-export check failed</div><div style="font:400 12px/1.5 system-ui;color:#8a4340;margin-top:6px">${esc(present.gate?.flag ?? 'A figure does not reconcile with its source.')}</div></div>`
+		: '';
+	const cta = gateBlocked
+		? `<div style="display:flex;gap:10px"><button class="pm-cta" data-present-fix-first style="flex:1;border:1px solid ${ACCENT};border-radius:9px;padding:12px;background:#fff;color:${ACCENT};font:600 13px/1 system-ui;cursor:pointer">Fix first</button><button class="pm-cta" data-present-cta-force style="flex:1;border:none;border-radius:9px;padding:12px;background:#b4332f;color:#fff;font:600 13px/1 system-ui;cursor:pointer">Export anyway</button></div>`
+		: `<button class="pm-cta" data-present-cta style="width:100%;border:none;border-radius:9px;padding:12px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;cursor:pointer">${pc.cta}</button>`;
+
 	return `<div class="pm-overlay" data-present-close>`
 		+ `<div class="pm-card" data-present-stop>`
 		+ `<div class="pm-head"><div><h2 class="pm-title">Present &amp; export</h2><div class="pm-sub">${esc(title)} &middot; 4 linked blocks</div></div><button class="pm-x" data-present-close>&#10005;</button></div>`
@@ -834,8 +859,9 @@ function renderPresentModal(present: IPresentState, title: string): string {
 		+ `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><h3 style="margin:0;font:600 17px/1.2 system-ui;color:#15171c">${pc.label}</h3></div>`
 		+ `<p style="margin:0 0 18px;font:400 13.5px/1.55 system-ui;color:#696e78">${pc.live}</p>`
 		+ `<div style="border:1px solid #eceef2;border-radius:10px;overflow:hidden;margin-bottom:18px"><div style="padding:13px 15px;border-bottom:1px solid #f4f5f7"><div style="font:600 13px/1.3 system-ui;color:#23262c;margin-bottom:5px">${esc(title)}</div><div style="font:400 11px/1.5 system-ui;color:#969ba4">Highlights &middot; KPI table &middot; Commentary &middot; What to watch</div></div><div style="display:flex;align-items:center;gap:8px;padding:10px 15px;background:#fafbfc;font:400 11.5px/1.4 system-ui;color:#52575f"><span style="width:7px;height:7px;border-radius:50%;background:${ACCENT}"></span>4 source-linked blocks included</div></div>`
+		+ gateBanner
 		+ destNote
-		+ `<button class="pm-cta" data-present-cta style="width:100%;border:none;border-radius:9px;padding:12px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;cursor:pointer">${pc.cta}</button>`
+		+ cta
 		+ `<div style="margin-top:11px;font:400 11px/1.5 system-ui;color:#bcc0c8;text-align:center">Provenance &amp; approval history are retained on export.</div>`
 		+ `</div></div></div></div>`;
 }

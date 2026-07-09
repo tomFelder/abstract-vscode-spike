@@ -8,7 +8,7 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
-import { bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAgentRun, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
+import { AgentPolicy, bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAgentRun, IAgentTrigger, ISkillRunSummary, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
@@ -22,9 +22,9 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ILivingDocSummary, ILivingDocsService, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { ILivingDocSummary, ILivingDocsService, ISkillCheck, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
-import { AgentFilter, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
+import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -32,6 +32,10 @@ interface IScreenEditorState {
 	openAgentId?: string;
 	filter: AgentFilter;
 	lastRun?: IAgentRun;
+	// Agents detail drawer (plan 32 iter 3): the result of the most recent "Run skill across project", held so
+	// the run strip persists across re-renders until the drawer is closed/re-opened. The run log itself is read
+	// live from the service each render (like the agent registry), so it is not carried here.
+	skillRun?: ISkillRunSummary;
 	// Home: the documents discovered in the open folder (fetched async; the folder name is read live at render).
 	docs?: readonly ILivingDocSummary[];
 	// Templates: the `*.template.md` files discovered in the open folder (plan 28); fetched async on open and
@@ -66,7 +70,13 @@ interface IScreenEditorState {
 	// The attached source name for the review topbar chip, carried over from the run that produced the
 	// changes (undefined when the screen is opened directly, e.g. from the palette, with no run context).
 	reviewSource?: string;
+	// Home: the latest failed scheduled run, for the quiet attention line (plan 32 iter 2). Undefined when
+	// nothing failed; rebuilt on open + on every change so a fresh failure surfaces without reopening Home.
+	homeFailure?: IHomeFailure;
 }
+
+// Weekday names for the Home failure line ("failed on Monday"). Local time - matches when the user saw it.
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // Webview editor that hosts one Abstract screen (Templates / Knowledge / Agents) in the
 // editor area. The screen's small interactive state (Knowledge scope, agent canvas, run state)
@@ -122,7 +132,7 @@ export class ScreenEditor extends EditorPane {
 				this._fetchRecentFolders(),
 				this._livingDocs.listTemplates(),
 			]);
-			this._state = { ...this._state, docs, recentFolders, templates };
+			this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure() };
 		}
 		// Templates reflects the open folder's `*.template.md` files (plan 28): fetch before first render.
 		if (this._screen === 'templates') {
@@ -181,8 +191,19 @@ export class ScreenEditor extends EditorPane {
 			this._fetchRecentFolders(),
 			this._livingDocs.listTemplates(),
 		]);
-		this._state = { ...this._state, docs, recentFolders, templates };
+		this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure() };
 		this._render();
+	}
+
+	// Build the Home attention line from the latest failed run (plan 32 iter 2). Real data only: undefined
+	// when nothing failed, so the surface renders nothing rather than fabricating activity.
+	private _homeFailure(): IHomeFailure | undefined {
+		const run = this._livingDocs.getLatestAgentFailure();
+		if (!run || !run.error) { return undefined; }
+		const agent = this._livingDocs.getAgents().find(a => a.id === run.agentId);
+		const when = run.finishedAt ?? run.startedAt;
+		const day = WEEKDAY_NAMES[new Date(Date.parse(when)).getDay()] ?? 'recently';
+		return { agentName: agent?.name ?? run.agentId, day, error: run.error };
 	}
 
 	// Fetch the workbench recently-opened folder list for the ALL PROJECTS grid (D22-A). Maps each
@@ -237,7 +258,7 @@ export class ScreenEditor extends EditorPane {
 		}
 	}
 
-	private _onMessage(message: { type?: string; arg?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string }): void {
+	private _onMessage(message: { type?: string; arg?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string; value?: string }): void {
 		switch (message?.type) {
 			case 'setKnOrg':
 				this._state = { ...this._state, knScope: 'org' };
@@ -272,15 +293,39 @@ export class ScreenEditor extends EditorPane {
 				this._render();
 				break;
 			case 'openAgent':
-				this._state = { ...this._state, openAgentId: message.arg, lastRun: undefined };
+				this._state = { ...this._state, openAgentId: message.arg, lastRun: undefined, skillRun: undefined };
 				this._render();
 				break;
 			case 'closeAgent':
-				this._state = { ...this._state, openAgentId: undefined, lastRun: undefined };
+				this._state = { ...this._state, openAgentId: undefined, lastRun: undefined, skillRun: undefined };
 				this._render();
 				break;
 			case 'runWf':
 				if (message.arg) { void this._runAgent(message.arg); }
+				break;
+			// Agents detail-drawer registry edits (plan 32 iter 3): each writes through the service, which
+			// persists to agents.json and fires onDidChange -> re-render. Create/duplicate open the new agent.
+			case 'createAgent':
+				void this._createAgent();
+				break;
+			case 'duplicateAgent':
+				if (message.arg) { void this._duplicateAgent(message.arg); }
+				break;
+			case 'pauseAgent':
+				if (message.arg) { void this._livingDocs.setAgentDisabled(message.arg, true); }
+				break;
+			case 'resumeAgent':
+				if (message.arg) { void this._livingDocs.setAgentDisabled(message.arg, false); }
+				break;
+			case 'setAgentPolicy':
+				if (message.arg && message.value) { void this._livingDocs.setAgentPolicy(message.arg, message.value as AgentPolicy); }
+				break;
+			case 'setAgentTrigger':
+				if (message.arg && message.value) { void this._setAgentTrigger(message.arg, message.value); }
+				break;
+			// "Run skill across project" (the P3 gap): fan the skill grade over the folder and show the strip.
+			case 'runSkillProject':
+				if (message.arg) { void this._runSkillAcrossProject(message.arg); }
 				break;
 			case 'goReview':
 				this._livingDocs.focusPanel('review');
@@ -447,6 +492,53 @@ export class ScreenEditor extends EditorPane {
 		if (run && run.queued > 0) { this._livingDocs.focusPanel('review'); }
 	}
 
+	// Create a new agent (plan 32 iter 3) and land on its detail drawer so the user can edit it inline.
+	private async _createAgent(): Promise<void> {
+		const before = new Set(this._livingDocs.getAgents().map(a => a.id));
+		await this._livingDocs.createAgent();
+		const created = this._livingDocs.getAgents().find(a => !before.has(a.id));
+		this._state = { ...this._state, openAgentId: created?.id ?? this._state.openAgentId, lastRun: undefined, skillRun: undefined };
+		this._render();
+	}
+
+	// Duplicate an agent and open the copy's drawer.
+	private async _duplicateAgent(agentId: string): Promise<void> {
+		const before = new Set(this._livingDocs.getAgents().map(a => a.id));
+		await this._livingDocs.duplicateAgent(agentId);
+		const copy = this._livingDocs.getAgents().find(a => !before.has(a.id));
+		this._state = { ...this._state, openAgentId: copy?.id ?? this._state.openAgentId, lastRun: undefined, skillRun: undefined };
+		this._render();
+	}
+
+	// Compose an IAgentTrigger from the drawer's picker fields (the client posts a JSON value) and persist it.
+	// The cron day + time compose to "Mon 09:00"; heartbeat to everyHours; event to a source path ('*' = any).
+	private async _setAgentTrigger(agentId: string, value: string): Promise<void> {
+		let f: { kind?: string; day?: string; time?: string; hours?: string; source?: string };
+		try { f = JSON.parse(value); } catch { return; }
+		let trigger: IAgentTrigger;
+		if (f.kind === 'cron') {
+			const time = /^\d{2}:\d{2}$/.test(f.time ?? '') ? f.time! : '09:00';
+			trigger = { kind: 'cron', cron: `${f.day || 'Mon'} ${time}` };
+		} else if (f.kind === 'heartbeat') {
+			const hours = Math.max(1, Math.round(Number(f.hours) || 6));
+			trigger = { kind: 'heartbeat', everyHours: hours };
+		} else if (f.kind === 'event') {
+			trigger = { kind: 'event', source: (f.source || '*').trim() || '*' };
+		} else {
+			trigger = { kind: 'manual' };
+		}
+		await this._livingDocs.setAgentTrigger(agentId, trigger);
+	}
+
+	// Fan a Skill grade across every project document (plan 32 iter 3, the P3 gap) and render the run strip.
+	private async _runSkillAcrossProject(id: string): Promise<void> {
+		const names: Record<string, string> = { financial: 'Financial agent', strategy: 'Strategy agent', formatting: 'Formatting agent' };
+		const skillId = id as ISkillCheck['id'];
+		const summary = await this._livingDocs.runSkillAcrossProject(skillId, names[id] ?? id);
+		this._state = { ...this._state, skillRun: summary };
+		this._render();
+	}
+
 	// D23-B entry point: open the project-run screen (C4) via the SAME open-screen path every other
 	// Abstract screen uses (a singleton ScreenEditorInput opened through the editor service). Iter 2
 	// lands on the truthful idle state; the whole-project chat fan-out that fills the swarm is 23.3.
@@ -557,6 +649,8 @@ export class ScreenEditor extends EditorPane {
 			projectRun: this._projectRunState(),
 			reviewProject: this._updateAndGetReviewProjectState(folderName),
 			agents: this._livingDocs.getAgents(),
+			// The open agent's run log, read live so a run that just completed shows without reopening the drawer.
+			openAgentRuns: this._state.openAgentId ? this._livingDocs.getAgentRunsForAgent(this._state.openAgentId) : undefined,
 			hasFolder: !!folderName,
 			folderName,
 		}));
@@ -605,14 +699,21 @@ export class ScreenEditor extends EditorPane {
 		// skipped, not no-change. Never treat an in-flight run as stopped.
 		const chat = anchor ? this._livingDocs.getChatMessages(anchor) : [];
 		const stopped = !inFlight && chat.length > 0 && !!chat[chat.length - 1].stopped;
-		const summary = summariseProjectRun(docs, pending, stopped);
-		const working = inFlight ? docs.map(d => d.docId) : [];
+		// Fan-out batch progress (plan 30, track 3, D30-B): which batch of how many is running and which docs
+		// were too large for the budget. Oversize docs are flagged on their tiles (never sent, never dropped),
+		// and are excluded from the live "working" overlay so an oversize tile reads "too large", not spinning.
+		const fanout = anchor ? this._livingDocs.getFanoutProgress(anchor) : undefined;
+		const oversizeIds = fanout?.oversizeDocIds ?? [];
+		const oversize = new Set(oversizeIds);
+		const summary = summariseProjectRun(docs, pending, stopped, oversizeIds);
+		const working = inFlight ? docs.map(d => d.docId).filter(id => !oversize.has(id)) : [];
 		// Decisions column (23.4): group the LIVE pending changes by their source grounding. Restrict to
 		// changes for documents in this run's tile set so a stale change from another surface never leaks
 		// into the run's decisions (mirrors summariseProjectRun's tile-set restriction).
 		const runDocIds = new Set(docs.map(d => d.docId));
 		const decisions = groupDecisions(pending.filter(c => runDocIds.has(c.docId)));
-		return { ...run, inFlight, stopped, summary, working, decisions };
+		const batch = fanout ? { index: fanout.batchIndex, count: fanout.batchCount } : undefined;
+		return { ...run, inFlight, stopped, summary, working, decisions, batch };
 	}
 
 	layout(dimension: Dimension): void {

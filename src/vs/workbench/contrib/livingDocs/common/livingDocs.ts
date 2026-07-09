@@ -6,7 +6,7 @@
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { AddedContextKind, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ISourceGrid } from './sourceGrid.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
@@ -171,6 +171,12 @@ export interface ISourcePeek {
 	readonly grid?: ISourceGrid;
 	/** For a clicked api/mcp bound value: the real response payload with the extracted field (plan 29 iter 4). */
 	readonly payload?: ISourcePayload;
+	/**
+	 * The pin label when the document was published and this source is frozen to a version (plan 32 iter 4):
+	 * "pinned at v <short-hash> of <date>". Absent when the document is not published / this source is not
+	 * pinned, so an unpublished document's source-peek shows nothing extra. Real data only - from the lock's pins.
+	 */
+	readonly pinnedLabel?: string;
 }
 
 /**
@@ -211,6 +217,23 @@ export interface IChatMessage {
 export interface IStreamingChat {
 	readonly text: string;
 	readonly steps: readonly IChatStep[];
+}
+
+/**
+ * The progress of a whole-project fan-out that was packed into context-bounded batches (plan 30, track 3,
+ * D30-B). The fan-out sends the working set in `batchCount` batches; `batchIndex` is the 1-based batch
+ * currently running (0 before the first). The project-run command strip reads this to show `batch K of M`,
+ * and `oversizeDocIds` marks the documents too large for the run so their swarm tiles read the honest
+ * "too large for this run" state rather than being silently dropped. Absent when a run sent a single batch
+ * with no oversize documents (the common small-scale case), so nothing extra is shown then.
+ */
+export interface IFanoutProgress {
+	/** The 1-based index of the batch currently running (0 before the first batch starts). */
+	readonly batchIndex: number;
+	/** The total number of batches the working set was packed into. */
+	readonly batchCount: number;
+	/** The docIds (resource strings) of documents too large for the budget - never sent, reported honestly. */
+	readonly oversizeDocIds: readonly string[];
 }
 
 /**
@@ -270,6 +293,13 @@ export interface ILivingDocsService {
 	runSkillCheck(resource: URI, id: ISkillCheck['id']): Promise<void>;
 	/** Apply a Skill's deterministic fix to the document (e.g. Formatting title-cases the flagged headings). */
 	applySkillFix(resource: URI, id: ISkillCheck['id']): Promise<void>;
+	/**
+	 * Run one Skill across every project document (plan 32 iter 3, the P3 gap): fans the skill grade over the
+	 * folder's living documents and returns the per-document summary the Agents run strip renders. Skills stay
+	 * single-doc units; the orchestrator does the fanning. Real data only - a non-living doc or a model-less
+	 * model-backed skill is honestly skipped.
+	 */
+	runSkillAcrossProject(id: ISkillCheck['id'], skillName: string): Promise<ISkillRunSummary>;
 	/** Re-hash the document's sources and recompute its dirty bits (what the source watcher triggers). */
 	checkSources(resource: URI): Promise<void>;
 	getStatus(resource: URI): string;
@@ -314,6 +344,32 @@ export interface ILivingDocsService {
 
 	/** The registered orchestration agents (for the Agents view). */
 	getAgents(): readonly IAgentDef[];
+
+	/** The persisted run log, newest-first (Agents-screen run log + Home; plan 32 iter 2, D32-A). */
+	getAgentRuns(): readonly IAgentRun[];
+
+	/** The persisted run log for ONE agent, newest-first (the detail drawer's run log; plan 32 iter 3). */
+	getAgentRunsForAgent(agentId: string): readonly IAgentRun[];
+
+	// --- Agents-screen detail drawer registry edits (plan 32 iter 3): create / duplicate / pause / inline
+	// policy + trigger edits. Each persists to `agents.json` and fires onDidChange so the screen re-renders. ---
+	/** Create a new agent (draft-only, manual trigger by default); the drawer then edits it inline. */
+	createAgent(): Promise<void>;
+	/** Duplicate an existing agent as a fresh "(copy)" with its own id and no run history. */
+	duplicateAgent(agentId: string): Promise<void>;
+	/** Pause / resume an agent: the scheduler skips a paused agent; a manual Run now is still honoured. */
+	setAgentDisabled(agentId: string, disabled: boolean): Promise<void>;
+	/** Set an agent's policy inline (the three-level select). */
+	setAgentPolicy(agentId: string, policy: AgentPolicy): Promise<void>;
+	/** Set an agent's trigger inline (the cron day/time picker or heartbeat-hours field). */
+	setAgentTrigger(agentId: string, trigger: IAgentTrigger): Promise<void>;
+
+	/**
+	 * The most recent agent run that FAILED and is still the latest for its agent, for the Home attention line
+	 * (plan 32 iter 2). Undefined when the newest run of every agent succeeded - truthful automation: a run
+	 * that did not fail says nothing.
+	 */
+	getLatestAgentFailure(): IAgentRun | undefined;
 
 	/** Run an agent now over its flow documents (or the whole workspace if it scopes none). */
 	runAgent(agentId: string): Promise<IAgentRun | undefined>;
@@ -378,8 +434,14 @@ export interface ILivingDocsService {
 	 */
 	editBlock(resource: URI, blockId: string, text: string): Promise<void>;
 
-	/** Re-derive bound blocks across every bound document from the latest source values. */
-	refreshFromSources(): Promise<void>;
+	/**
+	 * Re-derive bound blocks across bound documents from the latest source values (plan 30, track 1).
+	 * With no argument this is the project-wide refresh: it scopes to the documents whose sources' hashes
+	 * actually changed (a cheap hash check first), so an unchanged folder does no derivation work. Pass a
+	 * `resource` to scope to a single document (the doc toolbar's Refresh) plus the documents that share a
+	 * changed source with it. Shared sources are read once per pass (a CSV bound by 20 docs is read once).
+	 */
+	refreshFromSources(resource?: URI): Promise<void>;
 
 	/**
 	 * The expensive, on-demand impact pass (spec 3.6): read the changed context sources against the
@@ -389,20 +451,34 @@ export interface ILivingDocsService {
 	 */
 	reviewImpact(resource: URI): Promise<void>;
 
-	/** Export a document's current state to a self-contained HTML page and open it. */
-	exportDocument(resource: URI): Promise<URI | undefined>;
+	/**
+	 * The before-export gate's current verdict (plan 32 iter 4), so the export/present flow can SHOW it -
+	 * no silent block. `pass:true` = clean; `pass:false` carries the one-line grader `flag` the export sheet
+	 * renders alongside "Export anyway" (audited override) and "Fix first" (jump to the flag).
+	 */
+	previewExportGate(resource: URI): { readonly pass: boolean; readonly flag?: string };
+
+	/**
+	 * Export a document's current state to a self-contained HTML page and open it. `force` proceeds PAST a
+	 * failed before-export gate ("Export anyway"), auditing the override (plan 32 iter 4) - never silent.
+	 */
+	exportDocument(resource: URI, force?: boolean): Promise<URI | undefined>;
 
 	/**
 	 * Export a document's *resolved* state to a clean, static Markdown file (no bindings, no
 	 * {cell} placeholders, live values inlined) and open it. The portable share/Obsidian artefact.
+	 * `force` proceeds past a failed before-export gate, auditing the override (plan 32 iter 4).
 	 */
-	exportMarkdown(resource: URI): Promise<URI | undefined>;
+	exportMarkdown(resource: URI, force?: boolean): Promise<URI | undefined>;
 
 	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
 	shareDocument(resource: URI): void;
 
-	/** Publish a document: snapshot (pin) its sources to current versions for reproducibility. */
-	publishDocument(resource: URI): Promise<void>;
+	/**
+	 * Publish a document: snapshot (pin) its sources to current versions for reproducibility. `force`
+	 * publishes PAST a failed before-export gate, auditing the override (plan 32 iter 4) - never silent.
+	 */
+	publishDocument(resource: URI, force?: boolean): Promise<void>;
 
 	// --- versions / snapshots (plan 26 iter 2: the trust spine) ---
 	/** The document's saved versions, newest first (empty until the first snapshot). */
@@ -434,6 +510,13 @@ export interface ILivingDocsService {
 	 * assistant turn and reads its `text` for the salvage when the user stops.
 	 */
 	getStreamingChat(resource: URI): IStreamingChat | undefined;
+	/**
+	 * The batch progress of an in-flight (or the last) whole-project fan-out for a document (plan 30,
+	 * track 3, D30-B): which batch of how many is running, and which documents were too large for the
+	 * budget. Undefined when the fan-out ran as a single batch with no oversize documents, so the run
+	 * screen shows nothing extra in the common small-scale case. Read by the project-run command strip.
+	 */
+	getFanoutProgress(resource: URI): IFanoutProgress | undefined;
 	/**
 	 * Send one user message to the document's Chat agent. Parses `@mentions`, gathers the document
 	 * (with resolved figures) plus the mentioned/context sources, and asks the model for a reply that

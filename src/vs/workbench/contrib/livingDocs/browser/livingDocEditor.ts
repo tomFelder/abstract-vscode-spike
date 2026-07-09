@@ -21,8 +21,9 @@ import { ILivingDocsService } from '../common/livingDocs.js';
 import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
+import { applyFocusRequest, applyReady, applyRender, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
-import { ILivingDocContent, ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
+import { ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -37,21 +38,12 @@ export class LivingDocEditor extends EditorPane {
 	// In-surface source-peek state (the comp's "Sync across" pane). Held on the editor, NOT opened as a
 	// second editor group - this is the v2 fix for the split-pane / blank-pane abrasion.
 	private _sourcePeek: { cells: readonly string[]; synced: boolean; syncedCount: number } | undefined;
-	// Mount-once-then-message (plan 15 iter 2): the shell is set via setHtml ONCE; thereafter content goes
-	// over postMessage. `_webviewReady` flips when the webview RUNTIME signals 'lwdReady'; a render that
-	// arrives before then is held in `_pendingContent` and flushed on ready (so updates can't be lost to a
-	// load race).
-	private _webviewInitialized = false;
-	private _webviewReady = false;
-	private _pendingContent: ILivingDocContent | undefined;
-	// The body the live ProseMirror surface currently holds. A render whose fresh body differs (a
-	// model-driven change such as an accepted proposal - NOT the user's own typing, which is saved silently
-	// and never re-renders) resets the PM doc to disk truth via `pmReset` (plan 15 iter 4).
-	private _pmBody: string | undefined;
-	// The change the rail asked us to scroll to (plan 19 iter 2). Held until the webview is ready and the
-	// body (with its inline-diff decorations) has rendered, then posted as a 'focusChange' message and
-	// cleared. Navigate-only: revealing a change never approves it.
-	private _pendingFocusChangeId: string | undefined;
+	// Mount-once-then-message (plan 15 iter 2, decision 50): the shell is set via setHtml ONCE; thereafter
+	// content goes over postMessage. The whole lifecycle (first-render setHtml, hold-render-until-ready +
+	// flush, pmReset only on a model-driven body change, focus-after-navigate) is a PURE reducer extracted
+	// to `common/editorWebviewProtocol.ts` (plan 30, track 4); this class holds its state and carries out the
+	// effects. Reset per input in setInput.
+	private _proto: IEditorWebviewState = initialEditorWebviewState();
 	private readonly _inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -82,18 +74,13 @@ export class LivingDocEditor extends EditorPane {
 		this._resource = input.resource;
 		// Dispose the previous input's webview (registered to `_inputDisposables`) and build a fresh one.
 		this._inputDisposables.clear();
-		this._webviewInitialized = false;
-		this._webviewReady = false;
-		this._pendingContent = undefined;
-		this._pmBody = undefined;
-		this._pendingFocusChangeId = undefined;
+		this._proto = initialEditorWebviewState();
 		this._createWebview();
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		// Rail-to-editor navigation: when a change for THIS document is asked to be focused, scroll to it.
 		this._inputDisposables.add(this._livingDocs.onDidRequestFocusChange(e => {
 			if (this._resource && e.docId === this._resource.toString()) {
-				this._pendingFocusChangeId = e.changeId;
-				this._flushFocusChange();
+				this._runProto(applyFocusRequest(this._proto, e.changeId));
 			}
 		}));
 		await this._livingDocs.loadDocument(input.resource);
@@ -139,14 +126,8 @@ export class LivingDocEditor extends EditorPane {
 	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string }): void {
 		switch (message?.type) {
 			case 'lwdReady':
-				// The webview RUNTIME has loaded and is listening; flush any update that raced the load.
-				this._webviewReady = true;
-				if (this._pendingContent) {
-					void this._webview?.postMessage({ type: 'lwdRender', html: this._pendingContent.html, pmMd: this._pendingContent.pmMd, pmDeco: this._pendingContent.pmDeco });
-					this._pendingContent = undefined;
-				}
-				// The body (with its inline-diff decorations) is now live; reveal any pending focus target.
-				this._flushFocusChange();
+				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
+				this._runProto(applyReady(this._proto));
 				break;
 			case 'pmEdit':
 				// The ProseMirror editing surface serialized its current state back to Markdown. Persist it
@@ -160,15 +141,19 @@ export class LivingDocEditor extends EditorPane {
 						: message.text;
 					// The live surface already holds this body, so record it to suppress a spurious pmReset on
 					// the next (non-typing) render.
-					this._pmBody = parseLivingDoc(text).body;
+					this._proto = recordPmBody(this._proto, parseLivingDoc(text).body);
 					void this._livingDocs.saveRawText(this._resource, text, { silent: true });
 				}
 				break;
 			case 'refresh':
-				void this._livingDocs.refreshFromSources();
+				// The doc toolbar Refresh scopes to THIS document (plan 30, track 1): it re-derives the open
+				// document plus the co-dependents of any source that actually changed, not the whole folder.
+				void this._livingDocs.refreshFromSources(this._resource);
 				break;
 			case 'presentOpen':
-				this._present = { ...this._present, open: true };
+				// Compute the before-export gate as the modal opens (plan 32 iter 4), so a failed grader is SHOWN
+				// with "Export anyway" + "Fix first" rather than silently blocking the export write.
+				this._present = { ...this._present, open: true, gate: this._resource ? this._livingDocs.previewExportGate(this._resource) : undefined };
 				this._render();
 				break;
 			case 'presentClose':
@@ -182,7 +167,18 @@ export class LivingDocEditor extends EditorPane {
 				}
 				break;
 			case 'presentCta':
-				void this._runPresent();
+				void this._runPresent(false);
+				break;
+			// "Export anyway" past a failed gate (plan 32 iter 4): proceed with force so the override is audited.
+			case 'presentCtaForce':
+				void this._runPresent(true);
+				break;
+			// "Fix first": close the modal and jump to the flagged block so the user can reconcile it. The
+			// financial gate flags on the unresolved bound blocks, so focusing the first bound block is the jump.
+			case 'presentFixFirst':
+				this._present = { ...this._present, open: false };
+				this._render();
+				this._focusFirstBoundBlock();
 				break;
 			case 'approve':
 				if (typeof message.id === 'string') { void this._livingDocs.approve(message.id); }
@@ -263,15 +259,27 @@ export class LivingDocEditor extends EditorPane {
 	// The Present/export CTA maps each real destination onto the export Abstract actually writes:
 	// "Web page" -> the self-contained HTML export; "Markdown" -> the clean resolved Markdown. The
 	// native-format / cloud destinations are "Soon" and non-selectable, so only these two reach here.
-	private async _runPresent(): Promise<void> {
+	private async _runPresent(force: boolean): Promise<void> {
 		if (!this._resource) { return; }
 		if (this._present.choice === 'markdown') {
-			await this._livingDocs.exportMarkdown(this._resource);
+			await this._livingDocs.exportMarkdown(this._resource, force);
 		} else {
 			// 'html' (and any defensive fallthrough) -> the self-contained HTML page.
-			await this._livingDocs.exportDocument(this._resource);
+			await this._livingDocs.exportDocument(this._resource, force);
 		}
 		this._present = { ...this._present, open: false };
+		this._render();
+	}
+
+	// "Fix first" (plan 32 iter 4): jump to the block the gate flagged. The Financial gate flags on the
+	// bound blocks whose figures do not reconcile, so open the in-surface source pane on the first bound
+	// block's keys - the reconciliation UI - rather than a dead scroll. A no-op if the doc has no bound block.
+	private _focusFirstBoundBlock(): void {
+		if (!this._resource) { return; }
+		const doc = this._livingDocs.getDoc(this._resource);
+		const bound = doc?.blocks.find(b => b.binds.length > 0);
+		if (!bound) { return; }
+		this._sourcePeek = { cells: bound.binds.map(b => b.key), synced: false, syncedCount: 0 };
 		this._render();
 	}
 
@@ -334,30 +342,32 @@ export class LivingDocEditor extends EditorPane {
 			snapshotCount: this._livingDocs.getSnapshots(resource).length,
 		};
 		const content = renderLivingDocContent(input);
-		// Reset the live PM doc only when the fresh body changed from a model-driven source (an accepted
-		// proposal). The user's own typing is saved silently (no re-render) and already recorded in `_pmBody`,
-		// so it never triggers a reset; chrome-only renders (a modal, the source drawer) keep the same body.
-		let pmReset: string | undefined;
-		if (content.pmMd !== null) {
-			if (this._pmBody !== undefined && content.pmMd.trim() !== this._pmBody.trim()) {
-				pmReset = content.pmMd;
-			}
-			this._pmBody = content.pmMd;
-		} else {
-			this._pmBody = undefined;
-		}
+		// The mount-once lifecycle (first-render setHtml, pmReset only on a model-driven body change,
+		// hold-until-ready) is decided by the pure reducer; this shell just carries out its effects. The
+		// setHtml effect needs the FULL shell HTML, built here on demand so the reducer stays DOM-free.
+		this._runProto(applyRender(this._proto, content), () => renderLivingDocHtml(input));
+	}
 
-		// First render builds the full shell (chrome + bundle + RUNTIME) via setHtml; every later render
-		// pushes just the content as an 'lwdRender' message so the live ProseMirror view is never torn down.
-		if (!this._webviewInitialized) {
-			this._webview.setHtml(renderLivingDocHtml(input));
-			this._webviewInitialized = true;
-			return;
-		}
-		if (this._webviewReady) {
-			void this._webview.postMessage({ type: 'lwdRender', html: content.html, pmMd: content.pmMd, pmDeco: content.pmDeco, pmReset });
-		} else {
-			this._pendingContent = content;
+	// Advance the mount-once lifecycle state and carry out the reducer's effects against the live webview.
+	// `shellHtml` is a lazy builder for the first-render setHtml (only called for the setHtml effect).
+	private _runProto(step: { state: IEditorWebviewState; effects: readonly EditorWebviewEffect[] }, shellHtml?: () => string): void {
+		this._proto = step.state;
+		if (!this._webview) { return; }
+		for (const effect of step.effects) {
+			switch (effect.kind) {
+				case 'setHtml':
+					this._webview.setHtml(shellHtml ? shellHtml() : '');
+					break;
+				case 'postRender':
+					void this._webview.postMessage({ type: 'lwdRender', html: effect.html, pmMd: effect.pmMd, pmDeco: effect.pmDeco, pmReset: effect.pmReset });
+					break;
+				case 'postFocus':
+					void this._webview.postMessage({ type: 'focusChange', id: effect.id });
+					break;
+				case 'holdPending':
+					// The render is held in the reducer state; nothing to post until the RUNTIME signals ready.
+					break;
+			}
 		}
 	}
 
@@ -369,15 +379,6 @@ export class LivingDocEditor extends EditorPane {
 		// Open in this pane's own group so a split layout advances the document the action came from,
 		// rather than falling back to whichever group happens to be active.
 		if (nextId) { void this._editorService.openEditor({ resource: URI.parse(nextId) }, this.group); }
-	}
-
-	// Post the pending rail-to-editor focus target once the webview is ready (the body + its inline-diff
-	// decorations are live by then). The RUNTIME scrolls that change's widget into view and flashes it.
-	private _flushFocusChange(): void {
-		if (this._webviewReady && this._webview && this._pendingFocusChangeId) {
-			void this._webview.postMessage({ type: 'focusChange', id: this._pendingFocusChangeId });
-			this._pendingFocusChangeId = undefined;
-		}
 	}
 
 	layout(dimension: Dimension): void {

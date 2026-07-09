@@ -6,6 +6,7 @@
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
+import { Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -21,14 +22,16 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
+import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISnapshotEntry, SNAPSHOT_CAP, SnapshotVia, SourceKind } from '../common/livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
 import { projectDisplayName } from '../common/projectDisplayName.js';
 
@@ -43,6 +46,23 @@ interface IResolution {
 	readonly value: string;
 	readonly sourceHash: string;
 	readonly source: string;        // human-ish origin, e.g. "metrics.csv#mrr"
+}
+
+// A single refresh/agent pass over many documents (plan 30, tracks 1 + 2). It caches each source read
+// for the LIFETIME OF THE PASS so a CSV bound by 20 documents is read once, not 20 times, and a remote
+// resolution shared across documents runs once. `fileBodies` caches raw file text by its absolute URI
+// string; `resolutions` caches a source's resolved bind-key map by the source's frontmatter identity.
+// Created per pass by the refresh/agent entry points and discarded when the pass ends (never long-lived),
+// so it can never serve a stale value across passes - it only collapses duplicate reads WITHIN one pass.
+// The caches store the in-flight PROMISE, not the resolved value, so concurrent documents that read the
+// same shared source within one pass await a single read rather than racing to launch N identical reads.
+interface IRefreshPass {
+	readonly fileBodies: Map<string, Promise<string>>;
+	readonly resolutions: Map<string, Promise<Map<string, IResolution>>>;
+}
+
+function newRefreshPass(): IRefreshPass {
+	return { fileBodies: new Map(), resolutions: new Map() };
 }
 
 // Everything we hold for one open or discovered document.
@@ -117,6 +137,15 @@ const MODEL_MAX_TOKENS = 1024;
 // How long a model-availability probe result is trusted before re-checking (so starting the proxy
 // mid-session is picked up without re-probing on every render).
 const MODEL_PROBE_TTL_MS = 30_000;
+
+// Bounded concurrency (plan 30, track 2, D30-A): how many source fetches and model calls may be in
+// flight at once within a refresh/agent run. Local file reads are cheap and stay unlimited (they hit the
+// per-pass cache); the limits protect the network/model, which is where the real cost and the rate limit
+// live. A per-host cooldown suppresses an identical remote fetch repeated within the window (unauthenticated
+// GitHub is 60 req/h/IP - a per-source cooldown is correctness, not polish; doc 04).
+const SOURCE_FETCH_CONCURRENCY = 4;
+const MODEL_CALL_CONCURRENCY = 2;
+const SOURCE_COOLDOWN_MS = 30_000;
 
 // The alias a bind key uses for a source file: "metrics.csv" -> "metrics", "market-research.md" ->
 // "market-research". Bind keys are "<alias>.<field>" (with an optional ".<qualifier>").
@@ -242,8 +271,26 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// active document the chat belongs to (mirrors the per-document _chats keying). Empty by default,
 	// so with no set added the chat stays single-doc (decision 61).
 	private readonly _workingSets = new Map<string, IWorkingSetDoc[]>();
+	// The live batch progress of each document's whole-project fan-out (plan 30, track 3, D30-B): which
+	// batch of how many is running, and which docs were too large for the budget. Keyed like _chats. Set as
+	// the fan-out packs + runs, cleared with the streaming turn in _deliverChatReply's finally.
+	private readonly _fanoutProgress = new Map<string, IFanoutProgress>();
 	// The figure diff from each document's last "Sync across", for the editor's synced banner.
 	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
+
+	// Bounded concurrency for a refresh/agent run (plan 30, track 2, D30-A). The source limiter caps
+	// concurrent REMOTE (api/mcp) fetches; the model limiter caps concurrent model calls. Both are created
+	// once and reused across runs; disposed with the service. Local file reads bypass them (cheap + cached).
+	private readonly _sourceLimiter = this._register(new Limiter<Map<string, IResolution>>(SOURCE_FETCH_CONCURRENCY));
+	private readonly _modelLimiter = this._register(new Limiter<string>(MODEL_CALL_CONCURRENCY));
+	// Per-host cooldown: the last time (clock ms) we fetched each remote host, so an identical fetch within
+	// SOURCE_COOLDOWN_MS is suppressed (the last resolved value is reused). Keyed by host, workspace-wide.
+	private readonly _hostCooldown = new Map<string, number>();
+	// The clock behind the per-host cooldown (plan 30 uses the IClock seam for deterministic tests). A
+	// RealClock in production; tests swap a fake clock via {@link setClock} right after construction so the
+	// cooldown window can be advanced deterministically. Not a DI service (the orchestrator's clock is the
+	// same plain seam), so it stays off the constructor to keep the service's DI signature clean.
+	private _clock: IClock = new RealClock();
 
 	// (plan 33 iter 2, L5) The contents of the folder's `.abstract-name` marker, if it ships one. Read once
 	// at startup + on folder change and cached so `getWorkspaceFolderName()` can stay synchronous. Only ever
@@ -317,6 +364,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	get orchestrator(): AgentOrchestrator { return this._orchestrator; }
 
 	getAgents(): readonly IAgentDef[] { return this._orchestrator.getAgents(); }
+	getAgentRuns(): readonly IAgentRun[] { return this._orchestrator.getRuns(); }
+	getAgentRunsForAgent(agentId: string): readonly IAgentRun[] { return this._orchestrator.getRunsForAgent(agentId); }
+	getLatestAgentFailure(): IAgentRun | undefined { return this._orchestrator.getLatestFailure(); }
+
+	// Agents-screen detail drawer registry edits (plan 32 iter 3): thin pass-throughs to the orchestrator,
+	// which persists to `agents.json` and fires onDidChange so the screen re-renders.
+	async createAgent(): Promise<void> { await this._orchestrator.createAgent(); }
+	async duplicateAgent(agentId: string): Promise<void> { await this._orchestrator.duplicateAgent(agentId); }
+	async setAgentDisabled(agentId: string, disabled: boolean): Promise<void> { await this._orchestrator.setAgentDisabled(agentId, disabled); }
+	async setAgentPolicy(agentId: string, policy: AgentPolicy): Promise<void> { await this._orchestrator.setAgentPolicy(agentId, policy); }
+	async setAgentTrigger(agentId: string, trigger: IAgentTrigger): Promise<void> { await this._orchestrator.setAgentTrigger(agentId, trigger); }
 
 	// --- per-document views ---
 
@@ -418,6 +476,29 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.status = `Formatting fix applied - ${fixed} heading${fixed === 1 ? '' : 's'} title-cased`;
 		await this._persist(state);
 		this._onDidChange.fire();
+	}
+
+	// Run a Skill across every project document (plan 32 iter 3, the P3 gap): fan the skill grade over the
+	// folder's living documents through the orchestrator's fan surface, and return a per-document summary the
+	// Agents screen renders as a run strip. Skills stay single-doc units - the orchestrator does the fanning.
+	// Real data only: a non-living document, or a model-backed skill with no model, is honestly `skipped`
+	// (never a fabricated pass). The model-backed Strategy grade runs per document (its verdict caches).
+	async runSkillAcrossProject(id: ISkillCheck['id'], skillName: string): Promise<ISkillRunSummary> {
+		const uris = await this._discoverLivingDocUris();
+		const results: ISkillRunDocResult[] = [];
+		for (const uri of uris) {
+			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
+			if (!state || !state.doc.isLiving) { continue; }
+			// A model-backed skill needs its per-document grade run first so the report reflects the live verdict.
+			if (id === 'strategy') { await this.runSkillCheck(uri, 'strategy'); }
+			const check = this.getSkillReport(uri).find(c => c.id === id);
+			const status: SkillRunDocStatus = !check
+				? 'skipped'
+				: check.status === 'flag' ? 'flag' : check.status === 'pass' ? 'pass' : 'skipped';
+			results.push({ docId: uri.toString(), docTitle: state.doc.title, status, detail: check?.detail ?? 'Not gradeable for this document.' });
+		}
+		this._onDidChange.fire();
+		return summariseSkillRun(id, skillName, results);
 	}
 
 	// House style: title-case headings. A heading passes when every significant word (the first word,
@@ -1067,18 +1148,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Re-hash every source and flip the dirty bits. Value bindings compare the source value's hash to
 	// the lock's; context sources compare to the lock's reviewedHash. No prose is touched, no model is
 	// called - this is the always-on layer.
-	private async _recomputeFreshness(state: IDocState): Promise<void> {
+	private async _recomputeFreshness(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		const staleBindings = new Set<string>();
 		const staleContext = new Set<string>();
 		if (state.doc.isLiving) {
-			const resolution = await this._resolveCurrent(state);
+			const resolution = await this._resolveCurrent(state, pass);
 			for (const key of Object.keys(state.lock.bindings)) {
 				const cur = resolution.get(key);
 				if (cur && !bindingIsFresh(cur, state.lock.bindings[key])) { staleBindings.add(key); }
 			}
 			for (const file of state.doc.context) {
 				const entry = state.lock.context[file];
-				const hash = await this._hashContext(state, file);
+				const hash = await this._hashContext(state, file, pass);
 				if (!entry || entry.reviewedHash !== hash) { staleContext.add(file); }
 			}
 		}
@@ -1089,10 +1170,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	private async _hashContext(state: IDocState, file: string): Promise<string> {
+	private async _hashContext(state: IDocState, file: string, pass?: IRefreshPass): Promise<string> {
 		if (sourceKind(file) === 'api') { return ''; }
 		try {
-			const text = (await this._files.readFile(joinPath(dirname(state.uri), file))).value.toString();
+			const text = await this._readSourceFile(joinPath(dirname(state.uri), file), pass);
 			return hashString(text);
 		} catch (e) {
 			this._log.trace('[livingDocs] context unreadable', file, e instanceof Error ? e.message : String(e));
@@ -1139,7 +1220,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Read every `sources:` file and build the bind-key -> freshly-resolved value map. A CSV produces
 	// the latest row's columns (plus `.prev` / `.delta` qualifiers); an api/JSON source produces its
 	// top-level fields. Influence (`context:`) sources are not value-resolved here (see Item 5).
-	private async _resolveCurrent(state: IDocState): Promise<Map<string, IResolution>> {
+	//
+	// `pass` (plan 30, tracks 1 + 2) collapses duplicate work WITHIN one refresh/agent pass: a shared CSV
+	// bound by many documents is read once (file-body cache), a shared remote source is resolved once
+	// (per-source resolution cache), and a repeat remote fetch inside the per-host cooldown window is
+	// suppressed. With no `pass` (single-document paths, source-peek, subtitle) behaviour is byte-identical
+	// to before - every source is read fresh, exactly as it was.
+	private async _resolveCurrent(state: IDocState, pass?: IRefreshPass): Promise<Map<string, IResolution>> {
 		const resolved = new Map<string, IResolution>();
 		// Inline `mcp` bindings (bind:key@mcp:server.tool/field, D29-B) resolve through the proxy, which owns the
 		// server process + credentials (decision 14) - the web build cannot spawn, so the proxy does the spawning
@@ -1148,7 +1235,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		for (const block of state.doc.blocks) {
 			for (const bind of block.binds) {
 				const mcp = parseMcpKey(bind.key);
-				if (mcp) { await this._resolveMcpSource(bind.key, mcp, resolved); }
+				if (mcp) {
+					const sub = await this._resolveSourceCached(pass, `mcp:${bind.key}`, async () => {
+						const m = new Map<string, IResolution>();
+						await this._resolveMcpSource(bind.key, mcp, m);
+						return m;
+					}, undefined);
+					for (const [k, v] of sub) { resolved.set(k, v); }
+				}
 			}
 		}
 		for (const source of state.doc.sources) {
@@ -1156,14 +1250,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				// Strip any ` auth=<name>` marker before deriving the alias/URL, so an authenticated source's
 				// bind keys (metrics.arr) and identity are the clean URL, not the credential spec.
 				const spec = parseApiSpec(source);
-				await this._resolveApiSource(spec.url, sourceAlias(spec.url), resolved, spec.auth);
+				const sub = await this._resolveSourceCached(pass, `api:${spec.url}`, async () => {
+					const m = new Map<string, IResolution>();
+					await this._resolveApiSource(spec.url, sourceAlias(spec.url), m, spec.auth);
+					return m;
+				}, spec.url);
+				for (const [k, v] of sub) { resolved.set(k, v); }
 				continue;
 			}
 			const alias = sourceAlias(source);
 			const uri = joinPath(dirname(state.uri), source);
 			let text: string;
 			try {
-				text = (await this._files.readFile(uri)).value.toString();
+				text = await this._readSourceFile(uri, pass);
 			} catch (e) {
 				this._log.warn('[livingDocs] source unreadable', source, e instanceof Error ? e.message : String(e));
 				continue;
@@ -1178,14 +1277,68 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return resolved;
 	}
 
+	// Read one local source file, served from the pass's file-body cache when present (plan 30, track 1):
+	// a CSV bound by 20 documents is read from disk once per pass, not 20 times. Without a pass every read
+	// hits the file service, exactly as before.
+	private async _readSourceFile(uri: URI, pass?: IRefreshPass): Promise<string> {
+		if (!pass) { return (await this._files.readFile(uri)).value.toString(); }
+		const key = uri.toString();
+		let inFlight = pass.fileBodies.get(key);
+		if (!inFlight) {
+			inFlight = this._files.readFile(uri).then(f => f.value.toString());
+			pass.fileBodies.set(key, inFlight);
+		}
+		return inFlight;
+	}
+
+	// Resolve one REMOTE (api/mcp) source into its bind-key map, served from the pass cache when a prior
+	// document in the same pass already resolved it (plan 30, tracks 1 + 2). The fetch runs through the
+	// source-fetch limiter (bounded concurrency, D30-A) and honours the per-host cooldown: an identical
+	// host fetched within SOURCE_COOLDOWN_MS is not re-fetched - the cached resolution (or an empty map) is
+	// reused. Without a pass the source is resolved directly (single-document paths keep their old behaviour).
+	private async _resolveSourceCached(
+		pass: IRefreshPass | undefined,
+		cacheKey: string,
+		resolve: () => Promise<Map<string, IResolution>>,
+		httpUrl: string | undefined,
+	): Promise<Map<string, IResolution>> {
+		if (!pass) { return resolve(); }
+		const cached = pass.resolutions.get(cacheKey);
+		if (cached) { return cached; }
+		const host = httpUrl ? this._hostOf(httpUrl) : undefined;
+		if (host !== undefined) {
+			const last = this._hostCooldown.get(host);
+			if (last !== undefined && this._clock.now() - last < SOURCE_COOLDOWN_MS) {
+				// Cooling down: skip the identical remote fetch and reuse an empty map (its bind keys keep
+				// their last-known lock values; freshness is unchanged). Cached so it is a single decision.
+				const empty = Promise.resolve(new Map<string, IResolution>());
+				pass.resolutions.set(cacheKey, empty);
+				return empty;
+			}
+		}
+		// Cache the in-flight promise BEFORE awaiting so concurrent documents sharing this source await one
+		// fetch, not N. The fetch runs through the source-fetch limiter (bounded concurrency, D30-A).
+		const inFlight = this._sourceLimiter.queue(async () => {
+			const m = await resolve();
+			if (host !== undefined) { this._hostCooldown.set(host, this._clock.now()); }
+			return m;
+		});
+		pass.resolutions.set(cacheKey, inFlight);
+		return inFlight;
+	}
+
+	private _hostOf(url: string): string {
+		try { return new URL(url).host || url; } catch { return url; }
+	}
+
 	// The doc subtitle tracks the resolved period: when it reads "Week N", N is refreshed from the
 	// primary source's latest `week` value, so a sync that advances the source advances the subtitle too.
-	private async _resolveSubtitle(state: IDocState): Promise<void> {
+	private async _resolveSubtitle(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		const m = /^Week\s+(\d+)(.*)$/i.exec(state.doc.subtitle);
 		if (!m || !state.doc.sources.length) { return; }
 		let week: string | undefined;
 		try {
-			const resolution = await this._resolveCurrent(state);
+			const resolution = await this._resolveCurrent(state, pass);
 			for (const [key, r] of resolution) {
 				if (/(^|\.)week$/.test(key)) { week = r.value.trim(); break; }
 			}
@@ -1300,9 +1453,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	// Resolve the current source values into the lock (update each binding's resolved/sourceHash/
-	// syncedAt). No prose is touched.
-	private async _resolveIntoLock(state: IDocState): Promise<void> {
-		const resolution = await this._resolveCurrent(state);
+	// syncedAt). No prose is touched. `pass` shares source reads across documents in one refresh (plan 30).
+	private async _resolveIntoLock(state: IDocState, pass?: IRefreshPass): Promise<void> {
+		const resolution = await this._resolveCurrent(state, pass);
 		for (const [key, r] of resolution) {
 			state.lock.bindings[key] = this._bindingEntry(r);
 		}
@@ -1332,9 +1485,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	// Re-sync the lock from the current sources and auto-apply every figure (the manual "Refresh from
-	// sources" path; figures are deterministic and low-risk). Caller persists.
-	private async _syncLock(state: IDocState): Promise<void> {
-		await this._resolveIntoLock(state);
+	// sources" path; figures are deterministic and low-risk). Caller persists. `pass` shares source reads
+	// across the documents of one refresh (plan 30, track 1).
+	private async _syncLock(state: IDocState, pass?: IRefreshPass): Promise<void> {
+		await this._resolveIntoLock(state, pass);
 		for (const change of this._figureReconciles(state)) { this._applyFigure(state, change); }
 	}
 
@@ -1406,8 +1560,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// gate runs between rewrite and apply: a failed grader blocks the whole run (nothing applied or
 	// queued) and surfaces the flag (spec 5). auto-figures applies silently (audited); ask-before-apply
 	// queues a pending change; draft-only queues a draft and never lands.
-	private async _runFiguresByPolicy(state: IDocState, policy: AgentPolicy): Promise<{ applied: number; queued: number; blocked?: string }> {
-		await this._resolveIntoLock(state);
+	private async _runFiguresByPolicy(state: IDocState, policy: AgentPolicy, pass?: IRefreshPass): Promise<{ applied: number; queued: number; blocked?: string }> {
+		await this._resolveIntoLock(state, pass);
 		const changes = this._figureReconciles(state);
 		if (changes.length) {
 			const gate = await this._verifyGate(state, changes);
@@ -1490,15 +1644,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._gradeFinancial(state, current);
 	}
 
+	// The before-export gate's current verdict, surfaced so the export/present flow can SHOW it (plan 32 iter 4):
+	// no silent blocks. `pass:true` = clean to export; `pass:false` with `flag` = the one-line grader reason the
+	// export sheet renders alongside "Export anyway" (audited override) and "Fix first" (jumps to the flag).
+	previewExportGate(resource: URI): IGradeResult {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return { pass: true }; }
+		return this._beforeExportGate(state);
+	}
+
+	// Record on the audit that the user exported/published PAST a failed gate (plan 32 iter 4): the override is
+	// never silent - it lands as an `override`-via audit entry so the trail shows a human chose to proceed.
+	private _auditGateOverride(state: IDocState, action: 'export' | 'publish', flag: string): void {
+		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `${action} overridden past gate - ${flag}`, 'override'));
+	}
+
 	// On-publish snapshot: pin the document to the current source versions (hashes) so a published doc
 	// stays reproducible even as sources move on (spec 7; uses the pins[] field reserved in plan 06).
-	async publishDocument(resource: URI): Promise<void> {
+	async publishDocument(resource: URI, force = false): Promise<void> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return; }
 		const gate = this._beforeExportGate(state);
 		if (!gate.pass) {
-			this._notify.info(`Cannot publish - ${gate.flag}`);
-			return;
+			// No silent block, no silent override (plan 32 iter 4): without `force` the caller surfaced the gate
+			// and the user chose not to proceed; with `force` the user chose "Publish anyway" and it is audited.
+			if (!force) { this._notify.info(`Cannot publish - ${gate.flag}`); return; }
+			this._auditGateOverride(state, 'publish', gate.flag ?? 'grader flagged');
 		}
 		const versions = new Map<string, string>();
 		for (const key of Object.keys(state.lock.bindings)) {
@@ -1510,8 +1681,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.lock.pins = [...versions].map(([source, version]) => ({ source, version }));
 		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `published ${at}`, 'heuristic'));
 		await this._lockStore.write(state.uri, state.lock);
-		// Publishing is a milestone: snapshot the published body so it is a restorable version.
-		await this.saveSnapshot(resource, 'Published', 'publish');
+		// Publishing is a milestone: snapshot the published body so it is a restorable version, carrying the
+		// real pin count so the History SNAPSHOT row can name the pinned source versions (plan 32 iter 4).
+		await this.saveSnapshot(resource, 'Published', 'publish', undefined, state.lock.pins.length);
 		this._notify.info(`Published "${state.doc.title}" - pinned to ${state.lock.pins.length} source version${state.lock.pins.length === 1 ? '' : 's'}.`);
 		this._onDidChange.fire();
 	}
@@ -1528,7 +1700,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// so the lock never grows without bound (D26-A). The body is verbatim Markdown (defaults to the
 	// current on-disk text; callers that snapshot a pre-change state pass it explicitly); `auditIndex`
 	// is the audit length now, so the History tab can group later changes.
-	async saveSnapshot(resource: URI, label: string, via: SnapshotVia, body?: string): Promise<void> {
+	async saveSnapshot(resource: URI, label: string, via: SnapshotVia, body?: string, pinnedSources?: number): Promise<void> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return; }
 		const entry: ISnapshotEntry = {
@@ -1538,6 +1710,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			via,
 			body: body ?? state.rawText,
 			auditIndex: state.lock.audit.length,
+			// The publish pin count (plan 32 iter 4) so the History SNAPSHOT row names the pinned versions. Only
+			// recorded when a real count was passed (a publish); undefined stays off the entry for other snapshots.
+			...(typeof pinnedSources === 'number' ? { pinnedSources } : {}),
 		};
 		state.lock.snapshots.push(entry);
 		while (state.lock.snapshots.length > SNAPSHOT_CAP) {
@@ -1575,13 +1750,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
-	async exportDocument(resource: URI): Promise<URI | undefined> {
+	async exportDocument(resource: URI, force = false): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
 		const gate = this._beforeExportGate(state);
 		if (!gate.pass) {
-			this._notify.info(`Export blocked - ${gate.flag}`);
-			return undefined;
+			// The export sheet surfaces the gate (plan 32 iter 4); without `force` a failed gate blocks, with
+			// `force` ("Export anyway") it proceeds and the override is audited - never a silent either way.
+			if (!force) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
+			this._auditGateOverride(state, 'export', gate.flag ?? 'grader flagged');
+			await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] override audit write failed', e));
 		}
 		const html = renderExportHtml(state.doc, this.getResolved(resource));
 		const stem = basename(resource).replace(/\.md$/, '');
@@ -1597,13 +1775,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	async exportMarkdown(resource: URI): Promise<URI | undefined> {
+	async exportMarkdown(resource: URI, force = false): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
 		const gate = this._beforeExportGate(state);
 		if (!gate.pass) {
-			this._notify.info(`Export blocked - ${gate.flag}`);
-			return undefined;
+			if (!force) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
+			this._auditGateOverride(state, 'export', gate.flag ?? 'grader flagged');
+			await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] override audit write failed', e));
 		}
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
 		const stem = basename(resource).replace(/\.md$/, '');
@@ -1639,34 +1818,135 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// --- the fan-out refresh ---
 
-	async refreshFromSources(): Promise<void> {
-		// Re-derive every bound document in the workspace, not just the open one.
-		const uris = await this._discoverLivingDocUris();
-		let derived = 0;
-		for (const uri of uris) {
+	// Test seam (plan 30, track 2): swap the clock the per-host cooldown reads, so a test can advance the
+	// 30 s window deterministically without wall-clock waits. Production always keeps the RealClock.
+	setClock(clock: IClock): void { this._clock = clock; }
+
+	async refreshFromSources(resource?: URI): Promise<void> {
+		// One pass shares every source read + remote resolution across the documents it derives (plan 30,
+		// track 1): a CSV bound by 20 documents is read once here, not 20 times.
+		const pass = newRefreshPass();
+
+		// Resolve the candidate document set: a scoped refresh starts from the one document; a project
+		// refresh starts from every discovered bound document.
+		const candidates = resource
+			? [resource, ...await this._sharedSourceSiblings(resource, pass)]
+			: await this._discoverLivingDocUris();
+
+		// Changed-source-only scoping (plan 30, track 1): only re-derive documents whose bindings are
+		// actually stale (the cheap hash check, already implemented in _recomputeFreshness), or that have
+		// never been synced yet (a bind key with no lock entry). A folder whose sources have not moved and
+		// is already synced does no derivation work. A single-document scope always includes the target
+		// document itself (an explicit Refresh should re-sync it even when nothing looks stale).
+		// Load the candidate states (cheap; dedups into _docs), then recompute their freshness CONCURRENTLY.
+		// The freshness check re-reads sources through the same shared pass + limiters, so an api-backed check
+		// no longer serialises one fetch at a time - the bounded concurrency applies to the pre-check too.
+		const states: IDocState[] = [];
+		for (const uri of candidates) {
 			let state = this._docs.get(uri.toString());
 			if (!state) { state = await this._loadState(uri); }
-			if (!state || !state.doc.isLiving) { continue; }
-			// Snapshot the pre-refresh body BEFORE syncing writes the new one, but only keep it if the
-			// sync actually re-derived a figure (D26-B: one snapshot per run that applied a change). A
-			// no-op refresh leaves no version. `saveSnapshot` reads `state.rawText`, so capture here.
-			const beforeBody = state.rawText;
-			const changes = await this._syncLockWithDiff(state);
-			const afterBody = serializeLivingDoc(state.doc);
-			if (changes.length && beforeBody !== afterBody) {
-				await this.saveSnapshot(state.uri, 'Before refresh', 'refresh', beforeBody);
-			}
-			await this._persist(state);
-			// The value bindings are now in sync, so their dirty bits clear (context stays stale until
-			// a Review-impact pass, Item 5).
-			await this._recomputeFreshness(state);
-			derived++;
+			if (state && state.doc.isLiving) { states.push(state); }
 		}
+		await Promise.all(states.map(state => this._recomputeFreshness(state, pass)));
+
+		// Changed-source-only scoping (plan 30, track 1): only re-derive documents whose bindings are
+		// actually stale (the cheap hash check, already implemented in _recomputeFreshness), or that have
+		// never been synced yet (a bind key with no lock entry). A folder whose sources have not moved and
+		// is already synced does no derivation work. A single-document scope always includes the target
+		// document itself (an explicit Refresh should re-sync it even when nothing looks stale).
+		const affected: IDocState[] = [];
+		for (const state of states) {
+			const isTarget = !!resource && state.uri.toString() === resource.toString();
+			// Re-derive when: this is the explicitly-refreshed document; a source hash actually moved; a bind
+			// key was never synced; OR the visible figures no longer match the lock's resolved values (the lock
+			// is fresh vs the source but the prose cache is stale - e.g. a doc authored at an older value whose
+			// lock bootstrapped to the current one on open). The last check preserves the pre-plan-30 behaviour
+			// that a manual Refresh always reconciles the visible cache to the resolved values.
+			if (isTarget || state.staleBindings.size > 0 || this._hasUnsyncedBind(state) || this._figureReconciles(state).length > 0) {
+				affected.push(state);
+			}
+		}
+
+		// Derive the affected documents concurrently (plan 30, track 2, D30-A). The documents kick off
+		// together; the bounded concurrency lives ONE level down, inside each derive: remote source fetches
+		// are gated by the source-fetch limiter (at most SOURCE_FETCH_CONCURRENCY in flight workspace-wide)
+		// and model calls by the model limiter (2). Gating here at the document level too would deadlock,
+		// because a document holding a slot then awaits a nested fetch on the same limiter. Each document's
+		// derive is independent, so a rejecting fetch/model call inside one document fails only that document
+		// (others complete); the shared pass keeps source reads deduplicated even under concurrency.
+		let derived = 0;
+		await Promise.all(affected.map(async state => {
+			try {
+				await this._deriveDocument(state, pass);
+				derived++;
+			} catch (e) {
+				this._log.warn('[livingDocs] refresh failed for document', state.uri.toString(), e instanceof Error ? e.message : String(e));
+			}
+		}));
 
 		for (const state of this._docs.values()) {
 			if (state.doc.isLiving) { state.status = `${derived} document${derived === 1 ? '' : 's'} synced`; }
 		}
 		this._onDidChange.fire();
+	}
+
+	// True when the document declares a bind key the lock has never resolved (a never-synced doc). Such a
+	// document must derive on the next refresh even when nothing looks "stale" (there is no prior hash to
+	// compare against), so its figures land the first time round - the changed-source scope never drops it.
+	private _hasUnsyncedBind(state: IDocState): boolean {
+		for (const block of state.doc.blocks) {
+			for (const b of block.binds) {
+				if (!Object.prototype.hasOwnProperty.call(state.lock.bindings, b.key)) { return true; }
+			}
+		}
+		return false;
+	}
+
+	// Derive one document within a refresh pass: re-sync its figures from the (shared-cached) sources,
+	// snapshot the pre-change body once if a figure actually moved (D26-B), persist, and re-flag freshness.
+	// Extracted so the refresh loop can run it through the concurrency limiter (plan 30, track 2).
+	private async _deriveDocument(state: IDocState, pass: IRefreshPass): Promise<void> {
+		// Snapshot the pre-refresh body BEFORE syncing writes the new one, but only keep it if the sync
+		// actually re-derived a figure (D26-B: one snapshot per run that applied a change). A no-op refresh
+		// leaves no version. `saveSnapshot` reads `state.rawText`, so capture here.
+		const beforeBody = state.rawText;
+		const changes = await this._syncLockWithDiff(state, pass);
+		const afterBody = serializeLivingDoc(state.doc);
+		if (changes.length && beforeBody !== afterBody) {
+			await this.saveSnapshot(state.uri, 'Before refresh', 'refresh', beforeBody);
+		}
+		await this._persist(state);
+		// The value bindings are now in sync, so their dirty bits clear (context stays stale until a
+		// Review-impact pass, Item 5).
+		await this._recomputeFreshness(state, pass);
+	}
+
+	// The documents that share a CHANGED source with `resource` (plan 30, track 1): the orchestrator's
+	// reverse edges give the docs bound to each source; we keep only those whose target document's sources
+	// actually moved, so a scoped Refresh fans out exactly to the co-dependents of what changed (never the
+	// whole folder). The target document itself is added by the caller.
+	private async _sharedSourceSiblings(resource: URI, pass: IRefreshPass): Promise<URI[]> {
+		let state = this._docs.get(resource.toString());
+		if (!state) { state = await this._loadState(resource); }
+		if (!state || !state.doc.isLiving) { return []; }
+		await this._recomputeFreshness(state, pass);
+		// A source is "changed" for this document when one of its bind keys is stale. Map stale keys back to
+		// their source alias, then walk the reverse edges to the other documents bound to those sources.
+		const changedAliases = new Set<string>();
+		for (const key of state.staleBindings) { changedAliases.add(key.split('.')[0]); }
+		if (changedAliases.size === 0) { return []; }
+		const siblings: URI[] = [];
+		const seen = new Set<string>([resource.toString()]);
+		for (const source of state.doc.sources) {
+			const alias = sourceKind(source) === 'api' ? sourceAlias(parseApiSpec(source).url) : sourceAlias(source);
+			if (!changedAliases.has(alias)) { continue; }
+			for (const uri of await this._orchestrator.docsBoundToSource(source)) {
+				if (seen.has(uri.toString())) { continue; }
+				seen.add(uri.toString());
+				siblings.push(uri);
+			}
+		}
+		return siblings;
 	}
 
 	// "Run now": run an agent over its flow documents (or the whole workspace if it scopes none).
@@ -1678,17 +1958,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._orchestrator.runAgent(agentId, 'manual', docs);
 	}
 
-	// The orchestration host: how an agent does its work once a trigger fires. Event agents only flag
-	// along the graph (propagation already ran); lifecycle hooks fire from the document lifecycle
-	// (Item 5). Everything else re-derives each in-scope document and routes its figure changes through
-	// the verify gate then the per-edge policy (auto-apply / queue / draft). Reports what landed/queued.
+	// The orchestration host: how an agent does its work once a trigger fires. Lifecycle hooks fire from the
+	// document lifecycle (Item 5) and do no re-derive here. EVERY other trigger - cron, heartbeat, manual AND
+	// event (plan 32 iter 1) - re-derives each in-scope document and routes its figure changes through the
+	// verify gate then the per-edge policy (auto-apply / queue / draft). The event path is what makes a live
+	// source edit ripple across the graph without a manual Refresh: propagation dirties the co-dependent docs,
+	// the event agent's policy then decides whether their figures auto-apply (auto-figures) or queue (draft-only).
 	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<IAgentRunResult> {
-		if (agent.trigger.kind === 'event' || agent.trigger.kind === 'lifecycle') { return { applied: 0, queued: 0 }; }
+		if (agent.trigger.kind === 'lifecycle') { return { applied: 0, queued: 0, docsTouched: 0 }; }
 		let applied = 0;
 		let queued = 0;
 		let skipped = 0;
+		let touched = 0;
 		let blocked: string | undefined;
 		const docs = context.docs;
+		// One shared pass across the run's documents (plan 30, track 1): a source bound by many of the run's
+		// documents is read/resolved once. The document loop stays SEQUENTIAL to preserve the plan-27 per-run
+		// Stop contract (a Stop leaves every remaining document unprocessed and honestly skipped, in order);
+		// the bounded concurrency lives inside each document's resolve (remote fetch / model-call limiters).
+		const pass = newRefreshPass();
 		for (let i = 0; i < docs.length; i++) {
 			// A per-run Stop leaves every remaining document unprocessed and honestly skipped (plan 27 iter 4);
 			// documents already processed keep whatever they applied/queued (reviewable work, not partial writes).
@@ -1697,17 +1985,26 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const state = this._docs.get(uri.toString()) ?? await this._loadState(uri);
 			if (!state || !state.doc.isLiving) { continue; }
 			state.recent = new Set<string>();
-			const result = await this._runFiguresByPolicy(state, agent.policy);
+			// Snapshot the doc's dirty keys BEFORE the awaited reconcile (plan 32 iter 2 fix, finding 1): a
+			// concurrent source-watcher event can interleave during `_runFiguresByPolicy` and re-mark this doc
+			// dirty; clearing only the snapshotted keys afterwards leaves that freshly-added bit for the heartbeat
+			// to drain, instead of a blanket clear dropping it. Copied so a later propagate cannot mutate it.
+			const dirtyBefore = this._orchestrator.getDirty(uri);
+			const snapshot = dirtyBefore ? { value: [...dirtyBefore.value], influence: [...dirtyBefore.influence] } : undefined;
+			const result = await this._runFiguresByPolicy(state, agent.policy, pass);
 			applied += result.applied;
 			queued += result.queued;
+			touched++;
 			if (result.blocked) { blocked = result.blocked; }
 			if (result.applied) { await this._persist(state); } else { await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] lock write failed', e)); }
-			await this._recomputeFreshness(state);
-			// The heartbeat drains each doc it processed from the dirty queue.
-			if (agent.trigger.kind === 'heartbeat') { this._orchestrator.clearDirty(uri); }
+			await this._recomputeFreshness(state, pass);
+			// A queue-draining trigger (heartbeat) or the event agent that just processed this doc clears the
+			// dirty keys it reconciled: the value bindings are now reconciled/queued, so the sweep must not
+			// re-flag them. Only the snapshotted keys clear, so an interleaved concurrent dirty survives.
+			if (snapshot && (agent.trigger.kind === 'heartbeat' || agent.trigger.kind === 'event')) { this._orchestrator.clearDirtyKeys(uri, snapshot); }
 		}
 		this._onDidChange.fire();
-		return { applied, queued, blocked, skipped };
+		return { applied, queued, blocked, skipped, docsTouched: touched };
 	}
 
 	// --- the Review-impact pass (expensive, on-demand): spec 3.6 ---
@@ -1880,13 +2177,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// retry recovers most of those before the caller's honest fallback ever shows. A refusal is NOT retried
 	// (it would just refuse again). Only a genuine second failure propagates.
 	private async _callModel(system: string, user: string): Promise<string> {
-		try {
-			return await this._callModelOnce(system, user);
-		} catch (e) {
-			if (e instanceof Error && e.message === 'model refused the request') { throw e; }
-			this._log.info('[livingDocs] model call failed, retrying once', e instanceof Error ? e.message : String(e));
-			return await this._callModelOnce(system, user);
-		}
+		// Bounded model concurrency (plan 30, track 2, D30-A): at most MODEL_CALL_CONCURRENCY buffered model
+		// calls run at once, so a fan-out that grades/rewrites many documents never opens an unbounded burst
+		// of proxy requests. The single silent retry (decision 58) stays inside the gated task.
+		return this._modelLimiter.queue(async () => {
+			try {
+				return await this._callModelOnce(system, user);
+			} catch (e) {
+				if (e instanceof Error && e.message === 'model refused the request') { throw e; }
+				this._log.info('[livingDocs] model call failed, retrying once', e instanceof Error ? e.message : String(e));
+				return await this._callModelOnce(system, user);
+			}
+		});
 	}
 
 	private async _callModelOnce(system: string, user: string): Promise<string> {
@@ -2129,6 +2431,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._chatStreaming.get(resource.toString());
 	}
 
+	getFanoutProgress(resource: URI): IFanoutProgress | undefined {
+		return this._fanoutProgress.get(resource.toString());
+	}
+
 	retryChat(resource: URI): void {
 		const id = resource.toString();
 		const history = this._chats.get(id);
@@ -2278,10 +2584,6 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 		const sourceFiles = mentions.length ? mentions : [...active.doc.sources, ...active.doc.context];
 		const sources = await this._readContext(active, sourceFiles);
-		const docSections = states.map(s => {
-			const headings = s.doc.blocks.filter(b => b.type === 'heading').map(b => b.text);
-			return `### Document: "${s.doc.title}"\n${this._serializeDocForChat(s)}\nHeadings: ${headings.join(' | ') || '(none)'}`;
-		}).join('\n\n');
 
 		const system = 'You are the agent inside a Living Document editor. The user has selected a WORKING SET of documents and given ONE instruction to apply across ALL of them. '
 			+ 'Apply the instruction to every document where it is relevant; a document that needs no change simply gets empty arrays. Never touch bound figures. '
@@ -2291,35 +2593,102 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			+ '"inserts": [{"afterHeading": string, "newText": string, "rationale": string, "sourceQuote": string, "sourceLine": number}]}]}. '
 			+ 'The "doc" field MUST be the exact document title shown below. Use "edits" to rewrite an existing paragraph (oldText must quote the current prose). Use "inserts" to add NEW content after the named heading (empty afterHeading = end of that document). Keep reply concise.';
 		const transcript = this._chatTranscript(active.uri);
-		const user = `Working set (${states.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
-		const raw = await this._chatModelCall(system, user, onDelta, token);
-		const json = parseMultiChatResponse(raw);
+
+		// D30-B: pack the working set into context-bounded batches instead of sending every document body in
+		// one over-large call. Serialize each document once (the body the model is shown), estimate the fixed
+		// per-call overhead (system + shared sources + transcript, which ride EVERY batch), and let the pure
+		// planner split the docs into batches that fit the configured budget - flagging any single document
+		// too large for the budget as `oversize` (reported honestly, never sent, never truncated).
+		const sectionFor = (s: IDocState) => {
+			const headings = s.doc.blocks.filter(b => b.type === 'heading').map(b => b.text);
+			return `### Document: "${s.doc.title}"\n${this._serializeDocForChat(s)}\nHeadings: ${headings.join(' | ') || '(none)'}`;
+		};
+		const stateByTitle = new Map(states.map(s => [s.doc.title.trim().toLowerCase(), s]));
+		const fanoutDocs: IFanoutDoc[] = states.map(s => ({ id: s.uri.toString(), title: s.doc.title, body: sectionFor(s) }));
+		const budget = this._fanoutContextBudget();
+		// Everything that is NOT a document body but still consumed by every call, so a batch's usable space is
+		// budget - overhead. The `Working set (N documents):` scaffold + the `Shared sources ...` framing are
+		// small and folded into the transcript estimate here.
+		const overhead = estimateTokens(system) + estimateTokens(sources) + estimateTokens(transcript) + estimateTokens(text) + 64;
+		const plan = planFanoutBatches(fanoutDocs, budget, overhead);
 
 		const steps: IChatStep[] = [];
 		const proposedIds: string[] = [];
 		const addStep = (step: IChatStep) => { steps.push(step); onStep(step); };
 		if (sourceFiles.length) { addStep({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
-		// Match each returned doc entry to a working-set document by title, then queue its edits/inserts
-		// against that document's own state (so proposals carry the right docId for the rail grouping).
-		const byTitle = new Map(states.map(s => [s.doc.title.trim().toLowerCase(), s]));
-		for (const entry of json.docs) {
-			const target = byTitle.get(entry.doc.trim().toLowerCase());
-			if (!target) { continue; }
-			for (const edit of entry.edits) {
-				const queued = this._queueChatEdit(target, edit, sources);
-				if (queued) { addStep({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
-			}
-			for (const insert of entry.inserts) {
-				const queued = this._queueChatInsert(target, insert, sources);
-				if (queued) { addStep({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+
+		// Publish the fan-out's batch progress so the project-run command strip can show `batch K of M` and
+		// the oversize documents' tiles read the honest "too large for this run" state. Keyed on the anchor
+		// (this chat's own document), overwritten each batch, and kept after the run settles so a completed
+		// swarm still shows which documents were too large. Fires onDidChange so the run screen re-renders.
+		const anchorId = active.uri.toString();
+		const oversizeDocIds = plan.oversize.map(d => d.id);
+		const publishProgress = (batchIndex: number) => {
+			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds });
+			this._onDidChange.fire();
+		};
+		publishProgress(0);
+		// Announce every oversize document up front (plan-23 honesty rule): a document larger than the whole
+		// budget is NEVER sent - its tile/step says so rather than the run silently dropping it.
+		for (const doc of plan.oversize) {
+			addStep({ label: `${doc.title}: too large for this run`, status: 'queued' });
+		}
+
+		let anyReply = '';
+		// Run the batches in order. Each doc appears in exactly ONE batch (uniqueness by construction), so the
+		// per-batch keyed replies simply concatenate into the pending queue with no double-count or drop. The
+		// first batch STREAMS its prose into the live turn (onDelta); later batches use the buffered call (no
+		// delta) so the live turn is not scrambled by interleaved prose - their steps still settle live. The
+		// buffered `_callModel` is bounded by the plan-30 track-2 model limiter.
+		for (let b = 0; b < plan.batches.length; b++) {
+			if (token.isCancellationRequested) { throw new CancellationError(); }
+			const batch = plan.batches[b];
+			publishProgress(b + 1);
+			if (plan.batchCount > 1) { addStep({ label: `Batch ${b + 1} of ${plan.batchCount} (${batch.docs.length} documents)`, status: 'done' }); }
+			const docSections = batch.docs.map(d => d.body).join('\n\n');
+			const user = `Working set (${batch.docs.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
+			const raw = b === 0
+				? await this._chatModelCall(system, user, onDelta, token)
+				: await this._callModel(system, user);
+			const json = parseMultiChatResponse(raw);
+			if (json.reply && !anyReply) { anyReply = json.reply; }
+			// Match each returned doc entry to a document IN THIS BATCH by title, then queue its edits/inserts
+			// against that document's own state (so proposals carry the right docId for the rail grouping). The
+			// match is restricted to the batch's own documents so a reply that names an out-of-batch doc cannot
+			// route an edit to a document that batch was never shown - keeping "each doc in exactly one batch"
+			// airtight (a document is only ever edited by the one batch that actually contained its body).
+			const batchByTitle = new Map(batch.docs.map(d => [d.title.trim().toLowerCase(), stateByTitle.get(d.title.trim().toLowerCase())]));
+			for (const entry of json.docs) {
+				const target = batchByTitle.get(entry.doc.trim().toLowerCase());
+				if (!target) { continue; }
+				for (const edit of entry.edits) {
+					const queued = this._queueChatEdit(target, edit, sources);
+					if (queued) { addStep({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+				}
+				for (const insert of entry.inserts) {
+					const queued = this._queueChatInsert(target, insert, sources);
+					if (queued) { addStep({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+				}
 			}
 		}
-		const content = json.reply || (proposedIds.length ? '' : 'I did not find anything to change across those documents.');
+		// Mark the fan-out as no longer on a live batch (batchIndex 0) while keeping the batchCount + oversize
+		// set, so the settled run screen still reads "N documents too large" without a spurious live "batch K".
+		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds });
+
+		const content = anyReply || (proposedIds.length ? '' : 'I did not find anything to change across those documents.');
 		return {
 			role: 'assistant', via: 'model', content,
 			steps: steps.length ? steps : undefined,
 			proposedIds: proposedIds.length ? proposedIds : undefined,
 		};
+	}
+
+	// The configured fan-out context budget in tokens (plan 30, track 3, D30-B). Reads the user-overridable
+	// `livingDocs.fanoutContextBudget` (default 24k), floored at a small minimum so a mis-set value can never
+	// produce a budget that packs nothing.
+	private _fanoutContextBudget(): number {
+		const raw = this._config.getValue<number>('livingDocs.fanoutContextBudget');
+		return typeof raw === 'number' && Number.isFinite(raw) && raw >= 2000 ? raw : 24000;
 	}
 
 	// Render the last few turns for the model so a follow-up ("change a couple of them") resolves against
@@ -2600,7 +2969,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// When the clicked value is an api/mcp binding, surface its real response payload (field highlighted)
 		// instead of the CSV grid - closing the "provenance falls back to the CSV" gap for non-file kinds.
 		const payload = this._sourcePayloadFor(cells[0], state);
-		return { source, rows, referencedBy, grid, payload };
+		// A published document pins its sources to a version (plan 32 iter 4): when the peeked source is pinned,
+		// surface "pinned at v <short-hash> of <date>" so a reader of a published doc sees the frozen version.
+		const pinnedLabel = this._pinnedLabelFor(state, source);
+		return { source, rows, referencedBy, grid, payload, ...(pinnedLabel ? { pinnedLabel } : {}) };
+	}
+
+	// The pin label for a source when the document is published (plan 32 iter 4). The lock's `pins` freeze each
+	// source to a version hash on publish; the newest `publish` snapshot dates the pin. Undefined when the doc
+	// is not published or this source is not pinned - real data only, never a fabricated "pinned" line.
+	private _pinnedLabelFor(state: IDocState, source: string): string | undefined {
+		const tail = (s: string) => s.split('/').pop() ?? s;
+		const pin = state.lock.pins.find(p => p.source === source || tail(p.source) === tail(source));
+		if (!pin) { return undefined; }
+		const shortHash = pin.version.slice(0, 7);
+		const published = [...state.lock.snapshots].reverse().find(s => s.via === 'publish');
+		const date = published ? new Date(Date.parse(published.at)).toISOString().slice(0, 10) : undefined;
+		return date ? `pinned at v ${shortHash} of ${date}` : `pinned at v ${shortHash}`;
 	}
 
 	// Build the raw-payload view for a clicked api/mcp bind key (plan 29, iter 4), or undefined for a file
@@ -2642,11 +3027,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Re-derive a document's figures (the existing _syncLock) while capturing the old -> new diff of the
 	// resolved values, recorded per document for the editor's "Sync across" banner. Shared by the focused
 	// per-document sync and the workspace-wide refresh.
-	private async _syncLockWithDiff(state: IDocState): Promise<IFigureChange[]> {
+	private async _syncLockWithDiff(state: IDocState, pass?: IRefreshPass): Promise<IFigureChange[]> {
 		const before = new Map(this.getResolved(state.uri));
 		state.recent = new Set<string>();
-		await this._syncLock(state);
-		await this._resolveSubtitle(state);
+		await this._syncLock(state, pass);
+		await this._resolveSubtitle(state, pass);
 		const after = this.getResolved(state.uri);
 		const changes: IFigureChange[] = [];
 		for (const [key, next] of after) {

@@ -182,7 +182,7 @@ suite('LivingDocsService', () => {
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -233,7 +233,9 @@ suite('LivingDocsService', () => {
 
 		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; } } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
-		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
+		// Most settings the service reads are booleans that default to true (useModel); the fan-out context
+		// budget (plan 30, track 3) is a number a test can lower to force multi-batch packing over few docs.
+		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : true) } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
@@ -246,9 +248,16 @@ suite('LivingDocsService', () => {
 				// assert the renderer only ever names the secret, never carries its value.
 				if (url.includes('/mcp/resolve')) { lastMcpBody = options.data; payload = opts.mcpResponse ?? MCP_RESOLVE_RESPONSE; }
 				else if (url.includes('/proxy/fetch')) { lastProxyFetchBody = options.data; payload = API_AUTH_PAYLOAD; }
-				else if (opts.model) {
+				else if (opts.model || opts.modelSequence) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
-					else if (url.includes('/v1/messages')) { payload = opts.model; lastModelBody = options.data; lastModelCalls++; }
+					else if (url.includes('/v1/messages')) {
+						// A `modelSequence` returns a DIFFERENT canned reply per call (the Nth /v1/messages call
+						// gets the Nth reply), so a multi-batch fan-out can be given one reply per batch; a single
+						// `model` returns the same reply every call. lastModelCalls counts calls either way.
+						payload = opts.modelSequence ? (opts.modelSequence[lastModelCalls] ?? opts.modelSequence[opts.modelSequence.length - 1]) : opts.model!;
+						lastModelBody = options.data;
+						lastModelCalls++;
+					}
 				}
 				return {
 					res: { statusCode: 200, headers: {} },
@@ -1124,6 +1133,82 @@ suite('LivingDocsService', () => {
 		);
 	});
 
+	// --- fan-out context budgeting (plan 30, track 3, D30-B): batches to a budget, merges keyed edits ---
+
+	test('a working set over the fan-out budget is sent in BATCHES, and the per-batch edits merge to the right docs', async () => {
+		// Two documents each padded to ~1000 tokens (~4000 chars): together they exceed a 2000-token budget's
+		// usable per-batch space (budget minus the fixed prompt overhead), so the fan-out splits them into two
+		// single-doc batches. Each batch gets its OWN reply (modelSequence): batch 1 edits the Weekly, batch 2
+		// the Board. The merge must queue each batch's edit against its own document - two model calls, two docs.
+		// Padding blocks are blank-line separated so they are their OWN paragraphs - the editable anchor block
+		// ("Growth remained steady this week.") stays short so the edit still matches it, while the doc as a
+		// whole grows past the per-document budget.
+		const padBlocks = Array.from({ length: 40 }, (_, i) => `Background context paragraph ${i} that pads the document body so it approaches the per-document budget.`).join('\n\n');
+		const weeklyBig = WEEKLY_MD.replace('Growth remained steady this week.', `Growth remained steady this week.\n\n${padBlocks}`);
+		const boardBig = BOARD_MD.replace('Momentum is steady this week.', `Momentum is steady this week.\n\n${padBlocks}`);
+		const service = createService([], {
+			boardNote: true,
+			fanoutBudget: 2000,
+			modelSequence: [
+				multiReply('Weekly done.', [{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] }]),
+				multiReply('Board done.', [{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum is now red-themed.', rationale: 'r' }] }]),
+			],
+		});
+		lastFiles!.set(WEEKLY.toString(), weeklyBig);
+		lastFiles!.set(BOARD.toString(), boardBig);
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'change the primary colour from blue to red');
+
+		// Two batches => two model calls (not one over-large call, and not one per attempt).
+		assert.strictEqual(lastModelCalls, 2, 'the over-budget working set is sent in two batches');
+		const docIds = new Set(service.getAllPending().map(c => c.docId));
+		assert.deepStrictEqual(
+			[...docIds].sort(),
+			[BOARD.toString(), WEEKLY.toString()].sort(),
+			'each batch\'s edit is merged against its own document (no drop, no double-count)',
+		);
+		// Exactly one pending change per document - the merge did not double-queue across batches.
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 1, 'the Weekly has exactly its own one proposal');
+		assert.strictEqual(service.getPendingForDoc(BOARD).length, 1, 'the Board has exactly its own one proposal');
+		// The fan-out progress records the two-batch run for the run screen's "batch K of M" chip (no oversize).
+		const progress = service.getFanoutProgress(WEEKLY);
+		assert.strictEqual(progress?.batchCount, 2, 'the run screen sees a two-batch fan-out');
+		assert.deepStrictEqual(progress?.oversizeDocIds, [], 'no document was oversize');
+		// The assistant turn carries the batch steps so the rail shows the run proceeded in batches.
+		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(assistant.steps?.some(s => /Batch 1 of 2/.test(s.label)), 'a Batch 1 of 2 step is surfaced');
+		assert.ok(assistant.steps?.some(s => /Batch 2 of 2/.test(s.label)), 'a Batch 2 of 2 step is surfaced');
+	});
+
+	test('a document larger than the whole budget is flagged oversize, never sent, others still change (no silent drop)', async () => {
+		// README is padded to a large body; the budget (2000) is far smaller, so it cannot fit any batch and
+		// is set aside as oversize. The Weekly still fits and is edited. The oversize doc is reported honestly.
+		const bigBody = `---\ntitle: Team Notes\n---\n\n## Team Notes\n\n${'padding sentence to blow the budget. '.repeat(400)}\n`;
+		const service = createService([], {
+			fanoutBudget: 2000,
+			modelSequence: [
+				multiReply('Weekly done.', [{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] }]),
+			],
+		});
+		lastFiles!.set(README.toString(), bigBody);
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, README]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'change the primary colour from blue to red');
+
+		// Only the fitting document is edited; the oversize document produced no proposal and was never sent.
+		const docIds = new Set(service.getAllPending().map(c => c.docId));
+		assert.deepStrictEqual([...docIds], [WEEKLY.toString()], 'only the fitting document is edited');
+		const progress = service.getFanoutProgress(WEEKLY);
+		assert.deepStrictEqual(progress?.oversizeDocIds, [README.toString()], 'the oversize document is flagged, not dropped silently');
+		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(assistant.steps?.some(s => /too large for this run/.test(s.label)), 'the oversize document reads "too large for this run"');
+	});
+
 	test('with NO working set, chat still edits only the active document (backwards compatible, D-B)', async () => {
 		const service = createService([], {
 			boardNote: true,
@@ -1601,6 +1686,37 @@ suite('LivingDocsService', () => {
 		assert.deepStrictEqual({ count: pending.length, draft: !!pending[0]?.draft }, { count: 1, draft: true });
 	});
 
+	// --- plan 32 iter 1: policy routing on the EVENT path (a live source edit ripples without a manual Refresh) ---
+
+	function eventAgent(policy: AgentPolicy): IAgentDef {
+		return { id: 'agent', name: 'Watcher', trigger: { kind: 'event', source: '*' }, flow: { sources: [], docs: [] }, policy, status: 'idle' };
+	}
+
+	test('a source event under an auto-figures agent applies figures immediately (no manual Refresh)', async () => {
+		const service = createService([], { agents: [eventAgent('auto-figures')] });
+		await service.loadDocument(WEEKLY);
+
+		// A source change fires the event agent over the dirtied co-dependents (the propagation graph walk).
+		await service.orchestrator.onSourceChanged('/ws/metrics.csv');
+
+		const highlights = blockText(service, WEEKLY, 'h-highlights');
+		assert.ok(highlights.includes('[$48.6k](bind:metrics.mrr)'), `figure landed on the event path: ${highlights}`);
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'auto-figures queues nothing on the event path');
+		assert.ok(service.getAudit().some(e => e.action === 'auto-applied'), 'the event-path auto-apply is audited');
+		assert.ok(!service.orchestrator.isDirty(WEEKLY), 'the event agent drains the dirty bit it processed');
+	});
+
+	test('a source event under a draft-only agent queues drafts and never lands them (event path)', async () => {
+		const service = createService([], { agents: [eventAgent('draft-only')] });
+		await service.loadDocument(WEEKLY);
+
+		await service.orchestrator.onSourceChanged('/ws/metrics.csv');
+
+		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'draft-only leaves the doc untouched on the event path');
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.deepStrictEqual({ count: pending.length, draft: !!pending[0]?.draft }, { count: 1, draft: true }, 'a draft is queued for review');
+	});
+
 	test('the verify gate blocks a run whose figures do not reconcile (Financial flag), applying nothing', async () => {
 		const agent: IAgentDef = { id: 'agent', name: 'Agent', trigger: { kind: 'manual' }, flow: { sources: [], docs: [BADBIND.toString()] }, policy: 'auto-figures', status: 'idle' };
 		const service = createService([], { badBind: true, agents: [agent] });
@@ -1642,6 +1758,75 @@ suite('LivingDocsService', () => {
 
 		const pins = service.getLock(WEEKLY)!.pins;
 		assert.ok(pins.some(p => p.source === 'metrics.csv' && !!p.version), `pinned to the source version: ${JSON.stringify(pins)}`);
+	});
+
+	// --- plan 32 iter 4: the gate is visible + override-audited; publish pins surface ---
+
+	test('previewExportGate surfaces the failed grader reason so the export flow can show it (no silent block)', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+		const gate = service.previewExportGate(BADBIND);
+		assert.strictEqual(gate.pass, false, 'the gate reports the failure to the surface');
+		assert.ok(gate.flag && /reconcile/i.test(gate.flag), 'the one-line grader reason is available for the modal');
+	});
+
+	test('exporting PAST a failed gate with force writes the file AND audits the override (no silent override)', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+
+		// Without force the gate blocks (existing behaviour); with force the export proceeds and is audited.
+		assert.strictEqual(await service.exportMarkdown(BADBIND), undefined, 'unforced export is still blocked at the gate');
+		const target = await service.exportMarkdown(BADBIND, true);
+		assert.ok(target, 'the forced export writes the file');
+		assert.ok(service.getAudit().some(e => e.via === 'override'), 'the override lands on the audit trail via:override');
+	});
+
+	test('publishing PAST a failed gate with force publishes and audits the override', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+		assert.strictEqual(service.getLock(BADBIND)!.pins.length, 0, 'not published yet');
+
+		await service.publishDocument(BADBIND); // blocked, no pins
+		assert.strictEqual(service.getLock(BADBIND)!.pins.length, 0, 'an unforced publish past a failed gate does nothing');
+
+		await service.publishDocument(BADBIND, true);
+		assert.ok(service.getAudit().some(e => e.via === 'override'), 'the forced publish audits the override');
+	});
+
+	test('a publish records the real pin count on its snapshot so History can name it', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		await service.publishDocument(WEEKLY);
+
+		const published = service.getSnapshots(WEEKLY).find(s => s.via === 'publish');
+		assert.ok(published, 'a publish snapshot is recorded');
+		assert.strictEqual(published!.pinnedSources, service.getLock(WEEKLY)!.pins.length, 'the snapshot carries the true pin count for the History row');
+		assert.ok(published!.pinnedSources! > 0, 'the sample doc pins at least one source version');
+	});
+
+	test('source-peek shows the pinned version line on a published document (plan 32 iter 4)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		await service.publishDocument(WEEKLY);
+
+		const peek = service.getSourcePeek(WEEKLY, ['metrics.mrr']);
+		assert.ok(peek, 'source-peek is available');
+		assert.ok(peek!.pinnedLabel && /pinned at v/.test(peek!.pinnedLabel), `the pinned version line is surfaced: ${peek!.pinnedLabel}`);
+	});
+
+	// --- plan 32 iter 3: run a Skill across every project document (the P3 gap) ---
+
+	test('runSkillAcrossProject fans the grade over every living document with a real per-doc verdict', async () => {
+		const service = createService([], { boardNote: true });
+		await service.loadDocument(WEEKLY);
+		await service.loadDocument(BOARD);
+
+		const summary = await service.runSkillAcrossProject('financial', 'Financial agent');
+		assert.strictEqual(summary.skillId, 'financial');
+		// Every living document in the folder is graded (WEEKLY + BOARD; the plain README is not living).
+		assert.ok(summary.results.length >= 2, `every living doc is graded: ${summary.results.map(r => r.docTitle).join(', ')}`);
+		assert.ok(summary.results.every(r => r.status === 'pass' || r.status === 'flag' || r.status === 'skipped'), 'each result is a real grade');
+		assert.strictEqual(summary.flagged + summary.passed + summary.skipped, summary.results.length, 'the tallies cover every result');
 	});
 
 	test('on-open freshness shows a changed source as stale without a manual refresh', async () => {
