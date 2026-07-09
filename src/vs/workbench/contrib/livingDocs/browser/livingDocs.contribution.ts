@@ -85,6 +85,12 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			default: 'http://localhost:8090',
 			description: localize('livingDocs.modelProxyUrl', "Base URL of the local Anthropic OAuth proxy (scripts/lwd-anthropic-proxy.js) the renderer calls for model-backed features. The proxy holds the developer's OAuth token server-side; no credential is ever embedded in the app."),
 		},
+		'livingDocs.fanoutContextBudget': {
+			type: 'number',
+			default: 24000,
+			minimum: 2000,
+			description: localize('livingDocs.fanoutContextBudget', "Token budget for one whole-project fan-out model call (plan 30, track 3). When you ask across the whole project, the documents are packed into batches that fit this budget rather than sent in one over-large call; a document larger than the budget is flagged as too large for the run instead of being silently truncated."),
+		},
 	},
 });
 

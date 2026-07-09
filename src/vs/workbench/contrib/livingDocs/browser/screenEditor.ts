@@ -605,14 +605,21 @@ export class ScreenEditor extends EditorPane {
 		// skipped, not no-change. Never treat an in-flight run as stopped.
 		const chat = anchor ? this._livingDocs.getChatMessages(anchor) : [];
 		const stopped = !inFlight && chat.length > 0 && !!chat[chat.length - 1].stopped;
-		const summary = summariseProjectRun(docs, pending, stopped);
-		const working = inFlight ? docs.map(d => d.docId) : [];
+		// Fan-out batch progress (plan 30, track 3, D30-B): which batch of how many is running and which docs
+		// were too large for the budget. Oversize docs are flagged on their tiles (never sent, never dropped),
+		// and are excluded from the live "working" overlay so an oversize tile reads "too large", not spinning.
+		const fanout = anchor ? this._livingDocs.getFanoutProgress(anchor) : undefined;
+		const oversizeIds = fanout?.oversizeDocIds ?? [];
+		const oversize = new Set(oversizeIds);
+		const summary = summariseProjectRun(docs, pending, stopped, oversizeIds);
+		const working = inFlight ? docs.map(d => d.docId).filter(id => !oversize.has(id)) : [];
 		// Decisions column (23.4): group the LIVE pending changes by their source grounding. Restrict to
 		// changes for documents in this run's tile set so a stale change from another surface never leaks
 		// into the run's decisions (mirrors summariseProjectRun's tile-set restriction).
 		const runDocIds = new Set(docs.map(d => d.docId));
 		const decisions = groupDecisions(pending.filter(c => runDocIds.has(c.docId)));
-		return { ...run, inFlight, stopped, summary, working, decisions };
+		const batch = fanout ? { index: fanout.batchIndex, count: fanout.batchCount } : undefined;
+		return { ...run, inFlight, stopped, summary, working, decisions, batch };
 	}
 
 	layout(dimension: Dimension): void {

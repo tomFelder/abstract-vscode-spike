@@ -45,3 +45,23 @@ A validator re-running with a complete node_modules can build the web bundle, ge
 - The `perfScale.test.ts` harness runs against a mocked file service that counts source reads; it uses `makeScaleFixture(50, 4)` and asserts the post-cache counts, logging the wall-time.
 - The **baseline** row in `notes.md` was captured by `git stash`-ing the four changed source files (reverting to the pre-plan-30 serial refresh), running the SAME mock harness, recording the numbers, then `git stash pop`.
 - The tests were executed with an esbuild-bundled node runner (the sandbox lacks the full mocha/gulp browser-test toolchain); the suites are ordinary `*.test.ts` and run unchanged in CI.
+
+---
+
+## Tracks 3 + 4 - live verification status (appended, do not rewrite history above)
+
+Tracks 3 + 4 landed on branch `30-perf-tracks-3-4` (off `main`, which includes PR #110 tracks 1-2).
+
+**Track 3 (fan-out context budgeting, D30-B)** touches a user-visible surface: the project-run screen's command strip (`Batch K of M` chip) and swarm tiles (amber "too large for this run").
+These only render for a REAL multi-batch fan-out, which needs BOTH:
+1. the full web build on `:8080` (blocked by the same pruned sandbox node_modules documented above - `dompurify` and the nested extension deps; no `out/vs` is produced), and
+2. a reachable model backend to produce the per-batch proposals (unreachable - no credits; Anthropic "credit balance too low", OpenRouter key unset).
+
+So the live in-app screenshot of the batch chip / oversize tile was **not captured in this sandbox**.
+The batching, merge, and oversize decisions are all made BEFORE any model call (a pure token-budget split), so the whole track-3 contract is proven deterministically by `fanoutBudget.test.ts` + the service batch/merge/oversize tests + the `summariseProjectRun` oversize test, and the UI itself (the `Batch K of M` chip, the amber "too large for this run" tile, the `N too large` bucket) is asserted from the pure render in `screenRender.test.ts` - a validator with a full node_modules + a funded backend can additionally drive a real 50-doc run over a lowered `livingDocs.fanoutContextBudget` and see the chip + amber tile live.
+
+**Track 4 (editor webview test seam, P2-3)** is a pure refactor of the document editor's mount-once lifecycle into a reducer with NO behaviour change (the effects are the same messages the old inline code posted).
+The live open/edit/approve/navigate smoke that would confirm no regression is blocked by the same pruned-node_modules web build.
+The reducer's 9 unit tests cover the exact timing-sensitive cases the plan named (pmReset ordering, hold-render-until-ready, focus-after-navigate).
+
+**No screenshots were fabricated for tracks 3 or 4.**

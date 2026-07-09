@@ -72,6 +72,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 2,
 			unchangedDocs: 1,
 			skippedDocs: 0,
+			oversizeDocs: 0,
 		});
 	});
 
@@ -86,6 +87,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 0,
 			unchangedDocs: 3,
 			skippedDocs: 0,
+			oversizeDocs: 0,
 		});
 	});
 
@@ -103,6 +105,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 1,
 			unchangedDocs: 0,
 			skippedDocs: 2,
+			oversizeDocs: 0,
 		});
 	});
 
@@ -117,6 +120,25 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			changedDocs: 1,
 			unchangedDocs: 0,
 			skippedDocs: 0,
+			oversizeDocs: 0,
+		});
+	});
+
+	test('an oversize document is flagged and reported as its own bucket, priority over changed/no-change (plan 30, track 3)', () => {
+		// doc `b` is too large for the fan-out budget: it was never sent, so its tile is `oversize` even though
+		// it also has no pending change. It must not read `no change` (which would claim it ran and found none).
+		const pending = [change('a', '1')];
+		assert.deepStrictEqual(summariseProjectRun(docs, pending, false, ['b']), {
+			tiles: [
+				{ docId: 'a', docTitle: 'Access Control', status: 'changed', changeCount: 1 },
+				{ docId: 'b', docTitle: 'Acceptable Use', status: 'oversize', changeCount: 0 },
+				{ docId: 'c', docTitle: 'Cryptography', status: 'no-change', changeCount: 0 },
+			],
+			totalChanges: 1,
+			changedDocs: 1,
+			unchangedDocs: 1,
+			skippedDocs: 0,
+			oversizeDocs: 1,
 		});
 	});
 });
