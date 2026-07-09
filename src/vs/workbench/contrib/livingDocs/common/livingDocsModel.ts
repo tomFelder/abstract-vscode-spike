@@ -218,7 +218,9 @@ export interface IAgentDef {
 	status: AgentStatus;
 }
 
-// One execution of an agent, recorded for the History/observability trace.
+// One execution of an agent, recorded for the History/observability trace and the Agents-screen run log
+// (D32-A, decision 150). Persisted in `agents.json` (no new file) so the run history survives a reload;
+// the last 50 runs are kept (AGENT_RUN_CAP), oldest evicted.
 export interface IAgentRun {
 	readonly agentId: string;
 	readonly startedAt: string;
@@ -226,7 +228,26 @@ export interface IAgentRun {
 	applied: number;        // figures auto-applied
 	queued: number;         // candidates queued in the review rail
 	blocked?: string;       // the grader flag if the verify gate stopped the run
+	// Which trigger kind fired this run (cron / heartbeat / event / manual), shown as the "via" column
+	// of the run log. Optional so older persisted runs (no `via`) still parse.
+	via?: AgentTriggerKind;
+	// How many documents the run processed (the run-log "N docs" outcome count). Distinct from applied/
+	// queued (per-change counts): a run can touch several docs and change none.
+	docsTouched?: number;
+	// Documents the run failed on (its runner threw). 0 on a clean run; >0 with `error` set on a failure.
+	failed?: number;
+	// The failure string when the run errored (the run-log failure line + the Home attention line). Absent
+	// on a clean run - truthful automation: a run that did not fail says nothing (spec 09; plan 32 iter 2).
+	error?: string;
+	// A run that was NOT started because a previous run of the same agent was still in flight (spec 09 §3
+	// overlap rule, plan 32 iter 2): recorded so runs never silently stack. `applied`/`queued` are 0 and the
+	// run-log renders it as "skipped (still running)". Absent on a run that actually executed.
+	skippedReason?: 'still-running';
 }
+
+// The run log is capped with oldest-eviction so `agents.json` never grows without bound (D32-A,
+// decision 150): the last 50 runs across all agents, shown newest-first on the Agents screen.
+export const AGENT_RUN_CAP = 50;
 
 // One document's dirty bits in the workspace queue, split by edge kind (the heartbeat drains this).
 export interface IDirtyEntry {

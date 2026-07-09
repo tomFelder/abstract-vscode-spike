@@ -24,7 +24,7 @@ import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocSummary, ILivingDocsService, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
-import { AgentFilter, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
+import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -66,7 +66,13 @@ interface IScreenEditorState {
 	// The attached source name for the review topbar chip, carried over from the run that produced the
 	// changes (undefined when the screen is opened directly, e.g. from the palette, with no run context).
 	reviewSource?: string;
+	// Home: the latest failed scheduled run, for the quiet attention line (plan 32 iter 2). Undefined when
+	// nothing failed; rebuilt on open + on every change so a fresh failure surfaces without reopening Home.
+	homeFailure?: IHomeFailure;
 }
+
+// Weekday names for the Home failure line ("failed on Monday"). Local time - matches when the user saw it.
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // Webview editor that hosts one Abstract screen (Templates / Knowledge / Agents) in the
 // editor area. The screen's small interactive state (Knowledge scope, agent canvas, run state)
@@ -122,7 +128,7 @@ export class ScreenEditor extends EditorPane {
 				this._fetchRecentFolders(),
 				this._livingDocs.listTemplates(),
 			]);
-			this._state = { ...this._state, docs, recentFolders, templates };
+			this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure() };
 		}
 		// Templates reflects the open folder's `*.template.md` files (plan 28): fetch before first render.
 		if (this._screen === 'templates') {
@@ -181,8 +187,19 @@ export class ScreenEditor extends EditorPane {
 			this._fetchRecentFolders(),
 			this._livingDocs.listTemplates(),
 		]);
-		this._state = { ...this._state, docs, recentFolders, templates };
+		this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure() };
 		this._render();
+	}
+
+	// Build the Home attention line from the latest failed run (plan 32 iter 2). Real data only: undefined
+	// when nothing failed, so the surface renders nothing rather than fabricating activity.
+	private _homeFailure(): IHomeFailure | undefined {
+		const run = this._livingDocs.getLatestAgentFailure();
+		if (!run || !run.error) { return undefined; }
+		const agent = this._livingDocs.getAgents().find(a => a.id === run.agentId);
+		const when = run.finishedAt ?? run.startedAt;
+		const day = WEEKDAY_NAMES[new Date(Date.parse(when)).getDay()] ?? 'recently';
+		return { agentName: agent?.name ?? run.agentId, day, error: run.error };
 	}
 
 	// Fetch the workbench recently-opened folder list for the ALL PROJECTS grid (D22-A). Maps each

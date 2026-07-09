@@ -25,6 +25,16 @@ export interface IRecentProject {
 	readonly folderUri: string;
 }
 
+/** The Home attention line for a failed scheduled run (plan 32 iter 2). Real data only - built from a run. */
+export interface IHomeFailure {
+	/** The agent's human name, e.g. "Weekly refresh". */
+	readonly agentName: string;
+	/** The weekday the run failed on, e.g. "Monday" (from the run's finished/started timestamp). */
+	readonly day: string;
+	/** The failure string the runner reported (shown on hover / in the details link title). */
+	readonly error: string;
+}
+
 export interface IScreenState {
 	/** Knowledge: which scope tab is selected (`project` = the real source registry; `org` = the honest "Soon"). */
 	readonly knScope: 'org' | 'project';
@@ -42,6 +52,12 @@ export interface IScreenState {
 	readonly filter: AgentFilter;
 	/** Agents: the result of the most recent Run now, for the canvas banner. */
 	readonly lastRun?: IAgentRun;
+	/**
+	 * Home: the latest agent run that failed, for the quiet attention line above the project grid (plan 32
+	 * iter 2). Absent when nothing failed - truthful automation, no fake activity. Carries the agent's human
+	 * name and the failure day so the copy reads "Weekly refresh failed on Monday - view details".
+	 */
+	readonly homeFailure?: IHomeFailure;
 	/** Home: whether a workspace folder (the "project") is open. */
 	readonly hasFolder?: boolean;
 	/** Home: the open folder's name, shown as the project. */
@@ -371,6 +387,12 @@ function renderHome(state: IScreenState): string {
 			<button data-msg="openDoc" data-arg="${esc(d.resource.toString())}" style="width:100%;font:600 13px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:9px;padding:11px;cursor:pointer">Review ${n} change${n === 1 ? '' : 's'}</button>
 		</div>`;
 	};
+	// The quiet attention line for a failed scheduled run (plan 32 iter 2): one calm amber row linking to the
+	// Agents screen. Only rendered when a run actually failed (real data) - no fake activity when all is well.
+	const fail = state.homeFailure;
+	const failureLine = fail
+		? `<button data-msg="goAgents" title="${esc(fail.error)}" style="display:flex;align-items:center;gap:9px;width:100%;text-align:left;margin:0 0 26px;padding:11px 14px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:10px;font:500 12.5px/1.4 system-ui;color:#9a6b16;cursor:pointer"><span style="width:7px;height:7px;flex:none;border-radius:50%;background:oklch(0.66 0.16 45)"></span><span style="flex:1">${esc(fail.agentName)} failed on ${esc(fail.day)}</span><span style="font:600 12px/1 system-ui;color:${ACCENT_DK}">View details &#8594;</span></button>`
+		: '';
 	const needsYou = pendingDocs.length
 		? `<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#5661c9;margin-bottom:14px;display:flex;align-items:center;gap:8px"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 2.4s ease-in-out infinite"></span>NEEDS YOU</div>
 			<div style="display:flex;gap:16px;margin-bottom:34px;flex-wrap:wrap">${pendingDocs.slice(0, 2).map(needsCard).join('')}</div>`
@@ -428,6 +450,7 @@ function renderHome(state: IScreenState): string {
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
 		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
+		${failureLine}
 		${needsYou}
 		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
 		${projectsGrid}

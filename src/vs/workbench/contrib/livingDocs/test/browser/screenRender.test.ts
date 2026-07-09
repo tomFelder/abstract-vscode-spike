@@ -103,6 +103,23 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('Acme Co') && !html.includes('Fund III'), 'no hardcoded demo project cards');
 	});
 
+	// --- Home failed-run attention line (plan 32 iter 2): truthful, links to Agents ---
+
+	test('home surfaces one quiet attention line when a scheduled run failed, linking to Agents', () => {
+		const html = renderScreenHtml('home', {
+			...state, hasFolder: true, folderName: 'realdocs-test', docs: [],
+			homeFailure: { agentName: 'Weekly refresh', day: 'Monday', error: 'metrics.csv unreadable' },
+		});
+		assert.ok(html.includes('Weekly refresh failed on Monday'), 'shows the agent + day in the failure line');
+		assert.ok(/data-msg="goAgents"/.test(html), 'the failure line links to the Agents screen');
+		assert.ok(html.includes('View details'), 'offers a details affordance');
+	});
+
+	test('home shows NO failure line when nothing failed (truthful automation, no fake activity)', () => {
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'realdocs-test', docs: [] });
+		assert.ok(!/failed on/.test(html), 'no fabricated failure line when there is no failure');
+	});
+
 	// --- Templates (plan 28): the real template library, driven by listTemplates() ---
 
 	function template(name: string, description: string, sources: readonly string[], body: string): ITemplateInfo {
