@@ -14,6 +14,12 @@ export interface ISseParseResult {
 	readonly deltas: readonly string[];
 	/** True once a terminal event (`message_stop` or `[DONE]`) has been seen - the caller stops reading. */
 	readonly done: boolean;
+	/**
+	 * True once a `message_delta` carrying `stop_reason: "pause"` has been seen. The proxy emits this when
+	 * the day's included usage is spent (plan 35 iter 3): the caller keeps the streamed prose (the plain-words
+	 * cap message) but pauses the run via D15 rather than parsing proposals from it.
+	 */
+	readonly paused: boolean;
 	/** The trailing bytes AFTER the last newline (a partially-received line) to prepend to the next chunk. */
 	readonly remainder: string;
 }
@@ -29,11 +35,12 @@ export interface ISseParseResult {
 export function parseSseChunk(buffer: string): ISseParseResult {
 	const deltas: string[] = [];
 	let done = false;
+	let paused = false;
 
 	const lastNewline = buffer.lastIndexOf('\n');
 	if (lastNewline < 0) {
 		// No complete line yet - hold the whole buffer for the next chunk.
-		return { deltas, done, remainder: buffer };
+		return { deltas, done, paused, remainder: buffer };
 	}
 	const complete = buffer.slice(0, lastNewline);
 	const remainder = buffer.slice(lastNewline + 1);
@@ -50,7 +57,7 @@ export function parseSseChunk(buffer: string): ISseParseResult {
 			done = true;
 			continue;
 		}
-		let event: { type?: string; delta?: { type?: string; text?: string } };
+		let event: { type?: string; delta?: { type?: string; text?: string; stop_reason?: string } };
 		try {
 			event = JSON.parse(payload);
 		} catch {
@@ -61,10 +68,16 @@ export function parseSseChunk(buffer: string): ISseParseResult {
 			done = true;
 			continue;
 		}
+		// The proxy signals a spent daily budget with a `message_delta` carrying stop_reason "pause"
+		// (plan 35 iter 3); the caller keeps the streamed cap prose but pauses the run rather than parsing it.
+		if (event.type === 'message_delta' && event.delta && event.delta.stop_reason === 'pause') {
+			paused = true;
+			continue;
+		}
 		if (event.type === 'content_block_delta' && event.delta && event.delta.type === 'text_delta' && typeof event.delta.text === 'string') {
 			deltas.push(event.delta.text);
 		}
 	}
 
-	return { deltas, done, remainder };
+	return { deltas, done, paused, remainder };
 }
