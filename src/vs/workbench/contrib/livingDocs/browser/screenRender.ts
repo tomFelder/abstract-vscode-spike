@@ -11,9 +11,9 @@
 
 import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { countTemplateSlots } from '../common/livingDocMarkdown.js';
-import { ILivingDocSummary, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 
-export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project';
+export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings';
 
 export type AgentFilter = 'all' | 'scheduled' | 'event' | 'needs-approval';
 
@@ -96,6 +96,14 @@ export interface IScreenState {
 	 * navigation state (current doc + which docs were reviewed this session). Iter 1/2 is read-only.
 	 */
 	readonly reviewProject?: IReviewProjectScreenState;
+	/** Settings (plan 35 iter 4): the live model door + usage snapshot driving the provider step. */
+	readonly providerStatus?: IModelProviderStatus;
+	/** Settings: the "Sign in with ChatGPT" flow stage (drives the primary button + waiting/error copy). */
+	readonly signInStage?: ChatGptSignInStage;
+	/** Settings: a plain-words sign-in error to show under the button, if the last attempt failed. */
+	readonly signInError?: string;
+	/** Settings: true once the onboarding survey has been recorded this session (shows the thank-you state). */
+	readonly surveySaved?: boolean;
 }
 
 /**
@@ -334,6 +342,15 @@ for (const el of document.querySelectorAll('[data-trigger-save]')) {
 			value: JSON.stringify({ kind: kind ? kind.value : 'manual', day: day ? day.value : undefined, time: time ? time.value : undefined, hours: hours ? hours.value : undefined, source: source ? source.value : undefined }) });
 	});
 }
+// Settings onboarding survey (plan 35 iter 4): Save gathers the three plain-words answers and posts one
+// submitSurvey message; the host records the model_configured event and re-renders to the thank-you state.
+for (const el of document.querySelectorAll('[data-survey-save]')) {
+	el.addEventListener('click', () => {
+		const box = document.querySelector('[data-survey]'); if (!box) { return; }
+		const val = (n) => { const f = box.querySelector('[data-sfield=' + n + ']'); return f ? f.value.trim() : ''; };
+		vscode.postMessage({ type: 'submitSurvey', daily: val('daily'), subs: val('subs'), weekly: val('weekly') });
+	});
+}
 // The trigger kind <select> toggles which picker fields show (cron day/time vs heartbeat hours vs event source).
 for (const el of document.querySelectorAll('[data-tfield=kind]')) {
 	el.addEventListener('change', () => {
@@ -367,6 +384,7 @@ export function renderScreenHtml(screen: ScreenId, state: IScreenState): string 
 		case 'templates': return page(withTopBar(renderTemplates(state), 'Templates'));
 		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge'));
 		case 'agents': return page(withTopBar(renderAgents(state), 'Agents'));
+		case 'settings': return page(withTopBar(renderSettings(state), 'Settings'));
 		case 'project-run': return page(renderProjectRun(state));
 		case 'review-project': return page(renderReviewProject(state));
 	}
@@ -1012,13 +1030,111 @@ function renderSkillRunCard(summary: ISkillRunSummary | undefined): string {
 }
 
 
-// ---- Project-wide agent run (C4, the ceiling surface). One instruction fans out across every
-// document in the project. This iteration (plan 23 iter 2) builds the reachable, TRUTHFUL SHELL:
-// the 48px run topbar, the command strip (avatar + instruction in reading type + source chip +
-// `Whole project` pill), a truthful idle body when no run is active, and the bottom-bar route stub.
-// The decisions column (23.4) and the sub-agent swarm grid (23.3) are deliberately NOT built yet -
-// the placeholder region below says so honestly rather than showing the comp's illustrative
-// 38-changes / 24-doc ISMS numbers (real-data guardrail, plan-17 "never fabricate"). ----
+// ---- Model access: the provider picker + onboarding survey (plan 35 iter 4; doc 18 sections 2.1 + 2.4).
+// The first-run/Settings step where the user chooses how their model calls are paid for: "Sign in with
+// ChatGPT" (their own subscription, primary) or "Use the included model" (the founder-funded fallback,
+// secondary). The active door + today's included-usage are shown live from the proxy's /healthz (D19: usage
+// glanceable). Below it, the three onboarding survey questions are captured once and recorded as the local
+// `model_configured` event. All copy is plain words (P5): never "OAuth", "token" or "rate limit". ----
+
+// A compact usage ring (D19 semantics) rendered as an inline SVG donut: the fraction of today's included
+// usage spent. Reused idiom, not the chat contrib's token-context ring (that widget is a DOM component bound
+// to chat models - see the report's deviation note); this shows the DOLLAR fraction the cap actually meters.
+function usageRing(fraction: number): string {
+	const pct = Math.max(0, Math.min(1, fraction));
+	const r = 15;
+	const c = 2 * Math.PI * r;
+	const dash = (pct * c).toFixed(2);
+	const colour = pct >= 0.9 ? '#b4332f' : (pct >= 0.75 ? '#9a6b16' : ACCENT);
+	return `<svg width="40" height="40" viewBox="0 0 40 40" style="flex:none">
+		<circle cx="20" cy="20" r="${r}" fill="none" stroke="#eceef2" stroke-width="4"></circle>
+		<circle cx="20" cy="20" r="${r}" fill="none" stroke="${colour}" stroke-width="4" stroke-linecap="round"
+			stroke-dasharray="${dash} ${(c - Number(dash)).toFixed(2)}" transform="rotate(-90 20 20)"></circle>
+		<text x="20" y="24" text-anchor="middle" style="font:600 11px/1 system-ui;fill:#52575f">${Math.round(pct * 100)}%</text>
+	</svg>`;
+}
+
+function renderSettings(state: IScreenState): string {
+	const status = state.providerStatus ?? { provider: 'none' as const, signedIn: false, dailyBudgetUsd: 0 };
+	const stage: ChatGptSignInStage = state.signInStage ?? (status.signedIn ? 'signed-in' : 'signed-out');
+
+	// The live "what is serving you now" line - real data only.
+	const doorLabel = status.provider === 'chatgpt'
+		? 'Your ChatGPT subscription'
+		: status.provider === 'included'
+			? 'The included model'
+			: 'The built-in fallback (no model connected)';
+	const dot = status.provider === 'none' ? '#cdd1d8' : 'oklch(0.6 0.13 150)';
+
+	// The included-tier usage line + ring (only meaningful for the metered fallback).
+	let usageBlock = '';
+	if (typeof status.dailyTotalUsd === 'number' && status.dailyBudgetUsd > 0) {
+		const frac = status.dailyTotalUsd / status.dailyBudgetUsd;
+		const spent = status.dailyTotalUsd.toFixed(2);
+		const budget = status.dailyBudgetUsd.toFixed(2);
+		usageBlock = `<div style="display:flex;align-items:center;gap:14px;margin-top:18px;padding-top:18px;border-top:1px solid #f1f2f5">
+			${usageRing(frac)}
+			<div><div style="font:600 13px/1.3 system-ui;color:#1a1c20">Today&#39;s included usage</div>
+			<div style="font:400 12px/1.4 system-ui;color:#696e78">US$${spent} of US$${budget} used today &middot; picks up again tomorrow</div></div>
+		</div>`;
+	}
+
+	// The "Sign in with ChatGPT" primary button, reflecting the flow stage.
+	const signInBtn = stage === 'signed-in'
+		? `<div style="display:flex;align-items:center;gap:12px">
+				<span style="font:600 13px/1 system-ui;color:oklch(0.5 0.13 150);display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Signed in to ChatGPT</span>
+				<button data-msg="signOutChatGpt" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Sign out</button>
+			</div>`
+		: stage === 'pending'
+			? `<button disabled style="border:none;border-radius:10px;padding:13px 20px;background:#c8cbd2;color:#fff;font:600 14px/1 system-ui;display:inline-flex;align-items:center;gap:9px;cursor:default"><span style="width:13px;height:13px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:lwdSpin .8s linear infinite"></span>Waiting for your browser&hellip;</button>`
+			: `<button data-msg="signInChatGpt" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">Sign in with ChatGPT</button>`;
+
+	const signInError = stage === 'error' && state.signInError
+		? `<p style="margin:12px 0 0;font:400 12.5px/1.5 system-ui;color:#b4332f">${esc(state.signInError)}</p>`
+		: '';
+
+	// The survey: three plain-words questions. Recorded once; a thank-you replaces the form after saving.
+	const surveyBody = state.surveySaved
+		? `<div style="display:flex;align-items:center;gap:10px;font:500 13px/1.4 system-ui;color:oklch(0.5 0.13 150)"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Thanks &mdash; that helps us build the right templates first.</div>`
+		: `<div data-survey style="display:flex;flex-direction:column;gap:16px">
+				<div><label style="display:block;font:600 12px/1 system-ui;color:#52575f;margin:0 0 7px">Which frontier model is your daily driver?</label>
+					<input data-sfield="daily" placeholder="ChatGPT, Claude, Gemini&hellip;" style="width:100%;border:1px solid #dfe1e7;border-radius:9px;padding:11px 12px;font:400 13.5px/1.3 system-ui;color:#1a1c20;outline:none"></div>
+				<div><label style="display:block;font:600 12px/1 system-ui;color:#52575f;margin:0 0 7px">Which subscriptions do you own?</label>
+					<input data-sfield="subs" placeholder="ChatGPT Plus, Claude Pro&hellip;" style="width:100%;border:1px solid #dfe1e7;border-radius:9px;padding:11px 12px;font:400 13.5px/1.3 system-ui;color:#1a1c20;outline:none"></div>
+				<div><label style="display:block;font:600 12px/1 system-ui;color:#52575f;margin:0 0 7px">What do you make each week?</label>
+					<input data-sfield="weekly" placeholder="Reports, briefs, proposals&hellip;" style="width:100%;border:1px solid #dfe1e7;border-radius:9px;padding:11px 12px;font:400 13.5px/1.3 system-ui;color:#1a1c20;outline:none"></div>
+				<button data-survey-save style="align-self:flex-start;border:1px solid #d4d7dd;background:#fff;border-radius:9px;padding:10px 17px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Save</button>
+			</div>`;
+
+	return `<div class="screen">
+		<div class="scr-head"><div><h1 class="scr-title">Model access</h1><div class="scr-sub">how your work gets its intelligence</div></div></div>
+		<div class="scr-body"><div style="max-width:720px;margin:0 auto;padding:32px 28px 60px">
+
+			<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:24px 26px;margin-bottom:22px">
+				<div style="display:flex;align-items:center;gap:9px;margin-bottom:4px"><span style="width:8px;height:8px;border-radius:50%;background:${dot}"></span><span style="font:600 12px/1 system-ui;color:#696e78">Serving you now</span></div>
+				<div style="font:600 17px/1.3 system-ui;color:#15171c;margin:0 0 20px">${esc(doorLabel)}</div>
+
+				<div style="font:600 12px/1 system-ui;color:#52575f;margin:0 0 10px">Sign in with your own subscription</div>
+				<p style="margin:0 0 14px;font:400 13px/1.55 system-ui;color:#696e78">Use your own ChatGPT plan and every model call in Abstract draws on it &mdash; nothing to set up, no usage limit from us.</p>
+				${signInBtn}
+				${signInError}
+
+				<div style="font:600 12px/1 system-ui;color:#52575f;margin:22px 0 10px;padding-top:18px;border-top:1px solid #f1f2f5">Or use the included model</div>
+				<p style="margin:0 0 14px;font:400 13px/1.55 system-ui;color:#696e78">A capable model we include for free, with a small amount of usage each day. It pauses politely when the day&#39;s usage is spent and picks up again tomorrow.</p>
+				<button data-msg="useIncludedModel" style="border:1px solid #d4d7dd;background:#fff;border-radius:10px;padding:11px 18px;font:600 13px/1 system-ui;color:#52575f;cursor:pointer">Use the included model</button>
+				${usageBlock}
+			</div>
+
+			<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:24px 26px">
+				<div style="font:600 16px/1.3 system-ui;color:#15171c;margin:0 0 5px">A few quick questions</div>
+				<p style="margin:0 0 20px;font:400 13px/1.55 system-ui;color:#696e78">This helps us build the right things first. Your answers stay on your computer.</p>
+				${surveyBody}
+			</div>
+
+		</div></div>
+	</div>`;
+}
+
 function renderProjectRun(state: IScreenState): string {
 	const run = state.projectRun;
 	const folderName = state.folderName ?? 'Project';

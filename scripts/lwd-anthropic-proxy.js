@@ -68,13 +68,22 @@ const spendMeter = new SpendMeter({ dailyBudgetUsd: DAILY_BUDGET_USD, clock: { n
 // tracked from day one - the cap is enforced by data, not hope. Never contains document text or a credential.
 const AUDIT_DIR = path.join(os.homedir(), '.abstract');
 const SPEND_LOG_PATH = path.join(AUDIT_DIR, 'model-spend.log');
+// The general analytics event sink (plan 35 iter 4): non-spend product events (e.g. `model_configured`, the
+// onboarding survey) append here as JSON lines, alongside model-spend.log, so plan 36 has ONE local place to
+// forward to PostHog. Never contains document text or a credential.
+const EVENT_LOG_PATH = path.join(AUDIT_DIR, 'events.log');
 
-/** Append one `model_spend` record to the local audit log (best effort; a log failure never blocks a reply). */
-function auditModelSpend(record) {
+/** Append one JSON record to a local audit log (best effort; a log failure never blocks a reply). */
+function appendAudit(logPath, record) {
 	try {
 		fs.mkdirSync(AUDIT_DIR, { recursive: true, mode: 0o700 });
-		fs.appendFileSync(SPEND_LOG_PATH, JSON.stringify(record) + '\n', { mode: 0o600 });
-	} catch { /* the audit log is best effort - never fail a model reply because logging failed */ }
+		fs.appendFileSync(logPath, JSON.stringify(record) + '\n', { mode: 0o600 });
+	} catch { /* the audit log is best effort - never fail a reply because logging failed */ }
+}
+
+/** Append one `model_spend` record to the local audit log. */
+function auditModelSpend(record) {
+	appendAudit(SPEND_LOG_PATH, record);
 }
 
 /** Standard permissive CORS for a localhost-only dev proxy (the page origin is http://localhost:8080). */
@@ -737,6 +746,22 @@ async function proxyFetch(req, res) {
 	}
 }
 
+// POST /event: append one product analytics event (JSON) to the local events log (plan 35 iter 4). Used by
+// the onboarding survey to record `model_configured` locally; plan 36 forwards this log to PostHog. The proxy
+// stamps a UTC timestamp; the body carries no document text or credential (the renderer only sends survey
+// answers + the event name). Best effort - a log failure still returns ok so onboarding never blocks.
+async function postEvent(req, res) {
+	const body = await readBody(req);
+	let parsed;
+	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+	if (!parsed || typeof parsed.event !== 'string' || !parsed.event) {
+		sendJson(res, 400, { error: { type: 'event_error', message: 'event is required' } });
+		return;
+	}
+	appendAudit(EVENT_LOG_PATH, Object.assign({ ts: new Date().toISOString() }, parsed));
+	sendJson(res, 200, { ok: true });
+}
+
 const server = http.createServer((req, res) => {
 	const url = req.url || '';
 	if (req.method === 'OPTIONS') {
@@ -811,6 +836,14 @@ const server = http.createServer((req, res) => {
 			console.error('[lwd-proxy] proxy fetch failed:', err && err.message ? err.message : err);
 			setCors(res);
 			sendJson(res, 502, { error: { type: 'proxy_error', message: String(err && err.message ? err.message : err) } });
+		});
+		return;
+	}
+	if (req.method === 'POST' && url.startsWith('/event')) {
+		postEvent(req, res).catch(err => {
+			console.error('[lwd-proxy] event log failed:', err && err.message ? err.message : err);
+			setCors(res);
+			sendJson(res, 502, { error: { type: 'event_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
 	}

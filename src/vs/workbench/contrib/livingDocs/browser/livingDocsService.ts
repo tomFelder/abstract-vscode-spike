@@ -22,7 +22,7 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
@@ -2165,6 +2165,87 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			via: 'heuristic',
 			relink: true,
 		};
+	}
+
+	// --- model access: provider picker + survey (plan 35 iter 4) ---
+	// All model credentials live in the proxy (decision 14); the renderer only reads status + drives the flow
+	// through the proxy's HTTP routes. Every failure degrades to a safe default (the heuristic path) rather than
+	// surfacing an error - the Settings step must never dead-end.
+
+	// Read the active model door + usage from the proxy's /healthz. `ok` gates whether a backend is actually
+	// serving (a signed-out ChatGPT tier or a key-less included tier reports ok:false -> provider 'none', the
+	// built-in heuristic path). Today's spend is only meaningful for the metered `included` tier.
+	async getModelProviderStatus(): Promise<IModelProviderStatus> {
+		const fallback: IModelProviderStatus = { provider: 'none', signedIn: false, dailyBudgetUsd: 0 };
+		try {
+			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/healthz`, callSite: 'livingDocs.providerStatus', disableCache: true }, CancellationToken.None);
+			const json = await asJson<{ ok?: boolean; backend?: string; meters?: boolean; signedIn?: boolean; dailyBudgetUsd?: number; dailyTotalUsd?: number }>(context);
+			if (!json) { return fallback; }
+			const signedIn = json.signedIn === true;
+			let provider: ModelProvider = 'none';
+			if (json.ok === true) { provider = json.backend === 'openai-oauth' ? 'chatgpt' : 'included'; }
+			return {
+				provider,
+				signedIn,
+				dailyBudgetUsd: typeof json.dailyBudgetUsd === 'number' ? json.dailyBudgetUsd : 0,
+				dailyTotalUsd: json.meters === true && typeof json.dailyTotalUsd === 'number' ? json.dailyTotalUsd : undefined,
+			};
+		} catch {
+			return fallback;
+		}
+	}
+
+	async startChatGptSignIn(): Promise<string | undefined> {
+		try {
+			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/auth/openai/start`, callSite: 'livingDocs.signInStart', disableCache: true }, CancellationToken.None);
+			const json = await asJson<{ authorizeUrl?: string }>(context);
+			return json?.authorizeUrl;
+		} catch (e) {
+			this._log.warn('[livingDocs] ChatGPT sign-in start failed', e instanceof Error ? e.message : String(e));
+			return undefined;
+		}
+	}
+
+	async pollChatGptSignIn(): Promise<IChatGptSignInStatus> {
+		try {
+			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/auth/openai/status`, callSite: 'livingDocs.signInStatus', disableCache: true }, CancellationToken.None);
+			const json = await asJson<{ status?: string; error?: string }>(context);
+			const stage = json?.status === 'signed-in' ? 'signed-in'
+				: json?.status === 'pending' ? 'pending'
+					: json?.status === 'error' ? 'error' : 'signed-out';
+			// A newly-signed-in ChatGPT tier changes what the app can do; refresh model-backed UI once.
+			if (stage === 'signed-in') { void this._probeModel(); this._onDidChange.fire(); }
+			return { stage, error: json?.error };
+		} catch {
+			return { stage: 'signed-out' };
+		}
+	}
+
+	async signOutChatGpt(): Promise<void> {
+		try {
+			await this._request.request({ type: 'POST', url: `${this._proxyUrl()}/auth/openai/signout`, headers: { 'content-type': 'application/json' }, data: '{}', callSite: 'livingDocs.signOut' }, CancellationToken.None);
+			void this._probeModel();
+			this._onDidChange.fire();
+		} catch (e) {
+			this._log.warn('[livingDocs] ChatGPT sign-out failed', e instanceof Error ? e.message : String(e));
+		}
+	}
+
+	// Record the onboarding survey as the local `model_configured` event (doc 18 section 2.4). The proxy owns
+	// the analytics audit sink (~/.abstract/events.log, alongside model-spend.log) so every event lands in one
+	// place for plan 36's PostHog wiring; a failure is best-effort (the survey never blocks onboarding).
+	async submitOnboardingSurvey(survey: IOnboardingSurvey): Promise<void> {
+		try {
+			const body = JSON.stringify({
+				event: 'model_configured',
+				daily_driver_model: survey.dailyDriverModel,
+				owned_subscriptions: survey.ownedSubscriptions,
+				weekly_output: survey.weeklyOutput,
+			});
+			await this._request.request({ type: 'POST', url: `${this._proxyUrl()}/event`, headers: { 'content-type': 'application/json' }, data: body, callSite: 'livingDocs.modelConfigured' }, CancellationToken.None);
+		} catch (e) {
+			this._log.warn('[livingDocs] model_configured event failed', e instanceof Error ? e.message : String(e));
+		}
 	}
 
 	// The local OAuth proxy base URL (coerced - config stubs may return non-strings), trailing slash trimmed.

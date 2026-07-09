@@ -17,6 +17,7 @@ const TITLES: Record<ScreenId, string> = {
 	agents: 'Agents',
 	'project-run': 'Agent Run',
 	'review-project': 'Review Project',
+	settings: 'Model Access',
 };
 
 // One singleton editor input per Abstract screen (Templates / Knowledge / Agents). The screen

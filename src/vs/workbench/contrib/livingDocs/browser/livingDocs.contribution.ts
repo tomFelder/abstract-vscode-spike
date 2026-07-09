@@ -18,6 +18,7 @@ import { SyncDescriptor } from '../../../../platform/instantiation/common/descri
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
@@ -383,6 +384,26 @@ registerAction2(class extends Action2 {
 	}
 });
 
+// Model access (plan 35 iter 4): the provider picker + onboarding survey. It is a Settings destination, not a
+// top-level nav item, so it is reached by this palette command ("Model Access") and by the first-run step
+// below. The screen shows which door serves you, today's included usage, "Sign in with ChatGPT" (primary) /
+// "Use the included model" (secondary), and the three survey questions.
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.open.settings',
+			title: localize2('livingDocs.openModelAccess', "Model Access"),
+			category: localize2('livingDocs.category', "Abstract"),
+			f1: true,
+		});
+	}
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const editorService = accessor.get(IEditorService);
+		const instantiationService = accessor.get(IInstantiationService);
+		await editorService.openEditor(instantiationService.createInstance(ScreenEditorInput, 'settings'), { pinned: true });
+	}
+});
+
 // --- the "Editor" nav item (order 2, first after Home) ---
 // Unlike the screens above, Editor opens the actual document surface: the active/last Living Document,
 // or the first document in the folder (D25-B, see editorNavLauncherView.ts). It is an activity-bar
@@ -434,10 +455,15 @@ const WELCOME_INPUT_TYPE_ID = 'workbench.editors.gettingStartedInput';
 class StudioStartupContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.studioStartup';
 
+	// First-run guard for the model-access step (plan 35 iter 4): a profile-scoped flag so the provider picker
+	// opens exactly once on a fresh profile, then never auto-opens again (the palette command still reaches it).
+	private static readonly MODEL_ACCESS_SEEN_KEY = 'livingDocs.modelAccessSeen';
+
 	constructor(
 		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
 		@IEditorService private readonly _editorService: IEditorService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
+		@IStorageService private readonly _storageService: IStorageService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -449,10 +475,16 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 			this._closeWelcomeEditors();
 			once.dispose();
 		}));
-		// Land on the Home dashboard (the comp's default screen) when nothing else is open, so launch
-		// reads as a document app rather than an empty editor.
+		// First run reaches a working model in under a minute (plan 35 iter 4 gate): on a fresh profile, land on
+		// the Model Access step (provider picker + survey) so the user picks a door before anything else. On
+		// every later launch this flag is set, so startup lands on Home as before.
+		const firstRun = !this._storageService.getBoolean(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, StorageScope.PROFILE, false);
 		if (this._editorService.editors.length === 0) {
-			void this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'home'), { pinned: true });
+			const screen: ScreenId = firstRun ? 'settings' : 'home';
+			if (firstRun) {
+				this._storageService.store(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, true, StorageScope.PROFILE, StorageTarget.MACHINE);
+			}
+			void this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, screen), { pinned: true });
 		}
 		// The two rails (tree-rail + review rail) are EDITOR companions, not global chrome: they are
 		// revealed + sized only when the document editor is the active surface, and hidden on the screen
