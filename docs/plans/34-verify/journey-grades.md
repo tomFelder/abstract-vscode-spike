@@ -436,4 +436,102 @@ Candidates probed: **2c (ask-the-project, D24 critical v1)** - the read-only "an
 - `1s-1-proxy-down-swallowed-as-nochange.png` - 1s, model outage rendered as "no change" (error swallowed).
 - `1u-1-present-export-panel.png` - 1u Present & export panel (.docx/Docs SOON).
 - `1v-1-audit-question-no-receipts.png` - 1v, chat has no audit data source ("no approvals or change-log trail").
+
+# Iteration 4 - The verdicts
+
+The re-baselined chip table, the prioritised fix list, and the doc 18 §2.3 gate check.
+These are the raw material for [plan 37 - journey robustness](../37-journey-robustness-loop.md); the aha-path specs they reference live in [docs/20-journey-specs-aha-path.md](../../20-journey-specs-aha-path.md).
+
+## (a) Re-baselined chip table
+
+Journey → the map's chip (as of ~8 Jul, [journey-map-v4.dc.html](../../journey-map-v4.dc.html)) → the walked grade (iterations 1-2, fresh 9 Jul build).
+Proposed as an update note for [13-journey-map-ratification.md](../../13-journey-map-ratification.md) §6 (delivered here, folded in after the reflow settles).
+"Grade shift" reads the honest direction of travel: several map GAP/PARTIAL chips are past their chip (the plans landed) yet the journey is still not walkable off-path - plan-completion is not journey-completion.
+
+| Journey | Title | Map chip | Walked grade | Note |
+|---|---|---|---|---|
+| 1a | Open a project for the first time | BUILT | FRAGILE | Golden path opens; empty dead-end, flattened tree, non-md dropped, .doc/.docx skipped, no Project Home landing |
+| 1b | Create a new document - the template on-ramp | GAP | FRAGILE | Template birth strong (past chip); blank-doc name discarded, no "From sources…", no persist (X1) |
+| 1c | Switch between projects from Home | BUILT | WALKABLE | Every nav destination real; "40% stubs" concern is stale |
+| 1d | Organise files without breaking anything | PARTIAL | MISSING | No context menu on the Abstract file list; map-D6 warn-and-orphan unreachable |
+| 1w | Project Home - the project's front door | GAP | MISSING | Lands in editor, not Project Home; no while-you-were-away, no whole-project chat |
+| 1x | Grow a template from examples | GAP | MISSING | From-examples wizard absent; only a manual template editor exists |
+| 1e | Iterate on a document via the chat rail | PARTIAL | FRAGILE | Golden + error paths strong; **X1 severity-1** (approved work lost on reload); X4 stock-Copilot tab |
+| 1f | Judge one proposal: approve/tweak/reject | PARTIAL | FRAGILE | Approve + Tweak (D131) sound; X1 persistence; fixed-85% confidence sub-line |
+| 1g | Dial the auto-apply policy | PARTIAL | FRAGILE | Figure/meaning behaviour real; the per-doc dial control (map-D9) is absent |
+| 1h | Undo, history and versions - the way back | GAP | FRAGILE | History truthful now (D133/134, X2/X3 struck); **X1 severity-1**; Cmd+Z-across-approve does nothing |
+| 1i | One chat, three docs - review at any granularity | PARTIAL | WALKABLE | Per-file ledger + all three granularities live; honest degradation (X1 applies) |
+| 1j | Project-wide run - the fan-out swarm | BUILT | WALKABLE | Swarm grid, real per-doc states, source grounding, cancel affordance (X1 applies) |
+| 1k | The cross-document review pass | PARTIAL | WALKABLE | One review grammar everywhere; bulk confirm (D132); done→clear (X1 applies) |
+| 1l | Parallel chats - tabs in the rail | GAP | MISSING | Single thread; no rail tabs |
+| 1m | Pull files & folders into the chat | PARTIAL | WALKABLE | @-mention + chips + add-folder scope the run; right-click/drag routes missing |
+| 1n | Inspect the context - what does it see? | GAP | PARTIAL/MISSING | Per-task togglable/sized context inspector absent; doc sources panel is a different home |
+| 1o | Knowledge - the library of sources of truth | GAP | FRAGILE | Library + freshness + reverse-lookup real (past chip); connect-a-source is file/URL only, no conflicts |
+| 1p | Trace a figure to its source - provenance peek | PARTIAL | WALKABLE | Click-to-drawer at CSV depth with reverse-lookup; api/mcp equal-depth + "then vs now" pending |
+| 1y | The document's sources rail - always-on inputs | GAP | MISSING | Sources panel exists; watched-doc-with-hook (the reason 1y is its own journey) absent |
+| 1q | Put a document on a schedule | PARTIAL | FRAGILE | Schedule+policy machinery good; doc-header "Keep current" on-ramp absent; unattended firing unproven |
+| 1r | The morning inbox - 90 seconds to done | PARTIAL | PARTIAL | Home all-clear exists; document-level needs-you queue with counts + notifications absent |
+| 1s | Watch, cancel, recover | GAP | FRAGILE | Cancel affordance present; **model outage on fan-out renders as "no change"** (error swallowed) |
+| 1t | Manage a project's agents & workflows | PARTIAL | WALKABLE | Roster, D16 flow graph, truthful run log, pause/run verbs all real (X1 on hard reload) |
+| 1z | Usage, cost & the starved run | GAP | MISSING | No usage meter, no context ring, no starved-run pause/resume surface (D19) |
+| 1u | Present, export, publish | PARTIAL | FRAGILE | HTML/Markdown export work; .docx/Docs disabled, no distinct Present mode, no publish-to-URL |
+| 1v | Interrogate the audit trail | GAP | MISSING | Chat has no audit data source; D18 inline numeric deltas exist in review cards |
+
+Candidates: **2c** ask-the-project - PARTIAL (read-only Q&A exists but doc-scoped, uncited, no whole-project front-door default). **2b** first-run orientation - MISSING (nothing orients on a fresh/messy folder open).
+
+Distribution of walked grades (26): WALKABLE 7 · FRAGILE 8 · PARTIAL 2 · MISSING 9. Severity-1 findings: 1 root cause (X1), two faces (1e, 1h).
+
+## (b) The prioritised fix list
+
+Every FRAGILE / BLOCKED / MISSING finding as a discrete fix item.
+Ordering: **(1)** severity-1 data loss first; **(2)** aha-path before everything; **(3)** cheapest-first within a tier.
+The trust-integrity item (silent model outage on fan-out) is lifted to high priority even though its journey (1s) is not on the strict aha path, because it directly poisons P0 (trust) - a beta whose whole thesis is trust cannot ship a surface where a model outage is indistinguishable from success.
+Each item cites the walk finding and the spec section it is validated against ([docs/20](../../20-journey-specs-aha-path.md)).
+
+### Tier 0 - Severity-1: lost approved work (persistence)
+
+- **F1. X1 - approved changes persist across reload (severity-1).** Approve writes applied text to the document on disk and records the version in the lock, atomically; a reload re-reads the persisted document, History and Saved · vN chip. New docs (1b), snapshots and the chip (1h) all persist. **Desktop confirmation is being checked separately**; the fix must make approved work survive a reload in **both** the web and desktop builds - if the desktop pass shows writes already land on disk there, F1 still owns the web build's in-memory-only writes and the reload-reread contract. Cite: walk 1e/1h X1 re-verify (HELD); spec 1e "persistence contract", 1h, 1b. This one item unblocks the persistence caveat noted across 1f, 1i, 1j, 1k, 1t, 1u.
+
+### Tier 1 - Aha-path robustness (FRAGILE off-path breaks on groups A + B, cheapest first)
+
+- **F2. X4 - remove/re-route the stock Copilot chat tab.** The title-bar "Chat" opens upstream GitHub Copilot; the only reachable Chat must be the Abstract rail. Cheapest of the tier (a shell-integrity removal, cf. plan 33). Cite: walk 1e X4; spec 1e.
+- **F3. 1b - keep the typed name for a blank document.** Name-first birth must hold for blank, not only templates. Cite: walk 1b; spec 1b.
+- **F4. 1b - stop dumping the internal template brief into the chat rail.** Plain-words progress only (P5). Cite: walk 1b; spec 1b.
+- **F5. 1f - replace the fixed "85% confidence" sub-line with a real signal or the label alone.** No fabricated percentages. Cite: walk 1f re-verify; spec 1f.
+- **F6. 1h - Cmd+Z reverts across an approve.** Editor-integration gap distinct from persistence; undo must cross an approve boundary (plan 26, P8). Cite: walk 1h; spec 1h.
+- **F7. 1a - preserve folder hierarchy on open (no flattening).** Cite: walk 1a; spec 1a.
+- **F8. 1a - fall back to filename for odd/blank-heading Markdown (never a bare "Untitled").** Cite: walk 1a; spec 1a.
+- **F9. 1a - show non-Markdown files in a SOURCES section (don't drop CSV/txt/image).** Cite: walk 1a; spec 1a.
+- **F10. 1a/T3 - mark .doc/.docx "not yet imported" with a reason instead of silently skipping.** Migration is founder-led for beta ([18](../../18-beta-plan.md) §3); the floor is visibility, not conversion. Cite: walk 1a T3; spec 1a.
+- **F11. 1g - surface the three-position autonomy dial in the doc header, reusing the existing agent policy control (no duplicate).** Cite: walk 1g; spec 1g (map-D9, P2).
+- **F12. 1p - make freshness labels consistent across library/drawer/hover and never present a stale value as current.** Couples to the staleness-escape guardrail. Cite: walk 1c/1o/1p; spec 1p.
+- **F13. 1p - add the hover peek and "then vs now"; mark api/mcp fallbacks as fallbacks (equal-depth is plan 29).** Cite: walk 1p; spec 1p.
+
+### Tier 2 - Trust integrity (high priority despite not being strict aha-path)
+
+- **F14. 1s - a model outage on the fan-out/agent-run path names itself and never renders as "no change" (high trust priority).** The single-doc rail already names this error (the reference standard, spec 1e error state); the fan-out path swallows it, making an outage indistinguishable from "nothing needed changing" - a direct P0 breach. Add the named error, a failed-doc list, and surgical retry. Cite: walk 1s; spec 1e error state, 1x loading state.
+
+### Tier 3 - Aha-path MISSING surfaces (the smallest walkable v1 per the new specs)
+
+- **F15. 1w - Project Home landing (minimal v1): land here not the editor; while-you-were-away feed; all-clear; whole-project chat composer; empty-project front door.** Cures the 1a empty-folder dead-end and gives map-D14/D21/D24 a home. Cite: walk 1w/1a/1r/2c; spec 1w [minimal v1].
+- **F16. 1d - provenance-safe file ops (minimal v1): a context menu with Rename/Delete/Add-to-chat; map-D6 warn-and-orphan on delete; atomic lock moves with Undo.** Cite: walk 1d; spec 1d [minimal v1].
+- **F17. 1b - the "From sources…" third birth.** Draft a doc from selected sources through the review engine (map-D4). Cite: walk 1b; spec 1b.
+- **F18. 1x - the from-examples template wizard (minimal v1): 3-10 docs → named commonalities through the review grammar → a proposed skill.md → joins the ＋ New picker.** Cite: walk 1x; spec 1x [minimal v1].
+
+### Tier 4 - Off-aha-path floors (not gating great, must not fall over - sequenced after the gate)
+
+These are recorded for completeness and belong to later fix loops, not plan 37's gate work: 1n per-task context inspector; 1o connect-a-source auth/test-fetch + conflict surface; 1y watched-doc change-hooks; 1l rail tabs; 1q doc-header "Keep current" on-ramp + unattended firing; 1r document-level inbox + notifications; 1u .docx/Docs + distinct Present mode + publish-to-URL; 1z usage/cost/starved-run (D19); 1v conversational audit; 2b first-run orientation; 2c whole-project cited ask. Each has a walk finding above; none is on the strict path to the aha and each must merely not dead-end without explanation ([18](../../18-beta-plan.md) §2.3 third bullet).
+
+## (c) Doc 18 §2.3 gate check
+
+The gate ([18-beta-plan.md](../../18-beta-plan.md) §2.3): "Every GAP on the path to the aha gets at least a partial fill; every PARTIAL on that path gets its broken off-path states fixed; journeys not on the aha path need a floor, not a ceiling."
+Verdict per requirement, grounded in the grades - **met / not-met / remaining**:
+
+- **R1: "Walk every mapped journey off-path and grade it against doc 13 §6."** **MET.** All 26 journeys graded with evidence over iterations 1-2; the re-baselined chip table (a) is the doc 13 §6 update note.
+- **R2: "Every GAP on the path to the aha gets at least a partial fill."** **NOT-MET, remaining defined.** The aha-path GAPs are 1b, 1h, 1w, 1x (map chips). 1b and 1h are past their chip in substance (template birth; truthful History) but still FRAGILE for X1; 1w and 1x are MISSING. Remaining: F15 (1w), F18 (1x), F17 (1b "From sources"), and the F1 persistence cure that makes 1b/1h actually stick. Until F1, F15, F18 land, no aha-path GAP is even partially walkable end to end.
+- **R3: "Every PARTIAL on that path gets its broken off-path states fixed (empty, error, cancel, recovery)."** **NOT-MET, remaining defined.** Aha-path PARTIALs are 1d, 1e, 1f, 1g, 1p (and 1c, now WALKABLE - MET). Their broken off-path states are the Tier-1 fix items F2-F13 plus F16 (1d). The single most severe off-path break is X1 (F1), which sits above the tier as severity-1. Remaining: Tier 0 + Tier 1 + F16.
+- **R4: "The aha is reachable, observable and survivable without Tom in the room" (the gate sentence, §1).** **NOT-MET.** Reachable: blocked until 1w landing (F15) and the D26 onboarding exist (spec'd here; built by the onboarding loop, plan 38). Observable: blocked until analytics (plan 36) wires `onboarding_step`/`proposal_resolved`. Survivable: blocked by X1 (F1) - approved work does not survive a reload, so the aha does not survive the session. Survivability is the sharpest miss.
+- **R5: "Journeys not on the aha path need a floor, not a ceiling - must not fall over or dead-end without explanation."** **PARTIAL.** Several off-path journeys are WALKABLE (1i/1j/1k/1m/1t) or degrade honestly. But two fall over silently: 1s (model outage as "no change", F14) and 1z/1v/1y/1l are MISSING surfaces that dead-end without explanation. Remaining: F14 (the trust-critical one) now; the rest are Tier-4 floors for later loops.
+
+Gate summary: **1 of 5 requirements met (R1)**; R2/R3/R4 not-met with a defined remaining list (F1 first, then aha-path robustness, then the MISSING minimal surfaces); R5 partial with F14 lifted forward. The single highest-leverage item for the gate is **F1 (X1 persistence)** - it is severity-1, it blocks survivability (R4), and it is the worst off-path break on the aha path (R3).
 </content>
