@@ -78,12 +78,12 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'livingDocs.commentaryModel': {
 			type: 'string',
 			default: '',
-			description: localize('livingDocs.commentaryModel', "Claude model id used for narrative rewrites and the Strategy grader. Leave empty to use the default ({0}).", 'claude-opus-4-8'),
+			description: localize('livingDocs.commentaryModel', "Model id used for narrative rewrites and the Strategy grader. Leave empty to use the default ({0}).", 'claude-opus-4-8'),
 		},
 		'livingDocs.modelProxyUrl': {
 			type: 'string',
 			default: 'http://localhost:8090',
-			description: localize('livingDocs.modelProxyUrl', "Base URL of the local Anthropic OAuth proxy (scripts/lwd-anthropic-proxy.js) the renderer calls for model-backed features. The proxy holds the developer's OAuth token server-side; no credential is ever embedded in the app."),
+			description: localize('livingDocs.modelProxyUrl', "Base URL of the local model proxy (scripts/lwd-anthropic-proxy.js) the renderer calls for model-backed features. The proxy holds the model credential server-side and translates to the configured backend; no credential is ever embedded in the app."),
 		},
 		'livingDocs.fanoutContextBudget': {
 			type: 'number',

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
-# Start the Living Documents Anthropic OAuth proxy (see scripts/lwd-anthropic-proxy.js).
-# Requires Node 24 and a completed `ant auth login`. Binds 127.0.0.1:8090 by default
-# (override with LWD_PROXY_PORT). The renderer reaches it via livingDocs.modelProxyUrl.
+# Start the Living Documents model proxy (see scripts/lwd-anthropic-proxy.js).
+# Requires Node 24. Binds 127.0.0.1:8090 by default (override with LWD_PROXY_PORT).
+# The renderer reaches it via livingDocs.modelProxyUrl. The proxy authenticates against a
+# pluggable backend (plan 35): the founder-funded OpenRouter fallback now, the user's own
+# ChatGPT subscription via OpenAI OAuth next. No credential ever reaches the renderer.
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
 	realpath() { [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"; }
@@ -18,10 +20,11 @@ if [ -s "$HOME/.nvm/nvm.sh" ]; then
 	nvm use 24.15.0 >/dev/null 2>&1 || true
 fi
 
-# v6 (plan 14, decision 44): OpenRouter is the default model backend for every call — the Anthropic
-# Console org is out of credits, so the OAuth path 400s on billing. Default the backend + key file here
-# (override by exporting LWD_BACKEND / OPENROUTER_API_KEY_FILE before running). The renderer is unchanged:
-# it always talks to this proxy's /v1/messages in the Anthropic Messages shape; the proxy translates.
+# Backend defaults to the founder-funded OpenRouter fallback tier (plan 35 iter 1). It is metered per user
+# to a small daily budget (LWD_DAILY_BUDGET_USD, default US$1) that pauses gracefully at the cap (iter 3).
+# Override LWD_BACKEND / OPENROUTER_API_KEY_FILE / OPENROUTER_MODEL / LWD_DAILY_BUDGET_USD before running.
+# The renderer is unchanged: it always talks to this proxy's /v1/messages in the Anthropic Messages shape;
+# the proxy translates. With no key the app runs on its built-in heuristic fallback (demoable with zero backends).
 export LWD_BACKEND="${LWD_BACKEND:-openrouter}"
 if [ "$LWD_BACKEND" = "openrouter" ] && [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FILE" ] && [ -f "$HOME/.config/lwd-openrouter.key" ]; then
 	export OPENROUTER_API_KEY_FILE="$HOME/.config/lwd-openrouter.key"

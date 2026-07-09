@@ -5,13 +5,20 @@
 
 // @ts-check
 
-// Localhost-only proxy that lets the Living Documents web build (served by @vscode/test-web at
-// http://localhost:8080) reach the Claude Developer Platform without ever embedding a credential
-// in the renderer. On each /v1/messages request it fetches a FRESH OAuth access token via
-// `ant auth print-credentials --access-token` (which refreshes the token if needed), caches it for
-// a short TTL, and forwards the request to api.anthropic.com with the OAuth headers. The developer
-// authenticates once with `ant auth login`; the token lives only in ~/.config/anthropic and is
-// never written here, logged, or sent to the browser.
+// Localhost-only model proxy for the Living Documents web build (served by @vscode/test-web at
+// http://localhost:8080). The engine speaks the Anthropic Messages protocol internally; this proxy
+// authenticates against a pluggable backend and translates the request/response so no credential ever
+// reaches the renderer (decision 14: the credential lives only in this process). No CSP/CORS changes are
+// needed - the sources build sets no connect-src CSP and this proxy owns the CORS policy (localhost-bind
+// only). If no backend is configured (or it errors) the renderer degrades to its built-in heuristic path,
+// so the app stays demoable with ZERO backends.
+//
+// Backends are pluggable behind one interface (see `backends` below):
+//   - `openrouter` - founder-funded fallback tier, budget-metered per user/day (plan 35 iter 3).
+//   - `openai-oauth` - the "Sign in with ChatGPT" subscription path (plan 35 iter 2) - SEAM ONLY here,
+//     the OAuth token flow + OpenAI translation land in that iteration.
+// The Anthropic Console-OAuth backend was removed in plan 35 iter 1 (doc 18 section 2.1): Anthropic
+// banned subscription OAuth in third-party tools and the Console-billed path burned unfunded API credit.
 //
 // Run it with ./scripts/lwd-anthropic-proxy.sh (Node 24). Nothing is committed except this script.
 
@@ -21,55 +28,50 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile, spawn } = require('child_process');
+const { spawn } = require('child_process');
 const { Readable } = require('stream');
+const { SpendMeter } = require('./lwd-spend-meter.js');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.LWD_PROXY_PORT || 8090);
-const UPSTREAM = 'https://api.anthropic.com/v1/messages';
 
-// Backend selection. Default 'anthropic' = the production OAuth path (token via `ant`). 'openrouter'
-// is a TEST-ONLY backend: it translates the Anthropic Messages request to OpenRouter's OpenAI-style
-// chat API and the response back, so the unchanged renderer/service can be exercised against a cheap
-// model without Anthropic Console credits. The OpenRouter key is read from env / a key file at
-// runtime and is NEVER committed.
-const BACKEND = (process.env.LWD_BACKEND || 'anthropic').toLowerCase();
+// Backend selection. `openrouter` is the founder-funded fallback tier (the only backend implemented in
+// plan 35 iter 1); `openai-oauth` is reserved for the subscription path (plan 35 iter 2) and reports
+// itself as not-configured until then, so the renderer stays on its heuristic fallback rather than 500ing.
+const BACKEND = (process.env.LWD_BACKEND || 'openrouter').toLowerCase();
+
 const OPENROUTER_URL = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
-// Tokens are short-lived; print-credentials refreshes on demand. A small cache avoids spawning
-// `ant` on every keystroke-driven call without ever holding a stale token for long.
-const TOKEN_TTL_MS = 60 * 1000;
+// Default fallback model: a capable mid-tier model, NOT the cheapest available. The beta bar is "more
+// reliable than ChatGPT" (doc 18 section 2.1, P0) and a bottom-shelf model (e.g. gpt-4o-mini) poisons the
+// one thing the fallback must prove; gpt-4.1-mini is a strong, low-cost mid-tier that keeps the ~$1/day
+// cap serving many requests while staying reliable. Override with OPENROUTER_MODEL.
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4.1-mini';
+
 // Bound the request body so a runaway client cannot exhaust memory; model calls here are tiny.
 const MAX_BODY_BYTES = 1 * 1024 * 1024;
 
-/** @type {{ token: string; fetchedAt: number } | undefined} */
-let cachedToken;
+// --- per-user daily budget meter (plan 35 iter 3) ------------------------------------------------------
+// The founder cannot fund API-priced usage for the cohort, so the OpenRouter fallback is capped at a
+// small daily budget per user (doc 18 section 2.1). Spend is metered per request HERE, in the proxy,
+// because this is where the real usage/cost numbers arrive. The meter is a pure module (lwd-spend-meter.js,
+// mirrored by common/spendMeter.ts which carries the unit tests) reading an injectable clock; the proxy
+// gives it the wall clock. At the cap it returns a structured overspend so the renderer pauses the run via
+// the D15 machinery (never 500s), and it emits a `model_spend` audit record per request (doc 15 section 3.1).
+const DAILY_BUDGET_USD = Number(process.env.LWD_DAILY_BUDGET_USD || 1);
+const spendMeter = new SpendMeter({ dailyBudgetUsd: DAILY_BUDGET_USD, clock: { now: () => Date.now() } });
 
-/** Resolve a fresh OAuth access token, refreshing via `ant` when the cache is cold or stale. */
-function getAccessToken() {
-	const now = Date.now();
-	if (cachedToken && (now - cachedToken.fetchedAt) < TOKEN_TTL_MS) {
-		return Promise.resolve(cachedToken.token);
-	}
-	return new Promise((resolve, reject) => {
-		// A set ANTHROPIC_API_KEY (even empty) silently shadows the OAuth profile, so strip it from
-		// the child environment. print-credentials --access-token prints the bare token and refreshes.
-		const env = Object.assign({}, process.env);
-		delete env.ANTHROPIC_API_KEY;
-		execFile('ant', ['auth', 'print-credentials', '--access-token'], { env, timeout: 20000 }, (err, stdout, stderr) => {
-			if (err) {
-				reject(new Error(`ant auth print-credentials failed: ${stderr ? String(stderr).trim() : err.message}`));
-				return;
-			}
-			const token = String(stdout).trim();
-			if (!token) {
-				reject(new Error('ant auth print-credentials returned an empty token (is `ant auth login` done?)'));
-				return;
-			}
-			cachedToken = { token, fetchedAt: Date.now() };
-			resolve(token);
-		});
-	});
+// The local audit sink for `model_spend` records. PostHog wiring is plan 36's job (doc 18 section 2.2);
+// for now every record appends as one JSON line to ~/.abstract/model-spend.log (0600) so per-user spend is
+// tracked from day one - the cap is enforced by data, not hope. Never contains document text or a credential.
+const AUDIT_DIR = path.join(os.homedir(), '.abstract');
+const SPEND_LOG_PATH = path.join(AUDIT_DIR, 'model-spend.log');
+
+/** Append one `model_spend` record to the local audit log (best effort; a log failure never blocks a reply). */
+function auditModelSpend(record) {
+	try {
+		fs.mkdirSync(AUDIT_DIR, { recursive: true, mode: 0o700 });
+		fs.appendFileSync(SPEND_LOG_PATH, JSON.stringify(record) + '\n', { mode: 0o600 });
+	} catch { /* the audit log is best effort - never fail a model reply because logging failed */ }
 }
 
 /** Standard permissive CORS for a localhost-only dev proxy (the page origin is http://localhost:8080). */
@@ -104,24 +106,55 @@ function readBody(req) {
 	});
 }
 
-// Production path: forward verbatim to the Anthropic Messages API with the OAuth token. OAuth tokens
-// go on Authorization: Bearer (NOT x-api-key) and /v1/messages requires the oauth beta header;
-// anthropic-version is always required.
-async function forwardToAnthropic(body) {
-	const token = await getAccessToken();
-	const upstream = await fetch(UPSTREAM, {
-		method: 'POST',
-		headers: {
-			'authorization': `Bearer ${token}`,
-			'anthropic-version': '2023-06-01',
-			'anthropic-beta': 'oauth-2025-04-20',
-			'content-type': 'application/json',
-		},
-		body,
-	});
-	const text = await upstream.text();
-	return { status: upstream.status, contentType: upstream.headers.get('content-type') || 'application/json', text };
+function proxyError(message) {
+	return { status: 502, contentType: 'application/json', text: JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }) };
 }
+
+// The plain-words body the renderer surfaces when the daily included usage is spent (P5: never "rate
+// limit" or "budget"). Shaped as a normal Anthropic message so the existing parser reads it as prose; the
+// `stop_reason: 'pause'` signals the service to pause the run via D15 and keep proposals reviewable.
+const CAP_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
+function capReached() {
+	return {
+		status: 200,
+		contentType: 'application/json',
+		text: JSON.stringify({
+			id: 'lwd-cap',
+			type: 'message',
+			role: 'assistant',
+			model: OPENROUTER_MODEL,
+			stop_reason: 'pause',
+			content: [{ type: 'text', text: CAP_MESSAGE }],
+		}),
+	};
+}
+
+// Standard SSE headers for an unbuffered event stream (backends normalise to Anthropic-shaped events).
+function writeSseHead(res) {
+	setCors(res);
+	res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'connection': 'keep-alive' });
+}
+
+// Serialise one Anthropic-shaped SSE event the renderer's parser understands.
+function sseEvent(event, data) {
+	return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+// Emit the plain-words cap message as a short SSE stream that ends with a paused-run signal + message_stop.
+// The renderer reads the text as prose and pauses the run (D15) instead of erroring.
+function writeCapStream(res) {
+	writeSseHead(res);
+	res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: CAP_MESSAGE } }));
+	res.write(sseEvent('message_delta', { type: 'message_delta', delta: { stop_reason: 'pause' } }));
+	res.write(sseEvent('message_stop', { type: 'message_stop' }));
+	res.end();
+}
+
+// --- backend: openrouter ------------------------------------------------------------------------------
+// Translates an Anthropic Messages request to OpenRouter's OpenAI-style chat API and the response back into
+// the Anthropic Messages shape the service parses. The founder's OpenRouter key comes from env / a key file
+// at runtime and is NEVER committed. This is also the seam iter 2's openai-oauth backend extends (same
+// request translation, a subscription-backed token instead of the founder key), so the mapping lives once.
 
 function openRouterKey() {
 	if (process.env.OPENROUTER_API_KEY) { return process.env.OPENROUTER_API_KEY.trim(); }
@@ -132,15 +165,8 @@ function openRouterKey() {
 	return '';
 }
 
-function proxyError(message) {
-	return { status: 502, contentType: 'application/json', text: JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }) };
-}
-
-// TEST backend: Anthropic Messages request -> OpenRouter chat request, and the response back into the
-// Anthropic Messages shape the service parses (content[].text + stop_reason). Lets the renderer/service
-// be exercised against a cheap model with no Anthropic credits.
-// Flatten an Anthropic Messages request into the OpenAI-style `messages` array OpenRouter expects. Shared
-// by the buffered and the streaming OpenRouter paths so the request shape is translated in exactly one place.
+// Flatten an Anthropic Messages request into the OpenAI-style `messages` array OpenRouter expects. Shared by
+// the buffered and streaming paths so the request shape is translated in exactly one place.
 function toOpenRouterMessages(req) {
 	const messages = [];
 	if (typeof req.system === 'string' && req.system) { messages.push({ role: 'system', content: req.system }); }
@@ -154,23 +180,26 @@ function toOpenRouterMessages(req) {
 	return messages;
 }
 
-// Standard SSE headers for an unbuffered event stream (both backends normalise to Anthropic-shaped events).
-function writeSseHead(res) {
-	setCors(res);
-	res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'connection': 'keep-alive' });
+// Best-effort dollar cost for one OpenRouter call. OpenRouter returns real spend when `usage` includes a
+// `cost` field (the authoritative number - we use it verbatim); when it does not (a model without cost
+// accounting, or a stream that omitted it) we ESTIMATE honestly from token counts at a conservative blended
+// rate so the meter never under-counts a call to zero. The estimate is deliberately rough - the cap carries
+// headroom and a real `cost` supersedes it whenever the API provides one.
+const ESTIMATED_USD_PER_1K_TOKENS = 0.002;
+function openRouterCost(usage) {
+	if (usage && typeof usage.cost === 'number' && usage.cost >= 0) {
+		return { costUsd: usage.cost, estimated: false };
+	}
+	const totalTokens = usage && typeof usage.total_tokens === 'number'
+		? usage.total_tokens
+		: ((usage && usage.prompt_tokens) || 0) + ((usage && usage.completion_tokens) || 0);
+	return { costUsd: (totalTokens / 1000) * ESTIMATED_USD_PER_1K_TOKENS, estimated: true };
 }
 
-// Serialise one Anthropic-shaped SSE event the renderer's parser understands.
-function sseEvent(event, data) {
-	return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-}
-
-async function forwardToOpenRouter(body) {
+async function openRouterForward(body, req) {
 	const key = openRouterKey();
 	if (!key) { return proxyError('OPENROUTER_API_KEY (or OPENROUTER_API_KEY_FILE) is not set'); }
-	const req = JSON.parse(body);
-	const messages = toOpenRouterMessages(req);
-	const orBody = JSON.stringify({ model: OPENROUTER_MODEL, max_tokens: req.max_tokens || 1024, messages });
+	const orBody = JSON.stringify({ model: OPENROUTER_MODEL, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), usage: { include: true } });
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -200,52 +229,18 @@ async function forwardToOpenRouter(body) {
 		stop_reason: stopReason,
 		content: [{ type: 'text', text: String(text) }],
 	};
-	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic) };
+	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic), usage: orJson.usage };
 }
 
-// Streaming production path: forward to Anthropic with stream:true and pipe the SSE bytes straight through,
-// unbuffered, so deltas reach the renderer as they are produced. If the client disconnects mid-stream
-// (the renderer's AbortController on cancel), destroying the node stream cancels the upstream reader and
-// closes the socket to Anthropic - no orphaned in-flight call. The credential never leaves the proxy.
-async function forwardToAnthropicStream(body, res) {
-	const token = await getAccessToken();
-	const upstream = await fetch(UPSTREAM, {
-		method: 'POST',
-		headers: {
-			'authorization': `Bearer ${token}`,
-			'anthropic-version': '2023-06-01',
-			'anthropic-beta': 'oauth-2025-04-20',
-			'content-type': 'application/json',
-		},
-		body,
-	});
-	if (!upstream.ok || !upstream.body) {
-		const text = await upstream.text().catch(() => '');
-		setCors(res);
-		res.writeHead(upstream.status || 502, { 'content-type': 'application/json' });
-		res.end(text || JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: `anthropic http ${upstream.status}` } }));
-		return;
-	}
-	writeSseHead(res);
-	const nodeStream = Readable.fromWeb(upstream.body);
-	res.on('close', () => nodeStream.destroy());
-	nodeStream.on('error', () => { if (!res.writableEnded) { res.end(); } });
-	nodeStream.pipe(res);
-}
-
-// Streaming TEST path: request OpenAI-style SSE from OpenRouter and normalise each chunk to an Anthropic
-// `content_block_delta` (text_delta) event, so the renderer parses ONE format regardless of backend. The
-// mapping is deliberately tiny: OpenAI `choices[0].delta.content` -> Anthropic text_delta; `[DONE]` ->
-// `message_stop`; everything else (keep-alives, role-only deltas, usage) is ignored.
-async function forwardToOpenRouterStream(req, res) {
+async function openRouterForwardStream(req, res) {
 	const key = openRouterKey();
 	if (!key) {
 		setCors(res);
 		res.writeHead(502, { 'content-type': 'application/json' });
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'OPENROUTER_API_KEY (or OPENROUTER_API_KEY_FILE) is not set' } }));
-		return;
+		return { usage: undefined };
 	}
-	const orBody = JSON.stringify({ model: OPENROUTER_MODEL, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), stream: true });
+	const orBody = JSON.stringify({ model: OPENROUTER_MODEL, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } });
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -264,34 +259,129 @@ async function forwardToOpenRouterStream(req, res) {
 		setCors(res);
 		res.writeHead(502, { 'content-type': 'application/json' });
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }));
-		return;
+		return { usage: undefined };
 	}
 	writeSseHead(res);
 	const nodeStream = Readable.fromWeb(upstream.body);
 	res.on('close', () => nodeStream.destroy());
+	// OpenRouter emits a final SSE chunk carrying `usage` (with `usage: {include:true}`) - capture it so the
+	// caller can meter the streamed call with real numbers where available.
+	const captured = { usage: undefined };
 	let buf = '';
 	const endStream = () => { if (!res.writableEnded) { res.write(sseEvent('message_stop', { type: 'message_stop' })); res.end(); } };
-	nodeStream.on('data', chunk => {
-		buf += chunk.toString('utf8');
-		let nl;
-		while ((nl = buf.indexOf('\n')) >= 0) {
-			const line = buf.slice(0, nl).trim();
-			buf = buf.slice(nl + 1);
-			if (!line.startsWith('data:')) { continue; }
-			const payload = line.slice(5).trim();
-			if (payload === '[DONE]') { endStream(); return; }
-			try {
-				const j = JSON.parse(payload);
-				const delta = j.choices && j.choices[0] && j.choices[0].delta;
-				const text = delta && delta.content;
-				if (typeof text === 'string' && text.length) {
-					res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }));
-				}
-			} catch { /* keep-alive comment or malformed chunk -> ignore */ }
-		}
+	return await new Promise(resolve => {
+		nodeStream.on('data', chunk => {
+			buf += chunk.toString('utf8');
+			let nl;
+			while ((nl = buf.indexOf('\n')) >= 0) {
+				const line = buf.slice(0, nl).trim();
+				buf = buf.slice(nl + 1);
+				if (!line.startsWith('data:')) { continue; }
+				const payload = line.slice(5).trim();
+				if (payload === '[DONE]') { endStream(); resolve(captured); return; }
+				try {
+					const j = JSON.parse(payload);
+					if (j.usage) { captured.usage = j.usage; }
+					const delta = j.choices && j.choices[0] && j.choices[0].delta;
+					const text = delta && delta.content;
+					if (typeof text === 'string' && text.length) {
+						res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }));
+					}
+				} catch { /* keep-alive comment or malformed chunk -> ignore */ }
+			}
+		});
+		nodeStream.on('end', () => { endStream(); resolve(captured); });
+		nodeStream.on('error', () => { if (!res.writableEnded) { res.end(); } resolve(captured); });
 	});
-	nodeStream.on('end', endStream);
-	nodeStream.on('error', () => { if (!res.writableEnded) { res.end(); } });
+}
+
+// --- backend registry ---------------------------------------------------------------------------------
+// One interface per backend: `isConfigured()` gates /healthz; `forward` (buffered) and `forwardStream`
+// (SSE) do the request/response translation. `meters` marks whether calls draw on the founder-funded
+// budget (openrouter) or the user's own subscription (openai-oauth, iter 2 - not metered).
+const backends = {
+	openrouter: {
+		name: 'openrouter',
+		meters: true,
+		isConfigured: () => !!openRouterKey(),
+		forward: openRouterForward,
+		forwardStream: openRouterForwardStream,
+	},
+	// SEAM for plan 35 iter 2 ("Sign in with ChatGPT"). Reports not-configured so /healthz is honest and the
+	// renderer stays on its heuristic fallback until the OAuth token flow + OpenAI translation land here.
+	'openai-oauth': {
+		name: 'openai-oauth',
+		meters: false,
+		isConfigured: () => false,
+		forward: async () => proxyError('the openai-oauth backend is not implemented yet (plan 35 iter 2)'),
+		forwardStream: async (_req, res) => {
+			setCors(res);
+			res.writeHead(502, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'the openai-oauth backend is not implemented yet (plan 35 iter 2)' } }));
+			return { usage: undefined };
+		},
+	},
+};
+
+function activeBackend() {
+	return backends[BACKEND] || backends.openrouter;
+}
+
+// Meter one metered (openrouter) call: charge the resolved cost, emit a `model_spend` audit record, and
+// return whether the day's included usage is now spent. Not called for a non-metering backend (a user's
+// own subscription is not the founder's budget). Cost uses real API numbers where present, an honest
+// estimate otherwise (see openRouterCost).
+function meterCall(backend, usage) {
+	if (!backend.meters) { return; }
+	const { costUsd, estimated } = openRouterCost(usage);
+	const outcome = spendMeter.charge(costUsd);
+	auditModelSpend({
+		event: 'model_spend',
+		ts: new Date().toISOString(),
+		provider: backend.name,
+		model: OPENROUTER_MODEL,
+		cost: Number(costUsd.toFixed(6)),
+		cost_estimated: estimated,
+		daily_total: Number(outcome.dailyTotalUsd.toFixed(6)),
+		daily_budget: DAILY_BUDGET_USD,
+		cap_hit: outcome.capHit,
+	});
+}
+
+async function forwardMessages(req, res) {
+	const body = await readBody(req);
+	let parsed;
+	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+	if (!parsed) {
+		setCors(res);
+		sendJson(res, 400, { type: 'error', error: { type: 'proxy_error', message: 'invalid request body' } });
+		return;
+	}
+	const backend = activeBackend();
+	const streaming = parsed.stream === true;
+	// Budget gate (metered backends only): if the day's included usage is already spent, do NOT call the
+	// model - return the plain-words cap message so the renderer pauses the run via D15 and keeps proposals.
+	if (backend.meters && spendMeter.isOverBudget()) {
+		if (streaming) { writeCapStream(res); }
+		else {
+			const capped = capReached();
+			setCors(res);
+			res.writeHead(capped.status, { 'content-type': capped.contentType });
+			res.end(capped.text);
+		}
+		return;
+	}
+	if (streaming) {
+		const { usage } = await backend.forwardStream(parsed, res);
+		meterCall(backend, usage);
+		return;
+	}
+	const result = await backend.forward(body, parsed);
+	// Only meter a successful model call (a proxy/backend error did not spend the founder's budget).
+	if (result.status === 200) { meterCall(backend, result.usage); }
+	setCors(res);
+	res.writeHead(result.status, { 'content-type': result.contentType });
+	res.end(result.text);
 }
 
 // --- MCP resolution + credentials (plan 29, iter 4) ------------------------------------------------
@@ -455,23 +545,6 @@ async function proxyFetch(req, res) {
 	}
 }
 
-async function forwardMessages(req, res) {
-	const body = await readBody(req);
-	let parsed;
-	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
-	// A `stream: true` body switches to the unbuffered SSE path; every existing (non-streaming) caller is
-	// byte-identical to before.
-	if (parsed && parsed.stream === true) {
-		if (BACKEND === 'openrouter') { await forwardToOpenRouterStream(parsed, res); }
-		else { await forwardToAnthropicStream(body, res); }
-		return;
-	}
-	const result = BACKEND === 'openrouter' ? await forwardToOpenRouter(body) : await forwardToAnthropic(body);
-	setCors(res);
-	res.writeHead(result.status, { 'content-type': result.contentType });
-	res.end(result.text);
-}
-
 const server = http.createServer((req, res) => {
 	const url = req.url || '';
 	if (req.method === 'OPTIONS') {
@@ -482,7 +555,9 @@ const server = http.createServer((req, res) => {
 	}
 	if (req.method === 'GET' && url.startsWith('/healthz')) {
 		setCors(res);
-		sendJson(res, 200, { ok: true, backend: BACKEND });
+		// `ok` is true only when the active backend is actually configured (a key present), so the renderer's
+		// probe stays honest and falls back to the heuristic path when no backend is wired.
+		sendJson(res, 200, { ok: activeBackend().isConfigured(), backend: BACKEND });
 		return;
 	}
 	if (req.method === 'POST' && url.startsWith('/v1/messages')) {
@@ -537,11 +612,12 @@ process.on('SIGINT', () => { killMcpServers(); process.exit(0); });
 process.on('SIGTERM', () => { killMcpServers(); process.exit(0); });
 
 server.listen(PORT, HOST, () => {
-	if (BACKEND === 'openrouter') {
-		console.log(`[lwd-proxy] listening on http://${HOST}:${PORT} -> ${OPENROUTER_URL} (TEST backend, model ${OPENROUTER_MODEL})`);
-		console.log('[lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE');
-	} else {
-		console.log(`[lwd-proxy] listening on http://${HOST}:${PORT} -> ${UPSTREAM}`);
-		console.log('[lwd-proxy] token source: ant auth print-credentials --access-token (run `ant auth login` first)');
+	const backend = activeBackend();
+	console.log(`[lwd-proxy] listening on http://${HOST}:${PORT} (backend ${backend.name}, model ${OPENROUTER_MODEL})`);
+	if (backend.name === 'openrouter') {
+		console.log(`[lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$${DAILY_BUDGET_USD}/user`);
+		if (!backend.isConfigured()) { console.log('[lwd-proxy] no OpenRouter key configured - the app runs on its built-in heuristic fallback'); }
+	} else if (backend.name === 'openai-oauth') {
+		console.log('[lwd-proxy] the openai-oauth ("Sign in with ChatGPT") backend is not implemented yet (plan 35 iter 2) - running heuristic fallback');
 	}
 });
