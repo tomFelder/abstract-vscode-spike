@@ -49,6 +49,17 @@ suite('analytics privacy canary + property-linter (plan 36 iter 2)', () => {
 		assert.deepStrictEqual(proseOrPathLeaks, [], `prose/path canary leaked past the linter: ${JSON.stringify(proseOrPathLeaks)}`);
 	});
 
+	test('the path guard catches Unicode homoglyph separators, not just ASCII slashes', () => {
+		// A path dressed in look-alike separators (fraction slash U+2044, division slash U+2215, fullwidth
+		// solidus U+FF0F, fullwidth reverse solidus U+FF3C) must not slip past the ASCII-only guard.
+		const homoglyphPaths = ['Users⁄someone⁄secret', 'a∕b', 'C＼win＼path', 'x／y'];
+		const missed = homoglyphPaths.filter(p => lintEventProps('provenance_peeked', { mode: p } as AnalyticsProps).length === 0);
+		assert.deepStrictEqual(missed, [], `a homoglyph-separator path slipped past the label guard: ${JSON.stringify(missed)}`);
+		// The same must hold for a hashed slot.
+		const hashedMissed = homoglyphPaths.filter(p => lintEventProps('this_was_wrong_reported', { ref_id: p } as AnalyticsProps).length === 0);
+		assert.deepStrictEqual(hashedMissed, [], `a homoglyph-separator path slipped past the hashed guard: ${JSON.stringify(hashedMissed)}`);
+	});
+
 	test('the linter rejects undeclared properties (a new field cannot smuggle content)', () => {
 		const errors = lintEventProps('app_opened', { version: '1.0.0', secret_note: CANARY_PROSE } as AnalyticsProps);
 		assert.deepStrictEqual(errors.map(e => e.key), ['secret_note']);

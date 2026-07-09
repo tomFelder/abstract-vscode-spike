@@ -107,6 +107,15 @@ export const ANALYTICS_EVENTS = {
 /** The union of every registered event name. New code can only capture a name that exists in the dictionary. */
 export type AnalyticsEventName = keyof typeof ANALYTICS_EVENTS;
 
+/**
+ * A path-separator giveaway: an enum label or an opaque id never contains one, so its presence means a real
+ * file path may have leaked. Covers the ASCII separators AND the common Unicode homoglyph slashes (fraction
+ * slash U+2044, division slash U+2215, big solidus U+29F8, fullwidth solidus U+FF0F, fullwidth reverse solidus
+ * U+FF3C) so a path dressed in look-alike separators cannot slip past the ASCII-only guard. Defence in depth:
+ * the emitters only ever route bounded enums into label/hashed slots, but a future emitter mistake is caught here.
+ */
+const PATH_SEPARATOR = /[/\\⁄∕⧸／＼]/;
+
 /** One property-linter finding: the offending key + a plain-words reason. */
 export interface IAnalyticsLintError {
 	readonly key: string;
@@ -149,7 +158,7 @@ export function lintEventProps(event: AnalyticsEventName, props: AnalyticsProps)
 					errors.push({ key, reason: `must be a short label string, got ${typeof value}` });
 				} else if (value.length > LABEL_MAX_LENGTH) {
 					errors.push({ key, reason: `label exceeds ${LABEL_MAX_LENGTH} chars - looks like free text, not an enum` });
-				} else if (/[/\\]/.test(value)) {
+				} else if (PATH_SEPARATOR.test(value)) {
 					errors.push({ key, reason: 'label contains a path separator - an enum value never does, so a real path may have leaked' });
 				}
 				break;
@@ -158,7 +167,7 @@ export function lintEventProps(event: AnalyticsEventName, props: AnalyticsProps)
 					errors.push({ key, reason: `must be an opaque id string, got ${typeof value}` });
 				} else if (value.length > HASHED_MAX_LENGTH) {
 					errors.push({ key, reason: `id exceeds ${HASHED_MAX_LENGTH} chars - looks like content, not a hash` });
-				} else if (/[\s/\\]/.test(value)) {
+				} else if (/\s/.test(value) || PATH_SEPARATOR.test(value)) {
 					errors.push({ key, reason: 'id contains whitespace or a path separator - a raw path or prose may have leaked' });
 				}
 				break;
