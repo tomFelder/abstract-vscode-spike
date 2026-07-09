@@ -58,10 +58,10 @@ These only render for a REAL multi-batch fan-out, which needs BOTH:
 2. a reachable model backend to produce the per-batch proposals (unreachable - no credits; Anthropic "credit balance too low", OpenRouter key unset).
 
 So the live in-app screenshot of the batch chip / oversize tile was **not captured in this sandbox**.
-The batching, merge, and oversize decisions are all made BEFORE any model call (a pure token-budget split), so the whole track-3 contract is proven deterministically by `fanoutBudget.test.ts` + the service batch/merge/oversize tests + the `summariseProjectRun` oversize test - a validator with a full node_modules + a funded backend can drive a real 50-doc run over a lowered `livingDocs.fanoutContextBudget` and see the chip + amber tile.
+The batching, merge, and oversize decisions are all made BEFORE any model call (a pure token-budget split), so the whole track-3 contract is proven deterministically by `fanoutBudget.test.ts` + the service batch/merge/oversize tests + the `summariseProjectRun` oversize test, and the UI itself (the `Batch K of M` chip, the amber "too large for this run" tile, the `N too large` bucket) is asserted from the pure render in `screenRender.test.ts` - a validator with a full node_modules + a funded backend can additionally drive a real 50-doc run over a lowered `livingDocs.fanoutContextBudget` and see the chip + amber tile live.
 
 **Track 4 (editor webview test seam, P2-3)** is a pure refactor of the document editor's mount-once lifecycle into a reducer with NO behaviour change (the effects are the same messages the old inline code posted).
 The live open/edit/approve/navigate smoke that would confirm no regression is blocked by the same pruned-node_modules web build.
-The reducer's 11 unit tests cover the exact timing-sensitive cases the plan named (pmReset ordering, hold-render-until-ready, focus-after-navigate).
+The reducer's 9 unit tests cover the exact timing-sensitive cases the plan named (pmReset ordering, hold-render-until-ready, focus-after-navigate).
 
 **No screenshots were fabricated for tracks 3 or 4.**

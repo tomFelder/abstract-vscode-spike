@@ -244,6 +244,53 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('Run stopped'), 'the swarm heading reflects the stop honestly');
 	});
 
+	// --- project-run: fan-out context budgeting UI (plan 30, track 3, D30-B) ---
+
+	test('a multi-batch project-run shows the Batch K of M chip in the command strip (plan 30 track 3)', () => {
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: true,
+				summary: summariseProjectRun(runDocs, []), working: runDocs.map(d => d.docId), decisions: [],
+				batch: { index: 2, count: 3 },
+			},
+		});
+		assert.ok(html.includes('Batch 2 of 3'), 'the command strip reports which batch of how many is running');
+	});
+
+	test('a single-batch run and a not-yet-started batch show NO batch chip (the common small-scale case)', () => {
+		const single = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review', inFlight: true,
+				summary: summariseProjectRun(runDocs, []), working: [], decisions: [],
+				batch: { index: 1, count: 1 },
+			},
+		});
+		assert.ok(!/Batch \d+ of \d+/.test(single), 'a one-batch run shows nothing extra');
+		const notStarted = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review', inFlight: true,
+				summary: summariseProjectRun(runDocs, []), working: [], decisions: [],
+				batch: { index: 0, count: 3 },
+			},
+		});
+		assert.ok(!/Batch \d+ of \d+/.test(notStarted), 'no live batch (index 0) shows no chip');
+	});
+
+	test('an oversize document renders the amber "too large for this run" tile and the "N too large" bucket (plan 30 track 3)', () => {
+		// Document `b` was too large for the fan-out budget: its tile must say so (never a silent drop or a
+		// false "no change"), and the bottom bar reports the oversize bucket with the real count.
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false,
+				summary: summariseProjectRun(runDocs, [], false, ['b']), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('too large for this run'), 'the oversize tile reads "too large for this run"');
+		assert.ok(html.includes('#9a6b16'), 'the oversize tile uses the amber treatment');
+		assert.ok(html.includes('1 too large'), 'the bottom bar reports the oversize bucket with the real count');
+		assert.ok(!html.includes('reviewing&hellip;'), 'an oversize tile never renders as a spinning sub-agent');
+	});
+
 	// The renderer escapes the same way the screen does, so a uri assertion matches the emitted attribute.
 	function esc(s: string): string {
 		return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

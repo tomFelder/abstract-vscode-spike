@@ -85,7 +85,8 @@ The run screen surfaces the batches truthfully: a `Batch K of M` chip in the com
 
 `test/browser/fanoutBudget.test.ts` - 6 pure tests: chars/4 estimate; fits-in-one-batch; ordered split at the boundary with every doc packed exactly once; oversize set aside (never packed); overhead floor keeps a usable budget; empty set.
 `test/browser/livingDocsModel.test.ts` - 1 added test: `summariseProjectRun` flags an oversize document as its own bucket (priority over changed/no-change), plus the 4 pre-existing summary tests updated for the new `oversizeDocs` field.
-`test/browser/livingDocsService.test.ts` - 3 added tests: an over-budget working set is sent in 2 batches with the per-batch edits merged to the right docs one-each (+ `Batch 1/2` and `Batch 2/2` steps + a 2-batch `IFanoutProgress`); a document larger than the whole budget is flagged oversize, never sent, and the others still change; the existing single-doc / no-working-set paths are unaffected.
+`test/browser/livingDocsService.test.ts` - 2 added tests: an over-budget working set is sent in 2 batches with the per-batch edits merged to the right docs one-each (+ `Batch 1/2` and `Batch 2/2` steps + a 2-batch `IFanoutProgress`); a document larger than the whole budget is flagged oversize, never sent, and the others still change. (The single-doc / no-working-set path is covered by the pre-existing, unmodified D-B test, which still passes against the batched path.)
+`test/browser/screenRender.test.ts` - 3 added tests asserting the track-3 UI from the PURE render (no model, no web build needed): a multi-batch run shows the `Batch 2 of 3` chip in the command strip; a single-batch run and a not-yet-started batch (index 0) show NO chip; an oversize document renders the amber `too large for this run` tile + the `1 too large` bottom-bar bucket and never renders as a spinning sub-agent.
 
 ## Track 4 - the editor webview test seam (P2-3)
 
