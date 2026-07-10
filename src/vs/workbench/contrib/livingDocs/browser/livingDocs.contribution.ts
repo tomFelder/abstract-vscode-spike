@@ -59,6 +59,14 @@ const IDE_VIEW_CONTAINER_IDS = [
 	'workbench.view.debug',
 	'workbench.view.extensions',
 	'workbench.view.explorer',
+	// (plan 37, F2) The stock GitHub Copilot chat container. It registers as a Secondary Side Bar view
+	// container (`ChatViewContainerId`), so it surfaced as a "Chat (Ctrl+Cmd+I)" tab right next to our
+	// Abstract "Review" rail - clicking it opened the raw upstream "Build with Agent" / "sign in to use
+	// Copilot" panel, breaking the spell (walk 1e X4). The product has its OWN chat (the Review-rail Chat
+	// sub-button), so the stock container is deregistered here by the same additive registry route as the
+	// other IDE containers. `chat.disableAIFeatures` already strips the AI chrome but does NOT remove the
+	// container itself, so the tab remained reachable until this deregistration. Logged in 03-merge-tax-ledger.md.
+	'workbench.panel.chat',
 ];
 
 // --- service ---
@@ -173,6 +181,10 @@ const NEUTRALISED_IDE_CHORDS: readonly IKeybindings[] = [
 	{ primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyG, mac: { primary: KeyMod.WinCtrl | KeyMod.Shift | KeyCode.KeyG } },	// SCM (deregistered)
 	{ primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyX },													// Extensions viewlet (deregistered)
 	{ primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyM },													// Problems panel
+	// (plan 37, F2) The stock Copilot chat open chord (Ctrl+Cmd+I on macOS): its container is deregistered
+	// above, but the chord would still try to open the (now-gone) stock chat, so swallow it too - the only
+	// reachable chat is the Abstract Review-rail Chat sub-button.
+	{ primary: KeyMod.CtrlCmd | KeyCode.KeyI, mac: { primary: KeyMod.WinCtrl | KeyMod.CtrlCmd | KeyCode.KeyI } },	// workbench.action.chat.open (stock Copilot)
 ];
 for (const chord of NEUTRALISED_IDE_CHORDS) {
 	// Weight 1000 sits above ExternalExtension (400) so this swallow always wins the chord resolution.
