@@ -602,6 +602,15 @@ export interface ILivingDocsService {
 	 */
 	restoreSnapshot(resource: URI, snapshotId: string): Promise<void>;
 
+	/** True when there is a prior approve to revert on this document (1h, F6): drives Cmd+Z routing. */
+	canUndoApprove(resource: URI): boolean;
+	/**
+	 * Revert the most recent approve on this document (1h, F6): pop the pre-approve body and write it back
+	 * through the body-rewrite path, audited via `restore`, so Cmd+Z crosses an approve even though the
+	 * ProseMirror keystroke history rebuilds on each service write (decision 100).
+	 */
+	undoLastApprove(resource: URI): Promise<void>;
+
 	// --- Chat agent (the right-panel Chat tab) ---
 	/** The conversation so far for a document (empty until the first message). */
 	getChatMessages(resource: URI): readonly IChatMessage[];

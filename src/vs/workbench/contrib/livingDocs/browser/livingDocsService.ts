@@ -300,6 +300,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _fanoutProgress = new Map<string, IFanoutProgress>();
 	// The figure diff from each document's last "Sync across", for the editor's synced banner.
 	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
+	// The pre-approve body of each document's recent approves (walk F6, journey 1h): a small in-memory stack
+	// so Cmd+Z can revert the last approve even though the ProseMirror keystroke history rebuilds on every
+	// service-driven body change (decision 100). Bounded per doc; not the lock's History snapshots (which stay
+	// user-facing bulk/refresh/publish milestones) - this is the fine-grained editor undo channel.
+	private readonly _approveUndo = new Map<string, string[]>();
+	private static readonly APPROVE_UNDO_CAP = 25;
 
 	// Bounded concurrency for a refresh/agent run (plan 30, track 2, D30-A). The source limiter caps
 	// concurrent REMOTE (api/mcp) fetches; the model limiter caps concurrent model calls. Both are created
@@ -1908,6 +1914,43 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	// Push the pre-approve body onto the per-doc undo stack (walk F6), capped so it never grows without bound.
+	private _pushApproveUndo(docId: string, body: string): void {
+		const stack = this._approveUndo.get(docId) ?? [];
+		stack.push(body);
+		while (stack.length > LivingDocsService.APPROVE_UNDO_CAP) { stack.shift(); }
+		this._approveUndo.set(docId, stack);
+	}
+
+	// True when there is a prior approve to revert on this document (walk F6): drives the editor's decision to
+	// route a Cmd+Z whose ProseMirror history is empty to a service-level undo rather than a no-op.
+	canUndoApprove(resource: URI): boolean {
+		return (this._approveUndo.get(resource.toString())?.length ?? 0) > 0;
+	}
+
+	// Revert the most recent approve on this document (walk F6, journey 1h): pop the pre-approve body and write
+	// it back through the same body-rewrite path restoreSnapshot uses, so undo crosses an approve even though the
+	// ProseMirror keystroke history rebuilds on each service write (decision 100). Audited as `via: 'restore'`,
+	// so the way back is itself on the trail - never a silent revert. Pending changes are rejected first.
+	async undoLastApprove(resource: URI): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const stack = this._approveUndo.get(resource.toString());
+		if (!stack || stack.length === 0) { return; }
+		const priorBody = stack.pop()!;
+		if (stack.length === 0) { this._approveUndo.delete(resource.toString()); }
+		const oldBody = state.rawText;
+		if (oldBody === priorBody) { return; }
+		await this.rejectAll(resource.toString());
+		state.doc = parseLivingDoc(priorBody);
+		state.rawText = priorBody;
+		state.status = 'Reverted the last approved change';
+		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'approved', oldBody, priorBody, 'restore'));
+		await this._persist(state);
+		await this._recomputeFreshness(state);
+		this._onDidChange.fire();
+	}
+
 	async exportDocument(resource: URI, force = false): Promise<URI | undefined> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return undefined; }
@@ -3122,6 +3165,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (!change) { return; }
 		const state = this._docs.get(change.docId);
 		if (!state) { return; }
+		// Capture the whole body BEFORE this approve mutates it, so Cmd+Z can revert exactly this one approve
+		// (walk F6). Pushed to the per-doc undo stack; undoLastApprove pops it. Kept out of the History snapshots.
+		this._pushApproveUndo(change.docId, state.rawText);
 		const block = state.doc.blocks.find(b => b.id === change.blockId);
 		if (change.insert) {
 			// A generative insertion: splice the new Markdown content in as a fresh block after its anchor

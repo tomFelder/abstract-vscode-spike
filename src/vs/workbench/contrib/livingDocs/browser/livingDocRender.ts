@@ -430,6 +430,17 @@ root.addEventListener('mousedown', e => {
 	const b = e.target.closest('button[data-pmcmd]');
 	if (b && pmView && window.LWDPM) { e.preventDefault(); window.LWDPM.cmd(pmView, b.getAttribute('data-pmcmd')); }
 });
+// Cmd/Ctrl+Z across an approve (walk F6, journey 1h). ProseMirror owns keystroke undo, but its history rebuilds
+// on every service-driven body change (decision 100), so once a proposal is approved PM has nothing to undo. We
+// let PM try first, then on the next tick compare the Markdown: if it did not change, PM's stack was empty, so
+// route the undo to the service (undoLastApprove pops the last approve). Shift+Z (redo) is left to PM.
+document.addEventListener('keydown', e => {
+	if (!pmView || !window.LWDPM) { return; }
+	const isUndo = (e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z');
+	if (!isUndo) { return; }
+	const before = window.LWDPM.toMarkdown(pmView);
+	setTimeout(function(){ try { if (pmView && window.LWDPM.toMarkdown(pmView) === before) { vscode.postMessage({ type: 'undoApprove' }); } } catch (err) {} }, 0);
+});
 root.addEventListener('change', e => {
 	const s = e.target.closest('select[data-pmcmd]');
 	if (s && pmView && window.LWDPM) { window.LWDPM.cmd(pmView, s.value); return; }

@@ -150,6 +150,14 @@ export class LivingDocEditor extends EditorPane {
 				// document plus the co-dependents of any source that actually changed, not the whole folder.
 				void this._livingDocs.refreshFromSources(this._resource);
 				break;
+			case 'undoApprove':
+				// Cmd+Z crossed an approve (walk F6, journey 1h): ProseMirror's own undo was a no-op (its history
+				// rebuilds on each service write, decision 100), so revert the last approve at the service. The
+				// service method is guarded - a no-op when there is nothing to revert - so a stray Cmd+Z is safe.
+				if (this._resource && this._livingDocs.canUndoApprove(this._resource)) {
+					void this._livingDocs.undoLastApprove(this._resource);
+				}
+				break;
 			case 'setDocPolicy':
 				// The 1g autonomy dial (walk F11): persist the chosen per-document policy to the lock so it
 				// survives a reload and travels with the file. The service fires onDidChange, which re-renders
