@@ -81,6 +81,9 @@ interface IScreenEditorState {
 	providerStatus?: IModelProviderStatus;
 	signInStage?: ChatGptSignInStage;
 	signInError?: string;
+	// The OpenAI authorize URL for the in-flight sign-in (plan 38): surfaced in the pending state as a real
+	// clickable link + copyable fallback so a fresh user reaches the sign-in page without a swallowed popup.
+	signInAuthorizeUrl?: string;
 	surveySaved?: boolean;
 }
 
@@ -488,6 +491,11 @@ export class ScreenEditor extends EditorPane {
 			case 'signOutChatGpt':
 				void this._signOutChatGpt();
 				break;
+			// Model access (plan 38): open the sign-in authorize URL OUTSIDE the sandboxed webview, in the
+			// system browser, from a genuine anchor click - the reliable route that is never popup-blocked.
+			case 'openExternalUrl':
+				if (message.arg) { this._openInBrowser(message.arg); }
+				break;
 			// "Use the included model": flip the proxy backend intent by re-reading status. The proxy's active
 			// backend is set at launch (LWD_BACKEND); here we simply re-assert the included tier in the UI and
 			// re-read the live door so the card reflects reality (a signed-out ChatGPT already falls back).
@@ -511,8 +519,11 @@ export class ScreenEditor extends EditorPane {
 			this._render();
 			return;
 		}
+		// Still attempt the automatic open, but never depend on it (a post-await window.open is popup-blocked,
+		// especially in Incognito). The pending state renders a real clickable link + copyable URL so the user
+		// can always reach the sign-in page with a genuine gesture; the poll settles the flow either way.
 		this._openInBrowser(authorizeUrl);
-		this._state = { ...this._state, signInStage: 'pending', signInError: undefined };
+		this._state = { ...this._state, signInStage: 'pending', signInError: undefined, signInAuthorizeUrl: authorizeUrl };
 		this._render();
 		this._pollSignIn();
 	}
@@ -524,7 +535,7 @@ export class ScreenEditor extends EditorPane {
 			const { stage, error } = await this._livingDocs.pollChatGptSignIn();
 			if (stage === 'signed-in') {
 				const status = await this._livingDocs.getModelProviderStatus();
-				this._state = { ...this._state, signInStage: 'signed-in', signInError: undefined, providerStatus: status };
+				this._state = { ...this._state, signInStage: 'signed-in', signInError: undefined, signInAuthorizeUrl: undefined, providerStatus: status };
 				this._render();
 				return;
 			}
@@ -542,7 +553,7 @@ export class ScreenEditor extends EditorPane {
 		this._signInPoll.clear();
 		await this._livingDocs.signOutChatGpt();
 		const status = await this._livingDocs.getModelProviderStatus();
-		this._state = { ...this._state, signInStage: 'signed-out', signInError: undefined, providerStatus: status };
+		this._state = { ...this._state, signInStage: 'signed-out', signInError: undefined, signInAuthorizeUrl: undefined, providerStatus: status };
 		this._render();
 	}
 
