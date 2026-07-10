@@ -35,6 +35,9 @@ function coerceLock(raw: Partial<ILivingDocLock> | undefined): ILivingDocLock {
 	if (Array.isArray(raw.audit)) { lock.audit = raw.audit; }
 	if (Array.isArray(raw.contextItems)) { lock.contextItems = raw.contextItems; }
 	if (Array.isArray(raw.snapshots)) { lock.snapshots = raw.snapshots; }
+	// The per-document autonomy policy (1g dial, walk F11): carry it through the read so the dialled setting
+	// survives a reload. Absent on older locks = the service's auto-figures default (handled by getDocPolicy).
+	if (raw.policy === 'auto-figures' || raw.policy === 'ask-before-apply' || raw.policy === 'draft-only') { lock.policy = raw.policy; }
 	return lock;
 }
 

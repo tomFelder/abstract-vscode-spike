@@ -7,7 +7,7 @@ import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
-import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
+import { AgentPolicy, ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
@@ -98,6 +98,12 @@ export interface ILivingDocRenderInput {
 	 * toolbar's honest `Saved &middot; vN` chip. Absent/0 => a plain `Saved` (no fabricated version number).
 	 */
 	readonly snapshotCount?: number;
+	/**
+	 * The per-document autonomy policy dialled from the doc header (1g, walk F11). Reuses the agent
+	 * AgentPolicy vocabulary (P2 - one policy control, not two). Absent => the "auto-figures" default.
+	 * Drives the three-position dial in the top bar; changing it posts `setDocPolicy` to the host.
+	 */
+	readonly docPolicy?: AgentPolicy;
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -177,6 +183,8 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .hint{max-width:720px;margin:0 auto;padding:0 40px 30px;font:400 12px/1.6 system-ui;color:#a3a8b2}
 .toggle{border:1px solid #d9dae0;border-radius:8px;padding:7px 12px;background:#fff;color:#4a4c54;font:600 12px/1 system-ui;cursor:pointer}
 .toggle:hover{background:#f4f4f6}
+.policydial{border:1px solid #d9dae0;border-radius:8px;padding:7px 26px 7px 12px;background:#fff;color:#4a4c54;font:600 12px/1 system-ui;cursor:pointer;-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234a4c54' stroke-width='1.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center}
+.policydial:hover{background-color:#f4f4f6}
 /* Persistent calm formatting toolbar (the comp's "Workbench v2" word-processor toolbar - formatting
  * essentials only): borderless heading dropdown + B/I/U + list/ordered/quote, with a quiet "Saved" status
  * on the right. Sticks just below the 48px top bar. No Link-to-source / Run-skill / History (the comp
@@ -413,7 +421,10 @@ root.addEventListener('mousedown', e => {
 });
 root.addEventListener('change', e => {
 	const s = e.target.closest('select[data-pmcmd]');
-	if (s && pmView && window.LWDPM) { window.LWDPM.cmd(pmView, s.value); }
+	if (s && pmView && window.LWDPM) { window.LWDPM.cmd(pmView, s.value); return; }
+	// The 1g autonomy dial (walk F11): dialling a new policy posts it to the host, which persists it to the lock.
+	const p = e.target.closest('select[data-policy]');
+	if (p) { vscode.postMessage({ type: 'setDocPolicy', policy: p.value }); }
 });
 root.addEventListener('click', e => {
 	let el;
@@ -624,6 +635,25 @@ function docReviewBar(pendingCount: number, totalPendingCount: number, nextChang
 	return `<div class="reviewbar">${inner}</div>`;
 }
 
+// The 1g autonomy dial's plain-words labels (walk F11, spec §1g frame 1): what the agent may do, per document,
+// while I am away. These map 1:1 onto the AgentPolicy vocabulary so the doc-header dial and the Agents policy
+// control stay one control, not two (P2 - the labels differ only in phrasing to fit the doc-header voice).
+const POLICY_DIAL_LABELS: Record<AgentPolicy, string> = {
+	'ask-before-apply': 'Ask me first - always',
+	'auto-figures': 'Auto-apply figures only',
+	'draft-only': 'Draft only, never apply',
+};
+
+// The three-position dial rendered in the doc header (walk F11). A plain <select> firing on change, carrying
+// the current policy from the persisted lock; the webview posts `setDocPolicy` with the chosen value. Calm, no
+// icon noise. `auto-figures` is the default (figures auto-apply, meaning-changes always wait regardless).
+function renderPolicyDial(policy: AgentPolicy): string {
+	const opt = (v: AgentPolicy) => `<option value="${v}"${policy === v ? ' selected' : ''}>${esc(POLICY_DIAL_LABELS[v])}</option>`;
+	return `<select class="policydial" data-policy title="While I am away, the agent may&hellip;">`
+		+ opt('ask-before-apply') + opt('auto-figures') + opt('draft-only')
+		+ `</select>`;
+}
+
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
 	const { doc, pending, dirty, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
@@ -645,8 +675,16 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		: '';
 	const presentBtn = (doc && isPm) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
 
+	// The 1g autonomy dial (walk F11): one plain-words control in the doc header, three positions, that reuses
+	// the AgentPolicy vocabulary so the doc-header dial and the Agents policy control are one control (P2). It
+	// says, per document, what the agent may do while I am away. Living documents only - a plain Markdown file
+	// has no agent to dial. Changing it posts `setDocPolicy`; the current value comes from the persisted lock.
+	const policyDial = (doc && isLiving && isPm)
+		? renderPolicyDial(input.docPolicy ?? 'auto-figures')
+		: '';
+
 	const topbar = `<div class="topbar"><div class="brand"><span class="logo">A</span>Abstract<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
-		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
+		+ `<div class="right">${livingControls}${policyDial}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 

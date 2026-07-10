@@ -362,6 +362,10 @@ export interface ILivingDocsService {
 	getResolved(resource: URI): ReadonlyMap<string, string>;
 	/** The document's lock (dependency graph + provenance ledger), if loaded. */
 	getLock(resource: URI): ILivingDocLock | undefined;
+	/** The per-document autonomy policy (1g dial): what the agent may do without asking. Defaults to auto-figures. */
+	getDocPolicy(resource: URI): AgentPolicy;
+	/** Dial the per-document autonomy policy (1g); persisted to the lock so it survives a reload. */
+	setDocPolicy(resource: URI, policy: AgentPolicy): Promise<void>;
 	/** The cheap always-on staleness signal: which bindings/context changed since last sync/review. */
 	getFreshness(resource: URI): IFreshness;
 	/** Run the document's Skills as graders over its current state (for the Skills rail). */

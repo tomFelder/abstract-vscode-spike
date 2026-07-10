@@ -18,7 +18,7 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
-import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
+import { AgentPolicy, bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { applyFocusRequest, applyReady, applyRender, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
@@ -123,7 +123,7 @@ export class LivingDocEditor extends EditorPane {
 		await apply();
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; policy?: string }): void {
 		switch (message?.type) {
 			case 'lwdReady':
 				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
@@ -149,6 +149,14 @@ export class LivingDocEditor extends EditorPane {
 				// The doc toolbar Refresh scopes to THIS document (plan 30, track 1): it re-derives the open
 				// document plus the co-dependents of any source that actually changed, not the whole folder.
 				void this._livingDocs.refreshFromSources(this._resource);
+				break;
+			case 'setDocPolicy':
+				// The 1g autonomy dial (walk F11): persist the chosen per-document policy to the lock so it
+				// survives a reload and travels with the file. The service fires onDidChange, which re-renders
+				// the dial from the new value.
+				if (this._resource && isAgentPolicy(message.policy)) {
+					void this._livingDocs.setDocPolicy(this._resource, message.policy);
+				}
 				break;
 			case 'presentOpen':
 				// Compute the before-export gate as the modal opens (plan 32 iter 4), so a failed grader is SHOWN
@@ -340,6 +348,7 @@ export class LivingDocEditor extends EditorPane {
 			totalPendingCount: allPending.length,
 			provenance,
 			snapshotCount: this._livingDocs.getSnapshots(resource).length,
+			docPolicy: this._livingDocs.getDocPolicy(resource),
 		};
 		const content = renderLivingDocContent(input);
 		// The mount-once lifecycle (first-render setHtml, pmReset only on a model-driven body change,
@@ -396,4 +405,10 @@ export class LivingDocEditor extends EditorPane {
 		super.focus();
 		this._webview?.focus();
 	}
+}
+
+// Narrow an untrusted webview string to the AgentPolicy union before it reaches the service (walk F11): the
+// doc-header dial only ever sends these three, but the message boundary is untyped, so guard it here.
+function isAgentPolicy(value: string | undefined): value is AgentPolicy {
+	return value === 'auto-figures' || value === 'ask-before-apply' || value === 'draft-only';
 }

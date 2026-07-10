@@ -1609,12 +1609,45 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.recent.add(block.id);
 	}
 
-	// Re-sync the lock from the current sources and auto-apply every figure (the manual "Refresh from
-	// sources" path; figures are deterministic and low-risk). Caller persists. `pass` shares source reads
-	// across the documents of one refresh (plan 30, track 1).
+	// Re-sync the lock from the current sources and reconcile every figure (the manual "Refresh from sources"
+	// path; figures are deterministic and low-risk). The per-document autonomy dial (1g, walk F11) gates what
+	// happens next: `auto-figures` (the default) applies silently and audited; `ask-before-apply`/`draft-only`
+	// queue the figure change to the review rail rather than touching the doc. Meaning changes always wait
+	// regardless - that path is untouched here. Caller persists. `pass` shares source reads across the
+	// documents of one refresh (plan 30, track 1).
 	private async _syncLock(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		await this._resolveIntoLock(state, pass);
-		for (const change of this._figureReconciles(state)) { this._applyFigure(state, change); }
+		const policy = state.lock.policy ?? DEFAULT_DOC_POLICY;
+		for (const change of this._figureReconciles(state)) {
+			if (policy === 'auto-figures') {
+				this._applyFigure(state, change);
+			} else {
+				this._queueFigure(state, change, policy === 'draft-only');
+			}
+		}
+	}
+
+	// Queue a reconciled figure change to the review rail instead of applying it (walk F11, the 1g dial's
+	// `ask-before-apply`/`draft-only` positions). Shared with the agent path's policy gate (_runFiguresByPolicy)
+	// so the doc-header dial and the Agents policy control produce identical pending changes (P2).
+	private _queueFigure(state: IDocState, change: { blockId: string; oldText: string; newText: string }, draft: boolean): void {
+		const block = state.doc.blocks.find(b => b.id === change.blockId);
+		this._pending = this._pending.filter(c => !(c.docId === state.uri.toString() && c.blockId === change.blockId));
+		this._pending.push({
+			id: generateUuid(),
+			docId: state.uri.toString(),
+			docTitle: state.doc.title,
+			blockId: change.blockId,
+			blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
+			oldText: change.oldText,
+			newText: change.newText,
+			kind: 'figure',
+			confidence: 1,
+			rationale: 'Source value changed; figure update prepared.',
+			sourceCells: block ? block.binds.map(b => b.key) : [],
+			via: 'heuristic',
+			draft,
+		});
 	}
 
 	// The verify gate (spec 5, maker != checker): run the document's Skills as graders before apply.
@@ -1708,23 +1741,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				continue;
 			}
 			// ask-before-apply / draft-only: queue for the rail without touching the doc.
-			const block = state.doc.blocks.find(b => b.id === change.blockId);
-			this._pending = this._pending.filter(c => !(c.docId === state.uri.toString() && c.blockId === change.blockId));
-			this._pending.push({
-				id: generateUuid(),
-				docId: state.uri.toString(),
-				docTitle: state.doc.title,
-				blockId: change.blockId,
-				blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
-				oldText: change.oldText,
-				newText: change.newText,
-				kind: 'figure',
-				confidence: 1,
-				rationale: 'Source value changed; figure update prepared.',
-				sourceCells: block ? block.binds.map(b => b.key) : [],
-				via: 'heuristic',
-				draft: policy === 'draft-only',
-			});
+			this._queueFigure(state, change, policy === 'draft-only');
 			queued++;
 		}
 		return { applied, queued };
