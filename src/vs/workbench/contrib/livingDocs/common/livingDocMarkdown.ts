@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { basename } from '../../../../base/common/resources.js';
+import { URI } from '../../../../base/common/uri.js';
 import { IBindLink, ILivingDoc, ILivingDocBlock, LivingDocBlockType } from './livingDocsModel.js';
 
 // The clean-file format (spec 08). A Living Document is portable Markdown:
@@ -213,6 +215,24 @@ function blockFor(chunk: string, index: number): ILivingDocBlock {
 	return { id: 'b-' + index, type, text: chunk, binds };
 }
 
+// The title a document parses to when it declares neither a frontmatter `title:` nor a usable H1 - the
+// signal that the row must fall back to the filename rather than show a bare, file-erasing label.
+export const DEFAULT_DOC_TITLE = 'Untitled';
+
+// Turn a file's basename into a readable title: drop the `.md` extension, and de-slug hyphen/underscore
+// separators so `notes-odd.md` reads "notes odd", never "Untitled". Used as the F8 fallback (walk 1a) when
+// a Markdown file has an odd heading (`#Heading no space`), leading blank lines, or no heading at all.
+export function filenameTitle(resource: URI): string {
+	const raw = basename(resource).replace(/\.md$/i, '').replace(/[-_]+/g, ' ').trim();
+	return raw || basename(resource);
+}
+
+// The display title for a document row: the parsed title where the document names itself, otherwise the
+// filename fallback (F8). A frontmatter title or an authored H1 always wins; only the bare default falls back.
+export function titleForDocument(doc: ILivingDoc, resource: URI): string {
+	return doc.title === DEFAULT_DOC_TITLE ? filenameTitle(resource) : doc.title;
+}
+
 export function parseLivingDoc(text: string): ILivingDoc {
 	const { fm, body } = parseFrontmatter(text);
 	const cleanBody = body.replace(/^\r?\n+/, '').replace(/\s+$/, '') + '\n';
@@ -230,7 +250,7 @@ export function parseLivingDoc(text: string): ILivingDoc {
 	let title = fm.title;
 	if (!title) {
 		const h1 = blocks.find(b => b.type === 'heading' && b.level === 1);
-		title = h1 ? h1.text : 'Untitled';
+		title = h1 ? h1.text : DEFAULT_DOC_TITLE;
 	}
 
 	return {

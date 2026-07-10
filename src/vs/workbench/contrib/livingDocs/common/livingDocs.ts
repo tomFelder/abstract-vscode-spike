@@ -87,6 +87,23 @@ export interface ILivingDocSummary {
 	readonly lastSynced: string;
 	/** Pending meaning-changes for this document (mirrors the Review rail count). */
 	readonly pendingCount: number;
+	/**
+	 * The document's folder path relative to the workspace root (e.g. `reports/2025`; empty at the root), so
+	 * the tree-rail can preserve subfolder hierarchy instead of flattening it (walk 1a F7).
+	 */
+	readonly relativeDir: string;
+}
+
+/**
+ * A non-Markdown workspace file the tree-rail surfaces rather than drops (walk 1a F9/F10). `data` files
+ * (csv, txt, json, images) sit in the Sources section; `unsupported` files (`.doc`/`.docx`) are shown with
+ * a plain-words `note` ("not yet imported") so the beta never silently skips them.
+ */
+export interface IWorkspaceFile {
+	readonly name: string;
+	readonly relativeDir: string;
+	readonly kind: 'data' | 'unsupported';
+	readonly note?: string;
 }
 
 /**
@@ -374,6 +391,13 @@ export interface ILivingDocsService {
 
 	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
 	listDocuments(): Promise<readonly ILivingDocSummary[]>;
+
+	/**
+	 * Discover the non-Markdown files in the workspace (for the tree-rail Sources section): data files (csv,
+	 * txt, json, images) and unsupported `.doc`/`.docx` marked "not yet imported" (walk 1a F9/F10). Markdown
+	 * documents are covered by `listDocuments`; this is the complement so nothing is silently dropped.
+	 */
+	listWorkspaceFiles(): Promise<readonly IWorkspaceFile[]>;
 
 	/** Discover and parse every `*.template.md` in the workspace (for the Templates screen; plan 28). */
 	listTemplates(): Promise<readonly ITemplateInfo[]>;

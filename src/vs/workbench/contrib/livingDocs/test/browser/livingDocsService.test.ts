@@ -182,9 +182,11 @@ suite('LivingDocsService', () => {
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; pickFolder?: URI; noFolder?: boolean; extraFiles?: Record<string, string> } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
+		// Arbitrary extra files (odd-heading docs, nested docs, non-md sources) for the tree-rail probes.
+		for (const [path, content] of Object.entries(opts.extraFiles ?? {})) { files.set(URI.file(path).toString(), content); }
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
 		files.set(URI.file('/ws/market-research.md').toString(), MARKET_MD);
 		files.set(WEEKLY.toString(), WEEKLY_MD);
@@ -1437,6 +1439,51 @@ suite('LivingDocsService', () => {
 			'all .md listed with a living/plain flag, sorted by title',
 		);
 		assert.deepStrictEqual(docs.find(d => d.title === 'Ecosystem Signal')!.sourceKinds, ['api'], 'api source kind still surfaced for the chip');
+	});
+
+	// Walk 1a F7/F8/F9/F10: the messy-folder probes. A doc with an odd heading (`#Heading no space`) or no
+	// heading falls back to its filename (never a bare "Untitled"); nested docs carry their relative dir; the
+	// non-Markdown files surface via listWorkspaceFiles with `.doc`/`.docx` marked "not yet imported".
+	test('odd/blank-heading docs fall back to their filename, nested docs carry relativeDir, non-md files surface (walk 1a F7/F8/F9/F10)', async () => {
+		const service = createService([], {
+			extraFiles: {
+				'/ws/notes-odd.md': '#Heading no space\n\ntext.',
+				'/ws/plain.md': 'no heading at all just a paragraph.',
+				'/ws/reports/2025/report-1.md': '# 2025 Report\n\nbody.',
+				'/ws/notes.txt': 'a note',
+				'/ws/legacy.doc': 'binary-ish',
+				'/ws/report.docx': 'binary-ish',
+			},
+		});
+
+		const docs = await service.listDocuments();
+		const byPath = (suffix: string) => docs.find(d => d.resource.path.endsWith(suffix))!;
+		const files = await service.listWorkspaceFiles();
+		assert.deepStrictEqual(
+			{
+				oddTitle: byPath('/notes-odd.md').title,
+				plainTitle: byPath('/plain.md').title,
+				noUntitled: docs.every(d => d.title !== 'Untitled'),
+				nestedDir: byPath('/reports/2025/report-1.md').relativeDir,
+				rootDir: byPath('/plain.md').relativeDir,
+				files: files.map(f => ({ name: f.name, kind: f.kind, note: f.note })),
+			},
+			{
+				oddTitle: 'notes odd',
+				plainTitle: 'plain',
+				noUntitled: true,
+				nestedDir: 'reports/2025',
+				rootDir: '',
+				// deduped, sorted; the two Word files marked "not yet imported"; the app's own agents.json is data.
+				files: [
+					{ name: 'agents.json', kind: 'data', note: undefined },
+					{ name: 'legacy.doc', kind: 'unsupported', note: 'not yet imported' },
+					{ name: 'metrics.csv', kind: 'data', note: undefined },
+					{ name: 'notes.txt', kind: 'data', note: undefined },
+					{ name: 'report.docx', kind: 'unsupported', note: 'not yet imported' },
+				],
+			},
+		);
 	});
 
 	// Plan 28, iter 1: a `*.template.md` is discovered by listTemplates but NEVER appears in listDocuments

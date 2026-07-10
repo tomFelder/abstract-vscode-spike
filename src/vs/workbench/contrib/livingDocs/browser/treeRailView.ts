@@ -19,8 +19,8 @@ import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
-import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildFileTree, buildOutline, ITreeRailItem, searchTreeRail } from '../common/treeRail.js';
+import { ILivingDocsService, ILivingDocSummary, IWorkspaceFile } from '../common/livingDocs.js';
+import { buildOutline, buildWorkspaceTree, ITreeRailItem, searchTreeRail } from '../common/treeRail.js';
 
 type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
 
@@ -109,32 +109,46 @@ export class TreeRailView extends ViewPane {
 
 		const panel = append(root, $('div.rail-panel'));
 		switch (this._tab) {
-			case 'files': this._renderFiles(panel, documents); break;
+			case 'files': {
+				const files = await this._livingDocs.listWorkspaceFiles();
+				if (token !== this._renderToken || !this._body) { return; }
+				this._renderFiles(panel, documents, files);
+				break;
+			}
 			case 'context': this._renderContext(panel); break;
 			case 'outline': this._renderOutline(panel); break;
 			case 'search': this._renderSearch(panel, documents); break;
 		}
 	}
 
-	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[]): void {
-		const folders = buildFileTree(documents.map(d => ({ title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources })));
+	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[], files: readonly IWorkspaceFile[]): void {
+		const folders = buildWorkspaceTree(
+			documents.map(d => ({ title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, relativeDir: d.relativeDir })),
+			files.map(f => ({ name: f.name, relativeDir: f.relativeDir, kind: f.kind, note: f.note })),
+		);
 		if (!folders.length) {
 			append(panel, $('div.rail-empty')).textContent = 'No documents yet.';
 			return;
 		}
 		for (const folder of folders) {
-			append(panel, $('div.rail-folder')).textContent = folder.name;
+			// Nested subfolders (depth > 0) are indented so the tree preserves hierarchy (walk 1a F7).
+			const header = append(panel, $('div.rail-folder'));
+			header.textContent = folder.name;
+			if (folder.depth > 0) { header.style.paddingLeft = `${6 + folder.depth * 12}px`; }
 			for (const item of folder.items) {
-				this._renderFileItem(panel, item);
+				this._renderFileItem(panel, item, folder.depth);
 			}
 		}
 	}
 
-	private _renderFileItem(panel: HTMLElement, item: ITreeRailItem): void {
+	private _renderFileItem(panel: HTMLElement, item: ITreeRailItem, depth: number = 0): void {
 		const row = append(panel, $(`div.rail-item.rail-item-${item.kind}`));
+		if (depth > 0) { row.style.paddingLeft = `${18 + depth * 12}px`; }
 		const glyph = item.kind === 'doc' ? '\u25A3' : (item.sourceKind === 'api' ? '\u21C4' : (item.sourceKind === 'mcp' ? '\u25F7' : '\u229E'));
 		append(row, $('span.rail-item-glyph')).textContent = glyph;
 		append(row, $('span.rail-item-label')).textContent = item.label;
+		// A plain-words note (e.g. "not yet imported" for a .doc/.docx, walk 1a F10) explains the row.
+		if (item.note) { append(row, $('span.rail-item-note')).textContent = item.note; }
 		if (item.pending) { append(row, $('span.rail-item-dot')); }
 		if (item.resource) {
 			const resource = item.resource;
@@ -365,6 +379,7 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-item-source .rail-item-glyph{color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		.living-docs-rail .rail-item-detail{margin-left:auto;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
+		.living-docs-rail .rail-item-note{margin-left:auto;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground);opacity:.8;white-space:nowrap}
 		.living-docs-rail .rail-item-dot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}
 		.living-docs-rail .rail-item-snippet{width:100%;padding-left:0;font:400 11.5px/1.5 system-ui;color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}

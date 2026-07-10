@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '../../../../nls.js';
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
@@ -22,8 +23,8 @@ import { asJson, asText, IRequestService } from '../../../../platform/request/co
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, IWorkspaceFile, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, titleForDocument, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
@@ -1055,17 +1056,92 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const bound = doc.blocks.reduce((n, b) => n + b.binds.length, 0);
 			return {
 				resource: uri,
-				title: doc.title,
+				// A document with no frontmatter title and no usable H1 parses to the bare "Untitled" default,
+				// which erases which file the row is. Fall back to the filename stem so an odd/blank-heading
+				// Markdown file still names itself in every list (walk 1a F8).
+				title: titleForDocument(doc, uri),
 				isLiving: doc.isLiving,
 				sourceKinds: [...kinds],
 				sources: doc.sources,
 				lastSynced: doc.context.length ? `${doc.context.length} context` : (bound ? `${bound} bound` : ''),
 				pendingCount: this._pending.filter(c => c.docId === id).length,
+				relativeDir: this._relativeDir(uri),
 			};
 		} catch (e) {
 			this._log.trace('[livingDocs] summarize skipped', e instanceof Error ? e.message : String(e));
 			return undefined;
 		}
+	}
+
+	// The folder path of a file relative to its workspace root (e.g. `reports/2025`; "" at the root), so the
+	// tree-rail preserves subfolder hierarchy (walk 1a F7). Falls back to "" when no root contains the file.
+	private _relativeDir(uri: URI): string {
+		for (const folder of this._workspace.getWorkspace().folders) {
+			const root = folder.uri.path.replace(/\/+$/, '');
+			const path = uri.path;
+			if (path === root || path.startsWith(root + '/')) {
+				const rest = path.slice(root.length + 1);
+				const slash = rest.lastIndexOf('/');
+				return slash < 0 ? '' : rest.slice(0, slash);
+			}
+		}
+		return '';
+	}
+
+	// The non-Markdown files in the workspace, for the tree-rail Sources section (walk 1a F9/F10). A shared
+	// bounded walk (mirrors `_collectDocs`) classifies each: data files (csv/txt/json/images) are bindable
+	// sources; `.doc`/`.docx` are unsupported and shown "not yet imported" so the beta never silently skips
+	// them (migration is founder-led for beta, doc 18 §3). Markdown, templates and generated views are the
+	// document surface (`listDocuments`) and are excluded here.
+	async listWorkspaceFiles(): Promise<readonly IWorkspaceFile[]> {
+		const found = new Map<string, URI>();
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectNonDocFiles(folder.uri, found, 0);
+		}
+		const files: IWorkspaceFile[] = [];
+		for (const uri of found.values()) {
+			const name = basename(uri);
+			const unsupported = /\.docx?$/i.test(name);
+			files.push({
+				name,
+				relativeDir: this._relativeDir(uri),
+				kind: unsupported ? 'unsupported' : 'data',
+				note: unsupported ? localize('livingDocs.notYetImported', "not yet imported") : undefined,
+			});
+		}
+		files.sort((a, b) => a.name.localeCompare(b.name));
+		return files;
+	}
+
+	private async _collectNonDocFiles(dir: URI, found: Map<string, URI>, depth: number): Promise<void> {
+		if (depth > 4) { return; }
+		let children;
+		try {
+			children = (await this._files.resolve(dir)).children ?? [];
+		} catch (e) {
+			this._log.trace('[livingDocs] non-doc scan skipped', e instanceof Error ? e.message : String(e));
+			return;
+		}
+		for (const child of children) {
+			const name = basename(child.resource);
+			if (child.isDirectory) {
+				if (name.startsWith('.') || name === 'node_modules' || name === 'out') { continue; }
+				await this._collectNonDocFiles(child.resource, found, depth + 1);
+			} else if (this._isNonDocFile(child.resource)) {
+				found.set(child.resource.toString(), child.resource);
+			}
+		}
+	}
+
+	// A file the tree-rail's Sources section shows: any non-Markdown file except the app's own sidecars
+	// (`.lock.json`) and hidden/dotfiles. `.doc`/`.docx` are included (marked unsupported by the caller).
+	private _isNonDocFile(resource: URI): boolean {
+		const name = basename(resource);
+		if (name.startsWith('.')) { return false; }
+		if (name.endsWith('.lock.json')) { return false; }
+		const path = resource.path;
+		if (path.endsWith('.md')) { return false; } // documents/templates/generated views are the doc surface
+		return true;
 	}
 
 	private async _uniqueDocUri(folder: URI, stem: string = 'Untitled'): Promise<URI> {
