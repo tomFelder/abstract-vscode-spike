@@ -177,6 +177,10 @@ export interface ILivingDocLock {
 	// Named, restorable versions of the body (plan 26 iter 2). Additive field: absent on older locks =
 	// no versions yet; LOCK_VERSION stays 1.
 	snapshots: ISnapshotEntry[];
+	// The per-document autonomy policy the user dials from the doc header (1g, walk F11). Reuses the agent
+	// AgentPolicy vocabulary (P2 - one policy control, not a parallel one). Additive: absent = the default
+	// "auto-figures" (figures auto-apply, meaning-changes wait). Travels with the file (couples to 1d rename).
+	policy?: AgentPolicy;
 }
 
 export function emptyLock(): ILivingDocLock {
@@ -203,6 +207,10 @@ export interface IAgentTrigger {
 // The per-edge safety dial (spec 4.2): figures may apply silently; prose waits for approval; the
 // heartbeat only ever drafts.
 export type AgentPolicy = 'auto-figures' | 'ask-before-apply' | 'draft-only';
+
+// The default per-document autonomy policy (1g, walk F11) when the lock does not carry one: figures
+// auto-apply, meaning-changes wait - the product's central mechanic (doc 12 principle 2).
+export const DEFAULT_DOC_POLICY: AgentPolicy = 'auto-figures';
 
 export type AgentStatus = 'idle' | 'running' | 'needs-approval' | 'blocked' | 'error';
 

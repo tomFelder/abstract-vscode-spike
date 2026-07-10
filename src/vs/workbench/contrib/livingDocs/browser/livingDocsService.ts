@@ -32,7 +32,7 @@ import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, DEFAULT_DOC_POLICY, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
 import { projectDisplayName } from '../common/projectDisplayName.js';
 
@@ -412,6 +412,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return out;
 	}
 	getLock(resource: URI): ILivingDocLock | undefined { return this._docs.get(resource.toString())?.lock; }
+
+	// The per-document autonomy policy (1g, walk F11): the human-dialled setting stored in the lock. Absent =
+	// the "auto-figures" default (figures auto-apply, meaning-changes wait). Reuses the AgentPolicy vocabulary
+	// so the doc-header dial and the Agents policy control are one control, not two (P2).
+	getDocPolicy(resource: URI): AgentPolicy { return this._docs.get(resource.toString())?.lock.policy ?? DEFAULT_DOC_POLICY; }
+
+	async setDocPolicy(resource: URI, policy: AgentPolicy): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		state.lock.policy = policy;
+		// Persist to the lock so the choice survives a reload and travels with the file (couples to 1d rename).
+		await this._lockStore.write(state.uri, state.lock);
+		this._onDidChange.fire();
+	}
+
 	getFreshness(resource: URI): IFreshness {
 		const state = this._docs.get(resource.toString());
 		const staleBindings = state ? [...state.staleBindings] : [];
