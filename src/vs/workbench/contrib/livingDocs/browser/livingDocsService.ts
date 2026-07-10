@@ -74,6 +74,7 @@ interface IDocState {
 	lock: ILivingDocLock;           // the source of truth for resolved values + freshness
 	recent: Set<string>;            // block ids changed in the last refresh (for the highlight)
 	staleBindings: Set<string>;     // dirty bits: bind keys whose source changed since last sync
+	unresolvedBindings: Set<string>; // api/mcp bind keys the last pass could not reach (walk F13, honest fallback)
 	staleContext: Set<string>;      // dirty bits: context files changed since last review
 	status: string;
 	folderFiles: readonly string[]; // real md/csv/json siblings in the doc's folder (for @mention + pickers)
@@ -430,8 +431,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	getFreshness(resource: URI): IFreshness {
 		const state = this._docs.get(resource.toString());
 		const staleBindings = state ? [...state.staleBindings] : [];
+		const unresolvedBindings = state ? [...state.unresolvedBindings] : [];
 		const staleContext = state ? [...state.staleContext] : [];
-		return { staleBindings, staleContext, dirty: staleBindings.length > 0 || staleContext.length > 0 };
+		return { staleBindings, unresolvedBindings, staleContext, dirty: staleBindings.length > 0 || staleContext.length > 0 };
 	}
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
@@ -743,7 +745,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const doc = parseLivingDoc(rawText);
 			if (!doc.isLiving) { return undefined; }
 			const lock = (await this._lockStore.read(uri)) ?? emptyLock();
-			state = { uri, doc, rawText, lock, recent: new Set(), staleBindings: new Set(), staleContext: new Set(), status: '', folderFiles: [] };
+			state = { uri, doc, rawText, lock, recent: new Set(), staleBindings: new Set(), unresolvedBindings: new Set(), staleContext: new Set(), status: '', folderFiles: [] };
 		}
 		if (!state.doc.isLiving) { return undefined; }
 		const resolution = await this._resolveCurrent(state);
@@ -1217,6 +1219,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			lock,
 			recent: this._docs.get(resource.toString())?.recent ?? new Set<string>(),
 			staleBindings: new Set<string>(),
+			unresolvedBindings: new Set<string>(),
 			staleContext: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 			folderFiles: [],
@@ -1275,12 +1278,20 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// called - this is the always-on layer.
 	private async _recomputeFreshness(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		const staleBindings = new Set<string>();
+		const unresolvedBindings = new Set<string>();
 		const staleContext = new Set<string>();
 		if (state.doc.isLiving) {
 			const resolution = await this._resolveCurrent(state, pass);
 			for (const key of Object.keys(state.lock.bindings)) {
 				const cur = resolution.get(key);
 				if (cur && !bindingIsFresh(cur, state.lock.bindings[key])) { staleBindings.add(key); }
+				// A non-file (api/mcp) binding the current pass could not reach produces no resolution (the resolve
+				// helpers return silently on a failed fetch). Mark it so the peek shows an honest "could not reach
+				// source" fallback rather than presenting the last-known value as freshly current (F13). Scoped to
+				// remote sources - a file source that has an extension resolves locally and is covered by staleness.
+				const src = state.lock.bindings[key].source;
+				const isRemote = sourceKind(src) === 'api' || !/\.(csv|json|md|txt|tsv)(#|$)/i.test(src);
+				if (!cur && isRemote) { unresolvedBindings.add(key); }
 			}
 			for (const file of state.doc.context) {
 				const entry = state.lock.context[file];
@@ -1289,6 +1300,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		state.staleBindings = staleBindings;
+		state.unresolvedBindings = unresolvedBindings;
 		state.staleContext = staleContext;
 		if (state.doc.isLiving) {
 			state.status = (staleBindings.size || staleContext.size) ? 'Sources changed - may be affected' : 'All sources synced';
@@ -1758,6 +1770,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			lock,
 			recent: new Set<string>(),
 			staleBindings: new Set<string>(),
+			unresolvedBindings: new Set<string>(),
 			staleContext: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
 			folderFiles: this._docs.get(id)?.folderFiles ?? [],
@@ -3222,10 +3235,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(resource.toString());
 		if (!state || !state.doc.isLiving) { return undefined; }
 		const selected = new Set(cells);
+		// Each row carries the same freshness signals the hover peek reads off the lock (walk F12), so the drawer
+		// and the hover can never disagree: the as-approved value, when it was synced, whether the source has moved
+		// since (stale), and whether a remote source could not be reached last pass (unresolved, F13).
 		const rows: ISourcePeekRow[] = Object.keys(state.lock.bindings).map(key => ({
 			key,
 			value: state.lock.bindings[key].resolved,
 			selected: selected.has(key),
+			syncedAt: state.lock.bindings[key].syncedAt,
+			stale: state.staleBindings.has(key),
+			unresolved: state.unresolvedBindings.has(key),
 		}));
 		const source = state.doc.sources.find(s => sourceKind(s) === 'file') ?? state.doc.sources[0] ?? 'source';
 		const referencedBy = [...this._docs.values()]

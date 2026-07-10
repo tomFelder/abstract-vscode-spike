@@ -8,7 +8,7 @@ import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { AgentPolicy, ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
-import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
+import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance, relativeSyncedLabel } from '../common/livingDocPmDecorations.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
 // The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
@@ -257,6 +257,11 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .srcdrawer .sp-payload{margin:0 0 8px;padding:12px 14px;background:#f7f8fa;border:1px solid #eceef2;border-radius:8px;font:400 11.5px/1.6 'JetBrains Mono',ui-monospace,monospace;color:#2c2f36;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:220px}
 .srcdrawer .sp-field{background:#fef0d6;box-shadow:inset 0 -1px 0 oklch(0.66 0.16 45);border-radius:2px;padding:0 2px;font-weight:600;color:#8a5a12}
 .srcdrawer .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
+/* Per-row freshness (walk F12/F13): the same relativeSyncedLabel every surface uses. A moved source shows a
+ * "then vs now" note; an unreachable remote source an amber "could not reach source" - never a fabricated value. */
+.srcdrawer .sp-fr{font:400 11px/1.4 system-ui;color:#8a8f98}
+.srcdrawer .sp-fr-stale{color:#8a6d1f}
+.srcdrawer .sp-fr-warn{color:#b1442f;font-weight:600}
 .prose{max-width:720px;margin:0 auto;padding:24px 40px 80px;font:400 15.5px/1.7 system-ui;color:#2a2a31}
 .prose h1{font:600 30px/1.12 system-ui;letter-spacing:-.02em;color:#15151a;margin:24px 0 12px}
 .prose h2{font:600 16px/1.3 system-ui;color:#26262d;margin:26px 0 10px}
@@ -352,7 +357,9 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .lwd-tip .tip-src{font:600 12px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#fff;word-break:break-all}
 .lwd-tip .tip-meta{color:#b7bcc6;margin-top:1px}
 .lwd-tip .tip-stale{display:flex;align-items:center;gap:6px;margin-top:5px;color:#f0b968;font-weight:500}
-.lwd-tip .tip-stale::before{content:"";width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}`;
+.lwd-tip .tip-stale::before{content:"";width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}
+.lwd-tip .tip-warn{display:flex;align-items:center;gap:6px;margin-top:5px;color:#f2836a;font-weight:600}
+.lwd-tip .tip-warn::before{content:"";width:6px;height:6px;border-radius:50%;background:#e05a3d;flex:none}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -379,8 +386,12 @@ let _tip = null;
 function tipEsc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function showTip(el, key){ const p = _prov[key]; if (!p) { return; } if (!_tip) { _tip = document.createElement('div'); _tip.className = 'lwd-tip'; document.body.appendChild(_tip); }
 	const loc = p.location ? (tipEsc(p.location) + ' &middot; ') : '';
-	const stale = p.fresh ? '' : '<div class="tip-stale">Source changed since last sync</div>';
-	_tip.innerHTML = '<div class="tip-src">' + tipEsc(p.source) + '</div><div class="tip-meta">' + loc + tipEsc(p.synced) + '</div>' + stale;
+	// F13: an unreachable remote source is called out honestly (the value shown is the last known one), and it
+	// takes priority over the generic "changed since sync" line. Otherwise the amber stale line shows when stale.
+	const flag = p.unresolved
+		? '<div class="tip-warn">Could not reach source - last known value</div>'
+		: (p.fresh ? '' : '<div class="tip-stale">Source changed since last sync</div>');
+	_tip.innerHTML = '<div class="tip-src">' + tipEsc(p.source) + '</div><div class="tip-meta">' + loc + tipEsc(p.synced) + '</div>' + flag;
 	const box = el.getBoundingClientRect();
 	// Measure then place above the figure (or below when it would clip the top of the viewport).
 	_tip.classList.add('show');
@@ -788,8 +799,19 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 // The bottom source drawer (the comp's "Workbench v2" overlay) for the PM surface: a full-width overlay
 // fixed to the bottom of the webview so the document is never split into a side-by-side pane.
 function renderSourceDrawer(peek: ISourcePeekRender): string {
-	const rows = peek.rows.map(r =>
-		`<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td></tr>`).join('');
+	// Each bound-figure row carries its own truthful freshness (walk F12): the same relativeSyncedLabel the hover
+	// peek uses, off the same lock timestamp, so the drawer and the hover always agree. A moved source is marked
+	// "then vs now" (the shown value is as-approved, not current); a remote source that could not be reached is
+	// marked "could not reach source" (F13) - never a fabricated fresh value.
+	const rows = peek.rows.map(r => {
+		const fresh = relativeSyncedLabel(r.syncedAt);
+		const mark = r.unresolved
+			? `<span class="sp-fr sp-fr-warn" title="This source could not be reached on the last sync - showing the last known value.">&#9888; Could not reach source &middot; last known ${esc(fresh)}</span>`
+			: r.stale
+				? `<span class="sp-fr sp-fr-stale" title="The source changed since this value was approved - Refresh to re-derive.">Then (as approved) &middot; ${esc(fresh)} &middot; source has changed</span>`
+				: `<span class="sp-fr">${esc(fresh)}</span>`;
+		return `<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td><td>${mark}</td></tr>`;
+	}).join('');
 	// The comp shows the source's raw CSV grid with the latest row (the one the document binds to)
 	// highlighted - rendered above the resolved bound-figure list.
 	const grid = peek.grid;
@@ -825,7 +847,7 @@ function renderSourceDrawer(peek: ISourcePeekRender): string {
 		+ `<div class="sd-head"><span class="sd-name">&#8862; ${esc(peek.source)}</span>`
 		+ `<span class="sd-meta">source &middot; ${rowCount} row${rowCount === 1 ? '' : 's'}</span>${pinned}`
 		+ `<span class="sd-actions">${action}<button class="sd-x" data-source-close title="Close source">&#10005;</button></span></div>`
-		+ `<div class="sd-body">${gridHtml}${payloadHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
+		+ `<div class="sd-body">${gridHtml}${payloadHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th><th>Freshness</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
 	return drawer;
 }
 

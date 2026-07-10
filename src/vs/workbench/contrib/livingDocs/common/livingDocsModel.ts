@@ -84,6 +84,7 @@ export type ChangeKind = 'figure' | 'meaning';
 // since last review. Computed without any model calls.
 export interface IFreshness {
 	readonly staleBindings: readonly string[];  // bind keys whose source value changed since last sync
+	readonly unresolvedBindings: readonly string[]; // api/mcp bind keys the last pass could not reach (walk F13)
 	readonly staleContext: readonly string[];   // context files changed since last review
 	readonly dirty: boolean;                     // true when anything is stale ("may be affected")
 }

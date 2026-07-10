@@ -422,7 +422,7 @@ suite('LivingDocsService', () => {
 
 	test('buildContextGroups splits image references into Images and surfaces added pasted/knowledge groups', () => {
 		const doc: ILivingDoc = { title: 't', subtitle: '', sources: [], context: ['market-research.md', 'chart.png'], blocks: [], isLiving: true, body: '' };
-		const fresh: IFreshness = { staleBindings: [], staleContext: [], dirty: false };
+		const fresh: IFreshness = { staleBindings: [], unresolvedBindings: [], staleContext: [], dirty: false };
 		const groups = buildContextGroups(doc, fresh, [
 			{ kind: 'pasted', label: 'Q3 plan notes', detail: 'pasted note' },
 			{ kind: 'knowledge', label: 'North Star metric', detail: 'company knowledge' },

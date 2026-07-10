@@ -329,8 +329,9 @@ export class LivingDocEditor extends EditorPane {
 		// bindings + its live staleness set into { source, location, synced, fresh }. Empty when the document
 		// is not living / has no lock, so the tooltip stays silent on a plain Markdown doc.
 		const lock = this._livingDocs.getLock(resource);
+		const freshness = this._livingDocs.getFreshness(resource);
 		const provenance = lock
-			? buildFigureProvenance(lock, new Set(this._livingDocs.getFreshness(resource).staleBindings))
+			? buildFigureProvenance(lock, new Set(freshness.staleBindings), Date.now(), new Set(freshness.unresolvedBindings))
 			: [];
 		const input: ILivingDocRenderInput = {
 			doc: this._livingDocs.getDoc(resource),

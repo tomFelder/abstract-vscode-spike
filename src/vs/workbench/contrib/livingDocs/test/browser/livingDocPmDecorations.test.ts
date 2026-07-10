@@ -355,6 +355,20 @@ suite('LivingDoc PM decoration mapping', () => {
 			assert.deepStrictEqual(prov, [{ key: 'pipeline@mcp:demo.query/total', source: 'demo.query', location: '', synced: 'Not yet synced', fresh: true }]);
 		});
 
+		test('a remote binding the last pass could not reach reports unresolved:true (F13 honest fallback)', () => {
+			// The value shown is the last known one; the flag marks the row so the peek says "could not reach
+			// source" instead of presenting a stale value as freshly current. A resolved/file binding never gets it.
+			const lock = lockWith({
+				'crm.pipeline': { resolved: '128,000', source: 'https://crm.example.com/data#pipeline', sourceHash: 'b2', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+				'metrics.mrr': { resolved: '$48.6k', source: 'metrics.csv#mrr', sourceHash: 'a1', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+			});
+			const prov = buildFigureProvenance(lock, new Set(), NOW, new Set(['crm.pipeline']));
+			assert.deepStrictEqual(prov, [
+				{ key: 'crm.pipeline', source: 'https://crm.example.com/data', location: 'pipeline', synced: 'Synced 2 h ago', fresh: true, unresolved: true },
+				{ key: 'metrics.mrr', source: 'metrics.csv', location: 'mrr', synced: 'Synced 2 h ago', fresh: true },
+			]);
+		});
+
 		test('relativeSyncedLabel is truthful across buckets and never fabricates on a missing time', () => {
 			assert.strictEqual(relativeSyncedLabel(undefined, NOW), 'Not yet synced');
 			assert.strictEqual(relativeSyncedLabel('not-a-date', NOW), 'Not yet synced');

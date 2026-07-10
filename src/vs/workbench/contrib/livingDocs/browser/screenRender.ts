@@ -11,6 +11,7 @@
 
 import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { countTemplateSlots } from '../common/livingDocMarkdown.js';
+import { relativeSyncedLabel } from '../common/livingDocPmDecorations.js';
 import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings';
@@ -629,21 +630,10 @@ function renderTemplates(state: IScreenState): string {
 // (every bound source + its freshness + the documents that depend on it) with a per-source detail drawer;
 // the Organization tab is an honest "Soon" until a real org store exists (never fabricated). ----
 
-// A truthful relative "last synced" label from a lock timestamp. Undefined = referenced but never synced
-// (the honest idle state), never a fabricated freshness.
-function relativeSynced(iso: string | undefined): string {
-	if (!iso) { return 'Not yet synced'; }
-	const t = Date.parse(iso);
-	if (Number.isNaN(t)) { return 'Not yet synced'; }
-	const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
-	if (s < 60) { return 'Synced just now'; }
-	const m = Math.floor(s / 60);
-	if (m < 60) { return `Synced ${m} min ago`; }
-	const h = Math.floor(m / 60);
-	if (h < 24) { return `Synced ${h} h ago`; }
-	const d = Math.floor(h / 24);
-	return `Synced ${d} day${d === 1 ? '' : 's'} ago`;
-}
+// The relative "last synced" label is the ONE shared formatter (relativeSyncedLabel, walk F12): every surface
+// that shows freshness - the hover peek, the source drawer, the Knowledge tab here - reads the same helper off
+// the same lock timestamp, so they can never disagree ("Synced 4 min ago" vs "Synced 11 days ago" for one file).
+const relativeSynced = relativeSyncedLabel;
 
 // Kind glyph for a source row (source-hygiene: non-ASCII written as HTML entities).
 const SOURCE_KIND_ICON: Record<string, string> = { file: '&#9635;', api: '&#127760;', mcp: '&#9670;' };

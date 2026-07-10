@@ -204,6 +204,23 @@ export interface ISourcePeekRow {
 	readonly value: string;
 	/** True when this key is the one the clicked provenance dot points at (highlighted in the pane). */
 	readonly selected: boolean;
+	/**
+	 * ISO timestamp this value was last synced from its source (walk F12): drives the row's freshness label,
+	 * read from the same lock `syncedAt` the hover peek uses so every surface agrees. Absent = never synced.
+	 */
+	readonly syncedAt?: string;
+	/**
+	 * True when the source has moved since this value was approved (walk F12): the value shown is the
+	 * as-approved figure, NOT the current source value - the row is marked so a stale value is never presented
+	 * as current (staleness-escape guardrail). Refresh re-derives it.
+	 */
+	readonly stale?: boolean;
+	/**
+	 * True when this binding is api/mcp and its source could not be resolved on the last pass (walk F13): the
+	 * shown value is the last known one, honestly marked "could not reach source" rather than a fabricated
+	 * fresh value. Absent/false for a resolved or file-backed binding.
+	 */
+	readonly unresolved?: boolean;
 }
 
 /**

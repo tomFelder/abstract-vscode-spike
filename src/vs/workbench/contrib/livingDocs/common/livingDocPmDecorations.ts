@@ -20,6 +20,9 @@ export interface IPmProvenance {
 	readonly synced: string;
 	// True when the current source value still matches the lock's recorded hash (nothing stale for this key).
 	readonly fresh: boolean;
+	// True when a remote (api/mcp) source could not be reached on the last pass (walk F13): the tooltip shows an
+	// honest "could not reach source" line and the shown value is the last known one, never a fabricated fresh value.
+	readonly unresolved?: boolean;
 }
 
 // A truthful relative "last synced" label from a lock timestamp (plan 29, iter 3). Undefined/unparseable =
@@ -45,14 +48,15 @@ export function relativeSyncedLabel(iso: string | undefined, now: number = Date.
  * `fresh` to false so the tooltip's amber "source changed since" line shows. Pure so it is unit-tested
  * directly and reused by the render payload builder; `now` is injectable for deterministic time tests.
  */
-export function buildFigureProvenance(lock: ILivingDocLock, staleKeys: ReadonlySet<string>, now: number = Date.now()): IPmProvenance[] {
+export function buildFigureProvenance(lock: ILivingDocLock, staleKeys: ReadonlySet<string>, now: number = Date.now(), unresolvedKeys?: ReadonlySet<string>): IPmProvenance[] {
 	const out: IPmProvenance[] = [];
 	for (const key of Object.keys(lock.bindings)) {
 		const entry = lock.bindings[key];
 		const hashIdx = entry.source.indexOf('#');
 		const source = hashIdx >= 0 ? entry.source.slice(0, hashIdx) : entry.source;
 		const location = hashIdx >= 0 ? entry.source.slice(hashIdx + 1) : '';
-		out.push({ key, source, location, synced: relativeSyncedLabel(entry.syncedAt, now), fresh: !staleKeys.has(key) });
+		const unresolved = unresolvedKeys?.has(key) ?? false;
+		out.push({ key, source, location, synced: relativeSyncedLabel(entry.syncedAt, now), fresh: !staleKeys.has(key), ...(unresolved ? { unresolved: true } : {}) });
 	}
 	return out;
 }
