@@ -1611,6 +1611,16 @@ suite('LivingDocsService', () => {
 		assert.deepStrictEqual(opened[opened.length - 1]?.resource?.toString(), uri!.toString(), 'the generated document is opened in the editor');
 	});
 
+	// F4 (walk 1b): sendChatMessage records a plain-words visible turn when a displayText is given, so an
+	// internal brief (template generation) drives the model without being dumped verbatim into the rail (P5).
+	test('sendChatMessage shows displayText in the rail while the full instruction drives the model (walk 1b F4)', async () => {
+		const service = createService([{ resource: WEEKLY }], { model: modelMessage({ reply: 'Drafted.', edits: [], inserts: [] }) });
+		await service.sendChatMessage(WEEKLY, 'Generate the first draft of this report. Template brief: fill every section from metrics.csv.', 'Draft this document from the Weekly report template.');
+		const userTurn = service.getChatMessages(WEEKLY).find(m => m.role === 'user');
+		assert.strictEqual(userTurn?.content, 'Draft this document from the Weekly report template.', 'the visible turn is the plain-words displayText');
+		assert.ok(!/Template brief|Generate the first draft/.test(userTurn?.content ?? ''), 'the internal brief never appears in the rail');
+	});
+
 	// The honest no-model state (plan 28, iter 3): the skeleton is still created and bound, but no prose is
 	// fabricated - the status explains the draft needs the model, and nothing is queued.
 	test('generateFromTemplate with no model still writes the bound skeleton and explains the draft needs a model', async () => {
@@ -1628,6 +1638,9 @@ suite('LivingDocsService', () => {
 		const service = createService();
 		const named = await service.createDocument('Quarterly plan');
 		assert.ok(named && named.path.endsWith('Quarterly plan.md'), 'a provided name is born titled');
+		// F3 (walk 1b): a named blank is born with its title as the H1, so the document itself keeps the typed
+		// name (editor + every list read "Quarterly plan", never "Untitled").
+		assert.strictEqual(parseLivingDoc(lastFiles!.get(named!.toString()) ?? '').title, 'Quarterly plan', 'the blank doc is born titled');
 		const blank = await service.createDocument();
 		assert.ok(blank && blank.path.endsWith('Untitled.md'), 'no name keeps the Untitled name-on-first-save path');
 	});

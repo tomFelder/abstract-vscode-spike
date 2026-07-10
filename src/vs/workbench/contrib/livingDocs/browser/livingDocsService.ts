@@ -931,8 +931,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// name-on-first-save escape hatch. Path-hostile characters are stripped so the name is a safe stem.
 		const stem = LivingDocsService._safeStem(name);
 		const target = await this._uniqueDocUri(folder.uri, stem || 'Untitled');
+		// F3 (walk 1b): name-first birth must hold for a blank document, not only templates. When the user
+		// typed a name, seed the file with that name as its H1 so the document is genuinely born titled - the
+		// editor and every list show the typed name, not "Untitled". A nameless blank keeps the empty seed.
+		const seed = name && name.trim() ? `# ${name.trim()}\n` : NEW_DOCUMENT_TEMPLATE;
 		try {
-			await this._files.writeFile(target, VSBuffer.fromString(NEW_DOCUMENT_TEMPLATE));
+			await this._files.writeFile(target, VSBuffer.fromString(seed));
 			await this._editors.openEditor({ resource: target, options: { pinned: true } });
 			this._onDidChange.fire();
 			return target;
@@ -989,9 +993,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return target;
 		}
 		// Drive the existing generative chat path with the composed brief: the model's output arrives as
-		// insertion proposals in the review rail, exactly like any chat generation.
+		// insertion proposals in the review rail, exactly like any chat generation. The rail shows a plain-words
+		// user turn (F4) - the internal brief drives the model but is never dumped into the transcript.
 		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
-		await this.sendChatMessage(target, instruction);
+		const shown = localize('livingDocs.draftFromTemplate', "Draft this document from the {0} template.", templateName);
+		await this.sendChatMessage(target, instruction, shown);
 		return target;
 	}
 
@@ -2635,7 +2641,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._chatBusy.has(resource.toString());
 	}
 
-	async sendChatMessage(resource: URI, text: string): Promise<void> {
+	async sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void> {
 		const trimmed = text.trim();
 		if (!trimmed) { return; }
 		const id = resource.toString();
@@ -2643,7 +2649,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chats.set(id, history);
 
 		const mentions = this._parseMentions(resource, trimmed);
-		history.push({ role: 'user', content: trimmed, mentions: mentions.length ? mentions : undefined });
+		// F4 (walk 1b): the visible user turn is `displayText` when the caller supplies a plain-words summary
+		// (e.g. template generation), so the internal brief/prompt is never dumped verbatim into the rail (P5).
+		// The full `trimmed` instruction still drives the model; only the transcript entry is the human line.
+		const shown = displayText?.trim() || trimmed;
+		history.push({ role: 'user', content: shown, mentions: mentions.length ? mentions : undefined });
 		await this._deliverChatReply(resource, trimmed, mentions);
 	}
 

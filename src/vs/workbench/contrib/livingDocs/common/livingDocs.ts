@@ -606,8 +606,10 @@ export interface ILivingDocsService {
 	 * (with resolved figures) plus the mentioned/context sources, and asks the model for a reply that
 	 * may also propose prose edits - those queue into the Review rail like any other pending change.
 	 * With no model reachable it appends an honest fallback turn and proposes nothing (never fakes a reply).
+	 * `displayText`, when given, is the plain-words line shown in the transcript in place of `text` (so an
+	 * internal brief drives the model without being dumped into the rail; walk 1b F4).
 	 */
-	sendChatMessage(resource: URI, text: string): Promise<void>;
+	sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void>;
 	/**
 	 * Cancel the in-flight chat reply for a document (plan 27). Aborts the streaming model call; the prose
 	 * streamed so far is kept as a muted "stopped" turn and any proposal JSON is discarded (decision D27-B).
