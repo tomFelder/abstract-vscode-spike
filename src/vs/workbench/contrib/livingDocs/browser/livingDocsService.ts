@@ -2531,6 +2531,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
+	// Empty an anchor's working set (plan 37, F14): used before a scoped retry rebuilds the set from just the
+	// documents a model outage never reached, so the fan-out re-runs surgically over the failed docs alone.
+	clearWorkingSet(resource: URI): void {
+		const id = resource.toString();
+		if (!this._workingSets.has(id)) { return; }
+		this._workingSets.delete(id);
+		this._onDidChange.fire();
+	}
+
 	async getWorkingSetCandidates(resource: URI): Promise<readonly IWorkingSetDoc[]> {
 		const inSet = new Set(this.getWorkingSet(resource).map(d => d.resource.toString()));
 		const docs = await this.listDocuments();

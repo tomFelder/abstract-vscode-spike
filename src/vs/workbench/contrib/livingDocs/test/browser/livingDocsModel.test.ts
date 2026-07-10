@@ -73,6 +73,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 1,
 			skippedDocs: 0,
 			oversizeDocs: 0,
+			failedDocs: 0,
 		});
 	});
 
@@ -88,6 +89,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 3,
 			skippedDocs: 0,
 			oversizeDocs: 0,
+			failedDocs: 0,
 		});
 	});
 
@@ -106,6 +108,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 0,
 			skippedDocs: 2,
 			oversizeDocs: 0,
+			failedDocs: 0,
 		});
 	});
 
@@ -121,6 +124,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 0,
 			skippedDocs: 0,
 			oversizeDocs: 0,
+			failedDocs: 0,
 		});
 	});
 
@@ -139,6 +143,27 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 1,
 			skippedDocs: 0,
 			oversizeDocs: 1,
+			failedDocs: 0,
+		});
+	});
+
+	test('a model outage marks not-yet-changed documents failed (not no-change), keeping changed ones (plan 37, F14)', () => {
+		// A mid-run model outage means every document that did not already land a change was never reached.
+		// It must read `failed` (not reached), NEVER `no-change` - an outage must never be indistinguishable
+		// from a genuine no-op. A document that produced a change before the outage keeps its `changed` tile.
+		const pending = [change('a', '1')];
+		assert.deepStrictEqual(summariseProjectRun(docs, pending, false, [], true), {
+			tiles: [
+				{ docId: 'a', docTitle: 'Access Control', status: 'changed', changeCount: 1 },
+				{ docId: 'b', docTitle: 'Acceptable Use', status: 'failed', changeCount: 0 },
+				{ docId: 'c', docTitle: 'Cryptography', status: 'failed', changeCount: 0 },
+			],
+			totalChanges: 1,
+			changedDocs: 1,
+			unchangedDocs: 0,
+			skippedDocs: 0,
+			oversizeDocs: 0,
+			failedDocs: 2,
 		});
 	});
 });

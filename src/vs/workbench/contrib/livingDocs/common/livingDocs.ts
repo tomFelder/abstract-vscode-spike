@@ -606,6 +606,8 @@ export interface ILivingDocsService {
 	addFolderToWorkingSet(resource: URI): Promise<void>;
 	/** Remove one document from the chat's working set. */
 	removeFromWorkingSet(resource: URI, doc: URI): void;
+	/** Empty the chat's working set (plan 37, F14: rebuilt from the failed docs before a scoped retry). */
+	clearWorkingSet(resource: URI): void;
 	/** The folder documents not already in the working set, for the "Add documents…" picker. */
 	getWorkingSetCandidates(resource: URI): Promise<readonly IWorkingSetDoc[]>;
 

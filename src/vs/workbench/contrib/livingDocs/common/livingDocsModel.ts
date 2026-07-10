@@ -380,7 +380,12 @@ export function nextPendingDocId(pending: readonly IProposedChange[], currentDoc
 // `oversize` (plan 30, track 3, D30-B): a document too large for the fan-out's context budget - it was
 // NEVER sent to the model (it would overflow the call by itself), so its tile reads the honest "too large
 // for this run" state rather than a silent drop or a "no change" that never happened.
-export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working' | 'skipped' | 'oversize';
+// `failed` (plan 37, F14): the whole-project run hit a model outage (the fan-out model call threw or the
+// model was unreachable), so a document with no change never got a real result. It must NOT read `no-change`
+// (which claims it ran and found nothing) - an outage is not a no-op. Its tile reads the honest "not reached
+// - model outage" state and the run offers a retry of exactly these documents (the single-doc rail's named
+// error is the reference standard; the fan-out must match it, never render an outage as success).
+export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working' | 'skipped' | 'oversize' | 'failed';
 
 export interface IProjectRunDocTile {
 	readonly docId: string;
@@ -403,6 +408,7 @@ export interface IProjectRunSummary {
 	readonly unchangedDocs: number;     // documents with no pending change (0 when the run was stopped)
 	readonly skippedDocs: number;       // documents the stopped run never settled (plan 27 iter 4)
 	readonly oversizeDocs: number;      // documents too large for the fan-out budget (plan 30, track 3)
+	readonly failedDocs: number;        // documents not reached because the run hit a model outage (plan 37, F14)
 }
 
 // `stopped` (plan 27 iter 4): the run was cancelled mid-flight, so a document with no pending change is
@@ -410,11 +416,17 @@ export interface IProjectRunSummary {
 // `oversizeDocIds` (plan 30, track 3, D30-B): the documents too large for the fan-out's context budget -
 // they were never sent, so their tile is honestly `oversize` regardless of stop state (they take priority
 // over `changed`/`skipped`/`no-change` because "too large to run" is the true reason they produced nothing).
+// `failed` (plan 37, F14): the run hit a model outage, so a document with no change never got a real result -
+// its tile reads the honest `failed` (not `no-change`, which would render an outage as a truthful no-op). A
+// document that already produced a change before the outage keeps its `changed` tile. An outage takes priority
+// over `skipped` (an outage is the real reason, not a user stop) but never over `oversize` (too-large is a
+// per-document fact that holds regardless of the run's fate).
 export function summariseProjectRun(
 	docs: readonly { readonly docId: string; readonly docTitle: string }[],
 	pending: readonly IProposedChange[],
 	stopped = false,
 	oversizeDocIds: readonly string[] = [],
+	failed = false,
 ): IProjectRunSummary {
 	const counts = new Map<string, number>();
 	for (const c of pending) { counts.set(c.docId, (counts.get(c.docId) ?? 0) + 1); }
@@ -423,14 +435,16 @@ export function summariseProjectRun(
 		const changeCount = counts.get(d.docId) ?? 0;
 		// An oversize document is honestly flagged even if it also shows no change: it never ran, so its
 		// tile must not read `no change` (which claims it ran and found nothing) nor `skipped` (a stop).
+		// A run that hit a model outage marks its unchanged documents `failed` (not reached), not `no-change`.
 		const status: ProjectRunDocStatus = oversize.has(d.docId)
 			? 'oversize'
-			: changeCount > 0 ? 'changed' : (stopped ? 'skipped' : 'no-change');
+			: changeCount > 0 ? 'changed' : (failed ? 'failed' : stopped ? 'skipped' : 'no-change');
 		return { docId: d.docId, docTitle: d.docTitle, status, changeCount };
 	});
 	const changedDocs = tiles.filter(t => t.status === 'changed').length;
 	const skippedDocs = tiles.filter(t => t.status === 'skipped').length;
 	const oversizeDocs = tiles.filter(t => t.status === 'oversize').length;
+	const failedDocs = tiles.filter(t => t.status === 'failed').length;
 	// Count only changes attributable to a document in this project's tile set, so totalChanges
 	// always equals the sum of the tile counts. A pending change whose docId is not in `docs`
 	// (a stale snapshot / a doc removed mid-run) has no tile and must not inflate the bottom-bar total.
@@ -439,9 +453,10 @@ export function summariseProjectRun(
 		tiles,
 		totalChanges,
 		changedDocs,
-		unchangedDocs: tiles.length - changedDocs - skippedDocs - oversizeDocs,
+		unchangedDocs: tiles.length - changedDocs - skippedDocs - oversizeDocs - failedDocs,
 		skippedDocs,
 		oversizeDocs,
+		failedDocs,
 	};
 }
 

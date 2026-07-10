@@ -28,6 +28,15 @@ import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProvid
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
 
+// True when an assistant fallback turn's content is the "model unreachable" guidance (plan 37, F14). The
+// single-doc rail returns this exact phrasing when the proxy is down at the START of a run (the reference
+// standard, spec 1e); the project run reuses that same chat path, so its anchor turn carries the same message.
+// Matched on the load-bearing phrase so the project-run screen can name the outage rather than rendering the
+// run's untouched documents as a silent "no change". A mid-run outage instead sets `failed:true` on the turn.
+function isModelUnreachable(content: string): boolean {
+	return content.includes('agent model is not reachable');
+}
+
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
 	knScope: 'org' | 'project';
@@ -380,6 +389,12 @@ export class ScreenEditor extends EditorPane {
 				if (anchor) { this._livingDocs.cancelChat(anchor); }
 				break;
 			}
+			// Retry only the documents a model outage never reached (plan 37, F14): re-run the SAME instruction
+			// across just the failed docs. Documents that already produced changes keep them; the retry fans out
+			// over the outage's untouched set. Mirrors the single-doc rail's Retry (re-send the same request).
+			case 'retryProjectRun':
+				void this._retryFailedProjectRun();
+				break;
 			// Project-run screen idle-state affordance: jump to the Agents screen (the run entry point).
 			case 'goAgents':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'agents'), { pinned: true });
@@ -659,7 +674,7 @@ export class ScreenEditor extends EditorPane {
 	// document to that anchor's working set, then send ONE instruction so `_chatRespondMulti` fans it out
 	// across the project in a single model call. The run is in flight while `isChatBusy(anchor)` is true;
 	// the finally block of `sendChatMessage` fires onDidChange, which re-renders and settles the swarm.
-	private async _kickProjectRun(instruction?: string, source?: string): Promise<void> {
+	private async _kickProjectRun(instruction?: string, source?: string, targetDocIds?: readonly string[]): Promise<void> {
 		const docs = await this._livingDocs.listDocuments();
 		if (docs.length === 0) { return; }
 		const runInstruction = instruction ?? 'Extract the decisions from the 3 March security review and apply the required changes across every affected policy.';
@@ -668,7 +683,17 @@ export class ScreenEditor extends EditorPane {
 		// transcript source is resolvable) and `sendChatMessage` requires a loaded anchor to fan out.
 		const anchor = docs[0].resource;
 		await this._livingDocs.loadDocument(anchor);
-		await this._livingDocs.addFolderToWorkingSet(anchor);
+		// A retry (plan 37, F14) fans out over ONLY the documents the outage never reached; a fresh run fans
+		// out over the whole folder. Restricting the working set to the failed docs is what makes the retry
+		// surgical - documents that already produced changes keep them and are not re-run. The anchor doc is
+		// added to its own working set when it is one of the failed docs, so it is re-run like any other.
+		if (targetDocIds && targetDocIds.length) {
+			this._livingDocs.clearWorkingSet(anchor);
+			const targets = targetDocIds.map(id => URI.parse(id));
+			await this._livingDocs.addToWorkingSet(anchor, targets);
+		} else {
+			await this._livingDocs.addFolderToWorkingSet(anchor);
+		}
 		// Default to the real security-review transcript source when the caller named none (the Agents
 		// "Run across the project" action passes none today). Resolved against the loaded anchor's
 		// mentionable folder files - never fabricated: undefined when the project ships no such source.
@@ -686,6 +711,18 @@ export class ScreenEditor extends EditorPane {
 		this._render();
 		// Fire-and-await the fan-out; the finally block flips isChatBusy off and fires onDidChange -> re-render.
 		await this._livingDocs.sendChatMessage(anchor, sent);
+	}
+
+	// Retry only the documents a model outage never reached (plan 37, F14). Recompute the failed set from the
+	// current run state (the same `summariseProjectRun` the screen renders), then re-kick the SAME instruction
+	// and source fanned out across just those documents. If the failed set is empty (nothing to retry) it is a
+	// no-op. Documents that already produced changes are untouched - the retry is surgical, not a whole re-run.
+	private async _retryFailedProjectRun(): Promise<void> {
+		const runState = this._projectRunState();
+		if (!runState?.failed || !runState.summary) { return; }
+		const failedDocIds = runState.summary.tiles.filter(t => t.status === 'failed').map(t => t.docId);
+		if (failedDocIds.length === 0) { return; }
+		await this._kickProjectRun(runState.instruction, runState.source, failedDocIds);
 	}
 
 	// Plan-24 entry (24.5): open the cross-document review screen (C5) landing on the FIRST document that
@@ -803,14 +840,21 @@ export class ScreenEditor extends EditorPane {
 		// (the whole-project fan-out is that anchor's chat call). When stopped, docs with no change are honestly
 		// skipped, not no-change. Never treat an in-flight run as stopped.
 		const chat = anchor ? this._livingDocs.getChatMessages(anchor) : [];
-		const stopped = !inFlight && chat.length > 0 && !!chat[chat.length - 1].stopped;
+		const lastTurn = chat.length > 0 ? chat[chat.length - 1] : undefined;
+		const stopped = !inFlight && !!lastTurn?.stopped;
+		// F14 (plan 37): a settled run hit a MODEL OUTAGE when the anchor's last chat turn is a failed error
+		// turn (the fan-out model call threw mid-run) or a model-unreachable fallback (the proxy was down when
+		// the run started). Either way the run never produced real per-document results, so its unchanged
+		// documents must read `failed` (not reached), never `no-change`. An outage is never rendered as success.
+		const failed = !inFlight && !!lastTurn && lastTurn.role === 'assistant'
+			&& (lastTurn.failed === true || (lastTurn.via === 'fallback' && isModelUnreachable(lastTurn.content)));
 		// Fan-out batch progress (plan 30, track 3, D30-B): which batch of how many is running and which docs
 		// were too large for the budget. Oversize docs are flagged on their tiles (never sent, never dropped),
 		// and are excluded from the live "working" overlay so an oversize tile reads "too large", not spinning.
 		const fanout = anchor ? this._livingDocs.getFanoutProgress(anchor) : undefined;
 		const oversizeIds = fanout?.oversizeDocIds ?? [];
 		const oversize = new Set(oversizeIds);
-		const summary = summariseProjectRun(docs, pending, stopped, oversizeIds);
+		const summary = summariseProjectRun(docs, pending, stopped, oversizeIds, failed);
 		const working = inFlight ? docs.map(d => d.docId).filter(id => !oversize.has(id)) : [];
 		// Decisions column (23.4): group the LIVE pending changes by their source grounding. Restrict to
 		// changes for documents in this run's tile set so a stale change from another surface never leaks
@@ -818,7 +862,7 @@ export class ScreenEditor extends EditorPane {
 		const runDocIds = new Set(docs.map(d => d.docId));
 		const decisions = groupDecisions(pending.filter(c => runDocIds.has(c.docId)));
 		const batch = fanout ? { index: fanout.batchIndex, count: fanout.batchCount } : undefined;
-		return { ...run, inFlight, stopped, summary, working, decisions, batch };
+		return { ...run, inFlight, stopped, failed, summary, working, decisions, batch };
 	}
 
 	layout(dimension: Dimension): void {
