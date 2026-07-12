@@ -50,6 +50,16 @@ tab. What they experience today:
    brilliant, they suspect there is 10x more available, they have heard of Claude Code/Cursor,
    and the terminal is a hard wall. They don't want prompts; they want the *harness*.
 
+**Addition (12 Jul 2026) - the services face.** A fifth face joins the doc-14 archetypes: the
+**services operator** (agency / consultancy / professional services) whose business runs on
+**quotes, proposals, SOPs, and project/service documents**. Template-born, high volume, assembled
+from the last one plus new client specifics; margin rides on speed-to-quote and consistency. This
+is the purest test of the template on-ramp (1b) and the from-examples wizard (1x, issue #126 -
+"here are six past quotes, learn the pattern"), and it strengthens VP3 (recurring cadence per
+*client* rather than per week) and VP5/VP6. Watch for this face in the survey's "what do you make
+weekly" answers - if it clusters, the template library becomes an acquisition channel
+([14](14-product-strategy.md) §6 chapter 3's template/skill sharing arrives earlier).
+
 **First-principles adoption laws for this user** (each maps to build priorities):
 
 - **Law 1 - The first session must beat their current workflow, visibly, on their own work.**
