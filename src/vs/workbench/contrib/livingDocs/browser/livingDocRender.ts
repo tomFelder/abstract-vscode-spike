@@ -9,6 +9,7 @@ import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
+import { isWordHtml, normalizeWordPasteHtml } from '../common/livingDocWordPaste.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
 // The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
@@ -355,6 +356,12 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 const RUNTIME = `const vscode = acquireVsCodeApi();
 const root = document.getElementById('lwd-root');
 let pmView = null, pmTimer = 0;
+// Word-paste normalisation seam (issue #137). These pure, DOM-free helpers are the SAME code unit-tested
+// in common/livingDocWordPaste.ts, injected verbatim so the webview and the tests share one implementation.
+// The paste listener below is the seam #138 (tables) / #139 (tracked changes) extend via the normaliser's
+// internal transform chain - it never has to be rewritten.
+${String(isWordHtml)}
+${String(normalizeWordPasteHtml)}
 // Per-key provenance for the hover tooltip (plan 29 iter 3), refreshed from every decoration payload so the
 // tooltip always reads the current lock state (a source edit that flips freshness re-renders the payload).
 let _prov = Object.create(null);
@@ -450,6 +457,24 @@ root.addEventListener('keydown', e => {
 	const b = e.target.closest('[data-block]');
 	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
 });
+// Word-paste interception (issue #137, the T1-A finding). Capture phase so we run BEFORE ProseMirror's own
+// clipboard handler: when the clipboard carries a Word/Office 'text/html' payload pasted INTO the live PM
+// surface, rebuild its list paragraphs into real nested lists (and drop Word's nbsp spacer crumbs) via the
+// injected normaliser, then hand the cleaned HTML to PM's paste pipeline. Any non-Word paste (or a paste
+// into a widget/textarea rather than the document) falls through untouched. Fail-soft: if reading the
+// clipboard or normalising throws, we do nothing and let the default paste proceed.
+root.addEventListener('paste', e => {
+	if (!pmView || !window.LWDPM || !pmView.dom || !pmView.dom.contains(e.target)) { return; }
+	const cd = e.clipboardData || window.clipboardData;
+	if (!cd) { return; }
+	let html = '';
+	try { html = cd.getData('text/html') || ''; } catch (err) { return; }
+	if (!html || !isWordHtml(html)) { return; }
+	e.preventDefault(); e.stopPropagation();
+	let cleaned;
+	try { cleaned = normalizeWordPasteHtml(html); } catch (err) { cleaned = html; }
+	try { pmView.pasteHTML(cleaned); } catch (err) {}
+}, true);
 // Hovering a bound figure (or its provenance gutter dot) floats a quiet tooltip answering "where from, how
 // fresh" (plan 29 iter 3): the source file/endpoint, the cell within it, the relative sync time, and an amber
 // "source changed" line when stale. Click still opens the source drawer (unchanged) - the tooltip is
