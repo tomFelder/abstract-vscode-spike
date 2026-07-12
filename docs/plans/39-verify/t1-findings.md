@@ -42,7 +42,7 @@ verdict section). Audit only — no product fixes were made in this loop.
 |---|---|---|---|---|
 | 1 | Paste from Word | **FAIL** | **gating** (T1-A, T1-B, T1-C) | Pasting your Word report keeps the words but destroys every table and bullet list, and can splice deleted tracked-changes text back into your sentences |
 | 2 | Tables | **FAIL** | **gating** (T1-D) | Your table displays beautifully but you cannot edit a cell or add a row — and clicking a cell then typing deletes the whole table |
-| 3 | Images | — | — | — |
+| 3 | Images | **FAIL** | **gating** (T1-E) | Pasting or dragging a screenshot into your doc does nothing at all — no image, no error |
 | 4 | Lists & structure | — | — | — |
 | 5 | Undo/redo | — | — | — |
 | 6 | Find & replace | — | — | — |
@@ -206,3 +206,30 @@ the table (typing replaces it).* With T1-B (pasted Word tables never become
 tables at all), table support is display-only end to end.
 
 Desktop caveat: none — identical webview code in both builds.
+
+---
+
+## Iteration 3 — Area 3: Images — **FAIL (gating)**
+
+Probes dispatched real `ClipboardEvent('paste')` / `DragEvent('drop')` with
+an actual PNG `File` in the `DataTransfer`, plus HTML-embedded and
+relative-path image probes. Evidence: `shots/03-image-datauri.png`,
+`shots/03-image-relative.png` + transcripts.
+
+| Probe | Result |
+|---|---|
+| **Paste an image file** (the "Ctrl+V a screenshot" case) | **FAIL — silent no-op.** File present in the clipboard (`files.length = 1`), document unchanged, no image, no message. There is no `handlePaste`/file handler in the editor bundle and no asset-write path in the service (images exist only as chat-context attachments). |
+| **Drag-drop an image file** | **FAIL — silent no-op.** Same: `drop` with a PNG file changes nothing. |
+| Image arriving inside pasted HTML as a data URI (Word's inline-image shape) | PASS-ish — inserts a commonmark `image` node, renders, serializes as `![chart](data:image/png;base64,…)`. But the whole image is base64 inside the `.md` body — no asset file on disk, no relative path; a large screenshot would balloon the document. |
+| Relative-path image already in the doc (`![logo](logo.png)`, file exists in the workspace) | **FAIL (web build) — does not render.** The webview resolves it against its own `/static/sources/` base and the load fails (`naturalWidth = 0`, broken-image placeholder). *Desktop caveat: resolution could differ in the Electron webview — untested here (environment: no desktop build); on the web build it is broken.* |
+| Persistence of the data-URI image | The image markdown is in the body that `pmEdit` saves (300 ms debounce observed, chip → "Saving…"); body persistence itself is the X1-verified desktop path. No separate asset file exists to persist. |
+
+### Grade: FAIL — gating (T1-E: no image paste/drop at all)
+
+P10 names images as one of the three "Word-grade" fundamentals. The two
+actions a Word/Docs person actually does — paste a screenshot, drag a
+picture in — are both silent no-ops, and there is no insert-image
+affordance anywhere in the editor UI as a workaround (the only way an image
+can enter a doc is embedded in pasted HTML, or by hand-editing the file
+outside the product). Silent no-op on user content → gating.
+
