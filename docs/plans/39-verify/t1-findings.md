@@ -389,3 +389,81 @@ incremental rendering make the 30-page case genuinely comfortable — this is
 the strongest area of the audit alongside lists.
 
 Desktop caveat: none (if anything, desktop removes the browser-tab overhead).
+
+---
+
+## Iteration 9 — Triage & verdict
+
+### Final grade table
+
+| # | Area | Grade | Triage | Issue |
+|---|---|---|---|---|
+| 1 | Paste from Word | FAIL | **gating** | #137 (lists), #138 (tables), #139 (tracked changes) |
+| 2 | Tables | FAIL | **gating** | #140 |
+| 3 | Images | FAIL | **gating** | #141 |
+| 4 | Lists & structure | PASS | — | — |
+| 5 | Undo/redo | DEGRADED | **gating** | #142 (sharpens F6 / #122) |
+| 6 | Find & replace | FAIL | polish | T1-G, in this doc — no issue filed (per plan: issues for gating only) |
+| 7 | Selection & cursor | DEGRADED | polish | T1-H, in this doc — reply-arrival focus steal |
+| 8 | Long-doc ergonomics | PASS | — | — |
+
+No area was UNTESTABLE. Every probe ran against the live editor; the one
+environment substitution (web build instead of the Electron desktop target,
+because the session's network policy blocks Electron downloads) is
+documented in the preamble, and every finding above is in build-independent
+webview code. One desktop-only caveat is flagged inside #141
+(relative-path image resolution needs a desktop re-check).
+
+### THE VERDICT: **FIX-FIRST**
+
+**Not DISQUALIFIED.** Nothing found reopens the editor-substrate question
+(docs/05 Q2): every gating failure is a bounded gap *in front of* a
+substrate that demonstrably works — ProseMirror here already does
+Word-grade lists, instant 10k-word editing, incremental rendering, stable
+selection, clean paste of inline formatting. Word-paste normalisation,
+table cells, image paste and history preservation are all standard,
+well-trodden ProseMirror territory (prosemirror-tables, paste
+transformers, history state carry-over). None require replacing the
+editor.
+
+**Not PROCEED.** Three of P10's own named fundamentals — paste, tables,
+images — fail in the silent-content-loss class, and P8's undo promise
+breaks at the product's signature moment. A Word person's first real
+session (paste weekly report → fix a number in the table → paste the
+chart screenshot → approve → change their mind) hits five of the six
+gating findings in the first ten minutes.
+
+**Fix order (with effort guesses, ~6–10 days total):**
+
+1. **#137 + #139 — the Word-paste normaliser** (lists + tracked-changes
+   strip), 1–2 days. Highest frequency, one shared `transformPastedHTML`
+   seam, and it defines the fidelity floor #129 must match.
+2. **#138 — pasted tables → `table_block`**, +0.5–1 day on the same seam.
+3. **#140 — table editing MVP + type-over guard**, 2–4 days (decide
+   minimal-atom-editor vs prosemirror-tables first).
+4. **#142 — undo survives approve** (history carry-over through the body
+   reset), 1–2 days. P8 restored; supersedes the F6 line in #122.
+5. **#141 — image paste/drop + assets/ write path**, 2–3 days (shares the
+   `assets/` convention with #129 — build once).
+
+Polish (not beta-gating, keep on the list): in-doc find & replace (T1-G),
+reply-arrival focus steal (T1-H), Word spacer-paragraph nbsp crumbs.
+
+### What this means for #129 / #130 (interop sequencing)
+
+- **#129 (docx import) should wait for the normaliser (#137/#138) or
+  build against the same mapping layer.** Import writes GFM directly, so
+  its tables/lists will *render* — but until #140 lands, every imported
+  table is display-only, and until #141 lands there is no `assets/`
+  convention for extracted images to share. The plan's instinct
+  ("no point importing docx into an editor that mangles pasted content")
+  holds in a sharper form: import fidelity is bounded by editor fidelity.
+- **#130 (docx/PDF export) is NOT blocked** by anything found here:
+  `table_block` round-trips losslessly on disk, so export can map GFM
+  tables to Word tables today. Export can proceed in parallel.
+
+### Loop accounting
+
+9 iterations used (0–8 + this triage), under the 12-iteration stop
+condition. Audit only: 0 product fixes, 0 core patches; the only artifacts
+are fixtures, findings, screenshots (this directory) and issues #137–#142.
