@@ -45,7 +45,7 @@ verdict section). Audit only — no product fixes were made in this loop.
 | 3 | Images | **FAIL** | **gating** (T1-E) | Pasting or dragging a screenshot into your doc does nothing at all — no image, no error |
 | 4 | Lists & structure | **PASS** | — | Bullets, numbering, nesting and heading conversion all behave the way a Word person expects |
 | 5 | Undo/redo | **DEGRADED** | **gating** (T1-F, confirms known F6) | Ctrl+Z is reliable while you edit — but the moment you approve a change, undo goes dead: even your own earlier typing can no longer be undone |
-| 6 | Find & replace | — | — | — |
+| 6 | Find & replace | **FAIL** | polish (T1-G) | Ctrl+F does nothing in a document — you scan a 30-page doc by eye; there is no replace at all (bound values, correctly, cannot be edited in place) |
 | 7 | Selection & cursor | — | — | — |
 | 8 | Long-doc ergonomics | — | — | — |
 
@@ -314,3 +314,30 @@ approve wipes undo for everything, not just itself. Broken-undo class →
 gating. This confirms and sharpens F6 — logged as a finding, not refixed.
 
 Desktop caveat: none — identical webview/bundle code both builds.
+
+---
+
+## Iteration 6 — Area 6: Find & replace — **FAIL (polish class)**
+
+Evidence: `shots/06-ctrl-f.png`, `shots/06-rail-search.png`,
+`shots/06-bound-figure.png`.
+
+| Probe | Result |
+|---|---|
+| Ctrl+F with the editor focused | **Nothing happens.** No find widget in the workbench, none in the webview. In-document find does not exist. |
+| Workspace search (tree-rail Search tab) | Works cross-document ("1 result" for `signups`, snippet shown); clicking a hit opens the doc but does **not** scroll to or highlight the match — you still hunt by eye. |
+| Replace | **Does not exist anywhere** — no UI, no command. |
+| Bound spans editable in place? (P8/provenance invariant) | **Invariant HOLDS.** Clicking a bound figure node-selects it (no caret inside the label); typing over the selected figure changed nothing (the atom resists even select-and-type replacement); the label cannot be silently edited into a lie. |
+
+### Grade: FAIL — but triaged **polish**, not gating
+
+The area fails on absence: a Word person's Ctrl+F muscle memory hits a dead
+key, and replace simply isn't there. Under the plan's triage rule, though,
+this is the "missing nicety with a workaround" class (rail search finds the
+right document; nothing corrupts or loses content) — not the
+paste-fidelity/data-loss class. The provenance half of the probe is a
+clear positive: bound values are genuinely not editable in place.
+
+Desktop caveat: none for the webview surface. (On desktop, Electron's
+native webview find could in principle be wired, but nothing wires it
+today — the absence is product-level, not build-level.)
