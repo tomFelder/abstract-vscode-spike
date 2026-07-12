@@ -3,6 +3,15 @@
 Predictions of where this becomes problematic, roughly ordered by how much they should influence
 the fork-vs-greenfield decision. "Spike-grade" means: fine for a throwaway demo, not for production.
 
+> **Update (12 Jul 2026) — scoring the predictions so far:** fork-vs-greenfield is resolved
+> (fork = beta vehicle, greenfield = chapter 2, [14](14-product-strategy.md) §6) and **merge tax
+> is paused** (upstream syncs frozen, decision 159). The **file-format trap** → resolved by
+> Option 10 ([08](08-living-documents-format-spec.md)). The **mcp stub** → closed (resolves
+> end-to-end since plan 29 iter 4). The **no-persistence/undo** risk → partially closed: plan 26
+> built undo/snapshots/History, but the web build's write-through gap survives as **X1**
+> (severity-1, issue #121). The strategic risk ("still too technical") is now measured by the
+> beta funnel ([24](24-beta-success-memo.md)) rather than argued.
+
 ## The strategic risk (the big one)
 
 **Users may still feel this is too technical.** This is Tom's standing assumption and the spike did

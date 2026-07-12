@@ -23,7 +23,7 @@ These are the canonical copies; mirrors live in `~/.claude/plans/` for clean-ses
 | [15-unify-editor-f7-loop.md](15-unify-editor-f7-loop.md) | v6 completion — make ProseMirror the single editor for ALL docs (bound figures as an inline node, the proposal diff + gutter + source drawer inside PM, bundle as a webview resource), which closes gate **F7**. **Done.** |
 | 16-calm-surface-loop · 17-off-the-golden-path-loop · 18-multi-document-editing-loop · 19-editor-led-review-loop | The calm-surface, off-the-golden-path, multi-document, and editor-led-review loops. **Done / landed on `main`** (see the decision log #54–#71). |
 
-### Abstract UI Redesign (the live set — driven by the loop below)
+### Abstract UI Redesign (done — driven by the loop below)
 | File | What it is |
 |---|---|
 | [20-abstract-ui-redesign-handoff.md](20-abstract-ui-redesign-handoff.md) | **Spec of record.** The design implementation handoff: product context (Part A), exact tokens (Part B), px-exact per-surface specs (Part C), code changes (Part D), build order + acceptance gates (Part E), resolved decisions (Part F). Companion pixels: `Abstract - UI Redesign.dc.html`. |
@@ -34,7 +34,7 @@ These are the canonical copies; mirrors live in `~/.claude/plans/` for clean-ses
 | [25-labeled-nav-loop.md](25-labeled-nav-loop.md) | Row 7 — the **76px labeled icon-nav** (Home · Editor · Templates · Knowledge · Agents). The one likely core seam; logged in the merge-tax ledger. |
 | [RUN-abstract-redesign-loop.md](RUN-abstract-redesign-loop.md) | **The master loop prompt.** Paste into a fresh session to run plans 21→25 as an overnight, sub-agent-driven loop landing stacked PRs off `main`, each with before/after + comp-comparison images and a design-match score. **Done.** |
 
-### Product completion (the next live set — from the July 2026 review)
+### Product completion (plans 26-33, merged to `main` — from the July 2026 review)
 
 Motivated and ranked by [../11-product-review-2026-07.md](../11-product-review-2026-07.md); the north star they serve is [../12-north-star-and-future-features.md](../12-north-star-and-future-features.md).
 Suggested order: 26 → 27 → 31 → 28 → 29 → 30 → 32 → 33 (hard dependencies: 26 → 31 iter 4 copy, 29 → 32 source work).
@@ -53,7 +53,7 @@ Suggested order: 26 → 27 → 31 → 28 → 29 → 30 → 32 → 33 (hard depen
 
 ### Beta gate (the live set — from the planning spine)
 
-Motivated and sequenced by [../18-beta-plan.md](../18-beta-plan.md) (the gate: "a stranger can bring a real folder and hit the aha without Tom in the room"); strategy of record is [../14-product-strategy.md](../14-product-strategy.md). Plan 34 runs first (it produces the work list); 35 and 36 can run in parallel with it. Plan 37 (journey robustness) is authored by plan 34's output; the onboarding/feedback-verb loop follows as 38.
+Motivated and sequenced by [../18-beta-plan.md](../18-beta-plan.md) (the gate: "a stranger can bring a real folder and hit the aha without Tom in the room"); strategy of record is [../14-product-strategy.md](../14-product-strategy.md). Status (12 Jul 2026): **plan 34 is done** (grades in `34-verify/journey-grades.md`; it produced the plan-37 fix list and the aha-path specs `../20-journey-specs-aha-path.md`); **plan 35 is mostly done** (Anthropic stripped, OpenRouter fallback live; issue #120 open on the ChatGPT-subscription call); **plans 36-38 are pending**. The operational tracking layer is the issue map in [../21-beta-v1-prioritization.md](../21-beta-v1-prioritization.md) §7 (#120-#133).
 
 | File | What it is |
 |---|---|
@@ -64,7 +64,7 @@ Motivated and sequenced by [../18-beta-plan.md](../18-beta-plan.md) (the gate: "
 
 ## How to use a handoff
 Paste the relevant file into a fresh Claude Code session. The handoffs are self-contained: repo /
-branch / build / conventions / design source / ordered work items / verification. Plans 06–14 are
-**done** (branches/PRs noted above); **[15](15-unify-editor-f7-loop.md) is the live one to run next**
-(unify the editor surface so ProseMirror drives living docs too, then close F7 — the chat-on-document
-loop starting from a freshly created folder).
+branch / build / conventions / design source / ordered work items / verification. Plans 06–33 are
+**done / merged** (branches/PRs noted above); **the live set is the beta gate** — plan 37 (journey
+robustness, fixing the plan-34 findings) and plans 36/38 (analytics, onboarding), tracked as
+issues #120–#133 per [../21-beta-v1-prioritization.md](../21-beta-v1-prioritization.md).

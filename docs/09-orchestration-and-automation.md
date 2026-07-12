@@ -1,6 +1,6 @@
 # Living Documents — Orchestration, automation & hooks (design spec)
 
-**Date:** 2026-06-21 · **Status:** approved direction, pre-implementation · **Builds on:**
+**Date:** 2026-06-21 · **Status:** approved and **implemented** (plans 07 + 32; journey-hardening pending, plan 37). Model wiring since changed — see the update note in [10](10-model-integration.md) and [18](18-beta-plan.md) §2.1 · **Builds on:**
 [08-living-documents-format-spec.md](08-living-documents-format-spec.md) (the dependency graph).
 **Companion visual:** [orchestration-automations.html](orchestration-automations.html).
 **Grounding:** Addy Osmani, *Loop Engineering*; LangChain, *The Art of Loop Engineering*.

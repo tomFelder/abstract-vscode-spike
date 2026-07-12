@@ -1,5 +1,12 @@
 # 01 — Architecture
 
+> **Update (12 Jul 2026):** this describes the items-0-5 slice. Two layers are since superseded:
+> the `.living.md` format + `.audit.json` sidecar → **Option 10** (clean `.md` + `.lock.json`,
+> [08](08-living-documents-format-spec.md); the Q1 "tension" flagged below is resolved), and the
+> render/editor layer (`renderMarkdown` + contenteditable) → a **single vendored-ProseMirror
+> surface** for every document ([06](06-design-notes.md) D7). The contribution-boundary and
+> service-loop description still holds.
+
 All spike code is one additive contribution: `src/vs/workbench/contrib/livingDocs/`, registered by
 a single import in `src/vs/workbench/workbench.common.main.ts`. No existing VS Code behaviour was
 changed (the only edits outside the contribution are the registration import, `product.json`

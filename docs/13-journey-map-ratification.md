@@ -2,7 +2,11 @@
 
 This document ratifies the **"Abstract - the crucial customer journeys" low-fi map v4** (9 Jul 2026) into the repo's documentation set, per the map's own handoff brief. The map itself is preserved verbatim as the companion visual: [journey-map-v4.dc.html](journey-map-v4.dc.html). It was produced in Claude Design across 8-9 Jul 2026, with Tom's review decisions folded in as D1-D26 and product principles P0-P10 ratified in v3/v4.
 
-**What ratification means here:** the decisions and principles in the map are now binding repo truth, on equal footing with [07-decision-log.md](07-decision-log.md). Conflicts with existing repo docs are flagged below, not silently overwritten. The map's brief mandates three tasks in order: ① ratify the decision log (this document) · ② expand every journey 1a-1z into a detailed spec with acceptance criteria · ③ build against those specs, keeping the BUILT/PARTIAL/GAP chips updated as truth. Task ② is future work; see the note on re-baselining below.
+**What ratification means here:** the decisions and principles in the map are now binding repo truth, on equal footing with [07-decision-log.md](07-decision-log.md). Conflicts with existing repo docs are flagged below, not silently overwritten. The map's brief mandates three tasks in order: ① ratify the decision log (this document) · ② expand every journey 1a-1z into a detailed spec with acceptance criteria · ③ build against those specs, keeping the BUILT/PARTIAL/GAP chips updated as truth. Task ② is future work; see the note on re-baselining below. **Update (12 Jul 2026):** the walk
+(task ②'s first act) is **done** — plan 34 graded all 26 journeys
+([plans/34-verify/journey-grades.md](plans/34-verify/journey-grades.md): 7 WALKABLE · 8 FRAGILE ·
+2 PARTIAL · 9 MISSING) and the aha-path specs exist ([20-journey-specs-aha-path.md](20-journey-specs-aha-path.md));
+the fixes are plan 37, prioritised in [21-beta-v1-prioritization.md](21-beta-v1-prioritization.md).
 
 ## 1. The map in one view
 

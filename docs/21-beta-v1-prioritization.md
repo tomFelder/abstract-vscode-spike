@@ -82,7 +82,7 @@ the joy flow as the default skills pack ([18](18-beta-plan.md) §2.6).
    (plan 37 tier 1)
 3. **F14** - the silent-model-outage trust breach on fan-out. (plan 37 tier 2)
 4. **F15-F18** - minimal v1 of the four MISSING aha surfaces: Project Home, file ops, "From
-   sources…", template wizard. (plan 37 tiers 3)
+   sources…", template wizard. (plan 37 tier 3)
 5. **Model access completed** - issue #120 (ChatGPT-subscription call fails after sign-in) plus the
    capped OpenRouter fallback proven end-to-end. (plan 35)
 6. **Analytics** - consent, event dictionary, T5 funnel, guardrails; the aha must be observable.

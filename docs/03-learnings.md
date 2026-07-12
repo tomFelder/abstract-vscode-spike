@@ -1,5 +1,11 @@
 # 03 — Learnings (what worked, what didn't, surprises)
 
+> **Update (12 Jul 2026):** several items flagged open here are since closed — the format
+> tension (Q1) → Option 10 ([08](08-living-documents-format-spec.md)); the "preview you can
+> poke" editor → ProseMirror ([06](06-design-notes.md) D7); the inline provenance dots → the
+> detached gutter rail (06 D6). And the fork this spike declined to commit to was since adopted
+> as the beta vehicle ([14](14-product-strategy.md) §6). The learnings stand as the retrospective.
+
 The one-line conclusion of the whole spike: **the engine maps cleanly onto VS Code and is proven;
 the shell is where the fork fights back.**
 

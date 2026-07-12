@@ -139,6 +139,26 @@ Doc 21's P0 list stands - every item maps to Laws 1/3/4. Adjustments from this a
 5. **Shell calm (Law 6) is a standing acceptance bar,** not a one-off plan: every P0 fix PR checks
    "does this still read as a minimal editor?" (plan 33's checklist is the tool).
 
+### 4b. The doc-set test (the VP4 dogfood benchmark, 12 Jul 2026)
+
+A lived founder example, adopted as the standing acceptance benchmark for VP4: **this repo's own
+`docs/` folder - 24+ interlinked documents - opened as an Abstract project.** In Word you'd open
+them one by one; the test is that Abstract makes the *set* the unit of work:
+
+1. **Ask the set:** from Project Home, a question whose answer spans many files ("what have we
+   decided about model access, and where?") returns a **cited** answer - file + section receipts,
+   not model memory. (2c made real; the citation gap is the walk's named finding.)
+2. **Edit the set from one prompt:** "we renamed the product - update every doc" produces a
+   reviewable **cross-document change set** (1j fan-out → 1k review), approved at any granularity,
+   never a blind find-and-replace.
+3. **Steer the set:** tools, skills and agent instructions are reachable from the same front door
+   (the Agents/Templates surfaces, 1t - already WALKABLE).
+
+The machinery exists (1j and 1k graded WALKABLE); the missing piece is precisely the **front door**
+- the whole-project composer with cited read-only answers (F15, issue #124). The test is cheap to
+run weekly and is the honest measure of "the folder is the context": **when managing these docs is
+easier inside Abstract than in this coding harness, VP4 is proven.**
+
 ## 5. The founder questions (the SaaS startup lens)
 
 Asked plainly, because the docs exist to survive politeness. Each has a "cheapest way to learn".

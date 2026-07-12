@@ -4,6 +4,12 @@ This spec covers tracking the upstream VS Code (`microsoft/vscode`) codebase our
 It records the current gap, the approach we chose, and a repeatable assess-then-merge procedure.
 The immediate job is the 1.126.0 -> 1.127.0 bump; the procedure is written to be reused on every future release.
 
+> **Update (12 Jul 2026):** upstream syncs are **frozen for the beta window** per decision 159
+> (security-only exception) — the fork is a disposable validation vehicle and chapter 2 is a
+> greenfield rebuild ([14](14-product-strategy.md) §6, [23](23-validation-thesis-and-value-hypotheses.md) §5 Q5).
+> The 1.127.0 state below stands as the last sync; this procedure resumes only for a security
+> bump or post-beta.
+
 Companion: [plans/03-merge-tax-ledger.md](plans/03-merge-tax-ledger.md) is the authoritative catalogue of every core patch and seam this merge must protect.
 This spec references it rather than duplicating it.
 

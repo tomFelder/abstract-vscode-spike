@@ -1,6 +1,6 @@
 # Living Documents — Raw-Markdown format & dependency model (design spec)
 
-**Date:** 2026-06-21 · **Status:** approved direction, pre-implementation · **Resolves:** Q1 in
+**Date:** 2026-06-21 · **Status:** approved and **implemented** (plan 06, branch `living-docs-format`) · **Resolves:** Q1 in
 `docs/05-open-questions.md`; supersedes the framing in `docs/plans/04-file-format-options.md`.
 **Companion visual:** `docs/option-10-living-docs-format.html`.
 **Followed by:** `docs/09-orchestration-and-automation.md` (the layer that runs agents/skills on top of
@@ -255,6 +255,9 @@ reserved). Cloud/platform persistence (spike stays on sidecar files).
 The canonical-format question is coupled to two bigger calls still open — **how "real" the WYSIWYG
 editor becomes (Q2)** and **fork-vs-greenfield (Q3)**. If/when the editor becomes a true block editor
 or we go greenfield, options **6/8** (structured/CRDT canonical with Markdown as a projection) become
-materially more attractive. The identity-keyed dependency model in this spec is deliberately chosen
+materially more attractive. **Update (12 Jul 2026):** both couplings have since resolved — the
+editor is ProseMirror ([06](06-design-notes.md) D7) and greenfield is the post-raise chapter 2
+([14](14-product-strategy.md) §6) — so the option-6/8 revisit is a named agenda item for the
+greenfield design, exactly as anticipated here. The identity-keyed dependency model in this spec is deliberately chosen
 to survive that transition: it is the same graph whether the text lives in Markdown, a block tree, or
 a CRDT.

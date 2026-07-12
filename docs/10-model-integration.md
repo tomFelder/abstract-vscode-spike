@@ -1,5 +1,14 @@
 # 10 — Model integration (Anthropic OAuth proxy)
 
+> **Update (12 Jul 2026): superseded for beta** by plan 35 / [18-beta-plan.md](18-beta-plan.md)
+> §2.1 — the Anthropic usage path is **stripped** (subscription OAuth banned by Anthropic,
+> Feb-Apr 2026), **OpenAI OAuth is the primary path** (sign-in works; the model call is blocked
+> on **issue #120**), and OpenRouter is promoted from "dev-only test backend" to the
+> **founder-funded fallback tier** (capped ~$1/user/day). The localhost-proxy *architecture*
+> described here still stands (`scripts/lwd-anthropic-proxy.js`, now backend-pluggable); the
+> Anthropic-specific wiring is retained below as the record of that phase. The "add Console
+> credits" follow-up at the end is obsolete.
+
 How the Living Documents agentic features became **model-backed**. Implemented on
 `living-docs-model` (PR #11); drove by [plans/10-anthropic-oauth-handoff.md](plans/10-anthropic-oauth-handoff.md).
 Resolves the long-standing `NO MODEL` / heuristic-only state for Review-impact rewrites and the
