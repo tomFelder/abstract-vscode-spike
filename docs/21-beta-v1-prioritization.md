@@ -74,22 +74,28 @@ the joy flow as the default skills pack ([18](18-beta-plan.md) §2.6).
 
 ## 4. The priority order
 
+Per decision 163, **live status lives on the GitHub issues** (§7); this list carries the
+rationale and the ordering only.
+
 **P0 - the gate (a stranger hits the aha and it survives):**
-1. **F1 + F19** - the X1 persistence contract on web + History rehydration from the lock. The one
-   severity-1. (plan 37 tier 0)
-2. **F2-F13** - the twelve cheap aha-path off-path fixes (Copilot tab, blank-doc name, prompt leak,
-   fake 85%, Cmd+Z, hierarchy, Untitled, SOURCES, docx visibility, dial, freshness, hover peek).
-   (plan 37 tier 1)
-3. **F14** - the silent-model-outage trust breach on fan-out. (plan 37 tier 2)
-4. **F15-F18** - minimal v1 of the four MISSING aha surfaces: Project Home, file ops, "From
-   sources…", template wizard. (plan 37 tier 3)
-5. **Model access completed** - issue #120 (ChatGPT-subscription call fails after sign-in) plus the
-   capped OpenRouter fallback proven end-to-end. (plan 35)
-6. **Analytics** - consent, event dictionary, T5 funnel, guardrails; the aha must be observable.
-   (plan 36)
-7. **D26 onboarding + survey + feedback verb.** (plan 38)
-8. **T1 editor audit** - paste-from-Word/tables/images; a disqualifier check, run pre-beta; paste
-   fidelity findings gate, polish doesn't. ([18](18-beta-plan.md) §3)
+1. **Desktop persistence integrity** (#121) - F19 History rehydration + desktop atomicity
+   verification. Re-scoped by decision 162 (**Electron-only beta**): the X1 web-persistence fix is
+   descoped; the web build is a dev harness with an honest notice. (plan 37 tier 0)
+2. **F2-F13** (#122) - the twelve cheap aha-path off-path fixes (Copilot tab, blank-doc name,
+   prompt leak, fake 85%, Cmd+Z, hierarchy, Untitled, SOURCES, docx visibility, dial, freshness,
+   hover peek). (plan 37 tier 1)
+3. **F14** (#123) - the silent-model-outage trust breach on fan-out. (plan 37 tier 2)
+4. **F15-F18** (#124, #125, #126) - minimal v1 of the four MISSING aha surfaces: Project Home,
+   file ops, "From sources…", template wizard. (plan 37 tier 3)
+5. **Model access completed** (#120) - the ChatGPT-subscription call plus the capped OpenRouter
+   fallback proven end-to-end. (plan 35)
+6. **Analytics** (#134) - consent, event dictionary, T5 funnel, guardrail + VP dashboards; the aha
+   must be observable. (plan 36)
+7. **D26 onboarding + survey + feedback verb** (#127). (plan 38)
+8. **T1 editor audit** (#128) - the disqualifier check; loop prompt at
+   [plans/39-t1-editor-audit-loop.md](plans/39-t1-editor-audit-loop.md); its verdict gates #129/#130.
+9. **The data-flow one-pager** (#135) - "what leaves my machine?" in plain words; the
+   decision-163 moratorium's one exemption.
 
 **P1 - the real-folder reality (the revised stance, spec in doc 22):**
 9. **docx → Markdown import** - per-file "Import" on the F10 "not yet imported" affordance;
@@ -179,7 +185,7 @@ against.
 
 | Issue | Tier | What |
 |---|---|---|
-| #121 | P0 | F1 + F19 - X1 web persistence + History rehydration (the severity-1) |
+| #121 | P0 | Desktop persistence integrity: F19 rehydration + atomicity verification (re-scoped Electron-only, decision 162) |
 | #122 | P0 | F2-F13 - the twelve cheap aha-path off-path fixes |
 | #123 | P0 | F14 - model outage must never render as "no changes proposed" |
 | #124 | P0 | F15 - Project Home minimal v1 |
@@ -188,6 +194,8 @@ against.
 | #127 | P0 | Plan 38 - D26 onboarding + survey + feedback verb |
 | #128 | P0 | T1 editor audit (paste-from-Word disqualifier check) |
 | #120 | P0 | (pre-existing) ChatGPT-subscription backend model call fails - plan 35 |
+| #134 | P0 | Plan 36 analytics: consent, event dictionary, T5 funnel, guardrail + VP dashboards |
+| #135 | P0 | The data-flow one-pager: "what leaves my machine?" in plain words (moratorium exemption) |
 | #129 | P1 | docx → Markdown import (doc 22 §2) |
 | #130 | P1 | docx + PDF export unstubbed (doc 22 §3) |
 | #131 | P1 | xlsx → CSV sources + PDF as read-only context (doc 22 §4) |
