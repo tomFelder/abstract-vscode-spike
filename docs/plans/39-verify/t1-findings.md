@@ -46,7 +46,7 @@ verdict section). Audit only — no product fixes were made in this loop.
 | 4 | Lists & structure | **PASS** | — | Bullets, numbering, nesting and heading conversion all behave the way a Word person expects |
 | 5 | Undo/redo | **DEGRADED** | **gating** (T1-F, confirms known F6) | Ctrl+Z is reliable while you edit — but the moment you approve a change, undo goes dead: even your own earlier typing can no longer be undone |
 | 6 | Find & replace | **FAIL** | polish (T1-G) | Ctrl+F does nothing in a document — you scan a 30-page doc by eye; there is no replace at all (bound values, correctly, cannot be edited in place) |
-| 7 | Selection & cursor | — | — | — |
+| 7 | Selection & cursor | **DEGRADED** | polish (T1-H) | Clicking, selecting and typing are rock-solid — but when a chat reply lands, the app steals your cursor mid-word and your typing stops going into the document |
 | 8 | Long-doc ergonomics | — | — | — |
 
 ---
@@ -341,3 +341,29 @@ clear positive: bound values are genuinely not editable in place.
 Desktop caveat: none for the webview surface. (On desktop, Electron's
 native webview find could in principle be wired, but nothing wires it
 today — the absence is product-level, not build-level.)
+
+---
+
+## Iteration 7 — Area 7: Selection & cursor — **DEGRADED (polish class)**
+
+Evidence: `shots/07-typing-during-stream-real.png` + transcripts.
+
+| Probe | Result |
+|---|---|
+| Caret stability across the save/re-render cycle (typed 16 chars at 400 ms — spanning many 300 ms save debounces + server re-renders) | PASS — `abcdefghijklmnop` lands contiguously; the mount-once/postMessage design (decision 50) keeps the surface stable while saving |
+| Click to place caret + Shift+ArrowRight ×5 | PASS — exactly 5 characters selected from the click point |
+| Selection across a block boundary (paragraph → into a list item) | PASS — selects `"one / item a"`, Delete merges cleanly, sibling item survives, single undo restores |
+| Ctrl+A + type | PASS — selects the whole doc (from 1 to 29 of 32), typing replaces everything |
+| Typing WHILE a proposal streams (canned proxy streaming at 400 ms/chunk) | PASS — `WHILESTREAM` typed mid-stream lands intact and survives the proposal landing; caret position preserved |
+| **Typing AFTER the reply lands** | **FAIL — focus is stolen.** The moment the chat reply/proposal lands, keyboard focus leaves the editor (the rail takes it): the follow-up typing (`AFTER`) never reaches the document. You are interrupted mid-word and must click back into the page. |
+
+### Grade: DEGRADED — polish (T1-H: reply-arrival steals editor focus)
+
+Everything a Word person does with the mouse and keyboard — click, drag,
+shift-arrows, select-all, cross-block edits — is solid, and the streaming
+window itself is safe. The one blemish: a landing chat reply pulls focus
+out of the document mid-typing. No content is lost from the doc (the
+keystrokes go to the rail instead), so this is interruption, not
+corruption → polish.
+
+Desktop caveat: none — same webview focus handling in both builds.
