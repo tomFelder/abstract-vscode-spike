@@ -43,7 +43,7 @@ verdict section). Audit only — no product fixes were made in this loop.
 | 1 | Paste from Word | **FAIL** | **gating** (T1-A, T1-B, T1-C) | Pasting your Word report keeps the words but destroys every table and bullet list, and can splice deleted tracked-changes text back into your sentences |
 | 2 | Tables | **FAIL** | **gating** (T1-D) | Your table displays beautifully but you cannot edit a cell or add a row — and clicking a cell then typing deletes the whole table |
 | 3 | Images | **FAIL** | **gating** (T1-E) | Pasting or dragging a screenshot into your doc does nothing at all — no image, no error |
-| 4 | Lists & structure | — | — | — |
+| 4 | Lists & structure | **PASS** | — | Bullets, numbering, nesting and heading conversion all behave the way a Word person expects |
 | 5 | Undo/redo | — | — | — |
 | 6 | Find & replace | — | — | — |
 | 7 | Selection & cursor | — | — | — |
@@ -233,3 +233,29 @@ affordance anywhere in the editor UI as a workaround (the only way an image
 can enter a doc is embedded in pasted HTML, or by hand-editing the file
 outside the product). Silent no-op on user content → gating.
 
+
+---
+
+## Iteration 4 — Area 4: Lists & structure — **PASS**
+
+Live keyboard probes in the editor (evidence: `shots/04-lists-final.png` +
+serialized transcripts inline):
+
+| Probe | Result |
+|---|---|
+| Enter mid-list-item | PASS — splits into a new sibling item (`alpha / inserted / beta`) |
+| Tab on an item | PASS — nests under the previous item (`  * inserted`) |
+| Shift-Tab | PASS — lifts back to top level |
+| Enter twice on an empty item | PASS — exits the list into a paragraph (the Word reflex) |
+| Mixed nesting (ordered inside bullet) | PASS — round-trips exactly; Enter inside the nested ordered list inserts `2.` and renumbers `two` → `3.` |
+| Heading conversion (toolbar select) | PASS — paragraph → `## h2` and back, no text loss |
+| Toolbar "Bulleted list" on a paragraph | PASS — wraps as a list item |
+| Edit ONE item of a 4-item list, siblings intact (PM surface) | PASS — `edit-me EDITED`, all three `keep-*` siblings byte-identical |
+| **Decision-68 regression (the list-sibling data-loss class, fixed in plan 31)** | PASS — ran the shipped unit suite in the real browser runner: `node test/unit/browser/index.js --browser chromium --grep "LivingDoc bind-link format"` → **62 passing**, including "applyBlockEdit splices ONE item and leaves siblings byte-identical (the data-loss repro)" and the fail-soft guard test |
+
+### Grade: PASS
+
+List editing is genuinely Word-grade: the enter/tab muscle memory works,
+nesting round-trips, and the decision-68 data-loss class stays fixed at
+both the unit and the live-surface level. (The list *paste* failure from
+Word lives in Area 1 / T1-A, not here.)
