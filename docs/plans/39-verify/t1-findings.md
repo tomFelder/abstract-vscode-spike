@@ -44,7 +44,7 @@ verdict section). Audit only — no product fixes were made in this loop.
 | 2 | Tables | **FAIL** | **gating** (T1-D) | Your table displays beautifully but you cannot edit a cell or add a row — and clicking a cell then typing deletes the whole table |
 | 3 | Images | **FAIL** | **gating** (T1-E) | Pasting or dragging a screenshot into your doc does nothing at all — no image, no error |
 | 4 | Lists & structure | **PASS** | — | Bullets, numbering, nesting and heading conversion all behave the way a Word person expects |
-| 5 | Undo/redo | — | — | — |
+| 5 | Undo/redo | **DEGRADED** | **gating** (T1-F, confirms known F6) | Ctrl+Z is reliable while you edit — but the moment you approve a change, undo goes dead: even your own earlier typing can no longer be undone |
 | 6 | Find & replace | — | — | — |
 | 7 | Selection & cursor | — | — | — |
 | 8 | Long-doc ergonomics | — | — | — |
@@ -259,3 +259,58 @@ List editing is genuinely Word-grade: the enter/tab muscle memory works,
 nesting round-trips, and the decision-68 data-loss class stays fixed at
 both the unit and the live-surface level. (The list *paste* failure from
 Word lives in Area 1 / T1-A, not here.)
+
+---
+
+## Iteration 5 — Area 5: Undo/redo — **DEGRADED (gating; confirms known gap F6, with a sharper mechanism)**
+
+Basics probed live with keyboard events; the approve-boundary probe used a
+**canned local model proxy** (a scratchpad-only test seam speaking the
+proxy's Anthropic-shaped SSE protocol on :8090 — no product code touched)
+so a real chat proposal → real approve could run in this model-less
+environment. Evidence: `shots/05-heuristic-proposal.png`,
+`shots/05-approved.png`, `shots/05-undo-after-approve.png`,
+`shots/05-history-wiped-after-approve.png`.
+
+### The good half — everyday undo is solid
+
+| Probe | Result |
+|---|---|
+| Undo typing | PASS |
+| Redo via Ctrl+Y **and** Ctrl+Shift+Z | PASS (both bound) |
+| Undo a full Word-report paste in ONE step | PASS — single Ctrl+Z removes the whole paste cleanly |
+| Undo a list restructure (Tab nest) | PASS — restores the flat list |
+| Undo typing-over-a-node-selection (table wipe from Area 2) | PASS — single undo restores the table |
+
+### The gating half — approve kills the undo stack (T1-F)
+
+Sequence run live: user types ` USERTYPED` (verified undoable + redoable)
+→ chat proposes an edit → **Approve** → the edit applies. Then:
+
+- **Ctrl+Z does not undo the approve** (the F6 statement, confirmed — the
+  doc is byte-identical after Ctrl+Z).
+- **Worse: Ctrl+Z no longer undoes ANYTHING** — the user's own
+  pre-approve typing, which was undoable seconds earlier, is now
+  permanently baked in. The undo stack is empty.
+
+Mechanism (code-confirmed in the vendored bundle): a model-driven body
+change re-renders through `LWDPM.setDoc`, which builds a **fresh
+`EditorState` with fresh plugins** — including a brand-new, empty
+`history()` plugin state. Every approve/reject/refresh that resets the PM
+body erases the whole session's undo history.
+
+Mitigation that exists: the History tab / snapshots (plan 26) can restore
+named versions, so approved-over work is not unrecoverable — but that is
+not the Ctrl+Z muscle-memory P8 promises ("undo works everywhere,
+including across approves"), and it does nothing for the wiped typing
+history.
+
+### Grade: DEGRADED — gating
+
+Everyday undo is dependable (better than the FRAGILE the journey map
+feared), but the P8 promise breaks exactly at the product's signature
+moment (the approve), and it breaks *wider* than F6's known statement: the
+approve wipes undo for everything, not just itself. Broken-undo class →
+gating. This confirms and sharpens F6 — logged as a finding, not refixed.
+
+Desktop caveat: none — identical webview/bundle code both builds.
