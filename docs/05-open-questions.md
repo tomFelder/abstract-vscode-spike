@@ -67,6 +67,9 @@ fine to keep. This is wired into the next plan as **ITEM G**
 > audit, [13-journey-map-ratification.md](13-journey-map-ratification.md) §3): paste from Word with
 > fidelity, tables, images, headings, find-and-replace. Per principle P10, weakness here is a beta
 > disqualifier — the audit runs before the first stranger gets in ([18-beta-plan.md](18-beta-plan.md) §3).
+> **Update 12 Jul 2026:** the *substrate* half is decided — vendored **ProseMirror** is the single
+> editor surface ([06](06-design-notes.md) D7), reversing the "VS Code primitives" lean below. What
+> remains open is *depth*: the T1 audit (issue #128) decides how much more editor the beta needs.
 
 The current editor is a webview preview with `contenteditable` on non-bound prose. It is **not** a
 full WYSIWYG: no rich toolbar, no block insert/move/delete, no list/table editing, no real selection

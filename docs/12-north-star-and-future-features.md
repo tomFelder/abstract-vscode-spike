@@ -62,6 +62,11 @@ Effort keys: S = days, M = 1-2 weeks, L = multi-week.
 
 ### 3.3 Deepening the word processor (the surface)
 
+> **Note (12 Jul 2026):** wherever this section touches publish/present, **map-D17 governs**:
+> published/exported artifacts are **static snapshots** ("verified as of {date}", human
+> Republish) — the update flagged in [13](13-journey-map-ratification.md) §5 C1, applied here.
+> The Word/Docs export item below is now **P1 beta work** (doc [22](22-file-interop-and-project-layout.md) §3, issue #130), not post-beta roadmap.
+
 - **Comments and suggestions from people (L).** The review engine treats human collaborators as first-class proposal authors: a colleague's suggestion is a pending change with provenance "Sam, 3:12pm", reviewed in the same rail as agent changes. One review grammar for humans and agents is a genuine differentiator over Docs + a bolted-on AI.
 - **Real-time co-editing (L).** The format spec's identity-keyed design is CRDT-ready (doc 08 §3.7). Sequence after comments; multiplayer without the review grammar would just be Docs again.
 - **Tables as first-class living blocks (M).** GFM tables render today (plan 17); make table cells bindable (`[42k](bind:metrics.mrr)` in a cell), and let a whole table derive from a source query. The beachhead documents are full of tables.

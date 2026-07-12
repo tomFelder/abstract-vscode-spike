@@ -52,7 +52,7 @@ The default pack present in new projects ([17-primitives.md](17-primitives.md) �
 
 - **Scale work beyond plan 30's baseline** - no beta user has a 300-file folder on day one; the big-folder first-open (gap audit) is a fast-follow.
 - **Scheduling depth** - local-first reality (D5) means agents only run while the project is open; the morning all-clear is demoable via on-open heartbeats; cloud agents are chapter 2.
-- **Migration tooling (T2/T3)** - start manual: the founder personally converts each early user's folder. It is founder-led onboarding *and* the migration research, and it defers building convert-on-import until its shape is known.
+- **Migration tooling (T2/T3)** - start manual: the founder personally converts each early user's folder. It is founder-led onboarding *and* the migration research, and it defers building convert-on-import until its shape is known. **Update (12 Jul 2026): revised** - a minimal interop floor (docx→md import, docx/PDF export, xlsx→CSV sources, PDF-as-context) is now **P1 in-product** per [21-beta-v1-prioritization.md](21-beta-v1-prioritization.md) §5 / decision 155, specced in [22](22-file-interop-and-project-layout.md); founder-led conversion remains the cohort-1 *motion* only.
 - **Mobile approvals (D23)**, **org library (D13)**, **agent graph view (D16)**, **conflict UI (D11)**, **full audit chat (D18)** - all sequenced by their decisions.
 - **Word-grade editor excellence (T1)** - the *audit* happens pre-beta (it is a disqualifier check, P10); the fixes it surfaces are prioritised by severity, with paste-fidelity issues treated as gating and polish items not.
 
@@ -66,7 +66,9 @@ The default pack present in new projects ([17-primitives.md](17-primitives.md) �
 ## 5. Sequencing (the work between here and the first stranger)
 
 1. **Journey walk + grading** (2.3) - produces the honest work list and re-baselined chips.
+   **Done (plan 34):** grades in [plans/34-verify/journey-grades.md](plans/34-verify/journey-grades.md); the operational priority order is now [21-beta-v1-prioritization.md](21-beta-v1-prioritization.md) §4.
 2. **Model access swap** (2.1) - OpenAI OAuth in, Anthropic usage out, OpenRouter fallback hardened with caps.
+   **Mostly done (plan 35):** Anthropic stripped ✓, capped OpenRouter fallback ✓, ChatGPT sign-in ✓ but the model call fails - **issue #120 is the open blocker**. The WTP fast-follow (charged metered APIs mid-beta) is added by decision 158 / [24-beta-success-memo.md](24-beta-success-memo.md) §4.
 3. **PostHog + consent + event dictionary** (2.2) - so everything after this point is measured.
 4. **D26 onboarding + survey + feedback verb** (2.4, 2.5).
 5. **Journey robustness fixes** in the 2.3 priority order, validated against their specs.

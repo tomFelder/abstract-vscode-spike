@@ -1,5 +1,12 @@
 # 00 — Overview
 
+> **Update (12 Jul 2026):** the product is now named **Abstract** ("Opportunity OS" / "Living
+> Documents" were spike-era working titles). Several questions this doc poses are since resolved:
+> the fork-vs-rebuild arc → **the fork is the beta vehicle**, greenfield is the post-raise
+> chapter ([14](14-product-strategy.md) §6); the file format → Option 10
+> ([08](08-living-documents-format-spec.md)); the shell has since been built out to the comp
+> ([06](06-design-notes.md) D5-D8). The framing below stands as the origin record.
+
 ## The product idea
 
 **Opportunity OS / Living Documents** is an AI-native, **non-technical-friendly word processor**

@@ -88,7 +88,7 @@ The public FAQ currently says "per-seat with usage on top" - close, but it shoul
 
 ## 6. The arc: local → cloud → floor
 
-**Chapter 1 (now, the beta): the local fork.** V1 is the VS Code fork run locally - "a local, non-technical Cursor for documents". Single-player, folder-on-disk, agents run while the project is open (D5). This retires open question Q3 (fork vs greenfield) for v1: the fork **is** the beta vehicle; the merge-tax ledger discipline continues so the option to rebuild stays cheap.
+**Chapter 1 (now, the beta): the local fork.** V1 is the VS Code fork run locally - "a local, non-technical Cursor for documents". Single-player, folder-on-disk, agents run while the project is open (D5). This retires open question Q3 (fork vs greenfield) for v1: the fork **is** the beta vehicle; the merge-tax ledger discipline continues so the option to rebuild stays cheap. **Update (12 Jul 2026, decision 159):** sharpened - the fork is a *disposable validation instrument*; upstream syncs are **frozen for the beta window** (security-only exception), and chapter 2 is explicitly a greenfield rebuild inheriting the learnings, not the code ([23](23-validation-thesis-and-value-hypotheses.md) §5 Q5, [24](24-beta-success-memo.md) §5).
 
 **Chapter 2 (post-raise): the cloud.** Venture funding and a team unlock: agents running in the cloud (while your laptop is closed - D5's open question becomes the paid feature), cloud document infrastructure, and real-time team collaboration. The identity-keyed format is already CRDT-ready (doc 08 §3.7); D23 keeps approve-from-anywhere portable; D25 sequences collaboration as publish-and-comment before multiplayer. The single-player-free → team-paid arc maps exactly onto the local → cloud architecture story.
 

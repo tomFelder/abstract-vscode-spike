@@ -14,6 +14,12 @@ Where the walk found the surface **MISSING** (1d, 1w, 1x), the spec defines the 
 
 Analytics events are named per [15-metrics-and-instrumentation.md](15-metrics-and-instrumentation.md) §3.1; where a journey needs a step the dictionary does not yet name, the spec says so and defers the wiring to plan 36.
 
+> **Update (12 Jul 2026, decision 162):** the beta targets the **Electron desktop build only**;
+> the web build is a dev harness. Wherever an acceptance criterion below says "both the web and
+> desktop builds" (the X1 persistence contract in §1e/§1h), read it as: **desktop must persist
+> and rehydrate fully** (F19 + atomicity verification, issue #121); the web build needs only an
+> honest "writes don't persist here" notice, not a fix.
+
 A note on scope held throughout: per [13](13-journey-map-ratification.md) §2 and [16-principles.md](16-principles.md), decisions are the spec where they defer scope.
 The version chip, History and Restore are graded and specified against the truthful state confirmed on the fresh build (X2/X3 struck; decisions 133/134 held), not the stale-build fabrications.
 

@@ -1,5 +1,10 @@
 # 02 — What we built (items 0-5)
 
+> **Update (12 Jul 2026):** historical build record. Since then: the editor substrate is
+> ProseMirror, not contenteditable ([06](06-design-notes.md) D7); the on-disk format is Option 10,
+> not `.living.md` ([08](08-living-documents-format-spec.md)); and the product name is
+> **Abstract**, not "Opportunity OS".
+
 Two phases of work. **Phase 1** (a prior session) built the thin vertical slice: the `.living.md`
 editor, the agent loop, the review rail, provenance, the real-model commentary rewrite. **Phase 2**
 (this session, items 0-5) extended and stress-tested it. Everything below is on branch

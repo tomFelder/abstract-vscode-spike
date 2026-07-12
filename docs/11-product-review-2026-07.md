@@ -1,5 +1,12 @@
 # 11 - Product review (July 2026): everything since the fork, and where to take it
 
+> **Update (12 Jul 2026):** plans 26-33 have since **merged** — this review is the pre-plan
+> snapshot that motivated them, kept as the historical record. Several of its findings are now
+> closed (Templates/Knowledge are real screens, the fabricated History stack and hardcoded chip
+> are struck — decisions 133/134). For current state see the journey walk
+> [plans/34-verify/journey-grades.md](plans/34-verify/journey-grades.md) and the beta priority
+> order [21-beta-v1-prioritization.md](21-beta-v1-prioritization.md).
+
 This document is a full review of the fork as of `main` at PR #85 (rails as editor companions).
 It sweeps all 85 merged PRs, the ~50 branches, the decision log, the verify logs, and the feature code, and turns what it finds into a ranked set of improvement opportunities.
 Each opportunity points at a detailed implementation plan in [plans/](plans/) (plans 26-33), written to be executed by a senior engineer with no prior context.

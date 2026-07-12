@@ -1,5 +1,12 @@
 # 06 — Design notes (intent vs reality)
 
+> **Scope note (12 Jul 2026):** this running log is self-superseding (later D-sections override
+> earlier ones — e.g. the gutter in D6, ProseMirror in D7, patches-permitted in D8) and is current
+> **through plan 16**. Design decisions from plans 17-37 (off-golden-path, multi-doc, editor-led
+> review, the UI-redesign set 20-25, the beta loops) are recorded in those plans and the decision
+> log, not folded in here. The visual spec of record is now
+> [plans/20-abstract-ui-redesign-handoff.md](plans/20-abstract-ui-redesign-handoff.md).
+
 The visual target is the **"Agentic Workbench" Direction 01 — Workbench hi-fi** (Claude Design
 project `d198ca07-9eef-4d05-96e1-b383e6c19c03`). The spike's shell does not yet match it. This doc
 records the known UI/UX gaps and Tom's specific design intent so the next pass can act on them. All
