@@ -1,0 +1,2 @@
+Plain text paste probe: two lines follow.
+Second line with a URL https://example.com and "straight quotes".
