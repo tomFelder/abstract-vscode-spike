@@ -204,9 +204,29 @@ out of all beta-era public narrative (site, onboarding) - a product that is "tru
 in hand: if thinking sessions retain, the coaching arc is the natural sequel and the data will
 say so.
 
-## 6. Status
+## 6. Status and resolutions (founder, 12 Jul 2026)
 
 §3's hypotheses and §5's questions are inputs to: plan 36 (dashboard cuts, §4.3), plan 38 (survey
 additions, §4.2; skills pack), and the pre-raise memo (Q2). The build order of record remains
 [21-beta-v1-prioritization.md](21-beta-v1-prioritization.md); this document is the *why* behind it
 and the list of things the beta must learn, not just ship.
+
+The founder resolved the §5 questions same-day (decision-log 156-160):
+
+- **Q1/Q2/Q8 → decided.** The "what must be true" memo exists as
+  [24-beta-success-memo.md](24-beta-success-memo.md) - the beta answers **success and growth**,
+  not just activation; beta gates on T4, the raise gates on the memo's retention + growth bars
+  (decision 157).
+- **Q6 → held.** The share-a-read-only-link fake door is deferred; the survey's team-vs-solo
+  question still ships (decision 160).
+- **Q7 → decided, upgraded.** WTP is tested with a *real* payment event: free OpenRouter included
+  tier to check it out, OpenAI OAuth for real usage, then one or two **charged metered API routes
+  as a beta fast-follow** (decision 158; memo §4).
+- **Q5 → decided.** Upstream syncs frozen for the beta window, security-only exception
+  (decision 159).
+- **Q10 → decided.** Realtime coaching stays out of beta-era narrative; future feature
+  (decision 160).
+- **New (same session):** the hidden `.abstract/` project folder for skills/knowledge/runs/config
+  (decision 156; layout in [22](22-file-interop-and-project-layout.md) §5).
+- Q3 (segment vs corridor), Q4 (platform squeeze), Q9 (buyer identity) remain **watch items**
+  measured by the memo's growth section and the per-face retention cut.

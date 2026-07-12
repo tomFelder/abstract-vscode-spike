@@ -118,10 +118,36 @@ my-project/
   assets/                      ← images extracted on import, referenced relatively
   working-files/               ← drafts, scratch, thinking docs
   archive/                     ← superseded docs; archive/originals/ for imported docx
+  .abstract/                   ← hidden app home (decision 156) - see below
 ```
 
-New projects are born with the empty conventional folders absent (no ceremony); the **Tidy verb**
-creates them as it needs them.
+**The `.abstract/` folder (decision 156):** the hidden, in-project home for everything the app
+needs to store that is not a user document or a user data file:
+
+```
+.abstract/
+  config.json                  ← project settings (autonomy defaults, model prefs)
+  skills/                      ← the default thinking-skills pack + wizard-grown skills (skill.md)
+  knowledge/                   ← Knowledge-library metadata & source caches (the data itself stays in data/)
+  runs/                        ← agent run log (feeds WHILE YOU WERE AWAY, 1w)
+  index/                       ← discovery/search indexes and derived caches (always rebuildable)
+```
+
+Boundaries that hold the portability principle (P6):
+- Everything inside is a **plain, portable file** - a skill.md found in `.abstract/skills/` is
+  readable and editable by a human or another tool; nothing binary, nothing proprietary.
+- **Locks stay beside their documents** (Option 10 spec of record) - lock-follows-file rename/move
+  semantics and provenance-visible-to-external-tools both depend on it. Relocating locks into
+  `.abstract/` is a greenfield revisit, not a beta change.
+- `templates/` stays visible: users author templates directly (plan 28); hiding them breaks that.
+- **Secrets never live here** (they are proxy-side in `~/.abstract/`, D29-C) - the project folder
+  must always be safe to zip and send.
+- Caches/indexes are rebuildable; deleting `.abstract/` must degrade gracefully (skills pack
+  re-seeded, knowledge re-derived from locks, runs history lost with a plain-words note).
+
+New projects are born with the empty conventional folders absent (no ceremony) - except
+`.abstract/`, which is created on first agentic use (skills pack seeding); the **Tidy verb**
+creates the visible conventions as it needs them.
 
 **The Tidy verb (P2, requires F16):** "Tidy this project" in the project chat / Home. The agent
 *proposes* a move plan through the review grammar - "move 6 outdated drafts to `archive/`, 3 CSVs
@@ -161,6 +187,7 @@ Spreadsheets:
 
 Layout & Tidy:
 - [ ] Lock files are hidden in the Abstract tree.
+- [ ] `.abstract/` exists (hidden in the tree), holds skills/knowledge-metadata/runs/config/index as plain files, is created on first agentic use, and deleting it degrades gracefully (rebuildable caches, re-seeded skills pack, plain-words note for lost run history).
 - [ ] Tidy proposes moves through the review grammar; nothing moves without approve.
 - [ ] Moves are atomic (doc + lock), update all dependent locks' source paths, warn on would-orphan, and offer Undo.
 - [ ] A tidied project remains legible in Finder/Explorer to a non-Abstract user.
