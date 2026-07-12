@@ -40,7 +40,7 @@ verdict section). Audit only — no product fixes were made in this loop.
 
 | # | Area | Grade | Gating / polish | One-line user impact |
 |---|---|---|---|---|
-| 1 | Paste from Word | — | — | — |
+| 1 | Paste from Word | **FAIL** | **gating** (T1-A, T1-B, T1-C) | Pasting your Word report keeps the words but destroys every table and bullet list, and can splice deleted tracked-changes text back into your sentences |
 | 2 | Tables | — | — | — |
 | 3 | Images | — | — | — |
 | 4 | Lists & structure | — | — | — |
@@ -77,3 +77,84 @@ verdict section). Audit only — no product fixes were made in this loop.
   `# smoke **bold** pasteProbe` — paste path live, bold preserved as
   `**bold**`. (The heading-merge artefact is because the caret sat at
   offset 0 of the H1; probes from iteration 1 place the caret deliberately.)
+
+---
+
+## Iteration 1 — Area 1: Paste from Word — **FAIL (gating)**
+
+All probes dispatched the synthesised Word `text/html` clipboard payloads
+(fixtures/) as real `ClipboardEvent('paste')` into the live ProseMirror
+surface, and read the document back through the editor's own serializer
+(`LWDPM.toMarkdown`). Evidence: `shots/01-paste-word-report.png`,
+`shots/01-paste-word-report-fresh.png`, `shots/01-paste-into-list.png`,
+plus the serialized-markdown transcripts below.
+
+### What survives (the good half)
+
+| Probe | Result |
+|---|---|
+| Heading (`<h1>` pasted at a fresh block) | PASS — becomes `# Q3 Weekly Report` |
+| Bold / italic / hyperlink | PASS — `**$49,800**`, `*12 per cent*`, `[dashboard](https://example.com/dashboard)` |
+| Smart quotes / em-dash / nbsp entities | PASS — kept as the typographic characters (`“momentum is steady.”`, `—`) |
+| mso- junk / `<o:p>` / conditional comments | PASS — none leak into the document text |
+| Inline image (data URI) | PASS — becomes a markdown image, renders |
+| Plain-text-only paste | PASS — both lines land as paragraphs |
+| Paste over a selection | PASS — selection replaced cleanly, formatting of pasted content kept |
+| Paste into a list item | PASS-ish — text lands inside the item, sibling items intact (a leading space is collapsed — HTML whitespace, minor) |
+
+### What breaks (the gating half)
+
+**T1-A — Word bullet/numbered lists flatten to junk-glyph paragraphs.**
+Word's clipboard HTML does not use `<ul>/<li>` — list items are
+`<p class=MsoListParagraphCxSp*>` with the bullet glyph inside a
+`mso-list:Ignore` span. The editor has no Word-list normaliser, so a 2-level
+bullet list pastes as four flat paragraphs with literal glyph characters:
+
+```
+·       Pipeline grew in EMEA
+
+o       Two new enterprise logos
+```
+
+Not a list (no `-`/`*` markdown, no nesting, glyph + nbsp runs kept as text).
+User impact: *pasting your weekly report turns every bullet list into junk
+lines you must retype.* Silent-structure-loss / mangled-paste class → gating.
+
+**T1-B — Word tables are silently destroyed.** The editor schema
+(commonmark + `bound_figure`; `docs/lwd-pm-bundle-build.md`) has **no table
+nodes**, so ProseMirror's paste parser hoists every `<td>`'s content out as
+a separate paragraph. The fixture's 6-row `MsoTableGrid` with a merged
+header pasted as a vertical run of 20 one-line paragraphs
+(`**Region & Segment**` / `**Revenue**` / … / `AMER` / `Enterprise` /
+`$21,300` / …). No cells, no rows, no grid — and nothing tells the user the
+table was dropped. User impact: *pasting your report loses the table; the
+numbers survive as a meaningless vertical list.* Silent-content/structure
+loss → gating, and it also caps Area 2 (tables) below.
+
+**T1-C — Tracked-changes residue pastes BOTH deleted and inserted text.**
+The fixture carries Word's `msoDel`/`msoIns` spans
+(`revised down` struck-through + `held flat` underlined). The strike/underline
+styling is dropped and both runs are concatenated into the sentence:
+
+```
+The forecast was revised downheld flat after the review; final wording pending.
+```
+
+User impact: *if your Word doc still has tracked changes, pasting splices the
+deleted wording back into the sentence with no visual warning.* Silent content
+corruption → gating (narrower than T1-A/T1-B but the same trust class).
+
+**Minor (polish):** Word's empty spacer paragraphs (`<o:p>&nbsp;</o:p>`)
+paste as stray blank paragraphs containing a non-breaking space.
+
+### Grade: FAIL — gating
+
+Inline fidelity is genuinely good (better than feared: no mso junk, real
+marks, smart quotes intact), but the two structures a Word person pastes
+most — bullet lists and tables — are both destroyed silently, and
+tracked-changes residue corrupts sentences. Per P10 this is exactly the
+paste-fidelity class that gates the beta.
+
+Desktop caveat: none — the paste path (ProseMirror clipboard parser +
+commonmark schema) is identical webview code in web and Electron builds;
+these results are build-independent.
