@@ -41,7 +41,7 @@ verdict section). Audit only — no product fixes were made in this loop.
 | # | Area | Grade | Gating / polish | One-line user impact |
 |---|---|---|---|---|
 | 1 | Paste from Word | **FAIL** | **gating** (T1-A, T1-B, T1-C) | Pasting your Word report keeps the words but destroys every table and bullet list, and can splice deleted tracked-changes text back into your sentences |
-| 2 | Tables | — | — | — |
+| 2 | Tables | **FAIL** | **gating** (T1-D) | Your table displays beautifully but you cannot edit a cell or add a row — and clicking a cell then typing deletes the whole table |
 | 3 | Images | — | — | — |
 | 4 | Lists & structure | — | — | — |
 | 5 | Undo/redo | — | — | — |
@@ -158,3 +158,51 @@ paste-fidelity class that gates the beta.
 Desktop caveat: none — the paste path (ProseMirror clipboard parser +
 commonmark schema) is identical webview code in web and Electron builds;
 these results are build-independent.
+
+---
+
+## Iteration 2 — Area 2: Tables — **FAIL (gating)**
+
+Probed with a 3×3 GFM table set as the document body, driven in the live
+editor. Evidence: `shots/02-gfm-table-render.png`,
+`shots/02-table-selected.png`, `shots/02-table-wiped-by-typing.png`,
+`shots/02-table-undo-restored.png`.
+
+### Render fidelity — PASS (genuinely good)
+
+A GFM pipe table renders as a real styled table (header row, borders,
+`:---:` alignment honoured, inline markdown inside cells). Since the
+plan-15 bundle doc was written, the vendored bundle gained a `table_block`
+node: markdown-it's `table` rule is enabled, the raw pipe text is held in a
+`markdown` attr, `toDOM` renders a static `<table class="lwd-table"
+data-md="…" contenteditable="false">`, and the serializer writes the attr
+back verbatim — so tables round-trip to disk losslessly.
+
+### Editing — absent, and destructively surprising (T1-D)
+
+The node is `atom:true, isolating:true, contenteditable=false`:
+
+- **Cell editing: absent.** Clicking a cell does not place a caret — it
+  node-selects the whole table (verified:
+  `selection.node.type = table_block` after clicking the `$21,300` cell).
+- **Tab between cells: absent.** Tab moves focus out of the editor.
+- **Add/delete row/column: absent.** The toolbar has no table commands
+  (`bold/italic/bullet_list/ordered_list/blockquote` + heading select only);
+  no context menu, no cell affordances. Absence is the finding, not a crash.
+- **The trap: click a cell, then type — the whole table is replaced by the
+  typed character.** Click selects the atom; typing over a node-selection
+  replaces it (standard ProseMirror), so the doc went from a 3×3 table to
+  the literal text `X`. Single-step undo does restore the table
+  (`02-table-undo-restored.png`). For the Word persona — "edit a cell, add
+  a row" is THE table journey — this is a one-keystroke silent table wipe.
+- Editing a table therefore requires editing the `.md` file outside the
+  product (or asking the model via chat). No in-editor path exists.
+
+### Grade: FAIL — gating (T1-D: no table editing + one-keystroke table wipe)
+
+User impact: *your board pack's table shows up perfectly, but the moment
+you try to fix one number in it you either can't (no caret) or you destroy
+the table (typing replaces it).* With T1-B (pasted Word tables never become
+tables at all), table support is display-only end to end.
+
+Desktop caveat: none — identical webview code in both builds.
