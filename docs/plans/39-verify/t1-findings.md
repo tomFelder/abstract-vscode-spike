@@ -47,7 +47,7 @@ verdict section). Audit only — no product fixes were made in this loop.
 | 5 | Undo/redo | **DEGRADED** | **gating** (T1-F, confirms known F6) | Ctrl+Z is reliable while you edit — but the moment you approve a change, undo goes dead: even your own earlier typing can no longer be undone |
 | 6 | Find & replace | **FAIL** | polish (T1-G) | Ctrl+F does nothing in a document — you scan a 30-page doc by eye; there is no replace at all (bound values, correctly, cannot be edited in place) |
 | 7 | Selection & cursor | **DEGRADED** | polish (T1-H) | Clicking, selecting and typing are rock-solid — but when a chat reply lands, the app steals your cursor mid-word and your typing stops going into the document |
-| 8 | Long-doc ergonomics | — | — | — |
+| 8 | Long-doc ergonomics | **PASS** | — | A 10,000-word board pack opens in under 2 s, typing stays instant everywhere, and the page never jumps while you work |
 
 ---
 
@@ -367,3 +367,25 @@ keystrokes go to the rail instead), so this is interruption, not
 corruption → polish.
 
 Desktop caveat: none — same webview focus handling in both builds.
+
+---
+
+## Iteration 8 — Area 8: Long-doc ergonomics — **PASS**
+
+Fixture: `fixtures/longdoc-10k.md` (10,271 words, 43 sections, 259 blocks →
+431 DOM nodes). Evidence: `shots/08-longdoc.png` + measurements.
+
+| Probe | Result |
+|---|---|
+| Open the 10k-word doc | PASS — interactive in ~1.7 s (4.2 s measured minus the harness's fixed 2.5 s settle) |
+| Typing latency at the end of the doc | PASS — per-keystroke dispatch+render: **median 0.5 ms, p90 1.0 ms, max 2.6 ms** (30 samples); real keyboard typing of 13 chars lands intact |
+| Whole-doc re-render on edit? | PASS — a DOM node at the top of the doc (tagged with a JS property) survives an edit at the bottom: ProseMirror renders incrementally, no innerHTML rebuild |
+| Scroll stability across the save cycle | PASS — scrolled to 2000 px, typed a mid-doc edit, waited out the 300 ms save debounce + server re-render: **0 px drift**, edit landed |
+
+### Grade: PASS
+
+The mount-once/postMessage architecture (decision 50) plus ProseMirror's
+incremental rendering make the 30-page case genuinely comfortable — this is
+the strongest area of the audit alongside lists.
+
+Desktop caveat: none (if anything, desktop removes the browser-tab overhead).
