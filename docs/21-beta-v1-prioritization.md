@@ -174,8 +174,22 @@ can score them. When cohort 1 opens their own folders:
 ## 7. Issue map
 
 All tracked in GitHub (tomFelder/abstract-vscode-spike); the issue list is the operational view of
-§4. Pre-existing: **#120** (model access, P0 item 5). Created 12 Jul 2026 alongside this document:
-issues for F1+F19, F2-F13, F14, F15, F16, F17+F18, plan-38 onboarding, T1 audit, docx import,
-docx/PDF export, xlsx-as-source + PDF-as-source, folder conventions + Tidy verb, and real-folder
-hardening. Plans 35/36/37/38 remain the loop vehicles; the issues are the tracking layer the loops
-close against.
+§4. Plans 35/36/37/38 remain the loop vehicles; the issues are the tracking layer the loops close
+against.
+
+| Issue | Tier | What |
+|---|---|---|
+| #121 | P0 | F1 + F19 - X1 web persistence + History rehydration (the severity-1) |
+| #122 | P0 | F2-F13 - the twelve cheap aha-path off-path fixes |
+| #123 | P0 | F14 - model outage must never render as "no changes proposed" |
+| #124 | P0 | F15 - Project Home minimal v1 |
+| #125 | P0 | F16 - provenance-safe file ops (prerequisite for #132) |
+| #126 | P0 | F17 + F18 - "From sources…" birth + from-examples template wizard |
+| #127 | P0 | Plan 38 - D26 onboarding + survey + feedback verb |
+| #128 | P0 | T1 editor audit (paste-from-Word disqualifier check) |
+| #120 | P0 | (pre-existing) ChatGPT-subscription backend model call fails - plan 35 |
+| #129 | P1 | docx → Markdown import (doc 22 §2) |
+| #130 | P1 | docx + PDF export unstubbed (doc 22 §3) |
+| #131 | P1 | xlsx → CSV sources + PDF as read-only context (doc 22 §4) |
+| #132 | P2 | Folder conventions + the Tidy verb (doc 22 §5; depends on #125) |
+| #133 | P2 | Real-folder hardening probes (the §6 predictions) |
