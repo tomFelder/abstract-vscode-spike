@@ -29,6 +29,7 @@ the convention and links are provenance — the layers below are the read-order.
 | [23-validation-thesis-and-value-hypotheses.md](23-validation-thesis-and-value-hypotheses.md) | The validation thesis: founder context, first-principles adoption laws, falsifiable value-prop hypotheses VP1-VP7 with kill signals, the doc-set test (§4b), the services face (§2), and the ten founder questions — resolved in §6 (decisions 156-160) |
 | [24-beta-success-memo.md](24-beta-success-memo.md) | **The raise gate.** Pre-registered beta success criteria: the three questions (activation / habit / pay+grow), funnel targets and kill thresholds, growth mechanics, the WTP sequence, and the deck-claim-to-evidence table. A living scoreboard, updated weekly |
 | [26-glossary-and-id-index.md](26-glossary-and-id-index.md) | **Keep open while reading anything else.** The vocabulary and every ID system (journeys, F-fixes, map-D vs decisions, VPs, T-tests, principle-P vs priority-P), each mapped to its home doc |
+| [27-data-flow-one-pager.md](27-data-flow-one-pager.md) | **The trust story in plain words** (issue #135; the sole decision-163 moratorium exemption): what leaves your machine, when, and to whom - the two model doors, what the localhost helper keeps, that no analytics ships yet, and what is never sent. Surfaced in-product on the Model access screen. Every claim traced to a live code path |
 
 *Named gap (decision 161): a fork-independent product spec for the greenfield team — to be
 written once the T1 audit and beta evidence land.*
