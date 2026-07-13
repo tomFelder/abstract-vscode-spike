@@ -225,11 +225,13 @@ export class LivingDocEditor extends EditorPane {
 			case 'reveal':
 				// Clicking a provenance dot opens the in-surface source pane focused on those cells.
 				this._sourcePeek = { cells: Array.isArray(message.cells) ? message.cells : [], synced: false, syncedCount: 0 };
+				this._livingDocs.notePeek('click-through');
 				this._render();
 				break;
 			case 'openSource':
 				// The "Source" toolbar button opens the in-surface source pane (no cell focus).
 				this._sourcePeek = { cells: [], synced: false, syncedCount: 0 };
+				this._livingDocs.notePeek('toolbar');
 				this._render();
 				break;
 			case 'closeSource':
