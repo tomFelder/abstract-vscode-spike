@@ -1629,11 +1629,9 @@ suite('LivingDocsService', () => {
 
 	// --- F17 "From sources..." birth (journey 1b): draft a document FROM selected sources through review ---
 	// The skeleton DECLARES the picked sources (provenance) and the document is opened, then the draft is driven
-	// through the SAME chat path every generation uses. The draft-arriving-as-review-proposals step is proven
-	// end-to-end by the E2E against the canned proxy (the model-backed chat call is not exercised in the unit
-	// sandbox - the shared generateFromTemplate test hits the same limitation); here we assert the reliable
-	// disk + wiring contract: declared sources, the H1, and that no prose is fabricated onto disk.
-	test('generateFromSources writes a source-declared skeleton (provenance) and opens it, drafting via the review engine', async () => {
+	// through the SAME chat path every generation uses (like generateFromTemplate): the prose arrives as a
+	// reviewable insertion proposal in the Review rail, never written to disk directly (decision 17).
+	test('generateFromSources writes a source-declared skeleton (provenance) and drafts through the review engine', async () => {
 		const opened: IOpenedEditor[] = [];
 		const service = createService(opened, {
 			model: modelMessage({ reply: 'Drafted from your sources.', edits: [], inserts: [{ afterHeading: '', newText: 'MRR grew steadily this week.', rationale: 'From the metrics.' }] }),
@@ -1648,8 +1646,13 @@ suite('LivingDocsService', () => {
 		assert.deepStrictEqual(doc.sources, ['metrics.csv'], 'the csv is a value source (so its figures can bind)');
 		assert.deepStrictEqual(doc.context, ['market-research.md'], 'the document/knowledge source is context');
 		assert.ok(raw.includes('# Board note - March'), 'the H1 is the document name');
-		// No prose is baked onto disk: the body is only the H1 - the draft is the review engine's job, not a write.
-		assert.ok(!/synced/i.test(raw) && doc.blocks.filter(b => b.type !== 'heading').length === 0, 'no fabricated prose is written to disk');
+		// The prose arrived as a reviewable insertion proposal (not written directly): it is in the pending set.
+		const pending = service.getPendingForDoc(uri!);
+		assert.strictEqual(pending.length, 1, 'the model draft landed as one insertion proposal in the review rail');
+		assert.strictEqual(pending[0].newText, 'MRR grew steadily this week.', 'the proposal carries the drafted prose');
+		assert.strictEqual(pending[0].oldText, '', 'an insertion has no old text (all-additions inline diff)');
+		// The composed from-sources brief actually drove the model call (the existing chat path, not a bespoke one).
+		assert.ok((lastModelBody ?? '').includes('Draft the first version of'), 'the composed from-sources brief drove the model call');
 		assert.deepStrictEqual(opened[opened.length - 1]?.resource?.toString(), uri!.toString(), 'the drafted document is opened in the editor');
 	});
 
@@ -1677,10 +1680,9 @@ suite('LivingDocsService', () => {
 	});
 
 	// The template file is a real, discoverable `*.template.md` that records the examples it was grown from and
-	// carries the skill.md scaffold; the analysis then runs through the SAME chat path (proven end-to-end by the
-	// E2E against the canned proxy - the model-backed chat call is not exercised in the unit sandbox, the shared
-	// generateFromTemplate test hits the same limitation). Here we assert the reliable disk + discovery contract.
-	test('generateTemplateFromExamples writes a real, discoverable template recording the examples, and analyses via review', async () => {
+	// carries the skill.md scaffold; the analysis then runs through the SAME chat path (like generateFromTemplate),
+	// so the named commonalities arrive as reviewable insertion proposals - the review grammar, never a silent write.
+	test('generateTemplateFromExamples writes a real, discoverable template and analyses the examples through the review engine', async () => {
 		const opened: IOpenedEditor[] = [];
 		const service = createService(opened, {
 			model: modelMessage({ reply: 'Found the shared pattern.', edits: [], inserts: [{ afterHeading: 'Structure', newText: 'Title, summary, then the numbers.', rationale: 'Every example shares it.' }] }),
@@ -1700,6 +1702,12 @@ suite('LivingDocsService', () => {
 
 		// It joins the Templates library at once (before any approval - the file exists on disk).
 		assert.ok((await service.listTemplates()).some(t => t.name === 'Board note'), 'the new template appears in listTemplates');
+
+		// The analysis named the commonality as a reviewable insertion proposal (the review grammar), not a silent write.
+		const pending = service.getPendingForDoc(uri!);
+		assert.strictEqual(pending.length, 1, 'the analysis landed as one insertion proposal in the review rail');
+		assert.strictEqual(pending[0].newText, 'Title, summary, then the numbers.', 'the proposal carries the named commonality');
+		assert.ok((lastModelBody ?? '').includes('Study the 3 attached example documents'), 'the composed analysis brief drove the model call');
 	});
 
 	test('generateTemplateFromExamples with no model still writes the template and NAMES the error (never "no commonalities")', async () => {

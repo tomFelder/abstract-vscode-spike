@@ -1087,7 +1087,6 @@ const POLICY_LABELS: Record<string, string> = {
 	'draft-only': 'Draft only',
 };
 
-// allow-any-unicode-next-line
 // The inline policy select + trigger editor (D32-B): the safety dial has exactly the three levels (spec 09 section 4)
 // and the trigger picker composes a cron day/time, a heartbeat cadence, or an event source. Both post on change.
 function renderAgentControls(agent: IAgentDef): string {
