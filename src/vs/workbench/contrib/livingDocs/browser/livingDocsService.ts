@@ -989,9 +989,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return target;
 		}
 		// Drive the existing generative chat path with the composed brief: the model's output arrives as
-		// insertion proposals in the review rail, exactly like any chat generation.
+		// insertion proposals in the review rail, exactly like any chat generation. The rail shows plain-words
+		// progress (F4), never the internal template brief - the full instruction drives the model only.
 		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
-		await this.sendChatMessage(target, instruction);
+		const trimmedNote = (note ?? '').trim();
+		const display = trimmedNote
+			? `Draft "${requested}" from the ${templateName} template. ${trimmedNote}`
+			: `Draft "${requested}" from the ${templateName} template.`;
+		await this.sendChatMessage(target, instruction, display);
 		return target;
 	}
 
@@ -2597,7 +2602,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._chatBusy.has(resource.toString());
 	}
 
-	async sendChatMessage(resource: URI, text: string): Promise<void> {
+	// `displayText`, when given, is the plain-words progress shown to the user in the rail while the model
+	// is driven with the full `text` instruction (plan 37 F4): a template generation shows "Draft ... from
+	// the ... template." rather than dumping the internal template brief/prompt into the chat. The full
+	// instruction is kept on the turn's `prompt` so a retry re-runs the brief, not the shown words.
+	async sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void> {
 		const trimmed = text.trim();
 		if (!trimmed) { return; }
 		const id = resource.toString();
@@ -2605,7 +2614,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chats.set(id, history);
 
 		const mentions = this._parseMentions(resource, trimmed);
-		history.push({ role: 'user', content: trimmed, mentions: mentions.length ? mentions : undefined });
+		const shown = (displayText ?? '').trim();
+		history.push({ role: 'user', content: shown || trimmed, prompt: shown ? trimmed : undefined, mentions: mentions.length ? mentions : undefined });
 		await this._deliverChatReply(resource, trimmed, mentions);
 	}
 
@@ -2628,8 +2638,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		while (history.length && history[history.length - 1].role === 'assistant') { history.pop(); }
 		const last = history[history.length - 1];
 		if (!last || last.role !== 'user') { return; }
-		const mentions = last.mentions ? [...last.mentions] : this._parseMentions(resource, last.content);
-		void this._deliverChatReply(resource, last.content, mentions);
+		// Re-run the underlying instruction (the template brief for a generation turn), not the plain-words
+		// progress shown in the rail (plan 37 F4): `prompt` holds it when the shown content was substituted.
+		const instruction = last.prompt ?? last.content;
+		const mentions = last.mentions ? [...last.mentions] : this._parseMentions(resource, instruction);
+		void this._deliverChatReply(resource, instruction, mentions);
 	}
 
 	// The shared chat-turn delivery (plan 27 iters 2-3): sets busy, opens a per-document cancellation source,

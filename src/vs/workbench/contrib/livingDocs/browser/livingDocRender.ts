@@ -544,7 +544,7 @@ function pmEditWidgetHtml(e: IPmEditDecoration, bar: boolean): string {
 		+ `<p class="editp">${renderDiffSegments(e.segments)}</p>`
 		+ editor
 		+ `<div class="ctrl"><span class="cdot"></span>`
-		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
+		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span></span>`
 		+ `<span class="acts normacts">${tweakBtn}<button class="approve" data-approve="${esc(e.id)}">Approve changes</button>`
 		+ `<button class="reject" data-reject="${esc(e.id)}">Reject</button></span>${tweakActs}</div></div>`;
 }
@@ -556,7 +556,7 @@ function pmInsertWidgetHtml(ins: IPmInsertDecoration): string {
 		+ framing
 		+ `<div class="insertbody">${renderGenericMarkdown(ins.newText)}</div>`
 		+ `<div class="ctrl"><span class="cdot add"></span>`
-		+ `<span class="lbl">New content from <span class="src">Chat</span> &middot; <span class="add">inserted after ${esc(ins.blockLabel)}</span> &middot; ${Math.round(ins.confidence * 100)}% confidence</span>`
+		+ `<span class="lbl">New content from <span class="src">Chat</span> &middot; <span class="add">inserted after ${esc(ins.blockLabel)}</span></span>`
 		+ `<span class="acts"><button class="approve" data-approve="${esc(ins.id)}">Approve</button>`
 		+ `<button class="reject" data-reject="${esc(ins.id)}">Reject</button></span></div></div>`;
 }
