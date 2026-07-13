@@ -25,7 +25,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { IAnalyticsService } from '../common/analytics.js';
-import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
@@ -143,7 +143,7 @@ const MODEL_MAX_TOKENS = 1024;
 // The plain-words message the proxy returns when the day's included usage is spent on the founder-funded
 // fallback (plan 35 iter 3; doc 18 section 2.1). Used as the fallback default when the proxy omits its own
 // prose, so the renderer always shows honest words (P5) rather than an error.
-const INCLUDED_USAGE_SPENT_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
+const INCLUDED_USAGE_SPENT_MESSAGE = 'You\'ve used today\'s included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.';
 
 // A model call that the proxy paused because the day's included usage is spent (stop_reason "pause"). It is
 // NOT a failure: the caller keeps any prose the proxy returned (the plain-words cap message), queues no
@@ -899,6 +899,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			.sort((a, b) => a.localeCompare(b));
 	}
 
+	// The project folder's document files (md/txt at the root), for the "From sources..." knowledge picker
+	// (F17) and the from-examples wizard's example picker (F18). Excludes templates, generated export/source
+	// views and lock sidecars - only user-authored documents. Empty when no folder is open.
+	async getFolderDocFiles(): Promise<readonly string[]> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) { return []; }
+		let children;
+		try {
+			children = (await this._files.resolve(folder.uri)).children ?? [];
+		} catch {
+			return [];
+		}
+		return children
+			.filter(c => !c.isDirectory)
+			.map(c => basename(c.resource))
+			.filter(name => /\.(md|txt)$/i.test(name) && !/\.template\.md$/i.test(name) && !/\.(export|source)\.md$/i.test(name))
+			.sort((a, b) => a.localeCompare(b));
+	}
+
 	async addSource(resource: URI, source: string): Promise<void> {
 		await this._rewriteSources(resource, source, true);
 	}
@@ -1038,6 +1057,111 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
 		await this.sendChatMessage(target, instruction);
 		return target;
+	}
+
+	// Draft a new document FROM SELECTED SOURCES (F17, journey 1b's third birth). Mirrors generateFromTemplate:
+	// write a bare skeleton that DECLARES the picked sources (so provenance is honest and figures bind), open
+	// it, then drive the SAME chat path every generation uses so the prose lands as reviewable insertion
+	// proposals - never silently written. csv/json become `sources:` (value bindings); md/txt become `context:`
+	// (prose knowledge). With no model reachable the skeleton is still created and a status line explains the
+	// draft needs the model (honest empty state, never fake content). Returns the new document's URI.
+	async generateFromSources(sources: readonly string[], docName: string, note: string): Promise<URI | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) {
+			this._notify.info('Open a folder to create a document.');
+			return undefined;
+		}
+		const picks = sources.map(s => s.trim()).filter(Boolean);
+		if (picks.length === 0) {
+			this._notify.info('Pick at least one source to draft from.');
+			return undefined;
+		}
+		// Value data (csv/json) binds; documents/notes (md/txt/everything else) are read as prose knowledge.
+		const valueSources = picks.filter(s => /\.(csv|json)$/i.test(s));
+		const contextSources = picks.filter(s => !/\.(csv|json)$/i.test(s));
+		const firstStem = (picks[0].split('/').pop() ?? picks[0]).replace(/\.[a-z0-9]+$/i, '');
+		const requested = LivingDocsService._safeStem(docName) || LivingDocsService._safeStem(firstStem) || 'Untitled';
+		const skeleton = buildSourcesSkeleton(requested, valueSources, contextSources);
+		const target = await this._uniqueDocUri(folder.uri, requested);
+		try {
+			await this._files.writeFile(target, VSBuffer.fromString(skeleton));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } });
+		} catch (e) {
+			this._log.warn('[livingDocs] from-sources skeleton write failed', e);
+			return undefined;
+		}
+		// Load so the declared sources are read alongside the doc (the chat path reads state.doc.sources/context).
+		await this.loadDocument(target);
+		if (!await this._hasModel()) {
+			const state = this._docs.get(target.toString());
+			if (state) { state.status = 'Draft skeleton created - connect a model to draft it from the sources'; }
+			this._notify.info(`Created "${requested}" from ${picks.length} source${picks.length === 1 ? '' : 's'}. Start the local model proxy to draft its content.`);
+			this._onDidChange.fire();
+			return target;
+		}
+		const instruction = composeSourcesInstruction(requested, valueSources, contextSources, note ?? '');
+		await this.sendChatMessage(target, instruction);
+		return target;
+	}
+
+	// Grow a new template FROM EXAMPLE DOCUMENTS (F18, journey 1x). Validate the set (3-10; else a plain-words
+	// refusal), write a real `<name>.template.md` skeleton (skill.md shape) that records the examples under
+	// `context:` so the analysis reads them, open it (it joins the + New picker at once), then drive the SAME
+	// chat path so the agent NAMES the commonalities as reviewable insertion proposals - the review grammar,
+	// never a silent write. With no model reachable the skeleton is still created and a status line NAMES the
+	// error - never rendered as "no commonalities" (the F14 rule). Returns the new template's URI.
+	async generateTemplateFromExamples(examples: readonly string[], templateName: string): Promise<URI | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) {
+			this._notify.info('Open a folder to create a template.');
+			return undefined;
+		}
+		const picks = examples.map(e => e.trim()).filter(Boolean);
+		const check = validateExampleSet(picks);
+		if (!check.ok) {
+			this._notify.info(check.reason ?? 'Pick between 3 and 10 example documents.');
+			return undefined;
+		}
+		const name = LivingDocsService._safeStem(templateName) || 'Untitled Template';
+		const skeleton = buildExamplesTemplateSkeleton(name, picks);
+		const target = await this._uniqueTemplateUriNamed(folder.uri, name);
+		try {
+			await this._files.writeFile(target, VSBuffer.fromString(skeleton));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } });
+			this._onDidChange.fire();
+		} catch (e) {
+			this._log.warn('[livingDocs] from-examples template write failed', e);
+			return undefined;
+		}
+		// Load so the declared example documents are read alongside the template (the analysis reads context).
+		await this.loadDocument(target);
+		if (!await this._hasModel()) {
+			const state = this._docs.get(target.toString());
+			if (state) { state.status = 'Template created - connect a model to analyse the examples and describe the pattern'; }
+			this._notify.info(`Created the "${name}" template from ${picks.length} examples. Start the local model proxy to analyse them.`);
+			this._onDidChange.fire();
+			return target;
+		}
+		const instruction = composeExamplesInstruction(name, picks);
+		await this.sendChatMessage(target, instruction);
+		return target;
+	}
+
+	// Pick a non-colliding `<stem>.template.md` name in the folder (mirrors `_uniqueDocUri` for templates).
+	private async _uniqueTemplateUriNamed(folder: URI, stem: string): Promise<URI> {
+		const existing = new Set<string>();
+		try {
+			for (const child of (await this._files.resolve(folder)).children ?? []) {
+				existing.add(basename(child.resource));
+			}
+		} catch {
+			// An unreadable folder just means no collisions to avoid.
+		}
+		let name = `${stem}.template.md`;
+		for (let n = 2; existing.has(name); n++) {
+			name = `${stem} ${n}.template.md`;
+		}
+		return joinPath(folder, name);
 	}
 
 	// Recursively collect every Markdown document under a folder (the folder is the project), skipping
@@ -3111,7 +3235,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (state) {
 			await this.saveSnapshot(state.uri, 'Before bulk approve', 'bulk-approve');
 		}
-		// Mark the fanned approves as bulk so each proposal_resolved carries bulk:true (doc 15 §3.1).
+		// Mark the fanned approves as bulk so each proposal_resolved carries bulk:true (doc 15 section 3.1).
 		this._inBulkApprove = true;
 		try {
 			for (const id of ids) {

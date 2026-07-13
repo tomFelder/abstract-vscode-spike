@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, countTemplateSlots, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSlotHints, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countTemplateSlots, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -247,6 +247,80 @@ suite('LivingDoc bind-link format', () => {
 		const instruction = composeTemplateInstruction('Client update', '# {{slot:client name}}\n\n## What we shipped\n\nSummarise.', 'Acme update', '');
 		assert.ok(!instruction.includes('Specific request'), 'no note line without a note');
 		assert.ok(instruction.includes('Fill these slots from the sources: client name.'));
+	});
+
+	// --- F17 "From sources..." birth (journey 1b): the pure skeleton + brief for drafting from picked sources.
+	test('buildSourcesSkeleton declares value sources and context, titled by the given name', () => {
+		const skeleton = buildSourcesSkeleton('Board note - March', ['metrics.csv'], ['market-research.md', 'Team Notes.md']);
+		assert.strictEqual(skeleton, [
+			'---',
+			'sources:',
+			'  - metrics.csv',
+			'context:',
+			'  - market-research.md',
+			'  - Team Notes.md',
+			'---',
+			'',
+			'# Board note - March',
+			'',
+		].join('\n'), 'csv/json land under sources: and md/txt under context:, with the doc H1');
+		// The skeleton is a parseable Living Document: its sources/context are read back correctly.
+		const parsed = parseLivingDoc(skeleton);
+		assert.deepStrictEqual(parsed.sources, ['metrics.csv']);
+		assert.deepStrictEqual(parsed.context, ['market-research.md', 'Team Notes.md']);
+		assert.strictEqual(parsed.title, 'Board note - March');
+	});
+
+	test('buildSourcesSkeleton falls back to the first source stem when no name is given', () => {
+		assert.strictEqual(buildSourcesSkeleton('', ['metrics.csv'], []), '---\nsources:\n  - metrics.csv\n---\n\n# metrics\n');
+		assert.strictEqual(buildSourcesSkeleton('', [], []), '---\n---\n\n# Untitled\n');
+	});
+
+	test('composeSourcesInstruction asks for a bound draft from the sources; the note is passed through', () => {
+		const instruction = composeSourcesInstruction('Board note - March', ['metrics.csv'], ['market-research.md'], 'Lead with churn.');
+		assert.strictEqual(instruction, [
+			'Draft the first version of "Board note - March" from the attached sources: metrics.csv, market-research.md.',
+			'Write the body as new content inserted into the document, grounded in what the sources actually say. Do not invent figures.',
+			'Where you state a figure that comes from a data source (metrics.csv), write it as a bind link - [value](bind:<source>.<field>) - so it stays traceable, rather than baking in a plain number.',
+			'',
+			'Specific request for this document: Lead with churn.',
+		].join('\n'), 'the brief names the sources, asks for born-bound figures, and carries the note verbatim');
+	});
+
+	test('composeSourcesInstruction omits the bind-link line when there are no value sources, and the note line when none', () => {
+		const instruction = composeSourcesInstruction('Summary', [], ['market-research.md'], '');
+		assert.ok(!instruction.includes('bind link'), 'no bind guidance without a value source');
+		assert.ok(!instruction.includes('Specific request'), 'no note line without a note');
+	});
+
+	// --- F18 from-examples template wizard (journey 1x): example-set validation, template skeleton, brief.
+	test('validateExampleSet accepts 3-10 and refuses out-of-bounds with a plain-words reason', () => {
+		assert.deepStrictEqual(validateExampleSet(['a.md', 'b.md', 'c.md']), { ok: true });
+		assert.deepStrictEqual(validateExampleSet(new Array(10).fill('x.md')), { ok: true });
+		const tooFew = validateExampleSet(['a.md', 'b.md']);
+		assert.strictEqual(tooFew.ok, false);
+		assert.ok(tooFew.reason && tooFew.reason.includes('at least 3') && tooFew.reason.includes('you chose 2'), 'the refusal names the floor and the count in plain words');
+		const tooMany = validateExampleSet(new Array(11).fill('x.md'));
+		assert.strictEqual(tooMany.ok, false);
+		assert.ok(tooMany.reason && tooMany.reason.includes('at most 10'), 'the refusal names the ceiling');
+	});
+
+	test('buildExamplesTemplateSkeleton is a real template file recording the examples and the skill.md sections', () => {
+		const skeleton = buildExamplesTemplateSkeleton('Board note', ['Board Note.md', 'Team Notes.md', 'Weekly Summary.md']);
+		const parsed = parseLivingDoc(skeleton);
+		assert.strictEqual(parsed.isTemplate, true, 'it is a template: true file, so it joins the + New picker');
+		assert.strictEqual(parsed.templateName, 'Board note');
+		assert.deepStrictEqual(parsed.context, ['Board Note.md', 'Team Notes.md', 'Weekly Summary.md'], 'the examples are recorded so the analysis can read them');
+		for (const section of ['## Structure', '## Recurring figures', '## Tone', '## Success examples']) {
+			assert.ok(skeleton.includes(section), `the skill.md scaffold has ${section}`);
+		}
+	});
+
+	test('composeExamplesInstruction asks for the shared pattern only, naming the examples', () => {
+		const instruction = composeExamplesInstruction('Board note', ['Board Note.md', 'Team Notes.md', 'Weekly Summary.md']);
+		assert.ok(instruction.includes('3 attached example documents (Board Note.md, Team Notes.md, Weekly Summary.md)'));
+		assert.ok(instruction.includes('the "Board note" template'));
+		assert.ok(/only what genuinely repeats/i.test(instruction), 'it guards against invented structure (never "no commonalities" territory)');
 	});
 
 	test('reconcileBindLinks rewrites visible cache to the resolved value (lock wins), keeping the key', () => {

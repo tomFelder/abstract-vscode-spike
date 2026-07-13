@@ -50,6 +50,9 @@ interface IScreenEditorState {
 	sources?: readonly ISourceInfo[];
 	knSelectedSource?: string;
 	dataFiles?: readonly string[];
+	// Home + Templates: the project's document files (md/txt), for the "From sources..." knowledge picker (F17)
+	// and the from-examples template wizard's example picker (F18); fetched with dataFiles on open + on change.
+	docFiles?: readonly string[];
 	// Home: recently-opened folders from the workbench history (D22-A); fetched async alongside docs.
 	recentFolders?: readonly IRecentProject[];
 	// Project-run (C4): the live/last whole-project fan-out state, or undefined for the truthful idle
@@ -144,16 +147,23 @@ export class ScreenEditor extends EditorPane {
 		// Home reflects the open folder: fetch its documents + recent folders + templates before the first
 		// render so there is no flash (templates seed the New-document sheet's template rows, iter 4).
 		if (this._screen === 'home') {
-			const [docs, recentFolders, templates] = await Promise.all([
+			const [docs, recentFolders, templates, dataFiles, docFiles] = await Promise.all([
 				this._livingDocs.listDocuments(),
 				this._fetchRecentFolders(),
 				this._livingDocs.listTemplates(),
+				this._livingDocs.getFolderDataFiles(),
+				this._livingDocs.getFolderDocFiles(),
 			]);
-			this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure() };
+			this._state = { ...this._state, docs, recentFolders, templates, dataFiles, docFiles, homeFailure: this._homeFailure() };
 		}
-		// Templates reflects the open folder's `*.template.md` files (plan 28): fetch before first render.
+		// Templates reflects the open folder's `*.template.md` files (plan 28) plus its documents (the
+		// from-examples wizard's example picker, F18): fetch before first render.
 		if (this._screen === 'templates') {
-			this._state = { ...this._state, templates: await this._livingDocs.listTemplates() };
+			const [templates, docFiles] = await Promise.all([
+				this._livingDocs.listTemplates(),
+				this._livingDocs.getFolderDocFiles(),
+			]);
+			this._state = { ...this._state, templates, docFiles };
 		}
 		// Knowledge reflects the project's real source registry (plan 29): fetch the sources, the documents
 		// (Add-source target list) and the folder's data files (the picker) before the first render.
@@ -202,7 +212,11 @@ export class ScreenEditor extends EditorPane {
 	}
 
 	private async _refreshTemplates(): Promise<void> {
-		this._state = { ...this._state, templates: await this._livingDocs.listTemplates() };
+		const [templates, docFiles] = await Promise.all([
+			this._livingDocs.listTemplates(),
+			this._livingDocs.getFolderDocFiles(),
+		]);
+		this._state = { ...this._state, templates, docFiles };
 		this._render();
 	}
 
@@ -219,12 +233,14 @@ export class ScreenEditor extends EditorPane {
 	}
 
 	private async _refreshHome(): Promise<void> {
-		const [docs, recentFolders, templates] = await Promise.all([
+		const [docs, recentFolders, templates, dataFiles, docFiles] = await Promise.all([
 			this._livingDocs.listDocuments(),
 			this._fetchRecentFolders(),
 			this._livingDocs.listTemplates(),
+			this._livingDocs.getFolderDataFiles(),
+			this._livingDocs.getFolderDocFiles(),
 		]);
-		this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure() };
+		this._state = { ...this._state, docs, recentFolders, templates, dataFiles, docFiles, homeFailure: this._homeFailure() };
 		this._render();
 	}
 
@@ -291,7 +307,7 @@ export class ScreenEditor extends EditorPane {
 		}
 	}
 
-	private _onMessage(message: { type?: string; arg?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string; value?: string; daily?: string; subs?: string; weekly?: string }): void {
+	private _onMessage(message: { type?: string; arg?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string; value?: string; daily?: string; subs?: string; weekly?: string; picks?: string }): void {
 		switch (message?.type) {
 			case 'setKnOrg':
 				this._state = { ...this._state, knScope: 'org' };
@@ -455,6 +471,17 @@ export class ScreenEditor extends EditorPane {
 			// keeps decision 56's Untitled name-on-first-save escape hatch. The service handles both.
 			case 'newDocument':
 				void this._livingDocs.createDocument(message.name);
+				break;
+			// "From sources..." (F17, journey 1b's third birth): the picker sheet posts the checked source
+			// files + the document name + an optional instruction. The document is drafted from them through
+			// the review engine.
+			case 'newFromSources':
+				void this._generateFromSources(message.picks, message.name, message.note);
+				break;
+			// "New template from examples" (F18, journey 1x): the picker sheet posts the checked example
+			// documents + the template name. The wizard validates the set and analyses them through review.
+			case 'newTemplateFromExamples':
+				void this._generateTemplateFromExamples(message.picks, message.name);
 				break;
 			case 'openDoc':
 				if (message.arg) { void this._editors.openEditor({ resource: URI.parse(message.arg), options: { pinned: true } }); }
@@ -756,6 +783,38 @@ export class ScreenEditor extends EditorPane {
 	private async _generateFromTemplate(templateUri: string, name?: string, note?: string): Promise<void> {
 		const target = await this._livingDocs.generateFromTemplate(URI.parse(templateUri), name ?? '', note ?? '');
 		if (target) { this._livingDocs.focusPanel('review'); }
+	}
+
+	// Draft a document from selected sources (F17): the sheet posts the checked source files as a JSON array.
+	// The service writes the skeleton, opens the new document and drives the chat path so the draft lands as
+	// reviewable proposals. Reveal the review rail so the pending draft is where the user expects it.
+	private async _generateFromSources(picks?: string, name?: string, note?: string): Promise<void> {
+		const sources = this._parsePicks(picks);
+		if (!sources.length) { return; }
+		const target = await this._livingDocs.generateFromSources(sources, name ?? '', note ?? '');
+		if (target) { this._livingDocs.focusPanel('review'); }
+	}
+
+	// Grow a template from examples (F18): the sheet posts the checked example documents as a JSON array. The
+	// service validates the set (refusing <3 or >10 with a plain-words notice), writes the template skeleton
+	// (which joins the + New picker at once) and drives the chat path so the analysis lands as reviewable
+	// proposals. Reveal the review rail so the named commonalities are where the user expects them.
+	private async _generateTemplateFromExamples(picks?: string, name?: string): Promise<void> {
+		const examples = this._parsePicks(picks);
+		const target = await this._livingDocs.generateTemplateFromExamples(examples, name ?? '');
+		if (target) { this._livingDocs.focusPanel('review'); }
+	}
+
+	// Parse a sheet's checked-picks JSON array (the client posts a JSON string of the checked values), never
+	// throwing on a malformed payload - an unparseable or non-array value yields an empty selection.
+	private _parsePicks(picks?: string): string[] {
+		if (!picks) { return []; }
+		try {
+			const parsed = JSON.parse(picks);
+			return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string') : [];
+		} catch {
+			return [];
+		}
 	}
 
 	// Templates "Export" lands the user on a real document, where the Present/export modal lives.
