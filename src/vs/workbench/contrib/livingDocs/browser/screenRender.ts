@@ -102,6 +102,11 @@ export interface IScreenState {
 	readonly signInStage?: ChatGptSignInStage;
 	/** Settings: a plain-words sign-in error to show under the button, if the last attempt failed. */
 	readonly signInError?: string;
+	/**
+	 * Settings: the OpenAI authorize URL for the in-flight sign-in, surfaced in the pending state as a real
+	 * clickable link (a genuine user gesture that the browser will not popup-block) plus a copyable fallback.
+	 */
+	readonly signInAuthorizeUrl?: string;
 	/** Settings: true once the onboarding survey has been recorded this session (shows the thank-you state). */
 	readonly surveySaved?: boolean;
 }
@@ -356,6 +361,21 @@ for (const el of document.querySelectorAll('[data-tfield=kind]')) {
 	el.addEventListener('change', () => {
 		const box = el.closest('[data-trigger-box]'); if (!box) { return; }
 		for (const g of box.querySelectorAll('[data-tgroup]')) { g.style.display = (g.getAttribute('data-tgroup') === el.value) ? 'flex' : 'none'; }
+	});
+}
+// Model-access sign-in (plan 38): the "Open the sign-in page" anchor is a genuine anchor click (a real user
+// gesture), so we hand the URL to the host to open OUTSIDE the sandboxed webview via the opener service - a
+// raw target=_blank inside the iframe is sandbox-blocked, and a post-await window.open would be popup-blocked.
+for (const el of document.querySelectorAll('[data-open-external]')) {
+	el.addEventListener('click', (e) => { e.preventDefault(); vscode.postMessage({ type: 'openExternalUrl', arg: el.getAttribute('href') || undefined }); });
+}
+// "Copy link" fallback for corporate/blocked environments: copy the authorize URL to the clipboard so the
+// user can paste it into their own browser. A brief "Copied" acknowledgement, then the label restores.
+for (const el of document.querySelectorAll('[data-copy-link]')) {
+	el.addEventListener('click', () => {
+		const link = el.getAttribute('data-link') || '';
+		const done = () => { const prev = el.textContent; el.textContent = 'Copied'; setTimeout(() => { el.textContent = prev; }, 1400); };
+		if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(link).then(done, done); } else { done(); }
 	});
 }`;
 
@@ -1055,6 +1075,29 @@ function usageRing(fraction: number): string {
 	</svg>`;
 }
 
+// The pending "Sign in with ChatGPT" block (plan 38): we still attempt the automatic browser open, but a
+// post-await window.open is popup-blocked (especially in Incognito), so we never depend on it. Instead we
+// surface a real anchor the user clicks directly - a genuine user gesture opens the tab, never swallowed -
+// routed to the host so it opens OUTSIDE the sandboxed webview (openerService -> system browser). A "Copy
+// link" fallback covers corporate/blocked environments where even the direct open is intercepted, and the
+// URL is shown as selectable text so it can always be pasted by hand. Plain words throughout (P5).
+function pendingSignInBlock(authorizeUrl: string | undefined): string {
+	const waiting = `<div style="display:inline-flex;align-items:center;gap:9px;font:600 13px/1 system-ui;color:#52575f;margin-bottom:14px"><span style="width:13px;height:13px;border:2px solid #d3d6dd;border-top-color:${ACCENT};border-radius:50%;animation:lwdSpin .8s linear infinite"></span>Waiting for you to finish signing in&hellip;</div>`;
+	if (!authorizeUrl) {
+		return `<div>${waiting}</div>`;
+	}
+	const url = esc(authorizeUrl);
+	return `<div>
+		${waiting}
+		<p style="margin:0 0 12px;font:400 12.5px/1.55 system-ui;color:#696e78">If your browser didn&#39;t open, open the sign-in page yourself:</p>
+		<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:12px">
+			<a data-open-external href="${url}" style="display:inline-flex;align-items:center;gap:8px;border:none;border-radius:10px;padding:12px 20px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;text-decoration:none;cursor:pointer">Open the sign-in page &#8599;</a>
+			<button data-copy-link data-link="${url}" style="border:1px solid #d4d7dd;background:#fff;border-radius:10px;padding:11px 16px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Copy link</button>
+		</div>
+		<div style="font:400 11px/1.5 ui-monospace,SFMono-Regular,monospace;color:#9aa0ac;background:#f7f8fa;border:1px solid #eceef2;border-radius:8px;padding:9px 11px;word-break:break-all;user-select:all">${url}</div>
+	</div>`;
+}
+
 function renderSettings(state: IScreenState): string {
 	const status = state.providerStatus ?? { provider: 'none' as const, signedIn: false, dailyBudgetUsd: 0 };
 	const stage: ChatGptSignInStage = state.signInStage ?? (status.signedIn ? 'signed-in' : 'signed-out');
@@ -1087,7 +1130,7 @@ function renderSettings(state: IScreenState): string {
 				<button data-msg="signOutChatGpt" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Sign out</button>
 			</div>`
 		: stage === 'pending'
-			? `<button disabled style="border:none;border-radius:10px;padding:13px 20px;background:#c8cbd2;color:#fff;font:600 14px/1 system-ui;display:inline-flex;align-items:center;gap:9px;cursor:default"><span style="width:13px;height:13px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:lwdSpin .8s linear infinite"></span>Waiting for your browser&hellip;</button>`
+			? pendingSignInBlock(state.signInAuthorizeUrl)
 			: `<button data-msg="signInChatGpt" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">Sign in with ChatGPT</button>`;
 
 	const signInError = stage === 'error' && state.signInError
