@@ -9,6 +9,7 @@ import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
+import { deleteCol, deleteRow, gfmEscapeCell, gfmIsAlignRow, gfmParseAlign, gfmSplitCells, insertCol, insertRow, parseGfmTable, serializeGfmTable, setCell } from '../common/livingDocTableEdit.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
 // The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
@@ -344,7 +345,16 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .lwd-tip .tip-src{font:600 12px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#fff;word-break:break-all}
 .lwd-tip .tip-meta{color:#b7bcc6;margin-top:1px}
 .lwd-tip .tip-stale{display:flex;align-items:center;gap:6px;margin-top:5px;color:#f0b968;font-weight:500}
-.lwd-tip .tip-stale::before{content:"";width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}`;
+.lwd-tip .tip-stale::before{content:"";width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}
+/* Table cell editing (issue #140): the GFM table_block renders as a static, contenteditable=false atom.
+ * An in-place edit affordance sits OVER it - a fixed-position input over the clicked cell, plus a small
+ * floating row/column toolbar - so a cell can be edited and rows/cols added without the node-select
+ * type-over that used to wipe the whole table. Cells show a text cursor to signal they are editable. */
+.pmwrap .ProseMirror table.lwd-table td,.pmwrap .ProseMirror table.lwd-table th{cursor:text}
+.lwd-cell-editor{position:fixed;z-index:70;box-sizing:border-box;border:2px solid ${ACCENT};border-radius:4px;padding:1px 6px;margin:0;font:400 13px/1.4 system-ui;color:#1a1c20;background:#fff;box-shadow:0 4px 14px rgba(20,30,60,.16);outline:none}
+.lwd-table-tools{position:fixed;z-index:71;display:flex;gap:4px;padding:4px;background:#fff;border:1px solid #e6e8ed;border-radius:8px;box-shadow:0 6px 18px rgba(20,30,60,.16)}
+.lwd-table-tools button{border:1px solid #e0e2e8;background:#fff;color:#52575f;border-radius:6px;padding:5px 9px;font:500 11.5px/1 system-ui;cursor:pointer}
+.lwd-table-tools button:hover{background:#f4f5f7}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -352,9 +362,20 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 // message; plan 15 iter 2). Event handling is DELEGATED on the persistent #lwd-root container, so it keeps
 // working across innerHTML swaps without re-binding. On an update the live ProseMirror node is detached,
 // the body is swapped, and the same node is re-inserted into the new #pm-root (PM survives reparenting).
-const RUNTIME = `const vscode = acquireVsCodeApi();
+// The pure GFM-table helpers (common/livingDocTableEdit.ts) are shared verbatim between the unit tests
+// and the webview: their compiled source is interpolated into the RUNTIME below so the in-place cell
+// editor's DOM shim can call them. Each is self-contained (asserted by the unit test), so String(fn)
+// yields injectable ES with no dangling import/helper references.
+const TABLE_HELPERS = [gfmSplitCells, gfmIsAlignRow, gfmParseAlign, gfmEscapeCell, parseGfmTable, serializeGfmTable, setCell, insertRow, deleteRow, insertCol, deleteCol].map(fn => String(fn)).join('\n');
+
+const RUNTIME = `${TABLE_HELPERS}
+const vscode = acquireVsCodeApi();
 const root = document.getElementById('lwd-root');
 let pmView = null, pmTimer = 0;
+// The open in-place table cell editor (issue #140): { input, tIdx, r, c }. tIdx is the table's index
+// in document order (robust to PM rebuilding the atom's DOM on setNodeMarkup); r < 0 addresses the
+// header row, r >= 0 a body row. tblToolbar is its floating +/- Row/Col affordance. null when idle.
+let tblEditor = null, tblToolbar = null;
 // Per-key provenance for the hover tooltip (plan 29 iter 3), refreshed from every decoration payload so the
 // tooltip always reads the current lock state (a source edit that flips freshness re-renders the payload).
 let _prov = Object.create(null);
@@ -382,7 +403,7 @@ function showTip(el, key){ const p = _prov[key]; if (!p) { return; } if (!_tip) 
 	_tip.style.left = left + 'px'; _tip.style.top = top + 'px';
 }
 function hideTip(){ if (_tip) { _tip.classList.remove('show'); } }
-function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); focusPm(); } }
+function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); wireTableEditing(); focusPm(); } }
 // plan 16 iter 3 (decision 56): land the caret in the document on first mount so a freshly-opened (or
 // freshly-created blank) doc is immediately writable -- "one click -> cursor ready", no extra click to
 // start typing. Only fires on the initial mount (mount-once-then-message, decision 50), so re-renders
@@ -399,10 +420,15 @@ function applyUpdate(htmlStr, pmMd, spec, pmReset){
 		const r = root.querySelector('#pm-root');
 		if (live && r) {
 			r.appendChild(live);
-			if (typeof pmReset === 'string' && window.LWDPM) { window.LWDPM.setDoc(pmView, pmReset); }
+			// A decoration-only re-render (e.g. the debounced save after a cell commit) keeps the live PM
+			// node - and so the table DOM the overlay sits over - intact; reposition the editor rather than
+			// tearing it down, so a save landing mid-edit never closes the cell the user just opened. A
+			// pmReset rebuilds the doc to disk truth, which invalidates any open editor, so drop it there.
+			if (typeof pmReset === 'string' && window.LWDPM) { teardownCellInput(); window.LWDPM.setDoc(pmView, pmReset); }
 			pmDeco(spec);
-		} else if (r && window.LWDPM) { mountPm(pmMd, spec); }
-	} else if (pmView) { window.LWDPM.destroy(pmView); pmView = null; }
+			revalidateCellEditor();
+		} else if (r && window.LWDPM) { teardownCellInput(); mountPm(pmMd, spec); }
+	} else if (pmView) { teardownCellInput(); window.LWDPM.destroy(pmView); pmView = null; }
 }
 // The calm formatting toolbar drives the live ProseMirror view through LWDPM.cmd (plan 15 iter 5) - NOT
 // document.execCommand, which PM does not honour. The B/I/list/quote buttons fire on mousedown with
@@ -479,6 +505,57 @@ root.addEventListener('focusout', e => {
 // The change's accept/reject widget carries data-approve="<id>"; reveal its surrounding diff/insert block.
 // A short timeout lets the just-applied decorations lay out before we measure/scroll.
 function focusChange(id){ setTimeout(function(){ try { const el = root.querySelector('[data-approve="' + id + '"]'); const block = el && el.closest('.editblock, .insertblock'); if (block) { block.scrollIntoView({ block: 'center', behavior: 'smooth' }); block.classList.add('lwd-focus-flash'); setTimeout(function(){ block.classList.remove('lwd-focus-flash'); }, 1600); } } catch (e) {} }, 30); }
+// ---- In-place table cell editing (issue #140) -------------------------------------------------
+// The shipped bundle renders a GFM table as a static \`table.lwd-table\` atom (contenteditable=false):
+// clicking a cell node-selects the whole table, and the next printable key REPLACES it (a one-keystroke
+// wipe). This shim keeps the atom but layers an edit affordance over it, all through history-friendly
+// \`setNodeMarkup\` transactions on the node's \`markdown\` attr (one undo step per commit / structural op,
+// and the normal pmEdit save path fires). The pure GFM helpers injected above do the string work.
+function tablesInView(){ return pmView ? Array.prototype.slice.call(pmView.dom.querySelectorAll('table.lwd-table')) : []; }
+// Resolve the Nth table_block node (document order === DOM order for block atoms) to { pos, node }.
+// Index mapping is robust to two tables with identical content and to the atom being rebuilt on edit.
+function tableNodeByIndex(idx){ if (!pmView || idx < 0) { return null; } let seen = -1, found = null; pmView.state.doc.descendants(function(node, pos){ if (node.type && node.type.name === 'table_block'){ seen++; if (seen === idx){ found = { pos: pos, node: node }; } return false; } return true; }); return found; }
+function edTableEl(){ return tblEditor ? tablesInView()[tblEditor.tIdx] : null; }
+// r < 0 => a header (thead) cell; r >= 0 => a body (tbody) row. cellIndex gives the column.
+function cellCoords(tableEl, cell){ const c = cell.cellIndex; if (cell.closest('thead')){ return { r: -1, c: c }; } const tbody = tableEl.querySelector('tbody'); const r = tbody ? Array.prototype.indexOf.call(tbody.rows, cell.parentNode) : 0; return { r: r, c: c }; }
+function cellAt(tableEl, coords){ if (!tableEl){ return null; } if (coords.r < 0){ const thead = tableEl.querySelector('thead'); const hr = thead && thead.rows[0]; return hr ? hr.cells[coords.c] : null; } const tbody = tableEl.querySelector('tbody'); const row = tbody && tbody.rows[coords.r]; return row ? (row.cells[coords.c] || null) : null; }
+function cellRawText(node, r, c){ const t = parseGfmTable(node.attrs.markdown || ''); if (r < 0){ return t.header[c] || ''; } return (t.rows[r] && t.rows[r][c] != null) ? t.rows[r][c] : ''; }
+// Position a fixed overlay exactly over a cell (both are viewport-anchored, so no reflow coupling).
+function placeOver(el, cell){ const b = cell.getBoundingClientRect(); el.style.left = b.left + 'px'; el.style.top = b.top + 'px'; el.style.width = b.width + 'px'; el.style.height = b.height + 'px'; }
+function teardownCellInput(){ if (tblToolbar){ if (tblToolbar.parentNode){ tblToolbar.parentNode.removeChild(tblToolbar); } tblToolbar = null; } if (!tblEditor){ return; } const ed = tblEditor; tblEditor = null; ed.input.removeEventListener('keydown', onCellKey); ed.input.removeEventListener('blur', onCellBlur); if (ed.input.parentNode){ ed.input.parentNode.removeChild(ed.input); } }
+// After a re-render that KEPT the live PM node, re-anchor the open overlay over its (surviving) cell;
+// if the cell is gone (its column/row was removed by the re-render), close the editor cleanly.
+function revalidateCellEditor(){ if (!tblEditor){ return; } const tableEl = tablesInView()[tblEditor.tIdx]; const cell = cellAt(tableEl, { r: tblEditor.r, c: tblEditor.c }); if (!cell){ teardownCellInput(); return; } placeOver(tblEditor.input, cell); if (tblToolbar && tableEl){ const b = tableEl.getBoundingClientRect(); tblToolbar.style.left = b.left + 'px'; tblToolbar.style.top = Math.max(6, b.top - tblToolbar.offsetHeight - 6) + 'px'; } }
+// Dispatch a single node-attr transaction: history-friendly (one undo step) and docChanged -> pmEdit save.
+function dispatchTableMd(pos, md){ if (!pmView){ return; } pmView.dispatch(pmView.state.tr.setNodeMarkup(pos, null, { markdown: md })); }
+// Write the open editor's current value into the model and dispatch it (no-op when unchanged). Returns
+// the { pos, node } AFTER dispatch so callers can chain a follow-up (Tab / structural op) off fresh state.
+function commitCell(){ if (!tblEditor){ return null; } const ed = tblEditor; const loc = tableNodeByIndex(ed.tIdx); if (!loc){ return null; } const cur = cellRawText(loc.node, ed.r, ed.c); if (ed.input.value !== cur){ dispatchTableMd(loc.pos, serializeGfmTable(setCell(parseGfmTable(loc.node.attrs.markdown || ''), ed.r, ed.c, ed.input.value))); return tableNodeByIndex(ed.tIdx); } return loc; }
+function openCellAt(tIdx, coords){ const tableEl = tablesInView()[tIdx]; const loc = tableNodeByIndex(tIdx); if (!tableEl || !loc){ return; } const cell = cellAt(tableEl, coords); if (!cell){ return; } const input = document.createElement('input'); input.type = 'text'; input.className = 'lwd-cell-editor'; input.setAttribute('aria-label', 'Edit table cell'); input.value = cellRawText(loc.node, coords.r, coords.c); document.body.appendChild(input); placeOver(input, cell); tblEditor = { input: input, tIdx: tIdx, r: coords.r, c: coords.c }; input.addEventListener('keydown', onCellKey); input.addEventListener('blur', onCellBlur); showTableToolbar(tableEl); input.focus(); input.select(); }
+function onCellBlur(){ if (!tblEditor){ return; } commitCell(); teardownCellInput(); }
+function onCellKey(e){ if (e.key === 'Enter'){ e.preventDefault(); commitCell(); teardownCellInput(); return; } if (e.key === 'Escape'){ e.preventDefault(); teardownCellInput(); return; } if (e.key === 'Tab'){ e.preventDefault(); moveCell(e.shiftKey ? -1 : 1); return; } }
+// Tab/Shift+Tab: commit, then open the next/previous cell (wraps across rows). Tab past the last cell
+// appends an empty row (Word muscle memory). All re-location is by tIdx off post-dispatch state.
+function moveCell(dir){ const ed = tblEditor; if (!ed){ return; } const tIdx = ed.tIdx, r = ed.r, c = ed.c; const loc = commitCell(); teardownCellInput(); if (!loc){ return; } let t = parseGfmTable(loc.node.attrs.markdown || ''); const cols = t.header.length; if (!cols){ return; } let nr = r, nc = c; if (dir > 0){ nc = c + 1; if (nc >= cols){ nc = 0; nr = r + 1; } if (nr >= 0 && nr >= t.rows.length){ t = insertRow(t, t.rows.length); dispatchTableMd(loc.pos, serializeGfmTable(t)); nr = t.rows.length - 1; nc = 0; } } else { nc = c - 1; if (nc < 0){ nc = cols - 1; nr = r - 1; } if (nr < -1){ return; } } openCellAt(tIdx, { r: nr, c: nc }); }
+// The floating +/- Row/Col affordance shown while a cell editor is open. Buttons preventDefault on
+// mousedown so the cell input keeps focus (no premature blur-commit); each op folds the in-progress
+// cell value in and dispatches ONE setNodeMarkup (one undo step), then reopens an editor to keep flow.
+function showTableToolbar(tableEl){ if (tblToolbar){ if (tblToolbar.parentNode){ tblToolbar.parentNode.removeChild(tblToolbar); } tblToolbar = null; } const bar = document.createElement('div'); bar.className = 'lwd-table-tools'; bar.innerHTML = '<button data-tblop="row+" title="Add a row below">+ Row</button><button data-tblop="col+" title="Add a column to the right">+ Col</button><button data-tblop="row-" title="Delete this row">\\u2212 Row</button><button data-tblop="col-" title="Delete this column">\\u2212 Col</button>'; document.body.appendChild(bar); const b = tableEl.getBoundingClientRect(); bar.style.left = b.left + 'px'; bar.style.top = Math.max(6, b.top - bar.offsetHeight - 6) + 'px'; bar.addEventListener('mousedown', onTableToolMousedown); tblToolbar = bar; }
+function onTableToolMousedown(e){ const btn = e.target.closest && e.target.closest('button[data-tblop]'); if (!btn){ return; } e.preventDefault(); applyTableOp(btn.getAttribute('data-tblop')); }
+function applyTableOp(op){ const ed = tblEditor; if (!ed){ return; } const tIdx = ed.tIdx; const loc = tableNodeByIndex(tIdx); if (!loc){ return; } let t = setCell(parseGfmTable(loc.node.attrs.markdown || ''), ed.r, ed.c, ed.input.value); let fr = ed.r, fc = ed.c; if (op === 'row+'){ const at = ed.r + 1; t = insertRow(t, at); fr = at < 0 ? 0 : at; fc = ed.c; } else if (op === 'col+'){ const at = ed.c + 1; t = insertCol(t, at); fc = at; } else if (op === 'row-'){ if (ed.r < 0 || t.rows.length === 0){ return; } t = deleteRow(t, ed.r); if (!t.rows.length){ fr = -1; fc = ed.c; } else { fr = Math.min(ed.r, t.rows.length - 1); } } else if (op === 'col-'){ if (t.header.length <= 1){ return; } t = deleteCol(t, ed.c); fc = Math.min(ed.c, t.header.length - 1); } else { return; } teardownCellInput(); dispatchTableMd(loc.pos, serializeGfmTable(t)); openCellAt(tIdx, { r: fr, c: fc }); }
+// Capture-phase mousedown on a cell: stop PM's node-select (the wipe trap can't even arm), commit any
+// open editor first (may rebuild this table's DOM), then open the target cell resolved by table index.
+function onTableCellMousedown(e){ const cell = e.target.closest && e.target.closest('td, th'); if (!cell){ return; } const tableEl = cell.closest && cell.closest('table.lwd-table'); if (!tableEl || !pmView || !pmView.dom.contains(tableEl)){ return; } e.preventDefault(); e.stopPropagation(); const tIdx = tablesInView().indexOf(tableEl); const coords = cellCoords(tableEl, cell); if (tblEditor){ commitCell(); teardownCellInput(); } openCellAt(tIdx, coords); }
+// Capture-phase keydown guard: while a table atom is node-selected, a single printable key would replace
+// it. Block that (the data-loss trap). Delete/Backspace still delete the table (a visible, undoable act);
+// Ctrl/Meta chords (copy/cut) pass through. Skipped while a cell editor is open (its own input owns keys).
+function onPmKeydownCapture(e){ if (tblEditor){ return; } const sel = pmView && pmView.state.selection; const node = sel && sel.node; if (node && node.type && node.type.name === 'table_block'){ if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey){ e.preventDefault(); } } }
+function wireTableEditing(){ if (!pmView || pmView.__lwdTableWired){ return; } pmView.__lwdTableWired = true; pmView.dom.addEventListener('mousedown', onTableCellMousedown, true); pmView.dom.addEventListener('keydown', onPmKeydownCapture, true); }
+// The doc scrolls inside the webview and a focus()/select() on the fixed overlay can itself scroll it
+// into view; keep the overlay glued to its cell by repositioning on any scroll (capture catches inner
+// scrollers too) rather than tearing it down - so opening a cell can never be undone by a stray scroll.
+window.addEventListener('scroll', function(){ revalidateCellEditor(); }, true);
+window.addEventListener('resize', function(){ revalidateCellEditor(); });
 window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); } else if (m && m.type === 'focusChange') { focusChange(m.id); } });
 if (typeof window.__LWD_PM_MD === 'string') { mountPm(window.__LWD_PM_MD, window.__LWD_PM_DECO); }
 vscode.postMessage({ type: 'lwdReady' });`;
