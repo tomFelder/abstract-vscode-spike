@@ -87,6 +87,9 @@ export interface ILivingDocSummary {
 	readonly lastSynced: string;
 	/** Pending meaning-changes for this document (mirrors the Review rail count). */
 	readonly pendingCount: number;
+	/** The document's directory relative to the workspace root ('' = root), '/'-joined; drives the
+	 * tree-rail's folder hierarchy so nested subfolders are not flattened (plan 37 F7). */
+	readonly folder: string;
 }
 
 /**
@@ -374,6 +377,10 @@ export interface ILivingDocsService {
 
 	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
 	listDocuments(): Promise<readonly ILivingDocSummary[]>;
+
+	/** The workspace's non-Markdown files (basenames): data/source files for the tree-rail SOURCES section
+	 * and files we cannot yet import (.doc/.docx) for the "Not yet imported" section (plan 37 F9/F10). */
+	listWorkspaceExtras(): Promise<readonly string[]>;
 
 	/** Discover and parse every `*.template.md` in the workspace (for the Templates screen; plan 28). */
 	listTemplates(): Promise<readonly ITemplateInfo[]>;

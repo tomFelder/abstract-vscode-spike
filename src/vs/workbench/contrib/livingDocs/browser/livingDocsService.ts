@@ -10,7 +10,7 @@ import { Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
+import { basename, dirname, joinPath, relativePath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -23,7 +23,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
@@ -33,6 +33,7 @@ import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
 import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
+import { classifyWorkspaceExtra } from '../common/treeRail.js';
 import { projectDisplayName } from '../common/projectDisplayName.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
@@ -141,7 +142,7 @@ const MODEL_MAX_TOKENS = 1024;
 // The plain-words message the proxy returns when the day's included usage is spent on the founder-funded
 // fallback (plan 35 iter 3; doc 18 section 2.1). Used as the fallback default when the proxy omits its own
 // prose, so the renderer always shows honest words (P5) rather than an error.
-const INCLUDED_USAGE_SPENT_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
+const INCLUDED_USAGE_SPENT_MESSAGE = 'You\'ve used today\'s included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.';
 
 // A model call that the proxy paused because the day's included usage is spent (stop_reason "pause"). It is
 // NOT a failure: the caller keeps any prose the proxy returned (the plain-words cap message), queues no
@@ -1016,6 +1017,50 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
+	// The document's directory relative to the workspace root ('' = root), '/'-joined, so the tree-rail can
+	// preserve on-disk hierarchy instead of flattening every document into one list (plan 37 F7). Resolved
+	// against whichever workspace folder contains the document; a document outside every folder reports ''.
+	private _relativeFolder(uri: URI): string {
+		for (const folder of this._workspace.getWorkspace().folders) {
+			const rel = relativePath(folder.uri, uri);
+			if (rel === undefined || rel.startsWith('../') || rel === '..') { continue; }
+			const slash = rel.lastIndexOf('/');
+			return slash >= 0 ? rel.slice(0, slash) : '';
+		}
+		return '';
+	}
+
+	// The workspace's non-Markdown files, as basenames (plan 37 F9/F10): CSV/txt/image/data files for the
+	// tree-rail SOURCES section and files we cannot yet import (.doc/.docx) for its "Not yet imported"
+	// section. Mirrors `_collectDocs`' bounded, hidden-dir-skipping walk; classification is pure (treeRail).
+	async listWorkspaceExtras(): Promise<readonly string[]> {
+		const found = new Set<string>();
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectExtras(folder.uri, found, 0);
+		}
+		return [...found].sort((a, b) => a.localeCompare(b));
+	}
+
+	private async _collectExtras(dir: URI, found: Set<string>, depth: number): Promise<void> {
+		if (depth > 4) { return; }
+		let children;
+		try {
+			children = (await this._files.resolve(dir)).children ?? [];
+		} catch (e) {
+			this._log.trace('[livingDocs] extras scan skipped', e instanceof Error ? e.message : String(e));
+			return;
+		}
+		for (const child of children) {
+			const name = basename(child.resource);
+			if (child.isDirectory) {
+				if (name.startsWith('.') || name === 'node_modules' || name === 'out') { continue; }
+				await this._collectExtras(child.resource, found, depth + 1);
+			} else if (classifyWorkspaceExtra(name)) {
+				found.add(name);
+			}
+		}
+	}
+
 	// A document is any `.md` file; generated `.export.md` / `.source.md` views are skipped, and template
 	// files (`*.template.md`, plan 28 D28-A) are excluded so they never appear in the Reports list, the
 	// tree-rail or the Home documents grid - they show only on the Templates screen (but stay on disk).
@@ -1055,12 +1100,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const bound = doc.blocks.reduce((n, b) => n + b.binds.length, 0);
 			return {
 				resource: uri,
-				title: doc.title,
+				// Never a bare "Untitled" for an odd/blank-heading file: fall back to the filename (F8).
+				title: documentDisplayTitle(doc, basename(uri)),
 				isLiving: doc.isLiving,
 				sourceKinds: [...kinds],
 				sources: doc.sources,
 				lastSynced: doc.context.length ? `${doc.context.length} context` : (bound ? `${bound} bound` : ''),
 				pendingCount: this._pending.filter(c => c.docId === id).length,
+				folder: this._relativeFolder(uri),
 			};
 		} catch (e) {
 			this._log.trace('[livingDocs] summarize skipped', e instanceof Error ? e.message : String(e));

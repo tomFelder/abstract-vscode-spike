@@ -49,7 +49,7 @@ suite('livingDocs screenRender', () => {
 	// --- Home reflects the real open folder (the folder IS the project; decision #39) ---
 
 	function summary(path: string, title: string, isLiving: boolean, pendingCount = 0): ILivingDocSummary {
-		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount };
+		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount, folder: '' };
 	}
 
 	test('home with no folder open shows the empty state and an Open folder action (no demo projects)', () => {
@@ -403,7 +403,7 @@ suite('livingDocs screenRender', () => {
 
 	test('the included tier shows today\'s usage in plain words with a D19 usage ring', () => {
 		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.6 } });
-		assert.ok(html.includes("Today&#39;s included usage"), 'the usage block is labelled in plain words');
+		assert.ok(html.includes('Today&#39;s included usage'), 'the usage block is labelled in plain words');
 		assert.ok(html.includes('US$0.60 of US$1.00 used today'), 'the real spend against the budget is shown');
 		assert.ok(html.includes('<svg') && html.includes('60%'), 'a usage ring reflects the 60% spent fraction');
 	});
