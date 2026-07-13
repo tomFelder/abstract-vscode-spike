@@ -21,8 +21,10 @@
 //     runners and in the webview.
 //
 // The normaliser is structured as an ORDERED TRANSFORM CHAIN (an internal array of `html -> html` steps)
-// so the sibling paste findings can extend the same seam without rewriting the paste listener: #138
-// (pasted Word tables -> table_block) and #139 (tracked-changes residue) append their own step.
+// so the sibling paste findings extend the same seam without rewriting the paste listener: #139
+// (tracked-changes residue) and #138 (pasted tables -> table_block) each append a step. The #138 table step
+// (`convertHtmlTablesToDataMd`) is exported separately as well, because tables convert for ANY HTML source -
+// the paste listener calls it directly for a plain, non-Word table paste (which the Word marker gate skips).
 
 /**
  * True when an HTML string looks like a Microsoft Word / Office clipboard payload. Cheap marker sniff
@@ -37,12 +39,235 @@ export function isWordHtml(html: string): boolean {
 }
 
 /**
+ * True when an HTML string carries at least one `<table>` element. Cheap marker sniff (no parse) used by the
+ * paste listener so a PLAIN (non-Word) HTML table paste is also intercepted and routed through the table
+ * transform - unlike the Word-only list/tracked-changes passes, `<table>` conversion applies to any source
+ * (issue #138). A payload with no table returns false and falls through to ProseMirror untouched.
+ * Self-contained for webview injection.
+ */
+export function hasHtmlTable(html: string): boolean {
+	if (typeof html !== 'string' || html.length === 0) {
+		return false;
+	}
+	return /<table\b/i.test(html);
+}
+
+/**
+ * Convert every `<table>...</table>` in a pasted HTML string into a `<table data-md="...GFM pipe text...">`
+ * element - exactly what the shipped ProseMirror bundle's `table[data-md]` parseDOM rule turns into a real
+ * rendered `table_block`. Without this, a pasted table has no schema node and ProseMirror flattens each cell
+ * into a separate paragraph (issue #138, the T1-B finding). Applies to ALL tables (Word's MsoTableGrid and
+ * plain HTML), so it runs both inside the Word normaliser chain and directly on plain-HTML table pastes.
+ *
+ * Conversion rules (cell text -> markdown-ish inline): <b>/<strong> -> **bold**, <i>/<em> -> *italic*,
+ * <a href> -> [text](href), <br> -> space, everything else -> its text with tags stripped and entities
+ * decoded; a literal `|` is escaped as `\|`. The first `<tr>` becomes the GFM header and a `| --- |`
+ * separator sized to the column count is emitted.
+ *
+ * MERGED-CELL RULE (stated): `colspan=N` puts the cell's text in its first column and leaves the remaining
+ * N-1 columns empty; `rowspan=N` puts the value in the first row and leaves the cells below it empty. The
+ * column count is the maximum expanded row width; short rows are padded with empty cells. Nothing is silently
+ * dropped - every cell's text lands in exactly one grid position. Fail-soft: a table that yields no rows is
+ * left unchanged. Self-contained for webview injection (no imports, no DOM, ASCII-only).
+ */
+export function convertHtmlTablesToDataMd(html: string): string {
+	if (typeof html !== 'string' || html.length === 0) {
+		return html;
+	}
+	if (!/<table\b/i.test(html)) {
+		return html;
+	}
+
+	// Decode the small set of HTML entities that show up in clipboard cell text into their literal
+	// characters (named specials + numeric/hex refs; nbsp -> space). `&amp;` is decoded last so a
+	// double-encoded `&amp;lt;` resolves to `&lt;`, not `<`. Anything unrecognised is left verbatim.
+	function decodeEntities(s: string): string {
+		let out = s.replace(/&nbsp;|&#160;|&#xA0;/gi, ' ');
+		out = out.replace(/&#(\d+);/g, function (m, d) {
+			const n = parseInt(d, 10);
+			if (n >= 0 && n <= 1114111) {
+				return String.fromCodePoint(n);
+			}
+			return m;
+		});
+		out = out.replace(/&#x([0-9a-fA-F]+);/g, function (m, h) {
+			const n = parseInt(h, 16);
+			if (n >= 0 && n <= 1114111) {
+				return String.fromCodePoint(n);
+			}
+			return m;
+		});
+		out = out.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+		out = out.replace(/&apos;/g, '\'').replace(/&#39;/g, '\'');
+		out = out.replace(/&amp;/g, '&');
+		return out;
+	}
+
+	// HTML-attribute-escape the finished GFM so it is safe inside `data-md="..."`. Newlines are preserved
+	// verbatim (the DOM parser keeps them in the attribute value; the bundle splits the markdown on \n).
+	function attrEscape(s: string): string {
+		return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+	}
+
+	// Text inside an inline mark (bold / italic / link) -> plain text with markup and whitespace collapsed
+	// and trimmed. Entities are NOT decoded here (a single decode pass runs at the end of cellToMd) but nbsp
+	// is folded to a space so a nbsp-only mark trims to empty. Trimming avoids `** bold **` (space-padded
+	// emphasis that markdown would not render).
+	function stripInline(frag: string): string {
+		let t = frag.replace(/<br\s*\/?>/gi, ' ');
+		t = t.replace(/<[^>]*>/g, '');
+		t = t.replace(/&nbsp;|&#160;|&#xA0;/gi, ' ');
+		t = t.replace(/\s+/g, ' ');
+		return t.replace(/^\s+/, '').replace(/\s+$/, '');
+	}
+
+	// One cell's inner HTML -> a single line of markdown-ish inline text (see the rules in the doc comment).
+	function cellToMd(frag: string): string {
+		let s = frag.replace(/<br\s*\/?>/gi, ' ');
+		// <a href> -> [text](href). href may be double-, single-, or unquoted. Entities in text and href are
+		// left for the final decode pass.
+		s = s.replace(/<a\b[^>]*\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))[^>]*>([\s\S]*?)<\/a>/gi,
+			function (m, dq, sq, uq, inner) {
+				const href = dq !== undefined ? dq : (sq !== undefined ? sq : (uq !== undefined ? uq : ''));
+				const txt = stripInline(inner);
+				return '[' + txt + '](' + href + ')';
+			});
+		// <b>/<strong> -> **...**, dropping an empty (whitespace-only) mark rather than emitting `****`.
+		s = s.replace(/<(?:b|strong)\b[^>]*>([\s\S]*?)<\/(?:b|strong)>/gi, function (m, inner) {
+			const t = stripInline(inner);
+			return t.length ? '**' + t + '**' : '';
+		});
+		// <i>/<em> -> *...*
+		s = s.replace(/<(?:i|em)\b[^>]*>([\s\S]*?)<\/(?:i|em)>/gi, function (m, inner) {
+			const t = stripInline(inner);
+			return t.length ? '*' + t + '*' : '';
+		});
+		// Everything else: strip remaining tags to a space (so block boundaries do not fuse words), decode
+		// entities once, collapse whitespace, trim, then escape any literal pipe.
+		s = s.replace(/<[^>]*>/g, ' ');
+		s = decodeEntities(s);
+		s = s.replace(/\s+/g, ' ').replace(/^\s+/, '').replace(/\s+$/, '');
+		s = s.replace(/\|/g, '\\|');
+		return s;
+	}
+
+	// One `<table>` inner HTML -> the GFM pipe-table text (or '' when there are no rows, for fail-soft).
+	function tableToGfm(tableInner: string): string {
+		const rows: Array<Array<{ text: string; colspan: number; rowspan: number }>> = [];
+		const trRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+		let mr: RegExpExecArray | null;
+		while ((mr = trRe.exec(tableInner)) !== null) {
+			const rowInner = mr[1];
+			const cells: Array<{ text: string; colspan: number; rowspan: number }> = [];
+			// Backreference on the tag name so <td>...</td> and <th>...</th> each close on their own kind.
+			const cellRe = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+			let mc: RegExpExecArray | null;
+			while ((mc = cellRe.exec(rowInner)) !== null) {
+				const attrs = mc[2];
+				let colspan = 1;
+				let rowspan = 1;
+				const cm = /colspan\s*=\s*["']?(\d+)/i.exec(attrs);
+				if (cm) {
+					const cv = parseInt(cm[1], 10);
+					if (cv > 1) {
+						colspan = cv;
+					}
+				}
+				const rm = /rowspan\s*=\s*["']?(\d+)/i.exec(attrs);
+				if (rm) {
+					const rv = parseInt(rm[1], 10);
+					if (rv > 1) {
+						rowspan = rv;
+					}
+				}
+				cells.push({ text: cellToMd(mc[3]), colspan: colspan, rowspan: rowspan });
+			}
+			rows.push(cells);
+		}
+		if (rows.length === 0) {
+			return '';
+		}
+
+		// Expand colspan/rowspan into a dense grid of strings. `carry[col]` counts how many further rows a
+		// rowspan still occupies at that column (those continuation cells are empty). A cell's text sits in
+		// its top-left position; every other position it spans is an empty string.
+		const grid: string[][] = [];
+		const carry: number[] = [];
+		for (let ri = 0; ri < rows.length; ri++) {
+			const rowCells = rows[ri];
+			const outRow: string[] = [];
+			let col = 0;
+			let ci = 0;
+			while (ci < rowCells.length || (carry[col] && carry[col] > 0)) {
+				if (carry[col] && carry[col] > 0) {
+					outRow[col] = '';
+					carry[col] = carry[col] - 1;
+					col++;
+					continue;
+				}
+				const cell = rowCells[ci];
+				ci++;
+				const startCol = col;
+				for (let k = 0; k < cell.colspan; k++) {
+					outRow[col] = k === 0 ? cell.text : '';
+					col++;
+				}
+				if (cell.rowspan > 1) {
+					for (let c2 = startCol; c2 < startCol + cell.colspan; c2++) {
+						carry[c2] = cell.rowspan - 1;
+					}
+				}
+			}
+			grid.push(outRow);
+		}
+
+		let maxCols = 0;
+		for (let g = 0; g < grid.length; g++) {
+			if (grid[g].length > maxCols) {
+				maxCols = grid[g].length;
+			}
+		}
+		if (maxCols === 0) {
+			return '';
+		}
+		for (let g2 = 0; g2 < grid.length; g2++) {
+			const r0 = grid[g2];
+			for (let p = 0; p < maxCols; p++) {
+				if (r0[p] === undefined) {
+					r0[p] = '';
+				}
+			}
+		}
+
+		const lines: string[] = [];
+		lines.push('| ' + grid[0].join(' | ') + ' |');
+		const sep: string[] = [];
+		for (let s2 = 0; s2 < maxCols; s2++) {
+			sep.push('---');
+		}
+		lines.push('| ' + sep.join(' | ') + ' |');
+		for (let b = 1; b < grid.length; b++) {
+			lines.push('| ' + grid[b].join(' | ') + ' |');
+		}
+		return lines.join('\n');
+	}
+
+	return html.replace(/<table\b[^>]*>([\s\S]*?)<\/table>/gi, function (whole, inner) {
+		const gfm = tableToGfm(inner);
+		if (!gfm) {
+			return whole;
+		}
+		return '<table data-md="' + attrEscape(gfm) + '"></table>';
+	});
+}
+
+/**
  * Normalise a Word clipboard `text/html` string for pasting into ProseMirror: rebuild Word list paragraphs
- * into real nested <ul>/<ol>/<li>, drop Word's empty <o:p> spacer runs (the nbsp crumb-paragraphs), and
- * resolve tracked-changes residue as paste-as-accepted (deleted runs removed, inserted runs kept as plain
- * text). Any other content (headings, paragraphs, tables, images) is preserved byte-for-byte apart from that
- * cleanup - lists and tracked changes are the only structures this pass rewrites. Runs an internal ordered
- * transform chain; fail-soft on unexpected input (returns the input string unchanged).
+ * into real nested <ul>/<ol>/<li>, drop Word's empty <o:p> spacer runs (the nbsp crumb-paragraphs), resolve
+ * tracked-changes residue as paste-as-accepted (deleted runs removed, inserted runs kept as plain text), and
+ * convert Word tables into `<table data-md="...">` so they parse to real `table_block` nodes. Any other
+ * content (headings, paragraphs, images) is preserved byte-for-byte apart from that cleanup. Runs an internal
+ * ordered transform chain; fail-soft on unexpected input (returns the input string unchanged).
  * Self-contained for webview injection.
  */
 export function normalizeWordPasteHtml(html: string): string {
@@ -230,8 +455,11 @@ export function normalizeWordPasteHtml(html: string): string {
 		return out;
 	}
 
-	// Ordered transform chain. #138 (tables) appends its step here as well.
-	const transforms: Array<(input: string) => string> = [stripOfficeSpacers, rebuildWordLists, stripTrackedChanges];
+	// Ordered transform chain. The table step (issue #138) runs LAST so cell contents have already had Word
+	// spacers, list markup and tracked-changes residue resolved before they are serialised to GFM. It is the
+	// shared top-level `convertHtmlTablesToDataMd` (also injected into the webview and used directly for plain,
+	// non-Word HTML table pastes), so Word and plain tables go through one implementation.
+	const transforms: Array<(input: string) => string> = [stripOfficeSpacers, rebuildWordLists, stripTrackedChanges, convertHtmlTablesToDataMd];
 	let out = html;
 	for (let i = 0; i < transforms.length; i++) {
 		out = transforms[i](out);
