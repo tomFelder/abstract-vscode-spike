@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../base/common/uri.js';
+import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { ILivingDoc, SourceKind } from './livingDocsModel.js';
 import { sourceKindOf } from './contextGroups.js';
 
@@ -50,7 +51,12 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[]): ITreeRailFold
 		for (const s of d.sources) {
 			if (seen.has(s)) { continue; }
 			seen.add(s);
-			sources.push({ label: s, kind: 'source', pending: false, sourceKind: sourceKindOf(s) });
+			// A file source resolves to a real URI alongside the document that references it (sources are
+			// folder-scoped, decision 40), so the Files tab can rename/delete it. An api/mcp source has no
+			// file to act on, so it carries no resource (its context menu row is inert).
+			const kind = sourceKindOf(s);
+			const resource = kind === 'file' ? joinPath(dirname(d.resource), s) : undefined;
+			sources.push({ label: s, resource, kind: 'source', pending: false, sourceKind: kind });
 		}
 	}
 	sources.sort((a, b) => a.label.localeCompare(b.label));

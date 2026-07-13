@@ -17,19 +17,21 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { toAction } from '../../../../base/common/actions.js';
 import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, IFileOpDependent, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
-import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
+import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
+import { IFileRef, rewriteLockSources, scanDependents } from '../common/fileOps.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
@@ -143,7 +145,7 @@ const MODEL_MAX_TOKENS = 1024;
 // The plain-words message the proxy returns when the day's included usage is spent on the founder-funded
 // fallback (plan 35 iter 3; doc 18 section 2.1). Used as the fallback default when the proxy omits its own
 // prose, so the renderer always shows honest words (P5) rather than an error.
-const INCLUDED_USAGE_SPENT_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
+const INCLUDED_USAGE_SPENT_MESSAGE = 'You\'ve used today\'s included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.';
 
 // A model call that the proxy paused because the day's included usage is spent (stop_reason "pause"). It is
 // NOT a failure: the caller keeps any prose the proxy returned (the plain-words cap message), queues no
@@ -251,6 +253,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
 	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
+
+	// "Add to chat" (docs 20 section 1d, the 1m entry): the review rail seeds the fired file name as an
+	// `@mention` in its chat composer draft. Kept in the service so the Files-tab view stays thin.
+	private readonly _onDidRequestChatAttach = this._register(new Emitter<string>());
+	readonly onDidRequestChatAttach: Event<string> = this._onDidRequestChatAttach.event;
 
 	// Fires per delta / tool step while a chat reply streams (plan 27 iter 3), so the rail appends to the
 	// live turn without a full re-render (preserving the composer caret + scroll). Carries the document URI.
@@ -991,6 +998,225 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// allows in a name, collapse whitespace. An empty result signals "no name" (the caller keeps Untitled).
 	private static _safeStem(name: string | undefined): string {
 		return (name ?? '').replace(/[\/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+	}
+
+	// --- provenance-safe file operations (docs 20 section 1d / map-D6): rename, delete, Add to chat ---
+
+	// The frontmatter references (sources/context) of every discovered document, for the dependent scan.
+	// Discovers the same set `listDocuments` does (loaded + on-disk) so the answer reflects the real folder
+	// even before anything is opened; a loaded document uses its parsed state, an on-disk one is read + parsed.
+	private async _collectFileRefs(): Promise<IFileRef[]> {
+		const found = new Map<string, URI>();
+		for (const state of this._docs.values()) { found.set(state.uri.toString(), state.uri); }
+		for (const folder of this._workspace.getWorkspace().folders) { await this._collectDocs(folder.uri, found, 0); }
+		const refs: IFileRef[] = [];
+		for (const uri of found.values()) {
+			const id = uri.toString();
+			let doc = this._docs.get(id)?.doc;
+			if (!doc) {
+				try { doc = parseLivingDoc((await this._files.readFile(uri)).value.toString()); }
+				catch (e) { this._log.trace('[livingDocs] file-ref scan skipped', e instanceof Error ? e.message : String(e)); continue; }
+			}
+			refs.push({ id, title: doc.title, sources: doc.sources, context: doc.context });
+		}
+		return refs;
+	}
+
+	async getFileDependents(resource: URI): Promise<readonly IFileOpDependent[]> {
+		const name = basename(resource);
+		const deps = scanDependents(await this._collectFileRefs(), name, resource.toString());
+		return deps.map(d => ({ resource: URI.parse(d.id), title: d.title }));
+	}
+
+	async renameFile(resource: URI, newBaseName: string): Promise<void> {
+		const dir = dirname(resource);
+		const oldName = basename(resource);
+		const dot = oldName.lastIndexOf('.');
+		const ext = dot >= 0 ? oldName.slice(dot) : '';
+		const stem = LivingDocsService._safeStem(newBaseName);
+		if (!stem) { return; }
+		const nextName = stem.endsWith(ext) ? stem : stem + ext;
+		if (nextName === oldName) { return; }
+		const target = joinPath(dir, nextName);
+		// A clashing target must never half-apply: refuse before touching anything.
+		if (await this._files.exists(target)) {
+			this._notify.error(`Cannot rename to "${nextName}" - a file with that name already exists.`);
+			return;
+		}
+		try {
+			await this._moveFileWithSidecar(resource, target);
+		} catch (e) {
+			this._log.warn('[livingDocs] rename failed', e);
+			this._notify.error(`Rename failed: ${e instanceof Error ? e.message : String(e)}. Nothing was changed.`);
+			return;
+		}
+		// A renamed SOURCE keeps its dependents bound: rewrite their frontmatter + lock provenance references.
+		await this._rewriteDependentReferences(oldName, nextName);
+		this._onDidChange.fire();
+		this._notify.notify({
+			severity: Severity.Info,
+			message: `Renamed "${oldName}" to "${nextName}".`,
+			sticky: true,
+			actions: { primary: [toAction({ id: 'livingDocs.file.rename.undo', label: 'Undo', run: () => void this._undoRename(target, resource, nextName, oldName) })] },
+		});
+	}
+
+	// Move a file and its `.lock.json` sidecar together, atomically on the pair: move the file, then the
+	// sidecar; if the sidecar move fails, roll the file back so neither half-applies. Carries the in-memory
+	// document state + source watcher to the new key and reopens an open editor at the new resource.
+	private async _moveFileWithSidecar(from: URI, to: URI): Promise<void> {
+		await this._files.move(from, to, false);
+		const fromLock = lockUriFor(from);
+		if (await this._files.exists(fromLock)) {
+			try {
+				await this._files.move(fromLock, lockUriFor(to), false);
+			} catch (e) {
+				try { await this._files.move(to, from, false); } catch { /* best-effort rollback */ }
+				throw e;
+			}
+		}
+		const state = this._docs.get(from.toString());
+		if (state) {
+			this._docs.delete(from.toString());
+			const moved: IDocState = { ...state, uri: to };
+			this._docs.set(to.toString(), moved);
+			const chat = this._chats.get(from.toString());
+			if (chat) { this._chats.delete(from.toString()); this._chats.set(to.toString(), chat); }
+			this._watchers.get(from.toString())?.dispose();
+			this._watchers.delete(from.toString());
+			this._watchSources(moved);
+		}
+		await this._reopenEditorAt(from, to);
+	}
+
+	// The editor follows a rename: open the new resource (if the old one was open) and close the stale input.
+	private async _reopenEditorAt(from: URI, to: URI): Promise<void> {
+		const editors = this._editors.findEditors(from);
+		if (!editors.length) { return; }
+		await this._editors.openEditor({ resource: to, options: { pinned: true } });
+		await this._editors.closeEditors(editors);
+	}
+
+	// Rewrite every dependent document's provenance references to a renamed file: its frontmatter
+	// `sources:`/`context:` entry (old -> new) and its lock's binding source paths + context key. Returns
+	// the documents it touched so the caller can invert them on undo. Best-effort per document (a failure
+	// on one is logged, never aborting the rename that already succeeded).
+	private async _rewriteDependentReferences(oldName: string, newName: string): Promise<URI[]> {
+		const deps = scanDependents(await this._collectFileRefs(), oldName);
+		const touched: URI[] = [];
+		for (const dep of deps) {
+			const uri = URI.parse(dep.id);
+			try {
+				let raw = (await this._files.readFile(uri)).value.toString();
+				if (dep.viaSources) { raw = withFrontmatterList(withFrontmatterList(raw, 'sources', oldName, false), 'sources', newName, true); }
+				if (dep.viaContext) { raw = withFrontmatterList(withFrontmatterList(raw, 'context', oldName, false), 'context', newName, true); }
+				await this._files.writeFile(uri, VSBuffer.fromString(raw));
+				const lock = await this._lockStore.read(uri);
+				if (lock) {
+					const { lock: nextLock, changed } = rewriteLockSources(lock, oldName, newName);
+					if (changed) { await this._lockStore.write(uri, nextLock); }
+				}
+				if (this._docs.has(dep.id)) { await this._loadState(uri); }
+				touched.push(uri);
+			} catch (e) {
+				this._log.warn('[livingDocs] dependent reference rewrite failed', e);
+			}
+		}
+		return touched;
+	}
+
+	private async _undoRename(current: URI, original: URI, currentName: string, originalName: string): Promise<void> {
+		if (await this._files.exists(original)) {
+			this._notify.error(`Cannot undo: "${originalName}" already exists again.`);
+			return;
+		}
+		try {
+			await this._moveFileWithSidecar(current, original);
+		} catch (e) {
+			this._notify.error(`Undo failed: ${e instanceof Error ? e.message : String(e)}.`);
+			return;
+		}
+		await this._rewriteDependentReferences(currentName, originalName);
+		this._onDidChange.fire();
+	}
+
+	async deleteFile(resource: URI): Promise<void> {
+		const name = basename(resource);
+		// Snapshot the file + its lock sidecar so Undo can restore the pair verbatim.
+		let fileBuf: VSBuffer;
+		try {
+			fileBuf = (await this._files.readFile(resource)).value;
+		} catch (e) {
+			this._notify.error(`Delete failed: "${name}" could not be read. Nothing was changed.`);
+			return;
+		}
+		const lockUri = lockUriFor(resource);
+		let lockBuf: VSBuffer | undefined;
+		try { if (await this._files.exists(lockUri)) { lockBuf = (await this._files.readFile(lockUri)).value; } }
+		catch { lockBuf = undefined; }
+		try {
+			await this._files.del(resource, { useTrash: false });
+			if (lockBuf) { await this._files.del(lockUri, { useTrash: false }); }
+		} catch (e) {
+			this._log.warn('[livingDocs] delete failed', e);
+			this._notify.error(`Delete failed: ${e instanceof Error ? e.message : String(e)}. Nothing was changed.`);
+			return;
+		}
+		this._forgetDoc(resource);
+		await this._closeEditorFor(resource);
+		// Orphan gracefully (map-D6): dependents are NOT rewritten - they keep their cached lock values and
+		// re-flag stale on the freshness recompute below, never crashing or blocking the delete.
+		await this._reflagDependents(name);
+		this._onDidChange.fire();
+		this._notify.notify({
+			severity: Severity.Info,
+			message: `Deleted "${name}".`,
+			sticky: true,
+			actions: { primary: [toAction({ id: 'livingDocs.file.delete.undo', label: 'Undo', run: () => void this._undoDelete(resource, fileBuf, lockUri, lockBuf) })] },
+		});
+	}
+
+	private async _undoDelete(resource: URI, fileBuf: VSBuffer, lockUri: URI, lockBuf?: VSBuffer): Promise<void> {
+		try {
+			await this._files.writeFile(resource, fileBuf);
+			if (lockBuf) { await this._files.writeFile(lockUri, lockBuf); }
+		} catch (e) {
+			this._notify.error(`Undo failed: ${e instanceof Error ? e.message : String(e)}.`);
+			return;
+		}
+		if (this._isDocFile(resource)) { await this.loadDocument(resource); }
+		await this._reflagDependents(basename(resource));
+		this._onDidChange.fire();
+	}
+
+	// Recompute freshness for every loaded document that references `name`, so a deleted source's dependents
+	// (and a restored source's) re-derive their stale/fresh flag from the file's new presence/absence.
+	private async _reflagDependents(name: string): Promise<void> {
+		for (const state of this._docs.values()) {
+			if (state.doc.sources.includes(name) || state.doc.context.includes(name)) {
+				await this._recomputeFreshness(state);
+			}
+		}
+	}
+
+	// Drop all in-memory state for a deleted document: its watcher, loaded state, and chat history.
+	private _forgetDoc(resource: URI): void {
+		const id = resource.toString();
+		this._watchers.get(id)?.dispose();
+		this._watchers.delete(id);
+		this._docs.delete(id);
+		this._chats.delete(id);
+	}
+
+	// The editor closes gracefully when its document is deleted.
+	private async _closeEditorFor(resource: URI): Promise<void> {
+		const editors = this._editors.findEditors(resource);
+		if (editors.length) { await this._editors.closeEditors(editors); }
+	}
+
+	attachToChat(resource: URI): void {
+		this.focusPanel('chat');
+		this._onDidRequestChatAttach.fire(basename(resource));
 	}
 
 	// Generate a draft document from a template (plan 28, iter 3): write the static skeleton (headings +
@@ -3111,7 +3337,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (state) {
 			await this.saveSnapshot(state.uri, 'Before bulk approve', 'bulk-approve');
 		}
-		// Mark the fanned approves as bulk so each proposal_resolved carries bulk:true (doc 15 §3.1).
+		// Mark the fanned approves as bulk so each proposal_resolved carries bulk:true (doc 15 section 3.1).
 		this._inBulkApprove = true;
 		try {
 			for (const id of ids) {
