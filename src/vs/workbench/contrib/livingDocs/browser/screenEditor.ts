@@ -6,6 +6,7 @@
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { matchesSomeScheme, Schemas } from '../../../../base/common/network.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -565,9 +566,20 @@ export class ScreenEditor extends EditorPane {
 
 	// Open the authorize URL in the user's default browser. It must open OUTSIDE the webview (the OpenAI sign-in
 	// page + the localhost:1455 loopback callback both need the real browser), so route through the opener
-	// service (which opens an external http(s) URL in the system browser).
+	// service (which opens an external http(s) URL in the system browser). `openExternal: true` skips the opener's
+	// own scheme filtering, and one call site forwards a URL that originated in a webview message, so gate the
+	// scheme here: only ever hand http(s) URLs to the OS opener, and ignore anything malformed or otherwise-schemed.
 	private _openInBrowser(url: string): void {
-		void this._openerService.open(URI.parse(url), { openExternal: true });
+		let uri: URI;
+		try {
+			uri = URI.parse(url, true);
+		} catch {
+			return;
+		}
+		if (!matchesSomeScheme(uri, Schemas.http, Schemas.https)) {
+			return;
+		}
+		void this._openerService.open(uri, { openExternal: true });
 	}
 
 	// Bind a source to a target document (plan 29 iter 2). The document may not be loaded (the Knowledge
