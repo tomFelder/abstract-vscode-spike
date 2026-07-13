@@ -1057,7 +1057,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			severity: Severity.Info,
 			message: `Renamed "${oldName}" to "${nextName}".`,
 			sticky: true,
-			actions: { primary: [toAction({ id: 'livingDocs.file.rename.undo', label: 'Undo', run: () => void this._undoRename(target, resource, nextName, oldName) })] },
+			actions: { primary: [toAction({ id: 'livingDocs.file.rename.undo', label: 'Undo', run: () => this._undoRename(target, resource, nextName, oldName) })] },
 		});
 	}
 
@@ -1156,11 +1156,34 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		catch { lockBuf = undefined; }
 		try {
 			await this._files.del(resource, { useTrash: false });
-			if (lockBuf) { await this._files.del(lockUri, { useTrash: false }); }
 		} catch (e) {
 			this._log.warn('[livingDocs] delete failed', e);
 			this._notify.error(`Delete failed: ${e instanceof Error ? e.message : String(e)}. Nothing was changed.`);
 			return;
+		}
+		// The pair is atomic: if the sidecar cannot be removed after the file was, roll the file back so
+		// neither half-applies (symmetric to the rename's sidecar-move rollback). Only if the rollback
+		// itself also fails is the state genuinely half-applied - then say so honestly and keep a sticky
+		// Restore action so the snapshot is never lost.
+		if (lockBuf) {
+			try {
+				await this._files.del(lockUri, { useTrash: false });
+			} catch (e) {
+				this._log.warn('[livingDocs] lock delete failed - rolling the file back', e);
+				try {
+					await this._files.writeFile(resource, fileBuf);
+					this._notify.error(`Delete failed: the "${basename(lockUri)}" sidecar could not be removed. Nothing was changed.`);
+				} catch (rollbackError) {
+					this._log.error('[livingDocs] delete rollback failed', rollbackError);
+					this._notify.notify({
+						severity: Severity.Error,
+						message: `Delete of "${name}" failed part-way: the file was removed but its lock sidecar was not. Restore brings the file back.`,
+						sticky: true,
+						actions: { primary: [toAction({ id: 'livingDocs.file.delete.restore', label: 'Restore', run: () => this._undoDelete(resource, fileBuf, lockUri, undefined) })] },
+					});
+				}
+				return;
+			}
 		}
 		this._forgetDoc(resource);
 		await this._closeEditorFor(resource);
@@ -1172,7 +1195,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			severity: Severity.Info,
 			message: `Deleted "${name}".`,
 			sticky: true,
-			actions: { primary: [toAction({ id: 'livingDocs.file.delete.undo', label: 'Undo', run: () => void this._undoDelete(resource, fileBuf, lockUri, lockBuf) })] },
+			actions: { primary: [toAction({ id: 'livingDocs.file.delete.undo', label: 'Undo', run: () => this._undoDelete(resource, fileBuf, lockUri, lockBuf) })] },
 		});
 	}
 
@@ -1456,6 +1479,29 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			for (const key of Object.keys(state.lock.bindings)) {
 				const cur = resolution.get(key);
 				if (cur && !bindingIsFresh(cur, state.lock.bindings[key])) { staleBindings.add(key); }
+			}
+			// A DELETED (or renamed-away) local file source resolves nothing at all, so the compare above -
+			// which only sees values that DID resolve - can never flag it. Explicitly re-flag the lock's
+			// bindings under a declared file source that is now missing on disk, so a dependent of a deleted
+			// source honestly reads stale (map-D6 orphan: cached values kept, flagged, never broken). Scoped
+			// to local file sources with recorded lock entries: api/mcp resolution misses (proxy down, host
+			// cooldown) and never-synced keys keep their previous not-stale behaviour, matching how a deleted
+			// CONTEXT file already flags below via its reviewedHash mismatch. The exists probe only runs when
+			// nothing under the source's alias resolved (a readable source skips it), and is guarded for
+			// harnesses whose file service has no `exists` (mirrors the `createWatcher` guard).
+			if (typeof this._files.exists === 'function') {
+				const resolvedAliases = new Set<string>();
+				for (const key of resolution.keys()) { resolvedAliases.add(key.split('.')[0]); }
+				for (const source of state.doc.sources) {
+					if (sourceKind(source) !== 'file') { continue; }
+					const alias = sourceAlias(source);
+					if (resolvedAliases.has(alias)) { continue; }
+					const keys = Object.keys(state.lock.bindings).filter(k => k.split('.')[0] === alias);
+					if (!keys.length) { continue; }
+					let missing = false;
+					try { missing = !(await this._files.exists(joinPath(dirname(state.uri), source))); } catch { missing = false; }
+					if (missing) { for (const key of keys) { staleBindings.add(key); } }
+				}
 			}
 			for (const file of state.doc.context) {
 				const entry = state.lock.context[file];
