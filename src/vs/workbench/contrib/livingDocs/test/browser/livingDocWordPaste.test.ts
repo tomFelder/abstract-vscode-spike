@@ -134,6 +134,63 @@ suite('LivingDoc Word paste', () => {
 		assert.strictEqual(normalizeWordPasteHtml('plain text with no tags'), 'plain text with no tags');
 	});
 
+	// --- Tracked-changes residue (issue #139, T1-C) -----------------------------------------------------
+	// Word exports revisions inline: deleted text in a `class=msoDel` span / `<del>`, inserted text in a
+	// `class=msoIns` span / `<ins>`. normalizeWordPasteHtml resolves them paste-as-accepted: deleted runs are
+	// removed outright, inserted runs are kept as plain text with their revision styling dropped.
+
+	test('drops msoDel deleted runs and keeps msoIns inserted runs as plain text (the fixture sentence)', () => {
+		// Verbatim from docs/plans/39-verify/fixtures/word-clipboard-report.html (the msoIns span open tag
+		// wraps across a newline exactly as Word emits it).
+		const sentence = `<p class=MsoNormal>The forecast was <span class=msoDel>revised down</span><span\n`
+			+ `class=msoIns>held flat</span> after the review; final wording pending.<o:p></o:p></p>`;
+		const out = normalizeWordPasteHtml(sentence);
+		assert.strictEqual(
+			squash(out),
+			'<p class=MsoNormal>The forecast was held flat after the review; final wording pending.</p>'
+		);
+		// The deleted words are gone (no "revised down", no "revised downheld flat" concatenation).
+		assert.ok(out.indexOf('revised down') === -1, 'deleted run removed');
+		assert.ok(out.indexOf('revised downheld flat') === -1, 'no deleted+inserted concatenation');
+		// No revision markup survives as document text.
+		assert.ok(!/msoDel|msoIns/i.test(out), 'revision marker classes stripped');
+	});
+
+	test('resolves <del>/<ins> element revisions in a Word payload (del removed, ins unwrapped)', () => {
+		const html = `<p class=MsoNormal>Price was <del>ten</del><ins>eight</ins> dollars.<o:p></o:p></p>`;
+		assert.strictEqual(
+			squash(normalizeWordPasteHtml(html)),
+			'<p class=MsoNormal>Price was eight dollars.</p>'
+		);
+	});
+
+	test('drops an inline line-through span carrying a Word marker (msoDel variant without the class)', () => {
+		const html = `<p class=MsoNormal>Keep <span style='mso-bidi-font-weight:normal;`
+			+ `text-decoration:line-through'>cut me</span>this.<o:p></o:p></p>`;
+		const out = normalizeWordPasteHtml(html);
+		assert.ok(out.indexOf('cut me') === -1, 'line-through+mso run removed');
+		assert.ok(out.indexOf('Keep this.') !== -1, 'surrounding text preserved');
+	});
+
+	test('handles nested / multiple del+ins pairs in one paragraph', () => {
+		const html = `<p class=MsoNormal>`
+			+ `The <span class=msoDel>old</span><span class=msoIns>new</span> plan `
+			+ `<del>was</del><ins>is</ins> ready; <span class=msoIns>and</span> shipping.`
+			+ `<o:p></o:p></p>`;
+		assert.strictEqual(
+			squash(normalizeWordPasteHtml(html)),
+			'<p class=MsoNormal>The new plan is ready; and shipping.</p>'
+		);
+	});
+
+	test('a <del>/<ins> inside NON-Word HTML is left untouched (plain-HTML paste is out of scope)', () => {
+		const plain = `<p>Price was <del>ten</del><ins>eight</ins> dollars.</p>`;
+		assert.strictEqual(normalizeWordPasteHtml(plain), plain);
+		// A plain strikethrough span with no Word marker is also preserved.
+		const strike = `<p>See <span style="text-decoration:line-through">crossed</span> out.</p>`;
+		assert.strictEqual(normalizeWordPasteHtml(strike), strike);
+	});
+
 	// Self-containment guard (common brief): the helpers are injected into the webview RUNTIME verbatim via
 	// String(fn), so their serialized source must carry no imports, no require, and no transpiler helper
 	// references - otherwise they would throw when eval'd in the webview where those symbols do not exist.

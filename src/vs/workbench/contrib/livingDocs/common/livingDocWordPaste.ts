@@ -38,10 +38,11 @@ export function isWordHtml(html: string): boolean {
 
 /**
  * Normalise a Word clipboard `text/html` string for pasting into ProseMirror: rebuild Word list paragraphs
- * into real nested <ul>/<ol>/<li>, and drop Word's empty <o:p> spacer runs (the nbsp crumb-paragraphs).
- * Any non-list content (headings, paragraphs, tables, images, tracked-changes residue) is preserved
- * byte-for-byte apart from the spacer cleanup - lists are the only structure this pass rewrites. Runs an
- * internal ordered transform chain; fail-soft on unexpected input (returns the input string unchanged).
+ * into real nested <ul>/<ol>/<li>, drop Word's empty <o:p> spacer runs (the nbsp crumb-paragraphs), and
+ * resolve tracked-changes residue as paste-as-accepted (deleted runs removed, inserted runs kept as plain
+ * text). Any other content (headings, paragraphs, tables, images) is preserved byte-for-byte apart from that
+ * cleanup - lists and tracked changes are the only structures this pass rewrites. Runs an internal ordered
+ * transform chain; fail-soft on unexpected input (returns the input string unchanged).
  * Self-contained for webview injection.
  */
 export function normalizeWordPasteHtml(html: string): string {
@@ -196,8 +197,41 @@ export function normalizeWordPasteHtml(html: string): string {
 		return result;
 	}
 
-	// Ordered transform chain. #138 (tables) and #139 (tracked changes) append their step here.
-	const transforms: Array<(input: string) => string> = [stripOfficeSpacers, rebuildWordLists];
+	// --- Step: resolve Word tracked-changes residue as paste-as-accepted (issue #139, T1-C). ---
+	// Word exports revisions inline: deleted text sits in a `<del>` element or a `class=msoDel` span (its
+	// CSS carries text-decoration:line-through), inserted text in an `<ins>` element or a `class=msoIns`
+	// span (underline + colour). Pasted as-is, PM keeps BOTH runs, splicing the deleted words back into the
+	// sentence ("revised down" + "held flat" -> "revised downheld flat"). This mirrors pasting into Word
+	// itself: DROP deleted runs entirely, KEEP inserted runs as plain text with their revision styling
+	// removed. Only acts on genuine Word/Office payloads - a legit <del>/<ins> from a non-Word source is
+	// left untouched (the marker sniff gates the whole step), so plain-HTML pastes are out of scope.
+	function stripTrackedChanges(input: string): string {
+		// Word-payload gate (msoDel/msoIns/mso-* tokens or the Office namespace). A non-Word paste with a
+		// hand-authored <del>/<ins> matches nothing here and returns byte-for-byte unchanged.
+		if (!/mso[-A-Za-z]|urn:schemas-microsoft-com:office/i.test(input)) {
+			return input;
+		}
+		let out = input;
+		// Deleted runs -> removed (content and wrapper). <del> elements first, then Word's msoDel spans.
+		out = out.replace(/<del\b[^>]*>[\s\S]*?<\/del>/gi, '');
+		out = out.replace(/<span\b[^>]*msoDel[^>]*>[\s\S]*?<\/span>/gi, '');
+		// A span whose inline style strikes text through AND carries a Word marker is a deleted run too
+		// (Word variants that inline the style instead of the msoDel class). Guarded on an mso token so a
+		// plain strikethrough span in the same payload is not swallowed.
+		out = out.replace(/<span\b([^>]*)>[\s\S]*?<\/span>/gi, function (m, attrs) {
+			if (/text-decoration\s*:\s*[^;>"']*line-through/i.test(attrs) && /mso/i.test(attrs)) {
+				return '';
+			}
+			return m;
+		});
+		// Inserted runs -> kept as plain text, the revision wrapper (underline / teal colour) dropped.
+		out = out.replace(/<ins\b[^>]*>([\s\S]*?)<\/ins>/gi, '$1');
+		out = out.replace(/<span\b[^>]*msoIns[^>]*>([\s\S]*?)<\/span>/gi, '$1');
+		return out;
+	}
+
+	// Ordered transform chain. #138 (tables) appends its step here as well.
+	const transforms: Array<(input: string) => string> = [stripOfficeSpacers, rebuildWordLists, stripTrackedChanges];
 	let out = html;
 	for (let i = 0; i < transforms.length; i++) {
 		out = transforms[i](out);
