@@ -1142,10 +1142,12 @@ function renderSettings(state: IScreenState): string {
 // in-product home of the plain-words data-flow one-pager (docs/27): a single expandable row that shows
 // the answer inline on click - no new panel, no navigation. The copy is a short, faithful retelling of
 // docs/27 and every line traces to a real code path (model calls go through the localhost proxy in
-// scripts/lwd-anthropic-proxy.js; the open document + its attached sources are the only content sent -
-// livingDocsService.ts _chatRespond/_chatRespondMulti; the sign-in + keys live only in the proxy). Plain
-// words per P5: no "OAuth", no "token", no "rate limit". The full page carries the provider-retention
-// detail and the founder-review notes.
+// scripts/lwd-anthropic-proxy.js; chats/runs send the open/selected documents + attached sources -
+// livingDocsService.ts _chatRespond/_chatRespondMulti; the default-enabled scheduled agents
+// (agentOrchestrator.ts defaultAgents) may send a checked document's changed sentences + context files
+// through the verify gate's strategy grader - livingDocsService.ts _runFiguresByPolicy/_gradeStrategy;
+// the sign-in + keys live only in the proxy). Plain words per P5: no "OAuth", no "token", no "rate
+// limit". The full page carries the provider-retention detail and the founder-review notes.
 function dataFlowCard(): string {
 	const line = (text: string) => `<li style="margin:0 0 9px;font:400 13px/1.55 system-ui;color:#52575f">${text}</li>`;
 	return `<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:6px 26px">
@@ -1156,12 +1158,13 @@ function dataFlowCard(): string {
 				<span style="color:#a3a8b2;font-size:12px">&#9662;</span>
 			</summary>
 			<div style="padding:2px 0 22px">
-				<p style="margin:0 0 14px;font:400 13px/1.6 system-ui;color:#696e78">Nothing leaves your computer until you ask the agent to do something. Here is exactly what is sent, and what never is.</p>
+				<p style="margin:0 0 14px;font:400 13px/1.6 system-ui;color:#696e78">Abstract sends content only when you ask it to work &mdash; or when an agent you have left running does its scheduled check. Here is exactly what is sent, and what never is.</p>
 				<ul style="margin:0 0 14px;padding-left:20px">
 					${line('When you <strong>chat about a document</strong>, Abstract sends that one open document and the source files you attached to it &mdash; nothing else in your folder.')}
 					${line('When you <strong>run one instruction across your project</strong>, it sends only the documents you selected for that run and their shared sources.')}
+					${line('Three <strong>built-in agents run on their own</strong> &mdash; when a source file changes, every six hours, and on Monday mornings. When a document&#39;s figures need updating, the double-check may send that document&#39;s changed sentences and its attached context files. Pause any agent on the Agents screen to stop this.')}
 					${line('Model calls go through your own <strong>ChatGPT sign-in</strong>, or the <strong>included model</strong> when you are not signed in. Your sign-in stays on this computer &mdash; the app never sees it.')}
-					${line('Your <strong>other files, unopened folders, and edit history stay on your computer</strong>. A folder listing is never sent.')}
+					${line('<strong>Files that no document lists as a source, and your edit history, stay on your computer.</strong> A folder listing is never sent.')}
 					${line('Abstract sends <strong>no usage analytics today</strong>. When it ships it will ask first, and count actions &mdash; never your words.')}
 				</ul>
 				<p style="margin:0;font:400 12.5px/1.5 system-ui;color:#a3a8b2">The full plain-words page: <span style="font:500 12.5px/1.5 ui-monospace,monospace;color:#696e78">docs/27-data-flow-one-pager.md</span></p>

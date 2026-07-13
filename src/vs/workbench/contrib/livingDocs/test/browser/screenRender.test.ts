@@ -432,7 +432,9 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('What does Abstract send?'), 'the data-flow question is reachable on the Model access screen');
 		assert.ok(/<details data-dataflow>/.test(html), 'it is an inline expandable section that shows the answer on click');
 		// The load-bearing honesty claims are present in plain words (each traces to a real code path).
-		assert.ok(html.includes('Nothing leaves your computer until you ask the agent to do something'), 'the plain-words summary is shown');
+		assert.ok(html.includes('Abstract sends content only when you ask it to work'), 'the plain-words summary is shown');
+		assert.ok(html.includes('or when an agent you have left running does its scheduled check'), 'the summary owns the scheduled-agent path (default-enabled agents can send without a gesture at that moment)');
+		assert.ok(html.includes('built-in agents run on their own') && html.includes('Pause any agent on the Agents screen'), 'the proactive-agent path is named with its off switch');
 		assert.ok(/no usage analytics today/i.test(html), 'the "no analytics today" honesty claim is present');
 		assert.ok(html.includes('docs/27-data-flow-one-pager.md'), 'it points to the full one-pager');
 	});

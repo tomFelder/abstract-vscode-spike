@@ -12,14 +12,17 @@ meant to write (the plan-33 honesty rule applies to privacy copy above all).
 
 ## The short version
 
-- **Nothing leaves your computer until you ask the agent to do something** - send a chat message,
-  or start a run across your project.
-- When you do, Abstract sends **the document you are working on and the source files you attached
-  to it** to the model that answers you. That is the content that leaves.
+- **Abstract sends content only when you ask it to work - or when a built-in agent you have left
+  running does its scheduled check.** Three such agents come switched on; you can pause any of them
+  (details below).
+- When you ask, Abstract sends **the document you are working on and the source files you attached
+  to it** to the model that answers you. When an agent checks a document, it sends **the changed
+  sentences from that document and the document's attached context files**. That is the content
+  that leaves.
 - The model is reached through **a small helper that runs on your own computer** (a local proxy).
   Your sign-in and any keys live only in that helper - the app you are looking at never sees them.
-- **Your other files, the folders you have not opened, and your edit history stay put.** They are
-  never sent anywhere.
+- **Files that no document lists as a source, and your edit history, stay put.** They are never
+  sent anywhere.
 - **Abstract sends no usage analytics today.** When that ships it will ask first, and it will count
   actions, never your words.
 
@@ -48,6 +51,28 @@ A run only ever sees the documents you picked. If a single document is too large
 
 The request is small on purpose: your instruction plus the document, capped so a reply comes back
 promptly.
+
+---
+
+## The agents that run on their own
+
+Three built-in agents come **switched on** and can act without you clicking anything at that
+moment:
+
+- a **source-change watcher** - runs when a source file changes on disk,
+- a **freshness check** - runs every six hours,
+- a **weekly refresh** - runs Monday mornings, across all the documents in your project (including
+  ones you have not opened in the editor).
+
+When one of these finds that a document's figures need updating, it double-checks the update before
+anything lands. That double-check **may send content to the model, through whichever door you
+chose**: the changed sentences from the affected document, plus that document's attached context
+files. If no model is connected, or nothing changed, nothing is sent.
+
+**To stop this:** open the **Agents** screen, open the agent, and press **Pause**. A paused agent
+is skipped by the scheduler and sends nothing (its "Run now" button still works if you press it
+yourself). Two further built-in agents exist but only ever run when you export or publish a
+document - those are actions you take.
 
 ---
 
@@ -97,7 +122,7 @@ readable only by you (owner-only permissions). **None of these ever contain your
 
 Your **documents, their generated `.lock.json` sidecars, and the hidden `.abstract/` project home**
 live in your project folder and stay there. The only document content that ever leaves is the
-specific text a chat or run sends to the model, as described above.
+specific text a chat, a run, or an agent's double-check sends to the model, as described above.
 
 ---
 
@@ -116,8 +141,11 @@ moment exists in the product, there is nothing to decline - because nothing is b
 
 ## What is never sent, anywhere
 
-- **The rest of your folder** - files you did not open or attach are never read into a request.
-- **Documents you did not select** for a run.
+- **Files that are not documents or attached sources** - a file no document lists as a source is
+  never read into a request. (Documents themselves can be touched by the built-in agents above,
+  even unopened ones - pause the agents if you do not want that.)
+- **Documents you did not select, for a run you start** - a run only ever sees the documents you
+  picked. The built-in agents have their own, wider scope, described above.
 - **Your edit history, undo stack, and the `.lock.json` provenance sidecars.**
 - **Your sign-in or your API keys** - these stay in the helper on your computer and are never
   returned to the app or written into a request.
@@ -138,7 +166,8 @@ moment exists in the product, there is nothing to decline - because nothing is b
 ---
 
 *Sources for every claim on this page are the actual code paths in
-`scripts/lwd-anthropic-proxy.js`, `scripts/lwd-openai-oauth.js`, and
-`src/vs/workbench/contrib/livingDocs/browser/livingDocsService.ts`; see the implementer's report on
+`scripts/lwd-anthropic-proxy.js`, `scripts/lwd-openai-oauth.js`,
+`src/vs/workbench/contrib/livingDocs/browser/livingDocsService.ts`, and
+`src/vs/workbench/contrib/livingDocs/browser/agentOrchestrator.ts`; see the implementer's report on
 issue #135 for the line-by-line map. Related: [18-beta-plan.md](18-beta-plan.md) §2.1/§2.2,
 [16-principles.md](16-principles.md) P5, decision 163.*
