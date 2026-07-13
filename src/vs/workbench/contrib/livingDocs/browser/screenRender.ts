@@ -11,7 +11,8 @@
 
 import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { countTemplateSlots } from '../common/livingDocMarkdown.js';
-import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAnswer, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { IAwayFeed } from '../common/projectHomeFeed.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings';
 
@@ -70,6 +71,19 @@ export interface IScreenState {
 	 * name and the failure day so the copy reads "Weekly refresh failed on Monday - view details".
 	 */
 	readonly homeFailure?: IHomeFailure;
+	/**
+	 * Home: the WHILE YOU WERE AWAY feed (F15 / journey 1w) - agent runs since the last visit + the live
+	 * needs-you count + the all-clear state. Absent renders no feed section (the pre-fetch idle). Real data
+	 * only: the rows come from the persisted run log, and the all-clear tracks the true pending set.
+	 */
+	readonly awayFeed?: IAwayFeed;
+	/**
+	 * Home: the answer to the last read-only whole-project question asked in the composer (map-D24). Absent
+	 * until a question has been answered; carries the plain-words answer + the real citations to render.
+	 */
+	readonly projectAnswer?: IProjectAnswer;
+	/** Home: true while a whole-project question is being answered (the composer's honest working state). */
+	readonly askBusy?: boolean;
 	/** Home: whether a workspace folder (the "project") is open. */
 	readonly hasFolder?: boolean;
 	/** Home: the open folder's name, shown as the project. */
@@ -369,6 +383,26 @@ for (const el of document.querySelectorAll('[data-tfield=kind]')) {
 for (const el of document.querySelectorAll('[data-open-external]')) {
 	el.addEventListener('click', (e) => { e.preventDefault(); vscode.postMessage({ type: 'openExternalUrl', arg: el.getAttribute('href') || undefined }); });
 }
+// Whole-project chat composer (F15 / journey 1w, map-D21/D24): the "Ask" button (and Cmd/Ctrl+Enter in the
+// textarea) gathers the text and posts one askProject message; the host classifies it (question -> read-only
+// answer with citations, rendered back into this box; change request -> the run/task surface).
+for (const el of document.querySelectorAll('[data-ask-send]')) {
+	el.addEventListener('click', () => {
+		const box = el.closest('[data-ask-box]'); if (!box) { return; }
+		const input = box.querySelector('[data-ask-input]');
+		const text = input ? input.value.trim() : '';
+		if (text) { vscode.postMessage({ type: 'askProject', text: text }); }
+	});
+}
+for (const el of document.querySelectorAll('[data-ask-input]')) {
+	el.addEventListener('keydown', (e) => {
+		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+			e.preventDefault();
+			const box = el.closest('[data-ask-box]'); const send = box && box.querySelector('[data-ask-send]');
+			if (send) { send.click(); }
+		}
+	});
+}
 // "Copy link" fallback for corporate/blocked environments: copy the authorize URL to the clipboard so the
 // user can paste it into their own browser. A brief "Copied" acknowledgement, then the label restores.
 for (const el of document.querySelectorAll('[data-copy-link]')) {
@@ -421,6 +455,103 @@ function healthIndicator(pending: number): string {
 	return `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:3px 6px;flex:none">${pending}</span>`;
 }
 
+// ---- Home front-door pieces (F15 / journey 1w): the whole-project chat composer, the WHILE YOU WERE AWAY
+// feed + all-clear promotion, and the empty-project front door. All are DOM-free HTML over the real state. ----
+
+// The whole-project chat composer (map-D21/D24): "Ask this project anything..." defaulting to whole-project
+// scope. A question answers read-only with citations (rendered below the box); a change request opens the
+// run/task surface. The client script gathers the textarea and posts one `askProject` message with the text.
+function renderHomeComposer(state: IScreenState): string {
+	const answer = state.projectAnswer;
+	// The read-only answer + its real citations (map-D24: "answers read-only with citations"). Citation chips
+	// name the exact documents/sources consulted - never fabricated (the service intersects with what it read).
+	const citations = answer && answer.citations.length
+		? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">${answer.citations.map(c => `<span style="font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#eef1ff;border:1px solid #e0e5fb;border-radius:6px;padding:4px 8px">&#128206; ${esc(c)}</span>`).join('')}</div>`
+		: '';
+	const answerBlock = answer
+		? `<div style="margin-top:14px;background:#fff;border:1px solid #e6e8ed;border-radius:12px;padding:16px 18px">
+			<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:8px">ANSWER &middot; READ-ONLY</div>
+			<div style="font:400 13.5px/1.6 system-ui;color:#2a2c32;white-space:pre-wrap">${esc(answer.answer)}</div>
+			${citations}
+		</div>`
+		: '';
+	const busy = state.askBusy
+		? `<div style="margin-top:12px;display:flex;align-items:center;gap:9px;font:400 12.5px/1 system-ui;color:#868b95"><span style="width:12px;height:12px;border:2px solid #d7d9df;border-top-color:${ACCENT};border-radius:50%;animation:lwdSpin .8s linear infinite"></span>Reading the project&hellip;</div>`
+		: '';
+	return `<div data-ask-box style="background:#fff;border:1px solid #e0e5fb;border-radius:15px;padding:18px 20px;margin-bottom:34px;box-shadow:0 12px 30px -24px rgba(86,97,201,.4)">
+		<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#5661c9">ASK THIS PROJECT</span><span style="font:500 10px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:4px 9px">Whole project</span></div>
+		<textarea data-ask-input rows="2" placeholder="Ask this project anything - or ask me to change something across it&hellip;" style="width:100%;resize:vertical;border:1px solid #dfe1e7;border-radius:10px;padding:11px 12px;font:400 13.5px/1.5 system-ui;color:#1a1c20;background:#fff;outline:none"></textarea>
+		<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px">
+			<span style="font:400 11px/1.4 system-ui;color:#a3a8b2">A question is answered read-only with citations; a change request opens a task.</span>
+			<button data-ask-send style="border:none;border-radius:9px;padding:9px 16px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Ask</button>
+		</div>
+		${busy}${answerBlock}
+	</div>`;
+}
+
+// The WHILE YOU WERE AWAY feed + the all-clear promotion (map-D14). Real data only: the rows are agent runs
+// since the last visit (from the persisted run log); when nothing ran the section is absent, and when nothing
+// needs review the calm all-clear promotion is shown ("Everything is in sync") rather than a fabricated feed.
+function renderAwaySection(feed: IAwayFeed): string {
+	// The all-clear promotion (map-D14): nothing pending -> a calm green banner, the honest "in sync" state.
+	const allClear = feed.allClear
+		? `<div style="display:flex;align-items:center;gap:11px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:12px;padding:14px 16px;margin-bottom:26px">
+			<span style="width:22px;height:22px;flex:none;border-radius:50%;background:oklch(0.6 0.13 150);color:#fff;font:600 13px/22px system-ui;text-align:center">&#10003;</span>
+			<div><div style="font:600 13.5px/1.3 system-ui;color:#2f6b45">Everything is in sync</div><div style="font:400 12px/1.4 system-ui;color:#5d8a66">Nothing needs your review right now.</div></div>
+		</div>`
+		: '';
+	if (!feed.hasActivity) {
+		// No runs in the window: show the all-clear if clear, else nothing (a non-empty pending set already
+		// surfaces through NEEDS YOU below - the feed never invents activity to fill the space).
+		return allClear;
+	}
+	const row = (r: IAwayFeed['rows'][number]) => {
+		const av = avatar(r.agentName);
+		// Honest per-run outcome: a failure names itself; a skip says why; otherwise the applied/queued tally.
+		const outcome = r.failed
+			? `<span style="font:500 11.5px/1.3 system-ui;color:#9a6b16">Failed${r.error ? ` &mdash; ${esc(r.error)}` : ''}</span>`
+			: r.skipped
+				? `<span style="font:500 11.5px/1.3 system-ui;color:#a3a8b2">Skipped &mdash; a previous run was still going</span>`
+				: `<span style="font:400 11.5px/1.3 system-ui;color:#52575f">${r.docsTouched} doc${r.docsTouched === 1 ? '' : 's'} &middot; ${r.applied} applied</span>`;
+		const needs = r.queued > 0
+			? `<span style="flex:none;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.03em;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:4px 7px">${r.queued} NEEDS YOU</span>`
+			: `<span style="flex:none;display:flex;align-items:center"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)"></span></span>`;
+		return `<div style="display:flex;align-items:center;gap:11px;padding:12px 14px;border-bottom:1px solid #f0f1f4">
+			<span style="width:26px;height:26px;flex:none;border-radius:7px;background:${av.color};color:#fff;font:600 10px/26px system-ui;text-align:center">${av.text}</span>
+			<div style="flex:1;min-width:0"><div style="font:600 13px/1.3 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.agentName)}</div>${outcome}</div>
+			<span style="flex:none;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${esc(r.whenLabel)}</span>
+			${needs}
+		</div>`;
+	};
+	const label = feed.firstVisit ? 'RECENT ACTIVITY' : 'WHILE YOU WERE AWAY';
+	return `${allClear}<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:12px">${label}</div>
+		<div style="background:#fff;border:1px solid #e9eaee;border-radius:14px;overflow:hidden;margin-bottom:34px">${feed.rows.map(row).join('')}</div>`;
+}
+
+// The empty-project front door (journey 1w frame 4): a folder is open but has no documents. Cures the 1a
+// empty-folder dead-end with "New from template / Blank document / ...or ask me to create one" - the New-doc
+// sheet (Blank + real templates) plus the whole-project composer, never a dead card.
+function renderEmptyProjectFrontDoor(state: IScreenState, folderName: string): string {
+	const scroll = (inner: string) => `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">${inner}</div></div>`;
+	const templates = state.templates ?? [];
+	const templateHint = templates.length
+		? `Start from one of your ${templates.length} template${templates.length === 1 ? '' : 's'}, from a blank page, or ask me to draft one.`
+		: 'Start from a blank page, or ask me to draft your first document.';
+	return scroll(`<div style="max-width:760px;margin:0 auto;padding:56px 36px 80px">
+		<div style="text-align:center;margin-bottom:30px">
+			<div style="font-size:38px;line-height:1;margin-bottom:14px">&#128196;</div>
+			<h1 style="margin:0 0 8px;font:600 24px/1.25 system-ui;color:#15171c;letter-spacing:-.01em">${esc(folderName)} is empty</h1>
+			<p style="margin:0;font:400 14px/1.6 system-ui;color:#696e78">${templateHint}</p>
+		</div>
+		<div style="display:flex;gap:12px;justify-content:center;margin-bottom:30px">
+			<button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:10px;padding:12px 20px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;cursor:pointer">&#65291; New document</button>
+			<button data-msg="goTemplates" style="border:1px solid #e6e8ed;background:#fff;border-radius:10px;padding:11px 18px;font:500 13px/1 system-ui;color:#52575f;cursor:pointer">Browse templates</button>
+		</div>
+		${renderHomeComposer(state)}
+		${renderNewDocSheet(templates)}
+	</div>`);
+}
+
 // ---- Home: the landing dashboard. The open folder IS the project (decision #39): an empty state when no
 // folder is open, otherwise the folder's name + every Markdown document (living ones badged). ----
 function renderHome(state: IScreenState): string {
@@ -441,14 +572,23 @@ function renderHome(state: IScreenState): string {
 	const docs = state.docs ?? [];
 	const folderName = state.folderName ?? 'Workspace';
 
+	// Empty-project front door (journey 1w frame 4): a folder is open but has no documents. Land on the
+	// front door ("New from template / Blank / ...or ask me") rather than an empty dashboard - cures the 1a
+	// empty-folder dead-end.
+	if (docs.length === 0) {
+		return renderEmptyProjectFrontDoor(state, folderName);
+	}
+
 	// NEEDS YOU + the greeting summary are derived from the REAL per-document pending count that
 	// listDocuments() already carries (ILivingDocSummary.pendingCount = the live pending set for that
 	// doc). Never fabricated: if nothing pends the section is absent and the summary is "in sync".
 	const pendingDocs = docs.filter(d => d.pendingCount > 0).sort((a, b) => b.pendingCount - a.pendingCount);
 	const totalPending = pendingDocs.reduce((n, d) => n + d.pendingCount, 0);
+	// When work pends, the greeting names it; when clear, it hands off to the all-clear promotion below rather
+	// than repeating "in sync" here (the map-D14 banner in the WHILE YOU WERE AWAY section carries that line).
 	const summary = pendingDocs.length
 		? `${pendingDocs.length} document${pendingDocs.length === 1 ? '' : 's'} need${pendingDocs.length === 1 ? 's' : ''} your review across this project. <strong style="font-weight:600;color:#8a6d1a">${totalPending} change${totalPending === 1 ? '' : 's'} to approve</strong>.`
-		: 'Everything is in sync.';
+		: `Here is where ${esc(folderName)} stands.`;
 
 	// One NEEDS-YOU card per document with pending work: accent top-border, a 2.4s pulse dot, the doc
 	// name, the amber `N TO APPROVE` chip (attention tokens), and a primary Review that opens the doc.
@@ -523,10 +663,16 @@ function renderHome(state: IScreenState): string {
 	// (Enter/default) makes a titled `<name>.md` - or an Untitled name-on-save doc when the name is empty
 	// (decision 56); the template rows reach the iter-3 generate flow with that same typed name.
 	const newDocSheet = renderNewDocSheet(state.templates ?? []);
+	// The whole-project chat composer (map-D21/D24) leads the front door; the WHILE YOU WERE AWAY feed +
+	// all-clear promotion (map-D14) sit between it and the NEEDS-YOU cards. Both render from real state only.
+	const composer = renderHomeComposer(state);
+	const awaySection = state.awayFeed ? renderAwaySection(state.awayFeed) : '';
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
-		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
+		<p style="margin:0 0 22px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
+		${composer}
 		${failureLine}
+		${awaySection}
 		${needsYou}
 		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
 		${projectsGrid}

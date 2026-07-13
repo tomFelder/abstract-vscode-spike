@@ -154,6 +154,18 @@ export interface IWorkingSetDoc {
 }
 
 /**
+ * The result of a read-only whole-project question from the Project Home composer (F15 / journey 1w). The
+ * `answer` is plain-words prose (never JSON, never a proposal); `citations` are the real project document /
+ * source names actually consulted, so the answer is auditable and never grounded in a fabricated reference.
+ * `via` is `model` for a real model answer, `fallback` for the honest no-model / no-document guidance turn.
+ */
+export interface IProjectAnswer {
+	readonly answer: string;
+	readonly citations: readonly string[];
+	readonly via: 'model' | 'fallback';
+}
+
+/**
  * One document Skill's verdict for the Skills rail (spec 5, maker != checker). Financial and
  * Formatting are deterministic and run with no model; Strategy needs a model to test claims against
  * the Knowledge decision stack, so it reports `needs-model` in the model-less build.
@@ -326,6 +338,12 @@ export interface ILivingDocsService {
 	focusChange(changeId: string): void;
 
 	// --- model access: provider picker + survey (plan 35 iter 4) ---
+	/**
+	 * Whether the agent model is reachable (the proxy answers /healthz and the model is not disabled). Used by
+	 * the startup router (F15 / journey 1w, map-D2): a first run with NO model connected lands on the Model
+	 * Access step, but once a model is reachable - or on any later launch - opening the project leads with Home.
+	 */
+	isModelReachable(): Promise<boolean>;
 	/** The current model door + usage snapshot for the Settings provider step (reads the proxy's /healthz). */
 	getModelProviderStatus(): Promise<IModelProviderStatus>;
 	/** Begin "Sign in with ChatGPT": returns the authorize URL to open in a browser (or undefined on failure). */
@@ -584,6 +602,15 @@ export interface ILivingDocsService {
 	 * With no model reachable it appends an honest fallback turn and proposes nothing (never fakes a reply).
 	 */
 	sendChatMessage(resource: URI, text: string): Promise<void>;
+	/**
+	 * Answer a READ-ONLY, whole-project question for the Project Home composer (F15 / journey 1w, map-D24:
+	 * "asking a question answers read-only with citations"). Reads every project document (figures resolved)
+	 * plus their sources and asks the model for a plain-words answer - it NEVER queues a proposal or mutates a
+	 * document. `citations` are the real document/source names actually consulted (never fabricated); with no
+	 * model reachable it returns an honest fallback answer and no citations. A change request routes to the
+	 * run/task surface instead of here (the caller classifies the intent).
+	 */
+	askProjectQuestion(question: string): Promise<IProjectAnswer>;
 	/**
 	 * Cancel the in-flight chat reply for a document (plan 27). Aborts the streaming model call; the prose
 	 * streamed so far is kept as a muted "stopped" turn and any proposal JSON is discarded (decision D27-B).

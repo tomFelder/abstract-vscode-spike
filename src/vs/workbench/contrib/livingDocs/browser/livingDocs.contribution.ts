@@ -479,6 +479,7 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		@IEditorService private readonly _editorService: IEditorService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
 		@IStorageService private readonly _storageService: IStorageService,
+		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -490,22 +491,35 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 			this._closeWelcomeEditors();
 			once.dispose();
 		}));
-		// First run reaches a working model in under a minute (plan 35 iter 4 gate): on a fresh profile, land on
-		// the Model Access step (provider picker + survey) so the user picks a door before anything else. On
-		// every later launch this flag is set, so startup lands on Home as before.
+		// Opening a project lands on Project Home (F15 / journey 1w, map-D2), not the editor. The one exception
+		// is the model-access gate (plan 35 iter 4): a FIRST run with NO model connected lands on the Model
+		// Access step so a fresh user picks a door before anything else. Once a model is reachable - or on any
+		// later launch - Home leads. The flag is set once here so a later launch always routes to Home.
 		const firstRun = !this._storageService.getBoolean(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, StorageScope.PROFILE, false);
 		if (this._editorService.editors.length === 0) {
-			const screen: ScreenId = firstRun ? 'settings' : 'home';
 			if (firstRun) {
 				this._storageService.store(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, true, StorageScope.PROFILE, StorageTarget.MACHINE);
 			}
-			void this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, screen), { pinned: true });
+			void this._openStartupScreen(firstRun);
 		}
 		// The two rails (tree-rail + review rail) are EDITOR companions, not global chrome: they are
 		// revealed + sized only when the document editor is the active surface, and hidden on the screen
 		// surfaces (Home / Templates / Knowledge / Agents / project-run / review-project). That is owned by
 		// RailVisibilityContribution below -- startup lands on Home, so both rails begin hidden and the
 		// Workspace-rail selection + the 264/392 pinning happen there when the editor surface opens.
+	}
+
+	// Route the startup surface (map-D2): Home leads, except a first run with no model connected, which lands on
+	// the Model Access step so a fresh user picks a door first. The model probe is async, so re-check that no
+	// editor opened while probing before opening (a restored editor or a deep-link wins).
+	private async _openStartupScreen(firstRun: boolean): Promise<void> {
+		let screen: ScreenId = 'home';
+		if (firstRun && !(await this._livingDocs.isModelReachable())) {
+			screen = 'settings';
+		}
+		if (this._editorService.editors.length === 0) {
+			await this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, screen), { pinned: true });
+		}
 	}
 
 	private _closeWelcomeEditors(): void {
@@ -716,7 +730,7 @@ class AnalyticsConsentContribution extends Disposable implements IWorkbenchContr
 			// Persist the choice into the visible Settings toggle so the two never drift.
 			await this._configuration.updateValue('abstract.analytics.enabled', enabled);
 		}
-		// The first UI funnel event (doc 15 §3.1): captured only when consent is on (the service gates it).
+		// The first UI funnel event (doc 15 sec 3.1): captured only when consent is on (the service gates it).
 		this._analytics.capture('app_opened', { version: this._productService.version, first_open: firstOpen });
 	}
 }
