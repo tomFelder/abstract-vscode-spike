@@ -936,6 +936,7 @@ const POLICY_LABELS: Record<string, string> = {
 	'draft-only': 'Draft only',
 };
 
+// allow-any-unicode-next-line
 // The inline policy select + trigger editor (D32-B): the safety dial has exactly the three levels (spec 09 §4)
 // and the trigger picker composes a cron day/time, a heartbeat cadence, or an event source. Both post on change.
 function renderAgentControls(agent: IAgentDef): string {
@@ -1125,13 +1126,50 @@ function renderSettings(state: IScreenState): string {
 				${usageBlock}
 			</div>
 
-			<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:24px 26px">
+			<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:24px 26px;margin-bottom:22px">
 				<div style="font:600 16px/1.3 system-ui;color:#15171c;margin:0 0 5px">A few quick questions</div>
 				<p style="margin:0 0 20px;font:400 13px/1.55 system-ui;color:#696e78">This helps us build the right things first. Your answers stay on your computer.</p>
 				${surveyBody}
 			</div>
 
+			${dataFlowCard()}
+
 		</div></div>
+	</div>`;
+}
+
+// A calm, small "What does Abstract send?" section on the Model access screen (issue #135). It is the
+// in-product home of the plain-words data-flow one-pager (docs/27): a single expandable row that shows
+// the answer inline on click - no new panel, no navigation. The copy is a short, faithful retelling of
+// docs/27 and every line traces to a real code path (model calls go through the localhost proxy in
+// scripts/lwd-anthropic-proxy.js; chats/runs send the open/selected documents + attached sources -
+// livingDocsService.ts _chatRespond/_chatRespondMulti; the default-enabled scheduled agents
+// (agentOrchestrator.ts defaultAgents) may send a checked document's changed sentences + context files
+// through the verify gate's strategy grader - livingDocsService.ts _runFiguresByPolicy/_gradeStrategy;
+// the sign-in + keys live only in the proxy). Plain words per P5: no "OAuth", no "token", no "rate
+// limit". The full page carries the provider-retention detail and the founder-review notes.
+function dataFlowCard(): string {
+	const line = (text: string) => `<li style="margin:0 0 9px;font:400 13px/1.55 system-ui;color:#52575f">${text}</li>`;
+	return `<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:6px 26px">
+		<details data-dataflow>
+			<summary style="list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:18px 0;font:600 14px/1.3 system-ui;color:#15171c">
+				<span style="width:22px;height:22px;flex:none;border-radius:7px;background:#f4f5fd;border:1px solid #e0e5fb;color:${ACCENT};display:flex;align-items:center;justify-content:center;font-size:12px">&#128274;</span>
+				<span style="flex:1">What does Abstract send?</span>
+				<span style="color:#a3a8b2;font-size:12px">&#9662;</span>
+			</summary>
+			<div style="padding:2px 0 22px">
+				<p style="margin:0 0 14px;font:400 13px/1.6 system-ui;color:#696e78">Abstract sends content only when you ask it to work &mdash; or when an agent you have left running does its scheduled check. Here is exactly what is sent, and what never is.</p>
+				<ul style="margin:0 0 14px;padding-left:20px">
+					${line('When you <strong>chat about a document</strong>, Abstract sends that one open document and the source files you attached to it &mdash; nothing else in your folder.')}
+					${line('When you <strong>run one instruction across your project</strong>, it sends only the documents you selected for that run and their shared sources.')}
+					${line('Three <strong>built-in agents run on their own</strong> &mdash; when a source file changes, every six hours, and on Monday mornings. When a document&#39;s figures need updating, the double-check may send that document&#39;s changed sentences and its attached context files. Pause any agent on the Agents screen to stop this.')}
+					${line('Model calls go through your own <strong>ChatGPT sign-in</strong>, or the <strong>included model</strong> when you are not signed in. Your sign-in stays on this computer &mdash; the app never sees it.')}
+					${line('<strong>Files that are not documents, attached sources, or @-mentions &mdash; and your edit history &mdash; stay on your computer.</strong> A folder listing is never sent.')}
+					${line('Abstract sends <strong>no usage analytics today</strong>. When it ships it will ask first, and count actions &mdash; never your words.')}
+				</ul>
+				<p style="margin:0;font:400 12.5px/1.5 system-ui;color:#a3a8b2">The full plain-words page: <span style="font:500 12.5px/1.5 ui-monospace,monospace;color:#696e78">docs/27-data-flow-one-pager.md</span></p>
+			</div>
+		</details>
 	</div>`;
 }
 

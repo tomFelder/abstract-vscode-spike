@@ -23,6 +23,8 @@ to its home doc so nobody has to hold them in their head. Update it when a new I
 | **ITE** | Integrated Thinking Environment - the category (mission); the trust wedge is the v1 spearhead | [14](14-product-strategy.md) §1 |
 | **The wedge** | Provenance + diff + approval on recurring data-fed documents | [25](25-why-abstract.md) |
 | **`.abstract/`** | Hidden in-project app home: skills, knowledge metadata, run log, config, indexes | [22](22-file-interop-and-project-layout.md) §5, decision 156 |
+| **`~/.abstract/`** | The localhost model helper's own home in your **home** dir (not the project): sign-in bundle, API secrets, spend/events logs - owner-only, never document text | [27](27-data-flow-one-pager.md), D29-C |
+| **Data-flow one-pager** | Plain-words "what leaves my machine?" - the two model doors, the localhost helper's storage, never-sent list; surfaced on Model access | [27](27-data-flow-one-pager.md) |
 | **Tidy verb** | "Tidy this project" - agent *proposes* file moves through review; atomic on locks | [22](22-file-interop-and-project-layout.md) §5 |
 | **Doc-set test** | The VP4 dogfood benchmark: this repo's own `docs/` as an Abstract project - ask it, batch-edit it | [23](23-validation-thesis-and-value-hypotheses.md) §4b |
 | **Merge tax / ledger** | The cost of core patches vs upstream; the running count (0-core-patch discipline) | [plans/03-merge-tax-ledger.md](plans/03-merge-tax-ledger.md) |
