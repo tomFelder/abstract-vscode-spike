@@ -167,6 +167,9 @@ suite('livingDocs screenRender', () => {
 		assert.ok(/READ-ONLY/.test(html), 'labels the answer as read-only');
 		assert.ok(html.includes('Revenue is on plan, no surprises.'), 'shows the answer prose');
 		assert.ok(html.includes('Board Note') && html.includes('metrics.csv'), 'shows the real citation chips');
+		// The chip row leads with "Consulted:" - exactly-true wording, since the fallback path lists every file
+		// read for the answer (not a model-attested "supporting sources" set).
+		assert.ok(html.includes('Consulted:'), 'the chip row is labelled Consulted so it never over-claims support');
 	});
 
 	// --- Templates (plan 28): the real template library, driven by listTemplates() ---

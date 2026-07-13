@@ -465,8 +465,11 @@ function renderHomeComposer(state: IScreenState): string {
 	const answer = state.projectAnswer;
 	// The read-only answer + its real citations (map-D24: "answers read-only with citations"). Citation chips
 	// name the exact documents/sources consulted - never fabricated (the service intersects with what it read).
+	// The row leads with a "Consulted:" label because that is exactly what the list is: on the fallback path
+	// (the model named no citations) it carries EVERY file read for the answer, so an unlabelled row could read
+	// as "sources supporting this answer" and over-claim; "Consulted" stays true on both paths.
 	const citations = answer && answer.citations.length
-		? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">${answer.citations.map(c => `<span style="font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#eef1ff;border:1px solid #e0e5fb;border-radius:6px;padding:4px 8px">&#128206; ${esc(c)}</span>`).join('')}</div>`
+		? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px"><span style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2">Consulted:</span>${answer.citations.map(c => `<span style="font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#eef1ff;border:1px solid #e0e5fb;border-radius:6px;padding:4px 8px">&#128206; ${esc(c)}</span>`).join('')}</div>`
 		: '';
 	const answerBlock = answer
 		? `<div style="margin-top:14px;background:#fff;border:1px solid #e6e8ed;border-radius:12px;padding:16px 18px">
