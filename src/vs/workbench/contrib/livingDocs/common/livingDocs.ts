@@ -190,6 +190,9 @@ export interface ISourcePeekRow {
 	readonly value: string;
 	/** True when this key is the one the clicked provenance dot points at (highlighted in the pane). */
 	readonly selected: boolean;
+	/** The live source value now ("now"), when it has drifted from the applied `value` ("then"): the source
+	 * changed since the figure was last synced. Unset when the value still matches (plan 37 F13). */
+	readonly current?: string;
 }
 
 /**

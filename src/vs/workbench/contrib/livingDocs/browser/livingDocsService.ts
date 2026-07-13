@@ -75,6 +75,10 @@ interface IDocState {
 	recent: Set<string>;            // block ids changed in the last refresh (for the highlight)
 	staleBindings: Set<string>;     // dirty bits: bind keys whose source changed since last sync
 	staleContext: Set<string>;      // dirty bits: context files changed since last review
+	// The live re-resolved source value per bind key from the last freshness recompute (the "now"); the
+	// lock holds the applied value at last sync (the "then"). Powers the source drawer's then-vs-now line
+	// (plan 37 F13) with no extra source read. Undefined until the first recompute; absent keys = unresolved.
+	current?: Map<string, string>;
 	status: string;
 	folderFiles: readonly string[]; // real md/csv/json siblings in the doc's folder (for @mention + pickers)
 }
@@ -650,14 +654,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			kind: SourceKind;
 			label: string;
 			syncedAt: string | undefined;
+			// The oldest sync time among the bindings that are currently STALE (plan 37 F12): a stale source
+			// must never read as freshly-synced, so its label reports how old its stale data actually is rather
+			// than the newest sync across its (still-fresh) dependents. Undefined while the source is all-fresh.
+			staleSyncedAt: string | undefined;
 			fresh: boolean;
 			usedBy: Map<string, { doc: URI; title: string; keys: Set<string>; context: boolean }>;
 		}
 		const acc = new Map<string, IRegistryRow>();
 		const ensure = (id: string, kind: SourceKind): IRegistryRow => {
 			let row = acc.get(id);
-			if (!row) { row = { kind, label: sourceLabel(id, kind), syncedAt: undefined, fresh: true, usedBy: new Map() }; acc.set(id, row); }
+			if (!row) { row = { kind, label: sourceLabel(id, kind), syncedAt: undefined, staleSyncedAt: undefined, fresh: true, usedBy: new Map() }; acc.set(id, row); }
 			return row;
+		};
+		// Fold one binding's sync time into a row: track the newest overall, and the oldest among stale ones.
+		const foldSync = (row: IRegistryRow, at: string, stale: boolean) => {
+			if (stale) { row.fresh = false; if (!row.staleSyncedAt || at < row.staleSyncedAt) { row.staleSyncedAt = at; } }
+			if (!row.syncedAt || at > row.syncedAt) { row.syncedAt = at; }
 		};
 		for (const uri of found.values()) {
 			const projection = await this._sourceProjection(uri);
@@ -681,8 +694,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				for (const key of keys) {
 					const entry = lock.bindings[key];
 					if (!entry) { continue; }
-					if (!bindingIsFresh(resolution.get(key), entry)) { row.fresh = false; }
-					if (!row.syncedAt || entry.syncedAt > row.syncedAt) { row.syncedAt = entry.syncedAt; }
+					foldSync(row, entry.syncedAt, !bindingIsFresh(resolution.get(key), entry));
 				}
 			}
 			// Context sources (frontmatter `context:`): influence edges - no bind keys; freshness compares the
@@ -694,8 +706,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				if (existing) { existing.context = true; } else { row.usedBy.set(docId, { doc: uri, title, keys: new Set(), context: true }); }
 				const entry = lock.context[file];
 				if (entry) {
-					if (contextHashes.get(file) !== entry.reviewedHash) { row.fresh = false; }
-					if (!row.syncedAt || entry.reviewedAt > row.syncedAt) { row.syncedAt = entry.reviewedAt; }
+					foldSync(row, entry.reviewedAt, contextHashes.get(file) !== entry.reviewedHash);
 				}
 			}
 		}
@@ -704,7 +715,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const usedBy: ISourceUsage[] = [...row.usedBy.values()]
 				.map(u => ({ doc: u.doc, title: u.title, keys: [...u.keys].sort((a, b) => a.localeCompare(b)), context: u.context }))
 				.sort((a, b) => a.title.localeCompare(b.title));
-			sources.push({ id, kind: row.kind, label: row.label, syncedAt: row.syncedAt, fresh: row.fresh, usedBy });
+			// A stale source reports its oldest stale sync time so it never reads as freshly-synced (F12);
+			// an all-fresh source reports the newest sync across its dependents.
+			const syncedAt = row.fresh ? row.syncedAt : (row.staleSyncedAt ?? row.syncedAt);
+			sources.push({ id, kind: row.kind, label: row.label, syncedAt, fresh: row.fresh, usedBy });
 		}
 		sources.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
 		return sources;
@@ -1231,10 +1245,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private async _recomputeFreshness(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		const staleBindings = new Set<string>();
 		const staleContext = new Set<string>();
+		// The current re-resolved values (the "now" for the drawer's then-vs-now, F13). We already read every
+		// source here for the dirty-bit compare, so retaining the values costs nothing extra.
+		const current = new Map<string, string>();
 		if (state.doc.isLiving) {
 			const resolution = await this._resolveCurrent(state, pass);
 			for (const key of Object.keys(state.lock.bindings)) {
 				const cur = resolution.get(key);
+				if (cur) { current.set(key, cur.value); }
 				if (cur && !bindingIsFresh(cur, state.lock.bindings[key])) { staleBindings.add(key); }
 			}
 			for (const file of state.doc.context) {
@@ -1245,6 +1263,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		state.staleBindings = staleBindings;
 		state.staleContext = staleContext;
+		state.current = current;
 		if (state.doc.isLiving) {
 			state.status = (staleBindings.size || staleContext.size) ? 'Sources changed - may be affected' : 'All sources synced';
 		}
@@ -3155,11 +3174,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(resource.toString());
 		if (!state || !state.doc.isLiving) { return undefined; }
 		const selected = new Set(cells);
-		const rows: ISourcePeekRow[] = Object.keys(state.lock.bindings).map(key => ({
-			key,
-			value: state.lock.bindings[key].resolved,
-			selected: selected.has(key),
-		}));
+		const rows: ISourcePeekRow[] = Object.keys(state.lock.bindings).map(key => {
+			const value = state.lock.bindings[key].resolved;
+			// then-vs-now (F13): if the source has drifted since last sync, surface the live value alongside.
+			const now = state.staleBindings.has(key) ? state.current?.get(key) : undefined;
+			const current = now !== undefined && now !== value ? now : undefined;
+			return { key, value, selected: selected.has(key), ...(current !== undefined ? { current } : {}) };
+		});
 		const source = state.doc.sources.find(s => sourceKind(s) === 'file') ?? state.doc.sources[0] ?? 'source';
 		const referencedBy = [...this._docs.values()]
 			.filter(s => s.doc.isLiving && s.doc.sources.some(src => state.doc.sources.includes(src)))
