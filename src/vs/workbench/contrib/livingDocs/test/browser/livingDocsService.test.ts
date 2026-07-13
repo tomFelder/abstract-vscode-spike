@@ -328,6 +328,26 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(missing.dataUri, undefined);
 	});
 
+	test('readImageAsset refuses a src that escapes the workspace (path traversal), but allows nested paths', async () => {
+		const service = createService();
+		// The files EXIST outside the workspace - containment (not a read failure) must be what refuses them.
+		lastFiles!.set(URI.file('/outside.png').toString(), 'SECRET');
+		lastFiles!.set(URI.file('/etc/x').toString(), 'SECRET');
+		const up = await service.readImageAsset(WEEKLY, '../outside.png');
+		assert.strictEqual(up.error, true, '../ escaping the doc folder + workspace is refused');
+		assert.strictEqual(up.dataUri, undefined);
+		const deep = await service.readImageAsset(WEEKLY, '../../../etc/x');
+		assert.strictEqual(deep.error, true, 'a deep ../../../ traversal is refused');
+		assert.strictEqual(deep.dataUri, undefined);
+		// Legitimate doc-relative reads still resolve: the assets layout and a nested subfolder.
+		lastFiles!.set(URI.file('/ws/assets/Weekly Summary/x.png').toString(), 'ASSET');
+		const asset = await service.readImageAsset(WEEKLY, 'assets/Weekly Summary/x.png');
+		assert.ok(asset.dataUri && asset.dataUri.startsWith('data:image/png;base64,'), 'assets/<doc>/x.png still resolves');
+		lastFiles!.set(URI.file('/ws/sub/img.png').toString(), 'NESTED');
+		const nested = await service.readImageAsset(WEEKLY, 'sub/img.png');
+		assert.ok(nested.dataUri && nested.dataUri.startsWith('data:image/png;base64,'), 'a nested relative path inside the doc folder still resolves');
+	});
+
 	test('refreshFromSources reconciles the visible cache (figures auto-apply), persists, and audits', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);

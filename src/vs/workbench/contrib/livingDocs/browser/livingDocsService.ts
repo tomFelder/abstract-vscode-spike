@@ -10,7 +10,7 @@ import { Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
+import { basename, dirname, isEqualOrParent, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -1839,6 +1839,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// balloon the webview message channel (the reply is a base64 data URI, ~4/3 the byte size).
 	private static readonly IMAGE_ASSET_CAP = 10 * 1024 * 1024;
 
+	// Path-traversal guard (defense-in-depth for the desktop file: scheme, where the file service reads the
+	// real disk): an image target computed from doc-relative input must stay inside the document's folder or
+	// the workspace - a doc body carrying `![x](../../secret)` must never read outside the project. joinPath
+	// collapses `..` segments, so containment of the NORMALISED target is checked with the platform's
+	// isEqualOrParent, never a hand-rolled string compare.
+	private _isContainedImageTarget(resource: URI, target: URI): boolean {
+		if (isEqualOrParent(target, dirname(resource))) { return true; }
+		return this._workspace.getWorkspace().folders.some(f => isEqualOrParent(target, f.uri));
+	}
+
 	async saveImageAsset(resource: URI, name: string, bytes: VSBuffer, mime?: string): Promise<string> {
 		// The #129 import layout: assets live beside the document under `assets/<doc-basename>/`.
 		const stem = basename(resource).replace(/\.md$/, '');
@@ -1852,6 +1862,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		const finalName = dedupeAssetName(safe, existing);
 		const target = joinPath(folder, finalName);
+		// The sanitised name cannot carry separators, so this cannot trip in practice - kept for symmetry with
+		// readImageAsset so every image path computed from webview input passes the same containment gate.
+		if (!this._isContainedImageTarget(resource, target)) {
+			this._log.warn('[livingDocs] image asset write escapes the document folder', name);
+			throw new Error('image asset target escapes the document folder');
+		}
 		try {
 			await this._files.writeFile(target, bytes);
 		} catch (e) {
@@ -1864,8 +1880,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async readImageAsset(resource: URI, src: string): Promise<{ readonly dataUri?: string; readonly error?: boolean }> {
 		try {
 			// The webview asks only for document-relative srcs (`assets/Doc/x.png`, `./logo.png`); resolve
-			// against the document's folder. joinPath normalises any `./` segments.
+			// against the document's folder. joinPath normalises any `./`/`..` segments.
 			const target = joinPath(dirname(resource), src);
+			if (!this._isContainedImageTarget(resource, target)) {
+				// Same visible broken-image reply as a missing file - the traversal is refused, never silent.
+				this._log.warn('[livingDocs] image asset read escapes the workspace', src);
+				return { error: true };
+			}
 			const content = await this._files.readFile(target);
 			if (content.value.byteLength > LivingDocsService.IMAGE_ASSET_CAP) {
 				this._log.warn('[livingDocs] image asset too large to inline', src, content.value.byteLength);
