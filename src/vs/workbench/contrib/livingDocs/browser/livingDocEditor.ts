@@ -6,6 +6,7 @@
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { isWeb } from '../../../../base/common/platform.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
@@ -342,6 +343,12 @@ export class LivingDocEditor extends EditorPane {
 			totalPendingCount: allPending.length,
 			provenance,
 			snapshotCount: this._livingDocs.getSnapshots(resource).length,
+			// The web build's workspace mount is an in-memory / memfs provider whose writes are lost on a
+			// page reload (issue #121 / decision 162): mark the render ephemeral so the toolbar states that
+			// plainly rather than claiming a durable "Saved". Electron's disk-backed provider persists, so
+			// `isWeb` is false there and the normal Saved chip stands. There is no file-provider capability
+			// flag for "survives reload", so the build type is the honest signal for this contract.
+			ephemeral: isWeb,
 		};
 		const content = renderLivingDocContent(input);
 		// The mount-once lifecycle (first-render setHtml, pmReset only on a model-driven body change,
