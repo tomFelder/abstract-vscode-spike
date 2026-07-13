@@ -1164,7 +1164,7 @@ function dataFlowCard(): string {
 					${line('When you <strong>run one instruction across your project</strong>, it sends only the documents you selected for that run and their shared sources.')}
 					${line('Three <strong>built-in agents run on their own</strong> &mdash; when a source file changes, every six hours, and on Monday mornings. When a document&#39;s figures need updating, the double-check may send that document&#39;s changed sentences and its attached context files. Pause any agent on the Agents screen to stop this.')}
 					${line('Model calls go through your own <strong>ChatGPT sign-in</strong>, or the <strong>included model</strong> when you are not signed in. Your sign-in stays on this computer &mdash; the app never sees it.')}
-					${line('<strong>Files that no document lists as a source, and your edit history, stay on your computer.</strong> A folder listing is never sent.')}
+					${line('<strong>Files that are not documents, attached sources, or @-mentions &mdash; and your edit history &mdash; stay on your computer.</strong> A folder listing is never sent.')}
 					${line('Abstract sends <strong>no usage analytics today</strong>. When it ships it will ask first, and count actions &mdash; never your words.')}
 				</ul>
 				<p style="margin:0;font:400 12.5px/1.5 system-ui;color:#a3a8b2">The full plain-words page: <span style="font:500 12.5px/1.5 ui-monospace,monospace;color:#696e78">docs/27-data-flow-one-pager.md</span></p>

@@ -21,8 +21,8 @@ meant to write (the plan-33 honesty rule applies to privacy copy above all).
   that leaves.
 - The model is reached through **a small helper that runs on your own computer** (a local proxy).
   Your sign-in and any keys live only in that helper - the app you are looking at never sees them.
-- **Files that no document lists as a source, and your edit history, stay put.** They are never
-  sent anywhere.
+- **Files that are not documents, attached sources, or @-mentions - and your edit history - stay
+  put.** They are never sent anywhere.
 - **Abstract sends no usage analytics today.** When that ships it will ask first, and it will count
   actions, never your words.
 
@@ -141,9 +141,10 @@ moment exists in the product, there is nothing to decline - because nothing is b
 
 ## What is never sent, anywhere
 
-- **Files that are not documents or attached sources** - a file no document lists as a source is
-  never read into a request. (Documents themselves can be touched by the built-in agents above,
-  even unopened ones - pause the agents if you do not want that.)
+- **Files that are not documents, attached sources, or @-mentions** - a file that no document
+  lists as a source, and that you never @-mention in chat, is never read into a request.
+  (Documents themselves can be touched by the built-in agents above, even unopened ones - pause
+  the agents if you do not want that.)
 - **Documents you did not select, for a run you start** - a run only ever sees the documents you
   picked. The built-in agents have their own, wider scope, described above.
 - **Your edit history, undo stack, and the `.lock.json` provenance sidecars.**
