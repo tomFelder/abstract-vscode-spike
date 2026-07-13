@@ -120,7 +120,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
 		const clock = new FakeClock();
 		service.setClock(clock);
 		store.add(service);
@@ -253,7 +253,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: WS, name: 'ws' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
 		const clock = new FakeClock();
 		service.setClock(clock);
 		store.add(service);
@@ -338,7 +338,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: WS, name: 'ws' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
 		service.setClock(new FakeClock());
 		store.add(service);
 		return { service };

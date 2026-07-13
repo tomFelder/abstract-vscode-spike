@@ -109,6 +109,8 @@ export interface IScreenState {
 	readonly signInAuthorizeUrl?: string;
 	/** Settings: true once the onboarding survey has been recorded this session (shows the thank-you state). */
 	readonly surveySaved?: boolean;
+	/** Settings: the current analytics consent (the `abstract.analytics.enabled` setting), for the data-flow card row. */
+	readonly analyticsEnabled?: boolean;
 }
 
 /**
@@ -1175,7 +1177,7 @@ function renderSettings(state: IScreenState): string {
 				${surveyBody}
 			</div>
 
-			${dataFlowCard()}
+			${dataFlowCard(state.analyticsEnabled === true)}
 
 		</div></div>
 	</div>`;
@@ -1191,7 +1193,7 @@ function renderSettings(state: IScreenState): string {
 // through the verify gate's strategy grader - livingDocsService.ts _runFiguresByPolicy/_gradeStrategy;
 // the sign-in + keys live only in the proxy). Plain words per P5: no "OAuth", no "token", no "rate
 // limit". The full page carries the provider-retention detail and the founder-review notes.
-function dataFlowCard(): string {
+function dataFlowCard(analyticsEnabled: boolean): string {
 	const line = (text: string) => `<li style="margin:0 0 9px;font:400 13px/1.55 system-ui;color:#52575f">${text}</li>`;
 	return `<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:6px 26px">
 		<details data-dataflow>
@@ -1208,11 +1210,32 @@ function dataFlowCard(): string {
 					${line('Three <strong>built-in agents run on their own</strong> &mdash; when a source file changes, every six hours, and on Monday mornings. When a document&#39;s figures need updating, the double-check may send that document&#39;s changed sentences and its attached context files. Pause any agent on the Agents screen to stop this.')}
 					${line('Model calls go through your own <strong>ChatGPT sign-in</strong>, or the <strong>included model</strong> when you are not signed in. Your sign-in stays on this computer &mdash; the app never sees it.')}
 					${line('<strong>Files that are not documents, attached sources, or @-mentions &mdash; and your edit history &mdash; stay on your computer.</strong> A folder listing is never sent.')}
-					${line('Abstract sends <strong>no usage analytics today</strong>. When it ships it will ask first, and count actions &mdash; never your words.')}
+					${line('<strong>Usage analytics is off unless you turn it on</strong>, and even then it stays on this computer &mdash; it counts your actions, never your words, and forwarding it anywhere is not built yet.')}
 				</ul>
+				${analyticsConsentRow(analyticsEnabled)}
 				<p style="margin:0;font:400 12.5px/1.5 system-ui;color:#a3a8b2">The full plain-words page: <span style="font:500 12.5px/1.5 ui-monospace,monospace;color:#696e78">docs/27-data-flow-one-pager.md</span></p>
 			</div>
 		</details>
+	</div>`;
+}
+
+// The revocable analytics consent control (plan 36 / issue #134), living right beside the data-flow copy that
+// explains it. It reflects and flips the `abstract.analytics.enabled` setting through the host (data-msg), so
+// this row, the first-run moment and the Settings toggle are all the same one choice. Off is total: with it
+// off, IAnalyticsService captures nothing, so not a single event line is written.
+function analyticsConsentRow(enabled: boolean): string {
+	const on = enabled === true;
+	const state = on ? 'On &mdash; counting your actions locally' : 'Off &mdash; nothing is counted';
+	const btnLabel = on ? 'Turn off' : 'Turn on';
+	const btnArg = on ? 'off' : 'on';
+	const dot = on ? ACCENT : '#a3a8b2';
+	return `<div style="display:flex;align-items:center;gap:12px;margin:0 0 14px;padding:13px 15px;background:#f7f8fb;border:1px solid #eceef3;border-radius:12px">
+		<span style="width:8px;height:8px;flex:none;border-radius:50%;background:${dot}"></span>
+		<div style="flex:1">
+			<div style="font:600 12.5px/1.3 system-ui;color:#15171c">Anonymous usage analytics</div>
+			<div style="font:400 12px/1.4 system-ui;color:#696e78">${state}. Change it any time.</div>
+		</div>
+		<button data-msg="setAnalyticsConsent" data-arg="${btnArg}" style="flex:none;border:1px solid #d4d7dd;background:#fff;border-radius:9px;padding:8px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${btnLabel}</button>
 	</div>`;
 }
 

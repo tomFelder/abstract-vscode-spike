@@ -11,6 +11,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
 import { AgentPolicy, bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAgentRun, IAgentTrigger, ISkillRunSummary, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
@@ -86,6 +87,7 @@ interface IScreenEditorState {
 	// clickable link + copyable fallback so a fresh user reaches the sign-in page without a swallowed popup.
 	signInAuthorizeUrl?: string;
 	surveySaved?: boolean;
+	analyticsEnabled?: boolean;
 }
 
 // Weekday names for the Home failure line ("failed on Monday"). Local time - matches when the user saw it.
@@ -125,8 +127,14 @@ export class ScreenEditor extends EditorPane {
 		@IHostService private readonly _host: IHostService,
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IOpenerService private readonly _openerService: IOpenerService,
+		@IConfigurationService private readonly _configuration: IConfigurationService,
 	) {
 		super(ScreenEditor.ID, group, telemetryService, themeService, storageService);
+	}
+
+	/** The user's current analytics consent, read from the single source of truth (the Settings toggle). */
+	private _analyticsEnabled(): boolean {
+		return this._configuration.getValue<boolean>('abstract.analytics.enabled') === true;
 	}
 
 	protected createEditor(parent: HTMLElement): void {
@@ -169,12 +177,19 @@ export class ScreenEditor extends EditorPane {
 		// card shows the real state (which door serves you, today's included usage), no flash.
 		if (this._screen === 'settings') {
 			const status = await this._livingDocs.getModelProviderStatus();
-			this._state = { ...this._state, providerStatus: status, signInStage: status.signedIn ? 'signed-in' : 'signed-out' };
+			this._state = { ...this._state, providerStatus: status, signInStage: status.signedIn ? 'signed-in' : 'signed-out', analyticsEnabled: this._analyticsEnabled() };
 		}
 		this._inputDisposables.clear();
 		this._signInPoll.clear();
 		// Re-render when agent status / the document set changes (e.g. a run completes, a doc is created).
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._onDidChange()));
+		// Keep the Model access data-flow card's analytics-consent row live: if consent flips anywhere else (the
+		// first-run moment, VS Code Settings), re-read it so the row never shows a stale On/Off (issue #134).
+		if (this._screen === 'settings') {
+			this._inputDisposables.add(this._configuration.onDidChangeConfiguration(e => {
+				if (e.affectsConfiguration('abstract.analytics.enabled')) { void this._refreshSettings(); }
+			}));
+		}
 		this._mountWebview();
 	}
 
@@ -197,7 +212,7 @@ export class ScreenEditor extends EditorPane {
 	// Re-read the model door + usage (e.g. after a sign-in/sign-out or a metered call) and re-render Settings.
 	private async _refreshSettings(): Promise<void> {
 		const status = await this._livingDocs.getModelProviderStatus();
-		this._state = { ...this._state, providerStatus: status };
+		this._state = { ...this._state, providerStatus: status, analyticsEnabled: this._analyticsEnabled() };
 		this._render();
 	}
 
@@ -507,6 +522,12 @@ export class ScreenEditor extends EditorPane {
 			case 'submitSurvey':
 				void this._submitSurvey(message.daily ?? '', message.subs ?? '', message.weekly ?? '');
 				break;
+			// The analytics consent row on the data-flow card (plan 36 / issue #134): flip the single source of
+			// truth (the `abstract.analytics.enabled` setting). The consent contribution observes that change and
+			// drives IAnalyticsService, so turning it off here stops capture entirely - no event is written.
+			case 'setAnalyticsConsent':
+				void this._setAnalyticsConsent(message.arg === 'on');
+				break;
 		}
 	}
 
@@ -561,6 +582,17 @@ export class ScreenEditor extends EditorPane {
 	private async _submitSurvey(daily: string, subs: string, weekly: string): Promise<void> {
 		await this._livingDocs.submitOnboardingSurvey({ dailyDriverModel: daily, ownedSubscriptions: subs, weeklyOutput: weekly });
 		this._state = { ...this._state, surveySaved: true };
+		this._render();
+	}
+
+	// Persist the analytics consent choice to the `abstract.analytics.enabled` setting (the one source of truth
+	// the consent contribution mirrors into IAnalyticsService). Optimistically reflect it, then re-read so the
+	// row always shows the real stored value.
+	private async _setAnalyticsConsent(enabled: boolean): Promise<void> {
+		this._state = { ...this._state, analyticsEnabled: enabled };
+		this._render();
+		await this._configuration.updateValue('abstract.analytics.enabled', enabled);
+		this._state = { ...this._state, analyticsEnabled: this._analyticsEnabled() };
 		this._render();
 	}
 
