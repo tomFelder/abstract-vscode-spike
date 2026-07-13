@@ -5,6 +5,7 @@
 
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
+import { isRelativeImageSrc } from '../common/livingDocAssets.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
@@ -266,6 +267,9 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .prose table{border-collapse:collapse;margin:0 0 14px;font-size:13px}
 .prose th,.prose td{border:1px solid #ececf0;padding:7px 12px;text-align:left}
 .prose img{max-width:100%}
+/* A relative image the host could not read (issue #141): a visible broken state, never a silent gap. The
+ * <img> keeps its (unresolvable) relative src so its title carries "image not found: <path>" on hover. */
+.prose img.lwd-img-broken{min-width:120px;min-height:42px;outline:1px dashed #d7a3a0;outline-offset:-1px;background:#fdf2f2;border-radius:4px}
 /* Plain-Markdown ProseMirror editor (F2): the document IS the writing surface (reuses .prose type).
  * Layout (plan 21 iter 1 / C2): a flex row that centres a reading group of [30px provenance gutter][720px
  * reading column]. The gutter is a real reserved column (via the prose column's 30px left padding) so
@@ -355,6 +359,40 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 const RUNTIME = `const vscode = acquireVsCodeApi();
 const root = document.getElementById('lwd-root');
 let pmView = null, pmTimer = 0;
+// Image assets (issue #141). A request-id sequence + in-flight guard, plus caches keyed by the doc-relative
+// src so a relative image only round-trips to the host ONCE even though ProseMirror recreates its <img> on
+// every re-render: _imgCache holds resolved data URIs, _imgBroken marks paths the host could not read.
+let _imgSeq = 0;
+const _imgReq = Object.create(null), _imgPending = Object.create(null), _imgCache = Object.create(null), _imgBroken = Object.create(null);
+// isRelativeImageSrc is injected verbatim from common/livingDocAssets.ts (pure, self-contained) so the
+// classifier is the SAME code the host + unit tests use.
+${String(isRelativeImageSrc)}
+// Swap the DOM src of every relative <img> matching rel to its resolved data URI (display only - the PM
+// doc keeps the relative path so serialization still writes ![alt](assets/...)). Idempotent across re-renders.
+function applyResolvedImg(rel, dataUri){ const imgs = root.querySelectorAll('#pm-root img'); for (let i = 0; i < imgs.length; i++){ if (imgs[i].getAttribute('src') === rel){ imgs[i].classList.remove('lwd-img-broken'); imgs[i].removeAttribute('title'); imgs[i].src = dataUri; } } }
+// A path the host could not read: keep the (unresolvable) relative src so the broken state is visible, and
+// carry the reason in the title - never a silent skip.
+function markBrokenImg(rel){ const imgs = root.querySelectorAll('#pm-root img'); for (let i = 0; i < imgs.length; i++){ if (imgs[i].getAttribute('src') === rel){ imgs[i].classList.add('lwd-img-broken'); imgs[i].title = 'image not found: ' + rel; } } }
+// Find every relative <img> in the live doc and resolve it (from cache, or by asking the host once).
+function resolveRelativeImages(){ if (!root){ return; } const imgs = root.querySelectorAll('#pm-root img'); for (let i = 0; i < imgs.length; i++){ const rel = imgs[i].getAttribute('src'); if (!isRelativeImageSrc(rel)){ continue; } if (_imgBroken[rel]){ markBrokenImg(rel); continue; } const cached = _imgCache[rel]; if (cached){ applyResolvedImg(rel, cached); continue; } if (_imgPending[rel]){ continue; } _imgPending[rel] = true; const reqId = 'img' + (++_imgSeq); _imgReq[reqId] = rel; vscode.postMessage({ type: 'resolveImg', src: rel, reqId: reqId }); } }
+// Insert an image node at the current selection (undoable, and fires the normal save path via onChange),
+// then resolve its freshly-written relative src so it displays immediately.
+function insertImage(rel, alt){ if (!pmView || !window.LWDPM){ return; } try { const node = pmView.state.schema.nodes.image.create({ src: rel, alt: alt || null }); pmView.dispatch(pmView.state.tr.replaceSelectionWith(node, false)); } catch (e) {} resolveRelativeImages(); }
+// Image paste + drop (issue #141), capture-phase so an image File is intercepted BEFORE ProseMirror's own
+// paste/drop handling. We act ONLY when the payload carries image/* File(s) (files take priority over any
+// text flavours); every other payload falls straight through untouched, so text/HTML/Word paste is unaffected.
+function imageFilesFrom(dt){ const out = []; if (!dt || !dt.files){ return out; } for (let i = 0; i < dt.files.length; i++){ const f = dt.files[i]; if (f && f.type && f.type.indexOf('image/') === 0){ out.push(f); } } return out; }
+function inPm(node){ return !!(pmView && pmView.dom && (pmView.dom === node || pmView.dom.contains(node))); }
+function sendImageFile(f){ const reqId = 'img' + (++_imgSeq); const reader = new FileReader(); reader.onload = function(){ const res = String(reader.result || ''); const comma = res.indexOf(','); const b64 = comma >= 0 ? res.slice(comma + 1) : res; vscode.postMessage({ type: 'imageFile', name: f.name || '', mime: f.type || '', b64: b64, reqId: reqId }); }; reader.readAsDataURL(f); }
+function onImagePaste(e){ if (!inPm(e.target)){ return; } const imgs = imageFilesFrom(e.clipboardData); if (!imgs.length){ return; } e.preventDefault(); e.stopPropagation(); for (let i = 0; i < imgs.length; i++){ sendImageFile(imgs[i]); } }
+function onImageDrop(e){ if (!inPm(e.target)){ return; } const imgs = imageFilesFrom(e.dataTransfer); if (!imgs.length){ return; } e.preventDefault(); e.stopPropagation(); try { const at = pmView.posAtCoords({ left: e.clientX, top: e.clientY }); if (at && typeof at.pos === 'number'){ const sel = pmView.state.selection.constructor.near(pmView.state.doc.resolve(at.pos)); pmView.dispatch(pmView.state.tr.setSelection(sel)); pmView.focus(); } } catch (e2) {} for (let i = 0; i < imgs.length; i++){ sendImageFile(imgs[i]); } }
+document.addEventListener('paste', onImagePaste, true);
+document.addEventListener('drop', onImageDrop, true);
+// PM recreates <img> nodes on every re-render, so relative srcs must be re-resolved idempotently: observe the
+// persistent #lwd-root subtree and re-run resolution (debounced) whenever nodes/srcs change.
+let _imgObsTimer = 0;
+const _imgObserver = new MutationObserver(function(){ clearTimeout(_imgObsTimer); _imgObsTimer = setTimeout(resolveRelativeImages, 30); });
+_imgObserver.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
 // Per-key provenance for the hover tooltip (plan 29 iter 3), refreshed from every decoration payload so the
 // tooltip always reads the current lock state (a source edit that flips freshness re-renders the payload).
 let _prov = Object.create(null);
@@ -382,7 +420,7 @@ function showTip(el, key){ const p = _prov[key]; if (!p) { return; } if (!_tip) 
 	_tip.style.left = left + 'px'; _tip.style.top = top + 'px';
 }
 function hideTip(){ if (_tip) { _tip.classList.remove('show'); } }
-function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); focusPm(); } }
+function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); resolveRelativeImages(); focusPm(); } }
 // plan 16 iter 3 (decision 56): land the caret in the document on first mount so a freshly-opened (or
 // freshly-created blank) doc is immediately writable -- "one click -> cursor ready", no extra click to
 // start typing. Only fires on the initial mount (mount-once-then-message, decision 50), so re-renders
@@ -401,6 +439,7 @@ function applyUpdate(htmlStr, pmMd, spec, pmReset){
 			r.appendChild(live);
 			if (typeof pmReset === 'string' && window.LWDPM) { window.LWDPM.setDoc(pmView, pmReset); }
 			pmDeco(spec);
+			resolveRelativeImages();
 		} else if (r && window.LWDPM) { mountPm(pmMd, spec); }
 	} else if (pmView) { window.LWDPM.destroy(pmView); pmView = null; }
 }
@@ -479,7 +518,14 @@ root.addEventListener('focusout', e => {
 // The change's accept/reject widget carries data-approve="<id>"; reveal its surrounding diff/insert block.
 // A short timeout lets the just-applied decorations lay out before we measure/scroll.
 function focusChange(id){ setTimeout(function(){ try { const el = root.querySelector('[data-approve="' + id + '"]'); const block = el && el.closest('.editblock, .insertblock'); if (block) { block.scrollIntoView({ block: 'center', behavior: 'smooth' }); block.classList.add('lwd-focus-flash'); setTimeout(function(){ block.classList.remove('lwd-focus-flash'); }, 1600); } } catch (e) {} }, 30); }
-window.addEventListener('message', e => { const m = e.data; if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); } else if (m && m.type === 'focusChange') { focusChange(m.id); } });
+window.addEventListener('message', e => { const m = e.data;
+	if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); }
+	else if (m && m.type === 'focusChange') { focusChange(m.id); }
+	// The host wrote the pasted/dropped image beside the doc and returns its doc-relative path; insert it.
+	else if (m && m.type === 'imageSaved') { if (typeof m.relPath === 'string') { insertImage(m.relPath, m.alt); } }
+	// The host resolved a relative image to a data URI (or flagged it unreadable): cache + swap, or mark broken.
+	else if (m && m.type === 'imageResolved') { const key = (typeof m.src === 'string') ? m.src : _imgReq[m.reqId]; if (m.reqId) { delete _imgReq[m.reqId]; } if (key) { delete _imgPending[key]; if (m.dataUri) { _imgCache[key] = m.dataUri; applyResolvedImg(key, m.dataUri); } else { _imgBroken[key] = true; markBrokenImg(key); } } }
+});
 if (typeof window.__LWD_PM_MD === 'string') { mountPm(window.__LWD_PM_MD, window.__LWD_PM_DECO); }
 vscode.postMessage({ type: 'lwdReady' });`;
 

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { VSBuffer } from '../../../../base/common/buffer.js';
+import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { Limiter } from '../../../../base/common/async.js';
@@ -23,6 +23,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
@@ -141,7 +142,7 @@ const MODEL_MAX_TOKENS = 1024;
 // The plain-words message the proxy returns when the day's included usage is spent on the founder-funded
 // fallback (plan 35 iter 3; doc 18 section 2.1). Used as the fallback default when the proxy omits its own
 // prose, so the renderer always shows honest words (P5) rather than an error.
-const INCLUDED_USAGE_SPENT_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
+const INCLUDED_USAGE_SPENT_MESSAGE = 'You\'ve used today\'s included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.';
 
 // A model call that the proxy paused because the day's included usage is spent (stop_reason "pause"). It is
 // NOT a failure: the caller keeps any prose the proxy returned (the plain-words cap message), queues no
@@ -1832,6 +1833,50 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	shareDocument(resource: URI): void {
 		// Live shareable links aren't built yet; point the user at the portable export for now.
 		this._notify.info('A live shareable link is coming soon. Use Download to send a Markdown copy in the meantime.');
+	}
+
+	// Pasted/dropped images resolve back through this same doc-relative read, capped so a runaway file cannot
+	// balloon the webview message channel (the reply is a base64 data URI, ~4/3 the byte size).
+	private static readonly IMAGE_ASSET_CAP = 10 * 1024 * 1024;
+
+	async saveImageAsset(resource: URI, name: string, bytes: VSBuffer, mime?: string): Promise<string> {
+		// The #129 import layout: assets live beside the document under `assets/<doc-basename>/`.
+		const stem = basename(resource).replace(/\.md$/, '');
+		const folder = joinPath(dirname(resource), 'assets', stem);
+		const safe = sanitizeImageAssetName(name, mime);
+		let existing: string[] = [];
+		try {
+			existing = ((await this._files.resolve(folder)).children ?? []).map(c => basename(c.resource));
+		} catch {
+			// The assets folder does not exist yet; writeFile creates the parent chain.
+		}
+		const finalName = dedupeAssetName(safe, existing);
+		const target = joinPath(folder, finalName);
+		try {
+			await this._files.writeFile(target, bytes);
+		} catch (e) {
+			this._log.warn('[livingDocs] image asset write failed', e);
+			throw e;
+		}
+		return `assets/${stem}/${finalName}`;
+	}
+
+	async readImageAsset(resource: URI, src: string): Promise<{ readonly dataUri?: string; readonly error?: boolean }> {
+		try {
+			// The webview asks only for document-relative srcs (`assets/Doc/x.png`, `./logo.png`); resolve
+			// against the document's folder. joinPath normalises any `./` segments.
+			const target = joinPath(dirname(resource), src);
+			const content = await this._files.readFile(target);
+			if (content.value.byteLength > LivingDocsService.IMAGE_ASSET_CAP) {
+				this._log.warn('[livingDocs] image asset too large to inline', src, content.value.byteLength);
+				return { error: true };
+			}
+			return { dataUri: `data:${imageMimeForName(src)};base64,${encodeBase64(content.value)}` };
+		} catch (e) {
+			// Missing file (or unreadable): the editor shows a visible broken state - never a silent skip.
+			this._log.warn('[livingDocs] image asset read failed', src, e);
+			return { error: true };
+		}
 	}
 
 	async editBlock(resource: URI, blockId: string, text: string): Promise<void> {

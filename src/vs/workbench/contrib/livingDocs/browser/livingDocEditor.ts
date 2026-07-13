@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, Dimension } from '../../../../base/browser/dom.js';
+import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -123,7 +124,7 @@ export class LivingDocEditor extends EditorPane {
 		await apply();
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string }): void {
 		switch (message?.type) {
 			case 'lwdReady':
 				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
@@ -143,6 +144,20 @@ export class LivingDocEditor extends EditorPane {
 					// the next (non-typing) render.
 					this._proto = recordPmBody(this._proto, parseLivingDoc(text).body);
 					void this._livingDocs.saveRawText(this._resource, text, { silent: true });
+				}
+				break;
+			case 'imageFile':
+				// A pasted/dropped image File (issue #141): write it beside the document as an asset and reply
+				// with its doc-relative path so the webview inserts the image node at the caret.
+				if (this._resource && typeof message.name === 'string' && typeof message.b64 === 'string') {
+					void this._saveImageFile(message.reqId, this._resource, message.name, message.mime, message.b64);
+				}
+				break;
+			case 'resolveImg':
+				// The webview found a relative <img> src it cannot load itself; read it back as a data URI so the
+				// image displays while the PM doc keeps the relative path (a missing file replies with an error flag).
+				if (this._resource && typeof message.src === 'string') {
+					void this._resolveImage(message.reqId, this._resource, message.src);
 				}
 				break;
 			case 'refresh':
@@ -292,6 +307,27 @@ export class LivingDocEditor extends EditorPane {
 			this._sourcePeek = { ...this._sourcePeek, synced: true, syncedCount: changes.length };
 		}
 		this._render();
+	}
+
+	// Write a pasted/dropped image beside the document (issue #141) and post its doc-relative path back so the
+	// webview inserts the image node at the caret. The alt text defaults to the file's stem (no extension).
+	private async _saveImageFile(reqId: string | undefined, resource: URI, name: string, mime: string | undefined, b64: string): Promise<void> {
+		try {
+			const bytes = decodeBase64(b64);
+			const relPath = await this._livingDocs.saveImageAsset(resource, name, bytes, mime);
+			const alt = (name || '').replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
+			void this._webview?.postMessage({ type: 'imageSaved', reqId, relPath, alt });
+		} catch (e) {
+			// A failed asset write should not wedge the paste flow silently; the webview simply gets no insert.
+		}
+	}
+
+	// Resolve a relative image src to a data URI so it displays in the webview (which cannot load a path
+	// relative to the document). A missing/oversized file replies with an error flag so the webview can show a
+	// visible broken state rather than a silent gap.
+	private async _resolveImage(reqId: string | undefined, resource: URI, src: string): Promise<void> {
+		const result = await this._livingDocs.readImageAsset(resource, src);
+		void this._webview?.postMessage({ type: 'imageResolved', reqId, src, dataUri: result.dataUri });
 	}
 
 	private async _applyRaw(text: string): Promise<void> {
