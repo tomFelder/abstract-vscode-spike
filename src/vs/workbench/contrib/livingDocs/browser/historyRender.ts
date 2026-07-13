@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IAuditEntry, ISnapshotEntry, SnapshotVia } from '../common/livingDocsModel.js';
+import { buildHistoryTimeline } from '../common/livingDocsHistory.js';
 
 // The truthful History tab body (plan 26 iter 3), kept as a pure, side-effect-free render module (mirroring
 // livingDocRender / treeRail) so it stays unit-testable without pulling in the ViewPane graph. It renders
@@ -47,13 +48,6 @@ const SNAPSHOT_VIA: Record<SnapshotVia, { glyph: string; label: string }> = {
 	manual: { glyph: '&#9998;', label: 'Saved version' },
 };
 
-// A History timeline event: a saved version (restorable) or an audit change, unified on its timestamp so
-// the two interleave newest-first and the changes read under the version they followed.
-interface IHistoryEvent {
-	readonly at: number;
-	readonly html: (last: boolean) => string;
-}
-
 // The truthful History tab body: the live document title as header, a manual "Save version" affordance,
 // then real snapshots interleaved with the real audit entries recorded since each - all from THIS
 // document's lock. No fabricated v14/v13 sample; a calm one-line empty state when there is nothing yet.
@@ -79,28 +73,32 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 	const currentBadge = `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#1f7a44;background:#e7f6ec;border-radius:999px;padding:3px 6px">CURRENT</span>`;
 	const snapshotBadge = `<span style="font:500 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:3px 6px">SNAPSHOT</span>`;
 
-	// A version row (restorable snapshot): via glyph + label as the title, an amber SNAPSHOT badge for a
-	// pinned/published milestone, the relative time as meta, and a quiet Restore action.
-	const events: IHistoryEvent[] = [];
-	for (const s of snapshots) {
-		const via = SNAPSHOT_VIA[s.via];
-		const title = `<span style="color:oklch(0.55 0.13 255);font-size:12px">${via.glyph}</span> ${esc(s.label)}`;
-		const badge = s.via === 'publish' ? snapshotBadge : '';
-		const glyph = s.via === 'publish'
-			? `<span style="font-size:12px;color:oklch(0.66 0.16 45)">&#9733;</span>`
-			: dot('#cfd3da');
-		// A published snapshot names the real pins it froze (plan 32 iter 4), replacing the comp mock. Only
-		// shown when a real count was recorded; a 0-pin publish reads "no sources to pin" truthfully.
-		const body = s.via === 'publish' && typeof s.pinnedSources === 'number'
-			? (s.pinnedSources > 0 ? `${via.label} &middot; pinned ${s.pinnedSources} source version${s.pinnedSources === 1 ? '' : 's'}` : `${via.label} &middot; no sources to pin`)
-			: `${via.label}`;
-		events.push({ at: Date.parse(s.at) || 0, html: last => timelineRow(glyph, title, badge, body, relTime(s.at, now), last, restoreBtn(s.id)) });
-	}
-	// A change row (audit entry): the verb + block, the via + relative time. Not restorable on its own.
-	for (const e of audit) {
+	// The ordered, deduped timeline model (F19): snapshots interleaved with the audit changes, newest
+	// first, read from THIS document's lock - identical whether the entries were rehydrated from the
+	// on-disk `<doc>.lock.json` on a cold open or appended in-session. Each model event maps to one row.
+	const rowFns = buildHistoryTimeline(snapshots, audit).map(ev => {
+		if (ev.kind === 'version') {
+			// A version row (restorable snapshot): via glyph + label as the title, an amber SNAPSHOT badge for
+			// a pinned/published milestone, the relative time as meta, and a quiet Restore action.
+			const s = ev.snapshot;
+			const via = SNAPSHOT_VIA[s.via];
+			const title = `<span style="color:oklch(0.55 0.13 255);font-size:12px">${via.glyph}</span> ${esc(s.label)}`;
+			const badge = s.via === 'publish' ? snapshotBadge : '';
+			const glyph = s.via === 'publish'
+				? `<span style="font-size:12px;color:oklch(0.66 0.16 45)">&#9733;</span>`
+				: dot('#cfd3da');
+			// A published snapshot names the real pins it froze (plan 32 iter 4), replacing the comp mock. Only
+			// shown when a real count was recorded; a 0-pin publish reads "no sources to pin" truthfully.
+			const body = s.via === 'publish' && typeof s.pinnedSources === 'number'
+				? (s.pinnedSources > 0 ? `${via.label} &middot; pinned ${s.pinnedSources} source version${s.pinnedSources === 1 ? '' : 's'}` : `${via.label} &middot; no sources to pin`)
+				: `${via.label}`;
+			return (last: boolean) => timelineRow(glyph, title, badge, body, relTime(s.at, now), last, restoreBtn(s.id));
+		}
+		// A change row (audit entry): the verb + block, the via + relative time. Not restorable on its own.
+		const e = ev.entry;
 		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'approved' ? (e.via === 'restore' ? 'Restored' : 'Approved') : 'Auto-applied';
-		events.push({ at: Date.parse(e.time) || 0, html: last => timelineRow(dot('#e0e3ea'), verb, '', `${esc(e.docTitle)} / ${esc(e.blockId)}`, `${esc(e.via)} &middot; ${relTime(e.time, now)}`, last) });
-	}
+		return (last: boolean) => timelineRow(dot('#e0e3ea'), verb, '', `${esc(e.docTitle)} / ${esc(e.blockId)}`, `${esc(e.via)} &middot; ${relTime(e.time, now)}`, last);
+	});
 
 	// A real origin row for a template-generated document (plan 28, iter 3): the oldest row, at the base of
 	// the timeline, driven by the document's own `fromTemplate` provenance.
@@ -109,25 +107,22 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 		: undefined;
 
 	// Nothing recorded yet: one calm line, no fabricated versions.
-	if (!events.length && !originHtml) {
+	if (!rowFns.length && !originHtml) {
 		return head + `<div style="font:400 12.5px/1.6 system-ui;color:#a3a8b2;padding:8px 2px">No versions yet - changes you approve will appear here.</div>`;
 	}
-
-	// Newest first; the top row is the live state, so it carries the CURRENT badge.
-	events.sort((a, b) => b.at - a.at);
 
 	// Cap the display at the 20 most recent rows (the lock keeps the full record); a mono line names the
 	// remainder rather than silently truncating.
 	const CAP = 20;
-	const shown = events.slice(0, CAP);
-	const hidden = events.length - shown.length;
+	const shown = rowFns.slice(0, CAP);
+	const hidden = rowFns.length - shown.length;
 
 	const rows: string[] = [];
 	// The current live state marker sits above the recorded versions/changes (CURRENT badge, no Restore).
 	rows.push(timelineRow(dot('oklch(0.55 0.13 255)'), 'Current version', currentBadge, 'The document as it is right now.', 'live', false));
-	shown.forEach((ev, i) => {
+	shown.forEach((rowFn, i) => {
 		const last = i === shown.length - 1 && hidden === 0 && !originHtml;
-		rows.push(ev.html(last));
+		rows.push(rowFn(last));
 	});
 	if (hidden > 0) {
 		rows.push(`<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8;padding:2px 2px 16px 31px">${hidden} earlier ${hidden === 1 ? 'entry' : 'entries'}</div>`);
