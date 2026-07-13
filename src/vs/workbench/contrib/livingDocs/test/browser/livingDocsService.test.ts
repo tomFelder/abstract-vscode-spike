@@ -162,6 +162,10 @@ const API_AUTH_MD = [
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
 const BOARD = URI.file('/ws/Board Note.md');
 const README = URI.file('/ws/Team Notes.md');
+// A closed loopback port for the model proxy URL: the STREAMING model path (a raw `fetch`) fails fast
+// against it and falls back to the mocked buffered call, so a real proxy on the default port cannot leak
+// into the fan-out tests. The buffered call is matched by the mock via its `/v1/messages` path either way.
+const DEAD_PROXY = 'http://127.0.0.1:49999';
 const API = URI.file('/ws/Ecosystem.md');
 const MCP = URI.file('/ws/Pipeline Brief.md');
 const APIAUTH = URI.file('/ws/Revenue Signal.md');
@@ -182,7 +186,7 @@ suite('LivingDocsService', () => {
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -235,7 +239,11 @@ suite('LivingDocsService', () => {
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		// Most settings the service reads are booleans that default to true (useModel); the fan-out context
 		// budget (plan 30, track 3) is a number a test can lower to force multi-batch packing over few docs.
-		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : true) } as unknown as IConfigurationService;
+		// Most settings the service reads default to true (booleans like useModel); the fan-out budget is a number
+		// a test can lower; the model proxy URL lets a test point the STREAMING model path (a raw `fetch`, not the
+		// mocked request service) at a dead port, so the streaming call fails fast and falls back to the mocked
+		// buffered call - keeping the fan-out tests hermetic regardless of any real proxy on the default port.
+		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? opts.proxyUrl : true) } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
@@ -1112,6 +1120,7 @@ suite('LivingDocsService', () => {
 	test('with a working set, one chat instruction fans out edits to every document via a single model call (D-C)', async () => {
 		const service = createService([], {
 			boardNote: true,
+			proxyUrl: DEAD_PROXY,
 			model: multiReply('Changed blue to red across all three.', [
 				{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] },
 				{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum is now red-themed.', rationale: 'r' }] },
@@ -1148,6 +1157,7 @@ suite('LivingDocsService', () => {
 		const boardBig = BOARD_MD.replace('Momentum is steady this week.', `Momentum is steady this week.\n\n${padBlocks}`);
 		const service = createService([], {
 			boardNote: true,
+			proxyUrl: DEAD_PROXY,
 			fanoutBudget: 2000,
 			modelSequence: [
 				multiReply('Weekly done.', [{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] }]),
@@ -1189,6 +1199,7 @@ suite('LivingDocsService', () => {
 		const bigBody = `---\ntitle: Team Notes\n---\n\n## Team Notes\n\n${'padding sentence to blow the budget. '.repeat(400)}\n`;
 		const service = createService([], {
 			fanoutBudget: 2000,
+			proxyUrl: DEAD_PROXY,
 			modelSequence: [
 				multiReply('Weekly done.', [{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] }]),
 			],
@@ -1207,6 +1218,76 @@ suite('LivingDocsService', () => {
 		assert.deepStrictEqual(progress?.oversizeDocIds, [README.toString()], 'the oversize document is flagged, not dropped silently');
 		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
 		assert.ok(assistant.steps?.some(s => /too large for this run/.test(s.label)), 'the oversize document reads "too large for this run"');
+	});
+
+	// --- F14 (issue #123): a model outage on the fan-out path must never render as "no changes proposed" ---
+
+	test('a fan-out with the model down names EVERY failed doc + carries them for surgical retry, never an all-clear (F14)', async () => {
+		// /healthz is healthy (model probes available) but every /v1/messages errors (the outage): the fan-out
+		// must record each target document as failed, surface a NAMED unreachable error listing them, queue NO
+		// proposals, and never read as a silent "no changes proposed". The run screen sees the same failed set.
+		const service = createService([], { boardNote: true, proxyUrl: DEAD_PROXY, model: { error: { message: 'model proxy unreachable' } } });
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+
+		await service.sendChatMessage(WEEKLY, 'tighten every note across the project');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(turn.failedDocs && turn.failedDocs.length === 3, 'all three fan-out documents are recorded as failed');
+		assert.deepStrictEqual(
+			[...turn.failedDocs!.map(d => d.id)].sort(),
+			[WEEKLY.toString(), BOARD.toString(), README.toString()].sort(),
+			'the failed set is exactly the working set',
+		);
+		assert.ok(/The agent model is not reachable/.test(turn.content), 'the turn names the model as unreachable');
+		assert.ok(/Retry failed/.test(turn.content), 'the turn offers the surgical retry');
+		assert.ok(!/no changes|nothing to change|did not find anything/i.test(turn.content), 'never a silent all-clear');
+		assert.strictEqual(service.getAllPending().length, 0, 'nothing is proposed when the model was down');
+		// The run screen reads the failed docs so their tiles render "model unreachable", not "no change".
+		const progress = service.getFanoutProgress(WEEKLY);
+		assert.deepStrictEqual(
+			[...(progress?.failedDocIds ?? [])].sort(),
+			[WEEKLY.toString(), BOARD.toString(), README.toString()].sort(),
+			'the fan-out progress carries the failed docs for the run screen',
+		);
+	});
+
+	test('retryFailedDocs re-runs ONLY the failed documents (surgical retry, F14)', async () => {
+		// First run: the model is down for the fan-out, so all three docs fail. Then the model recovers and the
+		// surgical retry re-runs ONLY the failed docs - proven by the retry's single model call carrying just the
+		// failed documents' bodies, and by proposals now landing for them.
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				// Calls 1..N (the down run + its single silent retry per batch) all error.
+				{ error: { message: 'model proxy unreachable' } },
+				{ error: { message: 'model proxy unreachable' } },
+				// The retry run (model recovered) returns real edits across the three documents.
+				multiReply('Recovered.', [
+					{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth recovered.', rationale: 'r' }] },
+					{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum recovered.', rationale: 'r' }] },
+				]),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+		await service.sendChatMessage(WEEKLY, 'tighten every note');
+		assert.ok(service.getChatMessages(WEEKLY).at(-1)!.failedDocs?.length === 3, 'the first run failed all three');
+
+		// Do NOT reset lastModelCalls (the mock indexes modelSequence by it); lastModelBody holds the LAST call.
+		lastModelBody = undefined;
+		service.retryFailedDocs(WEEKLY);
+		await new Promise(r => setTimeout(r, 0));
+		// Drain the async retry delivery.
+		for (let i = 0; i < 50 && service.isChatBusy(WEEKLY); i++) { await new Promise(r => setTimeout(r, 5)); }
+
+		// The retry sends a single fan-out call whose body contains only the failed documents (all three here).
+		assert.ok((lastModelBody ?? '').includes('Weekly Operating Summary'), 'the retry re-runs the failed Weekly');
+		assert.ok((lastModelBody ?? '').includes('Board Note'), 'the retry re-runs the failed Board');
+		// Proposals now land for the recovered documents, and the last turn is no longer a failure.
+		assert.ok(service.getAllPending().length >= 1, 'the recovered retry lands proposals');
+		assert.ok(!service.getChatMessages(WEEKLY).at(-1)!.failedDocs, 'the retry turn is not a failure once recovered');
 	});
 
 	test('with NO working set, chat still edits only the active document (backwards compatible, D-B)', async () => {

@@ -25,6 +25,7 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
+import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
@@ -141,7 +142,7 @@ const MODEL_MAX_TOKENS = 1024;
 // The plain-words message the proxy returns when the day's included usage is spent on the founder-funded
 // fallback (plan 35 iter 3; doc 18 section 2.1). Used as the fallback default when the proxy omits its own
 // prose, so the renderer always shows honest words (P5) rather than an error.
-const INCLUDED_USAGE_SPENT_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
+const INCLUDED_USAGE_SPENT_MESSAGE = 'You\'ve used today\'s included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.';
 
 // A model call that the proxy paused because the day's included usage is spent (stop_reason "pause"). It is
 // NOT a failure: the caller keeps any prose the proxy returned (the plain-words cap message), queues no
@@ -2585,12 +2586,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		void this._deliverChatReply(resource, last.content, mentions);
 	}
 
+	retryFailedDocs(resource: URI): void {
+		const id = resource.toString();
+		const history = this._chats.get(id);
+		// Never retry while a reply is in flight, or when there is nothing to retry.
+		if (!history || !history.length || this._chatBusy.has(id)) { return; }
+		// The retry re-runs ONLY the documents the last fan-out failed for (F14, issue #123). The failed set is
+		// recorded on the last assistant turn; without it (a clean run, or a whole-turn failure) there is nothing
+		// surgical to retry - retryChat handles the plain single-turn Retry.
+		const lastTurn = history[history.length - 1];
+		if (lastTurn.role !== 'assistant' || !lastTurn.failedDocs || !lastTurn.failedDocs.length) { return; }
+		const failedIds = lastTurn.failedDocs.map(d => d.id);
+		// Drop the failed assistant turn(s) so the retry REPLACES them (the user turn is kept and re-run - no
+		// duplicate user message), then re-deliver restricted to just the failed documents.
+		while (history.length && history[history.length - 1].role === 'assistant') { history.pop(); }
+		const last = history[history.length - 1];
+		if (!last || last.role !== 'user') { return; }
+		const mentions = last.mentions ? [...last.mentions] : this._parseMentions(resource, last.content);
+		void this._deliverChatReply(resource, last.content, mentions, failedIds);
+	}
+
 	// The shared chat-turn delivery (plan 27 iters 2-3): sets busy, opens a per-document cancellation source,
 	// streams the reply into a live turn (onDelta appends prose, onStep appends tool steps as they settle),
 	// then pushes the final assistant turn. A cancel keeps the salvaged prose as a muted "stopped" turn
 	// (D27-B); a genuine failure pushes a "failed" turn the rail offers Retry on. The user turn is already the
 	// last history entry (pushed by sendChatMessage, or kept by retryChat), so the transcript reads correctly.
-	private async _deliverChatReply(resource: URI, trimmed: string, mentions: string[]): Promise<void> {
+	private async _deliverChatReply(resource: URI, trimmed: string, mentions: string[], restrictToDocIds?: readonly string[]): Promise<void> {
 		const id = resource.toString();
 		const history = this._chats.get(id) ?? [];
 		this._chats.set(id, history);
@@ -2620,13 +2641,31 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				history.push({ role: 'assistant', via: 'fallback', content: 'Open a document in the editor to chat about it - I answer using the document and its sources.' });
 				return;
 			}
+			// A working set fans the instruction across every doc in one model call (plan 18, decision 62);
+			// with no set the chat stays single-doc against the active document (decision 61). A surgical retry
+			// (F14, issue #123) restricts the working set to the documents that failed last time, so only they
+			// re-run - a re-tried doc is looked up in the current working set by its resource id.
+			let workingSet = this.getWorkingSet(resource);
+			if (restrictToDocIds && restrictToDocIds.length) {
+				const keep = new Set(restrictToDocIds);
+				workingSet = workingSet.filter(w => keep.has(w.resource.toString()));
+			}
 			if (!await this._hasModel()) {
+				// A fan-out with the model down must name EVERY target document as failed and offer "Retry failed"
+				// (F14, issue #123) - never the single-doc guidance line, which would hide the fan-out's failures
+				// and (on the run screen) let the swarm read as a silent all-clear. The single-doc path keeps the
+				// existing plain-words guidance turn (there are no fan-out documents to list).
+				if (workingSet.length) {
+					const failedDocs: IFanoutFailedDoc[] = workingSet.map(w => ({ id: w.resource.toString(), title: w.title }));
+					const outcome = summarizeFanoutRun({ proposedCount: 0, failedDocs });
+					this._fanoutProgress.set(id, { batchIndex: 0, batchCount: 0, oversizeDocIds: [], failedDocIds: failedDocs.map(d => d.id) });
+					this._onDidChange.fire();
+					history.push({ role: 'assistant', via: 'fallback', content: outcome.content, failedDocs: outcome.failedDocs });
+					return;
+				}
 				history.push({ role: 'assistant', via: 'fallback', content: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this document and its sources.' });
 				return;
 			}
-			// A working set fans the instruction across every doc in one model call (plan 18, decision 62);
-			// with no set the chat stays single-doc against the active document (decision 61).
-			const workingSet = this.getWorkingSet(resource);
 			const reply = workingSet.length
 				? await this._chatRespondMulti(state, trimmed, mentions, workingSet, onDelta, onStep, cts.token)
 				: await this._chatRespond(state, trimmed, mentions, onDelta, onStep, cts.token);
@@ -2640,8 +2679,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			} else if (isModelPausedError(e)) {
 				// The day's included usage is spent (plan 35 iter 3): show the plain-words cap message as a calm
 				// turn - NOT a failure, NOT retryable (retrying just pauses again), and queue no proposals. It
-				// resumes on its own at day rollover, or immediately once the user signs in with ChatGPT.
-				history.push({ role: 'assistant', via: 'fallback', content: e.message });
+				// resumes on its own at day rollover, or immediately once the user signs in with ChatGPT. The
+				// `paused` marker lets the run screen render a paused fan-out honestly (F14 item 3) - never a
+				// failure and never an all-clear.
+				history.push({ role: 'assistant', via: 'fallback', content: e.message, paused: true });
 			} else {
 				this._log.info('[livingDocs] chat failed, honest fallback', e instanceof Error ? e.message : String(e));
 				// A genuine model error offers Retry (plan 27 iter 3): the rail re-sends this same user message.
@@ -2763,8 +2804,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// swarm still shows which documents were too large. Fires onDidChange so the run screen re-renders.
 		const anchorId = active.uri.toString();
 		const oversizeDocIds = plan.oversize.map(d => d.id);
+		// Documents whose batch's model call failed (F14, issue #123): collected as the run proceeds so a model
+		// outage over some (or all) batches surfaces as a NAMED failure listing these documents, never a silent
+		// "no changes". Each doc is in exactly one batch, so a failed batch attributes failure to exactly its docs.
+		const failedDocs: IFanoutFailedDoc[] = [];
 		const publishProgress = (batchIndex: number) => {
-			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds });
+			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id) });
 			this._onDidChange.fire();
 		};
 		publishProgress(0);
@@ -2775,6 +2820,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 
 		let anyReply = '';
+		// The plain-words budget-cap message if the run pauses mid-fan-out (spent daily budget). When set, the
+		// loop stops running further batches but keeps every proposal already queued - the run pauses, it does
+		// NOT fail and is NOT an all-clear (F14 item 3; plan 35 iter 3).
+		let pausedMessage: string | undefined;
 		// Run the batches in order. Each doc appears in exactly ONE batch (uniqueness by construction), so the
 		// per-batch keyed replies simply concatenate into the pending queue with no double-count or drop. The
 		// first batch STREAMS its prose into the live turn (onDelta); later batches use the buffered call (no
@@ -2787,9 +2836,26 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (plan.batchCount > 1) { addStep({ label: `Batch ${b + 1} of ${plan.batchCount} (${batch.docs.length} documents)`, status: 'done' }); }
 			const docSections = batch.docs.map(d => d.body).join('\n\n');
 			const user = `Working set (${batch.docs.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
-			const raw = b === 0
-				? await this._chatModelCall(system, user, onDelta, token)
-				: await this._callModel(system, user);
+			let raw: string;
+			try {
+				raw = b === 0
+					? await this._chatModelCall(system, user, onDelta, token)
+					: await this._callModel(system, user);
+			} catch (e) {
+				// A cancel is the user stopping the whole run - salvage the streamed prose (D27-B), never a failure.
+				if (isCancellationError(e)) { throw e; }
+				// The day's included usage is spent (plan 35 iter 3): keep every proposal queued so far, stop the
+				// fan-out, and surface the plain-words cap message as a calm pause - NOT a failure, NOT an all-clear.
+				if (isModelPausedError(e)) { pausedMessage = e.message; publishProgress(0); break; }
+				// A genuine model outage/error for THIS batch (F14, issue #123): attribute the failure to exactly
+				// this batch's documents, record it for the honest named error + surgical retry, and KEEP GOING so
+				// later batches can still land their proposals (a partial success), instead of aborting the whole run.
+				this._log.info('[livingDocs] fan-out batch failed, recording failed docs', e instanceof Error ? e.message : String(e));
+				for (const d of batch.docs) { failedDocs.push({ id: d.id, title: d.title }); }
+				addStep({ label: `${batch.docs.map(d => d.title).join(', ')}: model unreachable`, status: 'queued' });
+				publishProgress(b + 1);
+				continue;
+			}
 			const json = parseMultiChatResponse(raw);
 			if (json.reply && !anyReply) { anyReply = json.reply; }
 			// Match each returned doc entry to a document IN THIS BATCH by title, then queue its edits/inserts
@@ -2811,15 +2877,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				}
 			}
 		}
-		// Mark the fan-out as no longer on a live batch (batchIndex 0) while keeping the batchCount + oversize
-		// set, so the settled run screen still reads "N documents too large" without a spurious live "batch K".
-		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds });
+		// Mark the fan-out as no longer on a live batch (batchIndex 0) while keeping the batchCount + oversize +
+		// failed sets, so the settled run screen still reads "N too large" / "N failed" without a spurious "batch K".
+		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id) });
 
-		const content = anyReply || (proposedIds.length ? '' : 'I did not find anything to change across those documents.');
+		// Aggregate the run honestly (F14, issue #123): a pause shows the cap message; any failed documents show a
+		// named error listing them (with the proposals that DID land, on a partial success) + "Retry failed"; a
+		// clean run keeps the existing reply / neutral no-change line. The all-clear is reachable ONLY when there
+		// were no failures and no pause, so a model outage can never render as "no changes proposed".
+		const outcome = summarizeFanoutRun({ proposedCount: proposedIds.length, failedDocs, reply: anyReply, pausedMessage });
 		return {
-			role: 'assistant', via: 'model', content,
+			role: 'assistant',
+			via: outcome.isError || outcome.isPaused ? 'fallback' : 'model',
+			content: outcome.content,
 			steps: steps.length ? steps : undefined,
 			proposedIds: proposedIds.length ? proposedIds : undefined,
+			failedDocs: outcome.failedDocs.length ? outcome.failedDocs : undefined,
+			paused: outcome.isPaused || undefined,
 		};
 	}
 
