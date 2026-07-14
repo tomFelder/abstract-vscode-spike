@@ -686,7 +686,7 @@ export interface ILivingDocsService {
 	getProjectDisplayName(): string | undefined;
 
 	/** Prompt for and open a local folder as the workspace (the on-ramp; FSA on web, native dialog on desktop). */
-	openFolder(): Promise<boolean>;
+	openFolder(beforeOpen?: () => void | Promise<void>): Promise<boolean>;
 
 	/**
 	 * Create a new blank Living Document and return its resource. With a `name` the file is born titled

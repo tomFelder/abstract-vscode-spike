@@ -51,7 +51,7 @@ suite('livingDocs screenRender', () => {
 
 	test('onboarding open step shows the intro, the consent status and the See it work action', () => {
 		const html = renderScreenHtml('onboarding', { ...state, onboarding: { step: 'open', consentEnabled: true, consentChosen: true, hasModel: true, demoGenerated: false } });
-		assert.ok(html.includes('Two wows, ten minutes, no setup'), 'intro headline');
+		assert.ok(html.includes('Two Wows, Ten Minutes, No Setup'), 'intro headline');
 		assert.ok(/data-msg="onbSeeItWork"/.test(html), 'has the See it work action');
 		assert.ok(html.includes('never your words'), 'shows the plain-words consent line');
 		assert.ok(html.includes('Step 1 of 7'), 'shows funnel progress');
