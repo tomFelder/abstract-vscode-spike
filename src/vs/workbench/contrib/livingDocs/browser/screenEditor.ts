@@ -827,21 +827,29 @@ export class ScreenEditor extends EditorPane {
 		// skipped, not no-change. Never treat an in-flight run as stopped.
 		const chat = anchor ? this._livingDocs.getChatMessages(anchor) : [];
 		const stopped = !inFlight && chat.length > 0 && !!chat[chat.length - 1].stopped;
+		// A settled run PAUSED on the spent daily budget (map-D15; F14 item 3) when the anchor's last turn is a
+		// "paused" cap turn. A paused run's not-yet-run documents are honestly skipped (they never ran) - like a
+		// stop, but the heading reads the calm plain-words pause, never a failure and never an all-clear.
+		const paused = !inFlight && chat.length > 0 && !!chat[chat.length - 1].paused;
 		// Fan-out batch progress (plan 30, track 3, D30-B): which batch of how many is running and which docs
 		// were too large for the budget. Oversize docs are flagged on their tiles (never sent, never dropped),
 		// and are excluded from the live "working" overlay so an oversize tile reads "too large", not spinning.
 		const fanout = anchor ? this._livingDocs.getFanoutProgress(anchor) : undefined;
 		const oversizeIds = fanout?.oversizeDocIds ?? [];
-		const oversize = new Set(oversizeIds);
-		const summary = summariseProjectRun(docs, pending, stopped, oversizeIds);
-		const working = inFlight ? docs.map(d => d.docId).filter(id => !oversize.has(id)) : [];
+		// Documents the model could not be reached for (F14, issue #123): their tile reads a named "model
+		// unreachable" state, never a silent "no change", and they are excluded from the live working overlay
+		// (they failed, they are not still spinning).
+		const failedIds = fanout?.failedDocIds ?? [];
+		const failedOrOversize = new Set([...oversizeIds, ...failedIds]);
+		const summary = summariseProjectRun(docs, pending, stopped || paused, oversizeIds, failedIds);
+		const working = inFlight ? docs.map(d => d.docId).filter(id => !failedOrOversize.has(id)) : [];
 		// Decisions column (23.4): group the LIVE pending changes by their source grounding. Restrict to
 		// changes for documents in this run's tile set so a stale change from another surface never leaks
 		// into the run's decisions (mirrors summariseProjectRun's tile-set restriction).
 		const runDocIds = new Set(docs.map(d => d.docId));
 		const decisions = groupDecisions(pending.filter(c => runDocIds.has(c.docId)));
 		const batch = fanout ? { index: fanout.batchIndex, count: fanout.batchCount } : undefined;
-		return { ...run, inFlight, stopped, summary, working, decisions, batch };
+		return { ...run, inFlight, stopped, paused, summary, working, decisions, batch };
 	}
 
 	layout(dimension: Dimension): void {

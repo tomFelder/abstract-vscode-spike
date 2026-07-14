@@ -151,6 +151,12 @@ export interface IProjectRunScreenState {
 	 */
 	readonly stopped?: boolean;
 	/**
+	 * True when the run paused mid-flight on the spent daily budget (map-D15; F14 item 3): the swarm's
+	 * not-yet-run tiles render as honest `skipped` (they never ran) and the heading reads the calm plain-words
+	 * pause - finished proposals stay reviewable, and the run renders as neither a failure nor an all-clear.
+	 */
+	readonly paused?: boolean;
+	/**
 	 * The whole-project fan-out summary derived from `summariseProjectRun(listDocuments, getAllPending())`
 	 * (plan 23, C4): one tile per project document + the real bottom-bar totals. Absent until the run's
 	 * document set has been fetched. The `working` (spinner) tile state is a live overlay the renderer
@@ -1226,9 +1232,11 @@ function renderProjectRun(state: IScreenState): string {
 	// (plan 27 iter 4) instead; no live/stopped run => no pill.
 	const livePill = run?.inFlight
 		? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#4650b8"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 1.6s ease-in-out infinite"></span>Live</span>`
-		: run?.stopped
-			? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f6f7f9;border:1px solid #e6e8ec;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#868b95"><span style="width:6px;height:6px;border-radius:50%;background:#b4332f"></span>Stopped</span>`
-			: '';
+		: run?.paused
+			? `<span style="display:inline-flex;align-items:center;gap:6px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#9a6b16"><span style="width:6px;height:6px;border-radius:50%;background:#d9a62b"></span>Paused</span>`
+			: run?.stopped
+				? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f6f7f9;border:1px solid #e6e8ec;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#868b95"><span style="width:6px;height:6px;border-radius:50%;background:#b4332f"></span>Stopped</span>`
+				: '';
 	const runTopBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
 		<span style="width:20px;height:20px;border-radius:6px;background:#3b4d8f;display:flex;align-items:center;justify-content:center;color:#fff;font:600 10px/1 system-ui">${projectAv.text}</span>
 		<span style="font:600 13px/1 system-ui;color:#1a1c20">${esc(folderName)}</span><span style="color:#cfd3da">/</span>
@@ -1284,7 +1292,7 @@ function renderProjectRun(state: IScreenState): string {
 	const runBody = summary
 		? `<div style="flex:1;display:flex;overflow:hidden;min-height:0">
 		${decisionsRail(run?.decisions ?? [], run?.source, !!run?.inFlight)}
-		${swarmPane(summary, workingSet, !!run?.stopped)}
+		${swarmPane(summary, workingSet, !!run?.stopped, !!run?.paused)}
 	</div>`
 		: idleBody;
 
@@ -1302,13 +1310,22 @@ function renderProjectRun(state: IScreenState): string {
 	const skippedDocs = summary?.skippedDocs ?? 0;
 	// Documents too large for the fan-out budget (plan 30, track 3) are reported as their own honest bucket.
 	const oversizeDocs = summary?.oversizeDocs ?? 0;
+	// Documents the model could not be reached for (F14, issue #123) are their own honest bucket - NEVER folded
+	// into "unchanged", so a model outage can never read as a silent all-clear on the run's bottom bar.
+	const failedDocs = summary?.failedDocs ?? 0;
 	const numeral = (n: number) => `<strong style="font:500 20px/1 system-ui;color:#14161a">${n}</strong>`;
 	const tailParts = [`&middot; ${workingCount} working`, `&middot; ${unchangedDocs} unchanged`];
 	if (skippedDocs) { tailParts.push(`&middot; ${skippedDocs} skipped`); }
 	if (oversizeDocs) { tailParts.push(`&middot; ${oversizeDocs} too large`); }
+	if (failedDocs) { tailParts.push(`&middot; <span style="color:#9a6b16">${failedDocs} failed</span>`); }
 	const tail = tailParts.join(' ');
+	// The lead line stays honest under a model outage: when documents failed and nothing was proposed, it names
+	// the model as unreachable (F14) instead of the false "0 changes proposed in 0 documents" all-clear.
+	const lead = failedDocs > 0 && changed === 0
+		? `<span style="font:400 14px/1 system-ui;color:#9a6b16">The agent model is not reachable &mdash; ${numeral(failedDocs)} documents could not be processed</span>`
+		: `<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>`;
 	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid #eef0f3;background:#fbfbfc;display:flex;align-items:center;padding:0 28px;gap:18px">
-		<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>
+		${lead}
 		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${tail}</span>
 		<button data-msg="reviewProject" style="margin-left:auto;font:600 14px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:10px;padding:12px 22px;cursor:pointer">Review Across the Project &#8594;</button>
 	</div>`;
@@ -1366,7 +1383,7 @@ function decisionsRail(decisions: readonly IDecisionGroup[], source: string | un
 // project document. Every tile's status comes from the REAL run: `changed` (accent tint + check +
 // `N changes`) from `summariseProjectRun`, `working` (spinner + `reviewing...`) layered on live while
 // the fan-out is in flight, and settled `no-change` (muted `no change`). Nothing is fabricated.
-function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, stopped = false): string {
+function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, stopped = false, paused = false): string {
 	const total = summary.tiles.length;
 	// A document is "done" once it has settled - it is no longer in the live working set. Progress counts
 	// settled docs (X) against the whole project (Y), matching the comp's "21 / 24 done".
@@ -1375,11 +1392,20 @@ function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, st
 	const busy = working.size > 0;
 	// A stopped run reports honestly (plan 27 iter 4): how many settled with a change vs were skipped, not
 	// "every document read" (which never happened). A live run and a fully-completed run keep their headings.
+	// A PAUSED run (spent daily budget, map-D15 / F14 item 3) reads the calm plain-words pause - finished
+	// proposals stay reviewable, not-yet-run docs are skipped, and it is neither a failure nor an all-clear.
+	// A settled run where the model was unreachable for some documents (F14, issue #123) must NOT read
+	// "every document read across the project" (a false all-clear); it names the outage honestly instead.
+	const failedCount = summary.failedDocs;
 	const heading = busy
 		? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Orchestrating ${total} sub-agents</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">reading every document in parallel</span>`
-		: stopped
-			? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run stopped</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed before you stopped &middot; ${summary.skippedDocs} skipped</span>`
-			: `<span style="font:600 15px/1 system-ui;color:#1a1c20">${total} sub-agents finished</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">every document read across the project</span>`;
+		: paused
+			? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run paused &mdash; today's included usage is spent</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed &middot; the rest resume tomorrow &middot; finished proposals are ready to review</span>`
+			: stopped
+				? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run stopped</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed before you stopped &middot; ${summary.skippedDocs} skipped</span>`
+				: failedCount > 0
+					? `<span style="font:600 15px/1 system-ui;color:#9a6b16">Model unreachable for ${failedCount} of ${total} documents</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} changed &middot; ${failedCount} failed &mdash; retry the failed documents from Chat</span>`
+					: `<span style="font:600 15px/1 system-ui;color:#1a1c20">${total} sub-agents finished</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">every document read across the project</span>`;
 	const progress = `<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">${heading}<span style="margin-left:auto;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f">${done} / ${total} done</span></div>
 		<div style="height:5px;background:#e9eaee;border-radius:3px;margin-bottom:18px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${ACCENT};border-radius:3px"></div></div>`;
 	const tiles = summary.tiles.map(t => swarmTile(t.docId, t.docTitle, t.status, t.changeCount, working.has(t.docId))).join('');
@@ -1421,6 +1447,15 @@ function swarmTile(_docId: string, title: string, status: ProjectRunDocStatus, c
 		return `<div style="background:#fdf6ec;border:1px solid #f0d9a8;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
 			<div style="display:flex;align-items:center;gap:6px"><span style="color:#9a6b16;font-size:11px">&#9888;</span><span style="${nameStyle};color:#7a5a13">${name}</span></div>
 			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16">too large for this run</span>
+		</div>`;
+	}
+	// A failed tile (F14, issue #123): the model could not be reached for this document during the run. A red
+	// border + a warning glyph + the honest "model unreachable" label tells the user WHY it produced nothing,
+	// so a model outage never reads as a silent "no change" all-clear. Retry from Chat re-runs just the failed docs.
+	if (status === 'failed') {
+		return `<div style="background:#fdf2f1;border:1px solid #ecc9c6;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:#b4332f;font-size:11px">&#9888;</span><span style="${nameStyle};color:#8a2f2b">${name}</span></div>
+			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#b4332f">model unreachable</span>
 		</div>`;
 	}
 	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">

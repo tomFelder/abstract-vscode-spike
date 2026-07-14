@@ -7,6 +7,7 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { IFanoutFailedDoc } from './fanoutOutcome.js';
 import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ISourceGrid } from './sourceGrid.js';
 
@@ -260,6 +261,16 @@ export interface IChatMessage {
 	// an inline Retry that re-sends the same user message (plan 27 iter 3). Distinct from the no-model /
 	// no-document fallbacks, which are honest guidance the user cannot usefully retry.
 	readonly failed?: boolean;
+	// The documents a whole-project / working-set fan-out could not reach the model for (F14, issue #123).
+	// When present, the rail renders a NAMED error listing these documents (never a silent "no changes") plus
+	// a "Retry failed" affordance that re-runs ONLY these documents via `retryFailedDocs`. Proposals that DID
+	// land in the same run are still rendered alongside the error (a partial success), so this coexists with
+	// `proposedIds` and is distinct from `failed` (which is a whole-turn failure with no proposals).
+	readonly failedDocs?: readonly IFanoutFailedDoc[];
+	// True when a fan-out paused mid-run on the spent daily budget (map-D15; doc 18 section 2.1): the content
+	// is the plain-words cap message, proposals already queued stay reviewable, and the run screen marks the
+	// not-yet-run documents skipped (they never ran) - NOT failed, and NOT a "no change" all-clear (F14 item 3).
+	readonly paused?: boolean;
 }
 
 /** The in-flight streaming turn for a document: the prose accumulated so far + the tool steps as they settle. */
@@ -283,6 +294,12 @@ export interface IFanoutProgress {
 	readonly batchCount: number;
 	/** The docIds (resource strings) of documents too large for the budget - never sent, reported honestly. */
 	readonly oversizeDocIds: readonly string[];
+	/**
+	 * The docIds (resource strings) of documents the model could not be reached/errored for (F14, issue #123).
+	 * The run screen reads these so a failed document's tile shows a named "model unreachable" state, never a
+	 * silent "no change" all-clear. Empty when every document the run reached was processed.
+	 */
+	readonly failedDocIds: readonly string[];
 }
 
 /**
@@ -613,6 +630,13 @@ export interface ILivingDocsService {
 	 * reply is in flight or when the last turn is not a failed assistant turn.
 	 */
 	retryChat(resource: URI): void;
+	/**
+	 * Re-run ONLY the documents a fan-out failed to reach the model for (F14, issue #123). Reads the failed
+	 * documents off the last assistant turn's `failedDocs`, drops that turn, and re-delivers the same user
+	 * instruction restricted to just those documents - so a surgical retry never re-touches the documents that
+	 * already succeeded. A no-op while a reply is in flight or when the last turn carries no failed documents.
+	 */
+	retryFailedDocs(resource: URI): void;
 
 	// --- working set (plan 18: the documents a chat instruction edits across; decisions 60-62) ---
 	/** The documents in the chat's working set (edit targets), keyed by the active document. */
