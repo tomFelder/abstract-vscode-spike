@@ -50,7 +50,7 @@ suite('livingDocs screenRender', () => {
 	// --- Home reflects the real open folder (the folder IS the project; decision #39) ---
 
 	function summary(path: string, title: string, isLiving: boolean, pendingCount = 0): ILivingDocSummary {
-		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount };
+		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount, folder: '' };
 	}
 
 	test('home with no folder open shows the empty state and an Open folder action (no demo projects)', () => {
@@ -358,6 +358,51 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('#9a6b16'), 'the oversize tile uses the amber treatment');
 		assert.ok(html.includes('1 too large'), 'the bottom bar reports the oversize bucket with the real count');
 		assert.ok(!html.includes('reviewing&hellip;'), 'an oversize tile never renders as a spinning sub-agent');
+	});
+
+	// --- project-run: a model outage must never render as "no changes proposed" (F14, issue #123) ---
+
+	test('a failed document renders the "model unreachable" tile, never "no change" (F14 issue #123)', () => {
+		// The model was unreachable for document `b`: its tile must name the outage (never the silent
+		// "no change" all-clear), and the bottom bar reports the failed bucket with the real count.
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false,
+				summary: summariseProjectRun(runDocs, [], false, [], ['b']), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('model unreachable'), 'the failed tile reads "model unreachable"');
+		assert.ok(html.includes('1 failed'), 'the bottom bar reports the failed bucket with the real count');
+		assert.ok(!html.includes('reviewing&hellip;'), 'a failed tile never renders as a spinning sub-agent');
+	});
+
+	test('a run where EVERY document failed leads with the named outage, never "0 changes proposed" (F14 issue #123)', () => {
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false,
+				summary: summariseProjectRun(runDocs, [], false, [], ['a', 'b']), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('The agent model is not reachable'), 'the bottom bar names the outage in plain words');
+		assert.ok(!html.includes('0</strong> changes proposed'), 'the false "0 changes proposed" all-clear is gone');
+		assert.ok(html.includes('Model unreachable for 2 of 2 documents'), 'the swarm heading names the outage');
+		assert.ok(!html.includes('every document read across the project'), 'no false "every document read" all-clear');
+	});
+
+	test('a budget-paused run reads the calm plain-words pause - not an error, not an all-clear (map-D15 / F14 item 3)', () => {
+		// The run paused before the documents ran: the heading reads the calm pause, the not-yet-run documents
+		// are skipped (never "no change"), the topbar shows a Paused pill, and nothing reads as failed.
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false, paused: true,
+				summary: summariseProjectRun(runDocs, [], true), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('Run paused'), 'the swarm heading reads the calm pause');
+		assert.ok(html.includes('Paused'), 'the topbar shows the Paused pill');
+		assert.ok(html.includes('skipped'), 'the not-yet-run document is honestly skipped, never "no change"');
+		assert.ok(!html.includes('model unreachable'), 'a pause is not rendered as a model failure');
+		assert.ok(!html.includes('every document read across the project'), 'a pause is not rendered as an all-clear');
 	});
 
 	// --- Agents screen: the list + the detail drawer (plan 32 iter 3) ---
