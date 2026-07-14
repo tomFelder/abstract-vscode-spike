@@ -66,6 +66,17 @@ suite('LivingDoc table edit', () => {
 		assert.strictEqual(serializeGfmTable(t), md);
 	});
 
+	test('a body row of all-dash cells is data, not a second separator (round-trips)', () => {
+		// Only the delimiter line right after the header is the alignment row; a later row whose cells
+		// all look like markers (e.g. `| --- | --- |`) is ordinary data and must survive intact.
+		const md = ['| a | b |', '| --- | --- |', '| Bob | 5 |', '| --- | --- |', '| Sue | 7 |'].join('\n');
+		const t = parseGfmTable(md);
+		assert.deepStrictEqual(t.rows, [['Bob', '5'], ['---', '---'], ['Sue', '7']]);
+		assert.strictEqual(serializeGfmTable(t), md);
+		// Editing an unrelated cell must not drop the all-dash row.
+		assert.strictEqual(parseGfmTable(serializeGfmTable(setCell(t, 0, 1, '6'))).rows.length, 3);
+	});
+
 	test('setCell edits a body cell and leaves the rest untouched', () => {
 		const t = setCell(parseGfmTable(T3x2), 0, 1, '$22,000');
 		assert.strictEqual(serializeGfmTable(t), [

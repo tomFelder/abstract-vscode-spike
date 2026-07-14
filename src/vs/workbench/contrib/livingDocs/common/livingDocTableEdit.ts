@@ -64,6 +64,9 @@ export function gfmEscapeCell(text: string): string {
 // Parse a GFM table's Markdown (the `table_block` node's `markdown` attr) into {header, align, rows}.
 // Rows are padded to the header width so cell access is always defined; a normalized table (what the
 // bundle stores) is already rectangular, so padding is a no-op there and the round-trip stays lossless.
+// Per GFM, the delimiter is ONLY the single line right after the header; a later body row whose cells
+// all look like alignment markers (e.g. `| --- | --- |`) is ordinary data and must NOT be swallowed as
+// a second separator - doing so would silently drop that row and break the byte-identical round-trip.
 export function parseGfmTable(md: string): IGfmTable {
 	const lines = String(md === null || md === undefined ? '' : md).split('\n').map(l => l.trim()).filter(l => l.length > 0);
 	let header: string[] | null = null;
@@ -71,8 +74,9 @@ export function parseGfmTable(md: string): IGfmTable {
 	const rows: string[][] = [];
 	for (let i = 0; i < lines.length; i++) {
 		const cells = gfmSplitCells(lines[i]);
-		if (gfmIsAlignRow(cells)) { align = cells.map(gfmParseAlign); continue; }
-		if (header === null) { header = cells; } else { rows.push(cells); }
+		if (header === null) { header = cells; continue; }
+		if (align.length === 0 && gfmIsAlignRow(cells)) { align = cells.map(gfmParseAlign); continue; }
+		rows.push(cells);
 	}
 	const h = header || [];
 	const width = h.length;
