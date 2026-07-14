@@ -81,4 +81,10 @@ suite('LivingDoc onboarding funnel (D26)', () => {
 		// The exact paragraph the prompted iteration tightens (wow two) -- a single reviewable block.
 		assert.ok(md.includes('Momentum is steady; we continue to track plan with no surprises this week.'));
 	});
+
+	test('a collision-safe demo CSV name remains a valid bind source alias', () => {
+		const md = buildDemoReportMarkdown('demo-metrics-2.csv');
+		assert.ok(md.includes('- demo-metrics-2.csv'));
+		assert.ok(md.includes('(bind:demo-metrics-2.mrr)'));
+	});
 });

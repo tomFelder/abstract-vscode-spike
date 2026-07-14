@@ -1602,7 +1602,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const extension = dot > 0 ? name.slice(dot) : '';
 		let candidate = name;
 		for (let n = 2; existing.has(candidate); n++) {
-			candidate = `${stem} ${n}${extension}`;
+			candidate = `${stem}-${n}${extension}`;
 		}
 		return joinPath(folder, candidate);
 	}
