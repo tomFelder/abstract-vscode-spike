@@ -3,16 +3,20 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { $, addDisposableListener, append, clearNode, EventHelper } from '../../../../base/browser/dom.js';
+import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
@@ -20,7 +24,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildFileTree, buildOutline, ITreeRailItem, searchTreeRail } from '../common/treeRail.js';
+import { buildFileTree, buildOutline, ITreeRailFolder, ITreeRailItem, searchTreeRail } from '../common/treeRail.js';
 
 type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
 
@@ -65,6 +69,8 @@ export class TreeRailView extends ViewPane {
 		@IHoverService hoverService: IHoverService,
 		@IEditorService private readonly _editors: IEditorService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+		@IDialogService private readonly _dialogService: IDialogService,
+		@IQuickInputService private readonly _quickInput: IQuickInputService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -92,6 +98,8 @@ export class TreeRailView extends ViewPane {
 		if (!root) { return; }
 		const token = ++this._renderToken;
 		const documents = await this._livingDocs.listDocuments();
+		// The Files tab also lists non-Markdown files (SOURCES + "Not yet imported"); other tabs skip the scan.
+		const extras = this._tab === 'files' ? await this._livingDocs.listWorkspaceExtras() : [];
 		if (token !== this._renderToken || !this._body) { return; }
 		this._renderDisposables.clear();
 		clearNode(root);
@@ -109,43 +117,106 @@ export class TreeRailView extends ViewPane {
 
 		const panel = append(root, $('div.rail-panel'));
 		switch (this._tab) {
-			case 'files': this._renderFiles(panel, documents); break;
+			case 'files': this._renderFiles(panel, documents, extras); break;
 			case 'context': this._renderContext(panel); break;
 			case 'outline': this._renderOutline(panel); break;
 			case 'search': this._renderSearch(panel, documents); break;
 		}
 	}
 
-	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[]): void {
-		const folders = buildFileTree(documents.map(d => ({ title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources })));
+	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
+		const folders = buildFileTree(
+			documents.map(d => ({ title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder })),
+			extras,
+		);
 		if (!folders.length) {
 			append(panel, $('div.rail-empty')).textContent = 'No documents yet.';
 			return;
 		}
-		for (const folder of folders) {
-			append(panel, $('div.rail-folder')).textContent = folder.name;
-			for (const item of folder.items) {
-				this._renderFileItem(panel, item);
-			}
-		}
+		// Render each group, recursing into nested subfolders so the on-disk hierarchy is preserved (F7).
+		const renderFolder = (folder: ITreeRailFolder, depth: number): void => {
+			const header = append(panel, $('div.rail-folder'));
+			header.textContent = folder.name;
+			if (depth > 0) { header.style.paddingLeft = `${6 + depth * 12}px`; }
+			for (const item of folder.items) { this._renderFileItem(panel, item, depth); }
+			for (const sub of folder.folders) { renderFolder(sub, depth + 1); }
+		};
+		for (const folder of folders) { renderFolder(folder, 0); }
 	}
 
-	private _renderFileItem(panel: HTMLElement, item: ITreeRailItem): void {
+	private _renderFileItem(panel: HTMLElement, item: ITreeRailItem, depth: number = 0): void {
 		const row = append(panel, $(`div.rail-item.rail-item-${item.kind}`));
-		const glyph = item.kind === 'doc' ? '\u25A3' : (item.sourceKind === 'api' ? '\u21C4' : (item.sourceKind === 'mcp' ? '\u25F7' : '\u229E'));
+		if (depth > 0) { row.style.paddingLeft = `${18 + depth * 12}px`; }
+		const glyph = item.kind === 'doc' ? '\u25A3'
+			: item.kind === 'unsupported' ? '\u2298'
+				: (item.sourceKind === 'api' ? '\u21C4' : (item.sourceKind === 'mcp' ? '\u25F7' : '\u229E'));
 		append(row, $('span.rail-item-glyph')).textContent = glyph;
 		append(row, $('span.rail-item-label')).textContent = item.label;
+		// A file we cannot yet import is shown, never dropped, with its plain-words reason (F10).
+		if (item.note) {
+			const note = append(row, $('div.rail-item-note'));
+			note.textContent = `not yet imported \u2014 ${item.note}`;
+		}
 		if (item.pending) { append(row, $('span.rail-item-dot')); }
 		if (item.resource) {
 			const resource = item.resource;
-			row.setAttribute('role', 'button');
-			row.tabIndex = 0;
-			const open = () => void this._editors.openEditor({ resource, options: { pinned: true } });
-			this._renderDisposables.add(addDisposableListener(row, 'click', open));
-			this._renderDisposables.add(addDisposableListener(row, 'keydown', e => {
-				if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+			// Document rows open in the editor on click/Enter; source-file rows are not openable (a csv/json
+			// has no Living Document editor), so they only carry the context menu below.
+			if (item.kind === 'doc') {
+				row.setAttribute('role', 'button');
+				row.tabIndex = 0;
+				const open = () => void this._editors.openEditor({ resource, options: { pinned: true } });
+				this._renderDisposables.add(addDisposableListener(row, 'click', open));
+				this._renderDisposables.add(addDisposableListener(row, 'keydown', e => {
+					if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+				}));
+			}
+			// The provenance-safe file menu (docs 20 section 1d): Rename / Delete / Add to chat. Only rows
+			// backed by a real file get it - so an empty list is never a broken empty menu container.
+			this._renderDisposables.add(addDisposableListener(row, 'contextmenu', e => {
+				EventHelper.stop(e, true);
+				this._showFileMenu(row, resource, item.label);
 			}));
 		}
+	}
+
+	// The Files-tab context menu (docs 20 section 1d, the 1m entry): the minimal-v1 provenance-safe ops.
+	// Rename and Delete route through the service, which moves the lock sidecar atomically and shows the
+	// Undo toast; the warn-and-list on delete (map-D6) is the confirm dialog below.
+	private _showFileMenu(anchor: HTMLElement, resource: URI, label: string): void {
+		const actions: IAction[] = [
+			toAction({ id: 'livingDocs.file.rename', label: 'Rename\u2026', run: () => void this._renameFile(resource) }),
+			toAction({ id: 'livingDocs.file.delete', label: 'Delete\u2026', run: () => void this._deleteFile(resource, label) }),
+			new Separator(),
+			toAction({ id: 'livingDocs.file.addToChat', label: 'Add to chat', run: () => this._livingDocs.attachToChat(resource) }),
+		];
+		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
+	}
+
+	private async _renameFile(resource: URI): Promise<void> {
+		const current = basename(resource);
+		const dot = current.lastIndexOf('.');
+		const stem = dot >= 0 ? current.slice(0, dot) : current;
+		const next = await this._quickInput.input({ prompt: 'Rename file', value: stem, valueSelection: [0, stem.length] });
+		if (next === undefined) { return; } // cancelled
+		const trimmed = next.trim();
+		if (!trimmed || trimmed === stem) { return; }
+		await this._livingDocs.renameFile(resource, trimmed);
+	}
+
+	// map-D6: delete warns and LISTS the dependent documents; on proceed the service orphans them
+	// gracefully (their cached values survive, flagged stale) and offers Undo - the delete never blocks.
+	private async _deleteFile(resource: URI, label: string): Promise<void> {
+		const dependents = await this._livingDocs.getFileDependents(resource);
+		const message = dependents.length
+			? `Delete "${label}"? ${dependents.length} document${dependents.length === 1 ? '' : 's'} depend on it.`
+			: `Delete "${label}"?`;
+		const detail = dependents.length
+			? `These documents will keep their last cached values, flagged as stale (not broken):\n${dependents.map(d => `\u2022 ${d.title}`).join('\n')}\n\nYou can undo this.`
+			: 'You can undo this.';
+		const { confirmed } = await this._dialogService.confirm({ type: 'warning', message, detail, primaryButton: 'Delete' });
+		if (!confirmed) { return; }
+		await this._livingDocs.deleteFile(resource);
 	}
 
 	private _renderContext(panel: HTMLElement): void {
@@ -367,6 +438,9 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-item-detail{margin-left:auto;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-item-dot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}
 		.living-docs-rail .rail-item-snippet{width:100%;padding-left:0;font:400 11.5px/1.5 system-ui;color:var(--vscode-descriptionForeground)}
+			.living-docs-rail .rail-item-unsupported{align-items:flex-start;flex-wrap:wrap;cursor:default}
+			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:var(--vscode-descriptionForeground)}
+			.living-docs-rail .rail-item-note{width:100%;padding-left:25px;font:400 11px/1.4 system-ui;color:var(--vscode-descriptionForeground);opacity:.85}
 		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}
 		.living-docs-rail .rail-outline.lvl-1{font-weight:600}
 		.living-docs-rail .rail-outline.lvl-2{padding-left:18px;color:var(--vscode-descriptionForeground)}

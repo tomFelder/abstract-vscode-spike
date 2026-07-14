@@ -8,6 +8,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDocSummary, ISourceInfo, ITemplateInfo } from '../../common/livingDocs.js';
 import { IAgentDef, IAgentRun, ISkillRunSummary, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
+import { buildAwayFeed } from '../../common/projectHomeFeed.js';
 import { IScreenState, renderScreenHtml, ScreenId } from '../../browser/screenRender.js';
 
 suite('livingDocs screenRender', () => {
@@ -49,7 +50,7 @@ suite('livingDocs screenRender', () => {
 	// --- Home reflects the real open folder (the folder IS the project; decision #39) ---
 
 	function summary(path: string, title: string, isLiving: boolean, pendingCount = 0): ILivingDocSummary {
-		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount };
+		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount, folder: '' };
 	}
 
 	test('home with no folder open shows the empty state and an Open folder action (no demo projects)', () => {
@@ -95,10 +96,15 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('OR START FROM A TEMPLATE'), 'no template section when the folder ships no templates');
 	});
 
-	test('home with a folder open but no documents is calmly in-sync (no fabricated cards)', () => {
+	// --- Empty-project front door (F15 / journey 1w frame 4): a folder is open with no documents ---
+
+	test('home with a folder open but no documents lands on the empty-project front door (cures the 1a dead-end)', () => {
 		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'empty-folder', docs: [] });
 		assert.ok(html.includes('empty-folder'), 'still shows the open folder name');
-		assert.ok(/in sync/i.test(html), 'shows the calm in-sync summary when nothing pends');
+		// The front door, not the dashboard: New document + Browse templates + the whole-project composer.
+		assert.ok(/is empty/.test(html), 'names the empty project so the on-ramp is calm');
+		assert.ok(/data-sheet-open="newdoc"/.test(html), 'offers New document (Blank / templates)');
+		assert.ok(/data-ask-box/.test(html) && /data-msg="askProject"|data-ask-send/.test(html), 'carries the "...or ask me" composer');
 		assert.ok(!/NEEDS YOU/.test(html), 'no NEEDS-YOU section when there is no pending work');
 		assert.ok(!html.includes('Acme Co') && !html.includes('Fund III'), 'no hardcoded demo project cards');
 	});
@@ -107,7 +113,7 @@ suite('livingDocs screenRender', () => {
 
 	test('home surfaces one quiet attention line when a scheduled run failed, linking to Agents', () => {
 		const html = renderScreenHtml('home', {
-			...state, hasFolder: true, folderName: 'realdocs-test', docs: [],
+			...state, hasFolder: true, folderName: 'realdocs-test', docs: [summary('/ws/Weekly Update.md', 'Weekly Update', true, 0)],
 			homeFailure: { agentName: 'Weekly refresh', day: 'Monday', error: 'metrics.csv unreadable' },
 		});
 		assert.ok(html.includes('Weekly refresh failed on Monday'), 'shows the agent + day in the failure line');
@@ -116,8 +122,54 @@ suite('livingDocs screenRender', () => {
 	});
 
 	test('home shows NO failure line when nothing failed (truthful automation, no fake activity)', () => {
-		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'realdocs-test', docs: [] });
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'realdocs-test', docs: [summary('/ws/Weekly Update.md', 'Weekly Update', true, 0)] });
 		assert.ok(!/failed on/.test(html), 'no fabricated failure line when there is no failure');
+	});
+
+	// --- Home front door (F15 / journey 1w): WHILE YOU WERE AWAY feed, all-clear promotion, chat composer ---
+
+	const now = Date.parse('2026-07-13T12:00:00Z');
+
+	test('home carries the whole-project chat composer defaulting to whole-project scope (map-D21/D24)', () => {
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)] });
+		assert.ok(/data-ask-box/.test(html), 'renders the composer box');
+		assert.ok(/data-ask-input/.test(html) && /data-ask-send/.test(html), 'has an input + Ask control');
+		assert.ok(/ASK THIS PROJECT/.test(html) && /Whole project/.test(html), 'defaults to whole-project scope');
+	});
+
+	test('home renders the WHILE YOU WERE AWAY feed from real run rows, with needs-you counts', () => {
+		const awayFeed = buildAwayFeed({
+			runs: [{ agentId: 'refresh', startedAt: '2026-07-13T11:00:00Z', applied: 1, queued: 2, docsTouched: 3, via: 'cron' }],
+			agentNames: { refresh: 'Weekly refresh' },
+			needsYouTotal: 2,
+			sinceMs: Date.parse('2026-07-13T00:00:00Z'),
+			nowMs: now,
+		});
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 2)], awayFeed });
+		assert.ok(/WHILE YOU WERE AWAY/.test(html), 'shows the away section when a run happened in the window');
+		assert.ok(html.includes('Weekly refresh'), 'names the real agent that ran');
+		assert.ok(/2 NEEDS YOU/.test(html), 'carries the run\'s needs-you count');
+		assert.ok(!/Everything is in sync/.test(html), 'no all-clear promotion while work pends');
+	});
+
+	test('home promotes the all-clear (map-D14) when nothing pends, and never fabricates feed rows', () => {
+		const awayFeed = buildAwayFeed({ runs: [], agentNames: {}, needsYouTotal: 0, sinceMs: 1, nowMs: now });
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)], awayFeed });
+		assert.ok(html.includes('Everything is in sync'), 'shows the calm all-clear promotion');
+		assert.ok(!/WHILE YOU WERE AWAY/.test(html), 'no feed section when nothing ran (no fabricated rows)');
+	});
+
+	test('home renders a read-only project answer with citation chips (map-D24)', () => {
+		const html = renderScreenHtml('home', {
+			...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)],
+			projectAnswer: { answer: 'Revenue is on plan, no surprises.', citations: ['Board Note', 'metrics.csv'], via: 'model' },
+		});
+		assert.ok(/READ-ONLY/.test(html), 'labels the answer as read-only');
+		assert.ok(html.includes('Revenue is on plan, no surprises.'), 'shows the answer prose');
+		assert.ok(html.includes('Board Note') && html.includes('metrics.csv'), 'shows the real citation chips');
+		// The chip row leads with "Consulted:" - exactly-true wording, since the fallback path lists every file
+		// read for the answer (not a model-attested "supporting sources" set).
+		assert.ok(html.includes('Consulted:'), 'the chip row is labelled Consulted so it never over-claims support');
 	});
 
 	// --- Templates (plan 28): the real template library, driven by listTemplates() ---
@@ -306,6 +358,51 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('#9a6b16'), 'the oversize tile uses the amber treatment');
 		assert.ok(html.includes('1 too large'), 'the bottom bar reports the oversize bucket with the real count');
 		assert.ok(!html.includes('reviewing&hellip;'), 'an oversize tile never renders as a spinning sub-agent');
+	});
+
+	// --- project-run: a model outage must never render as "no changes proposed" (F14, issue #123) ---
+
+	test('a failed document renders the "model unreachable" tile, never "no change" (F14 issue #123)', () => {
+		// The model was unreachable for document `b`: its tile must name the outage (never the silent
+		// "no change" all-clear), and the bottom bar reports the failed bucket with the real count.
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false,
+				summary: summariseProjectRun(runDocs, [], false, [], ['b']), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('model unreachable'), 'the failed tile reads "model unreachable"');
+		assert.ok(html.includes('1 failed'), 'the bottom bar reports the failed bucket with the real count');
+		assert.ok(!html.includes('reviewing&hellip;'), 'a failed tile never renders as a spinning sub-agent');
+	});
+
+	test('a run where EVERY document failed leads with the named outage, never "0 changes proposed" (F14 issue #123)', () => {
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false,
+				summary: summariseProjectRun(runDocs, [], false, [], ['a', 'b']), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('The agent model is not reachable'), 'the bottom bar names the outage in plain words');
+		assert.ok(!html.includes('0</strong> changes proposed'), 'the false "0 changes proposed" all-clear is gone');
+		assert.ok(html.includes('Model unreachable for 2 of 2 documents'), 'the swarm heading names the outage');
+		assert.ok(!html.includes('every document read across the project'), 'no false "every document read" all-clear');
+	});
+
+	test('a budget-paused run reads the calm plain-words pause - not an error, not an all-clear (map-D15 / F14 item 3)', () => {
+		// The run paused before the documents ran: the heading reads the calm pause, the not-yet-run documents
+		// are skipped (never "no change"), the topbar shows a Paused pill, and nothing reads as failed.
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false, paused: true,
+				summary: summariseProjectRun(runDocs, [], true), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('Run paused'), 'the swarm heading reads the calm pause');
+		assert.ok(html.includes('Paused'), 'the topbar shows the Paused pill');
+		assert.ok(html.includes('skipped'), 'the not-yet-run document is honestly skipped, never "no change"');
+		assert.ok(!html.includes('model unreachable'), 'a pause is not rendered as a model failure');
+		assert.ok(!html.includes('every document read across the project'), 'a pause is not rendered as an all-clear');
 	});
 
 	// --- Agents screen: the list + the detail drawer (plan 32 iter 3) ---
