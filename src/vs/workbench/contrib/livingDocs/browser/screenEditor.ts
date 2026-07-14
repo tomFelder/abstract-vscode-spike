@@ -29,8 +29,16 @@ import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.
 import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { buildAwayFeed, classifyProjectChat, IAwayFeed } from '../common/projectHomeFeed.js';
+import { DEMO_ITERATION_PROMPT, nextOnboardingStep, ONBOARDING_STEPS, OnboardingStep } from '../common/onboarding.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
+
+// Persisted onboarding step + demo-document URI (profile scope) so the two-wow flow "remembers where you were"
+// across reopens and the folder-open reload at hand-off (doc 20 section D26). The step + demo URI are persisted
+// (not just held in memory) because the walkthrough opens the demo document in the same editor group - which
+// displaces the onboarding screen - so the guide is re-entered from Home and must restore its place.
+const ONBOARDING_STEP_KEY = 'livingDocs.onboardingStep';
+const ONBOARDING_DEMO_KEY = 'livingDocs.onboardingDemoUri';
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -101,6 +109,13 @@ interface IScreenEditorState {
 	awaySinceMs?: number;
 	projectAnswer?: IProjectAnswer;
 	askBusy?: boolean;
+	// Onboarding (D26): the guided flow's current funnel step, the generated demo document's URI (so later
+	// steps re-open it rather than re-generate), and whether a model door is reachable (read on open).
+	onboardingStep?: OnboardingStep;
+	onboardingDemoUri?: URI;
+	onboardingHasModel?: boolean;
+	// Home only: the persisted in-progress onboarding step, to show the "Continue your walkthrough" banner.
+	onboardingResumeStep?: OnboardingStep;
 }
 
 // Weekday names for the Home failure line ("failed on Monday"). Local time - matches when the user saw it.
@@ -131,7 +146,7 @@ export class ScreenEditor extends EditorPane {
 		group: IEditorGroup,
 		@ITelemetryService telemetryService: ITelemetryService,
 		@IThemeService themeService: IThemeService,
-		@IStorageService storageService: IStorageService,
+		@IStorageService private readonly _storageService: IStorageService,
 		@IWebviewService private readonly _webviewService: IWebviewService,
 		@IEditorService private readonly _editors: IEditorService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
@@ -218,6 +233,23 @@ export class ScreenEditor extends EditorPane {
 		if (this._screen === 'settings') {
 			const status = await this._livingDocs.getModelProviderStatus();
 			this._state = { ...this._state, providerStatus: status, signInStage: status.signedIn ? 'signed-in' : 'signed-out', analyticsEnabled: this._analyticsEnabled() };
+		}
+		// Onboarding (D26): resume the funnel where the user left it (persisted) and read whether a model door is
+		// reachable so the flow never dead-ends. The `onboarding_step: open` event is recorded on the first engaged
+		// action (see _onbSeeItWork), not here: the consent moment resolves asynchronously, so a capture on open
+		// would race ahead of consent and be dropped by the gate.
+		if (this._screen === 'onboarding') {
+			const status = await this._livingDocs.getModelProviderStatus();
+			const saved = this._storageService.get(ONBOARDING_STEP_KEY, StorageScope.PROFILE) as OnboardingStep | undefined;
+			const step: OnboardingStep = saved && (ONBOARDING_STEPS as readonly string[]).includes(saved) ? saved : 'open';
+			const demoStr = this._storageService.get(ONBOARDING_DEMO_KEY, StorageScope.PROFILE);
+			this._state = { ...this._state, onboardingStep: step, onboardingHasModel: status.provider !== 'none', onboardingDemoUri: demoStr ? URI.parse(demoStr) : undefined };
+		}
+		// Home surfaces a "Continue your walkthrough" banner when an onboarding is in progress (persisted, not the
+		// final aha), so the guide is re-enterable after it was displaced by the demo document (D26).
+		if (this._screen === 'home') {
+			const saved = this._storageService.get(ONBOARDING_STEP_KEY, StorageScope.PROFILE) as OnboardingStep | undefined;
+			this._state = { ...this._state, onboardingResumeStep: saved && saved !== 'first-approve-own' && (ONBOARDING_STEPS as readonly string[]).includes(saved) ? saved : undefined };
 		}
 		this._inputDisposables.clear();
 		this._signInPoll.clear();
@@ -656,6 +688,115 @@ export class ScreenEditor extends EditorPane {
 			case 'setAnalyticsConsent':
 				void this._setAnalyticsConsent(message.arg === 'on');
 				break;
+			// --- D26 onboarding surface: each action drives the EXISTING engine + records the funnel step ---
+			// "See it work": generate the demo report from the bundled CSV (no folder, no setup), open it beside
+			// the guide, and advance to wow one. Records `onboarding_step: demo report generated`.
+			case 'onbSeeItWork':
+				void this._onbSeeItWork();
+				break;
+			// "Open the Demo Report": re-focus the generated demo document beside the guide (later steps).
+			case 'onbOpenDemo':
+				void this._onbOpenDemo();
+				break;
+			// "Prompt one edit": send the one iteration through the real chat path -> a single inline diff in
+			// Review (wow two). Records `first diff seen`, then advances to the approve step.
+			case 'onbPromptEdit':
+				void this._onbPromptEdit();
+				break;
+			// A "next" affordance on a step the user completes in the editor (peek / approve): record the current
+			// step's funnel event and advance the card.
+			case 'onbAdvance':
+				this._onbAdvance();
+				break;
+			// Hand-off: record `first folder opened` (arms the T4 own-file aha) and open a real folder (1a).
+			case 'onbOpenFolder':
+				void this._onbOpenFolder();
+				break;
+			// Never dead-end on model access: jump to the Model Access screen (sign in / included / survey).
+			case 'onbModelAccess':
+				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'settings'), { pinned: true });
+				break;
+			// Finish: clear the persisted walkthrough state and land on Home.
+			case 'onbDone':
+				this._storageService.remove(ONBOARDING_STEP_KEY, StorageScope.PROFILE);
+				this._storageService.remove(ONBOARDING_DEMO_KEY, StorageScope.PROFILE);
+				this._livingDocs.endOnboardingWalkthrough();
+				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'home'), { pinned: true });
+				break;
+			// Home "Continue your walkthrough": re-enter the onboarding surface at its persisted step.
+			case 'openOnboarding':
+				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'onboarding'), { pinned: true });
+				break;
+		}
+	}
+
+	// --- D26 onboarding drivers: each composes the golden paths (1e/1f/1h/1p), never new review machinery ---
+
+	// Persist + set the current funnel step, then re-render the card.
+	private _setOnboardingStep(step: OnboardingStep): void {
+		this._storageService.store(ONBOARDING_STEP_KEY, step, StorageScope.PROFILE, StorageTarget.MACHINE);
+		this._state = { ...this._state, onboardingStep: step };
+		this._render();
+	}
+
+	// "See it work": generate the demo report (bundled CSV -> real Living Document), open it in a side group so
+	// the guide stays visible next to the document + Review rail, and advance to the provenance peek (wow one).
+	// "See it work" runs the whole two-wow demo (doc 20 section D26). The calm shell cannot keep the onboarding
+	// SCREEN webview mounted beside an editor, so this launches the demo document as the stage for BOTH wows:
+	// it generates the demo, prompts the one iteration (so a single red/green proposal is already waiting in
+	// Review - wow two), reveals Review, and opens the demo document. The user then peeks a bound figure (wow
+	// one) and approves the proposal - the service records provenance-peek + first-approve-sample on those
+	// natural actions and hands off to "bring a real folder" via a notification (see LivingDocsService).
+	private async _onbSeeItWork(): Promise<void> {
+		// The funnel entry: recorded here (consent is resolved by the time the user clicks) rather than on open,
+		// so a first-run accept is not raced by the consent gate.
+		this._livingDocs.recordOnboardingStep('open');
+		this._setOnboardingStep('open');
+		const uri = await this._livingDocs.generateDemoReport();
+		if (!uri) { return; }
+		this._storageService.store(ONBOARDING_DEMO_KEY, uri.toString(), StorageScope.PROFILE, StorageTarget.MACHINE);
+		this._state = { ...this._state, onboardingDemoUri: uri };
+		this._livingDocs.recordOnboardingStep('demo-report');
+		this._setOnboardingStep('demo-report');
+		// Prompt the one iteration through the real chat path so the model's reply lands as a single reviewable
+		// inline diff (wow two); reveal Review and open the demo document where both wows live.
+		this._livingDocs.recordOnboardingStep('first-diff');
+		this._setOnboardingStep('first-diff');
+		this._livingDocs.focusPanel('review');
+		await this._editors.openEditor({ resource: uri, options: { pinned: true } });
+		await this._livingDocs.sendChatMessage(uri, DEMO_ITERATION_PROMPT);
+	}
+
+	private async _onbOpenDemo(): Promise<void> {
+		if (this._state.onboardingDemoUri) { await this._editors.openEditor({ resource: this._state.onboardingDemoUri, options: { pinned: true } }); }
+	}
+
+	// Prompt the one iteration on demand (revisited flow): reuse the same real chat path.
+	private async _onbPromptEdit(): Promise<void> {
+		const uri = this._state.onboardingDemoUri;
+		if (!uri) { return; }
+		this._livingDocs.recordOnboardingStep('first-diff');
+		this._setOnboardingStep('first-approve-sample');
+		await this._editors.openEditor({ resource: uri, options: { pinned: true } });
+		this._livingDocs.focusPanel('review');
+		await this._livingDocs.sendChatMessage(uri, DEMO_ITERATION_PROMPT);
+	}
+
+	// A step completed in the editor (peek seen / proposal approved): record it and step the card forward.
+	private _onbAdvance(): void {
+		const step = this._state.onboardingStep ?? 'open';
+		this._livingDocs.recordOnboardingStep(step);
+		const next = nextOnboardingStep(step);
+		if (next) { this._setOnboardingStep(next); }
+	}
+
+	// Hand-off (doc 20 section D26 step 6): record `first folder opened` (which arms the T4 own-file aha in the
+	// service) and open a real folder via the existing open-folder path (1a). The folder-open reloads the
+	// workbench; the persisted step + the armed aha survive it.
+	private async _onbOpenFolder(): Promise<void> {
+		if (await this._livingDocs.openFolder()) {
+			this._livingDocs.recordOnboardingStep('first-folder');
+			this._setOnboardingStep('first-approve-own');
 		}
 	}
 
@@ -973,6 +1114,15 @@ export class ScreenEditor extends EditorPane {
 			openAgentRuns: this._state.openAgentId ? this._livingDocs.getAgentRunsForAgent(this._state.openAgentId) : undefined,
 			hasFolder: !!folderName,
 			folderName,
+			onboarding: this._screen === 'onboarding' ? {
+				step: this._state.onboardingStep ?? 'open',
+				// Consent is already gated by the consent moment; reflect it (not a second consent surface).
+				consentEnabled: this._analytics.isEnabled,
+				consentChosen: this._analytics.hasChosen,
+				hasModel: this._state.onboardingHasModel ?? false,
+				demoGenerated: !!this._state.onboardingDemoUri,
+			} : undefined,
+			onboardingResumeStep: this._state.onboardingResumeStep,
 		}));
 	}
 

@@ -96,7 +96,10 @@ suite('livingDocs History tab (historyHtml)', () => {
 	test('F19: a duplicated audit entry (persisted + in-session copy of the same lock) renders once', () => {
 		const e = audit({ blockId: 'commentary', time: '2026-07-06T11:30:00.000Z', newText: 'Sharper line.' });
 		const h = historyHtml([], [e, { ...e }], 'Doc', undefined, NOW);
-		const rows = h.split('commentary').length - 1;
+		// Count the change-row BODY ("<docTitle> / <blockId>"), not the bare block id: the applied-change row now
+		// also carries a "This Was Wrong" feedback button (doc 18 section 2.5) whose data-wrong payload legitimately
+		// references the same block id, so a bare-id count would see two. The row body is the dedup signal.
+		const rows = h.split(' / commentary').length - 1;
 		assert.strictEqual(rows, 1, 'the same change is shown once, never doubled on a cold-open merge');
 	});
 
@@ -104,5 +107,26 @@ suite('livingDocs History tab (historyHtml)', () => {
 		const h = historyHtml([snap({ id: 's1' })], [], 'Doc', 'Weekly report', NOW);
 		assert.ok(h.includes('Created from Weekly report template'), 'the real template origin row is shown');
 		assert.ok(h.includes('FROM TEMPLATE'), 'the origin row carries the FROM TEMPLATE badge');
+	});
+
+	// The feedback verb (doc 18 section 2.5): "This Was Wrong" on APPLIED changes only. The button carries the
+	// change ref (block id + doc title) so the reviewRailView can flag + comment; it never appears on a
+	// rejection or a restore (those are not applied agent changes to disavow).
+	test('an approved change carries a "This Was Wrong" feedback affordance with the change ref', () => {
+		const h = historyHtml([], [audit({ blockId: 'commentary', action: 'approved' })], 'Weekly Summary', undefined, NOW);
+		assert.ok(h.includes('This Was Wrong'), 'applied change has the feedback verb');
+		assert.ok(/data-wrong="[^"]*commentary[^"]*"/.test(h), 'the feedback button carries the change ref');
+	});
+
+	test('an auto-applied figure change also carries the feedback affordance', () => {
+		const h = historyHtml([], [audit({ blockId: 'mrr', action: 'auto-applied', via: 'heuristic' })], 'Weekly Summary', undefined, NOW);
+		assert.ok(h.includes('This Was Wrong'), 'auto-applied change has the feedback verb');
+	});
+
+	test('a rejection and a restore carry no feedback affordance (nothing was applied to disavow)', () => {
+		const rejected = historyHtml([], [audit({ action: 'rejected' })], 'Weekly Summary', undefined, NOW);
+		assert.ok(!rejected.includes('This Was Wrong'), 'a rejection is not an applied change');
+		const restored = historyHtml([], [audit({ action: 'approved', via: 'restore' })], 'Weekly Summary', undefined, NOW);
+		assert.ok(!restored.includes('This Was Wrong'), 'a restore is not a fresh applied agent change');
 	});
 });

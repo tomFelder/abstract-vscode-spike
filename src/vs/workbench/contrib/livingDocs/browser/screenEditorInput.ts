@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../base/common/uri.js';
+import { localize } from '../../../../nls.js';
 import { EditorInputCapabilities, IUntypedEditorInput } from '../../../common/editor.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { ScreenId } from './screenRender.js';
@@ -18,6 +19,7 @@ const TITLES: Record<ScreenId, string> = {
 	'project-run': 'Agent Run',
 	'review-project': 'Review Project',
 	settings: 'Model Access',
+	onboarding: localize('livingDocs.screen.onboarding', "Welcome"),
 };
 
 // One singleton editor input per Abstract screen (Templates / Knowledge / Agents). The screen

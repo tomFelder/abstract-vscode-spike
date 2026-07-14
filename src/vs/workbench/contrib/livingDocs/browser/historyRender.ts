@@ -5,6 +5,7 @@
 
 import { IAuditEntry, ISnapshotEntry, SnapshotVia } from '../common/livingDocsModel.js';
 import { buildHistoryTimeline } from '../common/livingDocsHistory.js';
+import { localize } from '../../../../nls.js';
 
 // The truthful History tab body (plan 26 iter 3), kept as a pure, side-effect-free render module (mirroring
 // livingDocRender / treeRail) so it stays unit-testable without pulling in the ViewPane graph. It renders
@@ -97,7 +98,13 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 		// A change row (audit entry): the verb + block, the via + relative time. Not restorable on its own.
 		const e = ev.entry;
 		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'approved' ? (e.via === 'restore' ? 'Restored' : 'Approved') : 'Auto-applied';
-		return (last: boolean) => timelineRow(dot('#e0e3ea'), verb, '', `${esc(e.docTitle)} / ${esc(e.blockId)}`, `${esc(e.via)} &middot; ${relTime(e.time, now)}`, last);
+		// The feedback verb (doc 18 section 2.5): "this was wrong" on any APPLIED change (approved or
+		// auto-applied, not a rejection or a restore). Carries only the block id + doc title as the change ref -
+		// the reviewRailView turns the click into a flag + optional comment, logged for the founder + counted.
+		const wrongBtn = (e.action !== 'rejected' && e.via !== 'restore')
+			? `<button data-wrong="${esc(JSON.stringify({ ref: e.blockId, title: e.docTitle }))}" title="${esc(localize('livingDocs.history.flagWrong.title', "Flag this applied change as wrong"))}" style="margin-left:auto;border:1px solid #eeced0;border-radius:6px;padding:3px 8px;background:#fff;color:#b4332f;font:500 10px/1 system-ui;cursor:pointer">${esc(localize('livingDocs.history.flagWrong.label', "This Was Wrong"))}</button>`
+			: '';
+		return (last: boolean) => timelineRow(dot('#e0e3ea'), verb, '', `${esc(e.docTitle)} / ${esc(e.blockId)}`, `${esc(e.via)} &middot; ${relTime(e.time, now)}`, last, wrongBtn);
 	});
 
 	// A real origin row for a template-generated document (plan 28, iter 3): the oldest row, at the base of

@@ -47,6 +47,48 @@ suite('livingDocs screenRender', () => {
 		}
 	});
 
+	// --- D26 onboarding surface: the guided two-wow flow renders the current funnel step + its real action ---
+
+	test('onboarding open step shows the intro, the consent status and the See it work action', () => {
+		const html = renderScreenHtml('onboarding', { ...state, onboarding: { step: 'open', consentEnabled: true, consentChosen: true, hasModel: true, demoGenerated: false } });
+		assert.ok(html.includes('Two wows, ten minutes, no setup'), 'intro headline');
+		assert.ok(/data-msg="onbSeeItWork"/.test(html), 'has the See it work action');
+		assert.ok(html.includes('never your words'), 'shows the plain-words consent line');
+		assert.ok(html.includes('Step 1 of 7'), 'shows funnel progress');
+	});
+
+	test('onboarding wow steps name each wow and drive the real engine (peek + prompt one edit)', () => {
+		const peek = renderScreenHtml('onboarding', { ...state, onboarding: { step: 'provenance-peek', consentEnabled: true, consentChosen: true, hasModel: true, demoGenerated: true } });
+		assert.ok(peek.includes('Wow moment 1'), 'wow-1 badge');
+		assert.ok(peek.includes('$48.6k'), 'points at a bound figure to peek');
+		assert.ok(/data-msg="onbAdvance"/.test(peek), 'advance is wired');
+
+		const diff = renderScreenHtml('onboarding', { ...state, onboarding: { step: 'first-diff', consentEnabled: true, consentChosen: true, hasModel: true, demoGenerated: true } });
+		assert.ok(diff.includes('Wow moment 2'), 'wow-2 badge');
+		assert.ok(/data-msg="onbPromptEdit"/.test(diff), 'prompt one edit is wired');
+	});
+
+	test('onboarding warns honestly when no model is connected, without dead-ending', () => {
+		const diff = renderScreenHtml('onboarding', { ...state, onboarding: { step: 'first-diff', consentEnabled: true, consentChosen: true, hasModel: false, demoGenerated: true } });
+		assert.ok(diff.includes('No model is connected yet'), 'names the no-model state');
+		assert.ok(/data-msg="onbModelAccess"/.test(diff), 'offers a route to Model Access');
+	});
+
+	test('onboarding hand-off offers bring-a-real-folder (the 1a own-file path)', () => {
+		const html = renderScreenHtml('onboarding', { ...state, onboarding: { step: 'first-folder', consentEnabled: true, consentChosen: true, hasModel: true, demoGenerated: true } });
+		assert.ok(/data-msg="onbOpenFolder"/.test(html), 'has the bring-a-folder hand-off');
+		assert.ok(html.includes('your own file'), 'frames the own-file aha');
+	});
+
+	test('home offers a wired resume banner only for an in-progress walkthrough', () => {
+		const resumed = renderScreenHtml('home', { ...state, hasFolder: true, onboardingResumeStep: 'provenance-peek' });
+		assert.ok(resumed.includes('Your walkthrough is in progress'), 'shows the resume status');
+		assert.ok(/data-msg="openOnboarding"/.test(resumed), 'resume action reopens onboarding');
+
+		const fresh = renderScreenHtml('home', { ...state, hasFolder: true });
+		assert.ok(!fresh.includes('Your walkthrough is in progress'), 'does not show a resume banner without a saved step');
+	});
+
 	// --- Home reflects the real open folder (the folder IS the project; decision #39) ---
 
 	function summary(path: string, title: string, isLiving: boolean, pendingCount = 0): ILivingDocSummary {

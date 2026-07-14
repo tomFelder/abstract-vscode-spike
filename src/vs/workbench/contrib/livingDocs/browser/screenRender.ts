@@ -11,11 +11,13 @@
 
 import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { countTemplateSlots } from '../common/livingDocMarkdown.js';
+import { localize } from '../../../../nls.js';
 import { relativeSyncedLabel } from '../common/livingDocPmDecorations.js';
 import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAnswer, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 import { IAwayFeed } from '../common/projectHomeFeed.js';
+import { ONBOARDING_STEPS, onboardingStepIndex, OnboardingStep } from '../common/onboarding.js';
 
-export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings';
+export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings' | 'onboarding';
 
 export type AgentFilter = 'all' | 'scheduled' | 'event' | 'needs-approval';
 
@@ -131,6 +133,28 @@ export interface IScreenState {
 	readonly surveySaved?: boolean;
 	/** Settings: the current analytics consent (the `abstract.analytics.enabled` setting), for the data-flow card row. */
 	readonly analyticsEnabled?: boolean;
+	/** Onboarding (D26): the guided two-wow flow's current step + the reused-machinery status it reflects. */
+	readonly onboarding?: IOnboardingScreenState;
+	/** Home (D26): the persisted in-progress onboarding step, drives the "Continue your walkthrough" banner. */
+	readonly onboardingResumeStep?: OnboardingStep;
+}
+
+/**
+ * The D26 onboarding surface state (doc 20 section D26). The screen walks the T5 funnel; `step` is where the
+ * user is now. The rest is status read from the machinery this surface REUSES rather than rebuilds: the
+ * analytics consent (already gated by the consent moment), whether a model door is reachable (so the flow
+ * never dead-ends on model access), and whether the demo report has been generated yet.
+ */
+export interface IOnboardingScreenState {
+	readonly step: OnboardingStep;
+	/** Analytics consent (true = the user allowed capture at the consent moment). Drives the consent card copy. */
+	readonly consentEnabled: boolean;
+	/** True once the user has answered the consent moment either way (they always have by the time this shows). */
+	readonly consentChosen: boolean;
+	/** True when a model door (ChatGPT / included / canned proxy) is reachable, so the prompted edit will land. */
+	readonly hasModel: boolean;
+	/** True once "See it work" has generated the demo report (so later steps can re-open it, not re-generate). */
+	readonly demoGenerated: boolean;
 }
 
 /**
@@ -520,6 +544,7 @@ export function renderScreenHtml(screen: ScreenId, state: IScreenState): string 
 		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge'));
 		case 'agents': return page(withTopBar(renderAgents(state), 'Agents'));
 		case 'settings': return page(withTopBar(renderSettings(state), 'Settings'));
+		case 'onboarding': return page(withTopBar(renderOnboarding(state), 'Welcome'));
 		case 'project-run': return page(renderProjectRun(state));
 		case 'review-project': return page(renderReviewProject(state));
 	}
@@ -773,7 +798,18 @@ function renderHome(state: IScreenState): string {
 	// all-clear promotion (map-D14) sit between it and the NEEDS-YOU cards. Both render from real state only.
 	const composer = renderHomeComposer(state);
 	const awaySection = state.awayFeed ? renderAwaySection(state.awayFeed) : '';
+	// D26: a "Continue your walkthrough" banner when an onboarding is in progress. The onboarding screen is
+	// displaced by the demo document during the flow (the calm shell tears a hidden screen webview down), so
+	// Home - whose nav item is always present - is the reliable re-entry back into the guide at its saved step.
+	const resumeBanner = state.onboardingResumeStep
+		? `<div style="display:flex;align-items:center;gap:14px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:12px;padding:14px 18px;margin-bottom:22px">
+				<span style="font-size:18px;color:${ACCENT}">&#10022;</span>
+				<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#26292f">${localize('livingDocs.onboarding.resume.title', "Your walkthrough is in progress")}</div><div style="font:400 12.5px/1.4 system-ui;color:#696e78">${localize('livingDocs.onboarding.resume.body', "Pick up the two-wow tour where you left off.")}</div></div>
+				<button data-msg="openOnboarding" style="flex:none;border:none;border-radius:9px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">${localize('livingDocs.onboarding.resume.action', "Continue Your Walkthrough")}</button>
+			</div>`
+		: '';
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
+		${resumeBanner}
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
 		<p style="margin:0 0 22px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
 		${composer}
@@ -1510,6 +1546,111 @@ function analyticsConsentRow(enabled: boolean): string {
 			<div style="font:400 12px/1.4 system-ui;color:#696e78">${state}. Change it any time.</div>
 		</div>
 		<button data-msg="setAnalyticsConsent" data-arg="${btnArg}" style="flex:none;border:1px solid #d4d7dd;background:#fff;border-radius:9px;padding:8px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${btnLabel}</button>
+	</div>`;
+}
+
+// The D26 onboarding surface (doc 20 section D26): the guided two-wow, ten-minute, no-setup flow. It does NOT
+// rebuild review machinery (doc 20: "built on the composed golden paths of 1e/1f/1h/1p") - each step drives the
+// EXISTING engine (generate the demo, peek provenance in the editor, prompt one iteration through chat, approve
+// in Review, open a folder) and records the matching `onboarding_step` funnel event. The card reflects where the
+// user is; the wows are experienced in the document editor + Review rail this screen sends them to.
+function renderOnboarding(state: IScreenState): string {
+	const ob = state.onboarding ?? { step: 'open' as OnboardingStep, consentEnabled: false, consentChosen: false, hasModel: false, demoGenerated: false };
+	const idx = onboardingStepIndex(ob.step);
+	const total = ONBOARDING_STEPS.length;
+
+	// The funnel progress rail: a labelled dot per step, the current one filled, past ones ticked.
+	const railLabels: Record<OnboardingStep, string> = {
+		'open': localize('livingDocs.onboarding.rail.start', "Start"), 'demo-report': localize('livingDocs.onboarding.rail.demo', "Demo"), 'provenance-peek': localize('livingDocs.onboarding.rail.wowOne', "Wow 1"), 'first-diff': localize('livingDocs.onboarding.rail.wowTwo', "Wow 2"),
+		'first-approve-sample': localize('livingDocs.onboarding.rail.approve', "Approve"), 'first-folder': localize('livingDocs.onboarding.rail.folder', "Your Folder"), 'first-approve-own': localize('livingDocs.onboarding.rail.aha', "Aha"),
+	};
+	const rail = ONBOARDING_STEPS.map((s, i) => {
+		const done = i < idx;
+		const cur = i === idx;
+		const bg = done ? 'oklch(0.6 0.13 150)' : cur ? ACCENT : '#e4e6ea';
+		const fg = (done || cur) ? '#fff' : '#9aa0aa';
+		const mark = done ? '&#10003;' : String(i + 1);
+		return `<div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1;min-width:0">
+			<span style="width:26px;height:26px;border-radius:50%;background:${bg};color:${fg};display:flex;align-items:center;justify-content:center;font:600 12px/1 system-ui">${mark}</span>
+			<span style="font:${cur ? '600' : '500'} 10.5px/1.2 system-ui;color:${cur ? '#1a1c20' : '#9aa0aa'};text-align:center">${railLabels[s]}</span>
+		</div>`;
+	}).join('<div style="height:1px;background:#e4e6ea;flex:none;width:14px;margin-top:13px"></div>');
+
+	const btn = (label: string, msg: string, primary: boolean) => primary
+		? `<button data-msg="${msg}" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">${esc(label)}</button>`
+		: `<button data-msg="${msg}" style="border:1px solid #d4d7dd;background:#fff;border-radius:10px;padding:12px 18px;font:600 13px/1 system-ui;color:#52575f;cursor:pointer">${esc(label)}</button>`;
+
+	const wowBadge = (n: number) => `<span style="display:inline-flex;align-items:center;gap:6px;background:#fdf2dc;border:1px solid #f0dcae;border-radius:999px;padding:4px 11px;font:700 11px/1 system-ui;color:#9a6b16;margin-bottom:14px">&#10022; ${localize('livingDocs.onboarding.wowBadge', "Wow moment {0}", n)}</span>`;
+
+	// The consent line, reflecting the choice already made at the consent moment (reused, not rebuilt).
+	const consentLine = ob.consentEnabled
+		? `<span style="color:oklch(0.5 0.13 150)"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150);display:inline-block;margin-right:7px"></span>${localize('livingDocs.onboarding.analyticsOn', "Analytics on - we count actions, never your words. Document content never leaves your machine.")}</span>`
+		: `<span style="color:#868b95"><span style="width:7px;height:7px;border-radius:50%;background:#cdd1d8;display:inline-block;margin-right:7px"></span>${localize('livingDocs.onboarding.analyticsOff', "Analytics off - onboarding still works, it just isn't measured. Turn it on any time in Model Access.")}</span>`;
+	const consentCard = `<div style="margin-top:22px;padding-top:18px;border-top:1px solid #f1f2f5;font:400 12.5px/1.6 system-ui">${consentLine}</div>`;
+
+	const noModel = !ob.hasModel
+		? `<p style="margin:14px 0 0;font:400 12.5px/1.5 system-ui;color:#9a6b16;background:#fdf2dc;border:1px solid #f0dcae;border-radius:9px;padding:10px 13px">${localize('livingDocs.onboarding.noModel.prefix', "No model is connected yet.")} <a data-msg="onbModelAccess" style="color:${ACCENT};cursor:pointer;text-decoration:underline">${localize('livingDocs.onboarding.noModel.link', "Connect One in Model Access")}</a> ${localize('livingDocs.onboarding.noModel.suffix', "so the prompted edit can run - the demo report and its provenance still work without it.")}</p>`
+		: '';
+
+	// Per-step card content. Each primary action drives the real engine + records the funnel step.
+	let head = '';
+	let body = '';
+	let actions = '';
+	let badge = '';
+	switch (ob.step) {
+		case 'open':
+			head = localize('livingDocs.onboarding.open.head', "Two Wows, Ten Minutes, No Setup");
+			body = localize('livingDocs.onboarding.open.body', "Abstract keeps your documents bound to their sources, so numbers stay true and edits are reviewed. In the next few minutes we'll show you the magic twice - with nothing to set up. We start from a demo report generated from a bundled dataset.");
+			actions = btn(localize('livingDocs.onboarding.open.primary', "See It Work"), 'onbSeeItWork', true) + btn(localize('livingDocs.onboarding.open.secondary', "Model Access & a Few Questions"), 'onbModelAccess', false);
+			break;
+		case 'demo-report':
+			head = localize('livingDocs.onboarding.demo.head', "Your Demo Report Is Ready");
+			body = localize('livingDocs.onboarding.demo.body', "We generated a <strong>Demo Report</strong> from a bundled dataset in your open folder. Its figures are bound to that data. Let's see the first wow.");
+			actions = btn(localize('livingDocs.onboarding.demo.primary', "Show Me the First Wow"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the Demo Report"), 'onbOpenDemo', false);
+			break;
+		case 'provenance-peek':
+			badge = wowBadge(1);
+			head = localize('livingDocs.onboarding.peek.head', "See Where Every Number Comes From");
+			body = localize('livingDocs.onboarding.peek.body', "In the Demo Report, hover the <strong>$48.6k</strong> figure (or any bound number). Abstract shows a peek: its <strong>source</strong>, its <strong>value</strong>, and <strong>when it synced</strong> - so you never wonder where a figure came from or whether it's stale.");
+			actions = btn(localize('livingDocs.onboarding.peek.primary', "I Saw Where It Came From"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the Demo Report"), 'onbOpenDemo', false);
+			break;
+		case 'first-diff':
+			badge = wowBadge(2);
+			head = localize('livingDocs.onboarding.diff.head', "Ask for One Change, Get One Clean Diff");
+			body = localize('livingDocs.onboarding.diff.body', "Now ask Abstract to improve a paragraph. We'll ask it to <strong>tighten the note to the board</strong>. A single inline <span style=\"color:#b4332f\">red</span>/<span style=\"color:#1f7a44\">green</span> diff streams into that exact paragraph - nothing else moves, and nothing changes until you approve.");
+			actions = btn(localize('livingDocs.onboarding.diff.primary', "Prompt One Edit"), 'onbPromptEdit', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the Demo Report"), 'onbOpenDemo', false);
+			body += noModel;
+			break;
+		case 'first-approve-sample':
+			head = localize('livingDocs.onboarding.approveSample.head', "Approve It - and It's Saved");
+			body = localize('livingDocs.onboarding.approveSample.body', "Open the <strong>Review</strong> panel on the right and approve the single proposal. It applies to the paragraph and is recorded as a version in <strong>History</strong> you can restore. On the web build a reload is ephemeral; on desktop the approved version persists (the X1 cure).");
+			actions = btn(localize('livingDocs.onboarding.approveSample.primary', "I Approved It"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the Demo Report"), 'onbOpenDemo', false);
+			break;
+		case 'first-folder':
+			head = localize('livingDocs.onboarding.folder.head', "Now Bring Your Own Work");
+			body = localize('livingDocs.onboarding.folder.body', "That was the sample. The moment Abstract is built for is the first change you approve on <strong>your own file</strong>. Open a real folder to make it live - you keep everything you just learned.");
+			actions = btn(localize('livingDocs.onboarding.folder.primary', "Bring a Real Folder"), 'onbOpenFolder', true);
+			break;
+		case 'first-approve-own':
+			head = localize('livingDocs.onboarding.done.head', "You're All Set");
+			body = localize('livingDocs.onboarding.done.body', "Open one of your documents, ask for a change, and approve it - that first approved change on your own file is the aha this whole flow was for. You can revisit this walkthrough any time from the command palette.");
+			actions = btn(localize('livingDocs.onboarding.done.primary', "Go to Home"), 'onbDone', true);
+			break;
+	}
+
+	return `<div class="screen">
+		<div class="scr-head"><div><h1 class="scr-title">${localize('livingDocs.onboarding.title', "Welcome to Abstract")}</h1><div class="scr-sub">${localize('livingDocs.onboarding.subtitle', "the two-wow, ten-minute path")}</div></div></div>
+		<div class="scr-body"><div style="max-width:720px;margin:0 auto;padding:30px 28px 60px">
+			<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:30px">${rail}</div>
+			<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:28px 30px">
+				${badge}
+				<h2 style="margin:0 0 12px;font:600 21px/1.3 system-ui;color:#15171c">${head}</h2>
+				<p style="margin:0 0 22px;font:400 14.5px/1.65 system-ui;color:#4a4f57">${body}</p>
+				<div style="display:flex;gap:12px;flex-wrap:wrap">${actions}</div>
+				${ob.step === 'open' ? consentCard : ''}
+			</div>
+			<p style="margin:18px 2px 0;font:400 12px/1.5 system-ui;color:#a3a8b2">${localize('livingDocs.onboarding.progress', "Step {0} of {1} - you can leave and come back - onboarding remembers where you were.", idx + 1, total)}</p>
+		</div></div>
 	</div>`;
 }
 
