@@ -308,6 +308,51 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('reviewing&hellip;'), 'an oversize tile never renders as a spinning sub-agent');
 	});
 
+	// --- project-run: a model outage must never render as "no changes proposed" (F14, issue #123) ---
+
+	test('a failed document renders the "model unreachable" tile, never "no change" (F14 issue #123)', () => {
+		// The model was unreachable for document `b`: its tile must name the outage (never the silent
+		// "no change" all-clear), and the bottom bar reports the failed bucket with the real count.
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false,
+				summary: summariseProjectRun(runDocs, [], false, [], ['b']), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('model unreachable'), 'the failed tile reads "model unreachable"');
+		assert.ok(html.includes('1 failed'), 'the bottom bar reports the failed bucket with the real count');
+		assert.ok(!html.includes('reviewing&hellip;'), 'a failed tile never renders as a spinning sub-agent');
+	});
+
+	test('a run where EVERY document failed leads with the named outage, never "0 changes proposed" (F14 issue #123)', () => {
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false,
+				summary: summariseProjectRun(runDocs, [], false, [], ['a', 'b']), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('The agent model is not reachable'), 'the bottom bar names the outage in plain words');
+		assert.ok(!html.includes('0</strong> changes proposed'), 'the false "0 changes proposed" all-clear is gone');
+		assert.ok(html.includes('Model unreachable for 2 of 2 documents'), 'the swarm heading names the outage');
+		assert.ok(!html.includes('every document read across the project'), 'no false "every document read" all-clear');
+	});
+
+	test('a budget-paused run reads the calm plain-words pause - not an error, not an all-clear (map-D15 / F14 item 3)', () => {
+		// The run paused before the documents ran: the heading reads the calm pause, the not-yet-run documents
+		// are skipped (never "no change"), the topbar shows a Paused pill, and nothing reads as failed.
+		const html = renderScreenHtml('project-run', {
+			...state, projectRun: {
+				instruction: 'Apply the review across every policy', inFlight: false, paused: true,
+				summary: summariseProjectRun(runDocs, [], true), working: [], decisions: [],
+			},
+		});
+		assert.ok(html.includes('Run paused'), 'the swarm heading reads the calm pause');
+		assert.ok(html.includes('Paused'), 'the topbar shows the Paused pill');
+		assert.ok(html.includes('skipped'), 'the not-yet-run document is honestly skipped, never "no change"');
+		assert.ok(!html.includes('model unreachable'), 'a pause is not rendered as a model failure');
+		assert.ok(!html.includes('every document read across the project'), 'a pause is not rendered as an all-clear');
+	});
+
 	// --- Agents screen: the list + the detail drawer (plan 32 iter 3) ---
 
 	function agent(over: Partial<IAgentDef> = {}): IAgentDef {
@@ -420,7 +465,23 @@ suite('livingDocs screenRender', () => {
 		assert.ok(form.includes('Which frontier model is your daily driver?') && form.includes('Which subscriptions do you own?') && form.includes('What do you make each week?'), 'all three survey questions are present');
 		assert.ok(/data-survey-save/.test(form), 'the survey has a Save action');
 		const saved = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, surveySaved: true });
-		assert.ok(saved.includes('Thanks') && !/data-survey-save/.test(saved), 'once saved, a thank-you replaces the form');
+		// Assert on the rendered Save BUTTON, not the bare `data-survey-save` selector: the client SCRIPT
+		// that ships with every screen contains `querySelectorAll('[data-survey-save]')`, so a loose
+		// `/data-survey-save/` match is always true regardless of state (issue #135: corrected here).
+		assert.ok(saved.includes('Thanks') && !/<button data-survey-save/.test(saved), 'once saved, a thank-you replaces the form');
+	});
+
+	test('the Model access screen carries the "What does Abstract send?" data-flow section (issue #135)', () => {
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } });
+		// The in-product home of the data-flow one-pager: a calm expandable section, not a new panel.
+		assert.ok(html.includes('What does Abstract send?'), 'the data-flow question is reachable on the Model access screen');
+		assert.ok(/<details data-dataflow>/.test(html), 'it is an inline expandable section that shows the answer on click');
+		// The load-bearing honesty claims are present in plain words (each traces to a real code path).
+		assert.ok(html.includes('Abstract sends content only when you ask it to work'), 'the plain-words summary is shown');
+		assert.ok(html.includes('or when an agent you have left running does its scheduled check'), 'the summary owns the scheduled-agent path (default-enabled agents can send without a gesture at that moment)');
+		assert.ok(html.includes('built-in agents run on their own') && html.includes('Pause any agent on the Agents screen'), 'the proactive-agent path is named with its off switch');
+		assert.ok(/no usage analytics today/i.test(html), 'the "no analytics today" honesty claim is present');
+		assert.ok(html.includes('docs/27-data-flow-one-pager.md'), 'it points to the full one-pager');
 	});
 
 	test('the Settings screen uses plain words only (no "OAuth", "token" or "rate limit")', () => {

@@ -6,6 +6,7 @@
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { matchesSomeScheme, Schemas } from '../../../../base/common/network.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -81,6 +82,9 @@ interface IScreenEditorState {
 	providerStatus?: IModelProviderStatus;
 	signInStage?: ChatGptSignInStage;
 	signInError?: string;
+	// The OpenAI authorize URL for the in-flight sign-in (plan 38): surfaced in the pending state as a real
+	// clickable link + copyable fallback so a fresh user reaches the sign-in page without a swallowed popup.
+	signInAuthorizeUrl?: string;
 	surveySaved?: boolean;
 }
 
@@ -488,6 +492,11 @@ export class ScreenEditor extends EditorPane {
 			case 'signOutChatGpt':
 				void this._signOutChatGpt();
 				break;
+			// Model access (plan 38): open the sign-in authorize URL OUTSIDE the sandboxed webview, in the
+			// system browser, from a genuine anchor click - the reliable route that is never popup-blocked.
+			case 'openExternalUrl':
+				if (message.arg) { this._openInBrowser(message.arg); }
+				break;
 			// "Use the included model": flip the proxy backend intent by re-reading status. The proxy's active
 			// backend is set at launch (LWD_BACKEND); here we simply re-assert the included tier in the UI and
 			// re-read the live door so the card reflects reality (a signed-out ChatGPT already falls back).
@@ -511,8 +520,11 @@ export class ScreenEditor extends EditorPane {
 			this._render();
 			return;
 		}
+		// Still attempt the automatic open, but never depend on it (a post-await window.open is popup-blocked,
+		// especially in Incognito). The pending state renders a real clickable link + copyable URL so the user
+		// can always reach the sign-in page with a genuine gesture; the poll settles the flow either way.
 		this._openInBrowser(authorizeUrl);
-		this._state = { ...this._state, signInStage: 'pending', signInError: undefined };
+		this._state = { ...this._state, signInStage: 'pending', signInError: undefined, signInAuthorizeUrl: authorizeUrl };
 		this._render();
 		this._pollSignIn();
 	}
@@ -524,7 +536,7 @@ export class ScreenEditor extends EditorPane {
 			const { stage, error } = await this._livingDocs.pollChatGptSignIn();
 			if (stage === 'signed-in') {
 				const status = await this._livingDocs.getModelProviderStatus();
-				this._state = { ...this._state, signInStage: 'signed-in', signInError: undefined, providerStatus: status };
+				this._state = { ...this._state, signInStage: 'signed-in', signInError: undefined, signInAuthorizeUrl: undefined, providerStatus: status };
 				this._render();
 				return;
 			}
@@ -542,7 +554,7 @@ export class ScreenEditor extends EditorPane {
 		this._signInPoll.clear();
 		await this._livingDocs.signOutChatGpt();
 		const status = await this._livingDocs.getModelProviderStatus();
-		this._state = { ...this._state, signInStage: 'signed-out', signInError: undefined, providerStatus: status };
+		this._state = { ...this._state, signInStage: 'signed-out', signInError: undefined, signInAuthorizeUrl: undefined, providerStatus: status };
 		this._render();
 	}
 
@@ -554,9 +566,20 @@ export class ScreenEditor extends EditorPane {
 
 	// Open the authorize URL in the user's default browser. It must open OUTSIDE the webview (the OpenAI sign-in
 	// page + the localhost:1455 loopback callback both need the real browser), so route through the opener
-	// service (which opens an external http(s) URL in the system browser).
+	// service (which opens an external http(s) URL in the system browser). `openExternal: true` skips the opener's
+	// own scheme filtering, and one call site forwards a URL that originated in a webview message, so gate the
+	// scheme here: only ever hand http(s) URLs to the OS opener, and ignore anything malformed or otherwise-schemed.
 	private _openInBrowser(url: string): void {
-		void this._openerService.open(URI.parse(url), { openExternal: true });
+		let uri: URI;
+		try {
+			uri = URI.parse(url, true);
+		} catch {
+			return;
+		}
+		if (!matchesSomeScheme(uri, Schemas.http, Schemas.https)) {
+			return;
+		}
+		void this._openerService.open(uri, { openExternal: true });
 	}
 
 	// Bind a source to a target document (plan 29 iter 2). The document may not be loaded (the Knowledge
@@ -804,21 +827,29 @@ export class ScreenEditor extends EditorPane {
 		// skipped, not no-change. Never treat an in-flight run as stopped.
 		const chat = anchor ? this._livingDocs.getChatMessages(anchor) : [];
 		const stopped = !inFlight && chat.length > 0 && !!chat[chat.length - 1].stopped;
+		// A settled run PAUSED on the spent daily budget (map-D15; F14 item 3) when the anchor's last turn is a
+		// "paused" cap turn. A paused run's not-yet-run documents are honestly skipped (they never ran) - like a
+		// stop, but the heading reads the calm plain-words pause, never a failure and never an all-clear.
+		const paused = !inFlight && chat.length > 0 && !!chat[chat.length - 1].paused;
 		// Fan-out batch progress (plan 30, track 3, D30-B): which batch of how many is running and which docs
 		// were too large for the budget. Oversize docs are flagged on their tiles (never sent, never dropped),
 		// and are excluded from the live "working" overlay so an oversize tile reads "too large", not spinning.
 		const fanout = anchor ? this._livingDocs.getFanoutProgress(anchor) : undefined;
 		const oversizeIds = fanout?.oversizeDocIds ?? [];
-		const oversize = new Set(oversizeIds);
-		const summary = summariseProjectRun(docs, pending, stopped, oversizeIds);
-		const working = inFlight ? docs.map(d => d.docId).filter(id => !oversize.has(id)) : [];
+		// Documents the model could not be reached for (F14, issue #123): their tile reads a named "model
+		// unreachable" state, never a silent "no change", and they are excluded from the live working overlay
+		// (they failed, they are not still spinning).
+		const failedIds = fanout?.failedDocIds ?? [];
+		const failedOrOversize = new Set([...oversizeIds, ...failedIds]);
+		const summary = summariseProjectRun(docs, pending, stopped || paused, oversizeIds, failedIds);
+		const working = inFlight ? docs.map(d => d.docId).filter(id => !failedOrOversize.has(id)) : [];
 		// Decisions column (23.4): group the LIVE pending changes by their source grounding. Restrict to
 		// changes for documents in this run's tile set so a stale change from another surface never leaks
 		// into the run's decisions (mirrors summariseProjectRun's tile-set restriction).
 		const runDocIds = new Set(docs.map(d => d.docId));
 		const decisions = groupDecisions(pending.filter(c => runDocIds.has(c.docId)));
 		const batch = fanout ? { index: fanout.batchIndex, count: fanout.batchCount } : undefined;
-		return { ...run, inFlight, stopped, summary, working, decisions, batch };
+		return { ...run, inFlight, stopped, paused, summary, working, decisions, batch };
 	}
 
 	layout(dimension: Dimension): void {
