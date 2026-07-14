@@ -786,6 +786,50 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.isChatBusy(WEEKLY), false, 'no longer busy once the reply lands');
 	});
 
+	test('sendChatMessage shows plain-words progress but drives the model with the full instruction (F4)', async () => {
+		const service = createService([], { model: chatReply('Drafted the sections.') });
+		await service.loadDocument(WEEKLY);
+		lastModelBody = undefined;
+
+		await service.sendChatMessage(
+			WEEKLY,
+			'Generate the first draft of "Week 24" from the "Weekly" template.\n\nTemplate brief:\n## Summary\nSummarise the figures.',
+			'Draft "Week 24" from the Weekly template.',
+		);
+
+		const user = service.getChatMessages(WEEKLY)[0];
+		assert.strictEqual(user.content, 'Draft "Week 24" from the Weekly template.', 'the rail shows plain-words progress');
+		assert.ok(!user.content.includes('Template brief'), 'the internal template brief never leaks into the rail');
+		assert.ok((user.prompt ?? '').includes('Template brief'), 'the full instruction is kept on the turn for retry');
+		assert.ok((lastModelBody ?? '').includes('Template brief'), 'the model is still driven with the full instruction');
+	});
+
+	test('getSourcePeek surfaces then-vs-now once the source drifts since last sync (F13)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		const before = service.getSourcePeek(WEEKLY, ['metrics.mrr'])!.rows.find(r => r.key === 'metrics.mrr')!;
+		assert.strictEqual(before.current, undefined, 'no then-vs-now while the source is fresh');
+
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.checkSources(WEEKLY);
+
+		const row = service.getSourcePeek(WEEKLY, ['metrics.mrr'])!.rows.find(r => r.key === 'metrics.mrr')!;
+		assert.ok(row.current !== undefined && row.current !== row.value, `stale binding shows then (${row.value}) -> now (${row.current})`);
+	});
+
+	test('listSources reports a source as not fresh once it drifts - stale never presented as current (F12)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		const freshBefore = (await service.listSources()).find(s => s.id === 'metrics.csv');
+		assert.ok(freshBefore && freshBefore.fresh, 'the source is fresh right after load');
+
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.checkSources(WEEKLY);
+
+		const stale = (await service.listSources()).find(s => s.id === 'metrics.csv');
+		assert.ok(stale && stale.fresh === false, 'a drifted source is reported not fresh');
+	});
+
 	test('cancelChat stops an in-flight reply: no pending changes, busy cleared, a muted stopped turn (plan 27)', async () => {
 		const service = createService([], { model: chatReply('should never be applied', [{ heading: 'Commentary', oldText: 'Growth accelerated sharply this week.', newText: 'x', rationale: 'y' }]) });
 		await service.loadDocument(WEEKLY);

@@ -89,6 +89,9 @@ export interface ILivingDocSummary {
 	readonly lastSynced: string;
 	/** Pending meaning-changes for this document (mirrors the Review rail count). */
 	readonly pendingCount: number;
+	/** The document's directory relative to the workspace root ('' = root), '/'-joined; drives the
+	 * tree-rail's folder hierarchy so nested subfolders are not flattened (plan 37 F7). */
+	readonly folder: string;
 }
 
 /**
@@ -189,6 +192,9 @@ export interface ISourcePeekRow {
 	readonly value: string;
 	/** True when this key is the one the clicked provenance dot points at (highlighted in the pane). */
 	readonly selected: boolean;
+	/** The live source value now ("now"), when it has drifted from the applied `value` ("then"): the source
+	 * changed since the figure was last synced. Unset when the value still matches (plan 37 F13). */
+	readonly current?: string;
 }
 
 /**
@@ -247,6 +253,10 @@ export interface IChatStep {
 export interface IChatMessage {
 	readonly role: 'user' | 'assistant';
 	readonly content: string;
+	// The underlying instruction actually sent to the model when it differs from the shown `content`
+	// (a template generation shows the user plain-words progress but drives the model with the full
+	// template brief, so the internal brief never leaks into the rail; plan 37 F4). Retry re-runs this.
+	readonly prompt?: string;
 	readonly mentions?: readonly string[];
 	readonly steps?: readonly IChatStep[];
 	readonly via?: 'model' | 'fallback';
@@ -392,6 +402,10 @@ export interface ILivingDocsService {
 
 	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
 	listDocuments(): Promise<readonly ILivingDocSummary[]>;
+
+	/** The workspace's non-Markdown files (basenames): data/source files for the tree-rail SOURCES section
+	 * and files we cannot yet import (.doc/.docx) for the "Not yet imported" section (plan 37 F9/F10). */
+	listWorkspaceExtras(): Promise<readonly string[]>;
 
 	/** Discover and parse every `*.template.md` in the workspace (for the Templates screen; plan 28). */
 	listTemplates(): Promise<readonly ITemplateInfo[]>;
@@ -617,7 +631,7 @@ export interface ILivingDocsService {
 	 * may also propose prose edits - those queue into the Review rail like any other pending change.
 	 * With no model reachable it appends an honest fallback turn and proposes nothing (never fakes a reply).
 	 */
-	sendChatMessage(resource: URI, text: string): Promise<void>;
+	sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void>;
 	/**
 	 * Cancel the in-flight chat reply for a document (plan 27). Aborts the streaming model call; the prose
 	 * streamed so far is kept as a muted "stopped" turn and any proposal JSON is discarded (decision D27-B).

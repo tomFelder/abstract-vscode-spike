@@ -65,6 +65,12 @@ const IDE_VIEW_CONTAINER_IDS = [
 	'workbench.view.debug',
 	'workbench.view.extensions',
 	'workbench.view.explorer',
+	// The stock upstream Copilot "Chat" tab (auxiliary bar): it opens the raw "Build with Agent" panel
+	// gated on Copilot sign-in, unrelated to the open document. The only Chat we expose is the Review-rail
+	// Chat (workbench.viewContainer.livingDocs), so deregister this one (plan 37 F2 / walk finding X4). Its
+	// `when` clause has OR branches that leak the tab even with chat.disableAIFeatures set, so config alone
+	// is not enough - deregistering the container removes it unconditionally.
+	'workbench.panel.chat',
 ];
 
 // --- service ---
@@ -188,6 +194,7 @@ const NEUTRALISED_IDE_CHORDS: readonly IKeybindings[] = [
 	{ primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyG, mac: { primary: KeyMod.WinCtrl | KeyMod.Shift | KeyCode.KeyG } },	// SCM (deregistered)
 	{ primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyX },													// Extensions viewlet (deregistered)
 	{ primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyM },													// Problems panel
+	{ primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyI, mac: { primary: KeyMod.CtrlCmd | KeyMod.WinCtrl | KeyCode.KeyI } },	// stock Copilot Chat toggle (container deregistered, F2/X4)
 ];
 for (const chord of NEUTRALISED_IDE_CHORDS) {
 	// Weight 1000 sits above ExternalExtension (400) so this swallow always wins the chord resolution.

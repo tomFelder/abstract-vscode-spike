@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, countTemplateSlots, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSlotHints, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, countTemplateSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSlotHints, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -247,6 +247,21 @@ suite('LivingDoc bind-link format', () => {
 		const instruction = composeTemplateInstruction('Client update', '# {{slot:client name}}\n\n## What we shipped\n\nSummarise.', 'Acme update', '');
 		assert.ok(!instruction.includes('Specific request'), 'no note line without a note');
 		assert.ok(instruction.includes('Fill these slots from the sources: client name.'));
+	});
+
+	test('documentDisplayTitle falls back to the filename for odd/blank-heading Markdown, never a bare Untitled (F8)', () => {
+		// Authored frontmatter title wins.
+		assert.strictEqual(documentDisplayTitle(parseLivingDoc('---\ntitle: Board Note\n---\n\nBody.'), 'board.md'), 'Board Note');
+		// No frontmatter title -> the first H1.
+		assert.strictEqual(documentDisplayTitle(parseLivingDoc('# Weekly Summary\n\nBody.'), 'weekly.md'), 'Weekly Summary');
+		// No title, no recognised H1 (`#Heading` has no space) -> the filename stem, not "Untitled".
+		assert.strictEqual(documentDisplayTitle(parseLivingDoc('#Heading no space\n\nBody.'), 'notes-odd.md'), 'notes-odd');
+		// Leading blank lines, no heading -> the filename stem.
+		assert.strictEqual(documentDisplayTitle(parseLivingDoc('\n\n\nJust prose, no heading.'), 'messy-two.md'), 'messy-two');
+		// No heading at all -> the filename stem.
+		assert.strictEqual(documentDisplayTitle(parseLivingDoc('plain prose only'), 'plain.md'), 'plain');
+		// Only when there is genuinely no filename either does it fall to Untitled.
+		assert.strictEqual(documentDisplayTitle(parseLivingDoc('plain'), ''), 'Untitled');
 	});
 
 	test('reconcileBindLinks rewrites visible cache to the resolved value (lock wins), keeping the key', () => {

@@ -263,6 +263,11 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .srcdrawer .sp-payload{margin:0 0 8px;padding:12px 14px;background:#f7f8fa;border:1px solid #eceef2;border-radius:8px;font:400 11.5px/1.6 'JetBrains Mono',ui-monospace,monospace;color:#2c2f36;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:220px}
 .srcdrawer .sp-field{background:#fef0d6;box-shadow:inset 0 -1px 0 oklch(0.66 0.16 45);border-radius:2px;padding:0 2px;font-weight:600;color:#8a5a12}
 .srcdrawer .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
+.srcdrawer .sp-drift{margin:0 0 8px;font:500 11px/1.5 system-ui;color:#9a6b16}
+.srcdrawer tr.changed td{background:#fffaf1}
+.srcdrawer .sp-then{color:#a3a8b2;text-decoration:line-through}
+.srcdrawer .sp-arrow{color:#a3a8b2;padding:0 2px}
+.srcdrawer .sp-now{color:#8a5a12;font-weight:600}
 .prose{max-width:720px;margin:0 auto;padding:24px 40px 80px;font:400 15.5px/1.7 system-ui;color:#2a2a31}
 .prose h1{font:600 30px/1.12 system-ui;letter-spacing:-.02em;color:#15151a;margin:24px 0 12px}
 .prose h2{font:600 16px/1.3 system-ui;color:#26262d;margin:26px 0 10px}
@@ -732,7 +737,7 @@ function pmEditWidgetHtml(e: IPmEditDecoration, bar: boolean): string {
 		+ `<p class="editp">${renderDiffSegments(e.segments)}</p>`
 		+ editor
 		+ `<div class="ctrl"><span class="cdot"></span>`
-		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span> &middot; ${Math.round(e.confidence * 100)}% confidence</span>`
+		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span></span>`
 		+ `<span class="acts normacts">${tweakBtn}<button class="approve" data-approve="${esc(e.id)}">Approve changes</button>`
 		+ `<button class="reject" data-reject="${esc(e.id)}">Reject</button></span>${tweakActs}</div></div>`;
 }
@@ -744,7 +749,7 @@ function pmInsertWidgetHtml(ins: IPmInsertDecoration): string {
 		+ framing
 		+ `<div class="insertbody">${renderGenericMarkdown(ins.newText)}</div>`
 		+ `<div class="ctrl"><span class="cdot add"></span>`
-		+ `<span class="lbl">New content from <span class="src">Chat</span> &middot; <span class="add">inserted after ${esc(ins.blockLabel)}</span> &middot; ${Math.round(ins.confidence * 100)}% confidence</span>`
+		+ `<span class="lbl">New content from <span class="src">Chat</span> &middot; <span class="add">inserted after ${esc(ins.blockLabel)}</span></span>`
 		+ `<span class="acts"><button class="approve" data-approve="${esc(ins.id)}">Approve</button>`
 		+ `<button class="reject" data-reject="${esc(ins.id)}">Reject</button></span></div></div>`;
 }
@@ -942,8 +947,16 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 // The bottom source drawer (the comp's "Workbench v2" overlay) for the PM surface: a full-width overlay
 // fixed to the bottom of the webview so the document is never split into a side-by-side pane.
 function renderSourceDrawer(peek: ISourcePeekRender): string {
-	const rows = peek.rows.map(r =>
-		`<tr class="${r.selected ? 'sel' : ''}"><td>${esc(r.key)}</td><td>${esc(r.value)}</td></tr>`).join('');
+	// then-vs-now (plan 37 F13): when the live source value has drifted from the applied value, show
+	// "then -> now" so the reader sees what was approved versus what the source says now.
+	const anyDrift = peek.rows.some(r => r.current !== undefined);
+	const rows = peek.rows.map(r => {
+		const resolved = r.current !== undefined
+			? `<span class="sp-then">${esc(r.value)}</span> <span class="sp-arrow">&rarr;</span> <span class="sp-now">${esc(r.current)}</span>`
+			: esc(r.value);
+		return `<tr class="${r.selected ? 'sel' : ''}${r.current !== undefined ? ' changed' : ''}"><td>${esc(r.key)}</td><td>${resolved}</td></tr>`;
+	}).join('');
+	const driftHint = anyDrift ? `<div class="sp-drift">&#9650; then &rarr; now: the source changed since these figures were last synced.</div>` : '';
 	// The comp shows the source's raw CSV grid with the latest row (the one the document binds to)
 	// highlighted - rendered above the resolved bound-figure list.
 	const grid = peek.grid;
@@ -979,7 +992,7 @@ function renderSourceDrawer(peek: ISourcePeekRender): string {
 		+ `<div class="sd-head"><span class="sd-name">&#8862; ${esc(peek.source)}</span>`
 		+ `<span class="sd-meta">source &middot; ${rowCount} row${rowCount === 1 ? '' : 's'}</span>${pinned}`
 		+ `<span class="sd-actions">${action}<button class="sd-x" data-source-close title="Close source">&#10005;</button></span></div>`
-		+ `<div class="sd-body">${gridHtml}${payloadHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div><table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
+		+ `<div class="sd-body">${gridHtml}${payloadHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div>${driftHint}<table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
 	return drawer;
 }
 

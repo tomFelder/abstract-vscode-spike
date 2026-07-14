@@ -10,7 +10,7 @@ import { Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { basename, dirname, isEqualOrParent, joinPath } from '../../../../base/common/resources.js';
+import { basename, dirname, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -26,7 +26,7 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
-import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
@@ -37,6 +37,7 @@ import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
 import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
+import { classifyWorkspaceExtra } from '../common/treeRail.js';
 import { projectDisplayName } from '../common/projectDisplayName.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
@@ -78,6 +79,10 @@ interface IDocState {
 	recent: Set<string>;            // block ids changed in the last refresh (for the highlight)
 	staleBindings: Set<string>;     // dirty bits: bind keys whose source changed since last sync
 	staleContext: Set<string>;      // dirty bits: context files changed since last review
+	// The live re-resolved source value per bind key from the last freshness recompute (the "now"); the
+	// lock holds the applied value at last sync (the "then"). Powers the source drawer's then-vs-now line
+	// (plan 37 F13) with no extra source read. Undefined until the first recompute; absent keys = unresolved.
+	current?: Map<string, string>;
 	status: string;
 	folderFiles: readonly string[]; // real md/csv/json siblings in the doc's folder (for @mention + pickers)
 }
@@ -697,14 +702,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			kind: SourceKind;
 			label: string;
 			syncedAt: string | undefined;
+			// The oldest sync time among the bindings that are currently STALE (plan 37 F12): a stale source
+			// must never read as freshly-synced, so its label reports how old its stale data actually is rather
+			// than the newest sync across its (still-fresh) dependents. Undefined while the source is all-fresh.
+			staleSyncedAt: string | undefined;
 			fresh: boolean;
 			usedBy: Map<string, { doc: URI; title: string; keys: Set<string>; context: boolean }>;
 		}
 		const acc = new Map<string, IRegistryRow>();
 		const ensure = (id: string, kind: SourceKind): IRegistryRow => {
 			let row = acc.get(id);
-			if (!row) { row = { kind, label: sourceLabel(id, kind), syncedAt: undefined, fresh: true, usedBy: new Map() }; acc.set(id, row); }
+			if (!row) { row = { kind, label: sourceLabel(id, kind), syncedAt: undefined, staleSyncedAt: undefined, fresh: true, usedBy: new Map() }; acc.set(id, row); }
 			return row;
+		};
+		// Fold one binding's sync time into a row: track the newest overall, and the oldest among stale ones.
+		const foldSync = (row: IRegistryRow, at: string, stale: boolean) => {
+			if (stale) { row.fresh = false; if (!row.staleSyncedAt || at < row.staleSyncedAt) { row.staleSyncedAt = at; } }
+			if (!row.syncedAt || at > row.syncedAt) { row.syncedAt = at; }
 		};
 		for (const uri of found.values()) {
 			const projection = await this._sourceProjection(uri);
@@ -728,8 +742,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				for (const key of keys) {
 					const entry = lock.bindings[key];
 					if (!entry) { continue; }
-					if (!bindingIsFresh(resolution.get(key), entry)) { row.fresh = false; }
-					if (!row.syncedAt || entry.syncedAt > row.syncedAt) { row.syncedAt = entry.syncedAt; }
+					foldSync(row, entry.syncedAt, !bindingIsFresh(resolution.get(key), entry));
 				}
 			}
 			// Context sources (frontmatter `context:`): influence edges - no bind keys; freshness compares the
@@ -741,8 +754,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				if (existing) { existing.context = true; } else { row.usedBy.set(docId, { doc: uri, title, keys: new Set(), context: true }); }
 				const entry = lock.context[file];
 				if (entry) {
-					if (contextHashes.get(file) !== entry.reviewedHash) { row.fresh = false; }
-					if (!row.syncedAt || entry.reviewedAt > row.syncedAt) { row.syncedAt = entry.reviewedAt; }
+					foldSync(row, entry.reviewedAt, contextHashes.get(file) !== entry.reviewedHash);
 				}
 			}
 		}
@@ -751,7 +763,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const usedBy: ISourceUsage[] = [...row.usedBy.values()]
 				.map(u => ({ doc: u.doc, title: u.title, keys: [...u.keys].sort((a, b) => a.localeCompare(b)), context: u.context }))
 				.sort((a, b) => a.title.localeCompare(b.title));
-			sources.push({ id, kind: row.kind, label: row.label, syncedAt: row.syncedAt, fresh: row.fresh, usedBy });
+			// A stale source reports its oldest stale sync time so it never reads as freshly-synced (F12);
+			// an all-fresh source reports the newest sync across its dependents.
+			const syncedAt = row.fresh ? row.syncedAt : (row.staleSyncedAt ?? row.syncedAt);
+			sources.push({ id, kind: row.kind, label: row.label, syncedAt, fresh: row.fresh, usedBy });
 		}
 		sources.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
 		return sources;
@@ -1036,9 +1051,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return target;
 		}
 		// Drive the existing generative chat path with the composed brief: the model's output arrives as
-		// insertion proposals in the review rail, exactly like any chat generation.
+		// insertion proposals in the review rail, exactly like any chat generation. The rail shows plain-words
+		// progress (F4), never the internal template brief - the full instruction drives the model only.
 		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
-		await this.sendChatMessage(target, instruction);
+		const trimmedNote = (note ?? '').trim();
+		const display = trimmedNote
+			? `Draft "${requested}" from the ${templateName} template. ${trimmedNote}`
+			: `Draft "${requested}" from the ${templateName} template.`;
+		await this.sendChatMessage(target, instruction, display);
 		return target;
 	}
 
@@ -1060,6 +1080,50 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				await this._collectDocs(child.resource, found, depth + 1);
 			} else if (this._isDocFile(child.resource)) {
 				found.set(child.resource.toString(), child.resource);
+			}
+		}
+	}
+
+	// The document's directory relative to the workspace root ('' = root), '/'-joined, so the tree-rail can
+	// preserve on-disk hierarchy instead of flattening every document into one list (plan 37 F7). Resolved
+	// against whichever workspace folder contains the document; a document outside every folder reports ''.
+	private _relativeFolder(uri: URI): string {
+		for (const folder of this._workspace.getWorkspace().folders) {
+			const rel = relativePath(folder.uri, uri);
+			if (rel === undefined || rel.startsWith('../') || rel === '..') { continue; }
+			const slash = rel.lastIndexOf('/');
+			return slash >= 0 ? rel.slice(0, slash) : '';
+		}
+		return '';
+	}
+
+	// The workspace's non-Markdown files, as basenames (plan 37 F9/F10): CSV/txt/image/data files for the
+	// tree-rail SOURCES section and files we cannot yet import (.doc/.docx) for its "Not yet imported"
+	// section. Mirrors `_collectDocs`' bounded, hidden-dir-skipping walk; classification is pure (treeRail).
+	async listWorkspaceExtras(): Promise<readonly string[]> {
+		const found = new Set<string>();
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectExtras(folder.uri, found, 0);
+		}
+		return [...found].sort((a, b) => a.localeCompare(b));
+	}
+
+	private async _collectExtras(dir: URI, found: Set<string>, depth: number): Promise<void> {
+		if (depth > 4) { return; }
+		let children;
+		try {
+			children = (await this._files.resolve(dir)).children ?? [];
+		} catch (e) {
+			this._log.trace('[livingDocs] extras scan skipped', e instanceof Error ? e.message : String(e));
+			return;
+		}
+		for (const child of children) {
+			const name = basename(child.resource);
+			if (child.isDirectory) {
+				if (name.startsWith('.') || name === 'node_modules' || name === 'out') { continue; }
+				await this._collectExtras(child.resource, found, depth + 1);
+			} else if (classifyWorkspaceExtra(name)) {
+				found.add(name);
 			}
 		}
 	}
@@ -1103,12 +1167,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const bound = doc.blocks.reduce((n, b) => n + b.binds.length, 0);
 			return {
 				resource: uri,
-				title: doc.title,
+				// Never a bare "Untitled" for an odd/blank-heading file: fall back to the filename (F8).
+				title: documentDisplayTitle(doc, basename(uri)),
 				isLiving: doc.isLiving,
 				sourceKinds: [...kinds],
 				sources: doc.sources,
 				lastSynced: doc.context.length ? `${doc.context.length} context` : (bound ? `${bound} bound` : ''),
 				pendingCount: this._pending.filter(c => c.docId === id).length,
+				folder: this._relativeFolder(uri),
 			};
 		} catch (e) {
 			this._log.trace('[livingDocs] summarize skipped', e instanceof Error ? e.message : String(e));
@@ -1227,10 +1293,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private async _recomputeFreshness(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		const staleBindings = new Set<string>();
 		const staleContext = new Set<string>();
+		// The current re-resolved values (the "now" for the drawer's then-vs-now, F13). We already read every
+		// source here for the dirty-bit compare, so retaining the values costs nothing extra.
+		const current = new Map<string, string>();
 		if (state.doc.isLiving) {
 			const resolution = await this._resolveCurrent(state, pass);
 			for (const key of Object.keys(state.lock.bindings)) {
 				const cur = resolution.get(key);
+				if (cur) { current.set(key, cur.value); }
 				if (cur && !bindingIsFresh(cur, state.lock.bindings[key])) { staleBindings.add(key); }
 			}
 			for (const file of state.doc.context) {
@@ -1241,6 +1311,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		state.staleBindings = staleBindings;
 		state.staleContext = staleContext;
+		state.current = current;
 		if (state.doc.isLiving) {
 			state.status = (staleBindings.size || staleContext.size) ? 'Sources changed - may be affected' : 'All sources synced';
 		}
@@ -2690,7 +2761,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._chatBusy.has(resource.toString());
 	}
 
-	async sendChatMessage(resource: URI, text: string): Promise<void> {
+	// `displayText`, when given, is the plain-words progress shown to the user in the rail while the model
+	// is driven with the full `text` instruction (plan 37 F4): a template generation shows "Draft ... from
+	// the ... template." rather than dumping the internal template brief/prompt into the chat. The full
+	// instruction is kept on the turn's `prompt` so a retry re-runs the brief, not the shown words.
+	async sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void> {
 		const trimmed = text.trim();
 		if (!trimmed) { return; }
 		const id = resource.toString();
@@ -2698,7 +2773,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chats.set(id, history);
 
 		const mentions = this._parseMentions(resource, trimmed);
-		history.push({ role: 'user', content: trimmed, mentions: mentions.length ? mentions : undefined });
+		const shown = (displayText ?? '').trim();
+		history.push({ role: 'user', content: shown || trimmed, prompt: shown ? trimmed : undefined, mentions: mentions.length ? mentions : undefined });
 		await this._deliverChatReply(resource, trimmed, mentions);
 	}
 
@@ -2721,8 +2797,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		while (history.length && history[history.length - 1].role === 'assistant') { history.pop(); }
 		const last = history[history.length - 1];
 		if (!last || last.role !== 'user') { return; }
-		const mentions = last.mentions ? [...last.mentions] : this._parseMentions(resource, last.content);
-		void this._deliverChatReply(resource, last.content, mentions);
+		// Re-run the underlying instruction (the template brief for a generation turn), not the plain-words
+		// progress shown in the rail (plan 37 F4): `prompt` holds it when the shown content was substituted.
+		const instruction = last.prompt ?? last.content;
+		const mentions = last.mentions ? [...last.mentions] : this._parseMentions(resource, instruction);
+		void this._deliverChatReply(resource, instruction, mentions);
 	}
 
 	retryFailedDocs(resource: URI): void {
@@ -3328,11 +3407,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(resource.toString());
 		if (!state || !state.doc.isLiving) { return undefined; }
 		const selected = new Set(cells);
-		const rows: ISourcePeekRow[] = Object.keys(state.lock.bindings).map(key => ({
-			key,
-			value: state.lock.bindings[key].resolved,
-			selected: selected.has(key),
-		}));
+		const rows: ISourcePeekRow[] = Object.keys(state.lock.bindings).map(key => {
+			const value = state.lock.bindings[key].resolved;
+			// then-vs-now (F13): if the source has drifted since last sync, surface the live value alongside.
+			const now = state.staleBindings.has(key) ? state.current?.get(key) : undefined;
+			const current = now !== undefined && now !== value ? now : undefined;
+			return { key, value, selected: selected.has(key), ...(current !== undefined ? { current } : {}) };
+		});
 		const source = state.doc.sources.find(s => sourceKind(s) === 'file') ?? state.doc.sources[0] ?? 'source';
 		const referencedBy = [...this._docs.values()]
 			.filter(s => s.doc.isLiving && s.doc.sources.some(src => state.doc.sources.includes(src)))

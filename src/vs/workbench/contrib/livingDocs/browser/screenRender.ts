@@ -11,6 +11,7 @@
 
 import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { countTemplateSlots } from '../common/livingDocMarkdown.js';
+import { relativeSyncedLabel } from '../common/livingDocPmDecorations.js';
 import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings';
@@ -648,21 +649,9 @@ function renderTemplates(state: IScreenState): string {
 // (every bound source + its freshness + the documents that depend on it) with a per-source detail drawer;
 // the Organization tab is an honest "Soon" until a real org store exists (never fabricated). ----
 
-// A truthful relative "last synced" label from a lock timestamp. Undefined = referenced but never synced
-// (the honest idle state), never a fabricated freshness.
-function relativeSynced(iso: string | undefined): string {
-	if (!iso) { return 'Not yet synced'; }
-	const t = Date.parse(iso);
-	if (Number.isNaN(t)) { return 'Not yet synced'; }
-	const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
-	if (s < 60) { return 'Synced just now'; }
-	const m = Math.floor(s / 60);
-	if (m < 60) { return `Synced ${m} min ago`; }
-	const h = Math.floor(m / 60);
-	if (h < 24) { return `Synced ${h} h ago`; }
-	const d = Math.floor(h / 24);
-	return `Synced ${d} day${d === 1 ? '' : 's'} ago`;
-}
+// The relative "last synced" label is the single shared `relativeSyncedLabel` (common/livingDocPmDecorations)
+// so the Knowledge library, the source detail drawer and the in-document figure hover all read identically
+// (plan 37 F12 - one formatter, one source of truth; stale-vs-current is enforced upstream in `listSources`).
 
 // Kind glyph for a source row (source-hygiene: non-ASCII written as HTML entities).
 const SOURCE_KIND_ICON: Record<string, string> = { file: '&#9635;', api: '&#127760;', mcp: '&#9670;' };
@@ -700,7 +689,7 @@ function renderKnowledge(state: IScreenState): string {
 			<span style="width:26px;height:26px;flex:none;border-radius:7px;background:${av.color};color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center">${SOURCE_KIND_ICON[s.kind] ?? SOURCE_KIND_ICON.file}</span>
 			<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 13px/1.3 system-ui;color:#1a1c20">${esc(s.label)}</span>
 			<span style="font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;text-transform:uppercase;color:#868b95">${s.kind}</span>
-			<span style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${relativeSynced(s.syncedAt)}</span>
+			<span style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${relativeSyncedLabel(s.syncedAt)}</span>
 			<span>${freshCell(s.fresh)}</span>
 			<span style="font:500 11.5px/1 system-ui;color:#52575f">${s.usedBy.length} doc${s.usedBy.length === 1 ? '' : 's'}</span>
 		</button>`;
@@ -743,7 +732,7 @@ function renderKnowledge(state: IScreenState): string {
 		? `<div style="background:#fbfbfc;border:1px solid #e9eaee;border-radius:12px;padding:16px 16px 14px">
 				<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:4px">SOURCE</div>
 				<div style="font:600 15px/1.3 system-ui;color:#15171c;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(selected.label)}</div>
-				<div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:14px">${selected.kind} &middot; ${relativeSynced(selected.syncedAt)}</div>
+				<div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:14px">${selected.kind} &middot; ${relativeSyncedLabel(selected.syncedAt)}</div>
 				<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">USED BY ${selected.usedBy.length} DOCUMENT${selected.usedBy.length === 1 ? '' : 'S'}</div>
 				${selected.usedBy.map(u => usageRow(selected, u)).join('')}
 			</div>`
