@@ -96,6 +96,28 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('OR START FROM A TEMPLATE'), 'no template section when the folder ships no templates');
 	});
 
+	// --- F17 "From sources..." (journey 1b's third birth): the on-ramp gains a From-sources birth + picker ---
+	test('home offers the "From sources..." birth: a source picker sheet driven by the real folder sources', () => {
+		const html = renderScreenHtml('home', {
+			...state, hasFolder: true, folderName: 'realdocs-test', docs: [], templates: [],
+			dataFiles: ['metrics.csv'], docFiles: ['market-research.md', 'Team Notes.md'],
+		});
+		// The third birth is present in the New-document sheet and opens its own picker sheet.
+		assert.ok(/data-sheet-open="fromsources"/.test(html), 'the New-document sheet carries a From sources... row');
+		assert.ok(html.includes('id="sheet-fromsources"'), 'the source picker sheet is present');
+		assert.ok(html.includes('New document from sources'), 'the picker names the birth');
+		// Real data only: every folder source is a checkbox pick; the submit posts newFromSources.
+		assert.ok(html.includes('data-pick="metrics.csv"'), 'the csv data source is a pick');
+		assert.ok(html.includes('data-pick="market-research.md"') && html.includes('data-pick="Team Notes.md"'), 'the documents are picks');
+		assert.ok(/data-msg="newFromSources"/.test(html), 'the picker submits to newFromSources');
+		assert.ok(/data-field="name"/.test(html) && /data-field="note"/.test(html), 'the picker has a name and an optional instruction');
+	});
+
+	test('home omits the From-sources birth when the project has no sources (real data only)', () => {
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'empty', docs: [], templates: [], dataFiles: [], docFiles: [] });
+		assert.ok(!/data-sheet-open="fromsources"/.test(html), 'no From sources row when there is nothing to draft from');
+	});
+
 	// --- Empty-project front door (F15 / journey 1w frame 4): a folder is open with no documents ---
 
 	test('home with a folder open but no documents lands on the empty-project front door (cures the 1a dead-end)', () => {
@@ -208,6 +230,32 @@ suite('livingDocs screenRender', () => {
 		assert.ok(/data-msg="newTemplate"/.test(html) && html.includes('Create your first template'), 'offers to create the first template');
 		// The old mockup content is gone (no fabricated draft / resolved-slots preview).
 		assert.ok(!html.includes('Weekly Operating Summary') && !html.includes('ALL SLOTS RESOLVED'), 'no fabricated draft preview');
+	});
+
+	// --- F18 from-examples template wizard (journey 1x): a picker over the real project documents ---
+	test('templates screen offers the from-examples wizard: a picker over the real documents, keeping the blank editor', () => {
+		const templates = [template('Weekly report', 'A weekly operating summary.', ['metrics.csv'], '# {{slot:title}}\n\nMRR.')];
+		const html = renderScreenHtml('templates', { ...state, templates, docFiles: ['Board Note.md', 'Team Notes.md', 'Weekly Summary.md', 'market-research.md'] });
+		assert.ok(/data-sheet-open="fromexamples"/.test(html), 'a New From Examples action opens the wizard');
+		assert.ok(html.includes('id="sheet-fromexamples"'), 'the from-examples picker sheet is present');
+		assert.ok(html.includes('New template from examples'), 'the sheet names the wizard');
+		assert.ok(html.includes('data-pick="Board Note.md"') && html.includes('data-pick="market-research.md"'), 'every real document is a pick');
+		assert.ok(/data-msg="newTemplateFromExamples"/.test(html), 'the wizard submits to newTemplateFromExamples');
+		// The manual editor stays, labelled as editing/blank - not the wizard (spec 1x).
+		assert.ok(/data-msg="newTemplate"/.test(html) && html.includes('New Blank Template'), 'the manual blank editor is retained and labelled as such');
+	});
+
+	test('templates empty state leads with the from-examples wizard when there are documents to learn from', () => {
+		const html = renderScreenHtml('templates', { ...state, templates: [], docFiles: ['a.md', 'b.md', 'c.md'] });
+		assert.ok(/data-sheet-open="fromexamples"/.test(html), 'the empty state offers New from examples');
+		assert.ok(html.includes('id="sheet-fromexamples"'), 'the wizard sheet is present in the empty state');
+		assert.ok(/data-msg="newTemplate"/.test(html) && html.includes('New blank template'), 'the blank editor is still offered');
+	});
+
+	test('templates empty state falls back to the blank editor when there are no documents to learn from', () => {
+		const html = renderScreenHtml('templates', { ...state, templates: [], docFiles: [] });
+		assert.ok(!/data-sheet-open="fromexamples"/.test(html), 'no wizard entry without documents to learn from');
+		assert.ok(html.includes('Create your first template'), 'still offers to author a template by hand');
 	});
 
 	test('templates screen carries no "Soon" labels', () => {

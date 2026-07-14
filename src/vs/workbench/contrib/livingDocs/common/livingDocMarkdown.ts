@@ -135,6 +135,126 @@ export function composeTemplateInstruction(templateName: string, body: string, d
 	return lines.join('\n');
 }
 
+// ---- "From sources..." birth (F17, journey 1b): the third new-document birth. The user picks one or more
+// project source files (csv/json bind sources + md/txt knowledge) and the document is DRAFTED FROM THEM
+// through the review engine - the draft arrives as reviewable proposals, never silently written prose. The
+// two helpers below are the pure, self-contained pieces (skeleton + model brief); the service writes the
+// skeleton, opens it, and drives the SAME chat path every generation uses so provenance is honest: the
+// picked sources are declared in the skeleton frontmatter (`sources:` for value data, `context:` for prose
+// knowledge) so bound figures resolve and the draft's origin is recorded on disk. Pure + tested.
+
+// Build the STATIC skeleton for a document drafted from sources (F17). Just the frontmatter recording the
+// picked sources plus the document's own H1 - no fabricated body (the prose is the review engine's job).
+// `valueSources` (csv/json) land under `sources:` so their figures can bind; `context` (md/txt) under
+// `context:` so they are read as knowledge. An empty name falls back to the first source's stem, else
+// 'Untitled'. Deterministic, so it is snapshot-testable.
+export function buildSourcesSkeleton(docName: string, valueSources: readonly string[], contextSources: readonly string[]): string {
+	const title = docName.trim() || sourceStem(valueSources[0] ?? contextSources[0]) || 'Untitled';
+	const fm = ['---'];
+	if (valueSources.length) { fm.push('sources:', ...valueSources.map(s => `  - ${s}`)); }
+	if (contextSources.length) { fm.push('context:', ...contextSources.map(s => `  - ${s}`)); }
+	fm.push('---');
+	return `${fm.join('\n')}\n\n# ${title}\n`;
+}
+
+// Reduce a source file name to a human stem for a title fallback: drop the directory and extension.
+function sourceStem(source: string | undefined): string {
+	if (!source) { return ''; }
+	const base = source.split('/').pop() ?? source;
+	return base.replace(/\.[a-z0-9]+$/i, '').trim();
+}
+
+// Compose the instruction the "From sources..." draft sends through the EXISTING chat path (F17). The
+// document is already named and its sources are already declared (and so read by the chat path); this asks
+// the model to DRAFT the document from those sources, and - matching the template path's born-bound stance -
+// to represent any figure taken from a data source as a `bind:` link rather than a baked-in number, so
+// provenance survives. The model answers with insertion proposals that land in the review rail; generation
+// never writes prose directly (decision 17). Deterministic, so it is snapshot-testable.
+export function composeSourcesInstruction(docName: string, valueSources: readonly string[], contextSources: readonly string[], note: string): string {
+	const name = docName.trim() || 'this document';
+	const all = [...valueSources, ...contextSources];
+	const lines = [
+		`Draft the first version of "${name}" from the attached sources: ${all.join(', ') || 'the project sources'}.`,
+		`Write the body as new content inserted into the document, grounded in what the sources actually say. Do not invent figures.`,
+	];
+	if (valueSources.length) {
+		lines.push(`Where you state a figure that comes from a data source (${valueSources.join(', ')}), write it as a bind link - [value](bind:<source>.<field>) - so it stays traceable, rather than baking in a plain number.`);
+	}
+	if (note.trim()) {
+		lines.push('', `Specific request for this document: ${note.trim()}`);
+	}
+	return lines.join('\n');
+}
+
+// ---- "New template from examples" wizard (F18, journey 1x): the user picks 3-10 past documents; the agent
+// names what repeats (structure, recurring figures, tone) THROUGH THE REVIEW GRAMMAR and proposes a real
+// `*.template.md` (a skill.md-shaped file: description + rules + tone + success examples) written to the
+// project, which then joins the + New picker. The helpers below are the pure pieces: the example-set
+// validation, the template skeleton, and the analysis brief. Pure + tested.
+
+// The example-set bounds (journey 1x: "3-10 past documents"). Fewer than the floor cannot show a pattern;
+// more than the ceiling is refused rather than silently truncated - both with a plain-words reason.
+export const EXAMPLE_SET_MIN = 3;
+export const EXAMPLE_SET_MAX = 10;
+
+// Validate a picked example set (F18). Returns `ok:false` with a plain-words `reason` when the count is
+// outside the bounds - never a black-box refusal. Pure, so the sheet and the service share one rule.
+export function validateExampleSet(picks: readonly string[]): { readonly ok: boolean; readonly reason?: string } {
+	const n = picks.length;
+	if (n < EXAMPLE_SET_MIN) {
+		return { ok: false, reason: `Pick at least ${EXAMPLE_SET_MIN} documents so the pattern is real - you chose ${n}.` };
+	}
+	if (n > EXAMPLE_SET_MAX) {
+		return { ok: false, reason: `Pick at most ${EXAMPLE_SET_MAX} documents - you chose ${n}. Trim the set to the clearest examples.` };
+	}
+	return { ok: true };
+}
+
+// Build the STATIC skeleton for a template grown from examples (F18). A real `*.template.md`: `template: true`
+// frontmatter with the human name, a description the analysis will fill, the picked examples recorded under
+// `context:` so the review-grammar analysis reads them (and the file honestly records what it was grown
+// from), and the skill.md section scaffold (structure / recurring figures / tone / success examples) the
+// analysis fills through review. Deterministic, so it is snapshot-testable.
+export function buildExamplesTemplateSkeleton(templateName: string, examples: readonly string[]): string {
+	const name = templateName.trim() || 'Untitled Template';
+	const fm = ['---', 'template: true', `name: ${name}`, 'description: Grown from example documents - the shared pattern is described below.'];
+	if (examples.length) { fm.push('context:', ...examples.map(e => `  - ${e}`)); }
+	fm.push('---');
+	const body = [
+		`# ${name}`,
+		'',
+		'## Structure',
+		'',
+		'The sections and order these documents share.',
+		'',
+		'## Recurring figures',
+		'',
+		'The numbers worth binding to a source each time.',
+		'',
+		'## Tone',
+		'',
+		'How these documents read - voice, length, formality.',
+		'',
+		'## Success examples',
+		'',
+		'What a good version of this document looks like.',
+	];
+	return `${fm.join('\n')}\n\n${body.join('\n')}\n`;
+}
+
+// Compose the instruction the from-examples wizard sends through the EXISTING chat path (F18). The examples
+// are already declared as `context:` on the new template (and so read by the chat path); this asks the model
+// to NAME what repeats across them and fill each section of the template. The model answers with insertion
+// proposals that land in the review rail - the analysis is reviewable, never a silent write, and a model
+// outage becomes an honest error turn, never "no commonalities". Deterministic, so it is snapshot-testable.
+export function composeExamplesInstruction(templateName: string, examples: readonly string[]): string {
+	return [
+		`Study the ${examples.length} attached example documents (${examples.join(', ')}) and describe the pattern they share, so it can become the "${templateName}" template.`,
+		`Fill each section as new content inserted after its heading: under Structure, the sections and order they share; under Recurring figures, the numbers worth binding to a source; under Tone, how they read; under Success examples, what a strong version looks like.`,
+		`Name only what genuinely repeats across the examples - do not invent structure that is not there.`,
+	].join('\n');
+}
+
 function slug(s: string): string {
 	return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'section';
 }

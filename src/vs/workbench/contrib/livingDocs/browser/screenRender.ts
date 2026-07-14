@@ -46,6 +46,11 @@ export interface IScreenState {
 	readonly knSelectedSource?: string;
 	/** Knowledge: the project's data files (csv/json) offered by the Add-source picker, and the docs to bind to. */
 	readonly dataFiles?: readonly string[];
+	/**
+	 * Home + Templates: the project's document files (md/txt at the root) - the knowledge half of the
+	 * "From sources..." birth picker (F17) and the example set for the from-examples template wizard (F18).
+	 */
+	readonly docFiles?: readonly string[];
 	/** Agents: the live registry (drives the table + canvas). */
 	readonly agents: readonly IAgentDef[];
 	/** Agents: the agent whose workflow canvas is open (vs the list). */
@@ -249,6 +254,49 @@ function sheet(id: string, opts: { title: string; sub?: string; nameLabel: strin
 	</div>`;
 }
 
+// One checkbox row in a multi-select picker sheet (F17/F18): a labelled checkbox carrying its pick value.
+// The whole row is the click target; `sub` is an optional mono meta line (e.g. the file kind).
+function pickRow(value: string, label: string, sub?: string): string {
+	return `<label class="sheet-row" style="cursor:pointer;margin-top:6px">
+		<input type="checkbox" data-pick="${esc(value)}" style="width:16px;height:16px;flex:none;accent-color:${ACCENT}">
+		<span style="flex:1;min-width:0"><span style="display:block;font:600 12.5px/1.3 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</span>${sub ? `<span style="display:block;font:400 11px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${esc(sub)}</span>` : ''}</span>
+	</label>`;
+}
+
+// A multi-select picker sheet (F17 "From sources...", F18 "New template from examples"): a name field, an
+// optional note, a scrollable checkbox list with a live "N selected" count, and a submit that posts the
+// checked values as `picks`. Real data only: with no options it shows a calm empty line and no submit. The
+// out-of-bounds refusal (too few/too many) is the service's, in plain words - not a silently dead button.
+function pickerSheet(id: string, opts: { title: string; sub?: string; nameLabel: string; namePlaceholder: string; note?: boolean; pickLabel: string; submitMsg: string; submitLabel: string; rows: string; empty: string }): string {
+	const note = opts.note
+		? `<label class="sheet-label" style="margin-top:14px">Anything specific for this one?</label>
+			<input class="sheet-input" data-field="note" placeholder="Optional - a focus, a tone, a detail to include">`
+		: '';
+	const hasRows = opts.rows.length > 0;
+	const list = hasRows
+		? `<div style="max-height:230px;overflow-y:auto;margin:2px -2px 0;padding:0 2px">${opts.rows}</div>`
+		: `<p style="margin:8px 0 0;font:400 12.5px/1.5 system-ui;color:#868b95">${esc(opts.empty)}</p>`;
+	const actions = `<div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+			<button class="btn-ghost" data-sheet-close="${id}">Cancel</button>
+			${hasRows ? `<button class="btn-primary" data-sheet-submit data-pick-submit data-msg="${esc(opts.submitMsg)}">${esc(opts.submitLabel)}</button>` : ''}
+		</div>`;
+	return `<div class="sheet-back" id="sheet-${id}" data-sheet="${id}">
+		<div class="sheet-card" role="dialog" aria-modal="true">
+			<h2 class="sheet-title">${esc(opts.title)}</h2>
+			${opts.sub ? `<p class="sheet-sub">${esc(opts.sub)}</p>` : ''}
+			<label class="sheet-label">${esc(opts.nameLabel)}</label>
+			<input class="sheet-input" data-field="name" data-autofocus placeholder="${esc(opts.namePlaceholder)}">
+			${note}
+			<div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 0">
+				<label class="sheet-label" style="margin:0">${esc(opts.pickLabel)}</label>
+				<span data-pick-count style="font:500 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">0 selected</span>
+			</div>
+			${list}
+			${actions}
+		</div>
+	</div>`;
+}
+
 // Shared webview head: same font stack, selection colour and scrollbar treatment as the comp shell.
 const HEAD = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
@@ -302,14 +350,31 @@ function lwdSheet(id) { return document.getElementById('sheet-' + id); }
 function lwdClose(id) { const s = lwdSheet(id); if (s) { s.style.display = 'none'; } }
 function lwdOpen(id, arg, name) {
 	const s = lwdSheet(id); if (!s) { return; }
+	// Only one sheet at a time: opening a second birth (e.g. From sources from the New-document sheet) hides
+	// the first, so the overlays never stack.
+	for (const other of document.querySelectorAll('[data-sheet]')) { other.style.display = 'none'; }
 	s.dataset.arg = arg || '';
 	const nameEl = s.querySelector('[data-field=name]');
 	if (nameEl) { nameEl.value = name || ''; }
 	const noteEl = s.querySelector('[data-field=note]');
 	if (noteEl) { noteEl.value = ''; }
+	// Reset any multi-select picker (checkboxes) and refresh its count/limit affordance.
+	for (const pick of s.querySelectorAll('[data-pick]')) { pick.checked = false; }
+	lwdPickCount(s);
 	s.style.display = 'flex';
 	const focus = s.querySelector('[data-autofocus]');
 	if (focus) { focus.focus(); if (focus.select) { focus.select(); } }
+}
+// Update a picker sheet's live "N selected" count label. The count is advisory only - the actual bound check
+// (at least one source for F17; 3-10 examples for F18) is enforced by the service, which refuses out-of-bounds
+// selections with a plain-words reason rather than a silently dead button.
+function lwdPickCount(s) {
+	const picks = s.querySelectorAll('[data-pick]');
+	if (!picks.length) { return; }
+	let n = 0;
+	for (const p of picks) { if (p.checked) { n++; } }
+	const label = s.querySelector('[data-pick-count]');
+	if (label) { label.textContent = n + ' selected'; }
 }
 function lwdSubmit(el) {
 	const s = el.closest('[data-sheet]'); if (!s) { return; }
@@ -317,6 +382,8 @@ function lwdSubmit(el) {
 	const noteEl = s.querySelector('[data-field=note]');
 	const targetEl = s.querySelector('[data-field=target]');
 	const apiEl = s.querySelector('[data-field=apiurl]');
+	const picks = [];
+	for (const p of s.querySelectorAll('[data-pick]')) { if (p.checked) { picks.push(p.getAttribute('data-pick')); } }
 	vscode.postMessage({
 		type: el.getAttribute('data-msg'),
 		arg: el.getAttribute('data-arg') || s.dataset.arg || undefined,
@@ -324,8 +391,13 @@ function lwdSubmit(el) {
 		note: noteEl ? noteEl.value.trim() : undefined,
 		target: targetEl ? targetEl.value : undefined,
 		apiurl: apiEl ? apiEl.value.trim() : undefined,
+		picks: picks.length ? JSON.stringify(picks) : undefined,
 	});
 	lwdClose(s.getAttribute('data-sheet'));
+}
+// Keep every picker's count/limit affordance live as the user toggles checkboxes.
+for (const el of document.querySelectorAll('[data-pick]')) {
+	el.addEventListener('change', () => { const s = el.closest('[data-sheet]'); if (s) { lwdPickCount(s); } });
 }
 for (const el of document.querySelectorAll('[data-sheet-open]')) {
 	el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); lwdOpen(el.getAttribute('data-sheet-open'), el.getAttribute('data-arg'), el.getAttribute('data-name')); });
@@ -674,7 +746,29 @@ function renderHome(state: IScreenState): string {
 	// New-document on-ramp (plan 28, iter 4): a "New document" primary + a name-or-template sheet. Blank
 	// (Enter/default) makes a titled `<name>.md` - or an Untitled name-on-save doc when the name is empty
 	// (decision 56); the template rows reach the iter-3 generate flow with that same typed name.
-	const newDocSheet = renderNewDocSheet(state.templates ?? []);
+	// The "From sources..." birth (F17): its picker offers the project's real data files (csv/json bind
+	// sources) and documents (md/txt knowledge). With none, the New-document sheet omits the row and the
+	// picker shows a calm empty line. Real data only - the options come from the service's folder scan.
+	const dataFiles = state.dataFiles ?? [];
+	const docFiles = state.docFiles ?? [];
+	const hasSources = dataFiles.length + docFiles.length > 0;
+	const sourceRows = [
+		...dataFiles.map(f => pickRow(f, f, 'data source')),
+		...docFiles.map(f => pickRow(f, f, 'document')),
+	].join('');
+	const fromSourcesSheet = pickerSheet('fromsources', {
+		title: 'New document from sources',
+		sub: 'Pick the sources to draft from, name it, and the draft arrives as changes to review - nothing is written for you.',
+		nameLabel: 'Document Name',
+		namePlaceholder: 'e.g. Board note - March',
+		note: true,
+		pickLabel: 'Sources',
+		submitMsg: 'newFromSources',
+		submitLabel: 'Draft From Sources',
+		rows: sourceRows,
+		empty: 'This project has no sources yet. Add a csv, json or document to the folder to draft from it.',
+	});
+	const newDocSheet = renderNewDocSheet(state.templates ?? [], hasSources);
 	// The whole-project chat composer (map-D21/D24) leads the front door; the WHILE YOU WERE AWAY feed +
 	// all-clear promotion (map-D14) sit between it and the NEEDS-YOU cards. Both render from real state only.
 	const composer = renderHomeComposer(state);
@@ -689,17 +783,26 @@ function renderHome(state: IScreenState): string {
 		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
 		${projectsGrid}
 		${newDocSheet}
+		${fromSourcesSheet}
 	</div>`);
 }
 
 // The name-or-template sheet (plan 28, iter 4, D28-B shape): a name field, a Blank-document default row
 // (Enter), and each real template as a secondary row that routes to the iter-3 generate flow with the same
 // typed name. Real data only: the template rows come from `listTemplates()`; with none, only Blank shows.
-function renderNewDocSheet(templates: readonly ITemplateInfo[]): string {
+function renderNewDocSheet(templates: readonly ITemplateInfo[], hasSources: boolean): string {
 	const blankRow = `<button class="sheet-row" data-sheet-submit data-sheet-default data-msg="newDocument" style="background:#f7f8ff;border-color:#dfe1e7">
 		<span style="width:30px;height:30px;flex:none;border-radius:8px;background:#eef1ff;color:${ACCENT_DK};font:600 15px/30px system-ui;text-align:center">&#65291;</span>
 		<span style="flex:1;min-width:0"><span style="display:block;font:600 13px/1.3 system-ui;color:#1a1c20">Blank document</span><span style="display:block;font:400 11.5px/1.4 system-ui;color:#868b95">Start from an empty page - press Enter</span></span>
 	</button>`;
+	// The third birth (F17, map-D4): "From sources..." opens the source picker sheet. Shown only when the
+	// project has at least one source to draft from (real-data guardrail); it carries the typed name across.
+	const fromSourcesRow = hasSources
+		? `<button class="sheet-row" data-sheet-open="fromsources" data-name="">
+			<span style="width:30px;height:30px;flex:none;border-radius:8px;background:#eaf3ee;color:#2f7d55;font:600 14px/30px system-ui;text-align:center">&#9635;</span>
+			<span style="flex:1;min-width:0"><span style="display:block;font:600 13px/1.3 system-ui;color:#1a1c20">From sources&hellip;</span><span style="display:block;font:400 11.5px/1.4 system-ui;color:#868b95">Draft from your data and documents, through review</span></span>
+		</button>`
+		: '';
 	const templateRow = (t: ITemplateInfo) => {
 		const av = avatar(t.name);
 		const slots = countTemplateSlots(t.body);
@@ -717,7 +820,7 @@ function renderNewDocSheet(templates: readonly ITemplateInfo[]): string {
 		sub: 'Name it and start blank, or pick a template to generate a first draft through review.',
 		nameLabel: 'Document Name',
 		namePlaceholder: 'Name this document (optional)',
-		body: `<div style="margin-top:18px">${blankRow}${templateSection}</div>
+		body: `<div style="margin-top:18px">${blankRow}${fromSourcesRow}${templateSection}</div>
 			<div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end"><button class="btn-ghost" data-sheet-close="newdoc">Cancel</button></div>`,
 	});
 }
@@ -752,18 +855,42 @@ function renderTemplates(state: IScreenState): string {
 		</div>`;
 	};
 
-	// The calm empty state (real-data guardrail): no templates on disk -> one line + a single primary action.
+	// The from-examples wizard (F18, journey 1x): its picker offers the project's real documents as examples.
+	// The agent names what they share THROUGH THE REVIEW GRAMMAR, then proposes a real template file. Real
+	// data only - the options come from the service's folder scan; with none the sheet shows a calm empty line.
+	const exampleDocs = state.docFiles ?? [];
+	const exampleRows = exampleDocs.map(f => pickRow(f, f, 'document')).join('');
+	const fromExamplesSheet = pickerSheet('fromexamples', {
+		title: 'New template from examples',
+		sub: 'Pick 3-10 past documents. The agent names what they share - structure, recurring figures, tone - as changes to review, then proposes a template file.',
+		nameLabel: 'Template Name',
+		namePlaceholder: 'e.g. Board note',
+		pickLabel: 'Example documents (3-10)',
+		submitMsg: 'newTemplateFromExamples',
+		submitLabel: 'Analyse Examples',
+		rows: exampleRows,
+		empty: 'This project has no documents to learn from yet. Add a few finished documents to grow a template from them.',
+	});
+
+	// The calm empty state (real-data guardrail): no templates on disk -> one line + the two ways in. The
+	// from-examples wizard leads (journey 1x is its whole subject) when there are documents to learn from; the
+	// blank manual editor is always offered as the second, quieter way.
 	if (templates.length === 0) {
+		const emptyActions = exampleDocs.length
+			? `<button class="btn-primary" style="padding:11px 18px;font:600 13px/1 system-ui" data-sheet-open="fromexamples">New from examples</button>
+				<button class="btn-ghost" style="padding:10px 16px;font:500 12.5px/1 system-ui" data-msg="newTemplate">New blank template</button>`
+			: `<button class="btn-primary" style="padding:11px 18px;font:600 13px/1 system-ui" data-msg="newTemplate">Create your first template</button>`;
 		return `<div class="screen">
 	<div class="scr-head" style="display:block"><h2 class="scr-title">Templates</h2><div class="scr-sub">Reusable starting points for new documents.</div></div>
 	<div class="scr-body"><div style="flex:1;min-height:60vh;display:flex;align-items:center;justify-content:center">
-		<div style="text-align:center;max-width:420px;padding:40px">
+		<div style="text-align:center;max-width:440px;padding:40px">
 			<div style="font-size:40px;line-height:1;margin-bottom:16px">&#9636;</div>
 			<div style="font:600 17px/1.3 system-ui;color:#15171c;margin-bottom:8px">No templates yet</div>
-			<p style="margin:0 0 22px;font:400 13.5px/1.6 system-ui;color:#52575f">A template is an ordinary Markdown file in this project with a structure, sources and a brief. Create one to start new documents from it.</p>
-			<button class="btn-primary" style="padding:11px 18px;font:600 13px/1 system-ui" data-msg="newTemplate">Create your first template</button>
+			<p style="margin:0 0 22px;font:400 13.5px/1.6 system-ui;color:#52575f">A template is an ordinary Markdown file in this project with a structure, sources and a brief. Grow one from a few past documents, or author one by hand.</p>
+			<div style="display:flex;gap:10px;align-items:center;justify-content:center">${emptyActions}</div>
 		</div>
 	</div></div>
+	${fromExamplesSheet}
 </div>`;
 	}
 
@@ -787,12 +914,16 @@ function renderTemplates(state: IScreenState): string {
 		<div style="max-width:1080px;margin:0 auto;padding:28px 36px 80px">
 			<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
 				<span style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2">${templates.length} TEMPLATE${templates.length === 1 ? '' : 'S'}</span>
-				<button class="btn-primary" style="padding:9px 15px;font:600 12.5px/1 system-ui" data-msg="newTemplate">New Template</button>
+				<div style="display:flex;gap:8px">
+					${exampleDocs.length ? `<button class="btn-primary" style="padding:9px 15px;font:600 12.5px/1 system-ui" data-sheet-open="fromexamples">New From Examples</button>` : ''}
+					<button class="btn-ghost" style="padding:9px 14px;font:500 12.5px/1 system-ui" data-msg="newTemplate">New Blank Template</button>
+				</div>
 			</div>
 			${grid}
 		</div>
 	</div>
 	${generateSheet}
+	${fromExamplesSheet}
 </div>`;
 }
 
@@ -1102,8 +1233,7 @@ const POLICY_LABELS: Record<string, string> = {
 	'draft-only': 'Draft only',
 };
 
-// allow-any-unicode-next-line
-// The inline policy select + trigger editor (D32-B): the safety dial has exactly the three levels (spec 09 §4)
+// The inline policy select + trigger editor (D32-B): the safety dial has exactly the three levels (spec 09 section 4)
 // and the trigger picker composes a cron day/time, a heartbeat cadence, or an event source. Both post on change.
 function renderAgentControls(agent: IAgentDef): string {
 	const card = (title: string, body: string) => `<div style="background:#fff;border:1px solid #e9eaee;border-radius:12px;padding:16px 18px">

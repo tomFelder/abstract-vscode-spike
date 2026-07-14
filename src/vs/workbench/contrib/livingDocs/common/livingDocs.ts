@@ -470,6 +470,27 @@ export interface ILivingDocsService {
 	 */
 	generateFromTemplate(templateUri: URI, docName: string, note: string): Promise<URI | undefined>;
 
+	/**
+	 * Draft a new document FROM SELECTED SOURCES (F17, journey 1b's third birth). Writes `<docName>.md` as a
+	 * bare skeleton that declares the picked sources (csv/json under `sources:` so figures bind, md/txt under
+	 * `context:` as knowledge), opens it, then drives the EXISTING chat path so the draft arrives as reviewable
+	 * insertion proposals with provenance - never silently written prose. With no model reachable the skeleton
+	 * is still created and a status line explains the draft needs the model (honest, never fake content).
+	 * Returns the new resource, or undefined when no folder is open.
+	 */
+	generateFromSources(sources: readonly string[], docName: string, note: string): Promise<URI | undefined>;
+
+	/**
+	 * Grow a new template FROM EXAMPLE DOCUMENTS (F18, journey 1x). Validates the picked set (3-10; fewer or
+	 * more is refused with a plain-words reason), writes a real `<name>.template.md` skeleton (skill.md shape:
+	 * description + structure + recurring figures + tone + success examples) that records the examples so the
+	 * analysis can read them, opens it (it joins the + New picker at once), then drives the EXISTING chat path
+	 * so the agent NAMES the commonalities through the review grammar - reviewable, never silent. With no model
+	 * reachable the skeleton is still created and a status line names the error - never rendered as "no
+	 * commonalities". Returns the new resource, or undefined when no folder is open / the set is invalid.
+	 */
+	generateTemplateFromExamples(examples: readonly string[], templateName: string): Promise<URI | undefined>;
+
 	/** The registered orchestration agents (for the Agents view). */
 	getAgents(): readonly IAgentDef[];
 
@@ -557,6 +578,14 @@ export interface ILivingDocsService {
 	 * sidecars and the agents registry (they are not user data sources). Empty when no folder is open.
 	 */
 	getFolderDataFiles(): Promise<readonly string[]>;
+
+	/**
+	 * The project folder's document files (md/txt at the root), for the "From sources..." knowledge picker
+	 * (F17) and the from-examples template wizard's example picker (F18). Excludes `*.template.md`, generated
+	 * `*.export.md`/`*.source.md` views and lock sidecars. Empty when no folder is open. (See getFolderDataFiles
+	 * for the csv/json data files.)
+	 */
+	getFolderDocFiles(): Promise<readonly string[]>;
 
 	/** Bind a source file to a document by writing its frontmatter `sources:` list (no hand-editing). */
 	addSource(resource: URI, source: string): Promise<void>;

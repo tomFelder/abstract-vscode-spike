@@ -1816,6 +1816,99 @@ suite('LivingDocsService', () => {
 		assert.ok(/model/i.test(service.getStatus(uri!)), `the status explains the draft needs the model: ${service.getStatus(uri!)}`);
 	});
 
+	// --- F17 "From sources..." birth (journey 1b): draft a document FROM selected sources through review ---
+	// The skeleton DECLARES the picked sources (provenance) and the document is opened, then the draft is driven
+	// through the SAME chat path every generation uses (like generateFromTemplate): the prose arrives as a
+	// reviewable insertion proposal in the Review rail, never written to disk directly (decision 17).
+	test('generateFromSources writes a source-declared skeleton (provenance) and drafts through the review engine', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened, {
+			model: modelMessage({ reply: 'Drafted from your sources.', edits: [], inserts: [{ afterHeading: '', newText: 'MRR grew steadily this week.', rationale: 'From the metrics.' }] }),
+		});
+
+		const uri = await service.generateFromSources(['metrics.csv', 'market-research.md'], 'Board note - March', 'Lead with churn.');
+		assert.ok(uri && uri.path.endsWith('Board note - March.md'), 'a titled document is created from the doc name');
+
+		// The skeleton on disk declares the picked sources with provenance: csv under sources:, md under context:.
+		const raw = lastFiles!.get(uri!.toString()) ?? '';
+		const doc = parseLivingDoc(raw);
+		assert.deepStrictEqual(doc.sources, ['metrics.csv'], 'the csv is a value source (so its figures can bind)');
+		assert.deepStrictEqual(doc.context, ['market-research.md'], 'the document/knowledge source is context');
+		assert.ok(raw.includes('# Board note - March'), 'the H1 is the document name');
+		// The prose arrived as a reviewable insertion proposal (not written directly): it is in the pending set.
+		const pending = service.getPendingForDoc(uri!);
+		assert.strictEqual(pending.length, 1, 'the model draft landed as one insertion proposal in the review rail');
+		assert.strictEqual(pending[0].newText, 'MRR grew steadily this week.', 'the proposal carries the drafted prose');
+		assert.strictEqual(pending[0].oldText, '', 'an insertion has no old text (all-additions inline diff)');
+		// The composed from-sources brief actually drove the model call (the existing chat path, not a bespoke one).
+		assert.ok((lastModelBody ?? '').includes('Draft the first version of'), 'the composed from-sources brief drove the model call');
+		assert.deepStrictEqual(opened[opened.length - 1]?.resource?.toString(), uri!.toString(), 'the drafted document is opened in the editor');
+	});
+
+	test('generateFromSources with no model still writes the source-declared skeleton and names the model honestly', async () => {
+		const service = createService([], {}); // no opts.model -> /healthz unhealthy -> no model
+		const uri = await service.generateFromSources(['metrics.csv'], 'Draft', '');
+		assert.ok(uri, 'the skeleton is created even without a model');
+		const raw = lastFiles!.get(uri!.toString()) ?? '';
+		assert.ok(raw.includes('sources:') && raw.includes('metrics.csv') && raw.includes('# Draft'), 'the source-declared skeleton is on disk');
+		assert.strictEqual(service.getPendingForDoc(uri!).length, 0, 'no fabricated prose is queued without a model');
+		assert.ok(/model/i.test(service.getStatus(uri!)), `the status names the model, never fake content: ${service.getStatus(uri!)}`);
+	});
+
+	test('generateFromSources refuses an empty selection', async () => {
+		const service = createService();
+		const uri = await service.generateFromSources([], 'Draft', '');
+		assert.strictEqual(uri, undefined, 'no sources -> nothing drafted');
+	});
+
+	// --- F18 from-examples template wizard (journey 1x): grow a real template file through the review grammar ---
+	test('generateTemplateFromExamples refuses fewer than 3 examples with a plain-words reason (never a silent write)', async () => {
+		const service = createService();
+		const uri = await service.generateTemplateFromExamples(['Team Notes.md', 'market-research.md'], 'Board note');
+		assert.strictEqual(uri, undefined, 'a set below the floor is refused - no template written');
+	});
+
+	// The template file is a real, discoverable `*.template.md` that records the examples it was grown from and
+	// carries the skill.md scaffold; the analysis then runs through the SAME chat path (like generateFromTemplate),
+	// so the named commonalities arrive as reviewable insertion proposals - the review grammar, never a silent write.
+	test('generateTemplateFromExamples writes a real, discoverable template and analyses the examples through the review engine', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened, {
+			model: modelMessage({ reply: 'Found the shared pattern.', edits: [], inserts: [{ afterHeading: 'Structure', newText: 'Title, summary, then the numbers.', rationale: 'Every example shares it.' }] }),
+		});
+
+		const uri = await service.generateTemplateFromExamples(['Team Notes.md', 'Weekly Summary.md', 'market-research.md'], 'Board note');
+		assert.ok(uri && uri.path.endsWith('Board note.template.md'), 'a real *.template.md file is written to the project');
+
+		// The template on disk is a genuine template that records the examples it was grown from + the skill.md shape.
+		const raw = lastFiles!.get(uri!.toString()) ?? '';
+		const doc = parseLivingDoc(raw);
+		assert.strictEqual(doc.isTemplate, true, 'it is template: true, so it joins the + New picker');
+		assert.deepStrictEqual(doc.context, ['Team Notes.md', 'Weekly Summary.md', 'market-research.md'], 'the examples are recorded so the analysis reads them');
+		for (const section of ['## Structure', '## Recurring figures', '## Tone', '## Success examples']) {
+			assert.ok(raw.includes(section), `the skill.md scaffold has ${section}`);
+		}
+
+		// It joins the Templates library at once (before any approval - the file exists on disk).
+		assert.ok((await service.listTemplates()).some(t => t.name === 'Board note'), 'the new template appears in listTemplates');
+
+		// The analysis named the commonality as a reviewable insertion proposal (the review grammar), not a silent write.
+		const pending = service.getPendingForDoc(uri!);
+		assert.strictEqual(pending.length, 1, 'the analysis landed as one insertion proposal in the review rail');
+		assert.strictEqual(pending[0].newText, 'Title, summary, then the numbers.', 'the proposal carries the named commonality');
+		assert.ok((lastModelBody ?? '').includes('Study the 3 attached example documents'), 'the composed analysis brief drove the model call');
+	});
+
+	test('generateTemplateFromExamples with no model still writes the template and NAMES the error (never "no commonalities")', async () => {
+		const service = createService([], {}); // no opts.model -> /healthz unhealthy -> no model
+		const uri = await service.generateTemplateFromExamples(['Team Notes.md', 'Weekly Summary.md', 'market-research.md'], 'Board note');
+		assert.ok(uri, 'the template file is still created without a model');
+		assert.strictEqual(service.getPendingForDoc(uri!).length, 0, 'no fabricated analysis is queued without a model');
+		const status = service.getStatus(uri!);
+		assert.ok(/model/i.test(status), `the status names the model: ${status}`);
+		assert.ok(!/no commonalities/i.test(status), 'a model outage is NEVER rendered as "no commonalities" (the F14 rule)');
+	});
+
 	// Plan 28, iter 4: a named blank create is born titled; an empty name keeps decision 56's Untitled path.
 	test('createDocument(name) writes a titled <name>.md; an empty name keeps the Untitled escape hatch', async () => {
 		const service = createService();
