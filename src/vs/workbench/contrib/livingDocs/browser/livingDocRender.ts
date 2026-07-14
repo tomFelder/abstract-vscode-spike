@@ -367,6 +367,12 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 const RUNTIME = `const vscode = acquireVsCodeApi();
 const root = document.getElementById('lwd-root');
 let pmView = null, pmTimer = 0;
+// True only while a PROGRAMMATIC body swap (pmReplaceBody, on a model-driven pmReset) is being dispatched.
+// dispatchTransaction fires pmOnChange for that swap too, which would echo the just-applied body straight
+// back to the host as a spurious pmEdit save (double-persist over the approve's own write; a flickering
+// Saving chip). This suppresses that ONE echo; a real user edit, or a user Ctrl+Z that reverts the swap,
+// runs with the flag cleared and so saves normally (issue #142).
+let _pmEchoSuppressed = false;
 // Word-paste normalisation seam (issue #137). These pure, DOM-free helpers are the SAME code unit-tested
 // in common/livingDocWordPaste.ts, injected verbatim so the webview and the tests share one implementation.
 // The paste listener below is the seam #138 (tables) / #139 (tracked changes) extend via the normaliser's
@@ -381,8 +387,29 @@ function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance
 // the edit persists the server re-renders the chip back to its honest saved state, with an optional version
 // suffix when a snapshot exists (plan 26 iter 4).
 function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
-function pmOnChange(){ setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
+function pmOnChange(){ if (_pmEchoSuppressed) { return; } setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
 function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }
+// History-preserving body swap for a model-driven pmReset (approve/reject/refresh), replacing the old
+// LWDPM.setDoc path which built a FRESH EditorState with a fresh (empty) history() plugin and so wiped the
+// whole session's undo stack (issue #142). Here the new body is parsed to a doc node (via docJSON, so the
+// same Markdown->PM mapping is used) and swapped in as ONE transaction on the LIVE state: history records it,
+// so Ctrl+Z undoes the approve and a second Ctrl+Z still reaches the user's pre-approve typing. The selection
+// is remapped through the transaction and clamped into the fresh doc so the caret never lands past the end.
+// The single dispatch is echo-suppressed (see _pmEchoSuppressed) so it does not double-persist the approve.
+function pmReplaceBody(md){
+	if (!pmView || !window.LWDPM) { return; }
+	const st = pmView.state;
+	const json = window.LWDPM.docJSON(md);
+	const node = st.schema.nodeFromJSON(json);
+	const tr = st.tr.replaceWith(0, st.doc.content.size, node.content);
+	try {
+		const Sel = st.selection.constructor;
+		const head = Math.min(tr.selection.head, tr.doc.content.size);
+		if (Sel && typeof Sel.near === 'function') { tr.setSelection(Sel.near(tr.doc.resolve(head))); }
+	} catch (e) {}
+	_pmEchoSuppressed = true;
+	try { pmView.dispatch(tr); } finally { _pmEchoSuppressed = false; }
+}
 // A single reused tooltip element (created lazily), floated over the prose with pointer-events:none so it
 // never intercepts the click that opens the source drawer. esc keeps any source/location text inert markup.
 let _tip = null;
@@ -417,7 +444,7 @@ function applyUpdate(htmlStr, pmMd, spec, pmReset){
 		const r = root.querySelector('#pm-root');
 		if (live && r) {
 			r.appendChild(live);
-			if (typeof pmReset === 'string' && window.LWDPM) { window.LWDPM.setDoc(pmView, pmReset); }
+			if (typeof pmReset === 'string' && window.LWDPM) { pmReplaceBody(pmReset); }
 			pmDeco(spec);
 		} else if (r && window.LWDPM) { mountPm(pmMd, spec); }
 	} else if (pmView) { window.LWDPM.destroy(pmView); pmView = null; }
