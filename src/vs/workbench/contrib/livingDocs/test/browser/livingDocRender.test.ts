@@ -251,6 +251,27 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		assert.ok(!h.includes('v14'), 'the fabricated v14 is gone');
 	});
 
+	// Issue #142: approving a model-driven change must NOT wipe the session's undo stack. The RUNTIME's
+	// pmReset path used to call LWDPM.setDoc, which builds a fresh EditorState with a fresh (empty) history()
+	// plugin - erasing every prior undo, including the user's own pre-approve typing. The fix swaps the body
+	// as ONE transaction on the live state (pmReplaceBody) so history is preserved and Ctrl+Z undoes the
+	// approve. This is a runtime-string change, so it is asserted at the string level per the brief.
+	test('the pmReset path swaps the body history-preservingly (pmReplaceBody), never LWDPM.setDoc', () => {
+		const h = html({ open: false, choice: 'html' });
+		// The history-preserving swap helper is present in the shipped RUNTIME...
+		assert.ok(h.includes('function pmReplaceBody('), 'pmReplaceBody is defined in the RUNTIME');
+		// ...and the pmReset branch of applyUpdate calls it rather than the history-wiping setDoc.
+		assert.ok(h.includes('pmReplaceBody(pmReset)'), 'the pmReset branch calls pmReplaceBody');
+		assert.ok(!h.includes('LWDPM.setDoc(pmView, pmReset)'), 'the pmReset branch no longer calls LWDPM.setDoc');
+		// The swap replaces the whole doc content on the live state (a normal, undoable transaction) instead
+		// of recreating the state, and is dispatched under echo suppression so it does not double-persist.
+		assert.ok(h.includes('replaceWith(0, st.doc.content.size, node.content)'), 'the swap is one transaction on the live doc');
+		assert.ok(h.includes('_pmEchoSuppressed = true'), 'the programmatic swap is echo-suppressed');
+		// The real user-edit echo path is only guarded by the flag, never disabled: pmOnChange still posts a
+		// pmEdit for a genuine edit (or a user Ctrl+Z that reverts the swap) once the flag has cleared.
+		assert.ok(h.includes('if (_pmEchoSuppressed) { return; }'), 'pmOnChange short-circuits only while suppressed');
+	});
+
 	test('raw mode is reachable and offers the way back to the editor without a separate "rendered" mode', () => {
 		const raw = renderLivingDocContent({
 			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),

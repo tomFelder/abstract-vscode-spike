@@ -107,6 +107,17 @@ export interface IProductConfiguration {
 	readonly dataFolderName: string; // location for extensions (e.g. ~/.vscode-insiders)
 	readonly sharedDataFolderName: string; // location for shared data (e.g. ~/.vscode-insiders-shared)
 
+	/**
+	 * Abstract product analytics (PostHog). The project API key is publishable, not a secret (it can only
+	 * write events, never read), so it lives in product.json. Until the founder creates the PostHog project
+	 * and pastes the real key, `projectApiKey` is the obvious placeholder `phc_REPLACE_ME` - the analytics
+	 * service then never sends (it does not fake a connection). See docs/plans/36-verify/README.md.
+	 */
+	readonly posthog?: {
+		readonly projectApiKey: string;
+		readonly host?: string;
+	};
+
 	readonly builtInExtensions?: IBuiltInExtension[];
 	readonly walkthroughMetadata?: IProductWalkthrough[];
 	readonly featuredExtensions?: IFeaturedExtension[];

@@ -10,6 +10,7 @@ import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.
 import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
 import { deleteCol, deleteRow, gfmEscapeCell, gfmIsAlignRow, gfmParseAlign, gfmSplitCells, insertCol, insertRow, parseGfmTable, serializeGfmTable, setCell } from '../common/livingDocTableEdit.js';
+import { isWordHtml, normalizeWordPasteHtml } from '../common/livingDocWordPaste.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
 // The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
@@ -99,6 +100,14 @@ export interface ILivingDocRenderInput {
 	 * toolbar's honest `Saved &middot; vN` chip. Absent/0 => a plain `Saved` (no fabricated version number).
 	 */
 	readonly snapshotCount?: number;
+	/**
+	 * True in the web build (issue #121 / decision 162): the workspace mount is an in-memory / memfs
+	 * provider whose writes do NOT survive a page reload, so the beta demotes the web build to a dev
+	 * harness. When set, the toolbar's save chip states plainly that changes live only in this tab
+	 * instead of the persistent "Saved" claim it makes on the Electron desktop build (where writes reach
+	 * disk). Never fabricate a durable "Saved" state the provider can't back.
+	 */
+	readonly ephemeral?: boolean;
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -193,6 +202,9 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .etoolbar .tb-b.ic{font:400 14px/1 system-ui}
 .etoolbar .tb-saved{margin-left:auto;display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8}
 .etoolbar .tb-saved .sdot{width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)}
+/* Web dev-harness save chip (issue #121 / decision 162): an amber, plain-words notice that writes are
+ * in-memory only and lost on reload, so the web build never masquerades as a durable "Saved" state. */
+.etoolbar .tb-saved.tb-ephemeral{color:#9a6b16;cursor:help}
 /* Floating review bar (plan 19 iter 7): a calm affordance that floats DIRECTLY BELOW the formatting
  * toolbar - never inside the WYSIWYG header - and is present ONLY while there are pending changes in this
  * or another document. It sticks under the sticky topbar (top:48px, h48) + formatting toolbar (top:48px,
@@ -376,6 +388,18 @@ let pmView = null, pmTimer = 0;
 // in document order (robust to PM rebuilding the atom's DOM on setNodeMarkup); r < 0 addresses the
 // header row, r >= 0 a body row. tblToolbar is its floating +/- Row/Col affordance. null when idle.
 let tblEditor = null, tblToolbar = null;
+// True only while a PROGRAMMATIC body swap (pmReplaceBody, on a model-driven pmReset) is being dispatched.
+// dispatchTransaction fires pmOnChange for that swap too, which would echo the just-applied body straight
+// back to the host as a spurious pmEdit save (double-persist over the approve's own write; a flickering
+// Saving chip). This suppresses that ONE echo; a real user edit, or a user Ctrl+Z that reverts the swap,
+// runs with the flag cleared and so saves normally (issue #142).
+let _pmEchoSuppressed = false;
+// Word-paste normalisation seam (issue #137). These pure, DOM-free helpers are the SAME code unit-tested
+// in common/livingDocWordPaste.ts, injected verbatim so the webview and the tests share one implementation.
+// The paste listener below is the seam #138 (tables) / #139 (tracked changes) extend via the normaliser's
+// internal transform chain - it never has to be rewritten.
+${String(isWordHtml)}
+${String(normalizeWordPasteHtml)}
 // Per-key provenance for the hover tooltip (plan 29 iter 3), refreshed from every decoration payload so the
 // tooltip always reads the current lock state (a source edit that flips freshness re-renders the payload).
 let _prov = Object.create(null);
@@ -384,8 +408,29 @@ function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance
 // the edit persists the server re-renders the chip back to its honest saved state, with an optional version
 // suffix when a snapshot exists (plan 26 iter 4).
 function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
-function pmOnChange(){ setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
+function pmOnChange(){ if (_pmEchoSuppressed) { return; } setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
 function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }
+// History-preserving body swap for a model-driven pmReset (approve/reject/refresh), replacing the old
+// LWDPM.setDoc path which built a FRESH EditorState with a fresh (empty) history() plugin and so wiped the
+// whole session's undo stack (issue #142). Here the new body is parsed to a doc node (via docJSON, so the
+// same Markdown->PM mapping is used) and swapped in as ONE transaction on the LIVE state: history records it,
+// so Ctrl+Z undoes the approve and a second Ctrl+Z still reaches the user's pre-approve typing. The selection
+// is remapped through the transaction and clamped into the fresh doc so the caret never lands past the end.
+// The single dispatch is echo-suppressed (see _pmEchoSuppressed) so it does not double-persist the approve.
+function pmReplaceBody(md){
+	if (!pmView || !window.LWDPM) { return; }
+	const st = pmView.state;
+	const json = window.LWDPM.docJSON(md);
+	const node = st.schema.nodeFromJSON(json);
+	const tr = st.tr.replaceWith(0, st.doc.content.size, node.content);
+	try {
+		const Sel = st.selection.constructor;
+		const head = Math.min(tr.selection.head, tr.doc.content.size);
+		if (Sel && typeof Sel.near === 'function') { tr.setSelection(Sel.near(tr.doc.resolve(head))); }
+	} catch (e) {}
+	_pmEchoSuppressed = true;
+	try { pmView.dispatch(tr); } finally { _pmEchoSuppressed = false; }
+}
 // A single reused tooltip element (created lazily), floated over the prose with pointer-events:none so it
 // never intercepts the click that opens the source drawer. esc keeps any source/location text inert markup.
 let _tip = null;
@@ -424,7 +469,9 @@ function applyUpdate(htmlStr, pmMd, spec, pmReset){
 			// node - and so the table DOM the overlay sits over - intact; reposition the editor rather than
 			// tearing it down, so a save landing mid-edit never closes the cell the user just opened. A
 			// pmReset rebuilds the doc to disk truth, which invalidates any open editor, so drop it there.
-			if (typeof pmReset === 'string' && window.LWDPM) { teardownCellInput(); window.LWDPM.setDoc(pmView, pmReset); }
+			// The reset goes through pmReplaceBody (issue #142) so it swaps the body as ONE transaction on the
+			// live state and preserves the undo stack, rather than the old history-wiping setDoc path.
+			if (typeof pmReset === 'string' && window.LWDPM) { teardownCellInput(); pmReplaceBody(pmReset); }
 			pmDeco(spec);
 			revalidateCellEditor();
 		} else if (r && window.LWDPM) { teardownCellInput(); mountPm(pmMd, spec); }
@@ -476,6 +523,24 @@ root.addEventListener('keydown', e => {
 	const b = e.target.closest('[data-block]');
 	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
 });
+// Word-paste interception (issue #137, the T1-A finding). Capture phase so we run BEFORE ProseMirror's own
+// clipboard handler: when the clipboard carries a Word/Office 'text/html' payload pasted INTO the live PM
+// surface, rebuild its list paragraphs into real nested lists (and drop Word's nbsp spacer crumbs) via the
+// injected normaliser, then hand the cleaned HTML to PM's paste pipeline. Any non-Word paste (or a paste
+// into a widget/textarea rather than the document) falls through untouched. Fail-soft: if reading the
+// clipboard or normalising throws, we do nothing and let the default paste proceed.
+root.addEventListener('paste', e => {
+	if (!pmView || !window.LWDPM || !pmView.dom || !pmView.dom.contains(e.target)) { return; }
+	const cd = e.clipboardData || window.clipboardData;
+	if (!cd) { return; }
+	let html = '';
+	try { html = cd.getData('text/html') || ''; } catch (err) { return; }
+	if (!html || !isWordHtml(html)) { return; }
+	e.preventDefault(); e.stopPropagation();
+	let cleaned;
+	try { cleaned = normalizeWordPasteHtml(html); } catch (err) { cleaned = html; }
+	try { pmView.pasteHTML(cleaned); } catch (err) {}
+}, true);
 // Hovering a bound figure (or its provenance gutter dot) floats a quiet tooltip answering "where from, how
 // fresh" (plan 29 iter 3): the source file/endpoint, the cell within it, the relative sync time, and an amber
 // "source changed" line when stale. Click still opens the source drawer (unchanged) - the tooltip is
@@ -754,8 +819,12 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `<button class="tb-b ic" data-pmcmd="blockquote" title="Quote">&#10077;</button>`
 		// Honest save/version chip (plan 26 iter 4): `Saved` after persist (the RUNTIME flips it to
 		// `Saving...` during the 300ms debounce window), plus `&middot; vN` when the document has saved
-		// versions - N is the real snapshot count from the lock, never the fabricated v14.
-		+ `<span class="tb-saved"><span class="sdot"></span><span class="tb-saved-text">Saved${(input.snapshotCount ?? 0) > 0 ? ` &middot; v${input.snapshotCount}` : ''}</span></span>`
+		// versions - N is the real snapshot count from the lock, never the fabricated v14. In the web dev
+		// harness (issue #121 / decision 162) the mount is in-memory and writes are lost on reload, so the
+		// chip says so in plain words with a tooltip instead of claiming a durable save the tab can't back.
+		+ (input.ephemeral
+			? `<span class="tb-saved tb-ephemeral" title="Dev harness: this web build keeps your changes in memory only, so they are lost when you reload or close the tab. The desktop app saves to disk.">&#9888; <span class="tb-saved-text">Changes live only in this tab</span></span>`
+			: `<span class="tb-saved"><span class="sdot"></span><span class="tb-saved-text">Saved${(input.snapshotCount ?? 0) > 0 ? ` &middot; v${input.snapshotCount}` : ''}</span></span>`)
 		+ `</div>`
 		: '';
 
