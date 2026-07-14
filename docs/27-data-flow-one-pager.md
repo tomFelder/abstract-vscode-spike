@@ -23,8 +23,11 @@ meant to write (the plan-33 honesty rule applies to privacy copy above all).
   Your sign-in and any keys live only in that helper - the app you are looking at never sees them.
 - **Files that are not documents, attached sources, or @-mentions - and your edit history - stay
   put.** They are never sent anywhere.
-- **Abstract sends no usage analytics today.** When that ships it will ask first, and it will count
-  actions, never your words.
+- **Abstract now counts what you do in the app - but only if you say yes, and it never leaves your
+  computer yet.** On first run a plain-words moment asks; if you decline, nothing is counted at
+  all. If you accept, Abstract records **actions and counts, never your words**, to a file on your
+  own machine. Sending any of that to an analytics service is still not built - so today, nothing
+  leaves. You can change your choice any time on the Model access screen / in Settings.
 
 ---
 
@@ -117,8 +120,10 @@ readable only by you (owner-only permissions). **None of these ever contain your
   fetches that source, never handed to the app.
 - **A usage log** - one line per included-model call recording the cost, the running daily total,
   and whether the daily cap was hit. It records **money and counts, never words**.
-- **A product-events log** - things like your answers to the three onboarding questions. Today this
-  file **stays on your computer**; nothing forwards it anywhere yet.
+- **A product-events log** - your answers to the three onboarding questions and, **if you have said
+  yes to analytics**, a line for each action you take (a proposal approved, a source synced, a
+  document exported - the count and kind, never the words). If you declined, this file gains no
+  such lines. Today it **stays on your computer**; nothing forwards it anywhere yet.
 
 Your **documents, their generated `.lock.json` sidecars, and the hidden `.abstract/` project home**
 live in your project folder and stay there. The only document content that ever leaves is the
@@ -126,16 +131,26 @@ specific text a chat, a run, or an agent's double-check sends to the model, as d
 
 ---
 
-## Analytics: today, nothing leaves
+## Analytics: consent-first, and today nothing leaves your machine
 
-**Today Abstract sends no analytics at all.** The wiring that would forward anything to an analytics
-service is not built yet. Your onboarding answers are written to a local file and go no further; the
-Model access screen says as much ("Your answers stay on your computer").
+**Abstract now measures how you use the app - consent-first, and entirely on your own computer.**
+On first run a plain-words moment asks: *"Help us improve Abstract - we count actions, never your
+words."* You choose, and you can change that choice any time (the Model access screen and Settings
+both carry the toggle).
 
-**When analytics ships,** it is designed to be consent-first: a plain-words moment asks you before
-anything is turned on, it counts **actions, never the words in your documents**, and any session
-replay has document text masked. Declining will mean no product analytics is collected. Until that
-moment exists in the product, there is nothing to decline - because nothing is being sent.
+- **If you decline, nothing is captured at all** - not one line is written. Declining is total: it
+  is not "replay off, counting on"; it is off.
+- **If you accept,** Abstract writes one line per action to a **local** file (`~/.abstract/events.log`)
+  through the same helper on your computer. Each line carries **counts and kinds only** - which
+  feature you used, how many items, how long - and never your document text or bound figures. A
+  built-in check refuses to write a line that looks like prose or a file path, so content cannot
+  slip in by mistake.
+
+**What still does not exist:** forwarding any of this to an analytics service (PostHog), and session
+replay, are **not built yet**. So even when you accept, **no analytics leaves your machine today** -
+the events sit in that local file and go no further. When forwarding does ship it will keep the same
+consent gate and the same "actions, never words" rule, and any session replay will have document text
+masked. Declining will always mean no product analytics is collected.
 
 ---
 
@@ -161,8 +176,8 @@ moment exists in the product, there is nothing to decline - because nothing is b
   Insert the two links above and confirm the wording matches each provider's published stance before
   this goes in front of a user.
 - **Consent-moment link.** This page is meant to be linked from the analytics consent moment. That
-  moment does not exist in the product yet (it lands with the analytics/onboarding work, issue #127);
-  wire the link when it does.
+  moment now exists (the first-run dialog and the Settings toggle, `abstract.analytics.enabled`); the
+  richer onboarding surface still lands with issue #127. Wire this page's link into the consent copy.
 
 ---
 

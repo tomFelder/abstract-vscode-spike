@@ -532,8 +532,25 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('Abstract sends content only when you ask it to work'), 'the plain-words summary is shown');
 		assert.ok(html.includes('or when an agent you have left running does its scheduled check'), 'the summary owns the scheduled-agent path (default-enabled agents can send without a gesture at that moment)');
 		assert.ok(html.includes('built-in agents run on their own') && html.includes('Pause any agent on the Agents screen'), 'the proactive-agent path is named with its off switch');
-		assert.ok(/no usage analytics today/i.test(html), 'the "no analytics today" honesty claim is present');
+		// The honesty claim after analytics became real (issue #134): consent-first, and even when on it stays
+		// on the machine because forwarding is not built. This is the true successor to the "no analytics today"
+		// line - it must keep guarding the claim, just the honest one.
+		assert.ok(/off unless you turn it on/i.test(html), 'the consent-first honesty claim is present');
+		assert.ok(/counts your actions, never your words/i.test(html) && /forwarding it anywhere is not built yet/i.test(html), 'it says analytics counts actions not words and does not leave the machine');
 		assert.ok(html.includes('docs/27-data-flow-one-pager.md'), 'it points to the full one-pager');
+	});
+
+	test('the data-flow card carries the revocable analytics-consent row reflecting On/Off (issue #134)', () => {
+		const base = { ...state, providerStatus: { provider: 'none' as const, signedIn: false, dailyBudgetUsd: 0 } };
+		const off = renderScreenHtml('settings', { ...base, analyticsEnabled: false });
+		const on = renderScreenHtml('settings', { ...base, analyticsEnabled: true });
+		// The row exists on the data-flow card and always drives the one consent seam.
+		assert.ok(/data-msg="setAnalyticsConsent"/.test(off) && /data-msg="setAnalyticsConsent"/.test(on), 'the consent row is present in both states');
+		assert.ok(off.includes('Anonymous usage analytics'), 'the row is labelled in plain words');
+		// Off state: the toggle offers "Turn on" (arg=on) and says nothing is counted.
+		assert.ok(/data-msg="setAnalyticsConsent" data-arg="on"/.test(off) && off.includes('Turn on') && off.includes('nothing is counted'), 'when off, the row offers to turn it on and reports nothing counted');
+		// On state: the toggle offers "Turn off" (arg=off) and says it is counting.
+		assert.ok(/data-msg="setAnalyticsConsent" data-arg="off"/.test(on) && on.includes('Turn off') && on.includes('counting your actions locally'), 'when on, the row offers to turn it off and reports it is counting');
 	});
 
 	test('the Settings screen uses plain words only (no "OAuth", "token" or "rate limit")', () => {

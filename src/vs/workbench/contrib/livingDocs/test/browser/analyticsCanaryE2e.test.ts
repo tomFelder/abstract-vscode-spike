@@ -110,7 +110,7 @@ suite('analytics canary E2E (plan 36 iter 2: content never leaves via the live s
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 		const service = new LivingDocsService(
 			fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(),
-			requestService, workspaceService, fileDialogService, hostService, analytics, new InMemoryStorageService());
+			requestService, workspaceService, fileDialogService, hostService, analytics, store.add(new InMemoryStorageService()));
 		store.add(service);
 		return service;
 	}
