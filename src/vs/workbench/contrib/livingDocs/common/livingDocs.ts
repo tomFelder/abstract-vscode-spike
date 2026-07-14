@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
@@ -530,6 +531,22 @@ export interface ILivingDocsService {
 	 * `force` proceeds past a failed before-export gate, auditing the override (plan 32 iter 4).
 	 */
 	exportMarkdown(resource: URI, force?: boolean): Promise<URI | undefined>;
+
+	/**
+	 * Persist a pasted/dropped image (issue #141) beside `resource` under `assets/<doc-basename>/` (the #129
+	 * import layout). The name is sanitised (safe chars, extension derived from `mime` when absent) and
+	 * de-duplicated against the folder. Returns the document-relative path (`assets/<doc-basename>/<file>`) the
+	 * editor writes into the Markdown as `![alt](assets/...)`.
+	 */
+	saveImageAsset(resource: URI, name: string, bytes: VSBuffer, mime?: string): Promise<string>;
+
+	/**
+	 * Read an image referenced by a document-relative `src` (e.g. `assets/Probe/logo.png`, `logo.png`) back as
+	 * a `data:` URI so the webview can display it (it cannot load a path relative to the document). Oversized
+	 * (>10 MB) or unreadable/missing files resolve with `{ error: true }` so the editor shows a visible broken
+	 * state rather than a silent gap.
+	 */
+	readImageAsset(resource: URI, src: string): Promise<{ readonly dataUri?: string; readonly error?: boolean }>;
 
 	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
 	shareDocument(resource: URI): void;

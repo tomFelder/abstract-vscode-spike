@@ -302,6 +302,54 @@ suite('LivingDocsService', () => {
 		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'on-disk cache unchanged on load');
 	});
 
+	// --- Image assets (issue #141): paste/drop writes beside the doc; relative srcs resolve to data URIs ---
+
+	test('saveImageAsset writes under assets/<doc-basename>/ beside the doc, sanitising and de-duplicating', async () => {
+		const service = createService();
+		const rel = await service.saveImageAsset(WEEKLY, 'My Shot (1).png', VSBuffer.fromString('PNGBYTES'));
+		assert.strictEqual(rel, 'assets/Weekly Summary/My-Shot-1.png');
+		assert.strictEqual(lastFiles!.get(URI.file('/ws/assets/Weekly Summary/My-Shot-1.png').toString()), 'PNGBYTES', 'the bytes land beside the document');
+		// The same file pasted again gets a de-duplicated name, never an overwrite.
+		const rel2 = await service.saveImageAsset(WEEKLY, 'My Shot (1).png', VSBuffer.fromString('PNGBYTES2'));
+		assert.strictEqual(rel2, 'assets/Weekly Summary/My-Shot-1-2.png');
+		assert.strictEqual(lastFiles!.get(URI.file('/ws/assets/Weekly Summary/My-Shot-1.png').toString()), 'PNGBYTES', 'the first asset is untouched');
+		// A nameless paste (e.g. a raw screenshot) derives its extension from the reported MIME.
+		const rel3 = await service.saveImageAsset(WEEKLY, '', VSBuffer.fromString('x'), 'image/jpeg');
+		assert.strictEqual(rel3, 'assets/Weekly Summary/image.jpg');
+	});
+
+	test('readImageAsset returns a data URI for a doc-relative src, and error:true (no dataUri) when missing', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/logo.png').toString(), 'FAKEPNG');
+		const ok = await service.readImageAsset(WEEKLY, 'logo.png');
+		assert.strictEqual(ok.dataUri, 'data:image/png;base64,RkFLRVBORw==', 'the file comes back as a data URI');
+		assert.ok(!ok.error);
+		// A missing file is an explicit error reply - the editor renders a VISIBLE broken state from it.
+		const missing = await service.readImageAsset(WEEKLY, 'assets/Weekly Summary/nope.png');
+		assert.strictEqual(missing.error, true);
+		assert.strictEqual(missing.dataUri, undefined);
+	});
+
+	test('readImageAsset refuses a src that escapes the workspace (path traversal), but allows nested paths', async () => {
+		const service = createService();
+		// The files EXIST outside the workspace - containment (not a read failure) must be what refuses them.
+		lastFiles!.set(URI.file('/outside.png').toString(), 'SECRET');
+		lastFiles!.set(URI.file('/etc/x').toString(), 'SECRET');
+		const up = await service.readImageAsset(WEEKLY, '../outside.png');
+		assert.strictEqual(up.error, true, '../ escaping the doc folder + workspace is refused');
+		assert.strictEqual(up.dataUri, undefined);
+		const deep = await service.readImageAsset(WEEKLY, '../../../etc/x');
+		assert.strictEqual(deep.error, true, 'a deep ../../../ traversal is refused');
+		assert.strictEqual(deep.dataUri, undefined);
+		// Legitimate doc-relative reads still resolve: the assets layout and a nested subfolder.
+		lastFiles!.set(URI.file('/ws/assets/Weekly Summary/x.png').toString(), 'ASSET');
+		const asset = await service.readImageAsset(WEEKLY, 'assets/Weekly Summary/x.png');
+		assert.ok(asset.dataUri && asset.dataUri.startsWith('data:image/png;base64,'), 'assets/<doc>/x.png still resolves');
+		lastFiles!.set(URI.file('/ws/sub/img.png').toString(), 'NESTED');
+		const nested = await service.readImageAsset(WEEKLY, 'sub/img.png');
+		assert.ok(nested.dataUri && nested.dataUri.startsWith('data:image/png;base64,'), 'a nested relative path inside the doc folder still resolves');
+	});
+
 	test('refreshFromSources reconciles the visible cache (figures auto-apply), persists, and audits', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);
