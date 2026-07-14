@@ -24,7 +24,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, IFileOpDependent, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, IFileOpDependent, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
@@ -2658,6 +2658,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Read the active model door + usage from the proxy's /healthz. `ok` gates whether a backend is actually
 	// serving (a signed-out ChatGPT tier or a key-less included tier reports ok:false -> provider 'none', the
 	// built-in heuristic path). Today's spend is only meaningful for the metered `included` tier.
+	isModelReachable(): Promise<boolean> {
+		return this._hasModel();
+	}
+
 	async getModelProviderStatus(): Promise<IModelProviderStatus> {
 		const fallback: IModelProviderStatus = { provider: 'none', signedIn: false, dailyBudgetUsd: 0 };
 		try {
@@ -3048,6 +3052,77 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const shown = (displayText ?? '').trim();
 		history.push({ role: 'user', content: shown || trimmed, prompt: shown ? trimmed : undefined, mentions: mentions.length ? mentions : undefined });
 		await this._deliverChatReply(resource, trimmed, mentions);
+	}
+
+	// Answer a read-only whole-project question for the Project Home composer (F15 / journey 1w, map-D24). This
+	// reuses the existing model plumbing (`_hasModel`, `_readContext`, `_callModel`, `parseChatResponse`) but is
+	// deliberately SEPARATE from the chat delivery path: it queues no proposal and mutates no document - it only
+	// reads the project and returns prose + citations. The citations are the REAL files consulted (doc titles +
+	// their sources), intersected with any the model named, so the answer is never grounded in a fabricated ref.
+	async askProjectQuestion(question: string): Promise<IProjectAnswer> {
+		const trimmed = question.trim();
+		if (!trimmed) { return { answer: '', citations: [], via: 'fallback' }; }
+		const docs = await this.listDocuments();
+		if (docs.length === 0) {
+			return { answer: 'This project has no documents yet - create one, then ask me about it.', citations: [], via: 'fallback' };
+		}
+		if (!await this._hasModel()) {
+			return {
+				answer: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this project and its sources.',
+				citations: [],
+				via: 'fallback',
+			};
+		}
+		// Load every project document so it can be serialized (figures resolved) for the prompt, and collect the
+		// distinct source files consulted. These names ARE the citation set - the honest record of what the answer
+		// was read from, whether or not the model echoes them back.
+		const sections: string[] = [];
+		const consulted = new Set<string>();
+		for (const summary of docs) {
+			const id = summary.resource.toString();
+			if (!this._docs.get(id)) { await this.loadDocument(summary.resource); }
+			const state = this._docs.get(id);
+			if (!state) { continue; }
+			consulted.add(state.doc.title);
+			const sourceFiles = [...state.doc.sources, ...state.doc.context];
+			const sources = await this._readContext(state, sourceFiles);
+			for (const f of sourceFiles) { consulted.add(f); }
+			sections.push(`### Document: "${state.doc.title}"\n${this._serializeDocForChat(state)}\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""`);
+		}
+		const system = 'You are the project assistant on the Project Home screen, answering a READ-ONLY question about the whole project. '
+			+ 'Answer ONLY from the documents and sources shown below - do NOT propose or make any edit. '
+			+ 'Reply with ONLY a JSON object: {"answer": string, "citations": [string]} where "citations" is the list of the document or source names (exactly as shown) that your answer relied on. Keep the answer concise and plain-words.';
+		const user = `Project documents:\n\n${sections.join('\n\n')}\n\nQuestion: ${trimmed}`;
+		let raw: string;
+		try {
+			raw = await this._callModel(system, user);
+		} catch (e) {
+			if (isModelPausedError(e)) { return { answer: e.message, citations: [], via: 'fallback' }; }
+			this._log.info('[livingDocs] project question failed, honest fallback', e instanceof Error ? e.message : String(e));
+			return { answer: 'The model call failed - please try again.', citations: [], via: 'fallback' };
+		}
+		// Tolerant parse: the shape is {answer, citations} but a model (or the canned proxy) may reply with the
+		// chat {reply,...} envelope or plain prose. `parseChatResponse` routes a non-JSON / prose reply into
+		// `reply`, so `answer || reply || raw` is always real prose; the raw JSON envelope is never surfaced.
+		let answer = '';
+		let namedCitations: string[] = [];
+		try {
+			const start = raw.indexOf('{');
+			const end = raw.lastIndexOf('}');
+			if (start >= 0 && end > start) {
+				const obj = JSON.parse(raw.slice(start, end + 1));
+				if (typeof obj.answer === 'string') { answer = obj.answer.trim(); }
+				if (Array.isArray(obj.citations)) { namedCitations = obj.citations.filter((c: unknown): c is string => typeof c === 'string'); }
+			}
+		} catch {
+			// Not the {answer, citations} shape; fall through to the tolerant chat-envelope parse below.
+		}
+		if (!answer) { answer = parseChatResponse(raw).reply.trim() || raw.trim(); }
+		// Citations are the REAL consulted files: keep only names the model returned that we actually read (so a
+		// hallucinated citation is dropped), and fall back to everything consulted when the model named none.
+		const cited = namedCitations.filter(c => consulted.has(c));
+		const citations = cited.length ? cited : [...consulted];
+		return { answer: answer || 'I do not have enough in the project to answer that.', citations, via: 'model' };
 	}
 
 	getStreamingChat(resource: URI): { readonly text: string; readonly steps: readonly IChatStep[] } | undefined {

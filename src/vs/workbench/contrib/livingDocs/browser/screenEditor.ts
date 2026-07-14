@@ -15,7 +15,7 @@ import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
-import { IStorageService } from '../../../../platform/storage/common/storage.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { isRecentFolder, IWorkspacesService } from '../../../../platform/workspaces/common/workspaces.js';
@@ -25,7 +25,9 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, ISkillCheck, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { IAnalyticsService } from '../common/analytics.js';
+import { buildAwayFeed, classifyProjectChat, IAwayFeed } from '../common/projectHomeFeed.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
 
@@ -86,6 +88,14 @@ interface IScreenEditorState {
 	// clickable link + copyable fallback so a fresh user reaches the sign-in page without a swallowed popup.
 	signInAuthorizeUrl?: string;
 	surveySaved?: boolean;
+	// Home front door (F15 / journey 1w): the WHILE YOU WERE AWAY feed (built on open + refresh from the run
+	// log, the live pending set and the since-last-visit cutoff), the last read-only whole-project answer + its
+	// citations, and whether a question is in flight. The cutoff is captured ONCE per Home open (so a re-render
+	// mid-session does not keep pushing the window forward and hide everything the user just saw).
+	awayFeed?: IAwayFeed;
+	awaySinceMs?: number;
+	projectAnswer?: IProjectAnswer;
+	askBusy?: boolean;
 }
 
 // Weekday names for the Home failure line ("failed on Monday"). Local time - matches when the user saw it.
@@ -125,9 +135,21 @@ export class ScreenEditor extends EditorPane {
 		@IHostService private readonly _host: IHostService,
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IOpenerService private readonly _openerService: IOpenerService,
+		@IAnalyticsService private readonly _analytics: IAnalyticsService,
 	) {
 		super(ScreenEditor.ID, group, telemetryService, themeService, storageService);
+		this._storage = storageService;
 	}
+
+	// The storage service (also handed to super) captured for the Home last-visit cursor. Assigned in the
+	// constructor body because parameter properties are set after the super() call the base pane requires.
+	private readonly _storage: IStorageService;
+
+	// Home all-clear tracking (map-D14): the last needs-you total observed while Home is open, and when it last
+	// became non-zero, so `all_clear_reached` fires exactly on the >0 -> 0 transition with an honest duration.
+	private static readonly LAST_VISIT_KEY = 'livingDocs.home.lastVisitMs';
+	private _homeNeedsYou: number | undefined;
+	private _homeNeedsYouSinceMs: number | undefined;
 
 	protected createEditor(parent: HTMLElement): void {
 		this._container = $('.living-docs-screen');
@@ -144,12 +166,20 @@ export class ScreenEditor extends EditorPane {
 		// Home reflects the open folder: fetch its documents + recent folders + templates before the first
 		// render so there is no flash (templates seed the New-document sheet's template rows, iter 4).
 		if (this._screen === 'home') {
+			// Capture the since-last-visit cutoff ONCE per open (and advance the stored cursor to now), so the
+			// WHILE YOU WERE AWAY feed shows what happened since the previous visit and stays stable on refresh.
+			const sinceMs = this._captureLastVisit();
 			const [docs, recentFolders, templates] = await Promise.all([
 				this._livingDocs.listDocuments(),
 				this._fetchRecentFolders(),
 				this._livingDocs.listTemplates(),
 			]);
-			this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure() };
+			const awayFeed = this._buildAwayFeed(sinceMs);
+			this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure(), awaySinceMs: sinceMs, awayFeed };
+			// Reset the all-clear tracking baseline for this Home open, then seed it from the current count.
+			this._homeNeedsYou = undefined;
+			this._homeNeedsYouSinceMs = undefined;
+			this._trackAllClear(awayFeed.needsYouTotal);
 		}
 		// Templates reflects the open folder's `*.template.md` files (plan 28): fetch before first render.
 		if (this._screen === 'templates') {
@@ -224,7 +254,73 @@ export class ScreenEditor extends EditorPane {
 			this._fetchRecentFolders(),
 			this._livingDocs.listTemplates(),
 		]);
-		this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure() };
+		// Rebuild the away feed against the cutoff captured at open (not a fresh now-cursor) so the section stays
+		// stable across in-session refreshes; track the needs-you transition so the all-clear promotion + event
+		// react as proposals land and are cleared (map-D14).
+		const awayFeed = this._buildAwayFeed(this._state.awaySinceMs);
+		this._state = { ...this._state, docs, recentFolders, templates, homeFailure: this._homeFailure(), awayFeed };
+		this._trackAllClear(awayFeed.needsYouTotal);
+		this._render();
+	}
+
+	// Read the stored last-visit cursor (the WHILE YOU WERE AWAY cutoff) and advance it to now. Undefined on the
+	// first visit, so the feed shows every recorded run rather than an empty window (journey 1w).
+	private _captureLastVisit(): number | undefined {
+		const stored = this._storage.getNumber(ScreenEditor.LAST_VISIT_KEY, StorageScope.WORKSPACE);
+		this._storage.store(ScreenEditor.LAST_VISIT_KEY, Date.now(), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		return stored;
+	}
+
+	// Assemble the WHILE YOU WERE AWAY feed from the persisted run log, the live pending set (the real needs-you
+	// count) and the since-last-visit cutoff. Pure assembly lives in `buildAwayFeed`; this only gathers the live
+	// inputs. Real data only - an empty window yields an empty feed and the honest all-clear.
+	private _buildAwayFeed(sinceMs: number | undefined): IAwayFeed {
+		const agentNames: Record<string, string> = {};
+		for (const a of this._livingDocs.getAgents()) { agentNames[a.id] = a.name; }
+		return buildAwayFeed({
+			runs: this._livingDocs.getAgentRuns(),
+			agentNames,
+			needsYouTotal: this._livingDocs.getAllPending().length,
+			sinceMs,
+			nowMs: Date.now(),
+		});
+	}
+
+	// Track the needs-you total across Home renders so `all_clear_reached` fires exactly on the >0 -> 0
+	// transition (map-D14): the feed was driven to zero. Seeds the baseline silently on the first observation.
+	private _trackAllClear(needsYouTotal: number): void {
+		const now = Date.now();
+		const prev = this._homeNeedsYou;
+		if (prev === undefined) {
+			this._homeNeedsYou = needsYouTotal;
+			this._homeNeedsYouSinceMs = needsYouTotal > 0 ? now : undefined;
+			return;
+		}
+		if (prev === 0 && needsYouTotal > 0) {
+			this._homeNeedsYouSinceMs = now;
+		} else if (prev > 0 && needsYouTotal === 0) {
+			const since = this._homeNeedsYouSinceMs;
+			this._analytics.capture('all_clear_reached', {
+				items_cleared: prev,
+				time_to_clear_ms: since !== undefined ? Math.max(0, now - since) : 0,
+			});
+			this._homeNeedsYouSinceMs = undefined;
+		}
+		this._homeNeedsYou = needsYouTotal;
+	}
+
+	// The whole-project chat composer (F15 / journey 1w, map-D21/D24): classify the input, then either answer a
+	// question read-only with citations (rendered back into the composer) or open the run/task surface for a
+	// change request. Reuses the existing fan-out chat machinery via `_openProjectRun` - no new chat engine.
+	private async _askProject(text: string): Promise<void> {
+		if (classifyProjectChat(text) === 'change') {
+			await this._openProjectRun(text);
+			return;
+		}
+		this._state = { ...this._state, askBusy: true, projectAnswer: undefined };
+		this._render();
+		const answer = await this._livingDocs.askProjectQuestion(text);
+		this._state = { ...this._state, askBusy: false, projectAnswer: answer };
 		this._render();
 	}
 
@@ -473,6 +569,11 @@ export class ScreenEditor extends EditorPane {
 			// document name + an optional note. Generation writes the skeleton and drives the review engine.
 			case 'generateFromTemplate':
 				if (message.arg) { void this._generateFromTemplate(message.arg, message.name, message.note); }
+				break;
+			// Home whole-project chat composer (F15 / journey 1w, map-D21/D24): a question is answered read-only
+			// with citations in the composer; a change request opens the run/task surface.
+			case 'askProject':
+				if (message.text) { void this._askProject(message.text); }
 				break;
 			// Home ALL PROJECTS: the current folder tile focuses its first document (it is already open).
 			case 'openFirstDoc':

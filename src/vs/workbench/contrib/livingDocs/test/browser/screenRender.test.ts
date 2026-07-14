@@ -8,6 +8,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDocSummary, ISourceInfo, ITemplateInfo } from '../../common/livingDocs.js';
 import { IAgentDef, IAgentRun, ISkillRunSummary, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
+import { buildAwayFeed } from '../../common/projectHomeFeed.js';
 import { IScreenState, renderScreenHtml, ScreenId } from '../../browser/screenRender.js';
 
 suite('livingDocs screenRender', () => {
@@ -95,10 +96,15 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('OR START FROM A TEMPLATE'), 'no template section when the folder ships no templates');
 	});
 
-	test('home with a folder open but no documents is calmly in-sync (no fabricated cards)', () => {
+	// --- Empty-project front door (F15 / journey 1w frame 4): a folder is open with no documents ---
+
+	test('home with a folder open but no documents lands on the empty-project front door (cures the 1a dead-end)', () => {
 		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'empty-folder', docs: [] });
 		assert.ok(html.includes('empty-folder'), 'still shows the open folder name');
-		assert.ok(/in sync/i.test(html), 'shows the calm in-sync summary when nothing pends');
+		// The front door, not the dashboard: New document + Browse templates + the whole-project composer.
+		assert.ok(/is empty/.test(html), 'names the empty project so the on-ramp is calm');
+		assert.ok(/data-sheet-open="newdoc"/.test(html), 'offers New document (Blank / templates)');
+		assert.ok(/data-ask-box/.test(html) && /data-msg="askProject"|data-ask-send/.test(html), 'carries the "...or ask me" composer');
 		assert.ok(!/NEEDS YOU/.test(html), 'no NEEDS-YOU section when there is no pending work');
 		assert.ok(!html.includes('Acme Co') && !html.includes('Fund III'), 'no hardcoded demo project cards');
 	});
@@ -107,7 +113,7 @@ suite('livingDocs screenRender', () => {
 
 	test('home surfaces one quiet attention line when a scheduled run failed, linking to Agents', () => {
 		const html = renderScreenHtml('home', {
-			...state, hasFolder: true, folderName: 'realdocs-test', docs: [],
+			...state, hasFolder: true, folderName: 'realdocs-test', docs: [summary('/ws/Weekly Update.md', 'Weekly Update', true, 0)],
 			homeFailure: { agentName: 'Weekly refresh', day: 'Monday', error: 'metrics.csv unreadable' },
 		});
 		assert.ok(html.includes('Weekly refresh failed on Monday'), 'shows the agent + day in the failure line');
@@ -116,8 +122,54 @@ suite('livingDocs screenRender', () => {
 	});
 
 	test('home shows NO failure line when nothing failed (truthful automation, no fake activity)', () => {
-		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'realdocs-test', docs: [] });
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'realdocs-test', docs: [summary('/ws/Weekly Update.md', 'Weekly Update', true, 0)] });
 		assert.ok(!/failed on/.test(html), 'no fabricated failure line when there is no failure');
+	});
+
+	// --- Home front door (F15 / journey 1w): WHILE YOU WERE AWAY feed, all-clear promotion, chat composer ---
+
+	const now = Date.parse('2026-07-13T12:00:00Z');
+
+	test('home carries the whole-project chat composer defaulting to whole-project scope (map-D21/D24)', () => {
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)] });
+		assert.ok(/data-ask-box/.test(html), 'renders the composer box');
+		assert.ok(/data-ask-input/.test(html) && /data-ask-send/.test(html), 'has an input + Ask control');
+		assert.ok(/ASK THIS PROJECT/.test(html) && /Whole project/.test(html), 'defaults to whole-project scope');
+	});
+
+	test('home renders the WHILE YOU WERE AWAY feed from real run rows, with needs-you counts', () => {
+		const awayFeed = buildAwayFeed({
+			runs: [{ agentId: 'refresh', startedAt: '2026-07-13T11:00:00Z', applied: 1, queued: 2, docsTouched: 3, via: 'cron' }],
+			agentNames: { refresh: 'Weekly refresh' },
+			needsYouTotal: 2,
+			sinceMs: Date.parse('2026-07-13T00:00:00Z'),
+			nowMs: now,
+		});
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 2)], awayFeed });
+		assert.ok(/WHILE YOU WERE AWAY/.test(html), 'shows the away section when a run happened in the window');
+		assert.ok(html.includes('Weekly refresh'), 'names the real agent that ran');
+		assert.ok(/2 NEEDS YOU/.test(html), 'carries the run\'s needs-you count');
+		assert.ok(!/Everything is in sync/.test(html), 'no all-clear promotion while work pends');
+	});
+
+	test('home promotes the all-clear (map-D14) when nothing pends, and never fabricates feed rows', () => {
+		const awayFeed = buildAwayFeed({ runs: [], agentNames: {}, needsYouTotal: 0, sinceMs: 1, nowMs: now });
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)], awayFeed });
+		assert.ok(html.includes('Everything is in sync'), 'shows the calm all-clear promotion');
+		assert.ok(!/WHILE YOU WERE AWAY/.test(html), 'no feed section when nothing ran (no fabricated rows)');
+	});
+
+	test('home renders a read-only project answer with citation chips (map-D24)', () => {
+		const html = renderScreenHtml('home', {
+			...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)],
+			projectAnswer: { answer: 'Revenue is on plan, no surprises.', citations: ['Board Note', 'metrics.csv'], via: 'model' },
+		});
+		assert.ok(/READ-ONLY/.test(html), 'labels the answer as read-only');
+		assert.ok(html.includes('Revenue is on plan, no surprises.'), 'shows the answer prose');
+		assert.ok(html.includes('Board Note') && html.includes('metrics.csv'), 'shows the real citation chips');
+		// The chip row leads with "Consulted:" - exactly-true wording, since the fallback path lists every file
+		// read for the answer (not a model-attested "supporting sources" set).
+		assert.ok(html.includes('Consulted:'), 'the chip row is labelled Consulted so it never over-claims support');
 	});
 
 	// --- Templates (plan 28): the real template library, driven by listTemplates() ---
