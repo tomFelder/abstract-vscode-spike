@@ -9,6 +9,7 @@ import { CancellationError, isCancellationError } from '../../../../base/common/
 import { Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { Schemas } from '../../../../base/common/network.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { basename, dirname, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -28,6 +29,8 @@ import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigure
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { AnalyticsService } from './analyticsService.js';
+import { buildDemoReportMarkdown, DEMO_CSV, DEMO_CSV_NAME, DEMO_DOC_NAME, founderFeedbackLogLine, IFeedbackReport, onboardingStepLabel, OnboardingStep } from '../common/onboarding.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
@@ -182,6 +185,20 @@ const SOURCE_COOLDOWN_MS = 30_000;
 // Persisted flag (application scope): has this install ever emitted project_opened? Drives the is_first
 // property of the project_opened analytics event so the activation funnel can tell a first project apart.
 const FIRST_PROJECT_KEY = 'abstract.analytics.firstProjectOpened';
+
+// Persisted flag (application scope) armed at the D26 hand-off ("bring a real folder"): the next approved
+// change on the user's OWN file is the T4 aha (doc 15 section 2.1). Persisted because the hand-off opens a
+// new folder (a fresh workbench + service), so the intent must survive that reload to fire once, then clear.
+const ONBOARDING_AWAIT_OWN_APPROVE_KEY = 'abstract.onboarding.awaitOwnApprove';
+
+// D26 onboarding session (application scope). The calm shell cannot keep the onboarding SCREEN webview mounted
+// beside the demo document, so once "See it work" opens the demo the remaining funnel steps are recorded by
+// service hooks on the natural in-document actions (peek a figure -> provenance-peek; approve the sample ->
+// first-approve-sample) rather than by the screen. These persisted flags scope + de-duplicate those hooks.
+const ONBOARDING_ACTIVE_KEY = 'abstract.onboarding.active';        // a walkthrough is in progress (demo made).
+const ONBOARDING_DEMO_URI_KEY = 'abstract.onboarding.demoUri';     // the demo document the wows happen on.
+const ONBOARDING_PEEKED_KEY = 'abstract.onboarding.peeked';        // provenance-peek recorded once.
+const ONBOARDING_SAMPLE_KEY = 'abstract.onboarding.sampleApproved'; // first-approve-sample recorded once.
 
 // The alias a bind key uses for a source file: "metrics.csv" -> "metrics", "market-research.md" ->
 // "market-research". Bind keys are "<alias>.<field>" (with an optional ".<qualifier>").
@@ -1002,11 +1019,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// The on-ramp: prompt for a local folder and open it as the workspace. `showOpenDialog` uses the
 	// browser File System Access picker on web (real-disk, via the html file-system provider) and the
 	// native dialog on desktop; `openWindow` reloads the workbench with the picked folder as the workspace.
-	async openFolder(): Promise<void> {
+	async openFolder(): Promise<boolean> {
 		const picked = await this._fileDialog.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, title: 'Open Folder' });
-		if (picked && picked.length) {
-			await this._host.openWindow([{ folderUri: picked[0] }], { forceReuseWindow: true });
-		}
+		if (!picked || !picked.length) { return false; }
+		await this._host.openWindow([{ folderUri: picked[0] }], { forceReuseWindow: true });
+		return true;
 	}
 
 	async createDocument(name?: string): Promise<URI | undefined> {
@@ -1569,6 +1586,25 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			name = `${stem} ${n}.md`;
 		}
 		return joinPath(folder, name);
+	}
+
+	private async _uniqueSiblingUri(folder: URI, name: string): Promise<URI> {
+		const existing = new Set<string>();
+		try {
+			for (const child of (await this._files.resolve(folder)).children ?? []) {
+				existing.add(basename(child.resource));
+			}
+		} catch {
+			// Let the subsequent write surface an unreadable folder error.
+		}
+		const dot = name.lastIndexOf('.');
+		const stem = dot > 0 ? name.slice(0, dot) : name;
+		const extension = dot > 0 ? name.slice(dot) : '';
+		let candidate = name;
+		for (let n = 2; existing.has(candidate); n++) {
+			candidate = `${stem}-${n}${extension}`;
+		}
+		return joinPath(folder, candidate);
 	}
 
 	// --- loading ---
@@ -2857,6 +2893,117 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		} catch (e) {
 			this._log.warn('[livingDocs] model_configured event failed', e instanceof Error ? e.message : String(e));
 		}
+		// The provider door the survey was answered against is a bounded label, so it is safe to also mirror the
+		// survey completion through the consent-gated analytics seam as the typed `model_configured` event (the
+		// free-text answers stay in the local /event sink above; only the door label leaves the machine).
+		this._analytics.capture('model_configured', { provider: (await this.getModelProviderStatus()).provider });
+	}
+
+	// --- D26 onboarding funnel + feedback verb (doc 20 section D26; doc 15 section 2.1; doc 18 sections 2.4/2.5) ---
+
+	// Record one T5 onboarding funnel step. Routes through the analytics service, so a declined/unset consent
+	// silently no-ops (the consent moment gates the whole path); the label is the verbatim section-2.1 funnel
+	// name, a bounded analytics `label`.
+	recordOnboardingStep(step: OnboardingStep): void {
+		this._analytics.capture('onboarding_step', { step: onboardingStepLabel(step) });
+		// At the hand-off ("bring a real folder"), arm the T4 aha: the next approved change on the user's own
+		// file fires `first-approve-own`. Persisted so it survives the folder-open reload (see approve()).
+		if (step === 'first-folder') {
+			this._storage.store(ONBOARDING_AWAIT_OWN_APPROVE_KEY, true, StorageScope.APPLICATION, StorageTarget.MACHINE);
+		}
+	}
+
+	endOnboardingWalkthrough(): void {
+		for (const key of [ONBOARDING_ACTIVE_KEY, ONBOARDING_DEMO_URI_KEY, ONBOARDING_PEEKED_KEY, ONBOARDING_SAMPLE_KEY, ONBOARDING_AWAIT_OWN_APPROVE_KEY]) {
+			this._storage.remove(key, StorageScope.APPLICATION);
+		}
+	}
+
+	private _onboardingActive(): boolean {
+		return this._storage.getBoolean(ONBOARDING_ACTIVE_KEY, StorageScope.APPLICATION, false);
+	}
+
+	// Record a funnel step that a service hook drives during an active walkthrough, once. `flagKey` de-duplicates
+	// so a step fires a single time even if the user peeks/approves repeatedly.
+	private _recordOnboardingStepOnce(step: OnboardingStep, flagKey: string): void {
+		if (!this._onboardingActive() || this._storage.getBoolean(flagKey, StorageScope.APPLICATION, false)) { return; }
+		this._storage.store(flagKey, true, StorageScope.APPLICATION, StorageTarget.MACHINE);
+		this.recordOnboardingStep(step);
+	}
+
+	// The demo-doc approve hook (doc 20 section D26 step 5): the first approve of the sample proposal during a
+	// walkthrough is `first-approve-sample`, and it hands off to the user's own folder (step 6) via a gentle,
+	// shell-independent notification (the onboarding screen cannot coexist with the editor here). Fires once.
+	private _maybeRecordSampleApprove(docId: string): void {
+		if (!this._onboardingActive()) { return; }
+		if (this._storage.get(ONBOARDING_DEMO_URI_KEY, StorageScope.APPLICATION) !== docId) { return; }
+		if (this._storage.getBoolean(ONBOARDING_SAMPLE_KEY, StorageScope.APPLICATION, false)) { return; }
+		this._storage.store(ONBOARDING_SAMPLE_KEY, true, StorageScope.APPLICATION, StorageTarget.MACHINE);
+		this.recordOnboardingStep('first-approve-sample');
+		// Hand-off: only arm the own-file aha after the user actually picks a folder.
+		this._notify.notify({
+			severity: Severity.Info,
+			message: 'Nice - that is the sample. Now bring a real folder: the first change you approve on your own file is the moment Abstract is built for.',
+			actions: { primary: [toAction({ id: 'livingDocs.onboarding.bringFolder', label: 'Bring a real folder', run: async () => { if (await this.openFolder()) { this.recordOnboardingStep('first-folder'); } } })] },
+		});
+	}
+
+	// The T4 aha (doc 15 section 2.1): the first approved change on the user's OWN file after the hand-off.
+	// Armed at the hand-off (persisted), fired once here by the approve path, then cleared so it never repeats;
+	// reaching the aha also ends the walkthrough session.
+	private _maybeRecordOwnFileApprove(): void {
+		if (!this._storage.getBoolean(ONBOARDING_AWAIT_OWN_APPROVE_KEY, StorageScope.APPLICATION, false)) { return; }
+		this._analytics.capture('onboarding_step', { step: onboardingStepLabel('first-approve-own') });
+		this.endOnboardingWalkthrough();
+	}
+
+	// The feedback verb (doc 18 section 2.5): flag an applied change as "this was wrong". Two sinks, matching
+	// the doc: a consent-gated `this_was_wrong_reported` analytics event that carries ONLY a hashed reference id
+	// (never the document's prose or the comment), and a founder-visible LOCAL log line that keeps the plain-words
+	// comment so every report can be read. Best-effort - a report never blocks or throws.
+	reportChangeWrong(report: IFeedbackReport): void {
+		// The analytics ref is an opaque hash of the doc title + change reference: it lets the funnel count
+		// reports per change without the title or prose ever leaving the machine (the `hashed` prop contract).
+		const refId = AnalyticsService.hashPath(`${report.docTitle}::${report.changeRef}`);
+		this._analytics.capture('this_was_wrong_reported', { ref_id: refId });
+		// Founder log (doc 18 section 2.5 + doc 15 section 2.4: every report is read). Local only, so it may keep
+		// the comment. `info` so it surfaces in the product log without the noise gate a trace would carry.
+		this._log.info(founderFeedbackLogLine(report, new Date().toISOString()));
+	}
+
+	// The "See it work" path (doc 20 section D26 step 2): with no folder to open and no setup, write the bundled
+	// demo CSV + demo Living Document into the open folder and sync its figures straight from the CSV. The result
+	// is a REAL Living Document - its bound figures resolve from the bundled data (so the provenance peek, wow
+	// one, shows source / value / synced) and its "Note to the board" paragraph is a single reviewable block the
+	// prompted iteration tightens (wow two). Reuses the same write / load / sync machinery every generation uses;
+	// no new persistence path. Does NOT open an editor - the onboarding surface opens the returned URI beside its
+	// guide (a side group), so generating never displaces the onboarding screen. Undefined when no folder is open.
+	async generateDemoReport(): Promise<URI | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		const demoFolder = folder?.uri ?? URI.from({ scheme: Schemas.vscodeUserData, path: '/abstract/onboarding' });
+		try {
+			if (!folder) { await this._files.createFolder(demoFolder); }
+			const csvUri = await this._uniqueSiblingUri(demoFolder, DEMO_CSV_NAME);
+			const target = await this._uniqueDocUri(demoFolder, DEMO_DOC_NAME);
+			// Write the bundled demo data first so the document's binds resolve on load, then the document itself.
+			await this._files.writeFile(csvUri, VSBuffer.fromString(DEMO_CSV));
+			await this._files.writeFile(target, VSBuffer.fromString(buildDemoReportMarkdown(basename(csvUri))));
+			// Load + sync so the lock is populated from the bundled CSV (correct hashes -> the peek reads fresh). The
+			// authored figures already match the CSV's deterministic formatting, so the sync reconciles to no change.
+			await this.loadDocument(target);
+			await this.refreshFromSources(target);
+			// Begin the walkthrough session: the remaining funnel steps (provenance-peek, first-approve-sample) are
+			// recorded by the in-document hooks below, scoped to this demo document. Reset the once-flags for reruns.
+			this._storage.store(ONBOARDING_ACTIVE_KEY, true, StorageScope.APPLICATION, StorageTarget.MACHINE);
+			this._storage.store(ONBOARDING_DEMO_URI_KEY, target.toString(), StorageScope.APPLICATION, StorageTarget.MACHINE);
+			this._storage.store(ONBOARDING_PEEKED_KEY, false, StorageScope.APPLICATION, StorageTarget.MACHINE);
+			this._storage.store(ONBOARDING_SAMPLE_KEY, false, StorageScope.APPLICATION, StorageTarget.MACHINE);
+			this._onDidChange.fire();
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] demo report write failed', e instanceof Error ? e.message : String(e));
+			return undefined;
+		}
 	}
 
 	// The local OAuth proxy base URL (coerced - config stubs may return non-strings), trailing slash trimmed.
@@ -3783,6 +3930,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// false here; the bulk paths (approveAll) pass true to their own resolved emit is not needed because
 		// each underlying approve fires - so bulk resolution is captured as the individual approves it fans to.
 		this._captureProposalResolved(change.tweaked ? 'tweak' : 'approve', this._inBulkApprove);
+		// D26 funnel hooks (no-ops outside a walkthrough): approving the demo's sample proposal is step 5 and
+		// hands off to a real folder; the first approve on the user's own file after that hand-off is the T4 aha.
+		this._maybeRecordSampleApprove(change.docId);
+		this._maybeRecordOwnFileApprove();
 		await this._markContextReviewed(state, change.contextReviewed);
 		state.status = `Change approved - applied to ${change.docTitle}`;
 		await this._persist(state);
@@ -3937,6 +4088,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// recorded for the editor's synced banner. Meaning-changes still go through Review-impact, not here.
 	notePeek(mode: 'click-through' | 'toolbar'): void {
 		this._analytics.capture('provenance_peeked', { mode });
+		// D26 wow one: during a walkthrough, opening a bound figure's source is the provenance-peek funnel step.
+		const activeUri = this._editors.activeEditor?.resource?.toString();
+		if (activeUri && activeUri === this._storage.get(ONBOARDING_DEMO_URI_KEY, StorageScope.APPLICATION)) {
+			this._recordOnboardingStepOnce('provenance-peek', ONBOARDING_PEEKED_KEY);
+		}
 	}
 
 	async syncFromSources(resource: URI): Promise<readonly IFigureChange[]> {

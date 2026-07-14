@@ -7,6 +7,7 @@ import { $, addDisposableListener, append, clearNode } from '../../../../base/br
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
+import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -373,6 +374,26 @@ export class ReviewRailView extends ViewPane {
 						primaryButton: 'Restore',
 					});
 					if (confirmed) { await this._livingDocs.restoreSnapshot(resource, restoreId); }
+					return;
+				}
+				// The feedback verb (doc 18 section 2.5): "this was wrong" on an applied change. Flag + optional
+				// comment -> a consent-gated analytics event (a hashed ref only) + a founder-visible log line
+				// (which keeps the comment). A thin version suffices: the comment prompt is optional (Escape = just
+				// the flag). The change ref is the block id; the doc title labels the founder log.
+				const wrong = el.getAttribute('data-wrong');
+				if (wrong) {
+					let parsed: { ref?: string; title?: string } | null;
+					try { parsed = JSON.parse(wrong); } catch { return; }
+					if (!parsed?.ref) { return; }
+					const comment = await this._quickInput.input({
+						prompt: localize('livingDocs.feedback.prompt', "What was wrong with this change? (optional - Enter to flag, Escape to cancel the note)"),
+						placeHolder: localize('livingDocs.feedback.placeholder', "e.g. the figure is stale, or the wording changed the meaning"),
+						value: '',
+					});
+					// Escape returns undefined (cancel the whole report); an empty string is a flag with no comment.
+					if (comment === undefined) { return; }
+					this._livingDocs.reportChangeWrong({ changeRef: parsed.ref, comment, docTitle: parsed.title ?? '' });
+					this._dialogService.info(localize('livingDocs.feedback.confirmation', "Thanks - we log every \"this was wrong\" report and read them all."));
 					return;
 				}
 				el = el.parentElement;

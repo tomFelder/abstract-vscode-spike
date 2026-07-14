@@ -10,6 +10,7 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
 import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ISourceGrid } from './sourceGrid.js';
+import { IFeedbackReport, OnboardingStep } from './onboarding.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -401,6 +402,28 @@ export interface ILivingDocsService {
 	/** Record the onboarding survey locally as the `model_configured` event (plan 36 wires it to PostHog). */
 	submitOnboardingSurvey(survey: IOnboardingSurvey): Promise<void>;
 
+	// --- D26 onboarding funnel + feedback verb (doc 20 section D26; doc 15 section 2.1; doc 18 sections 2.4/2.5) ---
+	// Consent + capture are the analytics service's job (IAnalyticsService, already on this base): every event
+	// below routes through it, so a declined/unset consent silently no-ops. The methods here are the onboarding
+	// surface's seam into that service plus the feedback verb's founder-log side.
+	/** Record one T5 onboarding funnel step (`onboarding_step`); a no-op unless analytics consent is enabled. */
+	recordOnboardingStep(step: OnboardingStep): void;
+	/** Clear the application-scoped state of the active onboarding walkthrough. */
+	endOnboardingWalkthrough(): void;
+	/**
+	 * The feedback verb (doc 18 section 2.5): flag an applied change as "this was wrong". Captures the
+	 * `this_was_wrong_reported` event (a hashed ref id only -- no prose) through the analytics service AND writes
+	 * a founder-visible local log line (which keeps the plain-words comment). Never blocks; best-effort.
+	 */
+	reportChangeWrong(report: IFeedbackReport): void;
+	/**
+	 * The "See it work" path (doc 20 section D26 step 2): write the bundled demo CSV + demo Living Document
+	 * into the open folder, open it, and sync its figures from the CSV so the provenance peek (wow one) and
+	 * the prompted iteration (wow two) are both real. Returns the demo document's URI, or undefined when no
+	 * folder is open (the honest no-folder seam).
+	 */
+	generateDemoReport(): Promise<URI | undefined>;
+
 	// --- per-document views (the editor renders one document by its resource) ---
 	getDoc(resource: URI): ILivingDoc | undefined;
 	/** The verbatim Markdown source of a document (for the Raw Markdown view). */
@@ -534,7 +557,7 @@ export interface ILivingDocsService {
 	getProjectDisplayName(): string | undefined;
 
 	/** Prompt for and open a local folder as the workspace (the on-ramp; FSA on web, native dialog on desktop). */
-	openFolder(): Promise<void>;
+	openFolder(): Promise<boolean>;
 
 	/**
 	 * Create a new blank Living Document and return its resource. With a `name` the file is born titled

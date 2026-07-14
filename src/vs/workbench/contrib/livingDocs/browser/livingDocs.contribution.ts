@@ -426,6 +426,25 @@ registerAction2(class extends Action2 {
 	}
 });
 
+// The D26 onboarding walkthrough (doc 20 section D26): the two-wow, ten-minute path. It opens automatically on
+// a fresh profile (the first-run step below); this palette command ("Onboarding") reopens it any time so a
+// returning user can revisit the demo, the provenance peek and the single-diff iteration.
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.open.onboarding',
+			title: localize2('livingDocs.openOnboarding', "Onboarding"),
+			category: localize2('livingDocs.category', "Abstract"),
+			f1: true,
+		});
+	}
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const editorService = accessor.get(IEditorService);
+		const instantiationService = accessor.get(IInstantiationService);
+		await editorService.openEditor(instantiationService.createInstance(ScreenEditorInput, 'onboarding'), { pinned: true });
+	}
+});
+
 // --- the "Editor" nav item (order 2, first after Home) ---
 // Unlike the screens above, Editor opens the actual document surface: the active/last Living Document,
 // or the first document in the folder (D25-B, see editorNavLauncherView.ts). It is an activity-bar
@@ -477,8 +496,8 @@ const WELCOME_INPUT_TYPE_ID = 'workbench.editors.gettingStartedInput';
 class StudioStartupContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.studioStartup';
 
-	// First-run guard for the model-access step (plan 35 iter 4): a profile-scoped flag so the provider picker
-	// opens exactly once on a fresh profile, then never auto-opens again (the palette command still reaches it).
+	// First-run guard (plan 35 iter 4; D26): a profile-scoped flag so the fresh-profile onboarding surface opens
+	// exactly once, then never auto-opens again (the "Onboarding" + "Model Access" palette commands still reach it).
 	private static readonly MODEL_ACCESS_SEEN_KEY = 'livingDocs.modelAccessSeen';
 
 	constructor(
@@ -486,7 +505,6 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		@IEditorService private readonly _editorService: IEditorService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
 		@IStorageService private readonly _storageService: IStorageService,
-		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -498,10 +516,10 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 			this._closeWelcomeEditors();
 			once.dispose();
 		}));
-		// Opening a project lands on Project Home (F15 / journey 1w, map-D2), not the editor. The one exception
-		// is the model-access gate (plan 35 iter 4): a FIRST run with NO model connected lands on the Model
-		// Access step so a fresh user picks a door before anything else. Once a model is reachable - or on any
-		// later launch - Home leads. The flag is set once here so a later launch always routes to Home.
+		// First run drives the D26 two-wow onboarding (doc 20 section D26): on a fresh profile, land on the
+		// onboarding surface so the user reaches the demo report + both wows (and, from there, Model Access +
+		// bring-a-real-folder) within ten minutes. On every later launch this flag is set, so startup lands on
+		// Home as before; the palette "Onboarding" command reopens the flow any time.
 		const firstRun = !this._storageService.getBoolean(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, StorageScope.PROFILE, false);
 		if (this._editorService.editors.length === 0) {
 			if (firstRun) {
@@ -516,14 +534,10 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		// Workspace-rail selection + the 264/392 pinning happen there when the editor surface opens.
 	}
 
-	// Route the startup surface (map-D2): Home leads, except a first run with no model connected, which lands on
-	// the Model Access step so a fresh user picks a door first. The model probe is async, so re-check that no
-	// editor opened while probing before opening (a restored editor or a deep-link wins).
+	// Route the startup surface: a fresh profile begins the two-wow walkthrough, while returning users land on
+	// Home. Re-check that no editor opened while dispatching so a restored editor or deep-link still wins.
 	private async _openStartupScreen(firstRun: boolean): Promise<void> {
-		let screen: ScreenId = 'home';
-		if (firstRun && !(await this._livingDocs.isModelReachable())) {
-			screen = 'settings';
-		}
+		const screen: ScreenId = firstRun ? 'onboarding' : 'home';
 		if (this._editorService.editors.length === 0) {
 			await this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, screen), { pinned: true });
 		}
@@ -737,7 +751,7 @@ class AnalyticsConsentContribution extends Disposable implements IWorkbenchContr
 			// Persist the choice into the visible Settings toggle so the two never drift.
 			await this._configuration.updateValue('abstract.analytics.enabled', enabled);
 		}
-		// The first UI funnel event (doc 15 sec 3.1): captured only when consent is on (the service gates it).
+		// The first UI funnel event (doc 15 section 3.1): captured only when consent is on (the service gates it).
 		this._analytics.capture('app_opened', { version: this._productService.version, first_open: firstOpen });
 	}
 }
