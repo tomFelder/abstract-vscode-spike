@@ -3,9 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { IFanoutFailedDoc } from './fanoutOutcome.js';
 import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ISourceGrid } from './sourceGrid.js';
 
@@ -87,6 +89,9 @@ export interface ILivingDocSummary {
 	readonly lastSynced: string;
 	/** Pending meaning-changes for this document (mirrors the Review rail count). */
 	readonly pendingCount: number;
+	/** The document's directory relative to the workspace root ('' = root), '/'-joined; drives the
+	 * tree-rail's folder hierarchy so nested subfolders are not flattened (plan 37 F7). */
+	readonly folder: string;
 }
 
 /**
@@ -198,6 +203,9 @@ export interface ISourcePeekRow {
 	readonly value: string;
 	/** True when this key is the one the clicked provenance dot points at (highlighted in the pane). */
 	readonly selected: boolean;
+	/** The live source value now ("now"), when it has drifted from the applied `value` ("then"): the source
+	 * changed since the figure was last synced. Unset when the value still matches (plan 37 F13). */
+	readonly current?: string;
 }
 
 /**
@@ -256,6 +264,10 @@ export interface IChatStep {
 export interface IChatMessage {
 	readonly role: 'user' | 'assistant';
 	readonly content: string;
+	// The underlying instruction actually sent to the model when it differs from the shown `content`
+	// (a template generation shows the user plain-words progress but drives the model with the full
+	// template brief, so the internal brief never leaks into the rail; plan 37 F4). Retry re-runs this.
+	readonly prompt?: string;
 	readonly mentions?: readonly string[];
 	readonly steps?: readonly IChatStep[];
 	readonly via?: 'model' | 'fallback';
@@ -270,6 +282,16 @@ export interface IChatMessage {
 	// an inline Retry that re-sends the same user message (plan 27 iter 3). Distinct from the no-model /
 	// no-document fallbacks, which are honest guidance the user cannot usefully retry.
 	readonly failed?: boolean;
+	// The documents a whole-project / working-set fan-out could not reach the model for (F14, issue #123).
+	// When present, the rail renders a NAMED error listing these documents (never a silent "no changes") plus
+	// a "Retry failed" affordance that re-runs ONLY these documents via `retryFailedDocs`. Proposals that DID
+	// land in the same run are still rendered alongside the error (a partial success), so this coexists with
+	// `proposedIds` and is distinct from `failed` (which is a whole-turn failure with no proposals).
+	readonly failedDocs?: readonly IFanoutFailedDoc[];
+	// True when a fan-out paused mid-run on the spent daily budget (map-D15; doc 18 section 2.1): the content
+	// is the plain-words cap message, proposals already queued stay reviewable, and the run screen marks the
+	// not-yet-run documents skipped (they never ran) - NOT failed, and NOT a "no change" all-clear (F14 item 3).
+	readonly paused?: boolean;
 }
 
 /** The in-flight streaming turn for a document: the prose accumulated so far + the tool steps as they settle. */
@@ -293,6 +315,12 @@ export interface IFanoutProgress {
 	readonly batchCount: number;
 	/** The docIds (resource strings) of documents too large for the budget - never sent, reported honestly. */
 	readonly oversizeDocIds: readonly string[];
+	/**
+	 * The docIds (resource strings) of documents the model could not be reached/errored for (F14, issue #123).
+	 * The run screen reads these so a failed document's tile shows a named "model unreachable" state, never a
+	 * silent "no change" all-clear. Empty when every document the run reached was processed.
+	 */
+	readonly failedDocIds: readonly string[];
 }
 
 /**
@@ -392,6 +420,10 @@ export interface ILivingDocsService {
 
 	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
 	listDocuments(): Promise<readonly ILivingDocSummary[]>;
+
+	/** The workspace's non-Markdown files (basenames): data/source files for the tree-rail SOURCES section
+	 * and files we cannot yet import (.doc/.docx) for the "Not yet imported" section (plan 37 F9/F10). */
+	listWorkspaceExtras(): Promise<readonly string[]>;
 
 	/** Discover and parse every `*.template.md` in the workspace (for the Templates screen; plan 28). */
 	listTemplates(): Promise<readonly ITemplateInfo[]>;
@@ -576,6 +608,22 @@ export interface ILivingDocsService {
 	 */
 	exportMarkdown(resource: URI, force?: boolean): Promise<URI | undefined>;
 
+	/**
+	 * Persist a pasted/dropped image (issue #141) beside `resource` under `assets/<doc-basename>/` (the #129
+	 * import layout). The name is sanitised (safe chars, extension derived from `mime` when absent) and
+	 * de-duplicated against the folder. Returns the document-relative path (`assets/<doc-basename>/<file>`) the
+	 * editor writes into the Markdown as `![alt](assets/...)`.
+	 */
+	saveImageAsset(resource: URI, name: string, bytes: VSBuffer, mime?: string): Promise<string>;
+
+	/**
+	 * Read an image referenced by a document-relative `src` (e.g. `assets/Probe/logo.png`, `logo.png`) back as
+	 * a `data:` URI so the webview can display it (it cannot load a path relative to the document). Oversized
+	 * (>10 MB) or unreadable/missing files resolve with `{ error: true }` so the editor shows a visible broken
+	 * state rather than a silent gap.
+	 */
+	readImageAsset(resource: URI, src: string): Promise<{ readonly dataUri?: string; readonly error?: boolean }>;
+
 	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
 	shareDocument(resource: URI): void;
 
@@ -628,7 +676,7 @@ export interface ILivingDocsService {
 	 * may also propose prose edits - those queue into the Review rail like any other pending change.
 	 * With no model reachable it appends an honest fallback turn and proposes nothing (never fakes a reply).
 	 */
-	sendChatMessage(resource: URI, text: string): Promise<void>;
+	sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void>;
 	/**
 	 * Cancel the in-flight chat reply for a document (plan 27). Aborts the streaming model call; the prose
 	 * streamed so far is kept as a muted "stopped" turn and any proposal JSON is discarded (decision D27-B).
@@ -641,6 +689,13 @@ export interface ILivingDocsService {
 	 * reply is in flight or when the last turn is not a failed assistant turn.
 	 */
 	retryChat(resource: URI): void;
+	/**
+	 * Re-run ONLY the documents a fan-out failed to reach the model for (F14, issue #123). Reads the failed
+	 * documents off the last assistant turn's `failedDocs`, drops that turn, and re-delivers the same user
+	 * instruction restricted to just those documents - so a surgical retry never re-touches the documents that
+	 * already succeeded. A no-op while a reply is in flight or when the last turn carries no failed documents.
+	 */
+	retryFailedDocs(resource: URI): void;
 
 	// --- working set (plan 18: the documents a chat instruction edits across; decisions 60-62) ---
 	/** The documents in the chat's working set (edit targets), keyed by the active document. */

@@ -23,6 +23,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IChatMessage, IChatStep, ILivingDocsService, ISkillCheck } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
+import { ScreenEditorInput } from './screenEditorInput.js';
 
 type PanelTab = 'chat' | 'review' | 'history';
 
@@ -54,6 +55,11 @@ export class ReviewRailView extends ViewPane {
 	private _streamSteps: HTMLElement | undefined;
 	private _streamCaret: HTMLElement | undefined;
 	private _streamDoc: string | undefined;
+	// Whether the model provider is signed in to ChatGPT (plan 38): when false, the composer shows one calm
+	// line inviting sign-in for unlimited usage; it disappears once signed in. Fetched async from the live
+	// provider status (the proxy's /healthz) on first render and refreshed on onDidChange (which fires on a
+	// sign-in/out). Undefined until the first fetch resolves, so nothing flashes before we know the truth.
+	private _signedIn: boolean | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -90,12 +96,13 @@ export class ReviewRailView extends ViewPane {
 		this._root = append(container, $('.living-docs-panel'));
 		this._root.style.height = '100%';
 		this._injectStyles(container);
-		this._register(this._livingDocs.onDidChange(() => this._render()));
+		this._register(this._livingDocs.onDidChange(() => { void this._refreshSignedIn(); this._render(); }));
 		// Append streamed chat deltas to the live turn without a full re-render (plan 27 iter 3).
 		this._register(this._livingDocs.onDidStreamChat(resource => this._onStreamDelta(resource)));
 		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
 		this._register(this._livingDocs.onDidRequestChatAttach(file => this._attachToChatDraft(file)));
 		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'review' || this._activeTab === 'chat') { this._render(); } }));
+		void this._refreshSignedIn();
 		this._render();
 	}
 
@@ -146,6 +153,43 @@ export class ReviewRailView extends ViewPane {
 		} else {
 			this._renderReview(content, pending);
 		}
+	}
+
+	// Re-read the live provider status (the proxy's /healthz) and, if the signed-in state changed, re-render so
+	// the composer's sign-in line appears/disappears. Kept resilient: a failed probe leaves the last known
+	// state rather than flashing the invite off.
+	private async _refreshSignedIn(): Promise<void> {
+		try {
+			const status = await this._livingDocs.getModelProviderStatus();
+			if (this._signedIn !== status.signedIn) {
+				this._signedIn = status.signedIn;
+				this._render();
+			}
+		} catch {
+			// Leave the last known state; the next onDidChange retries.
+		}
+	}
+
+	// The calm, persistent sign-in affordance in the composer (plan 38, doc 18 section 2.1): shown whenever the
+	// model provider is NOT signed in to ChatGPT, one line only (P7 calm-by-default, no modal, no nag). Clicking
+	// "Sign in with ChatGPT" opens the Model Access screen (the sign-in surface). It disappears once signed in.
+	private _renderSignInHint(footer: HTMLElement): void {
+		// Only while we know the user is signed OUT (undefined = not yet probed, so render nothing to avoid a flash).
+		if (this._signedIn !== false) { return; }
+		const row = append(footer, $('div'));
+		row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
+		const dot = append(row, $('span'));
+		dot.style.cssText = 'width:6px;height:6px;flex:none;border-radius:50%;background:#cdd1d8';
+		const text = append(row, $('span'));
+		text.textContent = 'Using the included model · ';
+		const link = append(text, $('button')) as HTMLButtonElement;
+		link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
+		link.textContent = 'Sign in with ChatGPT';
+		this._renderDisposables.add(addDisposableListener(link, 'click', () => {
+			void this._editors.openEditor(this.instantiationService.createInstance(ScreenEditorInput, 'settings'), { pinned: true });
+		}));
+		const tail = append(text, $('span'));
+		tail.textContent = ' for unlimited.';
 	}
 
 	private _renderReview(content: HTMLElement, pending: readonly IProposedChange[]): void {
@@ -566,6 +610,30 @@ export class ReviewRailView extends ViewPane {
 
 		if (m.steps && m.steps.length) { this._appendStepsCard(col, m.steps); }
 
+		// A fan-out with a model outage (F14, issue #123): a NAMED error naming the model as unreachable and
+		// listing every document that failed, plus a "Retry failed" that re-runs ONLY those documents. Distinct
+		// from `failed` (a whole-turn failure): a partial fan-out still queued proposals, so the proposal cards
+		// are rendered BELOW the error banner - the surface never reads as a silent all-clear.
+		if (m.failedDocs && m.failedDocs.length) {
+			const err = append(col, $('div'));
+			err.style.cssText = 'display:flex;flex-direction:column;gap:9px;font:400 13.5px/1.6 system-ui;color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:9px;padding:9px 11px';
+			const line = append(err, $('span'));
+			line.textContent = m.content || 'The agent model is not reachable.';
+			const list = append(err, $('div'));
+			list.style.cssText = 'display:flex;flex-direction:column;gap:3px;font:500 12.5px/1.4 system-ui;color:#7a5a13';
+			for (const d of m.failedDocs) {
+				const item = append(list, $('span'));
+				item.textContent = `\u2022 ${d.title}`;
+			}
+			const retry = append(err, $('button')) as HTMLButtonElement;
+			retry.style.cssText = 'align-self:flex-start;border:1px solid #e6c98f;border-radius:7px;padding:6px 12px;background:#fff;color:#9a6b16;font:600 12px/1 system-ui;cursor:pointer';
+			retry.textContent = 'Retry failed';
+			this._renderDisposables.add(addDisposableListener(retry, 'click', () => { const d = this._activeDoc(); if (d) { this._livingDocs.retryFailedDocs(d); } }));
+			// Fall through so any proposals this partial run DID land still render as review cards below.
+			this._appendProposalCards(col, m);
+			return;
+		}
+
 		// A genuinely failed turn (plan 27 iter 3): an honest error line + an inline Retry that re-sends the
 		// same user message (the service drops this failed turn and re-runs). No prose / proposals follow.
 		if (m.failed) {
@@ -593,44 +661,52 @@ export class ReviewRailView extends ViewPane {
 			tag.textContent = 'STOPPED';
 		}
 
-		// F5: a Copilot/Cursor-style review card per proposal this turn produced. Read the LIVE pending
-		// change by id so the card naturally disappears once accepted/rejected (here or in the document).
-		if (m.proposedIds && m.proposedIds.length) {
-			const live = this._livingDocs.getAllPending().filter(c => m.proposedIds!.includes(c.id));
-			for (const change of live) {
-				const isInsert = !!change.insert;
-				const card = append(col, $('div'));
-				card.style.cssText = 'border:1px solid #e4e7ee;border-radius:10px;overflow:hidden;background:#fbfcff';
-				const head = append(card, $('div'));
-				head.style.cssText = `display:flex;align-items:center;gap:7px;padding:9px 12px 7px;font:600 10.5px/1 ui-monospace,monospace;letter-spacing:.04em;color:${isInsert ? '#1f7a44' : '#9a6b16'}`;
-				const tag = append(head, $('span'));
-				tag.textContent = isInsert ? '+ NEW CONTENT' : '\u270E EDIT';
-				const where = append(head, $('span'));
-				where.style.cssText = 'color:#868b95;font-weight:400';
-				where.textContent = isInsert ? `after ${change.blockLabel}` : change.blockLabel;
-				const preview = append(card, $('div'));
-				preview.style.cssText = 'padding:2px 12px 9px;font:400 12.5px/1.5 system-ui;color:#52575f;white-space:pre-wrap;max-height:96px;overflow:hidden;cursor:pointer';
-				preview.title = 'Open in the document';
-				preview.textContent = change.newText.length > 240 ? change.newText.slice(0, 240) + '\u2026' : change.newText;
-				// Click the preview to read this change inline in the document (navigate-only; Apply still applies).
-				this._renderDisposables.add(addDisposableListener(preview, 'click', () => void this._navigateToChange(change)));
-				const actions = append(card, $('div'));
-				actions.style.cssText = 'display:flex;gap:7px;padding:9px 12px;border-top:1px solid #eef0f3';
-				const approve = append(actions, $('button')) as HTMLButtonElement;
-				approve.style.cssText = 'flex:1;border:none;border-radius:7px;padding:8px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer';
-				approve.textContent = isInsert ? 'Insert' : 'Apply';
-				this._renderDisposables.add(addDisposableListener(approve, 'click', () => void this._livingDocs.approve(change.id)));
-				const reject = append(actions, $('button')) as HTMLButtonElement;
-				reject.style.cssText = 'border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer';
-				reject.textContent = 'Reject';
-				this._renderDisposables.add(addDisposableListener(reject, 'click', () => this._livingDocs.reject(change.id)));
-			}
+		// F5: a Copilot/Cursor-style review card per proposal this turn produced.
+		this._appendProposalCards(col, m);
+	}
+
+	// F5: a Copilot/Cursor-style review card per proposal this turn produced. Read the LIVE pending change by
+	// id so the card naturally disappears once accepted/rejected (here or in the document). Shared by the plain
+	// assistant turn and the F14 partial-failure turn (proposals that landed alongside a model outage).
+	private _appendProposalCards(col: HTMLElement, m: IChatMessage): void {
+		if (!m.proposedIds || !m.proposedIds.length) { return; }
+		const live = this._livingDocs.getAllPending().filter(c => m.proposedIds!.includes(c.id));
+		for (const change of live) {
+			const isInsert = !!change.insert;
+			const card = append(col, $('div'));
+			card.style.cssText = 'border:1px solid #e4e7ee;border-radius:10px;overflow:hidden;background:#fbfcff';
+			const head = append(card, $('div'));
+			head.style.cssText = `display:flex;align-items:center;gap:7px;padding:9px 12px 7px;font:600 10.5px/1 ui-monospace,monospace;letter-spacing:.04em;color:${isInsert ? '#1f7a44' : '#9a6b16'}`;
+			const tag = append(head, $('span'));
+			tag.textContent = isInsert ? '+ NEW CONTENT' : '\u270E EDIT';
+			const where = append(head, $('span'));
+			where.style.cssText = 'color:#868b95;font-weight:400';
+			where.textContent = isInsert ? `after ${change.blockLabel}` : change.blockLabel;
+			const preview = append(card, $('div'));
+			preview.style.cssText = 'padding:2px 12px 9px;font:400 12.5px/1.5 system-ui;color:#52575f;white-space:pre-wrap;max-height:96px;overflow:hidden;cursor:pointer';
+			preview.title = 'Open in the document';
+			preview.textContent = change.newText.length > 240 ? change.newText.slice(0, 240) + '\u2026' : change.newText;
+			// Click the preview to read this change inline in the document (navigate-only; Apply still applies).
+			this._renderDisposables.add(addDisposableListener(preview, 'click', () => void this._navigateToChange(change)));
+			const actions = append(card, $('div'));
+			actions.style.cssText = 'display:flex;gap:7px;padding:9px 12px;border-top:1px solid #eef0f3';
+			const approve = append(actions, $('button')) as HTMLButtonElement;
+			approve.style.cssText = 'flex:1;border:none;border-radius:7px;padding:8px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer';
+			approve.textContent = isInsert ? 'Insert' : 'Apply';
+			this._renderDisposables.add(addDisposableListener(approve, 'click', () => void this._livingDocs.approve(change.id)));
+			const reject = append(actions, $('button')) as HTMLButtonElement;
+			reject.style.cssText = 'border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer';
+			reject.textContent = 'Reject';
+			this._renderDisposables.add(addDisposableListener(reject, 'click', () => this._livingDocs.reject(change.id)));
 		}
 	}
 
 	private _renderChatComposer(content: HTMLElement, doc: URI | undefined): void {
 		const footer = append(content, $('div'));
 		footer.style.cssText = 'flex:none;border-top:1px solid #eef0f3;padding:10px 12px;background:#fbfbfc';
+
+		// The persistent, calm sign-in affordance (plan 38): one line above the composer while signed out.
+		this._renderSignInHint(footer);
 
 		const box = append(footer, $('div'));
 		// Comp C6: border tinted accent (#d9d7fb), 13px radius, subtle lifted shadow.

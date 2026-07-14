@@ -93,6 +93,13 @@ suite('livingDocs History tab (historyHtml)', () => {
 		assert.ok(h.includes('5 earlier entries'), 'the 5 rows beyond the cap are named, not dropped');
 	});
 
+	test('F19: a duplicated audit entry (persisted + in-session copy of the same lock) renders once', () => {
+		const e = audit({ blockId: 'commentary', time: '2026-07-06T11:30:00.000Z', newText: 'Sharper line.' });
+		const h = historyHtml([], [e, { ...e }], 'Doc', undefined, NOW);
+		const rows = h.split('commentary').length - 1;
+		assert.strictEqual(rows, 1, 'the same change is shown once, never doubled on a cold-open merge');
+	});
+
 	test('a template-generated document keeps its real origin row at the base', () => {
 		const h = historyHtml([snap({ id: 's1' })], [], 'Doc', 'Weekly report', NOW);
 		assert.ok(h.includes('Created from Weekly report template'), 'the real template origin row is shown');
