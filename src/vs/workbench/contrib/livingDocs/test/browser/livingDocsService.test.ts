@@ -9,6 +9,8 @@ import { Emitter, Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
+import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
+import { NullAnalyticsService } from '../../common/analytics.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { IRequestService } from '../../../../../platform/request/common/request.js';
@@ -274,7 +276,7 @@ suite('LivingDocsService', () => {
 		lastProxyFetchBody = undefined;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
 		store.add(service);
 		return service;
 	}
@@ -355,6 +357,55 @@ suite('LivingDocsService', () => {
 		assert.notStrictEqual(mrr.sourceHash, 'stale', 'source hash refreshed at sync');
 		const lockOnDisk = JSON.parse(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!);
 		assert.strictEqual(lockOnDisk.bindings['metrics.mrr'].resolved, '$48.6k', 'lock persisted to its sidecar');
+	});
+
+	// --- issue #121 / F19: History rehydrates from the on-disk lock audit on a cold open ---
+
+	test('F19: a cold open rehydrates the audit trail from the persisted lock (not just in-session entries)', async () => {
+		const service = createService();
+		// A lock already on disk with real audit[] entries - as it would be after a prior session's approve.
+		// The freshly constructed service has an empty in-memory doc cache, so this is a genuine cold open.
+		lastFiles!.set(URI.file('/ws/Weekly Summary.lock.json').toString(), JSON.stringify({
+			version: 1,
+			bindings: {}, context: {}, claims: {}, pins: [], audit: [
+				{ time: '2026-07-09T22:35:49.359Z', docTitle: 'Weekly Operating Summary', blockId: 'h-commentary', action: 'approved', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', via: 'model' },
+				{ time: '2026-07-10T09:12:03.100Z', docTitle: 'Weekly Operating Summary', blockId: 'h-highlights', action: 'rejected', oldText: 'x', newText: 'y', via: 'model' },
+			],
+			contextItems: [], snapshots: [],
+		}));
+
+		await service.loadDocument(WEEKLY);
+
+		// The History tab reads getLock(...).audit; on a cold open it must carry the persisted entries.
+		const audit = service.getLock(WEEKLY)!.audit;
+		assert.strictEqual(audit.length, 2, 'both persisted audit entries rehydrated on cold open');
+		assert.deepStrictEqual(audit.map(e => e.blockId), ['h-commentary', 'h-highlights'], 'entries preserved from disk');
+	});
+
+	test('X1 within-session persistence: approve writes the new text + audit entry back to the on-disk lock (write-then-read)', async () => {
+		const service = createService();
+		// A claim anchored to the Commentary sentence; a context change queues a deterministic (heuristic)
+		// candidate the user approves - no model probe, so the write-then-read is deterministic.
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'commentary-tone': { anchor: 'Growth remained steady this week.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+		await service.reviewImpact(WEEKLY);
+		const pending = service.getPendingForDoc(WEEKLY)[0];
+		const { newText, blockId } = pending;
+		await service.approve(pending.id);
+
+		// Read the persisted bytes back through the file map (what a same-session reload re-reads). This is the
+		// verifiable half of X1: approve -> _persist -> read-back succeeds within the provider session. The web
+		// dev-harness caveat is that the in-memory mount drops these bytes on a full page reload (decision 162).
+		const mdOnDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
+		assert.ok(mdOnDisk.includes(newText), 'the approved prose is persisted to the .md on disk');
+		const lockOnDisk = JSON.parse(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!);
+		assert.ok(lockOnDisk.audit.some((e: { action: string; blockId: string }) => e.action === 'approved' && e.blockId === blockId), 'the approval is persisted to the lock audit, so a cold reopen rehydrates it');
 	});
 
 	test('changing a value source flips the binding dirty bit (hash mismatch), with no model calls', async () => {
@@ -2033,7 +2084,7 @@ suite('LivingDocsService', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: mountRoot, name: opts.folderName ?? 'mount' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
 		store.add(service);
 		return { service, files, registerProvider };
 	}

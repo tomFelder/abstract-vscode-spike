@@ -19,10 +19,12 @@ import { IHostService } from '../../../services/host/browser/host.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IAnalyticsService } from '../common/analytics.js';
 import { applyBlockEdit, buildTemplateSkeleton, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
@@ -168,6 +170,10 @@ const SOURCE_FETCH_CONCURRENCY = 4;
 const MODEL_CALL_CONCURRENCY = 2;
 const SOURCE_COOLDOWN_MS = 30_000;
 
+// Persisted flag (application scope): has this install ever emitted project_opened? Drives the is_first
+// property of the project_opened analytics event so the activation funnel can tell a first project apart.
+const FIRST_PROJECT_KEY = 'abstract.analytics.firstProjectOpened';
+
 // The alias a bind key uses for a source file: "metrics.csv" -> "metrics", "market-research.md" ->
 // "market-research". Bind keys are "<alias>.<field>" (with an optional ".<qualifier>").
 function sourceAlias(source: string): string {
@@ -263,6 +269,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// highlighted (closing the "provenance falls back to the CSV" gap for api/mcp kinds).
 	private readonly _payloadRawCache = new Map<string, string>();
 	private _pending: IProposedChange[] = [];
+	// True while approveAll fans out, so each approve's proposal_resolved analytics event carries bulk:true.
+	private _inBulkApprove = false;
+	// True while rejectAll fans out, so each reject's proposal_resolved analytics event carries bulk:true.
+	private _inBulkReject = false;
 	private readonly _lockStore: ILockStore;
 	// The orchestration engine: agent registry + dependency-graph event-bus (+ triggers/policy/verify).
 	private readonly _orchestrator: AgentOrchestrator;
@@ -330,6 +340,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
 		@IFileDialogService private readonly _fileDialog: IFileDialogService,
 		@IHostService private readonly _host: IHostService,
+		@IAnalyticsService private readonly _analytics: IAnalyticsService,
+		@IStorageService private readonly _storage: IStorageService,
 	) {
 		super();
 		this._lockStore = new SidecarLockStore(this._files);
@@ -364,6 +376,36 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				void this._readProjectNameMarker();
 			}
 		}));
+		// (plan 36 iter 2) Emit project_opened once per session when a folder is open and its documents have been
+		// listed. Consent-gated in the service, so this is a no-op before consent; carries counts only, no paths.
+		void this._captureProjectOpenedOnce();
+	}
+
+	// True once this session's project_opened has fired, so a re-scan (marker retry, folder change) does not
+	// re-emit. Reset naturally per window/session because the service is a fresh singleton each launch.
+	private _projectOpenedCaptured = false;
+
+	private async _captureProjectOpenedOnce(): Promise<void> {
+		if (this._projectOpenedCaptured) { return; }
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) { return; }
+		this._projectOpenedCaptured = true;
+		try {
+			const docs = await this.listDocuments();
+			// is_first: whether this install has ever recorded a project_opened before (a persisted boolean flag,
+			// never a document path). Set true here so the next launch reports is_first:false.
+			const isFirst = !this._storage.getBoolean(FIRST_PROJECT_KEY, StorageScope.APPLICATION, false);
+			if (isFirst) {
+				this._storage.store(FIRST_PROJECT_KEY, true, StorageScope.APPLICATION, StorageTarget.USER);
+			}
+			this._analytics.capture('project_opened', {
+				doc_count: docs.length,
+				has_bindings: docs.some(d => d.sourceKinds.length > 0),
+				is_first: isFirst,
+			});
+		} catch (e) {
+			this._log.trace('[livingDocs] project_opened capture skipped', e instanceof Error ? e.message : String(e));
+		}
 	}
 
 	// Read the `.abstract-name` marker in the open folder, if any, into the cache. A missing/unreadable
@@ -465,6 +507,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// claims + decision stack and caches its verdict; Financial/Formatting are deterministic and simply
 	// recompute on the next render (the fired event triggers it).
 	async runSkillCheck(resource: URI, id: ISkillCheck['id']): Promise<void> {
+		const started = Date.now();
 		if (id === 'strategy') {
 			const state = this._docs.get(resource.toString());
 			if (state) {
@@ -479,6 +522,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				}
 			}
 		}
+		// UI funnel: the user invoked a skill grader. `skill` is the controlled skill id (never document text);
+		// the Skills here are deterministic/strategy graders, not the ITE thinking skills, so `thinking` is false.
+		this._analytics.capture('skill_invoked', { skill: id, thinking: false, duration_ms: Date.now() - started });
 		this._onDidChange.fire();
 	}
 
@@ -1613,7 +1659,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// ask-before-apply / draft-only: queue for the rail without touching the doc.
 			const block = state.doc.blocks.find(b => b.id === change.blockId);
 			this._pending = this._pending.filter(c => !(c.docId === state.uri.toString() && c.blockId === change.blockId));
-			this._pending.push({
+			const figureChange: IProposedChange = {
 				id: generateUuid(),
 				docId: state.uri.toString(),
 				docTitle: state.doc.title,
@@ -1627,7 +1673,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				sourceCells: block ? block.binds.map(b => b.key) : [],
 				via: 'heuristic',
 				draft: policy === 'draft-only',
-			});
+			};
+			this._pending.push(figureChange);
+			// A policy-driven agent run prepared this figure update, so its source is 'agent'.
+			this._captureProposalCreated(figureChange, 'agent');
 			queued++;
 		}
 		return { applied, queued };
@@ -1716,6 +1765,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// real pin count so the History SNAPSHOT row can name the pinned source versions (plan 32 iter 4).
 		await this.saveSnapshot(resource, 'Published', 'publish', undefined, state.lock.pins.length);
 		this._notify.info(`Published "${state.doc.title}" - pinned to ${state.lock.pins.length} source version${state.lock.pins.length === 1 ? '' : 's'}.`);
+		// UI funnel + guardrail: a publish pins the sources; `stale_sources_present` records whether the gate flagged.
+		this._analytics.capture('export_or_publish', { format: 'publish', provenance_mode: 'footnoted', stale_sources_present: !gate.pass });
 		this._onDidChange.fire();
 	}
 
@@ -1774,6 +1825,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.doc = parseLivingDoc(snapshot.body);
 		state.rawText = snapshot.body;
 		state.status = `Restored "${snapshot.label}"`;
+		// Guardrail: restoring an earlier version is the "way back" after approvals. `depth` = how many audit
+		// entries the restore steps back over (a coarse count, never any content), so a spike is visible.
+		const depth = Math.max(0, state.lock.audit.length - snapshot.auditIndex);
+		this._analytics.capture('undo_after_approve', { depth });
 		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'approved', oldBody, snapshot.body, 'restore'));
 		await this._persist(state);
 		await this._recomputeFreshness(state);
@@ -1799,6 +1854,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			await this._files.writeFile(target, VSBuffer.fromString(html));
 			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
 			this._notify.info(`Exported "${state.doc.title}" to ${basename(target)}.`);
+			// UI funnel + guardrail: an export happened. `stale_sources_present` is the guardrail signal (a doc
+			// shipped while a bound source was stale) - it comes from the before-export gate, not document text.
+			this._analytics.capture('export_or_publish', { format: 'html', provenance_mode: 'footnoted', stale_sources_present: !gate.pass });
 			return target;
 		} catch (e) {
 			this._log.warn('[livingDocs] export failed', e);
@@ -1822,6 +1880,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			await this._files.writeFile(target, VSBuffer.fromString(markdown));
 			await this._editors.openEditor({ resource: target, options: { pinned: true } }, SIDE_GROUP);
 			this._notify.info(`Exported "${state.doc.title}" to ${basename(target)}.`);
+			// The clean-Markdown export inlines resolved values (no bindings), so its provenance mode is 'clean'.
+			this._analytics.capture('export_or_publish', { format: 'markdown', provenance_mode: 'clean', stale_sources_present: !gate.pass });
 			return target;
 		} catch (e) {
 			this._log.warn('[livingDocs] markdown export failed', e);
@@ -1997,6 +2057,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// the event agent's policy then decides whether their figures auto-apply (auto-figures) or queue (draft-only).
 	private async _runAgent(agent: IAgentDef, context: IAgentRunContext): Promise<IAgentRunResult> {
 		if (agent.trigger.kind === 'lifecycle') { return { applied: 0, queued: 0, docsTouched: 0 }; }
+		// Audit-mirror: a run over `scope_size` documents began. run_finished (below) closes it with the outcome.
+		const runStart = Date.now();
+		this._analytics.capture('run_started', { scope_size: context.docs.length });
 		let applied = 0;
 		let queued = 0;
 		let skipped = 0;
@@ -2045,6 +2108,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (snapshot && (agent.trigger.kind === 'heartbeat' || agent.trigger.kind === 'event')) { this._orchestrator.clearDirtyKeys(uri, snapshot); }
 		}
 		this._onDidChange.fire();
+		// Audit-mirror: the run finished. `failures` counts the blocked-at-gate outcome (0 or 1 per run here);
+		// `cancelled` is true when a Stop left documents unprocessed. No document text - counts and durations only.
+		this._analytics.capture('run_finished', {
+			scope_size: context.docs.length,
+			cancelled: skipped > 0,
+			failures: blocked ? 1 : 0,
+			duration_ms: Date.now() - runStart,
+		});
 		return { applied, queued, blocked, skipped, docsTouched: touched };
 	}
 
@@ -2102,6 +2173,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			} else {
 				// Meaning/influence changes wait for approval in the review rail (no eager rewrites).
 				this._pending.push(change);
+				// The impact pass is driven by a source change (agent/hook), so this proposal's source is 'agent'.
+				this._captureProposalCreated(change, 'agent');
 			}
 		}
 
@@ -2802,11 +2875,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				const target = batchByTitle.get(entry.doc.trim().toLowerCase());
 				if (!target) { continue; }
 				for (const edit of entry.edits) {
-					const queued = this._queueChatEdit(target, edit, sources);
+					const queued = this._queueChatEdit(target, edit, sources, 'fan-out');
 					if (queued) { addStep({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 				}
 				for (const insert of entry.inserts) {
-					const queued = this._queueChatInsert(target, insert, sources);
+					const queued = this._queueChatInsert(target, insert, sources, 'fan-out');
 					if (queued) { addStep({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
 				}
 			}
@@ -2843,7 +2916,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Locate the prose block an edit targets (best token-overlap match under the named heading) and queue
 	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the
 	// block label when queued, else undefined.
-	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string): { id: string; label: string } | undefined {
+	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): { id: string; label: string } | undefined {
 		const newText = String(edit.newText ?? '').trim();
 		const oldText = String(edit.oldText ?? '').trim();
 		if (!newText || !oldText) { return undefined; }
@@ -2870,7 +2943,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const label = this._blockLabel(state.doc, best.id);
 		const id = generateUuid();
 		const grounding = this._resolveSourceGrounding(edit.sourceQuote, edit.sourceLine, sourceText);
-		this._pending.push({
+		const change: IProposedChange = {
 			id,
 			docId: state.uri.toString(),
 			docTitle: state.doc.title,
@@ -2884,7 +2957,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			sourceCells: [],
 			via: 'model',
 			...grounding,
-		});
+		};
+		this._pending.push(change);
+		this._captureProposalCreated(change, source);
 		return { id, label };
 	}
 
@@ -2905,7 +2980,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Queue a generative insertion: brand-new Markdown content (a list, a section) to be added after the
 	// named heading (best fuzzy match; empty/unknown -> end of document). No oldText - the inline diff
 	// renders it all-additions, and approve splices a new block into the document.
-	private _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string): { id: string; label: string } | undefined {
+	private _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): { id: string; label: string } | undefined {
 		const newText = String(insert.newText ?? '').trim();
 		if (!newText) { return undefined; }
 		const afterHeading = String(insert.afterHeading ?? '').trim();
@@ -2922,7 +2997,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (best) { afterBlockId = best.id; label = best.text; }
 		}
 		const id = generateUuid();
-		this._pending.push({
+		const change: IProposedChange = {
 			id,
 			docId: state.uri.toString(),
 			docTitle: state.doc.title,
@@ -2938,7 +3013,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			insert: true,
 			afterBlockId,
 			...this._resolveSourceGrounding(insert.sourceQuote, insert.sourceLine, sourceText),
-		});
+		};
+		this._pending.push(change);
+		this._captureProposalCreated(change, source);
 		return { id, label };
 	}
 
@@ -3012,6 +3089,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// A tweaked change records `via: 'tweaked'` so the trail shows the human amended the agent's words
 		// (plan 31 iter 3, D31-B); otherwise the change's own provenance (model/heuristic) stands.
 		state.lock.audit.push(this._entry(change.blockId, 'approved', change.oldText, change.newText, change.tweaked ? 'tweaked' : (change.via ?? 'model')));
+		// Audit-mirror: one approve resolved this proposal (tweaked = the human amended it first). `bulk` is
+		// false here; the bulk paths (approveAll) pass true to their own resolved emit is not needed because
+		// each underlying approve fires - so bulk resolution is captured as the individual approves it fans to.
+		this._captureProposalResolved(change.tweaked ? 'tweak' : 'approve', this._inBulkApprove);
 		await this._markContextReviewed(state, change.contextReviewed);
 		state.status = `Change approved - applied to ${change.docTitle}`;
 		await this._persist(state);
@@ -3030,8 +3111,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (state) {
 			await this.saveSnapshot(state.uri, 'Before bulk approve', 'bulk-approve');
 		}
-		for (const id of ids) {
-			await this.approve(id);
+		// Mark the fanned approves as bulk so each proposal_resolved carries bulk:true (doc 15 §3.1).
+		this._inBulkApprove = true;
+		try {
+			for (const id of ids) {
+				await this.approve(id);
+			}
+		} finally {
+			this._inBulkApprove = false;
 		}
 	}
 
@@ -3042,6 +3129,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(change.docId);
 		if (state) {
 			state.lock.audit.push(this._entry(change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model'));
+			this._captureProposalResolved('reject', this._inBulkReject);
 			state.status = `Change rejected - ${change.docTitle} left unchanged`;
 			// Rejecting still counts as reviewing the changed context, so the flag clears.
 			void this._markContextReviewed(state, change.contextReviewed)
@@ -3066,8 +3154,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// pending changes are untouched.
 	async rejectAll(docId: string): Promise<void> {
 		const ids = this._pending.filter(c => c.docId === docId).map(c => c.id);
-		for (const id of ids) {
-			this.reject(id);
+		this._inBulkReject = true;
+		try {
+			for (const id of ids) {
+				this.reject(id);
+			}
+		} finally {
+			this._inBulkReject = false;
 		}
 	}
 
@@ -3150,6 +3243,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// "Sync across": re-derive this one document's bound figures from its current sources and return the
 	// old -> new diff (the visible result of a source edit). Figures auto-apply (low risk); the diff is
 	// recorded for the editor's synced banner. Meaning-changes still go through Review-impact, not here.
+	notePeek(mode: 'click-through' | 'toolbar'): void {
+		this._analytics.capture('provenance_peeked', { mode });
+	}
+
 	async syncFromSources(resource: URI): Promise<readonly IFigureChange[]> {
 		const id = resource.toString();
 		const state = this._docs.get(id);
@@ -3160,6 +3257,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.status = changes.length
 			? `Synced - ${changes.length} figure${changes.length === 1 ? '' : 's'} updated`
 			: 'Synced - figures already up to date';
+		// Audit-mirror: a source_synced per distinct source KIND (file/api/mcp) - a count of what synced, no
+		// source name or value ever. `ok:true` because a sync that reaches here completed without throwing.
+		for (const kind of this._distinctSourceKinds(state)) {
+			this._analytics.capture('source_synced', { kind, ok: true });
+		}
 		this._onDidChange.fire();
 		return changes;
 	}
@@ -3234,6 +3336,42 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		return [...found.values()];
+	}
+
+	// --- analytics (plan 36 iter 2): the audit-mirror emitters, funnelled through these few points rather
+	// than sprinkled through the UI. Each captures a typed event whose properties are counts/kinds/durations
+	// only - never document prose or bound figures (the property-linter in the service enforces this before
+	// anything is sent; document ids are hashed opaque). Every call is a no-op unless the user has consented. ---
+
+	/** Map a proposal's 0..1 confidence to a coarse label (never the raw figure, which could be revealing). */
+	private _confidenceLabel(confidence: number): string {
+		return confidence >= 0.8 ? 'high' : confidence >= 0.5 ? 'medium' : 'low';
+	}
+
+	/** The distinct source kinds (file / api / mcp) a document binds to, for the source_synced analytics event. */
+	private _distinctSourceKinds(state: IDocState): SourceKind[] {
+		const kinds = new Set<SourceKind>();
+		for (const key of Object.keys(state.lock.bindings)) {
+			kinds.add(parseMcpKey(key) ? 'mcp' : sourceKind(state.lock.bindings[key].source));
+		}
+		for (const source of state.doc.sources) {
+			kinds.add(sourceKind(source));
+		}
+		return [...kinds];
+	}
+
+	/** Emit `proposal_created` for one queued change (source: chat / fan-out / agent / hook). */
+	private _captureProposalCreated(change: IProposedChange, source: 'chat' | 'fan-out' | 'agent' | 'hook'): void {
+		this._analytics.capture('proposal_created', {
+			source_kind: source,
+			change_kind: change.kind,
+			confidence: this._confidenceLabel(change.confidence),
+		});
+	}
+
+	/** Emit `proposal_resolved` when a change is approved / tweaked-and-approved / rejected. */
+	private _captureProposalResolved(resolution: 'approve' | 'tweak' | 'reject', bulk: boolean): void {
+		this._analytics.capture('proposal_resolved', { resolution, bulk });
 	}
 
 	private _entry(blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: IAuditEntry['via']): IAuditEntry {
