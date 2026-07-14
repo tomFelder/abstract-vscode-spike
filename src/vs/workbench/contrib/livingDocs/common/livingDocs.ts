@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
@@ -548,6 +549,22 @@ export interface ILivingDocsService {
 	 */
 	exportMarkdown(resource: URI, force?: boolean): Promise<URI | undefined>;
 
+	/**
+	 * Persist a pasted/dropped image (issue #141) beside `resource` under `assets/<doc-basename>/` (the #129
+	 * import layout). The name is sanitised (safe chars, extension derived from `mime` when absent) and
+	 * de-duplicated against the folder. Returns the document-relative path (`assets/<doc-basename>/<file>`) the
+	 * editor writes into the Markdown as `![alt](assets/...)`.
+	 */
+	saveImageAsset(resource: URI, name: string, bytes: VSBuffer, mime?: string): Promise<string>;
+
+	/**
+	 * Read an image referenced by a document-relative `src` (e.g. `assets/Probe/logo.png`, `logo.png`) back as
+	 * a `data:` URI so the webview can display it (it cannot load a path relative to the document). Oversized
+	 * (>10 MB) or unreadable/missing files resolve with `{ error: true }` so the editor shows a visible broken
+	 * state rather than a silent gap.
+	 */
+	readImageAsset(resource: URI, src: string): Promise<{ readonly dataUri?: string; readonly error?: boolean }>;
+
 	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
 	shareDocument(resource: URI): void;
 
@@ -662,6 +679,13 @@ export interface ILivingDocsService {
 	 * replacement for the abrasive SIDE_GROUP source open; the pane renders inside the one document surface).
 	 */
 	getSourcePeek(resource: URI, cells: readonly string[]): ISourcePeek | undefined;
+	/**
+	 * Record that the user peeked a source's provenance (plan 36: the provenance_peeked funnel event). `mode`
+	 * distinguishes a click-through on a provenance dot from opening the source pane via the toolbar. Analytics
+	 * only - counts the interaction, never the source or its values; a no-op unless the user consented.
+	 */
+	notePeek(mode: 'click-through' | 'toolbar'): void;
+
 	/** Re-derive this document's bound figures from its current sources, apply them, and return the old -> new diff. */
 	syncFromSources(resource: URI): Promise<readonly IFigureChange[]>;
 	/** The figure diff from the last syncFromSources for a document (for the editor's "synced" banner). */

@@ -23,6 +23,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IChatMessage, IChatStep, ILivingDocsService, ISkillCheck } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
+import { ScreenEditorInput } from './screenEditorInput.js';
 
 type PanelTab = 'chat' | 'review' | 'history';
 
@@ -54,6 +55,11 @@ export class ReviewRailView extends ViewPane {
 	private _streamSteps: HTMLElement | undefined;
 	private _streamCaret: HTMLElement | undefined;
 	private _streamDoc: string | undefined;
+	// Whether the model provider is signed in to ChatGPT (plan 38): when false, the composer shows one calm
+	// line inviting sign-in for unlimited usage; it disappears once signed in. Fetched async from the live
+	// provider status (the proxy's /healthz) on first render and refreshed on onDidChange (which fires on a
+	// sign-in/out). Undefined until the first fetch resolves, so nothing flashes before we know the truth.
+	private _signedIn: boolean | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -90,11 +96,12 @@ export class ReviewRailView extends ViewPane {
 		this._root = append(container, $('.living-docs-panel'));
 		this._root.style.height = '100%';
 		this._injectStyles(container);
-		this._register(this._livingDocs.onDidChange(() => this._render()));
+		this._register(this._livingDocs.onDidChange(() => { void this._refreshSignedIn(); this._render(); }));
 		// Append streamed chat deltas to the live turn without a full re-render (plan 27 iter 3).
 		this._register(this._livingDocs.onDidStreamChat(resource => this._onStreamDelta(resource)));
 		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
 		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'review' || this._activeTab === 'chat') { this._render(); } }));
+		void this._refreshSignedIn();
 		this._render();
 	}
 
@@ -132,6 +139,43 @@ export class ReviewRailView extends ViewPane {
 		} else {
 			this._renderReview(content, pending);
 		}
+	}
+
+	// Re-read the live provider status (the proxy's /healthz) and, if the signed-in state changed, re-render so
+	// the composer's sign-in line appears/disappears. Kept resilient: a failed probe leaves the last known
+	// state rather than flashing the invite off.
+	private async _refreshSignedIn(): Promise<void> {
+		try {
+			const status = await this._livingDocs.getModelProviderStatus();
+			if (this._signedIn !== status.signedIn) {
+				this._signedIn = status.signedIn;
+				this._render();
+			}
+		} catch {
+			// Leave the last known state; the next onDidChange retries.
+		}
+	}
+
+	// The calm, persistent sign-in affordance in the composer (plan 38, doc 18 section 2.1): shown whenever the
+	// model provider is NOT signed in to ChatGPT, one line only (P7 calm-by-default, no modal, no nag). Clicking
+	// "Sign in with ChatGPT" opens the Model Access screen (the sign-in surface). It disappears once signed in.
+	private _renderSignInHint(footer: HTMLElement): void {
+		// Only while we know the user is signed OUT (undefined = not yet probed, so render nothing to avoid a flash).
+		if (this._signedIn !== false) { return; }
+		const row = append(footer, $('div'));
+		row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
+		const dot = append(row, $('span'));
+		dot.style.cssText = 'width:6px;height:6px;flex:none;border-radius:50%;background:#cdd1d8';
+		const text = append(row, $('span'));
+		text.textContent = 'Using the included model · ';
+		const link = append(text, $('button')) as HTMLButtonElement;
+		link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
+		link.textContent = 'Sign in with ChatGPT';
+		this._renderDisposables.add(addDisposableListener(link, 'click', () => {
+			void this._editors.openEditor(this.instantiationService.createInstance(ScreenEditorInput, 'settings'), { pinned: true });
+		}));
+		const tail = append(text, $('span'));
+		tail.textContent = ' for unlimited.';
 	}
 
 	private _renderReview(content: HTMLElement, pending: readonly IProposedChange[]): void {
@@ -646,6 +690,9 @@ export class ReviewRailView extends ViewPane {
 	private _renderChatComposer(content: HTMLElement, doc: URI | undefined): void {
 		const footer = append(content, $('div'));
 		footer.style.cssText = 'flex:none;border-top:1px solid #eef0f3;padding:10px 12px;background:#fbfbfc';
+
+		// The persistent, calm sign-in affordance (plan 38): one line above the composer while signed out.
+		this._renderSignInHint(footer);
 
 		const box = append(footer, $('div'));
 		// Comp C6: border tinted accent (#d9d7fb), 13px radius, subtle lifted shadow.
