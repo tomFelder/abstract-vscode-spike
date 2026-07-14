@@ -657,7 +657,7 @@ function renderEmptyProjectFrontDoor(state: IScreenState, folderName: string): s
 			<button data-msg="goTemplates" style="border:1px solid #e6e8ed;background:#fff;border-radius:10px;padding:11px 18px;font:500 13px/1 system-ui;color:#52575f;cursor:pointer">Browse templates</button>
 		</div>
 		${renderHomeComposer(state)}
-		${renderNewDocSheet(templates)}
+		${renderNewDocSheet(templates, false)}
 	</div>`);
 }
 

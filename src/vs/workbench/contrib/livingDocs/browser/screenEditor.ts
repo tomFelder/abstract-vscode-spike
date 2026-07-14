@@ -158,8 +158,8 @@ export class ScreenEditor extends EditorPane {
 		@IConfigurationService private readonly _configuration: IConfigurationService,
 		@IAnalyticsService private readonly _analytics: IAnalyticsService,
 	) {
-		super(ScreenEditor.ID, group, telemetryService, themeService, storageService);
-		this._storage = storageService;
+		super(ScreenEditor.ID, group, telemetryService, themeService, _storageService);
+		this._storage = _storageService;
 	}
 
 	/** The user's current analytics consent, read from the single source of truth (the Settings toggle). */

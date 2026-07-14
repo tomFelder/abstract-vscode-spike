@@ -505,7 +505,6 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		@IEditorService private readonly _editorService: IEditorService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
 		@IStorageService private readonly _storageService: IStorageService,
-		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -523,7 +522,6 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		// Home as before; the palette "Onboarding" command reopens the flow any time.
 		const firstRun = !this._storageService.getBoolean(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, StorageScope.PROFILE, false);
 		if (this._editorService.editors.length === 0) {
-			const screen: ScreenId = firstRun ? 'onboarding' : 'home';
 			if (firstRun) {
 				this._storageService.store(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, true, StorageScope.PROFILE, StorageTarget.MACHINE);
 			}
@@ -536,14 +534,10 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		// Workspace-rail selection + the 264/392 pinning happen there when the editor surface opens.
 	}
 
-	// Route the startup surface (map-D2): Home leads, except a first run with no model connected, which lands on
-	// the Model Access step so a fresh user picks a door first. The model probe is async, so re-check that no
-	// editor opened while probing before opening (a restored editor or a deep-link wins).
+	// Route the startup surface: a fresh profile begins the two-wow walkthrough, while returning users land on
+	// Home. Re-check that no editor opened while dispatching so a restored editor or deep-link still wins.
 	private async _openStartupScreen(firstRun: boolean): Promise<void> {
-		let screen: ScreenId = 'home';
-		if (firstRun && !(await this._livingDocs.isModelReachable())) {
-			screen = 'settings';
-		}
+		const screen: ScreenId = firstRun ? 'onboarding' : 'home';
 		if (this._editorService.editors.length === 0) {
 			await this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, screen), { pinned: true });
 		}
