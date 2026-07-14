@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../base/common/uri.js';
+import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { ILivingDoc, SourceKind } from './livingDocsModel.js';
 import { sourceKindOf } from './contextGroups.js';
 
@@ -15,16 +16,20 @@ export interface ITreeRailItem {
 	readonly label: string;
 	/** Present for document rows (clicking opens the editor); absent for non-openable source rows. */
 	readonly resource?: URI;
-	readonly kind: 'doc' | 'source';
+	readonly kind: 'doc' | 'source' | 'unsupported';
 	/** A document with pending meaning-changes shows the amber dot (mirrors the Review count). */
 	readonly pending: boolean;
 	/** For source rows, the binding kind (file | api | mcp) - drives the row glyph. */
 	readonly sourceKind?: SourceKind;
+	/** For an `unsupported` (not-yet-imported) row, the plain-words reason; unset otherwise (plan 37 F10). */
+	readonly note?: string;
 }
 
 export interface ITreeRailFolder {
 	readonly name: string;
 	readonly items: readonly ITreeRailItem[];
+	/** Nested subfolders, preserving the on-disk hierarchy (plan 37 F7). Empty for a leaf group. */
+	readonly folders: readonly ITreeRailFolder[];
 }
 
 export interface ITreeRailDocInput {
@@ -32,32 +37,122 @@ export interface ITreeRailDocInput {
 	readonly resource: URI;
 	readonly pendingCount: number;
 	readonly sources: readonly string[];
+	/** The document's directory relative to the workspace root ('' = root), '/'-joined (plan 37 F7). */
+	readonly folder?: string;
+}
+
+// A non-Markdown file discovered in the workspace, classified for the Files tab: a `source` (a CSV / txt /
+// image / data file that belongs in the SOURCES section, F9) or `unsupported` (a .doc/.docx and kin marked
+// "not yet imported" with a plain-words reason, F10). Anything we should not surface returns undefined.
+export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupported'; reason?: string } | undefined {
+	if (!name || name.startsWith('.')) { return undefined; }
+	const lower = name.toLowerCase();
+	// Markdown documents are the Reports tree's job; system sidecars and the agents registry are not user data.
+	if (lower.endsWith('.md')) { return undefined; }
+	if (lower.endsWith('.lock.json') || lower === 'agents.json') { return undefined; }
+	const dot = lower.lastIndexOf('.');
+	const ext = dot >= 0 ? lower.slice(dot + 1) : '';
+	if (!ext) { return undefined; }
+	if (SOURCE_EXTS.has(ext)) { return { kind: 'source' }; }
+	const reason = IMPORT_REASONS[ext];
+	if (reason) { return { kind: 'unsupported', reason }; }
+	return undefined;
+}
+
+// Data/source file extensions that belong in the SOURCES section (F9).
+const SOURCE_EXTS = new Set(['csv', 'tsv', 'json', 'txt', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'yaml', 'yml']);
+
+// Formats we cannot yet interpret on open (F10): never silently skipped - the row is shown marked
+// "not yet imported - {reason}" so the user sees the file is there and why it is not opened.
+const IMPORT_REASONS: Record<string, string> = {
+	doc: 'Word documents are not imported yet',
+	docx: 'Word documents are not imported yet',
+	rtf: 'Rich Text documents are not imported yet',
+	odt: 'OpenDocument text is not imported yet',
+	pages: 'Pages documents are not imported yet',
+	pdf: 'PDFs are not imported yet',
+	xls: 'Spreadsheets are not imported yet',
+	xlsx: 'Spreadsheets are not imported yet',
+	ppt: 'Slide decks are not imported yet',
+	pptx: 'Slide decks are not imported yet',
+	key: 'Keynote decks are not imported yet',
+};
+
+interface IMutableFolder {
+	readonly name: string;
+	readonly items: ITreeRailItem[];
+	readonly children: Map<string, IMutableFolder>;
 }
 
 /**
- * The Files-tab folder tree. Living documents land under "Reports"; the distinct sources they bind to
- * land under "Sources" (deduped, kind-tagged). Empty folders are omitted so the rail only shows what
- * the workspace actually has.
+ * The Files-tab folder tree. Living documents land under "Reports" with their on-disk subfolder hierarchy
+ * preserved (F7 - nested folders are not flattened). The distinct sources the documents bind to, plus any
+ * data/source files (CSV/txt/image) discovered in the folder, land under "Sources" (deduped, kind-tagged,
+ * F9). Files we cannot yet import (.doc/.docx and kin) land under "Not yet imported" with a plain-words
+ * reason (F10). Empty groups are omitted so the rail only shows what the workspace actually has. Pure.
  */
-export function buildFileTree(docs: readonly ITreeRailDocInput[]): ITreeRailFolder[] {
-	const reports: ITreeRailItem[] = [...docs]
-		.sort((a, b) => a.title.localeCompare(b.title))
-		.map(d => ({ label: d.title, resource: d.resource, kind: 'doc' as const, pending: d.pendingCount > 0 }));
+export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readonly string[] = []): ITreeRailFolder[] {
+	const folders: ITreeRailFolder[] = [];
 
+	// --- Reports: the document tree, on-disk hierarchy preserved (F7) ---
+	const rootItems: ITreeRailItem[] = [];
+	const roots = new Map<string, IMutableFolder>();
+	for (const d of [...docs].sort((a, b) => a.title.localeCompare(b.title))) {
+		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0 };
+		const segments = (d.folder ?? '').split('/').filter(s => s.length > 0);
+		if (!segments.length) { rootItems.push(item); continue; }
+		let level = roots;
+		let node: IMutableFolder | undefined;
+		for (const seg of segments) {
+			node = level.get(seg) ?? { name: seg, items: [], children: new Map() };
+			level.set(seg, node);
+			level = node.children;
+		}
+		node!.items.push(item);
+	}
+	const freeze = (level: Map<string, IMutableFolder>): ITreeRailFolder[] =>
+		[...level.values()]
+			.sort((a, b) => a.name.localeCompare(b.name))
+			.map(f => ({ name: f.name, items: f.items, folders: freeze(f.children) }));
+	const reportsSubfolders = freeze(roots);
+	if (rootItems.length || reportsSubfolders.length) {
+		folders.push({ name: 'Reports', items: rootItems, folders: reportsSubfolders });
+	}
+
+	// --- Sources: bound sources + discovered data/source files, deduped (F9) ---
 	const seen = new Set<string>();
 	const sources: ITreeRailItem[] = [];
+	// A file source resolves to a real URI alongside the document that references it (sources are
+	// folder-scoped, decision 40), so the Files tab can rename/delete it. An api/mcp source has no file
+	// to act on, and a discovered "extra" (below) is a bare filename with no owning document, so both
+	// carry no resource and their context menu row is inert (gated on `item.resource`).
+	const addSource = (label: string, resource?: URI) => {
+		if (seen.has(label)) { return; }
+		seen.add(label);
+		sources.push({ label, resource, kind: 'source', pending: false, sourceKind: sourceKindOf(label) });
+	};
 	for (const d of docs) {
 		for (const s of d.sources) {
-			if (seen.has(s)) { continue; }
-			seen.add(s);
-			sources.push({ label: s, kind: 'source', pending: false, sourceKind: sourceKindOf(s) });
+			addSource(s, sourceKindOf(s) === 'file' ? joinPath(dirname(d.resource), s) : undefined);
 		}
 	}
-	sources.sort((a, b) => a.label.localeCompare(b.label));
 
-	const folders: ITreeRailFolder[] = [];
-	if (reports.length) { folders.push({ name: 'Reports', items: reports }); }
-	if (sources.length) { folders.push({ name: 'Sources', items: sources }); }
+	// --- Not yet imported: unsupported files, never silently dropped (F10) ---
+	const seenUnsupported = new Set<string>();
+	const unsupported: ITreeRailItem[] = [];
+	for (const name of extras) {
+		const c = classifyWorkspaceExtra(name);
+		if (!c) { continue; }
+		if (c.kind === 'source') { addSource(name); continue; }
+		if (seenUnsupported.has(name)) { continue; }
+		seenUnsupported.add(name);
+		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason });
+	}
+	sources.sort((a, b) => a.label.localeCompare(b.label));
+	unsupported.sort((a, b) => a.label.localeCompare(b.label));
+
+	if (sources.length) { folders.push({ name: 'Sources', items: sources, folders: [] }); }
+	if (unsupported.length) { folders.push({ name: 'Not yet imported', items: unsupported, folders: [] }); }
 	return folders;
 }
 

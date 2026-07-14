@@ -73,6 +73,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 1,
 			skippedDocs: 0,
 			oversizeDocs: 0,
+			failedDocs: 0,
 		});
 	});
 
@@ -88,6 +89,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 3,
 			skippedDocs: 0,
 			oversizeDocs: 0,
+			failedDocs: 0,
 		});
 	});
 
@@ -106,6 +108,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 0,
 			skippedDocs: 2,
 			oversizeDocs: 0,
+			failedDocs: 0,
 		});
 	});
 
@@ -121,6 +124,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 0,
 			skippedDocs: 0,
 			oversizeDocs: 0,
+			failedDocs: 0,
 		});
 	});
 
@@ -139,7 +143,53 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			unchangedDocs: 1,
 			skippedDocs: 0,
 			oversizeDocs: 1,
+			failedDocs: 0,
 		});
+	});
+
+	test('a document the model could not be reached for is flagged failed, never no-change (F14, issue #123)', () => {
+		// doc `b` failed (model unreachable) with no pending change: its tile must read `failed`, not the silent
+		// `no-change` all-clear that would falsely claim it ran and found nothing. It is its own honest bucket.
+		const pending = [change('a', '1')];
+		assert.deepStrictEqual(summariseProjectRun(docs, pending, false, [], ['b']), {
+			tiles: [
+				{ docId: 'a', docTitle: 'Access Control', status: 'changed', changeCount: 1 },
+				{ docId: 'b', docTitle: 'Acceptable Use', status: 'failed', changeCount: 0 },
+				{ docId: 'c', docTitle: 'Cryptography', status: 'no-change', changeCount: 0 },
+			],
+			totalChanges: 1,
+			changedDocs: 1,
+			unchangedDocs: 1,
+			skippedDocs: 0,
+			oversizeDocs: 0,
+			failedDocs: 1,
+		});
+	});
+
+	test('every document failed reads as all-failed, zero unchanged - never a silent all-clear (F14)', () => {
+		assert.deepStrictEqual(summariseProjectRun(docs, [], false, [], ['a', 'b', 'c']), {
+			tiles: [
+				{ docId: 'a', docTitle: 'Access Control', status: 'failed', changeCount: 0 },
+				{ docId: 'b', docTitle: 'Acceptable Use', status: 'failed', changeCount: 0 },
+				{ docId: 'c', docTitle: 'Cryptography', status: 'failed', changeCount: 0 },
+			],
+			totalChanges: 0,
+			changedDocs: 0,
+			unchangedDocs: 0,
+			skippedDocs: 0,
+			oversizeDocs: 0,
+			failedDocs: 3,
+		});
+	});
+
+	test('oversize takes priority over failed for a document flagged as both', () => {
+		// A document too large to send never reached the model, so "too large" is the more precise reason it
+		// produced nothing; it must not double-count as both oversize and failed.
+		const summary = summariseProjectRun(docs, [], false, ['b'], ['b']);
+		assert.strictEqual(summary.tiles[1].status, 'oversize', 'oversize wins over failed');
+		assert.strictEqual(summary.oversizeDocs, 1);
+		assert.strictEqual(summary.failedDocs, 0);
+		assert.strictEqual(summary.unchangedDocs, 2);
 	});
 });
 

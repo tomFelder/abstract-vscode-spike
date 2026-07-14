@@ -7,7 +7,7 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { buildFileTree, buildOutline, searchTreeRail } from '../../common/treeRail.js';
+import { buildFileTree, buildOutline, classifyWorkspaceExtra, searchTreeRail } from '../../common/treeRail.js';
 
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
 const BOARD = URI.file('/ws/Board Note.md');
@@ -44,6 +44,80 @@ suite('treeRail', () => {
 				]
 			},
 		]);
+	});
+
+	test('buildFileTree resolves a file source to a URI in the referencing document\'s folder (for the Files-tab menu), but not an api (URL) source', () => {
+		const folders = buildFileTree([
+			{ title: 'Weekly Summary', resource: WEEKLY, pendingCount: 0, sources: ['metrics.csv', 'https://api.example.com/mrr'] },
+		]);
+		const sources = folders.find(f => f.name === 'Sources')!.items;
+		const csv = sources.find(i => i.label === 'metrics.csv')!;
+		const api = sources.find(i => i.label === 'https://api.example.com/mrr')!;
+		// A file source is renamable/deletable, so it carries a real sibling URI; an api (URL) source has no file.
+		assert.strictEqual(csv.resource?.toString(), URI.file('/ws/metrics.csv').toString());
+		assert.strictEqual(api.resource, undefined);
+	});
+
+	test('buildFileTree preserves the on-disk folder hierarchy instead of flattening subfolders (F7)', () => {
+		const A = URI.file('/ws/root.md');
+		const B = URI.file('/ws/subfolder-a/note.md');
+		const C = URI.file('/ws/subfolder-a/deep/deep.md');
+		const D = URI.file('/ws/reports/2025/q1.md');
+		const folders = buildFileTree([
+			{ title: 'Root Doc', resource: A, pendingCount: 0, sources: [], folder: '' },
+			{ title: 'Sub Note', resource: B, pendingCount: 0, sources: [], folder: 'subfolder-a' },
+			{ title: 'Deep Doc', resource: C, pendingCount: 0, sources: [], folder: 'subfolder-a/deep' },
+			{ title: 'Q1', resource: D, pendingCount: 0, sources: [], folder: 'reports/2025' },
+		]);
+		// One "Reports" group: root docs at top level, subfolders nested by their path (not flattened).
+		const reports = folders.find(f => f.name === 'Reports')!;
+		assert.deepStrictEqual(reports.items.map(i => i.label), ['Root Doc']);
+		const shape = reports.folders.map(f => ({
+			name: f.name,
+			items: f.items.map(i => i.label),
+			subs: f.folders.map(s => ({ name: s.name, items: s.items.map(i => i.label) })),
+		}));
+		assert.deepStrictEqual(shape, [
+			{ name: 'reports', items: [], subs: [{ name: '2025', items: ['Q1'] }] },
+			{ name: 'subfolder-a', items: ['Sub Note'], subs: [{ name: 'deep', items: ['Deep Doc'] }] },
+		]);
+	});
+
+	test('buildFileTree lists discovered non-Markdown files as SOURCES and unsupported files as "Not yet imported" (F9/F10)', () => {
+		const A = URI.file('/ws/report.md');
+		const folders = buildFileTree(
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: ['metrics.csv'], folder: '' }],
+			['data.csv', 'notes.txt', 'chart.png', 'metrics.csv', 'brief.docx', 'old.doc', 'deck.pptx'],
+		);
+		const sources = folders.find(f => f.name === 'Sources')!;
+		// Bound source + discovered data/txt/image files, deduped (metrics.csv appears once), sorted.
+		assert.deepStrictEqual(sources.items.map(i => ({ label: i.label, kind: i.kind })), [
+			{ label: 'chart.png', kind: 'source' },
+			{ label: 'data.csv', kind: 'source' },
+			{ label: 'metrics.csv', kind: 'source' },
+			{ label: 'notes.txt', kind: 'source' },
+		]);
+		const notYet = folders.find(f => f.name === 'Not yet imported')!;
+		assert.deepStrictEqual(notYet.items.map(i => ({ label: i.label, kind: i.kind, hasReason: !!i.note })), [
+			{ label: 'brief.docx', kind: 'unsupported', hasReason: true },
+			{ label: 'deck.pptx', kind: 'unsupported', hasReason: true },
+			{ label: 'old.doc', kind: 'unsupported', hasReason: true },
+		]);
+	});
+
+	test('classifyWorkspaceExtra sorts data/image files into sources, office files into not-yet-imported, and skips md/system files', () => {
+		assert.strictEqual(classifyWorkspaceExtra('data.csv')?.kind, 'source');
+		assert.strictEqual(classifyWorkspaceExtra('photo.PNG')?.kind, 'source');
+		assert.strictEqual(classifyWorkspaceExtra('notes.txt')?.kind, 'source');
+		const docx = classifyWorkspaceExtra('brief.docx');
+		assert.strictEqual(docx?.kind, 'unsupported');
+		assert.ok(docx?.reason && docx.reason.length > 0, 'an unsupported file carries a plain-words reason');
+		// Never surfaced: Markdown (the Reports tree owns it), lock sidecars, the agents registry, hidden files.
+		assert.strictEqual(classifyWorkspaceExtra('doc.md'), undefined);
+		assert.strictEqual(classifyWorkspaceExtra('report.lock.json'), undefined);
+		assert.strictEqual(classifyWorkspaceExtra('agents.json'), undefined);
+		assert.strictEqual(classifyWorkspaceExtra('.hidden'), undefined);
+		assert.strictEqual(classifyWorkspaceExtra('README'), undefined);
 	});
 
 	test('buildOutline returns headings in order, stripped of Markdown and bind syntax', () => {

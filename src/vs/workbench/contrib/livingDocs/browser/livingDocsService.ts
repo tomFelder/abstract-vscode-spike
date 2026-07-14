@@ -3,38 +3,43 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { VSBuffer } from '../../../../base/common/buffer.js';
+import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
+import { basename, dirname, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { toAction } from '../../../../base/common/actions.js';
 import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, IFileOpDependent, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
-import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
+import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
-import { ILockStore, SidecarLockStore } from './livingDocLockStore.js';
+import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
+import { IFileRef, rewriteLockSources, scanDependents } from '../common/fileOps.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
 import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
+import { classifyWorkspaceExtra } from '../common/treeRail.js';
 import { projectDisplayName } from '../common/projectDisplayName.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
@@ -76,6 +81,10 @@ interface IDocState {
 	recent: Set<string>;            // block ids changed in the last refresh (for the highlight)
 	staleBindings: Set<string>;     // dirty bits: bind keys whose source changed since last sync
 	staleContext: Set<string>;      // dirty bits: context files changed since last review
+	// The live re-resolved source value per bind key from the last freshness recompute (the "now"); the
+	// lock holds the applied value at last sync (the "then"). Powers the source drawer's then-vs-now line
+	// (plan 37 F13) with no extra source read. Undefined until the first recompute; absent keys = unresolved.
+	current?: Map<string, string>;
 	status: string;
 	folderFiles: readonly string[]; // real md/csv/json siblings in the doc's folder (for @mention + pickers)
 }
@@ -251,6 +260,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
 	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
+
+	// "Add to chat" (docs 20 section 1d, the 1m entry): the review rail seeds the fired file name as an
+	// `@mention` in its chat composer draft. Kept in the service so the Files-tab view stays thin.
+	private readonly _onDidRequestChatAttach = this._register(new Emitter<string>());
+	readonly onDidRequestChatAttach: Event<string> = this._onDidRequestChatAttach.event;
 
 	// Fires per delta / tool step while a chat reply streams (plan 27 iter 3), so the rail appends to the
 	// live turn without a full re-render (preserving the composer caret + scroll). Carries the document URI.
@@ -695,14 +709,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			kind: SourceKind;
 			label: string;
 			syncedAt: string | undefined;
+			// The oldest sync time among the bindings that are currently STALE (plan 37 F12): a stale source
+			// must never read as freshly-synced, so its label reports how old its stale data actually is rather
+			// than the newest sync across its (still-fresh) dependents. Undefined while the source is all-fresh.
+			staleSyncedAt: string | undefined;
 			fresh: boolean;
 			usedBy: Map<string, { doc: URI; title: string; keys: Set<string>; context: boolean }>;
 		}
 		const acc = new Map<string, IRegistryRow>();
 		const ensure = (id: string, kind: SourceKind): IRegistryRow => {
 			let row = acc.get(id);
-			if (!row) { row = { kind, label: sourceLabel(id, kind), syncedAt: undefined, fresh: true, usedBy: new Map() }; acc.set(id, row); }
+			if (!row) { row = { kind, label: sourceLabel(id, kind), syncedAt: undefined, staleSyncedAt: undefined, fresh: true, usedBy: new Map() }; acc.set(id, row); }
 			return row;
+		};
+		// Fold one binding's sync time into a row: track the newest overall, and the oldest among stale ones.
+		const foldSync = (row: IRegistryRow, at: string, stale: boolean) => {
+			if (stale) { row.fresh = false; if (!row.staleSyncedAt || at < row.staleSyncedAt) { row.staleSyncedAt = at; } }
+			if (!row.syncedAt || at > row.syncedAt) { row.syncedAt = at; }
 		};
 		for (const uri of found.values()) {
 			const projection = await this._sourceProjection(uri);
@@ -726,8 +749,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				for (const key of keys) {
 					const entry = lock.bindings[key];
 					if (!entry) { continue; }
-					if (!bindingIsFresh(resolution.get(key), entry)) { row.fresh = false; }
-					if (!row.syncedAt || entry.syncedAt > row.syncedAt) { row.syncedAt = entry.syncedAt; }
+					foldSync(row, entry.syncedAt, !bindingIsFresh(resolution.get(key), entry));
 				}
 			}
 			// Context sources (frontmatter `context:`): influence edges - no bind keys; freshness compares the
@@ -739,8 +761,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				if (existing) { existing.context = true; } else { row.usedBy.set(docId, { doc: uri, title, keys: new Set(), context: true }); }
 				const entry = lock.context[file];
 				if (entry) {
-					if (contextHashes.get(file) !== entry.reviewedHash) { row.fresh = false; }
-					if (!row.syncedAt || entry.reviewedAt > row.syncedAt) { row.syncedAt = entry.reviewedAt; }
+					foldSync(row, entry.reviewedAt, contextHashes.get(file) !== entry.reviewedHash);
 				}
 			}
 		}
@@ -749,7 +770,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const usedBy: ISourceUsage[] = [...row.usedBy.values()]
 				.map(u => ({ doc: u.doc, title: u.title, keys: [...u.keys].sort((a, b) => a.localeCompare(b)), context: u.context }))
 				.sort((a, b) => a.title.localeCompare(b.title));
-			sources.push({ id, kind: row.kind, label: row.label, syncedAt: row.syncedAt, fresh: row.fresh, usedBy });
+			// A stale source reports its oldest stale sync time so it never reads as freshly-synced (F12);
+			// an all-fresh source reports the newest sync across its dependents.
+			const syncedAt = row.fresh ? row.syncedAt : (row.staleSyncedAt ?? row.syncedAt);
+			sources.push({ id, kind: row.kind, label: row.label, syncedAt, fresh: row.fresh, usedBy });
 		}
 		sources.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
 		return sources;
@@ -1012,6 +1036,248 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return (name ?? '').replace(/[\/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
 	}
 
+	// --- provenance-safe file operations (docs 20 section 1d / map-D6): rename, delete, Add to chat ---
+
+	// The frontmatter references (sources/context) of every discovered document, for the dependent scan.
+	// Discovers the same set `listDocuments` does (loaded + on-disk) so the answer reflects the real folder
+	// even before anything is opened; a loaded document uses its parsed state, an on-disk one is read + parsed.
+	private async _collectFileRefs(): Promise<IFileRef[]> {
+		const found = new Map<string, URI>();
+		for (const state of this._docs.values()) { found.set(state.uri.toString(), state.uri); }
+		for (const folder of this._workspace.getWorkspace().folders) { await this._collectDocs(folder.uri, found, 0); }
+		const refs: IFileRef[] = [];
+		for (const uri of found.values()) {
+			const id = uri.toString();
+			let doc = this._docs.get(id)?.doc;
+			if (!doc) {
+				try { doc = parseLivingDoc((await this._files.readFile(uri)).value.toString()); }
+				catch (e) { this._log.trace('[livingDocs] file-ref scan skipped', e instanceof Error ? e.message : String(e)); continue; }
+			}
+			refs.push({ id, title: doc.title, sources: doc.sources, context: doc.context });
+		}
+		return refs;
+	}
+
+	async getFileDependents(resource: URI): Promise<readonly IFileOpDependent[]> {
+		const name = basename(resource);
+		const deps = scanDependents(await this._collectFileRefs(), name, resource.toString());
+		return deps.map(d => ({ resource: URI.parse(d.id), title: d.title }));
+	}
+
+	async renameFile(resource: URI, newBaseName: string): Promise<void> {
+		const dir = dirname(resource);
+		const oldName = basename(resource);
+		const dot = oldName.lastIndexOf('.');
+		const ext = dot >= 0 ? oldName.slice(dot) : '';
+		const stem = LivingDocsService._safeStem(newBaseName);
+		if (!stem) { return; }
+		const nextName = stem.endsWith(ext) ? stem : stem + ext;
+		if (nextName === oldName) { return; }
+		const target = joinPath(dir, nextName);
+		// A clashing target must never half-apply: refuse before touching anything.
+		if (await this._files.exists(target)) {
+			this._notify.error(`Cannot rename to "${nextName}" - a file with that name already exists.`);
+			return;
+		}
+		try {
+			await this._moveFileWithSidecar(resource, target);
+		} catch (e) {
+			this._log.warn('[livingDocs] rename failed', e);
+			this._notify.error(`Rename failed: ${e instanceof Error ? e.message : String(e)}. Nothing was changed.`);
+			return;
+		}
+		// A renamed SOURCE keeps its dependents bound: rewrite their frontmatter + lock provenance references.
+		await this._rewriteDependentReferences(oldName, nextName);
+		this._onDidChange.fire();
+		this._notify.notify({
+			severity: Severity.Info,
+			message: `Renamed "${oldName}" to "${nextName}".`,
+			sticky: true,
+			actions: { primary: [toAction({ id: 'livingDocs.file.rename.undo', label: 'Undo', run: () => this._undoRename(target, resource, nextName, oldName) })] },
+		});
+	}
+
+	// Move a file and its `.lock.json` sidecar together, atomically on the pair: move the file, then the
+	// sidecar; if the sidecar move fails, roll the file back so neither half-applies. Carries the in-memory
+	// document state + source watcher to the new key and reopens an open editor at the new resource.
+	private async _moveFileWithSidecar(from: URI, to: URI): Promise<void> {
+		await this._files.move(from, to, false);
+		const fromLock = lockUriFor(from);
+		if (await this._files.exists(fromLock)) {
+			try {
+				await this._files.move(fromLock, lockUriFor(to), false);
+			} catch (e) {
+				try { await this._files.move(to, from, false); } catch { /* best-effort rollback */ }
+				throw e;
+			}
+		}
+		const state = this._docs.get(from.toString());
+		if (state) {
+			this._docs.delete(from.toString());
+			const moved: IDocState = { ...state, uri: to };
+			this._docs.set(to.toString(), moved);
+			const chat = this._chats.get(from.toString());
+			if (chat) { this._chats.delete(from.toString()); this._chats.set(to.toString(), chat); }
+			this._watchers.get(from.toString())?.dispose();
+			this._watchers.delete(from.toString());
+			this._watchSources(moved);
+		}
+		await this._reopenEditorAt(from, to);
+	}
+
+	// The editor follows a rename: open the new resource (if the old one was open) and close the stale input.
+	private async _reopenEditorAt(from: URI, to: URI): Promise<void> {
+		const editors = this._editors.findEditors(from);
+		if (!editors.length) { return; }
+		await this._editors.openEditor({ resource: to, options: { pinned: true } });
+		await this._editors.closeEditors(editors);
+	}
+
+	// Rewrite every dependent document's provenance references to a renamed file: its frontmatter
+	// `sources:`/`context:` entry (old -> new) and its lock's binding source paths + context key. Returns
+	// the documents it touched so the caller can invert them on undo. Best-effort per document (a failure
+	// on one is logged, never aborting the rename that already succeeded).
+	private async _rewriteDependentReferences(oldName: string, newName: string): Promise<URI[]> {
+		const deps = scanDependents(await this._collectFileRefs(), oldName);
+		const touched: URI[] = [];
+		for (const dep of deps) {
+			const uri = URI.parse(dep.id);
+			try {
+				let raw = (await this._files.readFile(uri)).value.toString();
+				if (dep.viaSources) { raw = withFrontmatterList(withFrontmatterList(raw, 'sources', oldName, false), 'sources', newName, true); }
+				if (dep.viaContext) { raw = withFrontmatterList(withFrontmatterList(raw, 'context', oldName, false), 'context', newName, true); }
+				await this._files.writeFile(uri, VSBuffer.fromString(raw));
+				const lock = await this._lockStore.read(uri);
+				if (lock) {
+					const { lock: nextLock, changed } = rewriteLockSources(lock, oldName, newName);
+					if (changed) { await this._lockStore.write(uri, nextLock); }
+				}
+				if (this._docs.has(dep.id)) { await this._loadState(uri); }
+				touched.push(uri);
+			} catch (e) {
+				this._log.warn('[livingDocs] dependent reference rewrite failed', e);
+			}
+		}
+		return touched;
+	}
+
+	private async _undoRename(current: URI, original: URI, currentName: string, originalName: string): Promise<void> {
+		if (await this._files.exists(original)) {
+			this._notify.error(`Cannot undo: "${originalName}" already exists again.`);
+			return;
+		}
+		try {
+			await this._moveFileWithSidecar(current, original);
+		} catch (e) {
+			this._notify.error(`Undo failed: ${e instanceof Error ? e.message : String(e)}.`);
+			return;
+		}
+		await this._rewriteDependentReferences(currentName, originalName);
+		this._onDidChange.fire();
+	}
+
+	async deleteFile(resource: URI): Promise<void> {
+		const name = basename(resource);
+		// Snapshot the file + its lock sidecar so Undo can restore the pair verbatim.
+		let fileBuf: VSBuffer;
+		try {
+			fileBuf = (await this._files.readFile(resource)).value;
+		} catch (e) {
+			this._notify.error(`Delete failed: "${name}" could not be read. Nothing was changed.`);
+			return;
+		}
+		const lockUri = lockUriFor(resource);
+		let lockBuf: VSBuffer | undefined;
+		try { if (await this._files.exists(lockUri)) { lockBuf = (await this._files.readFile(lockUri)).value; } }
+		catch { lockBuf = undefined; }
+		try {
+			await this._files.del(resource, { useTrash: false });
+		} catch (e) {
+			this._log.warn('[livingDocs] delete failed', e);
+			this._notify.error(`Delete failed: ${e instanceof Error ? e.message : String(e)}. Nothing was changed.`);
+			return;
+		}
+		// The pair is atomic: if the sidecar cannot be removed after the file was, roll the file back so
+		// neither half-applies (symmetric to the rename's sidecar-move rollback). Only if the rollback
+		// itself also fails is the state genuinely half-applied - then say so honestly and keep a sticky
+		// Restore action so the snapshot is never lost.
+		if (lockBuf) {
+			try {
+				await this._files.del(lockUri, { useTrash: false });
+			} catch (e) {
+				this._log.warn('[livingDocs] lock delete failed - rolling the file back', e);
+				try {
+					await this._files.writeFile(resource, fileBuf);
+					this._notify.error(`Delete failed: the "${basename(lockUri)}" sidecar could not be removed. Nothing was changed.`);
+				} catch (rollbackError) {
+					this._log.error('[livingDocs] delete rollback failed', rollbackError);
+					this._notify.notify({
+						severity: Severity.Error,
+						message: `Delete of "${name}" failed part-way: the file was removed but its lock sidecar was not. Restore brings the file back.`,
+						sticky: true,
+						actions: { primary: [toAction({ id: 'livingDocs.file.delete.restore', label: 'Restore', run: () => this._undoDelete(resource, fileBuf, lockUri, undefined) })] },
+					});
+				}
+				return;
+			}
+		}
+		this._forgetDoc(resource);
+		await this._closeEditorFor(resource);
+		// Orphan gracefully (map-D6): dependents are NOT rewritten - they keep their cached lock values and
+		// re-flag stale on the freshness recompute below, never crashing or blocking the delete.
+		await this._reflagDependents(name);
+		this._onDidChange.fire();
+		this._notify.notify({
+			severity: Severity.Info,
+			message: `Deleted "${name}".`,
+			sticky: true,
+			actions: { primary: [toAction({ id: 'livingDocs.file.delete.undo', label: 'Undo', run: () => this._undoDelete(resource, fileBuf, lockUri, lockBuf) })] },
+		});
+	}
+
+	private async _undoDelete(resource: URI, fileBuf: VSBuffer, lockUri: URI, lockBuf?: VSBuffer): Promise<void> {
+		try {
+			await this._files.writeFile(resource, fileBuf);
+			if (lockBuf) { await this._files.writeFile(lockUri, lockBuf); }
+		} catch (e) {
+			this._notify.error(`Undo failed: ${e instanceof Error ? e.message : String(e)}.`);
+			return;
+		}
+		if (this._isDocFile(resource)) { await this.loadDocument(resource); }
+		await this._reflagDependents(basename(resource));
+		this._onDidChange.fire();
+	}
+
+	// Recompute freshness for every loaded document that references `name`, so a deleted source's dependents
+	// (and a restored source's) re-derive their stale/fresh flag from the file's new presence/absence.
+	private async _reflagDependents(name: string): Promise<void> {
+		for (const state of this._docs.values()) {
+			if (state.doc.sources.includes(name) || state.doc.context.includes(name)) {
+				await this._recomputeFreshness(state);
+			}
+		}
+	}
+
+	// Drop all in-memory state for a deleted document: its watcher, loaded state, and chat history.
+	private _forgetDoc(resource: URI): void {
+		const id = resource.toString();
+		this._watchers.get(id)?.dispose();
+		this._watchers.delete(id);
+		this._docs.delete(id);
+		this._chats.delete(id);
+	}
+
+	// The editor closes gracefully when its document is deleted.
+	private async _closeEditorFor(resource: URI): Promise<void> {
+		const editors = this._editors.findEditors(resource);
+		if (editors.length) { await this._editors.closeEditors(editors); }
+	}
+
+	attachToChat(resource: URI): void {
+		this.focusPanel('chat');
+		this._onDidRequestChatAttach.fire(basename(resource));
+	}
+
 	// Generate a draft document from a template (plan 28, iter 3): write the static skeleton (headings +
 	// verbatim bind links + `template:` provenance), open it, then drive the SAME chat path every generation
 	// uses so the prose lands as reviewable insertion proposals (decision 17) - no new approve/apply path.
@@ -1053,9 +1319,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return target;
 		}
 		// Drive the existing generative chat path with the composed brief: the model's output arrives as
-		// insertion proposals in the review rail, exactly like any chat generation.
+		// insertion proposals in the review rail, exactly like any chat generation. The rail shows plain-words
+		// progress (F4), never the internal template brief - the full instruction drives the model only.
 		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
-		await this.sendChatMessage(target, instruction);
+		const trimmedNote = (note ?? '').trim();
+		const display = trimmedNote
+			? `Draft "${requested}" from the ${templateName} template. ${trimmedNote}`
+			: `Draft "${requested}" from the ${templateName} template.`;
+		await this.sendChatMessage(target, instruction, display);
 		return target;
 	}
 
@@ -1186,6 +1457,50 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
+	// The document's directory relative to the workspace root ('' = root), '/'-joined, so the tree-rail can
+	// preserve on-disk hierarchy instead of flattening every document into one list (plan 37 F7). Resolved
+	// against whichever workspace folder contains the document; a document outside every folder reports ''.
+	private _relativeFolder(uri: URI): string {
+		for (const folder of this._workspace.getWorkspace().folders) {
+			const rel = relativePath(folder.uri, uri);
+			if (rel === undefined || rel.startsWith('../') || rel === '..') { continue; }
+			const slash = rel.lastIndexOf('/');
+			return slash >= 0 ? rel.slice(0, slash) : '';
+		}
+		return '';
+	}
+
+	// The workspace's non-Markdown files, as basenames (plan 37 F9/F10): CSV/txt/image/data files for the
+	// tree-rail SOURCES section and files we cannot yet import (.doc/.docx) for its "Not yet imported"
+	// section. Mirrors `_collectDocs`' bounded, hidden-dir-skipping walk; classification is pure (treeRail).
+	async listWorkspaceExtras(): Promise<readonly string[]> {
+		const found = new Set<string>();
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectExtras(folder.uri, found, 0);
+		}
+		return [...found].sort((a, b) => a.localeCompare(b));
+	}
+
+	private async _collectExtras(dir: URI, found: Set<string>, depth: number): Promise<void> {
+		if (depth > 4) { return; }
+		let children;
+		try {
+			children = (await this._files.resolve(dir)).children ?? [];
+		} catch (e) {
+			this._log.trace('[livingDocs] extras scan skipped', e instanceof Error ? e.message : String(e));
+			return;
+		}
+		for (const child of children) {
+			const name = basename(child.resource);
+			if (child.isDirectory) {
+				if (name.startsWith('.') || name === 'node_modules' || name === 'out') { continue; }
+				await this._collectExtras(child.resource, found, depth + 1);
+			} else if (classifyWorkspaceExtra(name)) {
+				found.add(name);
+			}
+		}
+	}
+
 	// A document is any `.md` file; generated `.export.md` / `.source.md` views are skipped, and template
 	// files (`*.template.md`, plan 28 D28-A) are excluded so they never appear in the Reports list, the
 	// tree-rail or the Home documents grid - they show only on the Templates screen (but stay on disk).
@@ -1225,12 +1540,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const bound = doc.blocks.reduce((n, b) => n + b.binds.length, 0);
 			return {
 				resource: uri,
-				title: doc.title,
+				// Never a bare "Untitled" for an odd/blank-heading file: fall back to the filename (F8).
+				title: documentDisplayTitle(doc, basename(uri)),
 				isLiving: doc.isLiving,
 				sourceKinds: [...kinds],
 				sources: doc.sources,
 				lastSynced: doc.context.length ? `${doc.context.length} context` : (bound ? `${bound} bound` : ''),
 				pendingCount: this._pending.filter(c => c.docId === id).length,
+				folder: this._relativeFolder(uri),
 			};
 		} catch (e) {
 			this._log.trace('[livingDocs] summarize skipped', e instanceof Error ? e.message : String(e));
@@ -1349,11 +1666,38 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private async _recomputeFreshness(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		const staleBindings = new Set<string>();
 		const staleContext = new Set<string>();
+		// The current re-resolved values (the "now" for the drawer's then-vs-now, F13). We already read every
+		// source here for the dirty-bit compare, so retaining the values costs nothing extra.
+		const current = new Map<string, string>();
 		if (state.doc.isLiving) {
 			const resolution = await this._resolveCurrent(state, pass);
 			for (const key of Object.keys(state.lock.bindings)) {
 				const cur = resolution.get(key);
+				if (cur) { current.set(key, cur.value); }
 				if (cur && !bindingIsFresh(cur, state.lock.bindings[key])) { staleBindings.add(key); }
+			}
+			// A DELETED (or renamed-away) local file source resolves nothing at all, so the compare above -
+			// which only sees values that DID resolve - can never flag it. Explicitly re-flag the lock's
+			// bindings under a declared file source that is now missing on disk, so a dependent of a deleted
+			// source honestly reads stale (map-D6 orphan: cached values kept, flagged, never broken). Scoped
+			// to local file sources with recorded lock entries: api/mcp resolution misses (proxy down, host
+			// cooldown) and never-synced keys keep their previous not-stale behaviour, matching how a deleted
+			// CONTEXT file already flags below via its reviewedHash mismatch. The exists probe only runs when
+			// nothing under the source's alias resolved (a readable source skips it), and is guarded for
+			// harnesses whose file service has no `exists` (mirrors the `createWatcher` guard).
+			if (typeof this._files.exists === 'function') {
+				const resolvedAliases = new Set<string>();
+				for (const key of resolution.keys()) { resolvedAliases.add(key.split('.')[0]); }
+				for (const source of state.doc.sources) {
+					if (sourceKind(source) !== 'file') { continue; }
+					const alias = sourceAlias(source);
+					if (resolvedAliases.has(alias)) { continue; }
+					const keys = Object.keys(state.lock.bindings).filter(k => k.split('.')[0] === alias);
+					if (!keys.length) { continue; }
+					let missing = false;
+					try { missing = !(await this._files.exists(joinPath(dirname(state.uri), source))); } catch { missing = false; }
+					if (missing) { for (const key of keys) { staleBindings.add(key); } }
+				}
 			}
 			for (const file of state.doc.context) {
 				const entry = state.lock.context[file];
@@ -1363,6 +1707,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		state.staleBindings = staleBindings;
 		state.staleContext = staleContext;
+		state.current = current;
 		if (state.doc.isLiving) {
 			state.status = (staleBindings.size || staleContext.size) ? 'Sources changed - may be affected' : 'All sources synced';
 		}
@@ -2018,6 +2363,71 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._notify.info('A live shareable link is coming soon. Use Download to send a Markdown copy in the meantime.');
 	}
 
+	// Pasted/dropped images resolve back through this same doc-relative read, capped so a runaway file cannot
+	// balloon the webview message channel (the reply is a base64 data URI, ~4/3 the byte size).
+	private static readonly IMAGE_ASSET_CAP = 10 * 1024 * 1024;
+
+	// Path-traversal guard (defense-in-depth for the desktop file: scheme, where the file service reads the
+	// real disk): an image target computed from doc-relative input must stay inside the document's folder or
+	// the workspace - a doc body carrying `![x](../../secret)` must never read outside the project. joinPath
+	// collapses `..` segments, so containment of the NORMALISED target is checked with the platform's
+	// isEqualOrParent, never a hand-rolled string compare.
+	private _isContainedImageTarget(resource: URI, target: URI): boolean {
+		if (isEqualOrParent(target, dirname(resource))) { return true; }
+		return this._workspace.getWorkspace().folders.some(f => isEqualOrParent(target, f.uri));
+	}
+
+	async saveImageAsset(resource: URI, name: string, bytes: VSBuffer, mime?: string): Promise<string> {
+		// The #129 import layout: assets live beside the document under `assets/<doc-basename>/`.
+		const stem = basename(resource).replace(/\.md$/, '');
+		const folder = joinPath(dirname(resource), 'assets', stem);
+		const safe = sanitizeImageAssetName(name, mime);
+		let existing: string[] = [];
+		try {
+			existing = ((await this._files.resolve(folder)).children ?? []).map(c => basename(c.resource));
+		} catch {
+			// The assets folder does not exist yet; writeFile creates the parent chain.
+		}
+		const finalName = dedupeAssetName(safe, existing);
+		const target = joinPath(folder, finalName);
+		// The sanitised name cannot carry separators, so this cannot trip in practice - kept for symmetry with
+		// readImageAsset so every image path computed from webview input passes the same containment gate.
+		if (!this._isContainedImageTarget(resource, target)) {
+			this._log.warn('[livingDocs] image asset write escapes the document folder', name);
+			throw new Error('image asset target escapes the document folder');
+		}
+		try {
+			await this._files.writeFile(target, bytes);
+		} catch (e) {
+			this._log.warn('[livingDocs] image asset write failed', e);
+			throw e;
+		}
+		return `assets/${stem}/${finalName}`;
+	}
+
+	async readImageAsset(resource: URI, src: string): Promise<{ readonly dataUri?: string; readonly error?: boolean }> {
+		try {
+			// The webview asks only for document-relative srcs (`assets/Doc/x.png`, `./logo.png`); resolve
+			// against the document's folder. joinPath normalises any `./`/`..` segments.
+			const target = joinPath(dirname(resource), src);
+			if (!this._isContainedImageTarget(resource, target)) {
+				// Same visible broken-image reply as a missing file - the traversal is refused, never silent.
+				this._log.warn('[livingDocs] image asset read escapes the workspace', src);
+				return { error: true };
+			}
+			const content = await this._files.readFile(target);
+			if (content.value.byteLength > LivingDocsService.IMAGE_ASSET_CAP) {
+				this._log.warn('[livingDocs] image asset too large to inline', src, content.value.byteLength);
+				return { error: true };
+			}
+			return { dataUri: `data:${imageMimeForName(src)};base64,${encodeBase64(content.value)}` };
+		} catch (e) {
+			// Missing file (or unreadable): the editor shows a visible broken state - never a silent skip.
+			this._log.warn('[livingDocs] image asset read failed', src, e);
+			return { error: true };
+		}
+	}
+
 	async editBlock(resource: URI, blockId: string, text: string): Promise<void> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return; }
@@ -2372,6 +2782,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Read the active model door + usage from the proxy's /healthz. `ok` gates whether a backend is actually
 	// serving (a signed-out ChatGPT tier or a key-less included tier reports ok:false -> provider 'none', the
 	// built-in heuristic path). Today's spend is only meaningful for the metered `included` tier.
+	isModelReachable(): Promise<boolean> {
+		return this._hasModel();
+	}
+
 	async getModelProviderStatus(): Promise<IModelProviderStatus> {
 		const fallback: IModelProviderStatus = { provider: 'none', signedIn: false, dailyBudgetUsd: 0 };
 		try {
@@ -2747,7 +3161,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._chatBusy.has(resource.toString());
 	}
 
-	async sendChatMessage(resource: URI, text: string): Promise<void> {
+	// `displayText`, when given, is the plain-words progress shown to the user in the rail while the model
+	// is driven with the full `text` instruction (plan 37 F4): a template generation shows "Draft ... from
+	// the ... template." rather than dumping the internal template brief/prompt into the chat. The full
+	// instruction is kept on the turn's `prompt` so a retry re-runs the brief, not the shown words.
+	async sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void> {
 		const trimmed = text.trim();
 		if (!trimmed) { return; }
 		const id = resource.toString();
@@ -2755,8 +3173,80 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chats.set(id, history);
 
 		const mentions = this._parseMentions(resource, trimmed);
-		history.push({ role: 'user', content: trimmed, mentions: mentions.length ? mentions : undefined });
+		const shown = (displayText ?? '').trim();
+		history.push({ role: 'user', content: shown || trimmed, prompt: shown ? trimmed : undefined, mentions: mentions.length ? mentions : undefined });
 		await this._deliverChatReply(resource, trimmed, mentions);
+	}
+
+	// Answer a read-only whole-project question for the Project Home composer (F15 / journey 1w, map-D24). This
+	// reuses the existing model plumbing (`_hasModel`, `_readContext`, `_callModel`, `parseChatResponse`) but is
+	// deliberately SEPARATE from the chat delivery path: it queues no proposal and mutates no document - it only
+	// reads the project and returns prose + citations. The citations are the REAL files consulted (doc titles +
+	// their sources), intersected with any the model named, so the answer is never grounded in a fabricated ref.
+	async askProjectQuestion(question: string): Promise<IProjectAnswer> {
+		const trimmed = question.trim();
+		if (!trimmed) { return { answer: '', citations: [], via: 'fallback' }; }
+		const docs = await this.listDocuments();
+		if (docs.length === 0) {
+			return { answer: 'This project has no documents yet - create one, then ask me about it.', citations: [], via: 'fallback' };
+		}
+		if (!await this._hasModel()) {
+			return {
+				answer: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this project and its sources.',
+				citations: [],
+				via: 'fallback',
+			};
+		}
+		// Load every project document so it can be serialized (figures resolved) for the prompt, and collect the
+		// distinct source files consulted. These names ARE the citation set - the honest record of what the answer
+		// was read from, whether or not the model echoes them back.
+		const sections: string[] = [];
+		const consulted = new Set<string>();
+		for (const summary of docs) {
+			const id = summary.resource.toString();
+			if (!this._docs.get(id)) { await this.loadDocument(summary.resource); }
+			const state = this._docs.get(id);
+			if (!state) { continue; }
+			consulted.add(state.doc.title);
+			const sourceFiles = [...state.doc.sources, ...state.doc.context];
+			const sources = await this._readContext(state, sourceFiles);
+			for (const f of sourceFiles) { consulted.add(f); }
+			sections.push(`### Document: "${state.doc.title}"\n${this._serializeDocForChat(state)}\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""`);
+		}
+		const system = 'You are the project assistant on the Project Home screen, answering a READ-ONLY question about the whole project. '
+			+ 'Answer ONLY from the documents and sources shown below - do NOT propose or make any edit. '
+			+ 'Reply with ONLY a JSON object: {"answer": string, "citations": [string]} where "citations" is the list of the document or source names (exactly as shown) that your answer relied on. Keep the answer concise and plain-words.';
+		const user = `Project documents:\n\n${sections.join('\n\n')}\n\nQuestion: ${trimmed}`;
+		let raw: string;
+		try {
+			raw = await this._callModel(system, user);
+		} catch (e) {
+			if (isModelPausedError(e)) { return { answer: e.message, citations: [], via: 'fallback' }; }
+			this._log.info('[livingDocs] project question failed, honest fallback', e instanceof Error ? e.message : String(e));
+			return { answer: 'The model call failed - please try again.', citations: [], via: 'fallback' };
+		}
+		// Tolerant parse: the shape is {answer, citations} but a model (or the canned proxy) may reply with the
+		// chat {reply,...} envelope or plain prose. `parseChatResponse` routes a non-JSON / prose reply into
+		// `reply`, so `answer || reply || raw` is always real prose; the raw JSON envelope is never surfaced.
+		let answer = '';
+		let namedCitations: string[] = [];
+		try {
+			const start = raw.indexOf('{');
+			const end = raw.lastIndexOf('}');
+			if (start >= 0 && end > start) {
+				const obj = JSON.parse(raw.slice(start, end + 1));
+				if (typeof obj.answer === 'string') { answer = obj.answer.trim(); }
+				if (Array.isArray(obj.citations)) { namedCitations = obj.citations.filter((c: unknown): c is string => typeof c === 'string'); }
+			}
+		} catch {
+			// Not the {answer, citations} shape; fall through to the tolerant chat-envelope parse below.
+		}
+		if (!answer) { answer = parseChatResponse(raw).reply.trim() || raw.trim(); }
+		// Citations are the REAL consulted files: keep only names the model returned that we actually read (so a
+		// hallucinated citation is dropped), and fall back to everything consulted when the model named none.
+		const cited = namedCitations.filter(c => consulted.has(c));
+		const citations = cited.length ? cited : [...consulted];
+		return { answer: answer || 'I do not have enough in the project to answer that.', citations, via: 'model' };
 	}
 
 	getStreamingChat(resource: URI): { readonly text: string; readonly steps: readonly IChatStep[] } | undefined {
@@ -2778,8 +3268,31 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		while (history.length && history[history.length - 1].role === 'assistant') { history.pop(); }
 		const last = history[history.length - 1];
 		if (!last || last.role !== 'user') { return; }
+		// Re-run the underlying instruction (the template brief for a generation turn), not the plain-words
+		// progress shown in the rail (plan 37 F4): `prompt` holds it when the shown content was substituted.
+		const instruction = last.prompt ?? last.content;
+		const mentions = last.mentions ? [...last.mentions] : this._parseMentions(resource, instruction);
+		void this._deliverChatReply(resource, instruction, mentions);
+	}
+
+	retryFailedDocs(resource: URI): void {
+		const id = resource.toString();
+		const history = this._chats.get(id);
+		// Never retry while a reply is in flight, or when there is nothing to retry.
+		if (!history || !history.length || this._chatBusy.has(id)) { return; }
+		// The retry re-runs ONLY the documents the last fan-out failed for (F14, issue #123). The failed set is
+		// recorded on the last assistant turn; without it (a clean run, or a whole-turn failure) there is nothing
+		// surgical to retry - retryChat handles the plain single-turn Retry.
+		const lastTurn = history[history.length - 1];
+		if (lastTurn.role !== 'assistant' || !lastTurn.failedDocs || !lastTurn.failedDocs.length) { return; }
+		const failedIds = lastTurn.failedDocs.map(d => d.id);
+		// Drop the failed assistant turn(s) so the retry REPLACES them (the user turn is kept and re-run - no
+		// duplicate user message), then re-deliver restricted to just the failed documents.
+		while (history.length && history[history.length - 1].role === 'assistant') { history.pop(); }
+		const last = history[history.length - 1];
+		if (!last || last.role !== 'user') { return; }
 		const mentions = last.mentions ? [...last.mentions] : this._parseMentions(resource, last.content);
-		void this._deliverChatReply(resource, last.content, mentions);
+		void this._deliverChatReply(resource, last.content, mentions, failedIds);
 	}
 
 	// The shared chat-turn delivery (plan 27 iters 2-3): sets busy, opens a per-document cancellation source,
@@ -2787,7 +3300,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// then pushes the final assistant turn. A cancel keeps the salvaged prose as a muted "stopped" turn
 	// (D27-B); a genuine failure pushes a "failed" turn the rail offers Retry on. The user turn is already the
 	// last history entry (pushed by sendChatMessage, or kept by retryChat), so the transcript reads correctly.
-	private async _deliverChatReply(resource: URI, trimmed: string, mentions: string[]): Promise<void> {
+	private async _deliverChatReply(resource: URI, trimmed: string, mentions: string[], restrictToDocIds?: readonly string[]): Promise<void> {
 		const id = resource.toString();
 		const history = this._chats.get(id) ?? [];
 		this._chats.set(id, history);
@@ -2817,13 +3330,31 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				history.push({ role: 'assistant', via: 'fallback', content: 'Open a document in the editor to chat about it - I answer using the document and its sources.' });
 				return;
 			}
+			// A working set fans the instruction across every doc in one model call (plan 18, decision 62);
+			// with no set the chat stays single-doc against the active document (decision 61). A surgical retry
+			// (F14, issue #123) restricts the working set to the documents that failed last time, so only they
+			// re-run - a re-tried doc is looked up in the current working set by its resource id.
+			let workingSet = this.getWorkingSet(resource);
+			if (restrictToDocIds && restrictToDocIds.length) {
+				const keep = new Set(restrictToDocIds);
+				workingSet = workingSet.filter(w => keep.has(w.resource.toString()));
+			}
 			if (!await this._hasModel()) {
+				// A fan-out with the model down must name EVERY target document as failed and offer "Retry failed"
+				// (F14, issue #123) - never the single-doc guidance line, which would hide the fan-out's failures
+				// and (on the run screen) let the swarm read as a silent all-clear. The single-doc path keeps the
+				// existing plain-words guidance turn (there are no fan-out documents to list).
+				if (workingSet.length) {
+					const failedDocs: IFanoutFailedDoc[] = workingSet.map(w => ({ id: w.resource.toString(), title: w.title }));
+					const outcome = summarizeFanoutRun({ proposedCount: 0, failedDocs });
+					this._fanoutProgress.set(id, { batchIndex: 0, batchCount: 0, oversizeDocIds: [], failedDocIds: failedDocs.map(d => d.id) });
+					this._onDidChange.fire();
+					history.push({ role: 'assistant', via: 'fallback', content: outcome.content, failedDocs: outcome.failedDocs });
+					return;
+				}
 				history.push({ role: 'assistant', via: 'fallback', content: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this document and its sources.' });
 				return;
 			}
-			// A working set fans the instruction across every doc in one model call (plan 18, decision 62);
-			// with no set the chat stays single-doc against the active document (decision 61).
-			const workingSet = this.getWorkingSet(resource);
 			const reply = workingSet.length
 				? await this._chatRespondMulti(state, trimmed, mentions, workingSet, onDelta, onStep, cts.token)
 				: await this._chatRespond(state, trimmed, mentions, onDelta, onStep, cts.token);
@@ -2837,8 +3368,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			} else if (isModelPausedError(e)) {
 				// The day's included usage is spent (plan 35 iter 3): show the plain-words cap message as a calm
 				// turn - NOT a failure, NOT retryable (retrying just pauses again), and queue no proposals. It
-				// resumes on its own at day rollover, or immediately once the user signs in with ChatGPT.
-				history.push({ role: 'assistant', via: 'fallback', content: e.message });
+				// resumes on its own at day rollover, or immediately once the user signs in with ChatGPT. The
+				// `paused` marker lets the run screen render a paused fan-out honestly (F14 item 3) - never a
+				// failure and never an all-clear.
+				history.push({ role: 'assistant', via: 'fallback', content: e.message, paused: true });
 			} else {
 				this._log.info('[livingDocs] chat failed, honest fallback', e instanceof Error ? e.message : String(e));
 				// A genuine model error offers Retry (plan 27 iter 3): the rail re-sends this same user message.
@@ -2960,8 +3493,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// swarm still shows which documents were too large. Fires onDidChange so the run screen re-renders.
 		const anchorId = active.uri.toString();
 		const oversizeDocIds = plan.oversize.map(d => d.id);
+		// Documents whose batch's model call failed (F14, issue #123): collected as the run proceeds so a model
+		// outage over some (or all) batches surfaces as a NAMED failure listing these documents, never a silent
+		// "no changes". Each doc is in exactly one batch, so a failed batch attributes failure to exactly its docs.
+		const failedDocs: IFanoutFailedDoc[] = [];
 		const publishProgress = (batchIndex: number) => {
-			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds });
+			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id) });
 			this._onDidChange.fire();
 		};
 		publishProgress(0);
@@ -2972,6 +3509,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 
 		let anyReply = '';
+		// The plain-words budget-cap message if the run pauses mid-fan-out (spent daily budget). When set, the
+		// loop stops running further batches but keeps every proposal already queued - the run pauses, it does
+		// NOT fail and is NOT an all-clear (F14 item 3; plan 35 iter 3).
+		let pausedMessage: string | undefined;
 		// Run the batches in order. Each doc appears in exactly ONE batch (uniqueness by construction), so the
 		// per-batch keyed replies simply concatenate into the pending queue with no double-count or drop. The
 		// first batch STREAMS its prose into the live turn (onDelta); later batches use the buffered call (no
@@ -2984,9 +3525,26 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (plan.batchCount > 1) { addStep({ label: `Batch ${b + 1} of ${plan.batchCount} (${batch.docs.length} documents)`, status: 'done' }); }
 			const docSections = batch.docs.map(d => d.body).join('\n\n');
 			const user = `Working set (${batch.docs.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
-			const raw = b === 0
-				? await this._chatModelCall(system, user, onDelta, token)
-				: await this._callModel(system, user);
+			let raw: string;
+			try {
+				raw = b === 0
+					? await this._chatModelCall(system, user, onDelta, token)
+					: await this._callModel(system, user);
+			} catch (e) {
+				// A cancel is the user stopping the whole run - salvage the streamed prose (D27-B), never a failure.
+				if (isCancellationError(e)) { throw e; }
+				// The day's included usage is spent (plan 35 iter 3): keep every proposal queued so far, stop the
+				// fan-out, and surface the plain-words cap message as a calm pause - NOT a failure, NOT an all-clear.
+				if (isModelPausedError(e)) { pausedMessage = e.message; publishProgress(0); break; }
+				// A genuine model outage/error for THIS batch (F14, issue #123): attribute the failure to exactly
+				// this batch's documents, record it for the honest named error + surgical retry, and KEEP GOING so
+				// later batches can still land their proposals (a partial success), instead of aborting the whole run.
+				this._log.info('[livingDocs] fan-out batch failed, recording failed docs', e instanceof Error ? e.message : String(e));
+				for (const d of batch.docs) { failedDocs.push({ id: d.id, title: d.title }); }
+				addStep({ label: `${batch.docs.map(d => d.title).join(', ')}: model unreachable`, status: 'queued' });
+				publishProgress(b + 1);
+				continue;
+			}
 			const json = parseMultiChatResponse(raw);
 			if (json.reply && !anyReply) { anyReply = json.reply; }
 			// Match each returned doc entry to a document IN THIS BATCH by title, then queue its edits/inserts
@@ -3008,15 +3566,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				}
 			}
 		}
-		// Mark the fan-out as no longer on a live batch (batchIndex 0) while keeping the batchCount + oversize
-		// set, so the settled run screen still reads "N documents too large" without a spurious live "batch K".
-		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds });
+		// Mark the fan-out as no longer on a live batch (batchIndex 0) while keeping the batchCount + oversize +
+		// failed sets, so the settled run screen still reads "N too large" / "N failed" without a spurious "batch K".
+		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id) });
 
-		const content = anyReply || (proposedIds.length ? '' : 'I did not find anything to change across those documents.');
+		// Aggregate the run honestly (F14, issue #123): a pause shows the cap message; any failed documents show a
+		// named error listing them (with the proposals that DID land, on a partial success) + "Retry failed"; a
+		// clean run keeps the existing reply / neutral no-change line. The all-clear is reachable ONLY when there
+		// were no failures and no pause, so a model outage can never render as "no changes proposed".
+		const outcome = summarizeFanoutRun({ proposedCount: proposedIds.length, failedDocs, reply: anyReply, pausedMessage });
 		return {
-			role: 'assistant', via: 'model', content,
+			role: 'assistant',
+			via: outcome.isError || outcome.isPaused ? 'fallback' : 'model',
+			content: outcome.content,
 			steps: steps.length ? steps : undefined,
 			proposedIds: proposedIds.length ? proposedIds : undefined,
+			failedDocs: outcome.failedDocs.length ? outcome.failedDocs : undefined,
+			paused: outcome.isPaused || undefined,
 		};
 	}
 
@@ -3312,11 +3878,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const state = this._docs.get(resource.toString());
 		if (!state || !state.doc.isLiving) { return undefined; }
 		const selected = new Set(cells);
-		const rows: ISourcePeekRow[] = Object.keys(state.lock.bindings).map(key => ({
-			key,
-			value: state.lock.bindings[key].resolved,
-			selected: selected.has(key),
-		}));
+		const rows: ISourcePeekRow[] = Object.keys(state.lock.bindings).map(key => {
+			const value = state.lock.bindings[key].resolved;
+			// then-vs-now (F13): if the source has drifted since last sync, surface the live value alongside.
+			const now = state.staleBindings.has(key) ? state.current?.get(key) : undefined;
+			const current = now !== undefined && now !== value ? now : undefined;
+			return { key, value, selected: selected.has(key), ...(current !== undefined ? { current } : {}) };
+		});
 		const source = state.doc.sources.find(s => sourceKind(s) === 'file') ?? state.doc.sources[0] ?? 'source';
 		const referencedBy = [...this._docs.values()]
 			.filter(s => s.doc.isLiving && s.doc.sources.some(src => state.doc.sources.includes(src)))

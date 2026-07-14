@@ -164,6 +164,10 @@ const API_AUTH_MD = [
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
 const BOARD = URI.file('/ws/Board Note.md');
 const README = URI.file('/ws/Team Notes.md');
+// A closed loopback port for the model proxy URL: the STREAMING model path (a raw `fetch`) fails fast
+// against it and falls back to the mocked buffered call, so a real proxy on the default port cannot leak
+// into the fan-out tests. The buffered call is matched by the mock via its `/v1/messages` path either way.
+const DEAD_PROXY = 'http://127.0.0.1:49999';
 const API = URI.file('/ws/Ecosystem.md');
 const MCP = URI.file('/ws/Pipeline Brief.md');
 const APIAUTH = URI.file('/ws/Revenue Signal.md');
@@ -176,6 +180,9 @@ suite('LivingDocsService', () => {
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
 
 	let lastFiles: Map<string, string> | undefined;
+	// Notifications the service raised (file-op toasts + named errors), so a test can assert the message
+	// and drive the Undo action a toast carries (the file-ops tests; issue #125).
+	let lastNotifications: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }[] = [];
 	let lastModelBody: string | undefined;
 	let lastModelCalls = 0;
 	let lastOpenedFolder: URI | undefined;
@@ -184,7 +191,7 @@ suite('LivingDocsService', () => {
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -211,6 +218,14 @@ suite('LivingDocsService', () => {
 			writeFile: async (resource: URI, buffer: VSBuffer) => {
 				files.set(resource.toString(), buffer.toString());
 			},
+			exists: async (resource: URI) => files.has(resource.toString()),
+			// `failLockDelete` simulates a sidecar delete failing AFTER the file delete succeeded, so the
+			// file-ops tests can prove deleteFile rolls the file back (the pair never half-applies).
+			del: async (resource: URI) => {
+				if (opts.failLockDelete && resource.path.endsWith('.lock.json')) { throw new Error('simulated lock delete failure'); }
+				if (!files.has(resource.toString())) { throw new Error(`not found: ${resource.toString()}`); }
+				files.delete(resource.toString());
+			},
 			// List the direct children of a directory, so document discovery can fan out. Direct file children
 			// are the keys with no further slash; an immediate subdirectory is synthesised (as an isDirectory
 			// entry) from any key that has a deeper path, so the recursive template/document walk can descend.
@@ -233,12 +248,21 @@ suite('LivingDocsService', () => {
 			},
 		} as unknown as IFileService;
 
-		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; } } as unknown as IEditorService;
+		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; }, findEditors: () => [], closeEditors: async () => undefined } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		// Most settings the service reads are booleans that default to true (useModel); the fan-out context
 		// budget (plan 30, track 3) is a number a test can lower to force multi-batch packing over few docs.
-		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : true) } as unknown as IConfigurationService;
-		const notificationService = { info: () => undefined } as unknown as INotificationService;
+		// Most settings the service reads default to true (booleans like useModel); the fan-out budget is a number
+		// a test can lower; the model proxy URL lets a test point the STREAMING model path (a raw `fetch`, not the
+		// mocked request service) at a dead port, so the streaming call fails fast and falls back to the mocked
+		// buffered call - keeping the fan-out tests hermetic regardless of any real proxy on the default port.
+		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? opts.proxyUrl : true) } as unknown as IConfigurationService;
+		lastNotifications = [];
+		const notificationService = {
+			info: () => undefined,
+			error: (message: unknown) => { lastNotifications.push({ message: String(message) }); },
+			notify: (n: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }) => { lastNotifications.push(n); return { close: () => undefined }; },
+		} as unknown as INotificationService;
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
 		const requestService = {
@@ -276,7 +300,7 @@ suite('LivingDocsService', () => {
 		lastProxyFetchBody = undefined;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
 		store.add(service);
 		return service;
 	}
@@ -300,6 +324,54 @@ suite('LivingDocsService', () => {
 		);
 		// Load is read-only: the on-disk cache is untouched until an explicit refresh/save.
 		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'on-disk cache unchanged on load');
+	});
+
+	// --- Image assets (issue #141): paste/drop writes beside the doc; relative srcs resolve to data URIs ---
+
+	test('saveImageAsset writes under assets/<doc-basename>/ beside the doc, sanitising and de-duplicating', async () => {
+		const service = createService();
+		const rel = await service.saveImageAsset(WEEKLY, 'My Shot (1).png', VSBuffer.fromString('PNGBYTES'));
+		assert.strictEqual(rel, 'assets/Weekly Summary/My-Shot-1.png');
+		assert.strictEqual(lastFiles!.get(URI.file('/ws/assets/Weekly Summary/My-Shot-1.png').toString()), 'PNGBYTES', 'the bytes land beside the document');
+		// The same file pasted again gets a de-duplicated name, never an overwrite.
+		const rel2 = await service.saveImageAsset(WEEKLY, 'My Shot (1).png', VSBuffer.fromString('PNGBYTES2'));
+		assert.strictEqual(rel2, 'assets/Weekly Summary/My-Shot-1-2.png');
+		assert.strictEqual(lastFiles!.get(URI.file('/ws/assets/Weekly Summary/My-Shot-1.png').toString()), 'PNGBYTES', 'the first asset is untouched');
+		// A nameless paste (e.g. a raw screenshot) derives its extension from the reported MIME.
+		const rel3 = await service.saveImageAsset(WEEKLY, '', VSBuffer.fromString('x'), 'image/jpeg');
+		assert.strictEqual(rel3, 'assets/Weekly Summary/image.jpg');
+	});
+
+	test('readImageAsset returns a data URI for a doc-relative src, and error:true (no dataUri) when missing', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/logo.png').toString(), 'FAKEPNG');
+		const ok = await service.readImageAsset(WEEKLY, 'logo.png');
+		assert.strictEqual(ok.dataUri, 'data:image/png;base64,RkFLRVBORw==', 'the file comes back as a data URI');
+		assert.ok(!ok.error);
+		// A missing file is an explicit error reply - the editor renders a VISIBLE broken state from it.
+		const missing = await service.readImageAsset(WEEKLY, 'assets/Weekly Summary/nope.png');
+		assert.strictEqual(missing.error, true);
+		assert.strictEqual(missing.dataUri, undefined);
+	});
+
+	test('readImageAsset refuses a src that escapes the workspace (path traversal), but allows nested paths', async () => {
+		const service = createService();
+		// The files EXIST outside the workspace - containment (not a read failure) must be what refuses them.
+		lastFiles!.set(URI.file('/outside.png').toString(), 'SECRET');
+		lastFiles!.set(URI.file('/etc/x').toString(), 'SECRET');
+		const up = await service.readImageAsset(WEEKLY, '../outside.png');
+		assert.strictEqual(up.error, true, '../ escaping the doc folder + workspace is refused');
+		assert.strictEqual(up.dataUri, undefined);
+		const deep = await service.readImageAsset(WEEKLY, '../../../etc/x');
+		assert.strictEqual(deep.error, true, 'a deep ../../../ traversal is refused');
+		assert.strictEqual(deep.dataUri, undefined);
+		// Legitimate doc-relative reads still resolve: the assets layout and a nested subfolder.
+		lastFiles!.set(URI.file('/ws/assets/Weekly Summary/x.png').toString(), 'ASSET');
+		const asset = await service.readImageAsset(WEEKLY, 'assets/Weekly Summary/x.png');
+		assert.ok(asset.dataUri && asset.dataUri.startsWith('data:image/png;base64,'), 'assets/<doc>/x.png still resolves');
+		lastFiles!.set(URI.file('/ws/sub/img.png').toString(), 'NESTED');
+		const nested = await service.readImageAsset(WEEKLY, 'sub/img.png');
+		assert.ok(nested.dataUri && nested.dataUri.startsWith('data:image/png;base64,'), 'a nested relative path inside the doc folder still resolves');
 	});
 
 	test('refreshFromSources reconciles the visible cache (figures auto-apply), persists, and audits', async () => {
@@ -728,6 +800,50 @@ suite('LivingDocsService', () => {
 			],
 		);
 		assert.strictEqual(service.isChatBusy(WEEKLY), false, 'no longer busy once the reply lands');
+	});
+
+	test('sendChatMessage shows plain-words progress but drives the model with the full instruction (F4)', async () => {
+		const service = createService([], { model: chatReply('Drafted the sections.') });
+		await service.loadDocument(WEEKLY);
+		lastModelBody = undefined;
+
+		await service.sendChatMessage(
+			WEEKLY,
+			'Generate the first draft of "Week 24" from the "Weekly" template.\n\nTemplate brief:\n## Summary\nSummarise the figures.',
+			'Draft "Week 24" from the Weekly template.',
+		);
+
+		const user = service.getChatMessages(WEEKLY)[0];
+		assert.strictEqual(user.content, 'Draft "Week 24" from the Weekly template.', 'the rail shows plain-words progress');
+		assert.ok(!user.content.includes('Template brief'), 'the internal template brief never leaks into the rail');
+		assert.ok((user.prompt ?? '').includes('Template brief'), 'the full instruction is kept on the turn for retry');
+		assert.ok((lastModelBody ?? '').includes('Template brief'), 'the model is still driven with the full instruction');
+	});
+
+	test('getSourcePeek surfaces then-vs-now once the source drifts since last sync (F13)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		const before = service.getSourcePeek(WEEKLY, ['metrics.mrr'])!.rows.find(r => r.key === 'metrics.mrr')!;
+		assert.strictEqual(before.current, undefined, 'no then-vs-now while the source is fresh');
+
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.checkSources(WEEKLY);
+
+		const row = service.getSourcePeek(WEEKLY, ['metrics.mrr'])!.rows.find(r => r.key === 'metrics.mrr')!;
+		assert.ok(row.current !== undefined && row.current !== row.value, `stale binding shows then (${row.value}) -> now (${row.current})`);
+	});
+
+	test('listSources reports a source as not fresh once it drifts - stale never presented as current (F12)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		const freshBefore = (await service.listSources()).find(s => s.id === 'metrics.csv');
+		assert.ok(freshBefore && freshBefore.fresh, 'the source is fresh right after load');
+
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+		await service.checkSources(WEEKLY);
+
+		const stale = (await service.listSources()).find(s => s.id === 'metrics.csv');
+		assert.ok(stale && stale.fresh === false, 'a drifted source is reported not fresh');
 	});
 
 	test('cancelChat stops an in-flight reply: no pending changes, busy cleared, a muted stopped turn (plan 27)', async () => {
@@ -1163,6 +1279,7 @@ suite('LivingDocsService', () => {
 	test('with a working set, one chat instruction fans out edits to every document via a single model call (D-C)', async () => {
 		const service = createService([], {
 			boardNote: true,
+			proxyUrl: DEAD_PROXY,
 			model: multiReply('Changed blue to red across all three.', [
 				{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] },
 				{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum is now red-themed.', rationale: 'r' }] },
@@ -1199,6 +1316,7 @@ suite('LivingDocsService', () => {
 		const boardBig = BOARD_MD.replace('Momentum is steady this week.', `Momentum is steady this week.\n\n${padBlocks}`);
 		const service = createService([], {
 			boardNote: true,
+			proxyUrl: DEAD_PROXY,
 			fanoutBudget: 2000,
 			modelSequence: [
 				multiReply('Weekly done.', [{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] }]),
@@ -1240,6 +1358,7 @@ suite('LivingDocsService', () => {
 		const bigBody = `---\ntitle: Team Notes\n---\n\n## Team Notes\n\n${'padding sentence to blow the budget. '.repeat(400)}\n`;
 		const service = createService([], {
 			fanoutBudget: 2000,
+			proxyUrl: DEAD_PROXY,
 			modelSequence: [
 				multiReply('Weekly done.', [{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth is now red-themed.', rationale: 'r' }] }]),
 			],
@@ -1258,6 +1377,76 @@ suite('LivingDocsService', () => {
 		assert.deepStrictEqual(progress?.oversizeDocIds, [README.toString()], 'the oversize document is flagged, not dropped silently');
 		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
 		assert.ok(assistant.steps?.some(s => /too large for this run/.test(s.label)), 'the oversize document reads "too large for this run"');
+	});
+
+	// --- F14 (issue #123): a model outage on the fan-out path must never render as "no changes proposed" ---
+
+	test('a fan-out with the model down names EVERY failed doc + carries them for surgical retry, never an all-clear (F14)', async () => {
+		// /healthz is healthy (model probes available) but every /v1/messages errors (the outage): the fan-out
+		// must record each target document as failed, surface a NAMED unreachable error listing them, queue NO
+		// proposals, and never read as a silent "no changes proposed". The run screen sees the same failed set.
+		const service = createService([], { boardNote: true, proxyUrl: DEAD_PROXY, model: { error: { message: 'model proxy unreachable' } } });
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+
+		await service.sendChatMessage(WEEKLY, 'tighten every note across the project');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(turn.failedDocs && turn.failedDocs.length === 3, 'all three fan-out documents are recorded as failed');
+		assert.deepStrictEqual(
+			[...turn.failedDocs!.map(d => d.id)].sort(),
+			[WEEKLY.toString(), BOARD.toString(), README.toString()].sort(),
+			'the failed set is exactly the working set',
+		);
+		assert.ok(/The agent model is not reachable/.test(turn.content), 'the turn names the model as unreachable');
+		assert.ok(/Retry failed/.test(turn.content), 'the turn offers the surgical retry');
+		assert.ok(!/no changes|nothing to change|did not find anything/i.test(turn.content), 'never a silent all-clear');
+		assert.strictEqual(service.getAllPending().length, 0, 'nothing is proposed when the model was down');
+		// The run screen reads the failed docs so their tiles render "model unreachable", not "no change".
+		const progress = service.getFanoutProgress(WEEKLY);
+		assert.deepStrictEqual(
+			[...(progress?.failedDocIds ?? [])].sort(),
+			[WEEKLY.toString(), BOARD.toString(), README.toString()].sort(),
+			'the fan-out progress carries the failed docs for the run screen',
+		);
+	});
+
+	test('retryFailedDocs re-runs ONLY the failed documents (surgical retry, F14)', async () => {
+		// First run: the model is down for the fan-out, so all three docs fail. Then the model recovers and the
+		// surgical retry re-runs ONLY the failed docs - proven by the retry's single model call carrying just the
+		// failed documents' bodies, and by proposals now landing for them.
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				// Calls 1..N (the down run + its single silent retry per batch) all error.
+				{ error: { message: 'model proxy unreachable' } },
+				{ error: { message: 'model proxy unreachable' } },
+				// The retry run (model recovered) returns real edits across the three documents.
+				multiReply('Recovered.', [
+					{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth recovered.', rationale: 'r' }] },
+					{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum recovered.', rationale: 'r' }] },
+				]),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+		await service.sendChatMessage(WEEKLY, 'tighten every note');
+		assert.ok(service.getChatMessages(WEEKLY).at(-1)!.failedDocs?.length === 3, 'the first run failed all three');
+
+		// Do NOT reset lastModelCalls (the mock indexes modelSequence by it); lastModelBody holds the LAST call.
+		lastModelBody = undefined;
+		service.retryFailedDocs(WEEKLY);
+		await new Promise(r => setTimeout(r, 0));
+		// Drain the async retry delivery.
+		for (let i = 0; i < 50 && service.isChatBusy(WEEKLY); i++) { await new Promise(r => setTimeout(r, 5)); }
+
+		// The retry sends a single fan-out call whose body contains only the failed documents (all three here).
+		assert.ok((lastModelBody ?? '').includes('Weekly Operating Summary'), 'the retry re-runs the failed Weekly');
+		assert.ok((lastModelBody ?? '').includes('Board Note'), 'the retry re-runs the failed Board');
+		// Proposals now land for the recovered documents, and the last turn is no longer a failure.
+		assert.ok(service.getAllPending().length >= 1, 'the recovered retry lands proposals');
+		assert.ok(!service.getChatMessages(WEEKLY).at(-1)!.failedDocs, 'the retry turn is not a failure once recovered');
 	});
 
 	test('with NO working set, chat still edits only the active document (backwards compatible, D-B)', async () => {
@@ -2177,7 +2366,7 @@ suite('LivingDocsService', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: mountRoot, name: opts.folderName ?? 'mount' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
 		store.add(service);
 		return { service, files, registerProvider };
 	}
@@ -2219,5 +2408,66 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.getProjectDisplayName(), 'Living Docs Sample', 'marker resolves after the provider arrives');
 		// The same registration retries the document scan, so the root is no longer "0 docs".
 		assert.strictEqual((await service.listDocuments()).length, 3);
+	});
+
+	// --- provenance-safe file operations (issue #125, docs 20 section 1d / map-D6) ---
+
+	test('deleting a depended-on source flags its dependents STALE (orphaned, not broken); Undo restores them fresh', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getFreshness(WEEKLY).dirty, false, 'fresh after load');
+
+		await service.deleteFile(URI.file('/ws/metrics.csv'));
+		const stale = service.getFreshness(WEEKLY);
+		assert.ok(stale.staleBindings.includes('metrics.mrr'), `metrics.mrr flagged stale after the source delete, got: [${stale.staleBindings.join(', ')}]`);
+		assert.strictEqual(service.getStatus(WEEKLY), 'Sources changed - may be affected', 'the sync pill reads stale, never "All sources synced"');
+		// Orphaned gracefully: the cached resolved values survive (the document still renders its figures).
+		assert.ok(service.getResolved(WEEKLY).has('metrics.mrr'), 'cached lock value kept for the orphaned binding');
+
+		// The Undo toast restores the pair; the dependent re-reads fresh (values resolve, hashes still match).
+		const toast = lastNotifications.find(n => n.message === 'Deleted "metrics.csv".');
+		assert.ok(toast?.actions?.primary?.[0], 'delete toast carries an Undo action');
+		await toast!.actions!.primary![0].run();
+		const fresh = service.getFreshness(WEEKLY);
+		assert.deepStrictEqual({ dirty: fresh.dirty, staleBindings: [...fresh.staleBindings] }, { dirty: false, staleBindings: [] }, 'fresh again after Undo');
+		assert.strictEqual(service.getStatus(WEEKLY), 'All sources synced');
+	});
+
+	test('a dependent opened AFTER its source was deleted loads flagged stale, with its cached figures intact', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // records the lock (the provenance the orphan keeps)
+		await service.deleteFile(URI.file('/ws/metrics.csv'));
+
+		// A fresh open of the dependent (re-load from disk) must flag, not crash and not read synced.
+		await service.loadDocument(WEEKLY);
+		const fresh = service.getFreshness(WEEKLY);
+		assert.ok(fresh.staleBindings.includes('metrics.mrr'), `stale on fresh open, got: [${fresh.staleBindings.join(', ')}]`);
+		assert.strictEqual(service.getStatus(WEEKLY), 'Sources changed - may be affected');
+		assert.ok(service.getDoc(WEEKLY)!.blocks.length > 0, 'the document still renders');
+		assert.ok(service.getResolved(WEEKLY).has('metrics.mrr'), 'cached lock value kept');
+	});
+
+	test('an api-backed document does NOT flag stale from the missing-file check (resolution misses keep their behaviour)', async () => {
+		const service = createService([], { api: true });
+		await service.loadDocument(API);
+		// The api source is not a local file; whatever its resolution does, the deleted-file re-flag must not fire.
+		const fresh = service.getFreshness(API);
+		assert.strictEqual(fresh.staleBindings.length, 0, `no stale bindings from the exists probe, got: [${fresh.staleBindings.join(', ')}]`);
+	});
+
+	test('a failed sidecar delete rolls the file back - the delete pair never half-applies', async () => {
+		const service = createService([], { failLockDelete: true });
+		await service.loadDocument(WEEKLY); // bootstraps + persists the lock sidecar
+		const lockKey = URI.file('/ws/Weekly Summary.lock.json').toString();
+		assert.ok(lastFiles!.has(lockKey), 'lock sidecar exists before the delete');
+		const before = lastFiles!.get(WEEKLY.toString());
+
+		await service.deleteFile(WEEKLY);
+		assert.strictEqual(lastFiles!.get(WEEKLY.toString()), before, 'the file was rolled back after the sidecar delete failed');
+		assert.ok(lastFiles!.has(lockKey), 'the lock sidecar is untouched');
+		const err = lastNotifications.find(n => /sidecar could not be removed/.test(n.message));
+		assert.ok(err, `a named error was raised, got: [${lastNotifications.map(n => n.message).join(' | ')}]`);
+		assert.ok(/Nothing was changed\./.test(err!.message), 'the error honestly reports nothing changed');
+		assert.strictEqual(lastNotifications.some(n => n.message === 'Deleted "Weekly Summary.md".'), false, 'no success toast for a failed delete');
 	});
 });

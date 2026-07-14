@@ -11,7 +11,9 @@
 
 import { groupPendingByDoc, IAgentDef, IAgentFlow, IAgentRun, IAgentTrigger, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { countTemplateSlots } from '../common/livingDocMarkdown.js';
-import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { relativeSyncedLabel } from '../common/livingDocPmDecorations.js';
+import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAnswer, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { IAwayFeed } from '../common/projectHomeFeed.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings';
 
@@ -75,6 +77,19 @@ export interface IScreenState {
 	 * name and the failure day so the copy reads "Weekly refresh failed on Monday - view details".
 	 */
 	readonly homeFailure?: IHomeFailure;
+	/**
+	 * Home: the WHILE YOU WERE AWAY feed (F15 / journey 1w) - agent runs since the last visit + the live
+	 * needs-you count + the all-clear state. Absent renders no feed section (the pre-fetch idle). Real data
+	 * only: the rows come from the persisted run log, and the all-clear tracks the true pending set.
+	 */
+	readonly awayFeed?: IAwayFeed;
+	/**
+	 * Home: the answer to the last read-only whole-project question asked in the composer (map-D24). Absent
+	 * until a question has been answered; carries the plain-words answer + the real citations to render.
+	 */
+	readonly projectAnswer?: IProjectAnswer;
+	/** Home: true while a whole-project question is being answered (the composer's honest working state). */
+	readonly askBusy?: boolean;
 	/** Home: whether a workspace folder (the "project") is open. */
 	readonly hasFolder?: boolean;
 	/** Home: the open folder's name, shown as the project. */
@@ -114,6 +129,8 @@ export interface IScreenState {
 	readonly signInAuthorizeUrl?: string;
 	/** Settings: true once the onboarding survey has been recorded this session (shows the thank-you state). */
 	readonly surveySaved?: boolean;
+	/** Settings: the current analytics consent (the `abstract.analytics.enabled` setting), for the data-flow card row. */
+	readonly analyticsEnabled?: boolean;
 }
 
 /**
@@ -155,6 +172,12 @@ export interface IProjectRunScreenState {
 	 * as honest `skipped` (never `no change`), and the topbar shows a calm "Stopped" state instead of "Live".
 	 */
 	readonly stopped?: boolean;
+	/**
+	 * True when the run paused mid-flight on the spent daily budget (map-D15; F14 item 3): the swarm's
+	 * not-yet-run tiles render as honest `skipped` (they never ran) and the heading reads the calm plain-words
+	 * pause - finished proposals stay reviewable, and the run renders as neither a failure nor an all-clear.
+	 */
+	readonly paused?: boolean;
 	/**
 	 * The whole-project fan-out summary derived from `summariseProjectRun(listDocuments, getAllPending())`
 	 * (plan 23, C4): one tile per project document + the real bottom-bar totals. Absent until the run's
@@ -441,6 +464,26 @@ for (const el of document.querySelectorAll('[data-tfield=kind]')) {
 for (const el of document.querySelectorAll('[data-open-external]')) {
 	el.addEventListener('click', (e) => { e.preventDefault(); vscode.postMessage({ type: 'openExternalUrl', arg: el.getAttribute('href') || undefined }); });
 }
+// Whole-project chat composer (F15 / journey 1w, map-D21/D24): the "Ask" button (and Cmd/Ctrl+Enter in the
+// textarea) gathers the text and posts one askProject message; the host classifies it (question -> read-only
+// answer with citations, rendered back into this box; change request -> the run/task surface).
+for (const el of document.querySelectorAll('[data-ask-send]')) {
+	el.addEventListener('click', () => {
+		const box = el.closest('[data-ask-box]'); if (!box) { return; }
+		const input = box.querySelector('[data-ask-input]');
+		const text = input ? input.value.trim() : '';
+		if (text) { vscode.postMessage({ type: 'askProject', text: text }); }
+	});
+}
+for (const el of document.querySelectorAll('[data-ask-input]')) {
+	el.addEventListener('keydown', (e) => {
+		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+			e.preventDefault();
+			const box = el.closest('[data-ask-box]'); const send = box && box.querySelector('[data-ask-send]');
+			if (send) { send.click(); }
+		}
+	});
+}
 // "Copy link" fallback for corporate/blocked environments: copy the authorize URL to the clipboard so the
 // user can paste it into their own browser. A brief "Copied" acknowledgement, then the label restores.
 for (const el of document.querySelectorAll('[data-copy-link]')) {
@@ -493,6 +536,106 @@ function healthIndicator(pending: number): string {
 	return `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:3px 6px;flex:none">${pending}</span>`;
 }
 
+// ---- Home front-door pieces (F15 / journey 1w): the whole-project chat composer, the WHILE YOU WERE AWAY
+// feed + all-clear promotion, and the empty-project front door. All are DOM-free HTML over the real state. ----
+
+// The whole-project chat composer (map-D21/D24): "Ask this project anything..." defaulting to whole-project
+// scope. A question answers read-only with citations (rendered below the box); a change request opens the
+// run/task surface. The client script gathers the textarea and posts one `askProject` message with the text.
+function renderHomeComposer(state: IScreenState): string {
+	const answer = state.projectAnswer;
+	// The read-only answer + its real citations (map-D24: "answers read-only with citations"). Citation chips
+	// name the exact documents/sources consulted - never fabricated (the service intersects with what it read).
+	// The row leads with a "Consulted:" label because that is exactly what the list is: on the fallback path
+	// (the model named no citations) it carries EVERY file read for the answer, so an unlabelled row could read
+	// as "sources supporting this answer" and over-claim; "Consulted" stays true on both paths.
+	const citations = answer && answer.citations.length
+		? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px"><span style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2">Consulted:</span>${answer.citations.map(c => `<span style="font:500 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#eef1ff;border:1px solid #e0e5fb;border-radius:6px;padding:4px 8px">&#128206; ${esc(c)}</span>`).join('')}</div>`
+		: '';
+	const answerBlock = answer
+		? `<div style="margin-top:14px;background:#fff;border:1px solid #e6e8ed;border-radius:12px;padding:16px 18px">
+			<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#a3a8b2;margin-bottom:8px">ANSWER &middot; READ-ONLY</div>
+			<div style="font:400 13.5px/1.6 system-ui;color:#2a2c32;white-space:pre-wrap">${esc(answer.answer)}</div>
+			${citations}
+		</div>`
+		: '';
+	const busy = state.askBusy
+		? `<div style="margin-top:12px;display:flex;align-items:center;gap:9px;font:400 12.5px/1 system-ui;color:#868b95"><span style="width:12px;height:12px;border:2px solid #d7d9df;border-top-color:${ACCENT};border-radius:50%;animation:lwdSpin .8s linear infinite"></span>Reading the project&hellip;</div>`
+		: '';
+	return `<div data-ask-box style="background:#fff;border:1px solid #e0e5fb;border-radius:15px;padding:18px 20px;margin-bottom:34px;box-shadow:0 12px 30px -24px rgba(86,97,201,.4)">
+		<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;color:#5661c9">ASK THIS PROJECT</span><span style="font:500 10px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:4px 9px">Whole project</span></div>
+		<textarea data-ask-input rows="2" placeholder="Ask this project anything - or ask me to change something across it&hellip;" style="width:100%;resize:vertical;border:1px solid #dfe1e7;border-radius:10px;padding:11px 12px;font:400 13.5px/1.5 system-ui;color:#1a1c20;background:#fff;outline:none"></textarea>
+		<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px">
+			<span style="font:400 11px/1.4 system-ui;color:#a3a8b2">A question is answered read-only with citations; a change request opens a task.</span>
+			<button data-ask-send style="border:none;border-radius:9px;padding:9px 16px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">Ask</button>
+		</div>
+		${busy}${answerBlock}
+	</div>`;
+}
+
+// The WHILE YOU WERE AWAY feed + the all-clear promotion (map-D14). Real data only: the rows are agent runs
+// since the last visit (from the persisted run log); when nothing ran the section is absent, and when nothing
+// needs review the calm all-clear promotion is shown ("Everything is in sync") rather than a fabricated feed.
+function renderAwaySection(feed: IAwayFeed): string {
+	// The all-clear promotion (map-D14): nothing pending -> a calm green banner, the honest "in sync" state.
+	const allClear = feed.allClear
+		? `<div style="display:flex;align-items:center;gap:11px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:12px;padding:14px 16px;margin-bottom:26px">
+			<span style="width:22px;height:22px;flex:none;border-radius:50%;background:oklch(0.6 0.13 150);color:#fff;font:600 13px/22px system-ui;text-align:center">&#10003;</span>
+			<div><div style="font:600 13.5px/1.3 system-ui;color:#2f6b45">Everything is in sync</div><div style="font:400 12px/1.4 system-ui;color:#5d8a66">Nothing needs your review right now.</div></div>
+		</div>`
+		: '';
+	if (!feed.hasActivity) {
+		// No runs in the window: show the all-clear if clear, else nothing (a non-empty pending set already
+		// surfaces through NEEDS YOU below - the feed never invents activity to fill the space).
+		return allClear;
+	}
+	const row = (r: IAwayFeed['rows'][number]) => {
+		const av = avatar(r.agentName);
+		// Honest per-run outcome: a failure names itself; a skip says why; otherwise the applied/queued tally.
+		const outcome = r.failed
+			? `<span style="font:500 11.5px/1.3 system-ui;color:#9a6b16">Failed${r.error ? ` &mdash; ${esc(r.error)}` : ''}</span>`
+			: r.skipped
+				? `<span style="font:500 11.5px/1.3 system-ui;color:#a3a8b2">Skipped &mdash; a previous run was still going</span>`
+				: `<span style="font:400 11.5px/1.3 system-ui;color:#52575f">${r.docsTouched} doc${r.docsTouched === 1 ? '' : 's'} &middot; ${r.applied} applied</span>`;
+		const needs = r.queued > 0
+			? `<span style="flex:none;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.03em;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:4px 7px">${r.queued} NEEDS YOU</span>`
+			: `<span style="flex:none;display:flex;align-items:center"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)"></span></span>`;
+		return `<div style="display:flex;align-items:center;gap:11px;padding:12px 14px;border-bottom:1px solid #f0f1f4">
+			<span style="width:26px;height:26px;flex:none;border-radius:7px;background:${av.color};color:#fff;font:600 10px/26px system-ui;text-align:center">${av.text}</span>
+			<div style="flex:1;min-width:0"><div style="font:600 13px/1.3 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.agentName)}</div>${outcome}</div>
+			<span style="flex:none;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${esc(r.whenLabel)}</span>
+			${needs}
+		</div>`;
+	};
+	const label = feed.firstVisit ? 'RECENT ACTIVITY' : 'WHILE YOU WERE AWAY';
+	return `${allClear}<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:12px">${label}</div>
+		<div style="background:#fff;border:1px solid #e9eaee;border-radius:14px;overflow:hidden;margin-bottom:34px">${feed.rows.map(row).join('')}</div>`;
+}
+
+// The empty-project front door (journey 1w frame 4): a folder is open but has no documents. Cures the 1a
+// empty-folder dead-end with "New from template / Blank document / ...or ask me to create one" - the New-doc
+// sheet (Blank + real templates) plus the whole-project composer, never a dead card.
+function renderEmptyProjectFrontDoor(state: IScreenState, folderName: string): string {
+	const scroll = (inner: string) => `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">${inner}</div></div>`;
+	const templates = state.templates ?? [];
+	const templateHint = templates.length
+		? `Start from one of your ${templates.length} template${templates.length === 1 ? '' : 's'}, from a blank page, or ask me to draft one.`
+		: 'Start from a blank page, or ask me to draft your first document.';
+	return scroll(`<div style="max-width:760px;margin:0 auto;padding:56px 36px 80px">
+		<div style="text-align:center;margin-bottom:30px">
+			<div style="font-size:38px;line-height:1;margin-bottom:14px">&#128196;</div>
+			<h1 style="margin:0 0 8px;font:600 24px/1.25 system-ui;color:#15171c;letter-spacing:-.01em">${esc(folderName)} is empty</h1>
+			<p style="margin:0;font:400 14px/1.6 system-ui;color:#696e78">${templateHint}</p>
+		</div>
+		<div style="display:flex;gap:12px;justify-content:center;margin-bottom:30px">
+			<button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:10px;padding:12px 20px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;cursor:pointer">&#65291; New document</button>
+			<button data-msg="goTemplates" style="border:1px solid #e6e8ed;background:#fff;border-radius:10px;padding:11px 18px;font:500 13px/1 system-ui;color:#52575f;cursor:pointer">Browse templates</button>
+		</div>
+		${renderHomeComposer(state)}
+		${renderNewDocSheet(templates)}
+	</div>`);
+}
+
 // ---- Home: the landing dashboard. The open folder IS the project (decision #39): an empty state when no
 // folder is open, otherwise the folder's name + every Markdown document (living ones badged). ----
 function renderHome(state: IScreenState): string {
@@ -513,14 +656,23 @@ function renderHome(state: IScreenState): string {
 	const docs = state.docs ?? [];
 	const folderName = state.folderName ?? 'Workspace';
 
+	// Empty-project front door (journey 1w frame 4): a folder is open but has no documents. Land on the
+	// front door ("New from template / Blank / ...or ask me") rather than an empty dashboard - cures the 1a
+	// empty-folder dead-end.
+	if (docs.length === 0) {
+		return renderEmptyProjectFrontDoor(state, folderName);
+	}
+
 	// NEEDS YOU + the greeting summary are derived from the REAL per-document pending count that
 	// listDocuments() already carries (ILivingDocSummary.pendingCount = the live pending set for that
 	// doc). Never fabricated: if nothing pends the section is absent and the summary is "in sync".
 	const pendingDocs = docs.filter(d => d.pendingCount > 0).sort((a, b) => b.pendingCount - a.pendingCount);
 	const totalPending = pendingDocs.reduce((n, d) => n + d.pendingCount, 0);
+	// When work pends, the greeting names it; when clear, it hands off to the all-clear promotion below rather
+	// than repeating "in sync" here (the map-D14 banner in the WHILE YOU WERE AWAY section carries that line).
 	const summary = pendingDocs.length
 		? `${pendingDocs.length} document${pendingDocs.length === 1 ? '' : 's'} need${pendingDocs.length === 1 ? 's' : ''} your review across this project. <strong style="font-weight:600;color:#8a6d1a">${totalPending} change${totalPending === 1 ? '' : 's'} to approve</strong>.`
-		: 'Everything is in sync.';
+		: `Here is where ${esc(folderName)} stands.`;
 
 	// One NEEDS-YOU card per document with pending work: accent top-border, a 2.4s pulse dot, the doc
 	// name, the amber `N TO APPROVE` chip (attention tokens), and a primary Review that opens the doc.
@@ -617,10 +769,16 @@ function renderHome(state: IScreenState): string {
 		empty: 'This project has no sources yet. Add a csv, json or document to the folder to draft from it.',
 	});
 	const newDocSheet = renderNewDocSheet(state.templates ?? [], hasSources);
+	// The whole-project chat composer (map-D21/D24) leads the front door; the WHILE YOU WERE AWAY feed +
+	// all-clear promotion (map-D14) sit between it and the NEEDS-YOU cards. Both render from real state only.
+	const composer = renderHomeComposer(state);
+	const awaySection = state.awayFeed ? renderAwaySection(state.awayFeed) : '';
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
-		<p style="margin:0 0 26px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
+		<p style="margin:0 0 22px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
+		${composer}
 		${failureLine}
+		${awaySection}
 		${needsYou}
 		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
 		${projectsGrid}
@@ -773,21 +931,9 @@ function renderTemplates(state: IScreenState): string {
 // (every bound source + its freshness + the documents that depend on it) with a per-source detail drawer;
 // the Organization tab is an honest "Soon" until a real org store exists (never fabricated). ----
 
-// A truthful relative "last synced" label from a lock timestamp. Undefined = referenced but never synced
-// (the honest idle state), never a fabricated freshness.
-function relativeSynced(iso: string | undefined): string {
-	if (!iso) { return 'Not yet synced'; }
-	const t = Date.parse(iso);
-	if (Number.isNaN(t)) { return 'Not yet synced'; }
-	const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
-	if (s < 60) { return 'Synced just now'; }
-	const m = Math.floor(s / 60);
-	if (m < 60) { return `Synced ${m} min ago`; }
-	const h = Math.floor(m / 60);
-	if (h < 24) { return `Synced ${h} h ago`; }
-	const d = Math.floor(h / 24);
-	return `Synced ${d} day${d === 1 ? '' : 's'} ago`;
-}
+// The relative "last synced" label is the single shared `relativeSyncedLabel` (common/livingDocPmDecorations)
+// so the Knowledge library, the source detail drawer and the in-document figure hover all read identically
+// (plan 37 F12 - one formatter, one source of truth; stale-vs-current is enforced upstream in `listSources`).
 
 // Kind glyph for a source row (source-hygiene: non-ASCII written as HTML entities).
 const SOURCE_KIND_ICON: Record<string, string> = { file: '&#9635;', api: '&#127760;', mcp: '&#9670;' };
@@ -825,7 +971,7 @@ function renderKnowledge(state: IScreenState): string {
 			<span style="width:26px;height:26px;flex:none;border-radius:7px;background:${av.color};color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center">${SOURCE_KIND_ICON[s.kind] ?? SOURCE_KIND_ICON.file}</span>
 			<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 13px/1.3 system-ui;color:#1a1c20">${esc(s.label)}</span>
 			<span style="font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;text-transform:uppercase;color:#868b95">${s.kind}</span>
-			<span style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${relativeSynced(s.syncedAt)}</span>
+			<span style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${relativeSyncedLabel(s.syncedAt)}</span>
 			<span>${freshCell(s.fresh)}</span>
 			<span style="font:500 11.5px/1 system-ui;color:#52575f">${s.usedBy.length} doc${s.usedBy.length === 1 ? '' : 's'}</span>
 		</button>`;
@@ -868,7 +1014,7 @@ function renderKnowledge(state: IScreenState): string {
 		? `<div style="background:#fbfbfc;border:1px solid #e9eaee;border-radius:12px;padding:16px 16px 14px">
 				<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:4px">SOURCE</div>
 				<div style="font:600 15px/1.3 system-ui;color:#15171c;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(selected.label)}</div>
-				<div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:14px">${selected.kind} &middot; ${relativeSynced(selected.syncedAt)}</div>
+				<div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:14px">${selected.kind} &middot; ${relativeSyncedLabel(selected.syncedAt)}</div>
 				<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;margin-bottom:9px">USED BY ${selected.usedBy.length} DOCUMENT${selected.usedBy.length === 1 ? '' : 'S'}</div>
 				${selected.usedBy.map(u => usageRow(selected, u)).join('')}
 			</div>`
@@ -1305,7 +1451,7 @@ function renderSettings(state: IScreenState): string {
 				${surveyBody}
 			</div>
 
-			${dataFlowCard()}
+			${dataFlowCard(state.analyticsEnabled === true)}
 
 		</div></div>
 	</div>`;
@@ -1321,7 +1467,7 @@ function renderSettings(state: IScreenState): string {
 // through the verify gate's strategy grader - livingDocsService.ts _runFiguresByPolicy/_gradeStrategy;
 // the sign-in + keys live only in the proxy). Plain words per P5: no "OAuth", no "token", no "rate
 // limit". The full page carries the provider-retention detail and the founder-review notes.
-function dataFlowCard(): string {
+function dataFlowCard(analyticsEnabled: boolean): string {
 	const line = (text: string) => `<li style="margin:0 0 9px;font:400 13px/1.55 system-ui;color:#52575f">${text}</li>`;
 	return `<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:6px 26px">
 		<details data-dataflow>
@@ -1338,11 +1484,32 @@ function dataFlowCard(): string {
 					${line('Three <strong>built-in agents run on their own</strong> &mdash; when a source file changes, every six hours, and on Monday mornings. When a document&#39;s figures need updating, the double-check may send that document&#39;s changed sentences and its attached context files. Pause any agent on the Agents screen to stop this.')}
 					${line('Model calls go through your own <strong>ChatGPT sign-in</strong>, or the <strong>included model</strong> when you are not signed in. Your sign-in stays on this computer &mdash; the app never sees it.')}
 					${line('<strong>Files that are not documents, attached sources, or @-mentions &mdash; and your edit history &mdash; stay on your computer.</strong> A folder listing is never sent.')}
-					${line('Abstract sends <strong>no usage analytics today</strong>. When it ships it will ask first, and count actions &mdash; never your words.')}
+					${line('<strong>Usage analytics is off unless you turn it on</strong>, and even then it stays on this computer &mdash; it counts your actions, never your words, and forwarding it anywhere is not built yet.')}
 				</ul>
+				${analyticsConsentRow(analyticsEnabled)}
 				<p style="margin:0;font:400 12.5px/1.5 system-ui;color:#a3a8b2">The full plain-words page: <span style="font:500 12.5px/1.5 ui-monospace,monospace;color:#696e78">docs/27-data-flow-one-pager.md</span></p>
 			</div>
 		</details>
+	</div>`;
+}
+
+// The revocable analytics consent control (plan 36 / issue #134), living right beside the data-flow copy that
+// explains it. It reflects and flips the `abstract.analytics.enabled` setting through the host (data-msg), so
+// this row, the first-run moment and the Settings toggle are all the same one choice. Off is total: with it
+// off, IAnalyticsService captures nothing, so not a single event line is written.
+function analyticsConsentRow(enabled: boolean): string {
+	const on = enabled === true;
+	const state = on ? 'On &mdash; counting your actions locally' : 'Off &mdash; nothing is counted';
+	const btnLabel = on ? 'Turn off' : 'Turn on';
+	const btnArg = on ? 'off' : 'on';
+	const dot = on ? ACCENT : '#a3a8b2';
+	return `<div style="display:flex;align-items:center;gap:12px;margin:0 0 14px;padding:13px 15px;background:#f7f8fb;border:1px solid #eceef3;border-radius:12px">
+		<span style="width:8px;height:8px;flex:none;border-radius:50%;background:${dot}"></span>
+		<div style="flex:1">
+			<div style="font:600 12.5px/1.3 system-ui;color:#15171c">Anonymous usage analytics</div>
+			<div style="font:400 12px/1.4 system-ui;color:#696e78">${state}. Change it any time.</div>
+		</div>
+		<button data-msg="setAnalyticsConsent" data-arg="${btnArg}" style="flex:none;border:1px solid #d4d7dd;background:#fff;border-radius:9px;padding:8px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${btnLabel}</button>
 	</div>`;
 }
 
@@ -1356,9 +1523,11 @@ function renderProjectRun(state: IScreenState): string {
 	// (plan 27 iter 4) instead; no live/stopped run => no pill.
 	const livePill = run?.inFlight
 		? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#4650b8"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 1.6s ease-in-out infinite"></span>Live</span>`
-		: run?.stopped
-			? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f6f7f9;border:1px solid #e6e8ec;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#868b95"><span style="width:6px;height:6px;border-radius:50%;background:#b4332f"></span>Stopped</span>`
-			: '';
+		: run?.paused
+			? `<span style="display:inline-flex;align-items:center;gap:6px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#9a6b16"><span style="width:6px;height:6px;border-radius:50%;background:#d9a62b"></span>Paused</span>`
+			: run?.stopped
+				? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f6f7f9;border:1px solid #e6e8ec;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#868b95"><span style="width:6px;height:6px;border-radius:50%;background:#b4332f"></span>Stopped</span>`
+				: '';
 	const runTopBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
 		<span style="width:20px;height:20px;border-radius:6px;background:#3b4d8f;display:flex;align-items:center;justify-content:center;color:#fff;font:600 10px/1 system-ui">${projectAv.text}</span>
 		<span style="font:600 13px/1 system-ui;color:#1a1c20">${esc(folderName)}</span><span style="color:#cfd3da">/</span>
@@ -1414,7 +1583,7 @@ function renderProjectRun(state: IScreenState): string {
 	const runBody = summary
 		? `<div style="flex:1;display:flex;overflow:hidden;min-height:0">
 		${decisionsRail(run?.decisions ?? [], run?.source, !!run?.inFlight)}
-		${swarmPane(summary, workingSet, !!run?.stopped)}
+		${swarmPane(summary, workingSet, !!run?.stopped, !!run?.paused)}
 	</div>`
 		: idleBody;
 
@@ -1432,13 +1601,22 @@ function renderProjectRun(state: IScreenState): string {
 	const skippedDocs = summary?.skippedDocs ?? 0;
 	// Documents too large for the fan-out budget (plan 30, track 3) are reported as their own honest bucket.
 	const oversizeDocs = summary?.oversizeDocs ?? 0;
+	// Documents the model could not be reached for (F14, issue #123) are their own honest bucket - NEVER folded
+	// into "unchanged", so a model outage can never read as a silent all-clear on the run's bottom bar.
+	const failedDocs = summary?.failedDocs ?? 0;
 	const numeral = (n: number) => `<strong style="font:500 20px/1 system-ui;color:#14161a">${n}</strong>`;
 	const tailParts = [`&middot; ${workingCount} working`, `&middot; ${unchangedDocs} unchanged`];
 	if (skippedDocs) { tailParts.push(`&middot; ${skippedDocs} skipped`); }
 	if (oversizeDocs) { tailParts.push(`&middot; ${oversizeDocs} too large`); }
+	if (failedDocs) { tailParts.push(`&middot; <span style="color:#9a6b16">${failedDocs} failed</span>`); }
 	const tail = tailParts.join(' ');
+	// The lead line stays honest under a model outage: when documents failed and nothing was proposed, it names
+	// the model as unreachable (F14) instead of the false "0 changes proposed in 0 documents" all-clear.
+	const lead = failedDocs > 0 && changed === 0
+		? `<span style="font:400 14px/1 system-ui;color:#9a6b16">The agent model is not reachable &mdash; ${numeral(failedDocs)} documents could not be processed</span>`
+		: `<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>`;
 	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid #eef0f3;background:#fbfbfc;display:flex;align-items:center;padding:0 28px;gap:18px">
-		<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>
+		${lead}
 		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${tail}</span>
 		<button data-msg="reviewProject" style="margin-left:auto;font:600 14px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:10px;padding:12px 22px;cursor:pointer">Review Across the Project &#8594;</button>
 	</div>`;
@@ -1496,7 +1674,7 @@ function decisionsRail(decisions: readonly IDecisionGroup[], source: string | un
 // project document. Every tile's status comes from the REAL run: `changed` (accent tint + check +
 // `N changes`) from `summariseProjectRun`, `working` (spinner + `reviewing...`) layered on live while
 // the fan-out is in flight, and settled `no-change` (muted `no change`). Nothing is fabricated.
-function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, stopped = false): string {
+function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, stopped = false, paused = false): string {
 	const total = summary.tiles.length;
 	// A document is "done" once it has settled - it is no longer in the live working set. Progress counts
 	// settled docs (X) against the whole project (Y), matching the comp's "21 / 24 done".
@@ -1505,11 +1683,20 @@ function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, st
 	const busy = working.size > 0;
 	// A stopped run reports honestly (plan 27 iter 4): how many settled with a change vs were skipped, not
 	// "every document read" (which never happened). A live run and a fully-completed run keep their headings.
+	// A PAUSED run (spent daily budget, map-D15 / F14 item 3) reads the calm plain-words pause - finished
+	// proposals stay reviewable, not-yet-run docs are skipped, and it is neither a failure nor an all-clear.
+	// A settled run where the model was unreachable for some documents (F14, issue #123) must NOT read
+	// "every document read across the project" (a false all-clear); it names the outage honestly instead.
+	const failedCount = summary.failedDocs;
 	const heading = busy
 		? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Orchestrating ${total} sub-agents</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">reading every document in parallel</span>`
-		: stopped
-			? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run stopped</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed before you stopped &middot; ${summary.skippedDocs} skipped</span>`
-			: `<span style="font:600 15px/1 system-ui;color:#1a1c20">${total} sub-agents finished</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">every document read across the project</span>`;
+		: paused
+			? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run paused &mdash; today's included usage is spent</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed &middot; the rest resume tomorrow &middot; finished proposals are ready to review</span>`
+			: stopped
+				? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run stopped</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed before you stopped &middot; ${summary.skippedDocs} skipped</span>`
+				: failedCount > 0
+					? `<span style="font:600 15px/1 system-ui;color:#9a6b16">Model unreachable for ${failedCount} of ${total} documents</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} changed &middot; ${failedCount} failed &mdash; retry the failed documents from Chat</span>`
+					: `<span style="font:600 15px/1 system-ui;color:#1a1c20">${total} sub-agents finished</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">every document read across the project</span>`;
 	const progress = `<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">${heading}<span style="margin-left:auto;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f">${done} / ${total} done</span></div>
 		<div style="height:5px;background:#e9eaee;border-radius:3px;margin-bottom:18px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${ACCENT};border-radius:3px"></div></div>`;
 	const tiles = summary.tiles.map(t => swarmTile(t.docId, t.docTitle, t.status, t.changeCount, working.has(t.docId))).join('');
@@ -1551,6 +1738,15 @@ function swarmTile(_docId: string, title: string, status: ProjectRunDocStatus, c
 		return `<div style="background:#fdf6ec;border:1px solid #f0d9a8;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
 			<div style="display:flex;align-items:center;gap:6px"><span style="color:#9a6b16;font-size:11px">&#9888;</span><span style="${nameStyle};color:#7a5a13">${name}</span></div>
 			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16">too large for this run</span>
+		</div>`;
+	}
+	// A failed tile (F14, issue #123): the model could not be reached for this document during the run. A red
+	// border + a warning glyph + the honest "model unreachable" label tells the user WHY it produced nothing,
+	// so a model outage never reads as a silent "no change" all-clear. Retry from Chat re-runs just the failed docs.
+	if (status === 'failed') {
+		return `<div style="background:#fdf2f1;border:1px solid #ecc9c6;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:#b4332f;font-size:11px">&#9888;</span><span style="${nameStyle};color:#8a2f2b">${name}</span></div>
+			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#b4332f">model unreachable</span>
 		</div>`;
 	}
 	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">

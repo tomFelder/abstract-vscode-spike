@@ -370,6 +370,22 @@ export function parseLivingDoc(text: string): ILivingDoc {
 	};
 }
 
+// The title to show for a document in the tree-rail / Home list (plan 37 F8): the authored frontmatter
+// `title:`, else the first H1, else the file's own name. A Markdown file with an odd or missing heading
+// (`#Heading` with no space, leading blank lines, no heading at all) must never collapse to a bare
+// "Untitled" that erases which file it is - it falls back to the filename so the row still names the file.
+// `filename` is the document's basename; its `.md`/generated-view extension is stripped for the label.
+// Pure (string in, string out), so it is unit-testable independent of the DOM view + the file scan.
+export function documentDisplayTitle(doc: Pick<ILivingDoc, 'frontmatterTitle' | 'blocks'>, filename: string): string {
+	const authored = (doc.frontmatterTitle ?? '').trim();
+	if (authored) { return authored; }
+	const h1 = doc.blocks.find(b => b.type === 'heading' && b.level === 1);
+	const heading = h1 ? h1.text.trim() : '';
+	if (heading) { return heading; }
+	const stem = filename.replace(/\.(export|source|template)\.md$/i, '').replace(/\.md$/i, '').trim();
+	return stem || 'Untitled';
+}
+
 // Render one block back to its Markdown source. Headings re-emit their `#` prefix from the level;
 // everything else round-trips its raw text verbatim.
 function serializeBlock(block: ILivingDocBlock): string {
