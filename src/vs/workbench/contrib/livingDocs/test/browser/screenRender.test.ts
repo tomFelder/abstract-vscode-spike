@@ -403,7 +403,7 @@ suite('livingDocs screenRender', () => {
 
 	test('the included tier shows today\'s usage in plain words with a D19 usage ring', () => {
 		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.6 } });
-		assert.ok(html.includes("Today&#39;s included usage"), 'the usage block is labelled in plain words');
+		assert.ok(html.includes('Today&#39;s included usage'), 'the usage block is labelled in plain words');
 		assert.ok(html.includes('US$0.60 of US$1.00 used today'), 'the real spend against the budget is shown');
 		assert.ok(html.includes('<svg') && html.includes('60%'), 'a usage ring reflects the 60% spent fraction');
 	});
@@ -420,7 +420,23 @@ suite('livingDocs screenRender', () => {
 		assert.ok(form.includes('Which frontier model is your daily driver?') && form.includes('Which subscriptions do you own?') && form.includes('What do you make each week?'), 'all three survey questions are present');
 		assert.ok(/data-survey-save/.test(form), 'the survey has a Save action');
 		const saved = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, surveySaved: true });
-		assert.ok(saved.includes('Thanks') && !/data-survey-save/.test(saved), 'once saved, a thank-you replaces the form');
+		// Assert on the rendered Save BUTTON, not the bare `data-survey-save` selector: the client SCRIPT
+		// that ships with every screen contains `querySelectorAll('[data-survey-save]')`, so a loose
+		// `/data-survey-save/` match is always true regardless of state (issue #135: corrected here).
+		assert.ok(saved.includes('Thanks') && !/<button data-survey-save/.test(saved), 'once saved, a thank-you replaces the form');
+	});
+
+	test('the Model access screen carries the "What does Abstract send?" data-flow section (issue #135)', () => {
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } });
+		// The in-product home of the data-flow one-pager: a calm expandable section, not a new panel.
+		assert.ok(html.includes('What does Abstract send?'), 'the data-flow question is reachable on the Model access screen');
+		assert.ok(/<details data-dataflow>/.test(html), 'it is an inline expandable section that shows the answer on click');
+		// The load-bearing honesty claims are present in plain words (each traces to a real code path).
+		assert.ok(html.includes('Abstract sends content only when you ask it to work'), 'the plain-words summary is shown');
+		assert.ok(html.includes('or when an agent you have left running does its scheduled check'), 'the summary owns the scheduled-agent path (default-enabled agents can send without a gesture at that moment)');
+		assert.ok(html.includes('built-in agents run on their own') && html.includes('Pause any agent on the Agents screen'), 'the proactive-agent path is named with its off switch');
+		assert.ok(/no usage analytics today/i.test(html), 'the "no analytics today" honesty claim is present');
+		assert.ok(html.includes('docs/27-data-flow-one-pager.md'), 'it points to the full one-pager');
 	});
 
 	test('the Settings screen uses plain words only (no "OAuth", "token" or "rate limit")', () => {

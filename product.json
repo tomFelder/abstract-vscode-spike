@@ -2,6 +2,10 @@
 	"nameShort": "Abstract",
 	"nameLong": "Abstract",
 	"applicationName": "code-oss",
+	"posthog": {
+		"projectApiKey": "phc_REPLACE_ME",
+		"host": "https://us.i.posthog.com"
+	},
 	"dataFolderName": ".vscode-oss",
 	"sharedDataFolderName": ".vscode-oss-shared",
 	"win32MutexName": "vscodeoss",
