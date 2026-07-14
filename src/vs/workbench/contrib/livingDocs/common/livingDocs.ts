@@ -95,6 +95,17 @@ export interface ILivingDocSummary {
 }
 
 /**
+ * One document that depends on a file targeted by a rename/delete (docs 20 section 1d / map-D6): the
+ * dependent document's resource and display title, for the delete warning's "these documents depend on
+ * it" list. A projection over the folder's frontmatter `sources:`/`context:` - the file's own document
+ * is never its own dependent.
+ */
+export interface IFileOpDependent {
+	readonly resource: URI;
+	readonly title: string;
+}
+
+/**
  * One document that draws on a source (plan 29, iter 1): the dependent document plus the exact bind keys
  * it resolves from that source (empty for a context/influence-only dependency). Powers the Knowledge
  * screen's per-source detail drawer (the documents + keys behind a source, with jump-to-doc).
@@ -347,6 +358,13 @@ export interface ILivingDocsService {
 	 */
 	readonly onDidRequestFocusChange: Event<{ readonly docId: string; readonly changeId: string }>;
 
+	/**
+	 * Fires when "Add to chat" (docs 20 section 1d, the 1m entry) attaches a file to the active
+	 * document's chat: the argument is the file name to seed as an `@mention` in the chat composer.
+	 * The review rail listens and appends the mention to its draft; `focusPanel('chat')` reveals the tab.
+	 */
+	readonly onDidRequestChatAttach: Event<string>;
+
 	/** Reveal the right panel and switch it to the given tab. */
 	focusPanel(tab: LivingDocsPanelTab): void;
 
@@ -484,6 +502,33 @@ export interface ILivingDocsService {
 	 * (`<name>.md`); with none it stays `Untitled.md` (decision 56's zero-ceremony, name-on-first-save path).
 	 */
 	createDocument(name?: string): Promise<URI | undefined>;
+
+	// --- provenance-safe file operations (docs 20 section 1d / map-D6): the Files-tab context menu ---
+
+	/**
+	 * The documents that depend on a file through their frontmatter `sources:`/`context:` - the
+	 * warn-and-list behind delete (map-D6). A projection over the discovered folder (loaded + on-disk),
+	 * excluding the file's own document. Empty when nothing depends on it.
+	 */
+	getFileDependents(resource: URI): Promise<readonly IFileOpDependent[]>;
+
+	/**
+	 * Rename a file, moving its `.lock.json` sidecar with it ATOMICALLY (both move or neither) and
+	 * rewriting any dependent document's provenance references (frontmatter + lock source paths) so
+	 * bindings and audit stay intact. Shows an Undo toast on success and a named error on failure (a
+	 * clashing target name never half-applies). `newBaseName` is the new name without its extension.
+	 */
+	renameFile(resource: URI, newBaseName: string): Promise<void>;
+
+	/**
+	 * Delete a file and its `.lock.json` sidecar, orphaning dependents gracefully (map-D6): dependents
+	 * keep their last cached values, flagged stale, never blocked or broken. Shows an Undo toast that
+	 * restores the file (and sidecar). Closes the file's editor if it is open.
+	 */
+	deleteFile(resource: URI): Promise<void>;
+
+	/** Attach a file to the active document's chat as an `@mention` (docs 20 section 1d, the 1m entry). */
+	attachToChat(resource: URI): void;
 
 	/** The folder's data files (csv/json) not already bound to the document, for the Add-source picker. */
 	getSourceCandidates(resource: URI): Promise<readonly string[]>;

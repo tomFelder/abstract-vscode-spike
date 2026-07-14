@@ -3,16 +3,20 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { $, addDisposableListener, append, clearNode, EventHelper } from '../../../../base/browser/dom.js';
+import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
@@ -65,6 +69,8 @@ export class TreeRailView extends ViewPane {
 		@IHoverService hoverService: IHoverService,
 		@IEditorService private readonly _editors: IEditorService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+		@IDialogService private readonly _dialogService: IDialogService,
+		@IQuickInputService private readonly _quickInput: IQuickInputService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -154,14 +160,63 @@ export class TreeRailView extends ViewPane {
 		if (item.pending) { append(row, $('span.rail-item-dot')); }
 		if (item.resource) {
 			const resource = item.resource;
-			row.setAttribute('role', 'button');
-			row.tabIndex = 0;
-			const open = () => void this._editors.openEditor({ resource, options: { pinned: true } });
-			this._renderDisposables.add(addDisposableListener(row, 'click', open));
-			this._renderDisposables.add(addDisposableListener(row, 'keydown', e => {
-				if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+			// Document rows open in the editor on click/Enter; source-file rows are not openable (a csv/json
+			// has no Living Document editor), so they only carry the context menu below.
+			if (item.kind === 'doc') {
+				row.setAttribute('role', 'button');
+				row.tabIndex = 0;
+				const open = () => void this._editors.openEditor({ resource, options: { pinned: true } });
+				this._renderDisposables.add(addDisposableListener(row, 'click', open));
+				this._renderDisposables.add(addDisposableListener(row, 'keydown', e => {
+					if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+				}));
+			}
+			// The provenance-safe file menu (docs 20 section 1d): Rename / Delete / Add to chat. Only rows
+			// backed by a real file get it - so an empty list is never a broken empty menu container.
+			this._renderDisposables.add(addDisposableListener(row, 'contextmenu', e => {
+				EventHelper.stop(e, true);
+				this._showFileMenu(row, resource, item.label);
 			}));
 		}
+	}
+
+	// The Files-tab context menu (docs 20 section 1d, the 1m entry): the minimal-v1 provenance-safe ops.
+	// Rename and Delete route through the service, which moves the lock sidecar atomically and shows the
+	// Undo toast; the warn-and-list on delete (map-D6) is the confirm dialog below.
+	private _showFileMenu(anchor: HTMLElement, resource: URI, label: string): void {
+		const actions: IAction[] = [
+			toAction({ id: 'livingDocs.file.rename', label: 'Rename\u2026', run: () => void this._renameFile(resource) }),
+			toAction({ id: 'livingDocs.file.delete', label: 'Delete\u2026', run: () => void this._deleteFile(resource, label) }),
+			new Separator(),
+			toAction({ id: 'livingDocs.file.addToChat', label: 'Add to chat', run: () => this._livingDocs.attachToChat(resource) }),
+		];
+		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
+	}
+
+	private async _renameFile(resource: URI): Promise<void> {
+		const current = basename(resource);
+		const dot = current.lastIndexOf('.');
+		const stem = dot >= 0 ? current.slice(0, dot) : current;
+		const next = await this._quickInput.input({ prompt: 'Rename file', value: stem, valueSelection: [0, stem.length] });
+		if (next === undefined) { return; } // cancelled
+		const trimmed = next.trim();
+		if (!trimmed || trimmed === stem) { return; }
+		await this._livingDocs.renameFile(resource, trimmed);
+	}
+
+	// map-D6: delete warns and LISTS the dependent documents; on proceed the service orphans them
+	// gracefully (their cached values survive, flagged stale) and offers Undo - the delete never blocks.
+	private async _deleteFile(resource: URI, label: string): Promise<void> {
+		const dependents = await this._livingDocs.getFileDependents(resource);
+		const message = dependents.length
+			? `Delete "${label}"? ${dependents.length} document${dependents.length === 1 ? '' : 's'} depend on it.`
+			: `Delete "${label}"?`;
+		const detail = dependents.length
+			? `These documents will keep their last cached values, flagged as stale (not broken):\n${dependents.map(d => `\u2022 ${d.title}`).join('\n')}\n\nYou can undo this.`
+			: 'You can undo this.';
+		const { confirmed } = await this._dialogService.confirm({ type: 'warning', message, detail, primaryButton: 'Delete' });
+		if (!confirmed) { return; }
+		await this._livingDocs.deleteFile(resource);
 	}
 
 	private _renderContext(panel: HTMLElement): void {

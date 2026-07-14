@@ -100,8 +100,22 @@ export class ReviewRailView extends ViewPane {
 		// Append streamed chat deltas to the live turn without a full re-render (plan 27 iter 3).
 		this._register(this._livingDocs.onDidStreamChat(resource => this._onStreamDelta(resource)));
 		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
+		this._register(this._livingDocs.onDidRequestChatAttach(file => this._attachToChatDraft(file)));
 		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'review' || this._activeTab === 'chat') { this._render(); } }));
 		void this._refreshSignedIn();
+		this._render();
+	}
+
+	// "Add to chat" from the Files tab (docs 20 section 1d, the 1m entry): append the file as an @mention
+	// to the composer draft (de-duplicated) and show the Chat tab. focusPanel('chat') already switched the
+	// tab; this seeds the draft and re-renders so the mention is visible for the user to send.
+	private _attachToChatDraft(file: string): void {
+		const mention = `@${file}`;
+		if (!this._chatDraft.split(/\s+/).includes(mention)) {
+			const sep = this._chatDraft.length && !this._chatDraft.endsWith(' ') ? ' ' : '';
+			this._chatDraft = `${this._chatDraft}${sep}${mention} `;
+		}
+		this._activeTab = 'chat';
 		this._render();
 	}
 

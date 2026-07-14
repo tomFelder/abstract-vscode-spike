@@ -180,6 +180,9 @@ suite('LivingDocsService', () => {
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
 
 	let lastFiles: Map<string, string> | undefined;
+	// Notifications the service raised (file-op toasts + named errors), so a test can assert the message
+	// and drive the Undo action a toast carries (the file-ops tests; issue #125).
+	let lastNotifications: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }[] = [];
 	let lastModelBody: string | undefined;
 	let lastModelCalls = 0;
 	let lastOpenedFolder: URI | undefined;
@@ -188,7 +191,7 @@ suite('LivingDocsService', () => {
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -215,6 +218,14 @@ suite('LivingDocsService', () => {
 			writeFile: async (resource: URI, buffer: VSBuffer) => {
 				files.set(resource.toString(), buffer.toString());
 			},
+			exists: async (resource: URI) => files.has(resource.toString()),
+			// `failLockDelete` simulates a sidecar delete failing AFTER the file delete succeeded, so the
+			// file-ops tests can prove deleteFile rolls the file back (the pair never half-applies).
+			del: async (resource: URI) => {
+				if (opts.failLockDelete && resource.path.endsWith('.lock.json')) { throw new Error('simulated lock delete failure'); }
+				if (!files.has(resource.toString())) { throw new Error(`not found: ${resource.toString()}`); }
+				files.delete(resource.toString());
+			},
 			// List the direct children of a directory, so document discovery can fan out. Direct file children
 			// are the keys with no further slash; an immediate subdirectory is synthesised (as an isDirectory
 			// entry) from any key that has a deeper path, so the recursive template/document walk can descend.
@@ -237,7 +248,7 @@ suite('LivingDocsService', () => {
 			},
 		} as unknown as IFileService;
 
-		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; } } as unknown as IEditorService;
+		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; }, findEditors: () => [], closeEditors: async () => undefined } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		// Most settings the service reads are booleans that default to true (useModel); the fan-out context
 		// budget (plan 30, track 3) is a number a test can lower to force multi-batch packing over few docs.
@@ -246,7 +257,12 @@ suite('LivingDocsService', () => {
 		// mocked request service) at a dead port, so the streaming call fails fast and falls back to the mocked
 		// buffered call - keeping the fan-out tests hermetic regardless of any real proxy on the default port.
 		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? opts.proxyUrl : true) } as unknown as IConfigurationService;
-		const notificationService = { info: () => undefined } as unknown as INotificationService;
+		lastNotifications = [];
+		const notificationService = {
+			info: () => undefined,
+			error: (message: unknown) => { lastNotifications.push({ message: String(message) }); },
+			notify: (n: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }) => { lastNotifications.push(n); return { close: () => undefined }; },
+		} as unknown as INotificationService;
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
 		const requestService = {
@@ -284,7 +300,7 @@ suite('LivingDocsService', () => {
 		lastProxyFetchBody = undefined;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
 		store.add(service);
 		return service;
 	}
@@ -2257,7 +2273,7 @@ suite('LivingDocsService', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: mountRoot, name: opts.folderName ?? 'mount' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), new InMemoryStorageService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
 		store.add(service);
 		return { service, files, registerProvider };
 	}
@@ -2299,5 +2315,66 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(service.getProjectDisplayName(), 'Living Docs Sample', 'marker resolves after the provider arrives');
 		// The same registration retries the document scan, so the root is no longer "0 docs".
 		assert.strictEqual((await service.listDocuments()).length, 3);
+	});
+
+	// --- provenance-safe file operations (issue #125, docs 20 section 1d / map-D6) ---
+
+	test('deleting a depended-on source flags its dependents STALE (orphaned, not broken); Undo restores them fresh', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getFreshness(WEEKLY).dirty, false, 'fresh after load');
+
+		await service.deleteFile(URI.file('/ws/metrics.csv'));
+		const stale = service.getFreshness(WEEKLY);
+		assert.ok(stale.staleBindings.includes('metrics.mrr'), `metrics.mrr flagged stale after the source delete, got: [${stale.staleBindings.join(', ')}]`);
+		assert.strictEqual(service.getStatus(WEEKLY), 'Sources changed - may be affected', 'the sync pill reads stale, never "All sources synced"');
+		// Orphaned gracefully: the cached resolved values survive (the document still renders its figures).
+		assert.ok(service.getResolved(WEEKLY).has('metrics.mrr'), 'cached lock value kept for the orphaned binding');
+
+		// The Undo toast restores the pair; the dependent re-reads fresh (values resolve, hashes still match).
+		const toast = lastNotifications.find(n => n.message === 'Deleted "metrics.csv".');
+		assert.ok(toast?.actions?.primary?.[0], 'delete toast carries an Undo action');
+		await toast!.actions!.primary![0].run();
+		const fresh = service.getFreshness(WEEKLY);
+		assert.deepStrictEqual({ dirty: fresh.dirty, staleBindings: [...fresh.staleBindings] }, { dirty: false, staleBindings: [] }, 'fresh again after Undo');
+		assert.strictEqual(service.getStatus(WEEKLY), 'All sources synced');
+	});
+
+	test('a dependent opened AFTER its source was deleted loads flagged stale, with its cached figures intact', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // records the lock (the provenance the orphan keeps)
+		await service.deleteFile(URI.file('/ws/metrics.csv'));
+
+		// A fresh open of the dependent (re-load from disk) must flag, not crash and not read synced.
+		await service.loadDocument(WEEKLY);
+		const fresh = service.getFreshness(WEEKLY);
+		assert.ok(fresh.staleBindings.includes('metrics.mrr'), `stale on fresh open, got: [${fresh.staleBindings.join(', ')}]`);
+		assert.strictEqual(service.getStatus(WEEKLY), 'Sources changed - may be affected');
+		assert.ok(service.getDoc(WEEKLY)!.blocks.length > 0, 'the document still renders');
+		assert.ok(service.getResolved(WEEKLY).has('metrics.mrr'), 'cached lock value kept');
+	});
+
+	test('an api-backed document does NOT flag stale from the missing-file check (resolution misses keep their behaviour)', async () => {
+		const service = createService([], { api: true });
+		await service.loadDocument(API);
+		// The api source is not a local file; whatever its resolution does, the deleted-file re-flag must not fire.
+		const fresh = service.getFreshness(API);
+		assert.strictEqual(fresh.staleBindings.length, 0, `no stale bindings from the exists probe, got: [${fresh.staleBindings.join(', ')}]`);
+	});
+
+	test('a failed sidecar delete rolls the file back - the delete pair never half-applies', async () => {
+		const service = createService([], { failLockDelete: true });
+		await service.loadDocument(WEEKLY); // bootstraps + persists the lock sidecar
+		const lockKey = URI.file('/ws/Weekly Summary.lock.json').toString();
+		assert.ok(lastFiles!.has(lockKey), 'lock sidecar exists before the delete');
+		const before = lastFiles!.get(WEEKLY.toString());
+
+		await service.deleteFile(WEEKLY);
+		assert.strictEqual(lastFiles!.get(WEEKLY.toString()), before, 'the file was rolled back after the sidecar delete failed');
+		assert.ok(lastFiles!.has(lockKey), 'the lock sidecar is untouched');
+		const err = lastNotifications.find(n => /sidecar could not be removed/.test(n.message));
+		assert.ok(err, `a named error was raised, got: [${lastNotifications.map(n => n.message).join(' | ')}]`);
+		assert.ok(/Nothing was changed\./.test(err!.message), 'the error honestly reports nothing changed');
+		assert.strictEqual(lastNotifications.some(n => n.message === 'Deleted "Weekly Summary.md".'), false, 'no success toast for a failed delete');
 	});
 });

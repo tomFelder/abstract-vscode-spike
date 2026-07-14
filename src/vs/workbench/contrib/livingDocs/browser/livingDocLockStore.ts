@@ -8,6 +8,7 @@ import { basename, dirname, joinPath } from '../../../../base/common/resources.j
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { emptyLock, ILivingDocLock, LOCK_VERSION } from '../common/livingDocsModel.js';
+import { sidecarNameFor } from '../common/fileOps.js';
 
 // The read/write seam for a document's lock file. The spike persists it as a sibling
 // `<doc>.lock.json`; production will platform-store it. Keeping this behind a small interface makes
@@ -19,8 +20,7 @@ export interface ILockStore {
 
 /** The bind/influence graph as written to a sibling `<doc>.lock.json` for a `<doc>.md`. */
 export function lockUriFor(doc: URI): URI {
-	const stem = basename(doc).replace(/\.md$/, '');
-	return joinPath(dirname(doc), `${stem}.lock.json`);
+	return joinPath(dirname(doc), sidecarNameFor(basename(doc)));
 }
 
 // Normalize a parsed JSON object into a complete lock, tolerating older/partial files.

@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../base/common/uri.js';
+import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { ILivingDoc, SourceKind } from './livingDocsModel.js';
 import { sourceKindOf } from './contextGroups.js';
 
@@ -121,12 +122,20 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	// --- Sources: bound sources + discovered data/source files, deduped (F9) ---
 	const seen = new Set<string>();
 	const sources: ITreeRailItem[] = [];
-	const addSource = (label: string) => {
+	// A file source resolves to a real URI alongside the document that references it (sources are
+	// folder-scoped, decision 40), so the Files tab can rename/delete it. An api/mcp source has no file
+	// to act on, and a discovered "extra" (below) is a bare filename with no owning document, so both
+	// carry no resource and their context menu row is inert (gated on `item.resource`).
+	const addSource = (label: string, resource?: URI) => {
 		if (seen.has(label)) { return; }
 		seen.add(label);
-		sources.push({ label, kind: 'source', pending: false, sourceKind: sourceKindOf(label) });
+		sources.push({ label, resource, kind: 'source', pending: false, sourceKind: sourceKindOf(label) });
 	};
-	for (const d of docs) { for (const s of d.sources) { addSource(s); } }
+	for (const d of docs) {
+		for (const s of d.sources) {
+			addSource(s, sourceKindOf(s) === 'file' ? joinPath(dirname(d.resource), s) : undefined);
+		}
+	}
 
 	// --- Not yet imported: unsupported files, never silently dropped (F10) ---
 	const seenUnsupported = new Set<string>();

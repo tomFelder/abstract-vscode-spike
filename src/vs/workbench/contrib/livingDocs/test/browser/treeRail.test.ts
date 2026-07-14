@@ -46,6 +46,18 @@ suite('treeRail', () => {
 		]);
 	});
 
+	test('buildFileTree resolves a file source to a URI in the referencing document\'s folder (for the Files-tab menu), but not an api (URL) source', () => {
+		const folders = buildFileTree([
+			{ title: 'Weekly Summary', resource: WEEKLY, pendingCount: 0, sources: ['metrics.csv', 'https://api.example.com/mrr'] },
+		]);
+		const sources = folders.find(f => f.name === 'Sources')!.items;
+		const csv = sources.find(i => i.label === 'metrics.csv')!;
+		const api = sources.find(i => i.label === 'https://api.example.com/mrr')!;
+		// A file source is renamable/deletable, so it carries a real sibling URI; an api (URL) source has no file.
+		assert.strictEqual(csv.resource?.toString(), URI.file('/ws/metrics.csv').toString());
+		assert.strictEqual(api.resource, undefined);
+	});
+
 	test('buildFileTree preserves the on-disk folder hierarchy instead of flattening subfolders (F7)', () => {
 		const A = URI.file('/ws/root.md');
 		const B = URI.file('/ws/subfolder-a/note.md');
