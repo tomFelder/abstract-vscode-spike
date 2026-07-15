@@ -1,0 +1,42 @@
+{
+  "A.md": "# Q3 Weekly Report\n\nThis week’s revenue reached **$49,800**, an increase of *12 per cent* over the prior period — see the [dashboard](https://example.com/dashboard) for details. As the CFO said, “momentum is steady.”\n\n* Pipeline grew in EMEA\n\n  * Two new enterprise logos\n\n  * Renewal rate held at 96%\n\n* Hiring paused in G&A\n\n| **Region & Segment** | **Region & Segment** | **Revenue** | **Growth** |\n| --- | --- | --- | --- |\n| AMER | Enterprise | $21,300 | +8% |\n| AMER | SMB | $9,900 | +15% |\n| EMEA | Enterprise | $12,400 | +19% |\n| EMEA | SMB | $4,100 | +11% |\n| APAC | All | $2,100 | +3% |\n\nChart follows: ![Revenue chart](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==) and the caption sits beside it.\n\nThe forecast was held flat after the review; final wording pending.",
+  "A.tables": [
+    {
+      "rows": 6,
+      "cells": 24,
+      "firstRow": [
+        "Region & Segment",
+        "Region & Segment",
+        "Revenue",
+        "Growth"
+      ]
+    }
+  ],
+  "D.md_after_undo": "# Probe\n\nParagraph one.",
+  "B.md": "| Name | Role \\| Team |\n| --- | --- |\n| Ada | **Lead** Eng |\n| Bob | a\\|b |",
+  "B.tables": [
+    {
+      "rows": 3,
+      "cells": 6,
+      "firstRow": [
+        "Name",
+        "Role | Team"
+      ]
+    }
+  ],
+  "C.md": "| Merged Head | Merged Head | C3 |\n| --- | --- | --- |\n| Down | r1b | r1c |\n| Down | r2b | r2c |",
+  "C.tables": [
+    {
+      "rows": 3,
+      "cells": 9,
+      "firstRow": [
+        "Merged Head",
+        "Merged Head",
+        "C3"
+      ]
+    }
+  ],
+  "F.md": "hello **bold**",
+  "G.md": "Status: approved today.",
+  "G.hasUnderline": false
+}
