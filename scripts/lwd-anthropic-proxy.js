@@ -53,6 +53,15 @@ const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4.1-mini';
 
 // Bound the request body so a runaway client cannot exhaust memory; model calls here are tiny.
 const MAX_BODY_BYTES = 1 * 1024 * 1024;
+// The source-extraction routes carry a base64-encoded workbook/PDF, which is larger than a model
+// call; a beta user's weekly pack is well under this (doc 22 §4). Kept separate so raising it never
+// widens the model-call surface.
+const MAX_SOURCE_BYTES = 32 * 1024 * 1024;
+
+// The docx import route (POST /import/docx, issue #129) carries a base64 Word document, which is far larger
+// than a model call, so it gets its own generous cap (a base64 payload is ~4/3 of the file). 40 MB of
+// base64 covers a ~30 MB docx - well past any beta document - while still bounding memory.
+const MAX_IMPORT_BODY_BYTES = 40 * 1024 * 1024;
 
 // --- per-user daily budget meter (plan 35 iter 3) ------------------------------------------------------
 // The founder cannot fund API-priced usage for the cohort, so the OpenRouter fallback is capped at a
@@ -101,14 +110,13 @@ function sendJson(res, status, obj) {
 	res.end(body);
 }
 
-function readBody(req, maxBytes) {
-	const cap = maxBytes || MAX_BODY_BYTES;
+function readBody(req, maxBytes = MAX_BODY_BYTES) {
 	return new Promise((resolve, reject) => {
 		const chunks = [];
 		let size = 0;
 		req.on('data', chunk => {
 			size += chunk.length;
-			if (size > cap) {
+			if (size > maxBytes) {
 				reject(new Error('request body too large'));
 				req.destroy();
 				return;
@@ -748,6 +756,82 @@ async function proxyFetch(req, res) {
 	}
 }
 
+// --- docx -> HTML import (issue #129, doc 22 section 2) --------------------------------------------------
+// Conversion runs HERE in the node layer where file access + the pure-JS pipeline (mammoth) live, never in
+// the renderer (doc 22 section 2). POST /import/docx { base64 } -> { ok, html, detections } on success, or
+// { ok:false, reason } for a file we refuse to mangle (encrypted / not a real .docx / unparseable). The
+// renderer turns the HTML into Markdown + assets (common/docxImport.ts) and writes the doc + lock + card.
+
+// Detect the "named and dropped" structures (doc 22 section 2) by reading the raw docx parts, so the
+// kept/dropped card names a limitation ONLY when the document actually contained it. Fail-soft: an
+// unreadable part just leaves its flag false (never a fabricated caveat).
+async function detectDocxFidelity(buffer) {
+	const detections = { comments: false, trackedChanges: false, footnotes: false, textboxes: false, headersFooters: false };
+	try {
+		const JSZip = require('jszip');
+		const zip = await JSZip.loadAsync(buffer);
+		const read = async (name) => { const f = zip.file(name); return f ? await f.async('string') : ''; };
+		const documentXml = await read('word/document.xml');
+		detections.trackedChanges = /<w:ins\b/.test(documentXml) || /<w:del\b/.test(documentXml);
+		detections.textboxes = /<w:txbxContent\b/.test(documentXml) || /<v:textbox\b/.test(documentXml);
+		detections.comments = /<w:commentReference\b/.test(documentXml) || !!zip.file('word/comments.xml');
+		detections.footnotes = !!zip.file('word/footnotes.xml') || !!zip.file('word/endnotes.xml')
+			|| /<w:footnoteReference\b/.test(documentXml) || /<w:endnoteReference\b/.test(documentXml);
+		// A header/footer part counts only when it carries real text, so an empty default header is not a caveat.
+		for (const name of Object.keys(zip.files)) {
+			if (/^word\/(header|footer)\d*\.xml$/.test(name)) {
+				const xml = await read(name);
+				if (/<w:t[ >]/.test(xml)) { detections.headersFooters = true; break; }
+			}
+		}
+	} catch (e) {
+		// Best effort - a detection failure never blocks the import; the card just omits the caveat.
+	}
+	return detections;
+}
+
+async function importDocx(req, res) {
+	const body = await readBody(req, MAX_IMPORT_BODY_BYTES);
+	let parsed;
+	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+	if (!parsed || typeof parsed.base64 !== 'string' || !parsed.base64) {
+		sendJson(res, 400, { error: { type: 'import_error', message: 'base64 is required' } });
+		return;
+	}
+	let buffer;
+	try { buffer = Buffer.from(parsed.base64, 'base64'); } catch { buffer = null; }
+	if (!buffer || buffer.length < 4) {
+		sendJson(res, 200, { ok: false, reason: 'The file could not be read' });
+		return;
+	}
+	// A real .docx is a ZIP ("PK\x03\x04"). An OLE/CFB container ("\xD0\xCF\x11\xE0") is either a legacy .doc
+	// or an ENCRYPTED (password-protected) OOXML package - both are refused honestly, never mangled.
+	if (buffer[0] === 0xD0 && buffer[1] === 0xCF && buffer[2] === 0x11 && buffer[3] === 0xE0) {
+		sendJson(res, 200, { ok: false, reason: 'The file is password-protected or an older Word format' });
+		return;
+	}
+	if (!(buffer[0] === 0x50 && buffer[1] === 0x4B)) {
+		sendJson(res, 200, { ok: false, reason: 'The file is not a valid Word .docx' });
+		return;
+	}
+	let mammoth;
+	try { mammoth = require('mammoth'); } catch (e) {
+		// A missing importer is a refusal like any other (encrypted / invalid-zip / corrupt above): return it
+		// as 200 { ok:false, reason } so the client's asJson (which throws on non-2xx before reading the body)
+		// surfaces this specific, actionable reason instead of its generic transport-error fallback.
+		sendJson(res, 200, { ok: false, reason: 'The docx importer (mammoth) is not installed on the proxy' });
+		return;
+	}
+	try {
+		const result = await mammoth.convertToHtml({ buffer });
+		const detections = await detectDocxFidelity(buffer);
+		sendJson(res, 200, { ok: true, html: result && result.value ? result.value : '', detections });
+	} catch (e) {
+		// mammoth throws on a corrupt / unparseable document: refuse honestly, do not pretend a conversion.
+		sendJson(res, 200, { ok: false, reason: 'The file could not be read as a Word document' });
+	}
+}
+
 // POST /event: append one product analytics event (JSON) to the local events log (plan 35 iter 4). Used by
 // the onboarding survey to record `model_configured` locally; plan 36 forwards this log to PostHog. The proxy
 // stamps a UTC timestamp; the body carries no document text or credential (the renderer only sends survey
@@ -783,6 +867,78 @@ async function exportDocx(req, res) {
 	const bytes = renderDocx({ title: parsed.title, subtitle: parsed.subtitle, markdown: parsed.markdown, images: parsed.images });
 	res.writeHead(200, { 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'content-length': bytes.length });
 	res.end(bytes);
+}
+
+// --- source extraction: xlsx -> CSV, PDF -> context text (issue #131, doc 22 §4) ----------------------
+// Extraction runs HERE, in the node/proxy layer where file access + the heavy libraries live, never in
+// the renderer (P6 portability + the guardrail that a limitation is named, never a silent misread). The
+// renderer POSTs the file's bytes (base64) and receives clean CSV text / extracted context text back; it
+// then writes the plain-text results into the project folder itself. The engine is a pure module
+// (lwd-source-extract.js) with its own `node --test` suite; SheetJS + pdf-parse are lazily required so a
+// proxy without those dev deps still starts and serves the model routes (the source routes then 501).
+let _extractEngine;
+function sourceExtractEngine() {
+	if (_extractEngine === undefined) {
+		try { _extractEngine = require('./lwd-source-extract.js'); }
+		catch (e) { _extractEngine = null; console.error('[lwd-proxy] source-extract engine unavailable:', e && e.message ? e.message : e); }
+	}
+	return _extractEngine;
+}
+function optionalLib(name) {
+	try { return require(name); } catch { return null; }
+}
+
+// POST /sources/xlsx: body { dataBase64, dayFirst? } -> { sheets: [{ name, fileName, csv, rows, cols,
+// warnings }] }. Each sheet is a clean comma-delimited, number/date-normalised CSV the renderer writes to
+// data/<workbook>/<sheet>.csv. A merged-header/pivot sheet carries a NAMED warning, never a silent misread.
+async function extractXlsx(req, res) {
+	const engine = sourceExtractEngine();
+	const xlsx = optionalLib('xlsx');
+	if (!engine || !xlsx) {
+		sendJson(res, 501, { error: { type: 'source_error', message: 'spreadsheet extraction is not available in this build' } });
+		return;
+	}
+	const body = await readBody(req, MAX_SOURCE_BYTES);
+	let parsed;
+	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+	if (!parsed || typeof parsed.dataBase64 !== 'string') {
+		sendJson(res, 400, { error: { type: 'source_error', message: 'dataBase64 is required' } });
+		return;
+	}
+	try {
+		const buffer = Buffer.from(parsed.dataBase64, 'base64');
+		const { sheets } = engine.extractWorkbook(buffer, xlsx, { dayFirst: !!parsed.dayFirst });
+		const shaped = sheets.map(s => ({ name: s.name, fileName: engine.sheetFileName(s.name), csv: s.csv, rows: s.rows, cols: s.cols, warnings: s.warnings }));
+		sendJson(res, 200, { sheets: shaped });
+	} catch (e) {
+		sendJson(res, 502, { error: { type: 'source_error', message: String(e && e.message ? e.message : e) } });
+	}
+}
+
+// POST /sources/pdf: body { dataBase64 } -> { readable, text, pages, reason }. A text PDF returns its
+// extracted text (read-only CONTEXT, never value bindings); a scanned/image-only or password-protected PDF
+// returns readable:false with a plain-words reason, never empty context masquerading as a read.
+async function extractPdfRoute(req, res) {
+	const engine = sourceExtractEngine();
+	const pdfParse = optionalLib('pdf-parse');
+	if (!engine || !pdfParse || !pdfParse.PDFParse) {
+		sendJson(res, 501, { error: { type: 'source_error', message: 'PDF extraction is not available in this build' } });
+		return;
+	}
+	const body = await readBody(req, MAX_SOURCE_BYTES);
+	let parsed;
+	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+	if (!parsed || typeof parsed.dataBase64 !== 'string') {
+		sendJson(res, 400, { error: { type: 'source_error', message: 'dataBase64 is required' } });
+		return;
+	}
+	try {
+		const buffer = Buffer.from(parsed.dataBase64, 'base64');
+		const result = await engine.extractPdf(buffer, pdfParse.PDFParse);
+		sendJson(res, 200, result);
+	} catch (e) {
+		sendJson(res, 502, { error: { type: 'source_error', message: String(e && e.message ? e.message : e) } });
+	}
 }
 
 const server = http.createServer((req, res) => {
@@ -862,6 +1018,14 @@ const server = http.createServer((req, res) => {
 		});
 		return;
 	}
+	if (req.method === 'POST' && url.startsWith('/import/docx')) {
+		importDocx(req, res).catch(err => {
+			console.error('[lwd-proxy] docx import failed:', err && err.message ? err.message : err);
+			setCors(res);
+			sendJson(res, 502, { error: { type: 'import_error', message: String(err && err.message ? err.message : err) } });
+		});
+		return;
+	}
 	if (req.method === 'POST' && url.startsWith('/event')) {
 		postEvent(req, res).catch(err => {
 			console.error('[lwd-proxy] event log failed:', err && err.message ? err.message : err);
@@ -875,6 +1039,22 @@ const server = http.createServer((req, res) => {
 			console.error('[lwd-proxy] docx export failed:', err && err.message ? err.message : err);
 			setCors(res);
 			sendJson(res, 502, { error: { type: 'export_error', message: String(err && err.message ? err.message : err) } });
+		});
+		return;
+	}
+	if (req.method === 'POST' && url.startsWith('/sources/xlsx')) {
+		extractXlsx(req, res).catch(err => {
+			console.error('[lwd-proxy] xlsx extraction failed:', err && err.message ? err.message : err);
+			setCors(res);
+			sendJson(res, 502, { error: { type: 'source_error', message: String(err && err.message ? err.message : err) } });
+		});
+		return;
+	}
+	if (req.method === 'POST' && url.startsWith('/sources/pdf')) {
+		extractPdfRoute(req, res).catch(err => {
+			console.error('[lwd-proxy] pdf extraction failed:', err && err.message ? err.message : err);
+			setCors(res);
+			sendJson(res, 502, { error: { type: 'source_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
 	}

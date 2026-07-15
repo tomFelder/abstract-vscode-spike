@@ -1,0 +1,47 @@
+{
+  "generatedAt": "2026-07-15T04:22:00.002Z",
+  "workbook": {
+    "file": "Budget.xlsx",
+    "sheets": [
+      {
+        "sheet": "FY26",
+        "file": "Budget/FY26.csv",
+        "rows": 4,
+        "cols": 4,
+        "warnings": []
+      },
+      {
+        "sheet": "EU",
+        "file": "Budget/EU.csv",
+        "rows": 3,
+        "cols": 2,
+        "warnings": []
+      },
+      {
+        "sheet": "Merged Headers",
+        "file": "Budget/Merged Headers.csv",
+        "rows": 3,
+        "cols": 3,
+        "warnings": [
+          "This sheet has merged header cells - values may misalign with their columns."
+        ]
+      }
+    ]
+  },
+  "messyCsv": {
+    "delimiter": ";",
+    "encoding": "windows-1252",
+    "warnings": [
+      "Read as Windows-1252 text (not UTF-8) - a few characters may differ."
+    ]
+  },
+  "pdfText": {
+    "readable": true,
+    "pages": 1,
+    "textPreview": "Board pack: revenue reached 52000 dollar"
+  },
+  "pdfImageOnly": {
+    "readable": false,
+    "reason": "This PDF has no selectable text - it looks scanned or image-only."
+  }
+}

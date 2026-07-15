@@ -24,7 +24,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildFileTree, buildOutline, ITreeRailFolder, ITreeRailItem, searchTreeRail } from '../common/treeRail.js';
+import { buildFileTree, buildOutline, ITreeRailFolder, ITreeRailItem, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
 
 type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
 
@@ -138,10 +138,37 @@ export class TreeRailView extends ViewPane {
 			const header = append(panel, $('div.rail-folder'));
 			header.textContent = folder.name;
 			if (depth > 0) { header.style.paddingLeft = `${6 + depth * 12}px`; }
+			// The bulk-import affordance (doc 22 section 2, the 2b moment): when several Word documents are
+			// waiting, offer to import them all at once - "I found N Word documents - import them?".
+			const importable = folder.items.filter(i => i.kind === 'unsupported' && i.importable);
+			if (importable.length > 1) { this._renderBulkImport(panel, importable); }
 			for (const item of folder.items) { this._renderFileItem(panel, item, depth); }
 			for (const sub of folder.folders) { renderFolder(sub, depth + 1); }
 		};
 		for (const folder of folders) { renderFolder(folder, 0); }
+	}
+
+	// "I found N Word documents - import them?" (doc 22 section 2): one button that imports every waiting
+	// `.docx` in turn through the same single-file path, so the tree refreshes as each becomes a document.
+	private _renderBulkImport(panel: HTMLElement, importable: readonly ITreeRailItem[]): void {
+		const btn = append(panel, $('button.rail-import.rail-import-bulk')) as HTMLButtonElement;
+		btn.textContent = `Import All ${importable.length} Word Documents`;
+		const idleLabel = `Import All ${importable.length} Word Documents`;
+		this._renderDisposables.add(addDisposableListener(btn, 'click', async () => {
+			if (btn.disabled) { return; }
+			btn.disabled = true;
+			btn.textContent = 'Importing…';
+			// Each successful import fires onDidChange and re-renders this rail; a refusal/error does not, so
+			// restore the button in a finally or a refused file leaves it stuck disabled with no retry. The
+			// per-file plain-words reason is surfaced by the service's own notification. Keep going through the
+			// batch so one refused document does not strand the rest.
+			try {
+				for (const item of importable) { await this._livingDocs.importDocx(item.label); }
+			} finally {
+				btn.disabled = false;
+				btn.textContent = idleLabel;
+			}
+		}));
 	}
 
 	private _renderFileItem(panel: HTMLElement, item: ITreeRailItem, depth: number = 0): void {
@@ -152,12 +179,49 @@ export class TreeRailView extends ViewPane {
 				: (item.sourceKind === 'api' ? '\u21C4' : (item.sourceKind === 'mcp' ? '\u25F7' : '\u229E'));
 		append(row, $('span.rail-item-glyph')).textContent = glyph;
 		append(row, $('span.rail-item-label')).textContent = item.label;
-		// A file we cannot yet import is shown, never dropped, with its plain-words reason (F10).
-		if (item.note) {
+		// A `.docx` we CAN convert turns the F10 marker into a door: an "Import as document" button that
+		// converts it to a Living Document beside the untouched original (issue #129, doc 22 section 2).
+		if (item.kind === 'unsupported' && item.importable) {
+			const name = item.label;
+			const importBtn = append(row, $('button.rail-import')) as HTMLButtonElement;
+			importBtn.textContent = 'Import as Document';
+			this._renderDisposables.add(addDisposableListener(importBtn, 'click', async e => {
+				e.stopPropagation();
+				if (importBtn.disabled) { return; }
+				importBtn.disabled = true;
+				importBtn.textContent = 'Importing\u2026';
+				// On success the service fires onDidChange and this rail re-renders (the row becomes a document,
+				// so this button is gone). On any refusal or error it does NOT fire, so without this restore the
+				// row is left permanently stuck on a disabled "Importing\u2026" with no retry. The specific plain-words
+				// reason (proxy down, encrypted/legacy/unparseable file, write failure) is surfaced by the
+				// service's own notification - the same channel every other livingDocs refusal uses.
+				try {
+					const outcome = await this._livingDocs.importDocx(name);
+					if (outcome?.ok) { return; }
+				} catch {
+					// A rejected promise falls through to the same restore as an ok:false refusal.
+				}
+				importBtn.disabled = false;
+				importBtn.textContent = 'Import as Document';
+			}));
+		} else if (item.note) {
+			// A file we still cannot import is shown, never dropped, with its plain-words reason (F10).
 			const note = append(row, $('div.rail-item-note'));
 			note.textContent = `not yet imported \u2014 ${item.note}`;
 		}
 		if (item.pending) { append(row, $('span.rail-item-dot')); }
+		// A workbook / PDF SOURCES row offers "Use as source" (issue #131): extract sheets to CSVs, or a PDF's
+		// text to read-only context. Inline button (the row has no backing document, so no context menu).
+		if (item.action) {
+			const action = item.action;
+			const label = item.label;
+			const button = append(row, $('button.rail-srcaction')) as HTMLButtonElement;
+			button.textContent = 'Use as source';
+			this._renderDisposables.add(addDisposableListener(button, 'click', e => {
+				e.stopPropagation();
+				void this._useAsSource(action, label);
+			}));
+		}
 		if (item.resource) {
 			const resource = item.resource;
 			// Document rows open in the editor on click/Enter; source-file rows are not openable (a csv/json
@@ -191,6 +255,32 @@ export class TreeRailView extends ViewPane {
 			toAction({ id: 'livingDocs.file.addToChat', label: 'Add to chat', run: () => this._livingDocs.attachToChat(resource) }),
 		];
 		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
+	}
+
+	// "Use as source" on a workbook / PDF row (issue #131). Resolves the file name to its URI, then routes to
+	// the service: a workbook extracts each sheet to a CSV; a PDF extracts its text as read-only context for
+	// the active document. The service raises the plain-words result toast (success, named limitation, or an
+	// unreadable/scanned reason), and its onDidChange re-renders this rail once the new sources land.
+	private async _useAsSource(action: TreeRailAction, name: string): Promise<void> {
+		const resource = await this._livingDocs.resolveWorkspaceExtra(name);
+		if (!resource) {
+			// The classifier listed this row from disk, but the file may have been moved or renamed
+			// since the tree rendered (the one classifier->click race). Name that plainly rather than
+			// swallow the click - the button stays clickable, so the row remains actionable.
+			await this._dialogService.info('That file could not be found', `"${name}" may have been moved or renamed since this list was built. Refresh the sources and try again.`);
+			return;
+		}
+		if (action === 'use-xlsx') {
+			await this._livingDocs.useXlsxAsSource(resource);
+			return;
+		}
+		// A PDF is read-only CONTEXT for a document, so it needs an active document to attach to.
+		const active = this._editors.activeEditor?.resource;
+		if (!active || !active.path.endsWith('.md')) {
+			await this._dialogService.info('Open a document first', `Open the document that ${name} should inform, then use it as a source.`);
+			return;
+		}
+		await this._livingDocs.usePdfAsSource(resource, active);
 	}
 
 	private async _renameFile(resource: URI): Promise<void> {
@@ -441,6 +531,13 @@ export class TreeRailView extends ViewPane {
 			.living-docs-rail .rail-item-unsupported{align-items:flex-start;flex-wrap:wrap;cursor:default}
 			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:var(--vscode-descriptionForeground)}
 			.living-docs-rail .rail-item-note{width:100%;padding-left:25px;font:400 11px/1.4 system-ui;color:var(--vscode-descriptionForeground);opacity:.85}
+			.living-docs-rail .rail-srcaction{margin-left:auto;flex:none;border:1px solid var(--vscode-button-border,transparent);background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);font:500 11px/1 system-ui;cursor:pointer;padding:3px 7px;border-radius:4px;opacity:0}
+			.living-docs-rail .rail-item:hover .rail-srcaction,.living-docs-rail .rail-item:focus-within .rail-srcaction{opacity:1}
+			.living-docs-rail .rail-srcaction:hover{background:var(--vscode-button-secondaryHoverBackground)}
+			.living-docs-rail .rail-import{margin-left:auto;flex:none;border:1px solid oklch(0.55 0.13 255);background:none;color:oklch(0.5 0.13 255);border-radius:6px;padding:4px 9px;font:600 11px/1 system-ui;cursor:pointer;white-space:nowrap}
+			.living-docs-rail .rail-import:hover{background:oklch(0.55 0.13 255);color:#fff}
+			.living-docs-rail .rail-import:disabled{opacity:.6;cursor:default;background:none;color:var(--vscode-descriptionForeground);border-color:var(--vscode-input-border,#d3d8e0)}
+			.living-docs-rail .rail-import-bulk{display:block;width:100%;box-sizing:border-box;margin:2px 0 8px;padding:8px;text-align:center}
 		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}
 		.living-docs-rail .rail-outline.lvl-1{font-weight:600}
 		.living-docs-rail .rail-outline.lvl-2{padding-left:18px;color:var(--vscode-descriptionForeground)}

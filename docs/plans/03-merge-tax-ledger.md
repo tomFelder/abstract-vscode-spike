@@ -385,6 +385,18 @@ the redesign that was expected to force a core seam (the labeled nav) needed non
 less than predicted; the residual coupling the redesign adds is appearance wiring (the codicon-class DOM
 reach for the nav chip/tidy, fails-soft/cosmetic on rename), not behavioural forks.
 
+### File interop round - A1 docx -> Markdown import (issue #129, doc 22 section 2): 0 core patches
+
+| Item | Change | Tier | File(s) | Note |
+|------|--------|------|---------|------|
+| I1 | Pure docx-HTML -> GFM-Markdown converter + kept/dropped summary | our-surface | `livingDocs/common/docxImport.ts`, `test/browser/docxImport.test.ts` | New module + unit suite; string-in/data-out, no imports |
+| I2 | `imported` provenance on the lock (`importedFrom` + `sourceHash` + kept/dropped) | our-surface | `livingDocs/common/livingDocsModel.ts`, `browser/livingDocLockStore.ts` | Additive lock field; `coerceLock` tolerates older locks (LOCK_VERSION unchanged) |
+| I3 | `importDocx` service method + tree "Import as Document" door + bulk affordance | our-surface | `livingDocs/browser/livingDocsService.ts`, `common/livingDocs.ts`, `common/treeRail.ts`, `browser/treeRailView.ts` | Turns the F10 "not yet imported" marker into a door; refused formats stay refused |
+| I4 | Proxy `POST /import/docx` (mammoth docx -> HTML + image extraction + fidelity detection) | our-surface (proxy script) | `scripts/lwd-anthropic-proxy.js` | New route in our own node proxy; conversion runs where file access lives, never the renderer |
+| I5 | `mammoth@1.8.0` runtime dependency (pure-JS docx parser) | dependency | `package.json`, `package-lock.json` | Doc 22 section 2's recommended pipeline. Not a core patch; used only by the proxy at runtime (the TS build never imports it) |
+| I6 | `jszip@3.10.1` promoted to a direct dependency (review fix) | dependency | `package.json`, `package-lock.json` | The proxy's `detectDocxFidelity` calls `require('jszip')` directly; it was only transitively hoisted via mammoth, so a stricter install could silently drop fidelity detection. Declaring it directly makes that path robust. Same runtime-only footprint as mammoth |
+
+**A1 docx import: 0 core patches.** The whole feature lives in the `livingDocs` contribution + our node proxy, plus two pure-JS npm dependencies (mammoth + jszip) that only the proxy loads at runtime - so the merge tax is two additive lines in `package.json`, not a fork of any upstream file. Verified: `typecheck-client` 0; `valid-layers-check` 0 in changed files; the conversion pipeline exercised end-to-end against a real `.docx` through the live proxy (`docs/plans/40-verify/a1-import/`).
 ### Export round (plan 40, A2 - issue #130): +1 core patch (count 5 -> 6)
 
 Unstubbing docx export and adding PDF (doc 22 §3). docx is entirely our-surface + additive: a
