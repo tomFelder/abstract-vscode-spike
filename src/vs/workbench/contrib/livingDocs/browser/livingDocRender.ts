@@ -45,11 +45,12 @@ const EMPTY_RESOLVED: ReadonlyMap<string, string> = new Map<string, string>();
 // Markdown textarea, reachable from the editor for hand-editing source.
 export type LivingDocViewMode = 'raw' | 'pm';
 
-// (plan 33 iter 4, L8) Present only offers what Abstract actually produces today: a self-contained
-// HTML page and clean portable Markdown. The native-format / cloud destinations (Google Docs, Google
-// Sheets, Word, Excel) are real product goals but not built yet, so they are shown honestly as "Soon"
-// (non-selectable) rather than fabricating a format - the plan-17 rule against dead-end affordances.
-export type PresentChoice = 'html' | 'markdown' | 'gdoc' | 'gsheet' | 'docx' | 'xlsx';
+// (plan 33 iter 4, L8; doc 22 §3) Present offers what Abstract actually produces today: a self-contained
+// HTML page, clean portable Markdown, a print-to-PDF and a Word .docx mapped to built-in styles. The
+// remaining cloud/spreadsheet destinations (Google Docs, Google Sheets, Excel) are real product goals but
+// not built yet, so they stay honest "Soon" rows (non-selectable) rather than fabricating a format - the
+// plan-17 rule against dead-end affordances.
+export type PresentChoice = 'html' | 'markdown' | 'pdf' | 'docx' | 'gdoc' | 'gsheet' | 'xlsx';
 
 export interface IPresentState {
 	readonly open: boolean;
@@ -1015,13 +1016,14 @@ interface IPresentDef { label: string; accent: string; cta: string; live: string
 const PRESENT_DEFS: Record<PresentChoice, IPresentDef> = {
 	html: { label: 'Web page', accent: ACCENT, cta: 'Export web page', live: 'Self-contained HTML file &middot; opens in any browser, no Abstract needed', icon: '&#9673;', tint: '#eef1ff' },
 	markdown: { label: 'Markdown', accent: '#3a3f4a', cta: 'Export Markdown', live: 'Clean portable Markdown &middot; bound values inlined, opens in any editor', icon: 'M&#8595;', tint: '#eef0f3' },
+	pdf: { label: 'PDF', accent: '#b4332f', cta: 'Export as PDF', live: 'Print-ready PDF of the document &middot; opens anywhere, no Abstract needed', icon: '&#9635;', tint: '#fdeeed' },
+	docx: { label: 'Microsoft Word', accent: '#2b579a', cta: 'Export as Word', live: 'Offline .docx mapped to Word\'s built-in styles &middot; bound values inlined, restyle in Word', icon: 'W', tint: '#eaf0fa' },
 	gdoc: { label: 'Google Docs', accent: '#2a6fdb', cta: 'Coming soon', live: 'Editable copy with text &amp; tables formatted natively.', icon: 'G', tint: '#eaf1fd', soon: true },
 	gsheet: { label: 'Google Sheets', accent: '#1f8a5b', cta: 'Coming soon', live: 'Linked tables become live sheets.', icon: 'G', tint: '#e7f5ee', soon: true },
-	docx: { label: 'Microsoft Word', accent: '#2b579a', cta: 'Coming soon', live: 'Offline .docx with styles preserved.', icon: 'W', tint: '#eaf0fa', soon: true },
 	xlsx: { label: 'Microsoft Excel', accent: '#217346', cta: 'Coming soon', live: 'Linked tables as an .xlsx workbook.', icon: 'X', tint: '#e7f3ec', soon: true },
 };
 // Real destinations first, then the honest "Soon" group.
-const PRESENT_ORDER: readonly PresentChoice[] = ['html', 'markdown', 'gdoc', 'gsheet', 'docx', 'xlsx'];
+const PRESENT_ORDER: readonly PresentChoice[] = ['html', 'markdown', 'pdf', 'docx', 'gdoc', 'gsheet', 'xlsx'];
 
 function renderPresentModal(present: IPresentState, title: string): string {
 	// Guard: never let a "Soon" destination be the selected one (defensive - the rows are non-selectable).

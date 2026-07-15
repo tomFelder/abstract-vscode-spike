@@ -204,6 +204,9 @@ import './contrib/policyExport/electron-browser/policyExport.contribution.js';
 // Keybindings Export
 import './contrib/keybindingsExport/electron-browser/keybindingsExport.contribution.js';
 
+// Living Docs (desktop-only PDF export via print-to-PDF)
+import './contrib/livingDocs/electron-browser/livingDocsPdf.contribution.js';
+
 //#endregion
 
 

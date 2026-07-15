@@ -275,15 +275,25 @@ export class LivingDocEditor extends EditorPane {
 	}
 
 	// The Present/export CTA maps each real destination onto the export Abstract actually writes:
-	// "Web page" -> the self-contained HTML export; "Markdown" -> the clean resolved Markdown. The
-	// native-format / cloud destinations are "Soon" and non-selectable, so only these two reach here.
+	// "Web page" -> self-contained HTML; "Markdown" -> clean resolved Markdown; "PDF" -> desktop print-to-PDF
+	// of that HTML; "Word" -> a .docx mapped to Word's built-in styles (doc 22 §3). The cloud/spreadsheet
+	// destinations stay "Soon" and non-selectable, so only these four reach here.
 	private async _runPresent(force: boolean): Promise<void> {
 		if (!this._resource) { return; }
-		if (this._present.choice === 'markdown') {
-			await this._livingDocs.exportMarkdown(this._resource, force);
-		} else {
-			// 'html' (and any defensive fallthrough) -> the self-contained HTML page.
-			await this._livingDocs.exportDocument(this._resource, force);
+		switch (this._present.choice) {
+			case 'markdown':
+				await this._livingDocs.exportMarkdown(this._resource, force);
+				break;
+			case 'pdf':
+				await this._livingDocs.exportPdf(this._resource, force);
+				break;
+			case 'docx':
+				await this._livingDocs.exportDocx(this._resource, force);
+				break;
+			default:
+				// 'html' (and any defensive fallthrough) -> the self-contained HTML page.
+				await this._livingDocs.exportDocument(this._resource, force);
+				break;
 		}
 		this._present = { ...this._present, open: false };
 		this._render();

@@ -18,6 +18,7 @@ import { INotificationService } from '../../../../../platform/notification/commo
 import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IHostService } from '../../../../services/host/browser/host.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { AnalyticsEventName, AnalyticsProps, IAnalyticsService, lintEventProps } from '../../common/analytics.js';
@@ -110,9 +111,10 @@ suite('analytics canary E2E (plan 36 iter 2: content never leaves via the live s
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 		const clipboardService = { writeText: async () => undefined } as unknown as IClipboardService;
+		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
 		const service = new LivingDocsService(
 			fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(),
-			requestService, workspaceService, fileDialogService, hostService, analytics, store.add(new InMemoryStorageService()), clipboardService);
+			requestService, workspaceService, fileDialogService, hostService, analytics, store.add(new InMemoryStorageService()), commandService, clipboardService);
 		store.add(service);
 		return service;
 	}

@@ -96,6 +96,20 @@ export interface ILivingDocSummary {
 }
 
 /**
+ * The outcome of a docx import (issue #129, doc 22 section 2). On success `ok` is true, `resource` is the
+ * created `.md` beside the untouched original, and `kept`/`dropped` are the plain-words fidelity phrases the
+ * summary card shows. On refusal `ok` is false and `reason` names why (password-protected / legacy / could
+ * not be read); the original stays in the tree's "not yet imported" state, never mangled. Real data only.
+ */
+export interface IImportOutcome {
+	readonly ok: boolean;
+	readonly resource?: URI;
+	readonly reason?: string;
+	readonly kept?: readonly string[];
+	readonly dropped?: readonly string[];
+}
+
+/**
  * One document that depends on a file targeted by a rename/delete (docs 20 section 1d / map-D6): the
  * dependent document's resource and display title, for the delete warning's "these documents depend on
  * it" list. A projection over the folder's frontmatter `sources:`/`context:` - the file's own document
@@ -257,6 +271,63 @@ export interface ISourcePeek {
 	 * pinned, so an unpublished document's source-peek shows nothing extra. Real data only - from the lock's pins.
 	 */
 	readonly pinnedLabel?: string;
+	/**
+	 * When the peeked CSV was EXTRACTED from a spreadsheet workbook (issue #131, doc 22 §4), the provenance
+	 * hop the drawer shows above the CSV row: figure → CSV row → extracted from `Budget.xlsx · Sheet "FY26"`
+	 * → synced-at. Absent for a hand-authored CSV. Real data only - read from the extraction manifest.
+	 */
+	readonly workbook?: IWorkbookProvenance;
+}
+
+/**
+ * The workbook → sheet provenance hop for a CSV that Abstract extracted from a spreadsheet (issue #131).
+ * Recorded in the extraction manifest (`data/<workbook>/.abstract-source.json`) so the provenance chain
+ * survives on disk as a plain file (P6) and a re-open can rebuild it without re-parsing the workbook.
+ */
+export interface IWorkbookProvenance {
+	/** The originating workbook's file name, e.g. "Budget.xlsx". */
+	readonly workbook: string;
+	/** The sheet the CSV came from, e.g. "FY26". */
+	readonly sheet: string;
+	/** The last extraction time (ISO), shown as "synced N h ago". */
+	readonly syncedAt: string;
+	/** Any NAMED limitations for this sheet (merged headers, pivot layout), surfaced verbatim - never a silent misread. */
+	readonly warnings: readonly string[];
+}
+
+/** The outcome of extracting one sheet of a workbook to a CSV (issue #131). */
+export interface IExtractedSheet {
+	readonly name: string;
+	/** The written CSV's file name under `data/<workbook>/` (e.g. "FY26.csv"). */
+	readonly fileName: string;
+	/** The extracted CSV's workspace-relative path (e.g. "data/Budget/FY26.csv"), for binding + provenance. */
+	readonly relativePath: string;
+	readonly rows: number;
+	readonly cols: number;
+	readonly warnings: readonly string[];
+}
+
+/**
+ * The result of "Use as source" on a spreadsheet workbook (issue #131, doc 22 §4). On success each sheet
+ * became a clean CSV under `data/<workbook>/`; the workbook is now watched and re-extracts on change. On
+ * failure the workbook was left untouched and `reason` names why (P6: the original is never destroyed).
+ */
+export interface IWorkbookUseResult {
+	readonly ok: boolean;
+	readonly sheets: readonly IExtractedSheet[];
+	readonly reason?: string;
+}
+
+/**
+ * The result of "Use as source" on a PDF (issue #131, doc 22 §4 - PDFs are read-only CONTEXT, never value
+ * bindings). On success the PDF became a `context` edge on the target document and its extracted text is
+ * stored as knowledge. An image-only/scanned or password-protected PDF NAMES itself unreadable (`ok:false`
+ * + `reason`) rather than yielding empty context, and no dead edge is created.
+ */
+export interface IPdfContextResult {
+	readonly ok: boolean;
+	readonly pages: number;
+	readonly reason?: string;
 }
 
 /**
@@ -465,6 +536,40 @@ export interface ILivingDocsService {
 	/** The workspace's non-Markdown files (basenames): data/source files for the tree-rail SOURCES section
 	 * and files we cannot yet import (.doc/.docx) for the "Not yet imported" section (plan 37 F9/F10). */
 	listWorkspaceExtras(): Promise<readonly string[]>;
+
+	/**
+	 * Resolve a workspace-extra basename (as listed by `listWorkspaceExtras`) back to its file URI, so a
+	 * tree-rail action (e.g. "Use as source" on a workbook/PDF) can act on the real file (issue #131).
+	 * Returns the first match in the folder, or undefined when the name is not found.
+	 */
+	resolveWorkspaceExtra(name: string): Promise<URI | undefined>;
+
+	/**
+	 * "Use as source" on a spreadsheet workbook (issue #131, doc 22 §4): extract each sheet to a clean CSV
+	 * under `data/<workbook>/`, write the extraction manifest, and WATCH the workbook so a change re-extracts
+	 * the sheets and flags dependent documents through the normal staleness machinery. The workbook stays on
+	 * disk untouched (P6). Extraction runs in the node/proxy layer, never the renderer.
+	 */
+	useXlsxAsSource(workbook: URI): Promise<IWorkbookUseResult>;
+
+	/**
+	 * "Use as source" on a PDF (issue #131, doc 22 §4): extract its text in the node/proxy layer and, when
+	 * readable, register the PDF as a read-only `context` edge on `doc` (framing, never value bindings) with
+	 * its extracted text stored as knowledge. A scanned/image-only or password-protected PDF names itself
+	 * unreadable and no edge is created. The PDF stays on disk and is watched like any context source.
+	 */
+	usePdfAsSource(pdf: URI, doc: URI): Promise<IPdfContextResult>;
+
+	/**
+	 * Import a `.docx` file (by its workspace basename) into a Living Document (issue #129, doc 22 section 2).
+	 * Converts it to Markdown through the node/proxy pipeline (mammoth -> HTML -> GFM), writes `<Name>.md`
+	 * BESIDE the untouched original with `imported` provenance (from + sourceHash + the kept/dropped summary)
+	 * in its lock, lifts embedded images to `assets/<Name>/` with relative references, opens the new document,
+	 * and surfaces the plain-words kept/dropped summary card. A password-protected / legacy / unparseable file
+	 * is refused with a plain-words reason and left untouched in the "not yet imported" state - never a silent
+	 * mangle. Returns the outcome; undefined when no folder is open or the named file is gone.
+	 */
+	importDocx(name: string): Promise<IImportOutcome | undefined>;
 
 	/** Discover and parse every `*.template.md` in the workspace (for the Templates screen; plan 28). */
 	listTemplates(): Promise<readonly ITemplateInfo[]>;
@@ -677,6 +782,21 @@ export interface ILivingDocsService {
 	 * `force` proceeds past a failed before-export gate, auditing the override (plan 32 iter 4).
 	 */
 	exportMarkdown(resource: URI, force?: boolean): Promise<URI | undefined>;
+
+	/**
+	 * Export a document's *resolved* state to a clean `.docx` (issue #130), mapped to Word's built-in styles
+	 * with bound values inlined and no Abstract chrome. The conversion runs in the node/proxy layer (doc 22
+	 * §3); a failed before-export gate is honoured exactly like the other exports (`force` = "Export anyway",
+	 * audited). Returns the written file, or `undefined` if the proxy is unreachable (surfaced honestly).
+	 */
+	exportDocx(resource: URI, force?: boolean): Promise<URI | undefined>;
+
+	/**
+	 * Export a document's self-contained HTML page to `.pdf` (issue #130) via the desktop build's
+	 * print-to-PDF (doc 22 §3). Desktop-only: on the web dev harness the native host is absent and this
+	 * surfaces an honest message. `force` proceeds past a failed before-export gate, auditing the override.
+	 */
+	exportPdf(resource: URI, force?: boolean): Promise<URI | undefined>;
 
 	/**
 	 * Persist a pasted/dropped image (issue #141) beside `resource` under `assets/<doc-basename>/` (the #129

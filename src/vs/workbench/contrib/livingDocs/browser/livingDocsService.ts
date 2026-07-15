@@ -3,12 +3,12 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
+import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableMap, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -19,6 +19,7 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { toAction } from '../../../../base/common/actions.js';
 import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
@@ -26,7 +27,8 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IFanoutProgress, IFigureChange, IFileOpDependent, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
@@ -269,6 +271,44 @@ const NEW_TEMPLATE_TEMPLATE = [
 	'',
 ].join('\n');
 
+/**
+ * Match a Markdown inline image `![alt](dest "title")` starting at `i` in `text`. Unlike a `[^)\s]+` regex,
+ * this handles angle-bracket destinations (`<a b.png>` with spaces) and bare destinations that contain
+ * balanced parentheses (`foo(bar).png`), plus an optional title - so a valid local image is never dropped or
+ * truncated. Returns the DECODED destination (brackets stripped), which matches what the Markdown renderer
+ * emits as an `<img src>` and what the docx writer looks up in the image map. Mirrors `matchImageAt` in
+ * `scripts/lwd-docx.js`, so both export paths key images identically.
+ */
+function matchMarkdownImageAt(text: string, i: number): { readonly src: string; readonly end: number } | undefined {
+	if (text[i] !== '!' || text[i + 1] !== '[') { return undefined; }
+	let j = i + 2;
+	while (j < text.length && text[j] !== ']') { j++; }
+	if (text[j] !== ']' || text[j + 1] !== '(') { return undefined; }
+	j += 2;
+	let src = '';
+	if (text[j] === '<') {
+		j++;
+		while (j < text.length && text[j] !== '>') { src += text[j]; j++; }
+		if (text[j] !== '>') { return undefined; }
+		j++;
+	} else {
+		let depth = 0;
+		while (j < text.length) {
+			const c = text[j];
+			if (c === ')' && depth === 0) { break; }
+			if (/\s/.test(c)) { break; } // whitespace begins an optional title (or is malformed) - the dest ends here
+			if (c === '(') { depth++; }
+			if (c === ')') { depth--; }
+			src += c;
+			j++;
+		}
+	}
+	// Skip an optional title and any trailing whitespace up to the closing paren.
+	while (j < text.length && text[j] !== ')') { j++; }
+	if (text[j] !== ')') { return undefined; }
+	return { src, end: j + 1 };
+}
+
 
 export class LivingDocsService extends Disposable implements ILivingDocsService {
 	declare readonly _serviceBrand: undefined;
@@ -311,6 +351,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Correlated source watchers, one store per loaded document. Disposed/recreated on reload, and
 	// all torn down when the service is disposed.
 	private readonly _watchers = new Map<string, IDisposable>();
+	// Correlated watchers for spreadsheet WORKBOOKS used as sources (issue #131, doc 22 §4), keyed by the
+	// workbook URI. Distinct from `_watchers` (per-document source watchers): a workbook is the origin of
+	// extracted CSVs, not a document source itself, so it needs its own watcher that re-extracts on change.
+	// A DisposableMap so re-registering a workbook disposes the old watcher and disposal tears them all down.
+	private readonly _workbookWatchers = this._register(new DisposableMap<string>());
+	// Extraction provenance for CSVs Abstract wrote from a workbook (issue #131), keyed by the CSV's
+	// workspace-relative source path (e.g. "data/Budget/FY26.csv"). Populated on extraction and rebuilt from
+	// the on-disk manifests on folder load, so the provenance drawer can show the figure → CSV → workbook hop
+	// synchronously during a render.
+	private readonly _workbookProvenance = new Map<string, IWorkbookProvenance>();
 
 	// Cached "is the model proxy reachable?" so the synchronous Skills report can show the right
 	// Strategy state; refreshed on a short TTL and reused while a probe is in flight.
@@ -374,6 +424,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IHostService private readonly _host: IHostService,
 		@IAnalyticsService private readonly _analytics: IAnalyticsService,
 		@IStorageService private readonly _storage: IStorageService,
+		@ICommandService private readonly _commands: ICommandService,
 		@IClipboardService private readonly _clipboard: IClipboardService,
 	) {
 		super();
@@ -395,7 +446,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// (plan 33 iter 2, L5) Read the folder's `.abstract-name` marker once at startup + whenever the open
 		// folder changes, so the project name resolves truthfully even under the web/memfs "mount" label.
 		void this._readProjectNameMarker();
-		this._register(this._workspace.onDidChangeWorkspaceFolders(() => void this._readProjectNameMarker()));
+		// (issue #131) Rebuild the workbook → sheet extraction provenance from the on-disk manifests so the
+		// source-peek drawer shows the workbook hop for an extracted CSV after a reload, without re-parsing
+		// the workbook. Re-run when the open folder changes.
+		void this._loadWorkbookManifests();
+		this._register(this._workspace.onDidChangeWorkspaceFolders(() => { void this._readProjectNameMarker(); void this._loadWorkbookManifests(); }));
 		// (debt: sample root mount) In the web build the workspace folder's file-system provider (memfs /
 		// vscode-test-web) can register AFTER this service constructs. The startup read above then fails with
 		// no-provider, and because `onDidChangeWorkspaceFolders` never fires for a folder that was already
@@ -1520,6 +1575,315 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
+	// --- spreadsheets as CSV sources + PDF as read-only context (issue #131, doc 22 §4) -----------
+	// A workbook's sheets extract to plain CSVs under `data/<workbook>/`; the workbook is watched and
+	// re-extracts on change. A PDF's text is extracted to a portable cache and the PDF becomes a read-only
+	// `context` edge. All heavy parsing runs in the node/proxy layer (P6); the renderer only writes the
+	// resulting plain text into the project folder and threads the provenance.
+
+	// The manifest that records a workbook's extraction provenance beside its CSVs. Dot-prefixed so the
+	// tree-rail's extra scanner (which skips dotfiles) never lists it as a source.
+	private static readonly WORKBOOK_MANIFEST = '.abstract-source.json';
+
+	async resolveWorkspaceExtra(name: string): Promise<URI | undefined> {
+		for (const folder of this._workspace.getWorkspace().folders) {
+			const hit = await this._findExtra(folder.uri, name, 0);
+			if (hit) { return hit; }
+		}
+		return undefined;
+	}
+
+	// --- docx -> Markdown import (issue #129, doc 22 section 2) ---
+
+	// Find the first workspace file with the given basename (the tree row carries a basename, not a URI, so
+	// import resolves it here). Bounded, hidden-dir-skipping walk like `_collectExtras`. Undefined when gone.
+	private async _findExtraUri(name: string): Promise<URI | undefined> {
+		const walk = async (dir: URI, depth: number): Promise<URI | undefined> => {
+			if (depth > 4) { return undefined; }
+			let children;
+			try {
+				children = (await this._files.resolve(dir)).children ?? [];
+			} catch {
+				return undefined;
+			}
+			for (const child of children) {
+				const childName = basename(child.resource);
+				if (child.isDirectory) {
+					if (childName.startsWith('.') || childName === 'node_modules' || childName === 'out') { continue; }
+					const hit = await walk(child.resource, depth + 1);
+					if (hit) { return hit; }
+				} else if (childName === name) {
+					return child.resource;
+				}
+			}
+			return undefined;
+		};
+		for (const folder of this._workspace.getWorkspace().folders) {
+			const hit = await walk(folder.uri, 0);
+			if (hit) { return hit; }
+		}
+		return undefined;
+	}
+
+	private async _findExtra(dir: URI, name: string, depth: number): Promise<URI | undefined> {
+		if (depth > 4) { return undefined; }
+		let children;
+		try { children = (await this._files.resolve(dir)).children ?? []; } catch { return undefined; }
+		for (const child of children) {
+			const base = basename(child.resource);
+			if (child.isDirectory) {
+				if (base.startsWith('.') || base === 'node_modules' || base === 'out') { continue; }
+				const hit = await this._findExtra(child.resource, name, depth + 1);
+				if (hit) { return hit; }
+			} else if (base === name) {
+				return child.resource;
+			}
+		}
+		return undefined;
+	}
+
+	async useXlsxAsSource(workbook: URI): Promise<IWorkbookUseResult> {
+		let sheets: IExtractedSheet[];
+		try {
+			sheets = await this._extractWorkbookInto(workbook);
+		} catch (e) {
+			const reason = e instanceof Error ? e.message : String(e);
+			this._log.warn('[livingDocs] workbook extraction failed', reason);
+			return { ok: false, sheets: [], reason };
+		}
+		if (!sheets.length) {
+			this._notify.error(`Could not read any sheets from ${basename(workbook)}. The workbook was left unchanged.`);
+			return { ok: false, sheets: [], reason: 'No sheets could be read from this workbook.' };
+		}
+		this._watchWorkbook(workbook);
+		this._onDidChange.fire();
+		// Plain-words confirmation + any NAMED limitations surfaced verbatim (never a silent misread).
+		const stem = basename(workbook).replace(/\.[^.]+$/, '') || basename(workbook);
+		const warnings = sheets.flatMap(s => s.warnings);
+		const suffix = warnings.length ? ` Note: ${warnings[0]}` : '';
+		this._notify.info(`Using ${basename(workbook)} as a source - ${sheets.length} ${sheets.length === 1 ? 'sheet' : 'sheets'} extracted to data/${stem}.${suffix}`);
+		return { ok: true, sheets };
+	}
+
+	// Extract every sheet to a clean CSV under `data/<workbook>/`, write the extraction manifest, and record
+	// each CSV's workbook provenance. Shared by the initial "Use as source" and the watched re-extract, so a
+	// workbook change writes byte-identical clean CSVs and re-flags dependents the same way.
+	private async _extractWorkbookInto(workbook: URI): Promise<IExtractedSheet[]> {
+		const bytes = (await this._files.readFile(workbook)).value;
+		const dataBase64 = encodeBase64(bytes);
+		const context = await this._request.request({
+			type: 'POST',
+			url: `${this._proxyUrl()}/sources/xlsx`,
+			headers: { 'content-type': 'application/json' },
+			data: JSON.stringify({ dataBase64 }),
+			callSite: 'livingDocs.extractXlsx',
+		}, CancellationToken.None);
+		const json = await asJson<{ sheets?: { name: string; fileName: string; csv: string; rows: number; cols: number; warnings?: string[] }[]; error?: { message?: string } }>(context);
+		if (!json || json.error || !Array.isArray(json.sheets)) {
+			throw new Error(json?.error?.message ?? 'The spreadsheet could not be read.');
+		}
+		const wbName = basename(workbook);
+		const stem = wbName.replace(/\.[^.]+$/, '') || wbName;
+		const dir = joinPath(dirname(workbook), 'data', stem);
+		const syncedAt = new Date().toISOString();
+		const out: IExtractedSheet[] = [];
+		const manifestSheets: { name: string; csv: string; warnings: string[] }[] = [];
+		for (const sheet of json.sheets) {
+			const warnings = sheet.warnings ?? [];
+			await this._files.writeFile(joinPath(dir, sheet.fileName), VSBuffer.fromString(sheet.csv));
+			const relativePath = `data/${stem}/${sheet.fileName}`;
+			this._workbookProvenance.set(relativePath, { workbook: wbName, sheet: sheet.name, syncedAt, warnings });
+			out.push({ name: sheet.name, fileName: sheet.fileName, relativePath, rows: sheet.rows, cols: sheet.cols, warnings });
+			manifestSheets.push({ name: sheet.name, csv: sheet.fileName, warnings });
+		}
+		const manifest = { workbook: wbName, workbookHash: hashString(dataBase64), syncedAt, sheets: manifestSheets };
+		await this._files.writeFile(joinPath(dir, LivingDocsService.WORKBOOK_MANIFEST), VSBuffer.fromString(JSON.stringify(manifest, null, 2) + '\n'));
+		// Nudge the dependency graph for each rewritten CSV so dependent documents flag stale even if their
+		// own per-document watcher is not currently live (the orchestrator rebuilds reverse edges from disk).
+		for (const s of out) { void this._orchestrator.onSourceChanged(joinPath(dir, s.fileName).path); }
+		return out;
+	}
+
+	// Watch a workbook used as a source; a change re-extracts its sheets (the workbook behaves like any live
+	// source). Correlated watcher, keyed in a DisposableMap so re-use disposes the previous one and service
+	// disposal tears them all down. Best-effort (no-op where the platform has no watcher, e.g. unit tests).
+	private _watchWorkbook(workbook: URI): void {
+		if (typeof this._files.createWatcher !== 'function') { return; }
+		const store = new DisposableStore();
+		try {
+			const watcher = store.add(this._files.createWatcher(workbook, { recursive: false, excludes: [] }));
+			store.add(watcher.onDidChange(() => void this._reextractWorkbook(workbook)));
+		} catch (e) {
+			this._log.trace('[livingDocs] workbook watch failed', e instanceof Error ? e.message : String(e));
+		}
+		this._workbookWatchers.set(workbook.toString(), store);
+	}
+
+	private async _reextractWorkbook(workbook: URI): Promise<void> {
+		try {
+			await this._extractWorkbookInto(workbook);
+			// Recompute freshness for any loaded document (its bindings to the rewritten CSVs may now be stale).
+			for (const state of this._docs.values()) { await this._recomputeFreshness(state); }
+			this._onDidChange.fire();
+		} catch (e) {
+			this._log.warn('[livingDocs] workbook re-extract failed', e instanceof Error ? e.message : String(e));
+		}
+	}
+
+	async usePdfAsSource(pdf: URI, doc: URI): Promise<IPdfContextResult> {
+		let result: { readable?: boolean; text?: string; pages?: number; reason?: string; error?: { message?: string } } | null;
+		try {
+			const bytes = (await this._files.readFile(pdf)).value;
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/sources/pdf`,
+				headers: { 'content-type': 'application/json' },
+				data: JSON.stringify({ dataBase64: encodeBase64(bytes) }),
+				callSite: 'livingDocs.extractPdf',
+			}, CancellationToken.None);
+			result = await asJson(context);
+		} catch (e) {
+			return { ok: false, pages: 0, reason: e instanceof Error ? e.message : String(e) };
+		}
+		if (!result || result.error) {
+			const reason = result?.error?.message ?? 'The PDF could not be read.';
+			this._notify.error(`Could not read ${basename(pdf)}: ${reason}`);
+			return { ok: false, pages: 0, reason };
+		}
+		// An image-only/scanned or password-protected PDF names itself unreadable - no dead context edge.
+		if (!result.readable) {
+			const reason = result.reason ?? 'This PDF has no readable text.';
+			this._notify.info(`${basename(pdf)}: ${reason}`);
+			return { ok: false, pages: result.pages ?? 0, reason };
+		}
+		// Persist the extracted text to the portable cache, then register the PDF as a read-only context edge
+		// on the document (frontmatter `context:` - watched, hashed, stale-flagged, and shown in SOURCES).
+		const rel = relativePath(dirname(doc), pdf) ?? basename(pdf);
+		await this._files.writeFile(this._pdfTextCacheUri(doc, rel), VSBuffer.fromString(result.text ?? ''));
+		await this.addContextFile(doc, rel);
+		this._notify.info(`Using ${basename(pdf)} as read-only context for ${basename(doc)}.`);
+		return { ok: true, pages: result.pages ?? 0 };
+	}
+
+	// The portable, rebuildable cache of a PDF's extracted text (doc 22 §5 - `.abstract/knowledge/` holds
+	// source caches). `_readContext` reads this instead of the PDF's raw bytes so the model sees real text,
+	// not binary. Keyed by the context path so a reload finds it without re-parsing the PDF.
+	private _pdfTextCacheUri(doc: URI, contextFile: string): URI {
+		const root = this._workspace.getWorkspace().folders[0]?.uri ?? dirname(doc);
+		return joinPath(root, '.abstract', 'knowledge', encodeURIComponent(contextFile) + '.txt');
+	}
+
+	// Rebuild the workbook → sheet provenance map from each `data/<workbook>/.abstract-source.json` manifest,
+	// so an extracted CSV's provenance survives a reload without re-parsing the workbook. Best-effort: a
+	// missing/invalid manifest is skipped (the CSV still works as a plain source, just without the hop label).
+	private async _loadWorkbookManifests(): Promise<void> {
+		for (const folder of this._workspace.getWorkspace().folders) {
+			let stemDirs;
+			try { stemDirs = (await this._files.resolve(joinPath(folder.uri, 'data'))).children ?? []; } catch { continue; }
+			for (const stemDir of stemDirs) {
+				if (!stemDir.isDirectory) { continue; }
+				const stem = basename(stemDir.resource);
+				try {
+					const raw = (await this._files.readFile(joinPath(stemDir.resource, LivingDocsService.WORKBOOK_MANIFEST))).value.toString();
+					const m = JSON.parse(raw) as { workbook?: string; syncedAt?: string; sheets?: { name?: string; csv?: string; warnings?: string[] }[] };
+					if (!m || !Array.isArray(m.sheets)) { continue; }
+					for (const s of m.sheets) {
+						if (!s.csv || !s.name) { continue; }
+						this._workbookProvenance.set(`data/${stem}/${s.csv}`, { workbook: m.workbook ?? `${stem}.xlsx`, sheet: s.name, syncedAt: m.syncedAt ?? '', warnings: s.warnings ?? [] });
+					}
+				} catch { /* no or invalid manifest - skip this folder */ }
+			}
+		}
+	}
+
+	async importDocx(name: string): Promise<IImportOutcome | undefined> {
+		const source = await this._findExtraUri(name);
+		if (!source) {
+			this._notify.info('That file could not be found - it may have been moved or renamed.');
+			return undefined;
+		}
+		// Read the original bytes and hash them for provenance (the same FNV-1a the binding freshness uses),
+		// then convert THROUGH the node/proxy layer (mammoth) - never in the renderer (doc 22 section 2).
+		let base64: string;
+		let sourceHash: string;
+		try {
+			const bytes = (await this._files.readFile(source)).value;
+			base64 = encodeBase64(bytes);
+			sourceHash = hashString(base64);
+		} catch (e) {
+			this._log.warn('[livingDocs] docx import: unreadable source', e);
+			this._notify.info(`"${name}" could not be read.`);
+			return { ok: false, reason: 'The file could not be read' };
+		}
+
+		let response: { ok?: boolean; html?: string; detections?: IDocxDetections; reason?: string; error?: { message?: string } } | null;
+		try {
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/import/docx`,
+				headers: { 'content-type': 'application/json' },
+				data: JSON.stringify({ base64 }),
+				callSite: 'livingDocs.importDocx',
+			}, CancellationToken.None);
+			response = await asJson(context);
+		} catch (e) {
+			this._log.warn('[livingDocs] docx import: proxy unreachable', e);
+			this._notify.info('The importer is not running. Start the local model proxy and try again.');
+			return { ok: false, reason: 'The importer is not running' };
+		}
+		if (!response || response.error || response.ok === false || typeof response.html !== 'string') {
+			// A refused file (encrypted / legacy / unparseable) stays in the "not yet imported" state - the
+			// row is untouched, the original is not mangled, and the reason is named plainly (F10 / doc 22).
+			const reason = response?.reason ?? response?.error?.message ?? 'The file could not be imported';
+			this._notify.info(`"${name}" was not imported - ${reason}.`);
+			return { ok: false, reason };
+		}
+
+		// Convert to Markdown + lift images. Compute the target NAME first (beside the original, never
+		// overwriting) so the image asset paths the Markdown references match the document's real stem.
+		const dir = dirname(source);
+		const originalStem = name.replace(/\.docx$/i, '');
+		const target = await this._uniqueDocUri(dir, LivingDocsService._safeStem(originalStem) || 'Imported Document');
+		const stem = basename(target).replace(/\.md$/, '');
+		const detections = response.detections ?? { comments: false, trackedChanges: false, footnotes: false, textboxes: false, headersFooters: false };
+		const conversion = convertDocxHtml(response.html, stem, detections);
+
+		try {
+			// Write the extracted images first so the freshly-opened document resolves its references.
+			for (const image of conversion.images) {
+				const assetUri = joinPath(dir, 'assets', stem, image.name);
+				await this._files.writeFile(assetUri, decodeBase64(image.base64));
+			}
+			await this._files.writeFile(target, VSBuffer.fromString(conversion.markdown));
+			// Provenance from birth (doc 22 section 2): the lock records where the .md came from, a hash of the
+			// untouched original, and the plain-words kept/dropped summary so the provenance stays honest.
+			const lock = emptyLock();
+			lock.imported = {
+				from: name,
+				sourceHash,
+				importedAt: new Date().toISOString(),
+				kept: conversion.kept,
+				dropped: conversion.dropped,
+			};
+			await this._lockStore.write(target, lock);
+		} catch (e) {
+			this._log.warn('[livingDocs] docx import: write failed', e);
+			this._notify.info(`"${name}" could not be written after conversion.`);
+			return { ok: false, reason: 'The converted document could not be written' };
+		}
+
+		await this._editors.openEditor({ resource: target, options: { pinned: true } });
+		// The plain-words kept/dropped summary card (doc 22 section 2): sticky so the honesty about what the
+		// conversion kept and dropped is not a flash. Real data only - built from the actual conversion.
+		this._notify.notify({
+			severity: Severity.Info,
+			message: `Imported "${name}" - ${formatImportSummary(conversion.kept, conversion.dropped)}. The original is kept beside it.`,
+			sticky: true,
+		});
+		this._onDidChange.fire();
+		return { ok: true, resource: target, kept: conversion.kept, dropped: conversion.dropped };
+	}
+
 	// A document is any `.md` file; generated `.export.md` / `.source.md` views are skipped, and template
 	// files (`*.template.md`, plan 28 D28-A) are excluded so they never appear in the Reports list, the
 	// tree-rail or the Home documents grid - they show only on the Templates screen (but stay on disk).
@@ -2396,6 +2760,143 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
+	// The before-export gate, applied uniformly across every export format (plan 32 iter 4): a clean gate
+	// passes; a failed gate blocks WITHOUT `force` and, WITH `force` ("Export anyway"), proceeds and audits the
+	// override so the trail shows a human chose to ship past a flag. Returns `blocked` (caller aborts) and the
+	// `stale` guardrail signal for analytics. Shared by the docx/PDF exports so the gate is written once.
+	private async _gateExport(state: IDocState, force: boolean): Promise<{ blocked: boolean; stale: boolean; flag?: string }> {
+		const gate = this._beforeExportGate(state);
+		if (gate.pass) { return { blocked: false, stale: false }; }
+		if (!force) { return { blocked: true, stale: true, flag: gate.flag }; }
+		this._auditGateOverride(state, 'export', gate.flag ?? 'grader flagged');
+		await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] override audit write failed', e));
+		return { blocked: false, stale: true, flag: gate.flag };
+	}
+
+	// The proxy's `/export/docx` route caps the request body at 24 MiB. The images travel as base64 `data:` URIs
+	// inside that JSON body, so we hold the aggregate ENCODED image payload under this budget (leaving headroom
+	// for the Markdown and JSON structure) and drop any image that would push a docx export over a limit it must
+	// otherwise fail on. PDF prints locally with no such body, so it passes no budget.
+	private static readonly EXPORT_IMAGE_BUDGET_BYTES = 22 * 1024 * 1024;
+
+	// Resolve every `![alt](src)` in the export Markdown to a `data:` URI (via the same contained, size-capped
+	// reader the webview uses), so a downstream converter that has no access to the project folder still embeds
+	// the real images. Unreadable/oversized images are dropped from the map (the converter names them in text).
+	// Destinations with spaces (`<a b.png>`) or balanced parens (`foo(bar).png`) are parsed correctly, so a valid
+	// local image is never silently skipped. When `budgetBytes` is set, images are added only while the aggregate
+	// encoded payload stays within it; anything over-budget is reported via `droppedForBudget`.
+	private async _collectExportImages(resource: URI, markdown: string, budgetBytes?: number): Promise<{ images: Record<string, string>; droppedForBudget: number }> {
+		const images: Record<string, string> = {};
+		const seen = new Set<string>();
+		let encodedTotal = 0;
+		let droppedForBudget = 0;
+		for (let i = 0; i < markdown.length; i++) {
+			if (markdown[i] !== '!' || markdown[i + 1] !== '[') { continue; }
+			const match = matchMarkdownImageAt(markdown, i);
+			if (!match) { continue; }
+			i = match.end - 1; // skip past this image; the loop's i++ resumes after it
+			const src = match.src;
+			if (seen.has(src) || /^(https?:|data:)/.test(src)) { continue; }
+			seen.add(src);
+			const read = await this.readImageAsset(resource, src);
+			if (!read.dataUri) { continue; }
+			if (budgetBytes !== undefined && encodedTotal + read.dataUri.length > budgetBytes) {
+				this._log.warn('[livingDocs] image omitted from export - over the aggregate size budget', src);
+				droppedForBudget++;
+				continue;
+			}
+			encodedTotal += read.dataUri.length;
+			images[src] = read.dataUri;
+		}
+		return { images, droppedForBudget };
+	}
+
+	async exportDocx(resource: URI, force = false): Promise<URI | undefined> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return undefined; }
+		const gate = await this._gateExport(state, force);
+		if (gate.blocked) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
+		// The resolved export Markdown (bind values inlined as plain text) is the single source both docx and
+		// the HTML/Markdown exports build from, so the docx carries the same clean, chrome-free content. It
+		// already leads with `# title` + `_subtitle_` (like the HTML export body), so we do NOT also pass the
+		// title/subtitle separately - that would render them twice.
+		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
+		const { images, droppedForBudget } = await this._collectExportImages(resource, markdown, LivingDocsService.EXPORT_IMAGE_BUDGET_BYTES);
+		if (droppedForBudget > 0) {
+			// Honest, before-the-fact: say what was left out rather than posting an over-cap body that must 413.
+			this._notify.info(`${droppedForBudget} large image(s) were left out of the Word export to keep it under the size limit.`);
+		}
+		const stem = basename(resource).replace(/\.md$/, '');
+		const target = joinPath(dirname(resource), `${stem}.export.docx`);
+		try {
+			// Conversion runs in the node/proxy layer where file access + Node libs live, never the renderer
+			// (doc 22 §3): the proxy's /export/docx route returns the .docx bytes we write beside the document.
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/export/docx`,
+				headers: { 'content-type': 'application/json' },
+				data: JSON.stringify({ markdown, images }),
+				callSite: 'livingDocs.exportDocx',
+			}, CancellationToken.None);
+			if ((context.res.statusCode ?? 0) !== 200) {
+				this._log.warn('[livingDocs] docx export route failed', context.res.statusCode);
+				this._notify.info('Word export needs the local model proxy running. Start it, then export again.');
+				return undefined;
+			}
+			const bytes = await streamToBuffer(context.stream);
+			await this._files.writeFile(target, bytes);
+			this._notify.info(`Exported "${state.doc.title}" to ${basename(target)}.`);
+			// docx inlines resolved values (no bindings), so - like the clean Markdown export - its provenance
+			// mode is 'clean'; `stale_sources_present` is the before-export gate guardrail signal.
+			this._analytics.capture('export_or_publish', { format: 'docx', provenance_mode: 'clean', stale_sources_present: gate.stale });
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] docx export failed', e);
+			this._notify.info('Word export needs the local model proxy running. Start it, then export again.');
+			return undefined;
+		}
+	}
+
+	// The command the desktop build registers (electron-browser/livingDocsPdf.contribution) to print an HTML
+	// page to PDF bytes via Electron's own print engine. It is ABSENT on the web dev harness, where PDF is
+	// honestly unavailable rather than a broken button (doc 22 §3; desktop is the beta vehicle).
+	static readonly PRINT_TO_PDF_COMMAND = '_livingDocs.printToPDF';
+
+	async exportPdf(resource: URI, force = false): Promise<URI | undefined> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return undefined; }
+		const gate = await this._gateExport(state, force);
+		if (gate.blocked) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
+		// The existing self-contained HTML export IS the PDF's page; images are inlined as data URIs so the
+		// offscreen print has no project-folder dependency (doc 22 §3: reuse the HTML export, no new renderer).
+		let html = renderExportHtml(state.doc, this.getResolved(resource));
+		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
+		const { images } = await this._collectExportImages(resource, markdown);
+		for (const [src, dataUri] of Object.entries(images)) {
+			html = html.split(`src="${src}"`).join(`src="${dataUri}"`);
+		}
+		const stem = basename(resource).replace(/\.md$/, '');
+		const target = joinPath(dirname(resource), `${stem}.export.pdf`);
+		try {
+			// Print-to-PDF runs through Electron's main process (doc 22 §3); the browser service reaches it
+			// through the desktop-only command so it stays free of a desktop dependency. A missing command
+			// (web harness) or a failed print returns undefined -> honest message, never a broken write.
+			const bytes = await this._commands.executeCommand<VSBuffer | undefined>(LivingDocsService.PRINT_TO_PDF_COMMAND, html);
+			if (!bytes) {
+				this._notify.info('PDF export is available in the desktop app. Use Web page or Word here.');
+				return undefined;
+			}
+			await this._files.writeFile(target, bytes);
+			this._notify.info(`Exported "${state.doc.title}" to ${basename(target)}.`);
+			this._analytics.capture('export_or_publish', { format: 'pdf', provenance_mode: 'clean', stale_sources_present: gate.stale });
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] pdf export failed', e);
+			this._notify.info('PDF export is available in the desktop app. Use Web page or Word here.');
+			return undefined;
+		}
+	}
+
 	async shareDocument(resource: URI): Promise<void> {
 		const state = this._docs.get(resource.toString());
 		if (!state) { return; }
@@ -3235,6 +3736,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const parts: string[] = [];
 		for (const file of files) {
 			if (sourceKind(file) === 'api') { continue; }
+			// A PDF context source (issue #131) contributes its EXTRACTED text, not its raw bytes: read the
+			// portable extraction cache written by usePdfAsSource. A cache miss (never extracted / cache
+			// deleted) contributes nothing rather than binary garbage - honest empty, never a misread.
+			if (file.toLowerCase().endsWith('.pdf')) {
+				try { parts.push((await this._files.readFile(this._pdfTextCacheUri(state.uri, file))).value.toString()); }
+				catch { /* no extracted text cached yet */ }
+				continue;
+			}
 			try {
 				parts.push((await this._files.readFile(joinPath(dirname(state.uri), file))).value.toString());
 			} catch {
@@ -4058,7 +4567,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// A published document pins its sources to a version (plan 32 iter 4): when the peeked source is pinned,
 		// surface "pinned at v <short-hash> of <date>" so a reader of a published doc sees the frozen version.
 		const pinnedLabel = this._pinnedLabelFor(state, source);
-		return { source, rows, referencedBy, grid, payload, ...(pinnedLabel ? { pinnedLabel } : {}) };
+		// When the peeked CSV was extracted from a spreadsheet (issue #131), surface the workbook → sheet hop so
+		// the drawer reads figure → CSV row → extracted from `Budget.xlsx · Sheet "FY26"` → synced-at. Keyed by
+		// the clicked binding's source file first (a doc may bind several CSVs), then the primary file source.
+		const clickedFile = (cells[0] ? state.lock.bindings[cells[0]]?.source : undefined)?.split('#')[0];
+		const workbook = this._workbookProvenance.get(clickedFile ?? '') ?? this._workbookProvenance.get(source);
+		return { source, rows, referencedBy, grid, payload, ...(pinnedLabel ? { pinnedLabel } : {}), ...(workbook ? { workbook } : {}) };
 	}
 
 	// The pin label for a source when the document is published (plan 32 iter 4). The lock's `pins` freeze each
