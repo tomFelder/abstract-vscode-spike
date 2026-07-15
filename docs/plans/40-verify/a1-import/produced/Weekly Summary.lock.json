@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "bindings": {},
+  "context": {},
+  "claims": {},
+  "pins": [],
+  "audit": [],
+  "contextItems": [],
+  "snapshots": [],
+  "imported": {
+    "from": "Weekly Summary.docx",
+    "sourceHash": "a067c154",
+    "importedAt": "2026-07-15T04:03:20.093Z",
+    "kept": [
+      "Headings",
+      "Paragraphs",
+      "Lists",
+      "A table (display-only for now)",
+      "2 images",
+      "The final text of tracked changes"
+    ],
+    "dropped": [
+      "Comments",
+      "Tracked-change marks (the final text was kept)"
+    ]
+  }
+}

@@ -138,10 +138,27 @@ export class TreeRailView extends ViewPane {
 			const header = append(panel, $('div.rail-folder'));
 			header.textContent = folder.name;
 			if (depth > 0) { header.style.paddingLeft = `${6 + depth * 12}px`; }
+			// The bulk-import affordance (doc 22 section 2, the 2b moment): when several Word documents are
+			// waiting, offer to import them all at once - "I found N Word documents - import them?".
+			const importable = folder.items.filter(i => i.kind === 'unsupported' && i.importable);
+			if (importable.length > 1) { this._renderBulkImport(panel, importable); }
 			for (const item of folder.items) { this._renderFileItem(panel, item, depth); }
 			for (const sub of folder.folders) { renderFolder(sub, depth + 1); }
 		};
 		for (const folder of folders) { renderFolder(folder, 0); }
+	}
+
+	// "I found N Word documents - import them?" (doc 22 section 2): one button that imports every waiting
+	// `.docx` in turn through the same single-file path, so the tree refreshes as each becomes a document.
+	private _renderBulkImport(panel: HTMLElement, importable: readonly ITreeRailItem[]): void {
+		const btn = append(panel, $('button.rail-import.rail-import-bulk')) as HTMLButtonElement;
+		btn.textContent = `Import All ${importable.length} Word Documents`;
+		this._renderDisposables.add(addDisposableListener(btn, 'click', async () => {
+			if (btn.disabled) { return; }
+			btn.disabled = true;
+			btn.textContent = 'Importing…';
+			for (const item of importable) { await this._livingDocs.importDocx(item.label); }
+		}));
 	}
 
 	private _renderFileItem(panel: HTMLElement, item: ITreeRailItem, depth: number = 0): void {
@@ -152,8 +169,21 @@ export class TreeRailView extends ViewPane {
 				: (item.sourceKind === 'api' ? '\u21C4' : (item.sourceKind === 'mcp' ? '\u25F7' : '\u229E'));
 		append(row, $('span.rail-item-glyph')).textContent = glyph;
 		append(row, $('span.rail-item-label')).textContent = item.label;
-		// A file we cannot yet import is shown, never dropped, with its plain-words reason (F10).
-		if (item.note) {
+		// A `.docx` we CAN convert turns the F10 marker into a door: an "Import as document" button that
+		// converts it to a Living Document beside the untouched original (issue #129, doc 22 section 2).
+		if (item.kind === 'unsupported' && item.importable) {
+			const name = item.label;
+			const importBtn = append(row, $('button.rail-import')) as HTMLButtonElement;
+			importBtn.textContent = 'Import as Document';
+			this._renderDisposables.add(addDisposableListener(importBtn, 'click', e => {
+				e.stopPropagation();
+				if (importBtn.disabled) { return; }
+				importBtn.disabled = true;
+				importBtn.textContent = 'Importing\u2026';
+				void this._livingDocs.importDocx(name);
+			}));
+		} else if (item.note) {
+			// A file we still cannot import is shown, never dropped, with its plain-words reason (F10).
 			const note = append(row, $('div.rail-item-note'));
 			note.textContent = `not yet imported \u2014 ${item.note}`;
 		}
@@ -441,6 +471,10 @@ export class TreeRailView extends ViewPane {
 			.living-docs-rail .rail-item-unsupported{align-items:flex-start;flex-wrap:wrap;cursor:default}
 			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:var(--vscode-descriptionForeground)}
 			.living-docs-rail .rail-item-note{width:100%;padding-left:25px;font:400 11px/1.4 system-ui;color:var(--vscode-descriptionForeground);opacity:.85}
+			.living-docs-rail .rail-import{margin-left:auto;flex:none;border:1px solid oklch(0.55 0.13 255);background:none;color:oklch(0.5 0.13 255);border-radius:6px;padding:4px 9px;font:600 11px/1 system-ui;cursor:pointer;white-space:nowrap}
+			.living-docs-rail .rail-import:hover{background:oklch(0.55 0.13 255);color:#fff}
+			.living-docs-rail .rail-import:disabled{opacity:.6;cursor:default;background:none;color:var(--vscode-descriptionForeground);border-color:var(--vscode-input-border,#d3d8e0)}
+			.living-docs-rail .rail-import-bulk{display:block;width:100%;box-sizing:border-box;margin:2px 0 8px;padding:8px;text-align:center}
 		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}
 		.living-docs-rail .rail-outline.lvl-1{font-weight:600}
 		.living-docs-rail .rail-outline.lvl-2{padding-left:18px;color:var(--vscode-descriptionForeground)}
