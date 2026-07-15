@@ -26,12 +26,12 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateInfo, ITidyPlanItem } from '../common/livingDocs.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { buildAwayFeed, classifyProjectChat, IAwayFeed } from '../common/projectHomeFeed.js';
 import { DEMO_ITERATION_PROMPT, nextOnboardingStep, ONBOARDING_STEPS, OnboardingStep } from '../common/onboarding.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
-import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, renderScreenHtml, ScreenId } from './screenRender.js';
+import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, ITidyReviewState, renderScreenHtml, ScreenId } from './screenRender.js';
 
 // Persisted onboarding step + demo-document URI (profile scope) so the two-wow flow "remembers where you were"
 // across reopens and the folder-open reload at hand-off (doc 20 section D26). The step + demo URI are persisted
@@ -116,6 +116,10 @@ interface IScreenEditorState {
 	onboardingHasModel?: boolean;
 	// Home only: the persisted in-progress onboarding step, to show the "Continue your walkthrough" banner.
 	onboardingResumeStep?: OnboardingStep;
+	// Home: the Tidy verb's review surface (doc 22 section 5) - the proposed moves as approve/skip rows, or
+	// the applied summary. Absent until "Tidy this project" is invoked; the full plan (with file URIs) is held
+	// separately in `_tidyPlan` so apply can address the real resources while this projection drives the HTML.
+	tidyReview?: ITidyReviewState;
 }
 
 // Weekday names for the Home failure line ("failed on Monday"). Local time - matches when the user saw it.
@@ -133,6 +137,10 @@ export class ScreenEditor extends EditorPane {
 	private _webview: IWebviewElement | undefined;
 	private _screen: ScreenId = 'templates';
 	private _state: IScreenEditorState = { knScope: 'org', filter: 'all' };
+	// The full Tidy plan (with file URIs + dependents) behind the current review surface (doc 22 section 5).
+	// Kept parallel to `_state.tidyReview.items` so a per-row decision toggle and the apply address the same
+	// moves by index. Cleared when the surface is dismissed or applied.
+	private _tidyPlan?: readonly ITidyPlanItem[];
 	private readonly _inputDisposables = this._register(new DisposableStore());
 	// The single in-flight "Sign in with ChatGPT" poll (plan 35 iter 4), replaced each poll so a re-open or a
 	// completed sign-in never leaves a timer running on the class store.
@@ -385,6 +393,63 @@ export class ScreenEditor extends EditorPane {
 		const answer = await this._livingDocs.askProjectQuestion(text);
 		this._state = { ...this._state, askBusy: false, projectAnswer: answer };
 		this._render();
+	}
+
+	// --- the Tidy verb (doc 22 section 5): propose -> review -> apply, model-free -----------------------
+
+	// "Tidy this project": build the deterministic move plan and show it as an approve/skip review surface.
+	// Every proposed move defaults to approved (the plan is a vetted proposal) but is individually skippable,
+	// and NOTHING moves until the explicit Apply below - the review-grammar contract (propose, human disposes).
+	private async _startTidy(): Promise<void> {
+		const plan = await this._livingDocs.buildTidyPlan();
+		this._tidyPlan = plan;
+		const items = plan.map(p => ({
+			fromLabel: p.fromLabel,
+			toLabel: p.toLabel,
+			reason: p.reason,
+			dependents: p.dependents.map(d => d.title),
+			decision: 'approved' as const,
+		}));
+		this._state = { ...this._state, tidyReview: { items } };
+		this._render();
+	}
+
+	// Toggle one proposed move's decision (approve/skip). The plan and the review rows stay index-aligned, so
+	// this only flips the row's decision and re-renders; the move itself is untouched until Apply.
+	private _setTidyDecision(indexArg: string | undefined, decision: 'approved' | 'skipped'): void {
+		const review = this._state.tidyReview;
+		const index = Number(indexArg);
+		if (!review || !Number.isInteger(index) || index < 0 || index >= review.items.length) { return; }
+		const items = review.items.map((it, i) => (i === index ? { ...it, decision } : it));
+		this._state = { ...this._state, tidyReview: { ...review, items } };
+		this._render();
+	}
+
+	// Apply the approved moves through the F16 atomic machinery (doc 22 section 5). A move that would touch a
+	// document's bindings warns and LISTS the dependents first (the map-D6 warn-list-proceed shape) - it never
+	// blocks; proceeding re-points them so bindings survive. The service raises the sticky Undo toast; on
+	// return the surface flips to the calm applied summary and Home refreshes so the moved files show in place.
+	private async _applyTidy(): Promise<void> {
+		const review = this._state.tidyReview;
+		const plan = this._tidyPlan;
+		if (!review || !plan) { return; }
+		const approved = plan.filter((_, i) => review.items[i]?.decision === 'approved');
+		if (!approved.length) { return; }
+		const dependentTitles = [...new Set(approved.flatMap(p => p.dependents.map(d => d.title)))].sort((a, b) => a.localeCompare(b));
+		if (dependentTitles.length) {
+			const { confirmed } = await this._dialogService.confirm({
+				type: 'warning',
+				message: `${dependentTitles.length} document${dependentTitles.length === 1 ? '' : 's'} reference files you are moving.`,
+				detail: `Their links will be re-pointed to the new location in the same move, so nothing breaks:\n${dependentTitles.map(t => `\u2022 ${t}`).join('\n')}\n\nYou can undo this.`,
+				primaryButton: 'Move anyway',
+			});
+			if (!confirmed) { return; }
+		}
+		await this._livingDocs.applyTidyMoves(approved);
+		const applied = approved.length;
+		this._tidyPlan = undefined;
+		this._state = { ...this._state, tidyReview: { items: [], applied } };
+		await this._refreshHome();
 	}
 
 	// Build the Home attention line from the latest failed run (plan 32 iter 2). Real data only: undefined
@@ -648,6 +713,26 @@ export class ScreenEditor extends EditorPane {
 			// with citations in the composer; a change request opens the run/task surface.
 			case 'askProject':
 				if (message.text) { void this._askProject(message.text); }
+				break;
+			// The Tidy verb (doc 22 section 5): propose folder-convention moves through the review grammar. Build
+			// the plan (model-free), toggle each move's approval, and apply the approved set through F16 (atomic
+			// document+sidecar move, dependent re-point, Undo). Nothing moves before the explicit Apply.
+			case 'tidyProject':
+				void this._startTidy();
+				break;
+			case 'tidyApproveOne':
+				this._setTidyDecision(message.arg, 'approved');
+				break;
+			case 'tidySkipOne':
+				this._setTidyDecision(message.arg, 'skipped');
+				break;
+			case 'tidyApply':
+				void this._applyTidy();
+				break;
+			case 'tidyCancel':
+				this._tidyPlan = undefined;
+				this._state = { ...this._state, tidyReview: undefined };
+				this._render();
 				break;
 			// Home ALL PROJECTS: the current folder tile focuses its first document (it is already open).
 			case 'openFirstDoc':

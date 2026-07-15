@@ -207,6 +207,9 @@ suite('LivingDocsService', () => {
 	// Notifications the service raised (file-op toasts + named errors), so a test can assert the message
 	// and drive the Undo action a toast carries (the file-ops tests; issue #125).
 	let lastNotifications: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }[] = [];
+	// The convention folders the Tidy apply asked to create on demand (doc 22 section 5), so a test can assert
+	// `data/`/`archive/` were made before the move landed.
+	let createdFolders: string[] = [];
 	let lastModelBody: string | undefined;
 	let lastModelCalls = 0;
 	let lastOpenedFolder: URI | undefined;
@@ -222,7 +225,7 @@ suite('LivingDocsService', () => {
 	let pdfCommandBytes: VSBuffer | undefined;
 	let lastDocxBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -261,6 +264,19 @@ suite('LivingDocsService', () => {
 				if (!files.has(resource.toString())) { throw new Error(`not found: ${resource.toString()}`); }
 				files.delete(resource.toString());
 			},
+			// The F16 atomic move (rename + Tidy): move one file key to a new key. `failLockMove` simulates the
+			// sidecar move failing AFTER the document moved, so the move-op tests can prove the pair rolls back.
+			move: async (from: URI, to: URI) => {
+				if (opts.failLockMove && to.path.endsWith('.lock.json')) { throw new Error('simulated lock move failure'); }
+				const content = files.get(from.toString());
+				if (content === undefined) { throw new Error(`not found: ${from.toString()}`); }
+				files.set(to.toString(), content);
+				files.delete(from.toString());
+				return { resource: to } as unknown as never;
+			},
+			// Convention folders are created on demand (doc 22 section 5). The Map has no real directories (resolve
+			// synthesises them from keys), so folder creation is a no-op that just records that it was asked.
+			createFolder: async (resource: URI) => { createdFolders.push(resource.toString()); return { resource } as unknown as never; },
 			// List the direct children of a directory, so document discovery can fan out. Direct file children
 			// are the keys with no further slash; an immediate subdirectory is synthesised (as an isDirectory
 			// entry) from any key that has a deeper path, so the recursive template/document walk can descend.
@@ -293,6 +309,7 @@ suite('LivingDocsService', () => {
 		// buffered call - keeping the fan-out tests hermetic regardless of any real proxy on the default port.
 		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? opts.proxyUrl : true) } as unknown as IConfigurationService;
 		lastNotifications = [];
+		createdFolders = [];
 		const notificationService = {
 			info: () => undefined,
 			error: (message: unknown) => { lastNotifications.push({ message: String(message) }); },
@@ -316,9 +333,9 @@ suite('LivingDocsService', () => {
 				// assert the renderer only ever names the secret, never carries its value.
 				if (url.includes('/mcp/resolve')) { lastMcpBody = options.data; payload = opts.mcpResponse ?? MCP_RESOLVE_RESPONSE; }
 				else if (url.includes('/proxy/fetch')) { lastProxyFetchBody = options.data; payload = API_AUTH_PAYLOAD; }
-					// Source-extraction routes (issue #131): the node/proxy layer returns the extracted CSVs / PDF text.
-					else if (url.includes('/sources/xlsx')) { payload = opts.xlsx ?? XLSX_SHEETS; }
-					else if (url.includes('/sources/pdf')) { payload = opts.pdf ?? PDF_TEXT; }
+				// Source-extraction routes (issue #131): the node/proxy layer returns the extracted CSVs / PDF text.
+				else if (url.includes('/sources/xlsx')) { payload = opts.xlsx ?? XLSX_SHEETS; }
+				else if (url.includes('/sources/pdf')) { payload = opts.pdf ?? PDF_TEXT; }
 				else if (opts.model || opts.modelSequence) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
 					else if (url.includes('/v1/messages')) {
@@ -2570,6 +2587,105 @@ suite('LivingDocsService', () => {
 		assert.ok(err, `a named error was raised, got: [${lastNotifications.map(n => n.message).join(' | ')}]`);
 		assert.ok(/Nothing was changed\./.test(err!.message), 'the error honestly reports nothing changed');
 		assert.strictEqual(lastNotifications.some(n => n.message === 'Deleted "Weekly Summary.md".'), false, 'no success toast for a failed delete');
+	});
+
+	// --- the Tidy verb: folder-convention moves through the review grammar (issue #132, doc 22 section 5) ---
+
+	// A move plan item addressing a real file, built by hand so the move op can be exercised directly (the
+	// conservative plan builder is unit-tested separately in tidyPlan.test.ts).
+	function moveItem(from: URI, to: URI, dependents: readonly { resource: URI; title: string }[] = []) {
+		return { fromResource: from, toResource: to, fromLabel: relFromWs(from), toLabel: relFromWs(to), reason: 'test move', dependents };
+	}
+	function relFromWs(uri: URI): string { return uri.path.replace('/ws/', ''); }
+
+	test('applyTidyMoves moves a document AND its lock sidecar together, creating the folder on demand', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // persists the lock sidecar beside the document
+		const lockKey = URI.file('/ws/Weekly Summary.lock.json').toString();
+		assert.ok(lastFiles!.has(lockKey), 'the sidecar exists before the move');
+
+		await service.applyTidyMoves([moveItem(WEEKLY, URI.file('/ws/archive/Weekly Summary.md'))]);
+
+		assert.ok(lastFiles!.has(URI.file('/ws/archive/Weekly Summary.md').toString()), 'the document moved into archive/');
+		assert.ok(lastFiles!.has(URI.file('/ws/archive/Weekly Summary.lock.json').toString()), 'the lock sidecar followed it atomically');
+		assert.strictEqual(lastFiles!.has(WEEKLY.toString()), false, 'the original document is gone');
+		assert.strictEqual(lastFiles!.has(lockKey), false, 'the original sidecar is gone');
+		assert.ok(createdFolders.includes(URI.file('/ws/archive').toString()), 'the archive/ folder was created on demand');
+		assert.ok(lastNotifications.find(n => /Tidied 1 file into folders\./.test(n.message))?.actions?.primary?.[0], 'a sticky Undo toast is raised');
+	});
+
+	test('applyTidyMoves re-points every dependent lock + frontmatter so bindings survive the move', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // Weekly binds metrics.csv; persists its lock
+
+		const deps = await service.getFileDependents(URI.file('/ws/metrics.csv'));
+		assert.deepStrictEqual(deps.map(d => d.title), ['Weekly Operating Summary'], 'metrics.csv has the Weekly Summary as a dependent');
+
+		await service.applyTidyMoves([moveItem(URI.file('/ws/metrics.csv'), URI.file('/ws/data/metrics.csv'), deps)]);
+
+		assert.ok(lastFiles!.has(URI.file('/ws/data/metrics.csv').toString()), 'the CSV moved into data/');
+		assert.strictEqual(lastFiles!.has(URI.file('/ws/metrics.csv').toString()), false, 'the original CSV is gone');
+		// The dependent's frontmatter source AND its lock binding source are both re-pointed to the new path.
+		assert.match(lastFiles!.get(WEEKLY.toString())!, /data\/metrics\.csv/, 'the dependent frontmatter source is re-pointed');
+		assert.ok(!/- metrics\.csv$/m.test(lastFiles!.get(WEEKLY.toString())!), 'the old bare source name is gone from frontmatter');
+		assert.match(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!, /data\/metrics\.csv/, 'the dependent lock binding source is re-pointed');
+	});
+
+	test('Undo inverts an applied Tidy move - files, sidecars AND dependent references all restored', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		const deps = await service.getFileDependents(URI.file('/ws/metrics.csv'));
+		await service.applyTidyMoves([moveItem(URI.file('/ws/metrics.csv'), URI.file('/ws/data/metrics.csv'), deps)]);
+
+		const toast = lastNotifications.find(n => /Tidied 1 file/.test(n.message));
+		assert.ok(toast?.actions?.primary?.[0], 'the Undo action is present');
+		await toast!.actions!.primary![0].run();
+
+		assert.ok(lastFiles!.has(URI.file('/ws/metrics.csv').toString()), 'the CSV is back at the root');
+		assert.strictEqual(lastFiles!.has(URI.file('/ws/data/metrics.csv').toString()), false, 'the data/ copy is gone');
+		assert.match(lastFiles!.get(WEEKLY.toString())!, /- metrics\.csv/, 'the dependent frontmatter source is restored');
+		assert.ok(!/data\/metrics\.csv/.test(lastFiles!.get(WEEKLY.toString())!), 'no re-pointed path lingers after undo');
+	});
+
+	test('a clashing destination is refused with a named error and never half-applies (the rest of the batch continues)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		// The destination for the CSV already exists; the loose Team Notes move should still go through.
+		lastFiles!.set(URI.file('/ws/data/metrics.csv').toString(), 'PRE-EXISTING');
+		lastFiles!.set(URI.file('/ws/scratch.md').toString(), '# scratch\n');
+
+		await service.applyTidyMoves([
+			moveItem(URI.file('/ws/metrics.csv'), URI.file('/ws/data/metrics.csv')),
+			moveItem(URI.file('/ws/scratch.md'), URI.file('/ws/working-files/scratch.md')),
+		]);
+
+		assert.strictEqual(lastFiles!.get(URI.file('/ws/data/metrics.csv').toString()), 'PRE-EXISTING', 'the clashing target was not overwritten');
+		assert.ok(lastFiles!.has(URI.file('/ws/metrics.csv').toString()), 'the clashing move left its source untouched');
+		assert.ok(lastNotifications.some(n => /Could not tidy "metrics\.csv" - "data\/metrics\.csv" already exists\./.test(n.message)), 'a named clash error is raised');
+		assert.ok(lastFiles!.has(URI.file('/ws/working-files/scratch.md').toString()), 'the non-clashing move still applied');
+	});
+
+	test('a failed sidecar move rolls the document back - the pair never half-applies', async () => {
+		const service = createService([], { failLockMove: true });
+		await service.loadDocument(WEEKLY); // creates the sidecar, so the move will try (and fail) to carry it
+		const before = lastFiles!.get(WEEKLY.toString());
+
+		await service.applyTidyMoves([moveItem(WEEKLY, URI.file('/ws/archive/Weekly Summary.md'))]);
+
+		assert.strictEqual(lastFiles!.get(WEEKLY.toString()), before, 'the document was rolled back to its original location');
+		assert.strictEqual(lastFiles!.has(URI.file('/ws/archive/Weekly Summary.md').toString()), false, 'no half-moved document lingers');
+		assert.ok(lastNotifications.some(n => /Could not tidy "Weekly Summary\.md".*Nothing was changed\./.test(n.message)), 'a named failure names that nothing changed');
+		assert.strictEqual(lastNotifications.some(n => /Tidied/.test(n.message)), false, 'no success toast for a failed move');
+	});
+
+	test('buildTidyPlan proposes a loose data file for data/ but leaves a bound source alone (conservative)', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/extra.csv').toString(), 'a,b\n1,2\n'); // loose, unreferenced
+
+		const plan = await service.buildTidyPlan();
+		const targets = plan.map(p => p.toLabel);
+		assert.ok(targets.includes('data/extra.csv'), `the loose CSV is proposed for data/, got: [${targets.join(', ')}]`);
+		assert.ok(!plan.some(p => p.fromLabel === 'metrics.csv'), 'the bound metrics.csv is NOT proposed (it lives where its lock points)');
 	});
 
 	// --- spreadsheets as CSV sources + PDF as read-only context (issue #131, doc 22 §4) ---

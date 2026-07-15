@@ -26,7 +26,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
@@ -39,6 +39,7 @@ import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
 import { IFileRef, rewriteLockSources, scanDependents } from '../common/fileOps.js';
+import { buildTidyPlan, ITidyInventoryItem } from '../common/tidyPlan.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
@@ -1350,6 +1351,145 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidRequestChatAttach.fire(basename(resource));
 	}
 
+	// --- the Tidy verb (doc 22 section 5): fold the folder inventory into a proposed move plan ---------
+
+	// Build the deterministic, model-free Tidy plan (doc 22 section 5). Gathers the real root-file inventory
+	// (names + mtimes from disk, inbound-reference counts from the dependency graph, imported-original marks
+	// from the locks), hands it to the pure `buildTidyPlan`, then re-hydrates each proposed move into a
+	// reviewable item with its file URIs and its dependents. Conservative: an already-tidy project yields an
+	// honest empty plan. Nothing is moved here - this only proposes.
+	async buildTidyPlan(): Promise<readonly ITidyPlanItem[]> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) { return []; }
+		const refs = await this._collectFileRefs();
+		const importedOriginals = await this._collectImportedOriginals();
+		// Only the project root is tidied, so a single (metadata-resolved) listing of the root is enough for the
+		// name + mtime signals; the reference/import signals come from the whole-project scans above.
+		let children;
+		try {
+			children = (await this._files.resolve(folder.uri, { resolveMetadata: true })).children ?? [];
+		} catch (e) {
+			this._log.trace('[livingDocs] tidy root scan skipped', e instanceof Error ? e.message : String(e));
+			return [];
+		}
+		const inventory: ITidyInventoryItem[] = [];
+		for (const child of children) {
+			if (child.isDirectory) { continue; }
+			const name = basename(child.resource);
+			// Hidden files and the lock sidecars never appear in a Tidy plan (locks follow their document, never
+			// move on their own - doc 22 section 5), so they are not part of the inventory the heuristics read.
+			if (name.startsWith('.') || name.endsWith('.lock.json') || name === 'agents.json') { continue; }
+			inventory.push({
+				name,
+				folder: '',
+				mtimeMs: (child as { mtime?: number }).mtime,
+				referencedBy: scanDependents(refs, name, child.resource.toString()).length,
+				isImportedOriginal: importedOriginals.has(name),
+			});
+		}
+		const { moves } = buildTidyPlan(inventory, { nowMs: this._clock.now() });
+		const items: ITidyPlanItem[] = [];
+		for (const move of moves) {
+			const fromResource = joinPath(folder.uri, move.from);
+			const toResource = joinPath(folder.uri, move.to);
+			items.push({
+				fromResource,
+				toResource,
+				fromLabel: move.from,
+				toLabel: move.to,
+				reason: move.reason,
+				dependents: (await this.getFileDependents(fromResource)),
+			});
+		}
+		return items;
+	}
+
+	// The set of imported originals in the project: the untouched foreign file (docx) named by any document's
+	// lock `imported.from` provenance. A Tidy plan proposes moving these to `archive/originals/` (doc 22 section 2).
+	private async _collectImportedOriginals(): Promise<Set<string>> {
+		const originals = new Set<string>();
+		const found = new Map<string, URI>();
+		for (const state of this._docs.values()) { found.set(state.uri.toString(), state.uri); }
+		for (const folder of this._workspace.getWorkspace().folders) { await this._collectDocs(folder.uri, found, 0); }
+		for (const uri of found.values()) {
+			try {
+				const lock = await this._lockStore.read(uri);
+				if (lock?.imported?.from) { originals.add(lock.imported.from); }
+			} catch (e) {
+				this._log.trace('[livingDocs] tidy import-provenance read skipped', e instanceof Error ? e.message : String(e));
+			}
+		}
+		return originals;
+	}
+
+	// Apply the approved Tidy moves (doc 22 section 5, the F16 semantics). Each move is atomic on the lock
+	// (the shared `_moveFileWithSidecar` moves document + sidecar together or rolls back), creates its
+	// destination folder on demand, and re-points every dependent lock's `source` path in the same operation
+	// (`_rewriteDependentReferences`, exactly as rename does) so bindings survive the move. A clashing
+	// destination is refused with a named error and skipped - it never half-applies, and it never blocks the
+	// rest of the batch. One sticky Undo toast inverts every move that actually applied.
+	async applyTidyMoves(items: readonly ITidyPlanItem[]): Promise<void> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder || !items.length) { return; }
+		const applied: { from: URI; to: URI; oldName: string; newRef: string }[] = [];
+		for (const item of items) {
+			const from = item.fromResource;
+			const to = item.toResource;
+			// A clashing destination must never half-apply: refuse this move before touching anything, keep going.
+			if (await this._files.exists(to)) {
+				this._notify.error(`Could not tidy "${item.fromLabel}" - "${item.toLabel}" already exists.`);
+				continue;
+			}
+			try {
+				await this._ensureFolder(dirname(to));
+				await this._moveFileWithSidecar(from, to);
+			} catch (e) {
+				this._log.warn('[livingDocs] tidy move failed', e);
+				this._notify.error(`Could not tidy "${item.fromLabel}": ${e instanceof Error ? e.message : String(e)}. Nothing was changed.`);
+				continue;
+			}
+			const oldName = basename(from);
+			// The new reference is the destination relative to the project root, which is where a root document
+			// that binds this file resolves its sibling source from - so re-pointing keeps the binding resolving.
+			const newRef = relativePath(folder.uri, to) ?? item.toLabel;
+			await this._rewriteDependentReferences(oldName, newRef);
+			applied.push({ from, to, oldName, newRef });
+		}
+		if (!applied.length) { return; }
+		this._onDidChange.fire();
+		this._notify.notify({
+			severity: Severity.Info,
+			message: `Tidied ${applied.length} file${applied.length === 1 ? '' : 's'} into folders.`,
+			sticky: true,
+			actions: { primary: [toAction({ id: 'livingDocs.tidy.undo', label: 'Undo', run: () => this._undoTidy(applied) })] },
+		});
+	}
+
+	// Invert an applied Tidy batch (the F16 Undo semantics): move each file (and its sidecar) back and restore
+	// every dependent lock's `source` path. Reverse order and best-effort per move so one restored file that
+	// now clashes cannot strand the rest of the undo.
+	private async _undoTidy(applied: readonly { from: URI; to: URI; oldName: string; newRef: string }[]): Promise<void> {
+		for (const move of [...applied].reverse()) {
+			if (await this._files.exists(move.from)) {
+				this._notify.error(`Cannot undo: "${basename(move.from)}" already exists again.`);
+				continue;
+			}
+			try {
+				await this._moveFileWithSidecar(move.to, move.from);
+				await this._rewriteDependentReferences(move.newRef, move.oldName);
+			} catch (e) {
+				this._log.warn('[livingDocs] tidy undo failed', e);
+			}
+		}
+		this._onDidChange.fire();
+	}
+
+	// Create a convention folder on demand (doc 22 section 5: the folders are born only when Tidy needs them).
+	// A no-op when it already exists, so a second move into the same folder never errors.
+	private async _ensureFolder(dir: URI): Promise<void> {
+		if (!(await this._files.exists(dir))) { await this._files.createFolder(dir); }
+	}
+
 	// Generate a draft document from a template (plan 28, iter 3): write the static skeleton (headings +
 	// verbatim bind links + `template:` provenance), open it, then drive the SAME chat path every generation
 	// uses so the prose lands as reviewable insertion proposals (decision 17) - no new approve/apply path.
@@ -1763,7 +1903,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return { ok: true, pages: result.pages ?? 0 };
 	}
 
-	// The portable, rebuildable cache of a PDF's extracted text (doc 22 §5 - `.abstract/knowledge/` holds
+	// The portable, rebuildable cache of a PDF's extracted text (doc 22 section 5 - `.abstract/knowledge/` holds
 	// source caches). `_readContext` reads this instead of the PDF's raw bytes so the model sees real text,
 	// not binary. Keyed by the context path so a reload finds it without re-parsing the PDF.
 	private _pdfTextCacheUri(doc: URI, contextFile: string): URI {

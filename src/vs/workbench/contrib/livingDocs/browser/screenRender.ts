@@ -29,6 +29,29 @@ export interface IRecentProject {
 	readonly folderUri: string;
 }
 
+/**
+ * One reviewable row in the Tidy surface (doc 22 section 5): a proposed move rendered from the plan, with
+ * its plain-words reason, the documents that depend on the moved file (re-pointed on apply, warned like a
+ * map-D6 delete), and the human's decision so far. The host holds the full plan (with URIs); this is the
+ * serialisable projection the webview renders.
+ */
+export interface ITidyReviewItem {
+	readonly fromLabel: string;
+	readonly toLabel: string;
+	readonly reason: string;
+	/** Titles of documents that reference the moved file (empty for a move with no dependents). */
+	readonly dependents: readonly string[];
+	/** The per-move decision: approved rows are applied on Apply; skipped rows are left in place. */
+	readonly decision: 'approved' | 'skipped';
+}
+
+/** The Tidy review surface state (doc 22 section 5): the proposed moves, or the applied summary once done. */
+export interface ITidyReviewState {
+	readonly items: readonly ITidyReviewItem[];
+	/** Once Apply has run, how many moves were applied - drives the calm "done, Undo is in the toast" state. */
+	readonly applied?: number;
+}
+
 /** The Home attention line for a failed scheduled run (plan 32 iter 2). Real data only - built from a run. */
 export interface IHomeFailure {
 	/** The agent's human name, e.g. "Weekly refresh". */
@@ -92,6 +115,13 @@ export interface IScreenState {
 	readonly projectAnswer?: IProjectAnswer;
 	/** Home: true while a whole-project question is being answered (the composer's honest working state). */
 	readonly askBusy?: boolean;
+	/**
+	 * Home: the Tidy verb's review surface (doc 22 section 5). Absent until "Tidy this project" is invoked;
+	 * carries the proposed moves as individually approve/reject-able rows. Nothing moves until Apply. Real
+	 * data only: the moves are the deterministic plan, and an empty `items` list renders the honest
+	 * "nothing to tidy" state rather than a fabricated row.
+	 */
+	readonly tidyReview?: ITidyReviewState;
 	/** Home: whether a workspace folder (the "project") is open. */
 	readonly hasFolder?: boolean;
 	/** Home: the open folder's name, shown as the project. */
@@ -598,6 +628,73 @@ function renderHomeComposer(state: IScreenState): string {
 	</div>`;
 }
 
+// The Tidy verb surface (doc 22 section 5, the P2 folder conventions): "Tidy this project" proposes a move
+// plan through the review grammar - each move an individually approve/skip-able row, applied only on Apply,
+// nothing moved before that. Model-free: the plan is deterministic heuristics with a stated reason per row.
+// Collapsed to a single entry button until invoked; an empty plan renders the honest "nothing to tidy".
+function renderTidy(state: IScreenState): string {
+	const review = state.tidyReview;
+	if (!review) {
+		return `<button data-msg="tidyProject" style="display:flex;align-items:center;gap:11px;width:100%;text-align:left;margin:0 0 34px;padding:14px 16px;background:#fff;border:1px solid #e6e8ed;border-radius:12px;cursor:pointer">
+			<span style="width:26px;height:26px;flex:none;border-radius:8px;background:#f4f5fd;color:${ACCENT};font:600 14px/26px system-ui;text-align:center">&#10022;</span>
+			<span style="flex:1"><span style="display:block;font:600 13px/1.3 system-ui;color:#26292f">Tidy this project</span><span style="display:block;font:400 12px/1.4 system-ui;color:#868b95">Propose moving loose files into data/, assets/, archive/ &mdash; you approve every move.</span></span>
+			<span style="flex:none;font:600 12px/1 system-ui;color:${ACCENT_DK}">Review &#8594;</span>
+		</button>`;
+	}
+	// The applied summary: a calm confirmation that points at the sticky Undo toast the service raised.
+	if (review.applied !== undefined) {
+		return `<div style="display:flex;align-items:center;gap:11px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:12px;padding:14px 16px;margin-bottom:34px">
+			<span style="width:22px;height:22px;flex:none;border-radius:50%;background:oklch(0.6 0.13 150);color:#fff;font:600 13px/22px system-ui;text-align:center">&#10003;</span>
+			<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#2f6b45">Tidied ${review.applied} file${review.applied === 1 ? '' : 's'}</div><div style="font:400 12px/1.4 system-ui;color:#5d8a66">Each move is undoable from the notification. Nothing else was touched.</div></div>
+			<button data-msg="tidyCancel" style="flex:none;border:1px solid #cfe4d4;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#2f6b45;cursor:pointer">Done</button>
+		</div>`;
+	}
+	// The honest empty plan (doc 22: never a fabricated row): the project is already well organised.
+	if (!review.items.length) {
+		return `<div style="display:flex;align-items:center;gap:11px;background:#fff;border:1px solid #e6e8ed;border-radius:12px;padding:14px 16px;margin-bottom:34px">
+			<span style="width:22px;height:22px;flex:none;border-radius:50%;background:#eef1ff;color:${ACCENT};font:600 12px/22px system-ui;text-align:center">&#10003;</span>
+			<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#26292f">Nothing to tidy</div><div style="font:400 12px/1.4 system-ui;color:#868b95">This project is already well organised &mdash; no loose files to move.</div></div>
+			<button data-msg="tidyCancel" style="flex:none;border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Close</button>
+		</div>`;
+	}
+	const approved = review.items.filter(i => i.decision === 'approved').length;
+	const card = (it: ITidyReviewItem, i: number) => {
+		const skipped = it.decision === 'skipped';
+		// The would-orphan warning (map-D6 shape): name the dependent documents that will be re-pointed to the
+		// new location in the same atomic move (their bindings survive), so the move is never a silent break.
+		const deps = it.dependents.length
+			? `<div style="margin-top:8px;display:flex;gap:7px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:8px;padding:8px 10px"><span style="color:#9a6b16;flex:none">&#9888;</span><span style="font:400 11.5px/1.5 system-ui;color:#9a6b16">${it.dependents.length} document${it.dependents.length === 1 ? '' : 's'} reference this file &mdash; their links will be re-pointed so nothing breaks: ${it.dependents.map(esc).join(', ')}</span></div>`
+			: '';
+		const toggle = skipped
+			? `<button data-msg="tidyApproveOne" data-arg="${i}" style="flex:none;border:1px solid ${ACCENT};background:#fff;border-radius:8px;padding:7px 12px;font:600 12px/1 system-ui;color:${ACCENT_DK};cursor:pointer">Approve</button>`
+			: `<button data-msg="tidySkipOne" data-arg="${i}" style="flex:none;border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#868b95;cursor:pointer">Skip</button>`;
+		const opacity = skipped ? 'opacity:.55;' : '';
+		return `<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-bottom:1px solid #f0f1f4;${opacity}">
+			<div style="flex:1;min-width:0">
+				<div style="font:600 13px/1.35 system-ui;color:#1a1c20;word-break:break-word">${esc(it.fromLabel)} <span style="color:#c2c5cd">&#8594;</span> <span style="font:500 12.5px/1.35 'JetBrains Mono',ui-monospace,monospace;color:${ACCENT_DK}">${esc(it.toLabel)}</span></div>
+				<div style="margin-top:4px;font:400 12px/1.5 system-ui;color:#696e78">${esc(it.reason)}${skipped ? ' <span style="color:#a3a8b2">&middot; will stay put</span>' : ''}</div>
+				${deps}
+			</div>
+			${toggle}
+		</div>`;
+	};
+	return `<div style="margin-bottom:34px">
+		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px">
+			<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:${ACCENT}">TIDY &middot; ${review.items.length} PROPOSED MOVE${review.items.length === 1 ? '' : 'S'}</div>
+			<span style="font:400 11px/1.4 system-ui;color:#a3a8b2">Nothing moves until you apply.</span>
+		</div>
+		<div style="background:#fff;border:1px solid #e9eaee;border-radius:14px;overflow:hidden">${review.items.map(card).join('')}
+			<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;background:#fbfbfd">
+				<span style="font:400 12px/1.4 system-ui;color:#696e78">${approved} of ${review.items.length} approved</span>
+				<div style="display:flex;gap:8px">
+					<button data-msg="tidyCancel" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:500 12.5px/1 system-ui;color:#52575f;cursor:pointer">Cancel</button>
+					<button data-msg="tidyApply"${approved === 0 ? ' disabled' : ''} style="border:none;border-radius:9px;padding:9px 16px;background:${approved === 0 ? '#c7cbe8' : ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:${approved === 0 ? 'default' : 'pointer'}">Apply ${approved} move${approved === 1 ? '' : 's'}</button>
+				</div>
+			</div>
+		</div>
+	</div>`;
+}
+
 // The WHILE YOU WERE AWAY feed + the all-clear promotion (map-D14). Real data only: the rows are agent runs
 // since the last visit (from the persisted run log); when nothing ran the section is absent, and when nothing
 // needs review the calm all-clear promotion is shown ("Everything is in sync") rather than a fabricated feed.
@@ -813,6 +910,7 @@ function renderHome(state: IScreenState): string {
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
 		<p style="margin:0 0 22px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
 		${composer}
+		${renderTidy(state)}
 		${failureLine}
 		${awaySection}
 		${needsYou}
