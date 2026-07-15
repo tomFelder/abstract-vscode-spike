@@ -174,6 +174,29 @@ const APIAUTH = URI.file('/ws/Revenue Signal.md');
 const BADBIND = URI.file('/ws/Ratio Doc.md');
 const TEMPLATE = URI.file('/ws/templates/Weekly report.template.md');
 
+// Spreadsheets-as-CSV-sources fixtures (issue #131). The workbook file bytes are irrelevant here (the
+// proxy /sources/xlsx route is mocked), so any content stands in. The report binds the EXTRACTED CSV path,
+// exactly as it will on disk after "Use as source" writes data/<workbook>/<sheet>.csv.
+const WORKBOOK = URI.file('/ws/Budget.xlsx');
+const XLSX_REPORT = URI.file('/ws/Budget Brief.md');
+const XLSX_REPORT_MD = [
+	'---', 'title: Budget Brief', 'sources:', '  - data/Budget/FY26.csv', '---', '',
+	'## Budget', '', 'MRR is [pending](bind:FY26.MRR).',
+].join('\n') + '\n';
+// The canned proxy /sources/xlsx reply: one sheet, already clean + number-normalised, carrying a NAMED
+// merged-header limitation so the test proves the warning is surfaced verbatim, never a silent misread.
+const XLSX_SHEETS = {
+	sheets: [{
+		name: 'FY26', fileName: 'FY26.csv',
+		csv: 'Month,MRR\n2026-01-05,1234.56\n2026-02-05,2000\n', rows: 3, cols: 2,
+		warnings: ['This sheet has merged header cells - values may misalign with their columns.'],
+	}],
+};
+// The canned proxy /sources/pdf replies: a readable text PDF, and a scanned/image-only one.
+const PDF_TEXT = { readable: true, text: 'Board pack: revenue is up week on week. Watch churn.', pages: 2, reason: '' };
+const PDF_IMAGE_ONLY = { readable: false, text: '', pages: 4, reason: 'This PDF has no selectable text - it looks scanned or image-only.' };
+const PDF_FILE = URI.file('/ws/Board Pack.pdf');
+
 suite('LivingDocsService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -191,7 +214,7 @@ suite('LivingDocsService', () => {
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -207,6 +230,10 @@ suite('LivingDocsService', () => {
 		if (opts.badBind) { files.set(BADBIND.toString(), BADBIND_MD); }
 		// A template lives under a `templates/` subfolder to prove discovery walks into subdirectories (plan 28).
 		if (opts.template) { files.set(TEMPLATE.toString(), WEEKLY_TEMPLATE_MD); }
+		// Spreadsheets as CSV sources (issue #131): a workbook file + a report that binds its extracted CSV.
+		if (opts.workbook) { files.set(WORKBOOK.toString(), 'workbook-bytes'); }
+		if (opts.xlsxReport) { files.set(XLSX_REPORT.toString(), XLSX_REPORT_MD); }
+		if (opts.pdf) { files.set(PDF_FILE.toString(), 'pdf-bytes'); }
 
 		const fileService = {
 			onDidChangeFileSystemProviderRegistrations: Event.None,
@@ -274,6 +301,9 @@ suite('LivingDocsService', () => {
 				// assert the renderer only ever names the secret, never carries its value.
 				if (url.includes('/mcp/resolve')) { lastMcpBody = options.data; payload = opts.mcpResponse ?? MCP_RESOLVE_RESPONSE; }
 				else if (url.includes('/proxy/fetch')) { lastProxyFetchBody = options.data; payload = API_AUTH_PAYLOAD; }
+					// Source-extraction routes (issue #131): the node/proxy layer returns the extracted CSVs / PDF text.
+					else if (url.includes('/sources/xlsx')) { payload = opts.xlsx ?? XLSX_SHEETS; }
+					else if (url.includes('/sources/pdf')) { payload = opts.pdf ?? PDF_TEXT; }
 				else if (opts.model || opts.modelSequence) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
 					else if (url.includes('/v1/messages')) {
@@ -2469,5 +2499,62 @@ suite('LivingDocsService', () => {
 		assert.ok(err, `a named error was raised, got: [${lastNotifications.map(n => n.message).join(' | ')}]`);
 		assert.ok(/Nothing was changed\./.test(err!.message), 'the error honestly reports nothing changed');
 		assert.strictEqual(lastNotifications.some(n => n.message === 'Deleted "Weekly Summary.md".'), false, 'no success toast for a failed delete');
+	});
+
+	// --- spreadsheets as CSV sources + PDF as read-only context (issue #131, doc 22 §4) ---
+
+	test('useXlsxAsSource extracts each sheet to data/<workbook>/<sheet>.csv, writes the manifest, and names limitations', async () => {
+		const service = createService([], { workbook: true });
+		const result = await service.useXlsxAsSource(WORKBOOK);
+		// The CSV + manifest land on disk as plain files; the sheet's named limitation is surfaced, not hidden.
+		assert.deepStrictEqual(
+			{
+				ok: result.ok,
+				relativePath: result.sheets[0]?.relativePath,
+				warning: result.sheets[0]?.warnings[0],
+				csv: lastFiles!.get(URI.file('/ws/data/Budget/FY26.csv').toString()),
+				manifestWorkbook: JSON.parse(lastFiles!.get(URI.file('/ws/data/Budget/.abstract-source.json').toString()) ?? '{}').workbook,
+			},
+			{
+				ok: true,
+				relativePath: 'data/Budget/FY26.csv',
+				warning: 'This sheet has merged header cells - values may misalign with their columns.',
+				csv: 'Month,MRR\n2026-01-05,1234.56\n2026-02-05,2000\n',
+				manifestWorkbook: 'Budget.xlsx',
+			},
+		);
+	});
+
+	test('the provenance drawer shows the figure → CSV row → workbook chain for an extracted CSV', async () => {
+		const service = createService([], { workbook: true, xlsxReport: true });
+		await service.useXlsxAsSource(WORKBOOK);       // writes data/Budget/FY26.csv + records provenance
+		await service.loadDocument(XLSX_REPORT);        // binds FY26.MRR against the extracted CSV
+		const peek = service.getSourcePeek(XLSX_REPORT, ['FY26.MRR']);
+		assert.deepStrictEqual(
+			{ source: peek?.source, workbook: peek?.workbook?.workbook, sheet: peek?.workbook?.sheet, value: peek?.rows.find(r => r.key === 'FY26.MRR')?.value },
+			{ source: 'data/Budget/FY26.csv', workbook: 'Budget.xlsx', sheet: 'FY26', value: '2000' },
+		);
+	});
+
+	test('usePdfAsSource registers a readable PDF as a context edge with its extracted text, and names an image-only PDF unreadable', async () => {
+		// Readable text PDF: becomes a context edge on the document + its extracted text is cached for the model.
+		const service = createService([], { pdf: PDF_TEXT });
+		await service.loadDocument(WEEKLY);
+		const ok = await service.usePdfAsSource(PDF_FILE, WEEKLY);
+		// The extracted text is persisted to the portable cache that _readContext reads instead of PDF bytes.
+		const cacheKey = [...lastFiles!.keys()].find(k => k.includes('/knowledge/') && k.endsWith('.txt'));
+		assert.deepStrictEqual(
+			{ ok: ok.ok, pages: ok.pages, isContext: service.getDoc(WEEKLY)!.context.includes('Board Pack.pdf'), cached: cacheKey ? lastFiles!.get(cacheKey) : undefined },
+			{ ok: true, pages: 2, isContext: true, cached: PDF_TEXT.text },
+		);
+
+		// Image-only/scanned PDF: names itself unreadable and creates NO edge (never empty context).
+		const scanned = createService([], { pdf: PDF_IMAGE_ONLY });
+		await scanned.loadDocument(WEEKLY);
+		const bad = await scanned.usePdfAsSource(PDF_FILE, WEEKLY);
+		assert.deepStrictEqual(
+			{ ok: bad.ok, reason: bad.reason, isContext: scanned.getDoc(WEEKLY)!.context.includes('Board Pack.pdf') },
+			{ ok: false, reason: 'This PDF has no selectable text - it looks scanned or image-only.', isContext: false },
+		);
 	});
 });

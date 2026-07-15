@@ -52,6 +52,10 @@ const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4.1-mini';
 
 // Bound the request body so a runaway client cannot exhaust memory; model calls here are tiny.
 const MAX_BODY_BYTES = 1 * 1024 * 1024;
+// The source-extraction routes carry a base64-encoded workbook/PDF, which is larger than a model
+// call; a beta user's weekly pack is well under this (doc 22 §4). Kept separate so raising it never
+// widens the model-call surface.
+const MAX_SOURCE_BYTES = 32 * 1024 * 1024;
 
 // The docx import route (POST /import/docx, issue #129) carries a base64 Word document, which is far larger
 // than a model call, so it gets its own generous cap (a base64 payload is ~4/3 of the file). 40 MB of
@@ -105,14 +109,13 @@ function sendJson(res, status, obj) {
 	res.end(body);
 }
 
-function readBody(req, maxBytes) {
-	const cap = maxBytes || MAX_BODY_BYTES;
+function readBody(req, maxBytes = MAX_BODY_BYTES) {
 	return new Promise((resolve, reject) => {
 		const chunks = [];
 		let size = 0;
 		req.on('data', chunk => {
 			size += chunk.length;
-			if (size > cap) {
+			if (size > maxBytes) {
 				reject(new Error('request body too large'));
 				req.destroy();
 				return;
@@ -844,6 +847,78 @@ async function postEvent(req, res) {
 	sendJson(res, 200, { ok: true });
 }
 
+// --- source extraction: xlsx -> CSV, PDF -> context text (issue #131, doc 22 §4) ----------------------
+// Extraction runs HERE, in the node/proxy layer where file access + the heavy libraries live, never in
+// the renderer (P6 portability + the guardrail that a limitation is named, never a silent misread). The
+// renderer POSTs the file's bytes (base64) and receives clean CSV text / extracted context text back; it
+// then writes the plain-text results into the project folder itself. The engine is a pure module
+// (lwd-source-extract.js) with its own `node --test` suite; SheetJS + pdf-parse are lazily required so a
+// proxy without those dev deps still starts and serves the model routes (the source routes then 501).
+let _extractEngine;
+function sourceExtractEngine() {
+	if (_extractEngine === undefined) {
+		try { _extractEngine = require('./lwd-source-extract.js'); }
+		catch (e) { _extractEngine = null; console.error('[lwd-proxy] source-extract engine unavailable:', e && e.message ? e.message : e); }
+	}
+	return _extractEngine;
+}
+function optionalLib(name) {
+	try { return require(name); } catch { return null; }
+}
+
+// POST /sources/xlsx: body { dataBase64, dayFirst? } -> { sheets: [{ name, fileName, csv, rows, cols,
+// warnings }] }. Each sheet is a clean comma-delimited, number/date-normalised CSV the renderer writes to
+// data/<workbook>/<sheet>.csv. A merged-header/pivot sheet carries a NAMED warning, never a silent misread.
+async function extractXlsx(req, res) {
+	const engine = sourceExtractEngine();
+	const xlsx = optionalLib('xlsx');
+	if (!engine || !xlsx) {
+		sendJson(res, 501, { error: { type: 'source_error', message: 'spreadsheet extraction is not available in this build' } });
+		return;
+	}
+	const body = await readBody(req, MAX_SOURCE_BYTES);
+	let parsed;
+	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+	if (!parsed || typeof parsed.dataBase64 !== 'string') {
+		sendJson(res, 400, { error: { type: 'source_error', message: 'dataBase64 is required' } });
+		return;
+	}
+	try {
+		const buffer = Buffer.from(parsed.dataBase64, 'base64');
+		const { sheets } = engine.extractWorkbook(buffer, xlsx, { dayFirst: !!parsed.dayFirst });
+		const shaped = sheets.map(s => ({ name: s.name, fileName: engine.sheetFileName(s.name), csv: s.csv, rows: s.rows, cols: s.cols, warnings: s.warnings }));
+		sendJson(res, 200, { sheets: shaped });
+	} catch (e) {
+		sendJson(res, 502, { error: { type: 'source_error', message: String(e && e.message ? e.message : e) } });
+	}
+}
+
+// POST /sources/pdf: body { dataBase64 } -> { readable, text, pages, reason }. A text PDF returns its
+// extracted text (read-only CONTEXT, never value bindings); a scanned/image-only or password-protected PDF
+// returns readable:false with a plain-words reason, never empty context masquerading as a read.
+async function extractPdfRoute(req, res) {
+	const engine = sourceExtractEngine();
+	const pdfParse = optionalLib('pdf-parse');
+	if (!engine || !pdfParse || !pdfParse.PDFParse) {
+		sendJson(res, 501, { error: { type: 'source_error', message: 'PDF extraction is not available in this build' } });
+		return;
+	}
+	const body = await readBody(req, MAX_SOURCE_BYTES);
+	let parsed;
+	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+	if (!parsed || typeof parsed.dataBase64 !== 'string') {
+		sendJson(res, 400, { error: { type: 'source_error', message: 'dataBase64 is required' } });
+		return;
+	}
+	try {
+		const buffer = Buffer.from(parsed.dataBase64, 'base64');
+		const result = await engine.extractPdf(buffer, pdfParse.PDFParse);
+		sendJson(res, 200, result);
+	} catch (e) {
+		sendJson(res, 502, { error: { type: 'source_error', message: String(e && e.message ? e.message : e) } });
+	}
+}
+
 const server = http.createServer((req, res) => {
 	const url = req.url || '';
 	if (req.method === 'OPTIONS') {
@@ -934,6 +1009,22 @@ const server = http.createServer((req, res) => {
 			console.error('[lwd-proxy] event log failed:', err && err.message ? err.message : err);
 			setCors(res);
 			sendJson(res, 502, { error: { type: 'event_error', message: String(err && err.message ? err.message : err) } });
+		});
+		return;
+	}
+	if (req.method === 'POST' && url.startsWith('/sources/xlsx')) {
+		extractXlsx(req, res).catch(err => {
+			console.error('[lwd-proxy] xlsx extraction failed:', err && err.message ? err.message : err);
+			setCors(res);
+			sendJson(res, 502, { error: { type: 'source_error', message: String(err && err.message ? err.message : err) } });
+		});
+		return;
+	}
+	if (req.method === 'POST' && url.startsWith('/sources/pdf')) {
+		extractPdfRoute(req, res).catch(err => {
+			console.error('[lwd-proxy] pdf extraction failed:', err && err.message ? err.message : err);
+			setCors(res);
+			sendJson(res, 502, { error: { type: 'source_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
 	}

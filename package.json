@@ -250,6 +250,7 @@
     "os-browserify": "^0.3.0",
     "p-all": "^1.0.0",
     "path-browserify": "^1.0.1",
+    "pdf-parse": "^2.4.5",
     "pump": "^1.0.1",
     "rcedit": "^1.1.0",
     "rimraf": "^2.2.8",
@@ -263,6 +264,7 @@
     "typescript": "^6.0.0-dev.20260416",
     "typescript-eslint": "^8.45.0",
     "util": "^0.12.4",
+    "xlsx": "^0.18.5",
     "xml2js": "^0.5.0",
     "yaserver": "^0.4.0"
   },

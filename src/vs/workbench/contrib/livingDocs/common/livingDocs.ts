@@ -271,6 +271,63 @@ export interface ISourcePeek {
 	 * pinned, so an unpublished document's source-peek shows nothing extra. Real data only - from the lock's pins.
 	 */
 	readonly pinnedLabel?: string;
+	/**
+	 * When the peeked CSV was EXTRACTED from a spreadsheet workbook (issue #131, doc 22 §4), the provenance
+	 * hop the drawer shows above the CSV row: figure → CSV row → extracted from `Budget.xlsx · Sheet "FY26"`
+	 * → synced-at. Absent for a hand-authored CSV. Real data only - read from the extraction manifest.
+	 */
+	readonly workbook?: IWorkbookProvenance;
+}
+
+/**
+ * The workbook → sheet provenance hop for a CSV that Abstract extracted from a spreadsheet (issue #131).
+ * Recorded in the extraction manifest (`data/<workbook>/.abstract-source.json`) so the provenance chain
+ * survives on disk as a plain file (P6) and a re-open can rebuild it without re-parsing the workbook.
+ */
+export interface IWorkbookProvenance {
+	/** The originating workbook's file name, e.g. "Budget.xlsx". */
+	readonly workbook: string;
+	/** The sheet the CSV came from, e.g. "FY26". */
+	readonly sheet: string;
+	/** The last extraction time (ISO), shown as "synced N h ago". */
+	readonly syncedAt: string;
+	/** Any NAMED limitations for this sheet (merged headers, pivot layout), surfaced verbatim - never a silent misread. */
+	readonly warnings: readonly string[];
+}
+
+/** The outcome of extracting one sheet of a workbook to a CSV (issue #131). */
+export interface IExtractedSheet {
+	readonly name: string;
+	/** The written CSV's file name under `data/<workbook>/` (e.g. "FY26.csv"). */
+	readonly fileName: string;
+	/** The extracted CSV's workspace-relative path (e.g. "data/Budget/FY26.csv"), for binding + provenance. */
+	readonly relativePath: string;
+	readonly rows: number;
+	readonly cols: number;
+	readonly warnings: readonly string[];
+}
+
+/**
+ * The result of "Use as source" on a spreadsheet workbook (issue #131, doc 22 §4). On success each sheet
+ * became a clean CSV under `data/<workbook>/`; the workbook is now watched and re-extracts on change. On
+ * failure the workbook was left untouched and `reason` names why (P6: the original is never destroyed).
+ */
+export interface IWorkbookUseResult {
+	readonly ok: boolean;
+	readonly sheets: readonly IExtractedSheet[];
+	readonly reason?: string;
+}
+
+/**
+ * The result of "Use as source" on a PDF (issue #131, doc 22 §4 - PDFs are read-only CONTEXT, never value
+ * bindings). On success the PDF became a `context` edge on the target document and its extracted text is
+ * stored as knowledge. An image-only/scanned or password-protected PDF NAMES itself unreadable (`ok:false`
+ * + `reason`) rather than yielding empty context, and no dead edge is created.
+ */
+export interface IPdfContextResult {
+	readonly ok: boolean;
+	readonly pages: number;
+	readonly reason?: string;
 }
 
 /**
@@ -479,6 +536,29 @@ export interface ILivingDocsService {
 	/** The workspace's non-Markdown files (basenames): data/source files for the tree-rail SOURCES section
 	 * and files we cannot yet import (.doc/.docx) for the "Not yet imported" section (plan 37 F9/F10). */
 	listWorkspaceExtras(): Promise<readonly string[]>;
+
+	/**
+	 * Resolve a workspace-extra basename (as listed by `listWorkspaceExtras`) back to its file URI, so a
+	 * tree-rail action (e.g. "Use as source" on a workbook/PDF) can act on the real file (issue #131).
+	 * Returns the first match in the folder, or undefined when the name is not found.
+	 */
+	resolveWorkspaceExtra(name: string): Promise<URI | undefined>;
+
+	/**
+	 * "Use as source" on a spreadsheet workbook (issue #131, doc 22 §4): extract each sheet to a clean CSV
+	 * under `data/<workbook>/`, write the extraction manifest, and WATCH the workbook so a change re-extracts
+	 * the sheets and flags dependent documents through the normal staleness machinery. The workbook stays on
+	 * disk untouched (P6). Extraction runs in the node/proxy layer, never the renderer.
+	 */
+	useXlsxAsSource(workbook: URI): Promise<IWorkbookUseResult>;
+
+	/**
+	 * "Use as source" on a PDF (issue #131, doc 22 §4): extract its text in the node/proxy layer and, when
+	 * readable, register the PDF as a read-only `context` edge on `doc` (framing, never value bindings) with
+	 * its extracted text stored as knowledge. A scanned/image-only or password-protected PDF names itself
+	 * unreadable and no edge is created. The PDF stays on disk and is watched like any context source.
+	 */
+	usePdfAsSource(pdf: URI, doc: URI): Promise<IPdfContextResult>;
 
 	/**
 	 * Import a `.docx` file (by its workspace basename) into a Living Document (issue #129, doc 22 section 2).

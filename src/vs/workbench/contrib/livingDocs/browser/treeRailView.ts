@@ -24,7 +24,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildFileTree, buildOutline, ITreeRailFolder, ITreeRailItem, searchTreeRail } from '../common/treeRail.js';
+import { buildFileTree, buildOutline, ITreeRailFolder, ITreeRailItem, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
 
 type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
 
@@ -210,6 +210,18 @@ export class TreeRailView extends ViewPane {
 			note.textContent = `not yet imported \u2014 ${item.note}`;
 		}
 		if (item.pending) { append(row, $('span.rail-item-dot')); }
+		// A workbook / PDF SOURCES row offers "Use as source" (issue #131): extract sheets to CSVs, or a PDF's
+		// text to read-only context. Inline button (the row has no backing document, so no context menu).
+		if (item.action) {
+			const action = item.action;
+			const label = item.label;
+			const button = append(row, $('button.rail-srcaction')) as HTMLButtonElement;
+			button.textContent = 'Use as source';
+			this._renderDisposables.add(addDisposableListener(button, 'click', e => {
+				e.stopPropagation();
+				void this._useAsSource(action, label);
+			}));
+		}
 		if (item.resource) {
 			const resource = item.resource;
 			// Document rows open in the editor on click/Enter; source-file rows are not openable (a csv/json
@@ -243,6 +255,32 @@ export class TreeRailView extends ViewPane {
 			toAction({ id: 'livingDocs.file.addToChat', label: 'Add to chat', run: () => this._livingDocs.attachToChat(resource) }),
 		];
 		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
+	}
+
+	// "Use as source" on a workbook / PDF row (issue #131). Resolves the file name to its URI, then routes to
+	// the service: a workbook extracts each sheet to a CSV; a PDF extracts its text as read-only context for
+	// the active document. The service raises the plain-words result toast (success, named limitation, or an
+	// unreadable/scanned reason), and its onDidChange re-renders this rail once the new sources land.
+	private async _useAsSource(action: TreeRailAction, name: string): Promise<void> {
+		const resource = await this._livingDocs.resolveWorkspaceExtra(name);
+		if (!resource) {
+			// The classifier listed this row from disk, but the file may have been moved or renamed
+			// since the tree rendered (the one classifier->click race). Name that plainly rather than
+			// swallow the click - the button stays clickable, so the row remains actionable.
+			await this._dialogService.info('That file could not be found', `"${name}" may have been moved or renamed since this list was built. Refresh the sources and try again.`);
+			return;
+		}
+		if (action === 'use-xlsx') {
+			await this._livingDocs.useXlsxAsSource(resource);
+			return;
+		}
+		// A PDF is read-only CONTEXT for a document, so it needs an active document to attach to.
+		const active = this._editors.activeEditor?.resource;
+		if (!active || !active.path.endsWith('.md')) {
+			await this._dialogService.info('Open a document first', `Open the document that ${name} should inform, then use it as a source.`);
+			return;
+		}
+		await this._livingDocs.usePdfAsSource(resource, active);
 	}
 
 	private async _renameFile(resource: URI): Promise<void> {
@@ -493,6 +531,9 @@ export class TreeRailView extends ViewPane {
 			.living-docs-rail .rail-item-unsupported{align-items:flex-start;flex-wrap:wrap;cursor:default}
 			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:var(--vscode-descriptionForeground)}
 			.living-docs-rail .rail-item-note{width:100%;padding-left:25px;font:400 11px/1.4 system-ui;color:var(--vscode-descriptionForeground);opacity:.85}
+			.living-docs-rail .rail-srcaction{margin-left:auto;flex:none;border:1px solid var(--vscode-button-border,transparent);background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);font:500 11px/1 system-ui;cursor:pointer;padding:3px 7px;border-radius:4px;opacity:0}
+			.living-docs-rail .rail-item:hover .rail-srcaction,.living-docs-rail .rail-item:focus-within .rail-srcaction{opacity:1}
+			.living-docs-rail .rail-srcaction:hover{background:var(--vscode-button-secondaryHoverBackground)}
 			.living-docs-rail .rail-import{margin-left:auto;flex:none;border:1px solid oklch(0.55 0.13 255);background:none;color:oklch(0.5 0.13 255);border-radius:6px;padding:4px 9px;font:600 11px/1 system-ui;cursor:pointer;white-space:nowrap}
 			.living-docs-rail .rail-import:hover{background:oklch(0.55 0.13 255);color:#fff}
 			.living-docs-rail .rail-import:disabled{opacity:.6;cursor:default;background:none;color:var(--vscode-descriptionForeground);border-color:var(--vscode-input-border,#d3d8e0)}

@@ -120,6 +120,20 @@ suite('treeRail', () => {
 		assert.strictEqual(classifyWorkspaceExtra('README'), undefined);
 	});
 
+	test('classifyWorkspaceExtra offers workbooks + PDFs as usable sources with a "Use as source" action (issue #131)', () => {
+		assert.deepStrictEqual(classifyWorkspaceExtra('Budget.xlsx'), { kind: 'source', action: 'use-xlsx' });
+		assert.deepStrictEqual(classifyWorkspaceExtra('legacy.XLS'), { kind: 'source', action: 'use-xlsx' });
+		assert.deepStrictEqual(classifyWorkspaceExtra('Report.pdf'), { kind: 'source', action: 'use-pdf' });
+		// A workbook/PDF lands in SOURCES (with its action), never in the dead "Not yet imported" section.
+		const folders = buildFileTree([], ['Budget.xlsx', 'Report.pdf']);
+		const sources = folders.find(f => f.name === 'Sources')!;
+		assert.deepStrictEqual(sources.items.map(i => ({ label: i.label, kind: i.kind, action: i.action })), [
+			{ label: 'Budget.xlsx', kind: 'source', action: 'use-xlsx' },
+			{ label: 'Report.pdf', kind: 'source', action: 'use-pdf' },
+		]);
+		assert.strictEqual(folders.find(f => f.name === 'Not yet imported'), undefined);
+	});
+
 	test('buildOutline returns headings in order, stripped of Markdown and bind syntax', () => {
 		const d = doc('Weekly', [
 			{ text: '# Weekly Operating Summary', level: 1 },

@@ -12,6 +12,11 @@ import { sourceKindOf } from './contextGroups.js';
 // reuses `buildContextGroups`; these three helpers cover the rest and are unit-tested independently of
 // the DOM view that renders them.
 
+// A per-file action a SOURCES row can offer (issue #131): a spreadsheet workbook or a PDF that is not yet
+// wired in but that Abstract CAN turn into a source. `use-xlsx` extracts each sheet to a CSV; `use-pdf`
+// extracts the PDF's text as read-only context. Absent on rows that are already sources or cannot be used.
+export type TreeRailAction = 'use-xlsx' | 'use-pdf';
+
 export interface ITreeRailItem {
 	readonly label: string;
 	/** Present for document rows (clicking opens the editor); absent for non-openable source rows. */
@@ -23,6 +28,8 @@ export interface ITreeRailItem {
 	readonly sourceKind?: SourceKind;
 	/** For an `unsupported` (not-yet-imported) row, the plain-words reason; unset otherwise (plan 37 F10). */
 	readonly note?: string;
+	/** For a workbook/PDF SOURCES row, the "Use as source" action it offers (issue #131). */
+	readonly action?: TreeRailAction;
 	/** For an `unsupported` row we CAN convert (a `.docx`, issue #129): the row shows an "Import as document"
 	 * door instead of a dead reason. Unset (falsy) for a refused format (.doc, password-protected, ...). */
 	readonly importable?: boolean;
@@ -46,10 +53,10 @@ export interface ITreeRailDocInput {
 
 // A non-Markdown file discovered in the workspace, classified for the Files tab: a `source` (a CSV / txt /
 // image / data file that belongs in the SOURCES section, F9), or `unsupported` - either a `.docx` we can now
-// convert (`importable`, issue #129: the row becomes an "Import as document" door) or a format we still
-// refuse to mangle (.doc/.pdf/... marked "not yet imported" with a plain-words reason, F10). Anything we
-// should not surface returns undefined.
-export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupported'; reason?: string; importable?: boolean } | undefined {
+// convert (`importable`, issue #129: the row becomes an "Import as document" door), a workbook/PDF that
+// offers a "Use as source" `action` (issue #131), or a format we still refuse to mangle (.doc/... marked
+// "not yet imported" with a plain-words reason, F10). Anything we should not surface returns undefined.
+export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupported'; reason?: string; action?: TreeRailAction; importable?: boolean } | undefined {
 	if (!name || name.startsWith('.')) { return undefined; }
 	const lower = name.toLowerCase();
 	// Markdown documents are the Reports tree's job; system sidecars and the agents registry are not user data.
@@ -59,6 +66,10 @@ export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupp
 	const ext = dot >= 0 ? lower.slice(dot + 1) : '';
 	if (!ext) { return undefined; }
 	if (SOURCE_EXTS.has(ext)) { return { kind: 'source' }; }
+	// Spreadsheets + PDFs are usable sources, not dead "not yet imported" rows (issue #131, doc 22 §4): a
+	// workbook offers "Use as source" (sheets -> CSVs), a PDF offers "Use as source" (text -> read-only context).
+	const action = SOURCE_ACTIONS[ext];
+	if (action) { return { kind: 'source', action }; }
 	// `.docx` is the one foreign document format we convert (doc 22 section 2): it offers the import door
 	// rather than a dead reason. A password-protected / unparseable .docx is refused at conversion time (the
 	// proxy sniffs the bytes), so it drops back to a plain-words refusal there - never a silent mangle here.
@@ -71,6 +82,13 @@ export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupp
 // Data/source file extensions that belong in the SOURCES section (F9).
 const SOURCE_EXTS = new Set(['csv', 'tsv', 'json', 'txt', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'yaml', 'yml']);
 
+// File types that appear in SOURCES with a "Use as source" action rather than as inert rows (issue #131).
+const SOURCE_ACTIONS: Record<string, TreeRailAction> = {
+	xls: 'use-xlsx',
+	xlsx: 'use-xlsx',
+	pdf: 'use-pdf',
+};
+
 // Formats we cannot yet interpret on open (F10): never silently skipped - the row is shown marked
 // "not yet imported - {reason}" so the user sees the file is there and why it is not opened. `.docx` is
 // deliberately absent - it is importable (handled above), not refused.
@@ -79,9 +97,6 @@ const IMPORT_REASONS: Record<string, string> = {
 	rtf: 'Rich Text documents are not imported yet',
 	odt: 'OpenDocument text is not imported yet',
 	pages: 'Pages documents are not imported yet',
-	pdf: 'PDFs are not imported yet',
-	xls: 'Spreadsheets are not imported yet',
-	xlsx: 'Spreadsheets are not imported yet',
 	ppt: 'Slide decks are not imported yet',
 	pptx: 'Slide decks are not imported yet',
 	key: 'Keynote decks are not imported yet',
@@ -135,10 +150,10 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	// folder-scoped, decision 40), so the Files tab can rename/delete it. An api/mcp source has no file
 	// to act on, and a discovered "extra" (below) is a bare filename with no owning document, so both
 	// carry no resource and their context menu row is inert (gated on `item.resource`).
-	const addSource = (label: string, resource?: URI) => {
+	const addSource = (label: string, resource?: URI, action?: TreeRailAction) => {
 		if (seen.has(label)) { return; }
 		seen.add(label);
-		sources.push({ label, resource, kind: 'source', pending: false, sourceKind: sourceKindOf(label) });
+		sources.push({ label, resource, kind: 'source', pending: false, sourceKind: sourceKindOf(label), ...(action ? { action } : {}) });
 	};
 	for (const d of docs) {
 		for (const s of d.sources) {
@@ -152,7 +167,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	for (const name of extras) {
 		const c = classifyWorkspaceExtra(name);
 		if (!c) { continue; }
-		if (c.kind === 'source') { addSource(name); continue; }
+		if (c.kind === 'source') { addSource(name, undefined, c.action); continue; }
 		if (seenUnsupported.has(name)) { continue; }
 		seenUnsupported.add(name);
 		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason, importable: c.importable });
