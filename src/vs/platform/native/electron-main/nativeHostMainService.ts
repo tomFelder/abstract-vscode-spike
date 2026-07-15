@@ -878,6 +878,33 @@ export class NativeHostMainService extends Disposable implements INativeHostMain
 		return buf && VSBuffer.wrap(buf);
 	}
 
+	// Print a self-contained HTML page to PDF (living-docs export, issue #130). An offscreen, hidden
+	// BrowserWindow loads the HTML via a data URL, then Electron's webContents.printToPDF renders it - the
+	// cheapest correct path (doc 22 §3), reusing Chromium's own print engine, no new renderer. Fail-soft: any
+	// failure returns undefined so the caller surfaces an honest message rather than throwing.
+	async printToPDF(windowId: number | undefined, html: string): Promise<VSBuffer | undefined> {
+		let win: BrowserWindow | undefined;
+		try {
+			win = new BrowserWindow({
+				show: false,
+				webPreferences: { sandbox: true, javascript: false, images: true }
+			});
+			const loaded = new Promise<void>((resolve, reject) => {
+				win!.webContents.once('did-finish-load', () => resolve());
+				win!.webContents.once('did-fail-load', (_e, code, desc) => reject(new Error(`load failed ${code}: ${desc}`)));
+			});
+			await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+			await loaded;
+			const data = await win.webContents.printToPDF({ printBackground: true, margins: { marginType: 'default' } });
+			return VSBuffer.wrap(data);
+		} catch (error) {
+			this.logService.error('[NativeHostMainService] printToPDF failed', error);
+			return undefined;
+		} finally {
+			win?.destroy();
+		}
+	}
+
 	//#endregion
 
 

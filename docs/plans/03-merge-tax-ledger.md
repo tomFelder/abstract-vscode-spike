@@ -384,3 +384,23 @@ pre-existing, the newest being the v2-iter-9 76px `ACTIVITYBAR_WIDTH`. This is t
 the redesign that was expected to force a core seam (the labeled nav) needed none. The fork resisted far
 less than predicted; the residual coupling the redesign adds is appearance wiring (the codicon-class DOM
 reach for the nav chip/tidy, fails-soft/cosmetic on rename), not behavioural forks.
+
+### Export round (plan 40, A2 - issue #130): +1 core patch (count 5 -> 6)
+
+Unstubbing docx export and adding PDF (doc 22 §3). docx is entirely our-surface + additive: a
+zero-dependency pure-JS OOXML writer (`scripts/lwd-docx.js`) exposed through a new proxy route
+(`scripts/lwd-anthropic-proxy.js` `POST /export/docx`), driven by `livingDocsService.exportDocx` +
+the present modal - no core edit.
+
+PDF needs Electron's `webContents.printToPDF`, a main-process capability with no existing seam, so it
+takes **the one core patch of this round**:
+
+| Item | Change | Tier | File(s) | Note |
+|------|--------|------|---------|------|
+| A2-1 | `printToPDF(html)` on the native host: offscreen hidden `BrowserWindow` loads the HTML via a data URL and prints to PDF | **core-patch** | `platform/native/common/native.ts` (interface), `platform/native/electron-main/nativeHostMainService.ts` (impl), `workbench/test/electron-browser/workbenchTestServices.ts` (`TestNativeHostService` stub) | One new method on `ICommonNativeHostService`, modelled on the existing `getScreenshot` (also a `webContents`->`VSBuffer` capability). Fail-soft: any failure returns `undefined`. |
+| A2-2 | Desktop-only command `_livingDocs.printToPDF` bridging the browser service to the native host | additive-contribution | `livingDocs/electron-browser/livingDocsPdf.contribution.ts` (new), `workbench.desktop.main.ts` (one import line) | Keeps the browser-layer `LivingDocsService` free of a desktop dependency; on web the command is simply absent and PDF reports honestly. The one desktop-barrel import is the same kind of additive wiring as the existing `browser/livingDocs.contribution` import in `workbench.common.main`. |
+
+Why a core patch was unavoidable: `printToPDF` is a Chromium/Electron main-process API; the renderer
+cannot produce PDF bytes silently (`window.print()` opens a dialog and yields nothing). Adding one
+`getScreenshot`-shaped method to the native host is the minimal, upstream-mergeable seam. **New core-patch
+count: 6 total (was 5).**

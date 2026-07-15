@@ -187,6 +187,7 @@ export class TestNativeHostService implements INativeHostService {
 	async profileRenderer(): Promise<any> { throw new Error(); }
 	async startTracing(): Promise<void> { throw new Error(); }
 	async getScreenshot(rect?: IRectangle): Promise<VSBuffer | undefined> { return undefined; }
+	async printToPDF(html: string): Promise<VSBuffer | undefined> { return undefined; }
 	async uploadFileViaMobileApi(_token: string, _repoId: string, fileName: string, _fileBytes: VSBuffer, contentType: string): Promise<{ fileName: string; assetUrl: string; contentType: string }> { return { fileName, assetUrl: '', contentType }; }
 	async showToast(options: IToastOptions): Promise<IToastResult> { return { supported: false, clicked: false }; }
 	async clearToast(id: string): Promise<void> { }

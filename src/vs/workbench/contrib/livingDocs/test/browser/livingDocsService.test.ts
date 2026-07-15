@@ -18,6 +18,7 @@ import { IConfigurationService } from '../../../../../platform/configuration/com
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IFileDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { IHostService } from '../../../../services/host/browser/host.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
@@ -190,6 +191,13 @@ suite('LivingDocsService', () => {
 	// test can prove the credential (the secret VALUE) never leaves the proxy - the renderer only names it.
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
+	// Issue #130: capture the HTML the renderer hands the desktop print-to-PDF command, and let a test control
+	// the bytes it returns (undefined mimics the web harness where the command is absent). `lastDocxBody` is
+	// the JSON the renderer POSTs to the proxy's /export/docx route (so a test can prove it carries the
+	// resolved Markdown, not bindings).
+	let lastPrintPdfHtml: string | undefined;
+	let pdfCommandBytes: VSBuffer | undefined;
+	let lastDocxBody: string | undefined;
 
 	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
@@ -268,6 +276,13 @@ suite('LivingDocsService', () => {
 		const requestService = {
 			request: async (options: { url?: string; data?: string }) => {
 				const url = options.url ?? '';
+				// Issue #130: the docx export route returns .docx BYTES, not JSON. The real bytes are proven by
+				// the pure-node writer test (scripts/test/lwd-docx.test.js); here we return a PK-headed buffer and
+				// capture the posted body so the SERVICE wiring (gate -> resolved Markdown -> POST -> write) is proven.
+				if (url.includes('/export/docx')) {
+					lastDocxBody = options.data;
+					return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.wrap(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x64, 0x6f, 0x63, 0x78]))) };
+				}
 				let payload: object = API_PAYLOAD;
 				// The proxy routes (plan 29 iter 4): /mcp/resolve returns the extracted value + raw payload;
 				// /proxy/fetch returns the authenticated api JSON. Both capture the sent body so a test can
@@ -299,8 +314,17 @@ suite('LivingDocsService', () => {
 		lastMcpBody = undefined;
 		lastProxyFetchBody = undefined;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
+		lastPrintPdfHtml = undefined;
+		// Fake the desktop-only print-to-PDF command: record the HTML and return the configured bytes (default
+		// undefined = the command is absent, as on the web harness).
+		const commandService = {
+			executeCommand: async (id: string, html: string) => {
+				if (id === '_livingDocs.printToPDF') { lastPrintPdfHtml = html; return pdfCommandBytes; }
+				return undefined;
+			},
+		} as unknown as ICommandService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
 		store.add(service);
 		return service;
 	}
@@ -1981,6 +2005,52 @@ suite('LivingDocsService', () => {
 		assert.ok(!md.includes('bind:') && !md.includes(']('), 'no bind-link syntax in the export');
 	});
 
+	test('exportDocx posts the RESOLVED Markdown to the proxy route and writes the .docx beside the document', async () => {
+		const service = createService([]);
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
+
+		const target = await service.exportDocx(WEEKLY);
+		assert.ok(target && target.path.endsWith('Weekly Summary.export.docx'), `target name: ${target?.path}`);
+		const posted = JSON.parse(lastDocxBody ?? '{}');
+		assert.ok(posted.markdown.includes('$48.6k') && !posted.markdown.includes('bind:'), 'the posted body carries resolved values, no bindings');
+		assert.ok((lastFiles!.get(target!.toString()) ?? '').startsWith('PK'), 'the returned .docx bytes are written beside the document');
+	});
+
+	test('exportDocx honours the before-export gate: blocked unforced, audited override with force', async () => {
+		const service = createService([], { badBind: true });
+		await service.loadDocument(BADBIND);
+
+		assert.strictEqual(await service.exportDocx(BADBIND), undefined, 'an unforced docx export is blocked at the gate');
+		const target = await service.exportDocx(BADBIND, true);
+		assert.ok(target && target.path.endsWith('.export.docx'), 'the forced docx export writes the file');
+		assert.ok(service.getAudit().some(e => e.via === 'override'), 'the override lands on the audit trail via:override');
+	});
+
+	test('exportPdf hands the self-contained HTML to the desktop print command and writes the .pdf', async () => {
+		const service = createService([]);
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
+		pdfCommandBytes = VSBuffer.wrap(new Uint8Array([0x25, 0x50, 0x44, 0x46])); // "%PDF"
+
+		const target = await service.exportPdf(WEEKLY);
+		assert.ok(target && target.path.endsWith('Weekly Summary.export.pdf'), `target name: ${target?.path}`);
+		assert.ok((lastPrintPdfHtml ?? '').includes('<!DOCTYPE html>') && (lastPrintPdfHtml ?? '').includes('Weekly Operating Summary'), 'the resolved HTML page was handed to print-to-PDF');
+		assert.ok((lastFiles!.get(target!.toString()) ?? '').startsWith('%PDF'), 'the PDF bytes are written beside the document');
+		pdfCommandBytes = undefined;
+	});
+
+	test('exportPdf is honestly unavailable on the web harness (no print command) and writes nothing', async () => {
+		const service = createService([]);
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
+		pdfCommandBytes = undefined; // the desktop command is absent on web
+
+		const target = await service.exportPdf(WEEKLY);
+		assert.strictEqual(target, undefined, 'no PDF is produced when the desktop print command is absent');
+		assert.strictEqual(lastFiles!.get(URI.file('/ws/Weekly Summary.export.pdf').toString()), undefined, 'nothing is written');
+	});
+
 	function manualAgent(policy: AgentPolicy): IAgentDef {
 		return { id: 'agent', name: 'Agent', trigger: { kind: 'manual' }, flow: { sources: [], docs: [WEEKLY.toString()] }, policy, status: 'idle' };
 	}
@@ -2366,7 +2436,8 @@ suite('LivingDocsService', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: mountRoot, name: opts.folderName ?? 'mount' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
+		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
 		store.add(service);
 		return { service, files, registerProvider };
 	}

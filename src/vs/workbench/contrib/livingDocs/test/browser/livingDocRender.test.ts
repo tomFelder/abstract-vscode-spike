@@ -27,20 +27,24 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		return renderLivingDocHtml(input);
 	}
 
-	// (plan 33 iter 4, L8) Present is honest: only the two exports Abstract genuinely writes (a
-	// self-contained HTML page and clean Markdown) are selectable; the native-format / cloud
-	// destinations are shown as "Soon" and cannot be chosen or fired.
-	test('Present offers exactly the two real exports as selectable, and marks the rest "Soon"', () => {
+	// (plan 33 iter 4, L8; doc 22 §3) Present is honest: the exports Abstract genuinely writes (HTML,
+	// Markdown, PDF and a built-in-styled Word .docx) are selectable; the cloud/spreadsheet destinations
+	// stay "Soon" and cannot be chosen or fired.
+	test('Present offers the four real exports as selectable, and keeps gdoc/gsheet/xlsx "Soon"', () => {
 		const h = html({ open: true, choice: 'html' });
-		// The two real destinations are selectable (carry a data-present-choice hook).
-		assert.ok(h.includes('data-present-choice="html"'), 'HTML export is selectable');
-		assert.ok(h.includes('data-present-choice="markdown"'), 'Markdown export is selectable');
-		// The four aspirational destinations are listed but NOT selectable and carry a Soon marker.
-		const soon: PresentChoice[] = ['gdoc', 'gsheet', 'docx', 'xlsx'];
+		// The four real destinations are selectable (carry a data-present-choice hook).
+		const real: PresentChoice[] = ['html', 'markdown', 'pdf', 'docx'];
+		for (const k of real) {
+			assert.ok(h.includes(`data-present-choice="${k}"`), `${k} export is selectable`);
+		}
+		// The remaining cloud/spreadsheet destinations are listed but NOT selectable and carry a Soon marker.
+		const soon: PresentChoice[] = ['gdoc', 'gsheet', 'xlsx'];
 		for (const k of soon) {
 			assert.ok(!h.includes(`data-present-choice="${k}"`), `${k} is not selectable`);
 		}
 		assert.ok(h.includes('SOON'), 'a Soon marker is shown for the not-yet-real destinations');
+		// The Word destination, when selected, offers the title-case CTA (doc 22 label rule).
+		assert.ok(html({ open: true, choice: 'docx' }).includes('Export as Word'), 'the Word CTA reads "Export as Word"');
 		// No fabricated hosting / access-control / shareable URL is claimed anywhere.
 		assert.ok(!h.includes('WHO CAN ACCESS'), 'no fabricated access-control section');
 		assert.ok(!h.includes('opportunity-os'), 'no old-brand fabricated shareable URL');
