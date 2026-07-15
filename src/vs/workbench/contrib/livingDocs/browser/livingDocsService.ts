@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
+import { decodeBase64, encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { Limiter } from '../../../../base/common/async.js';
@@ -25,7 +25,8 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
@@ -1550,6 +1551,38 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return undefined;
 	}
 
+	// --- docx -> Markdown import (issue #129, doc 22 section 2) ---
+
+	// Find the first workspace file with the given basename (the tree row carries a basename, not a URI, so
+	// import resolves it here). Bounded, hidden-dir-skipping walk like `_collectExtras`. Undefined when gone.
+	private async _findExtraUri(name: string): Promise<URI | undefined> {
+		const walk = async (dir: URI, depth: number): Promise<URI | undefined> => {
+			if (depth > 4) { return undefined; }
+			let children;
+			try {
+				children = (await this._files.resolve(dir)).children ?? [];
+			} catch {
+				return undefined;
+			}
+			for (const child of children) {
+				const childName = basename(child.resource);
+				if (child.isDirectory) {
+					if (childName.startsWith('.') || childName === 'node_modules' || childName === 'out') { continue; }
+					const hit = await walk(child.resource, depth + 1);
+					if (hit) { return hit; }
+				} else if (childName === name) {
+					return child.resource;
+				}
+			}
+			return undefined;
+		};
+		for (const folder of this._workspace.getWorkspace().folders) {
+			const hit = await walk(folder.uri, 0);
+			if (hit) { return hit; }
+		}
+		return undefined;
+	}
+
 	private async _findExtra(dir: URI, name: string, depth: number): Promise<URI | undefined> {
 		if (depth > 4) { return undefined; }
 		let children;
@@ -1719,6 +1752,94 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				} catch { /* no or invalid manifest - skip this folder */ }
 			}
 		}
+	}
+
+	async importDocx(name: string): Promise<IImportOutcome | undefined> {
+		const source = await this._findExtraUri(name);
+		if (!source) {
+			this._notify.info('That file could not be found - it may have been moved or renamed.');
+			return undefined;
+		}
+		// Read the original bytes and hash them for provenance (the same FNV-1a the binding freshness uses),
+		// then convert THROUGH the node/proxy layer (mammoth) - never in the renderer (doc 22 section 2).
+		let base64: string;
+		let sourceHash: string;
+		try {
+			const bytes = (await this._files.readFile(source)).value;
+			base64 = encodeBase64(bytes);
+			sourceHash = hashString(base64);
+		} catch (e) {
+			this._log.warn('[livingDocs] docx import: unreadable source', e);
+			this._notify.info(`"${name}" could not be read.`);
+			return { ok: false, reason: 'The file could not be read' };
+		}
+
+		let response: { ok?: boolean; html?: string; detections?: IDocxDetections; reason?: string; error?: { message?: string } } | null;
+		try {
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/import/docx`,
+				headers: { 'content-type': 'application/json' },
+				data: JSON.stringify({ base64 }),
+				callSite: 'livingDocs.importDocx',
+			}, CancellationToken.None);
+			response = await asJson(context);
+		} catch (e) {
+			this._log.warn('[livingDocs] docx import: proxy unreachable', e);
+			this._notify.info('The importer is not running. Start the local model proxy and try again.');
+			return { ok: false, reason: 'The importer is not running' };
+		}
+		if (!response || response.error || response.ok === false || typeof response.html !== 'string') {
+			// A refused file (encrypted / legacy / unparseable) stays in the "not yet imported" state - the
+			// row is untouched, the original is not mangled, and the reason is named plainly (F10 / doc 22).
+			const reason = response?.reason ?? response?.error?.message ?? 'The file could not be imported';
+			this._notify.info(`"${name}" was not imported - ${reason}.`);
+			return { ok: false, reason };
+		}
+
+		// Convert to Markdown + lift images. Compute the target NAME first (beside the original, never
+		// overwriting) so the image asset paths the Markdown references match the document's real stem.
+		const dir = dirname(source);
+		const originalStem = name.replace(/\.docx$/i, '');
+		const target = await this._uniqueDocUri(dir, LivingDocsService._safeStem(originalStem) || 'Imported Document');
+		const stem = basename(target).replace(/\.md$/, '');
+		const detections = response.detections ?? { comments: false, trackedChanges: false, footnotes: false, textboxes: false, headersFooters: false };
+		const conversion = convertDocxHtml(response.html, stem, detections);
+
+		try {
+			// Write the extracted images first so the freshly-opened document resolves its references.
+			for (const image of conversion.images) {
+				const assetUri = joinPath(dir, 'assets', stem, image.name);
+				await this._files.writeFile(assetUri, decodeBase64(image.base64));
+			}
+			await this._files.writeFile(target, VSBuffer.fromString(conversion.markdown));
+			// Provenance from birth (doc 22 section 2): the lock records where the .md came from, a hash of the
+			// untouched original, and the plain-words kept/dropped summary so the provenance stays honest.
+			const lock = emptyLock();
+			lock.imported = {
+				from: name,
+				sourceHash,
+				importedAt: new Date().toISOString(),
+				kept: conversion.kept,
+				dropped: conversion.dropped,
+			};
+			await this._lockStore.write(target, lock);
+		} catch (e) {
+			this._log.warn('[livingDocs] docx import: write failed', e);
+			this._notify.info(`"${name}" could not be written after conversion.`);
+			return { ok: false, reason: 'The converted document could not be written' };
+		}
+
+		await this._editors.openEditor({ resource: target, options: { pinned: true } });
+		// The plain-words kept/dropped summary card (doc 22 section 2): sticky so the honesty about what the
+		// conversion kept and dropped is not a flash. Real data only - built from the actual conversion.
+		this._notify.notify({
+			severity: Severity.Info,
+			message: `Imported "${name}" - ${formatImportSummary(conversion.kept, conversion.dropped)}. The original is kept beside it.`,
+			sticky: true,
+		});
+		this._onDidChange.fire();
+		return { ok: true, resource: target, kept: conversion.kept, dropped: conversion.dropped };
 	}
 
 	// A document is any `.md` file; generated `.export.md` / `.source.md` views are skipped, and template
