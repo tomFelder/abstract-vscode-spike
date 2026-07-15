@@ -211,7 +211,13 @@ export class TreeRailView extends ViewPane {
 	// unreadable/scanned reason), and its onDidChange re-renders this rail once the new sources land.
 	private async _useAsSource(action: TreeRailAction, name: string): Promise<void> {
 		const resource = await this._livingDocs.resolveWorkspaceExtra(name);
-		if (!resource) { return; }
+		if (!resource) {
+			// The classifier listed this row from disk, but the file may have been moved or renamed
+			// since the tree rendered (the one classifier->click race). Name that plainly rather than
+			// swallow the click - the button stays clickable, so the row remains actionable.
+			await this._dialogService.info('That file could not be found', `"${name}" may have been moved or renamed since this list was built. Refresh the sources and try again.`);
+			return;
+		}
 		if (action === 'use-xlsx') {
 			await this._livingDocs.useXlsxAsSource(resource);
 			return;
