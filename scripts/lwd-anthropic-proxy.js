@@ -772,6 +772,7 @@ async function postEvent(req, res) {
 // images make the payload larger than the default JSON routes.
 const DOCX_MAX_BODY_BYTES = 24 * 1024 * 1024;
 async function exportDocx(req, res) {
+	setCors(res);
 	const body = await readBody(req, DOCX_MAX_BODY_BYTES);
 	let parsed;
 	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
@@ -780,7 +781,6 @@ async function exportDocx(req, res) {
 		return;
 	}
 	const bytes = renderDocx({ title: parsed.title, subtitle: parsed.subtitle, markdown: parsed.markdown, images: parsed.images });
-	setCors(res);
 	res.writeHead(200, { 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'content-length': bytes.length });
 	res.end(bytes);
 }

@@ -17,14 +17,22 @@
 // is exercised end-to-end by a plain Node unit script (test/lwd-docx.test.js) without a workbench build - the
 // "pure node path" the acceptance criteria are proven on.
 
-const MAX_IMAGE_EMU = 5486400; // 6 inches at 914400 EMU/inch - the printable body width, so an image never overflows the page.
+const MAX_IMAGE_WIDTH_EMU = 5486400; // 6 inches at 914400 EMU/inch - the printable body width, so an image never overflows the page horizontally.
+const MAX_IMAGE_HEIGHT_EMU = 8229600; // 9 inches - the printable body height (Letter, 1-inch margins), so a tall image is not clipped off the page.
 const EMU_PER_PX = 9525; // 914400 EMU per inch / 96 px per inch.
 
 // --- XML helpers ----------------------------------------------------------------------------------------
 
+// Characters forbidden in XML 1.0 char data: the C0 controls except tab/newline/carriage-return, plus the two
+// non-characters U+FFFE/U+FFFF. A single one of these (e.g. a NUL in a bound value) makes document.xml malformed,
+// so we drop them before entity-escaping.
+// eslint-disable-next-line no-control-regex
+const XML_FORBIDDEN = new RegExp('[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]', 'g');
+
 /** Escape the five XML predefined entities so nothing in a source value can break out as markup. */
 function xml(s) {
 	return String(s == null ? '' : s)
+		.replace(XML_FORBIDDEN, '')
 		.replace(/&/g, '&amp;')
 		.replace(/</g, '&lt;')
 		.replace(/>/g, '&gt;')
@@ -35,9 +43,54 @@ function xml(s) {
 // --- inline Markdown -> runs ----------------------------------------------------------------------------
 
 /**
+ * True when a run of `d` (length `len`) at `i` can CLOSE emphasis: it must be right-flanking (preceded by a
+ * non-whitespace char) and, for `_`, not sit intra-word (followed by a word char). This is the guard that keeps
+ * `customer_id` from being read as an italic toggle.
+ * @param {string} text @param {number} i @param {string} d @param {number} len
+ */
+function canCloseEmphasis(text, i, d, len) {
+	const before = text[i - 1];
+	if (before === undefined || /\s/.test(before)) { return false; }
+	if (d === '_' && /\w/.test(text[i + len] || '')) { return false; }
+	return true;
+}
+
+/**
+ * Index of the next valid closing delimiter run for `d`×`len` at/after `from`, or -1 when the emphasis is never
+ * closed (so the opener should be emitted literally rather than swallowed).
+ * @param {string} text @param {number} from @param {string} d @param {number} len
+ */
+function findEmphasisCloser(text, from, d, len) {
+	let j = from;
+	while (j < text.length) {
+		if (text[j] !== d) { j++; continue; }
+		let k = j;
+		while (k < text.length && text[k] === d) { k++; }
+		if (k - j >= len && canCloseEmphasis(text, j, d, len)) { return j; }
+		j = k;
+	}
+	return -1;
+}
+
+/**
+ * True when a run of `d` (length `len`) at `i` can OPEN emphasis: it must be left-flanking (followed by a
+ * non-whitespace char), not intra-word for `_`, and have a matching closer somewhere ahead. Unmatched or
+ * intra-word delimiters fail here and are kept as literal text.
+ * @param {string} text @param {number} i @param {string} d @param {number} len
+ */
+function canOpenEmphasis(text, i, d, len) {
+	const after = text[i + len];
+	if (after === undefined || /\s/.test(after)) { return false; }
+	if (d === '_' && /\w/.test(text[i - 1] || '')) { return false; }
+	return findEmphasisCloser(text, i + len, d, len) !== -1;
+}
+
+/**
  * Tokenise one line of Markdown into styled runs. Handles the beta inline floor: bold (`**`/`__`), italic
  * (`*`/`_`), inline code (`` ` ``), links (`[text](url)`) and inline images (`![alt](src)`). Everything else
- * is literal text. The walk is deliberately simple and left-to-right so it never mis-nests.
+ * is literal text. The walk is deliberately simple and left-to-right so it never mis-nests, and it only
+ * consumes a `*`/`_` as emphasis when a matching, word-boundary-respecting closer exists - so intra-word or
+ * unmatched delimiters (`customer_id`, `a * b`, `unmatched_`) survive as literal characters.
  * @param {string} text
  * @returns {Array<{ kind: 'text'|'link'|'image'; text?: string; bold?: boolean; italic?: boolean; code?: boolean; href?: string; src?: string; alt?: string }>}
  */
@@ -47,6 +100,8 @@ function parseInline(text) {
 	let plain = '';
 	let bold = false;
 	let italic = false;
+	let boldChar = '';
+	let italicChar = '';
 	const flush = () => { if (plain) { runs.push({ kind: 'text', text: plain, bold, italic }); plain = ''; } };
 	while (i < text.length) {
 		const rest = text.slice(i);
@@ -59,10 +114,20 @@ function parseInline(text) {
 		// Inline code: `code`
 		m = /^`([^`]+)`/.exec(rest);
 		if (m) { flush(); runs.push({ kind: 'text', text: m[1], code: true }); i += m[0].length; continue; }
-		// Bold: ** or __
-		if (rest.startsWith('**') || rest.startsWith('__')) { flush(); bold = !bold; i += 2; continue; }
-		// Italic: single * or _
-		if ((rest[0] === '*' || rest[0] === '_')) { flush(); italic = !italic; i += 1; continue; }
+		// Bold: ** or __ - close only a run opened by the same delimiter; open only when a matching closer exists.
+		if (rest.startsWith('**') || rest.startsWith('__')) {
+			const d = rest[0];
+			if (bold && boldChar === d && canCloseEmphasis(text, i, d, 2)) { flush(); bold = false; boldChar = ''; i += 2; continue; }
+			if (!bold && canOpenEmphasis(text, i, d, 2)) { flush(); bold = true; boldChar = d; i += 2; continue; }
+			plain += rest.slice(0, 2); i += 2; continue;
+		}
+		// Italic: single * or _ - same open/close discipline as bold.
+		if (rest[0] === '*' || rest[0] === '_') {
+			const d = rest[0];
+			if (italic && italicChar === d && canCloseEmphasis(text, i, d, 1)) { flush(); italic = false; italicChar = ''; i += 1; continue; }
+			if (!italic && canOpenEmphasis(text, i, d, 1)) { flush(); italic = true; italicChar = d; i += 1; continue; }
+			plain += d; i += 1; continue;
+		}
 		plain += text[i];
 		i += 1;
 	}
@@ -124,14 +189,18 @@ function parseBlocks(md) {
 		// List (bullet or ordered), possibly nested by indentation.
 		if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
 			const items = [];
+			let start = 1;
+			let sawOrdered = false;
 			while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
 				const li = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
 				const indent = li[1].replace(/\t/g, '    ').length;
 				const ordered = /\d/.test(li[2]);
+				// Remember the first ordered marker's ordinal so `3. Third` keeps starting at 3, not 1.
+				if (ordered && !sawOrdered) { start = parseInt(li[2], 10) || 1; sawOrdered = true; }
 				items.push({ level: Math.min(4, Math.floor(indent / 2)), ordered, text: li[3].trim() });
 				i++;
 			}
-			blocks.push({ type: 'list', items });
+			blocks.push({ type: 'list', items, start });
 			continue;
 		}
 		// Standalone image paragraph.
@@ -197,7 +266,8 @@ function extForMime(mime) {
 // --- document.xml assembly -----------------------------------------------------------------------------
 
 const BULLET_NUM_ID = 1;
-const ORDERED_NUM_ID = 2;
+const ORDERED_NUM_ID = 2; // The default numId the built-in ListNumber style points at.
+const ORDERED_NUM_BASE = 100; // Per-ordered-list numbering instances start here, so each list numbers independently.
 
 /** Serialise one styled run into a `<w:r>`. */
 function runXml(r, rels) {
@@ -224,9 +294,13 @@ function linkXml(r, rels) {
 function imageRunXml(r, rels) {
 	const media = rels.addImage(r.src);
 	if (!media) { return `<w:r><w:t xml:space="preserve">${xml('[image: ' + (r.alt || r.src) + ']')}</w:t></w:r>`; }
-	let cx = media.w * EMU_PER_PX;
-	let cy = media.h * EMU_PER_PX;
-	if (cx > MAX_IMAGE_EMU) { cy = Math.round(cy * (MAX_IMAGE_EMU / cx)); cx = MAX_IMAGE_EMU; }
+	let cx = Math.max(1, media.w) * EMU_PER_PX;
+	let cy = Math.max(1, media.h) * EMU_PER_PX;
+	// Scale down proportionally so the image fits within BOTH the printable width and height - a tall
+	// screenshot that is only width-clamped would otherwise run dozens of inches off the bottom of the page.
+	const scale = Math.min(1, MAX_IMAGE_WIDTH_EMU / cx, MAX_IMAGE_HEIGHT_EMU / cy);
+	cx = Math.round(cx * scale);
+	cy = Math.round(cy * scale);
 	const id = media.id;
 	const name = xml(r.alt || `image${id}`);
 	return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">`
@@ -291,8 +365,18 @@ function blockXml(block, rels) {
 			return block.text.split('\n').map(l => paragraphXml('HTMLPreformatted', `<w:r><w:t xml:space="preserve">${xml(l)}</w:t></w:r>`)).join('');
 		case 'image':
 			return paragraphXml('', imageRunXml(block, rels));
-		case 'list':
-			return block.items.map(it => paragraphXml(it.ordered ? 'ListNumber' : 'ListBullet', inlineXml(it.text, rels), it.ordered ? ORDERED_NUM_ID : BULLET_NUM_ID, it.level)).join('');
+		case 'list': {
+			// Allocate ONE ordered numbering instance for this list block (lazily, only if it has ordered items) so
+			// separate ordered lists number independently and this one starts at its captured ordinal.
+			let orderedNumId = 0;
+			return block.items.map(it => {
+				if (it.ordered) {
+					if (!orderedNumId) { orderedNumId = rels.addOrderedList(block.start); }
+					return paragraphXml('ListNumber', inlineXml(it.text, rels), orderedNumId, it.level);
+				}
+				return paragraphXml('ListBullet', inlineXml(it.text, rels), BULLET_NUM_ID, it.level);
+			}).join('');
+		}
 		case 'table':
 			// A trailing empty paragraph keeps Word from merging a table with whatever follows.
 			return tableXml(block, rels) + '<w:p/>';
@@ -310,11 +394,17 @@ function makeRels(images) {
 	let picId = 1000;
 	const hyperlinks = [];
 	const media = [];
+	const orderedLists = [];
 	return {
 		addHyperlink(href) {
 			const rId = `rId${next++}`;
 			hyperlinks.push({ rId, href: href || '' });
 			return rId;
+		},
+		addOrderedList(start) {
+			const numId = ORDERED_NUM_BASE + orderedLists.length;
+			orderedLists.push({ numId, start: start > 0 ? start : 1 });
+			return numId;
 		},
 		addImage(src) {
 			const data = images && images[src];
@@ -333,6 +423,7 @@ function makeRels(images) {
 		},
 		hyperlinks,
 		media,
+		orderedLists,
 	};
 }
 
@@ -398,8 +489,10 @@ function stylesXml() {
 }
 
 // numbering.xml: one bullet list + one decimal list, each with five indent levels so nested items render
-// real glyphs (referencing a built-in List style alone does not carry the numbering association).
-function numberingXml() {
+// real glyphs (referencing a built-in List style alone does not carry the numbering association). Every ordered
+// list block from the body also gets its OWN `<w:num>` instance (via rels.orderedLists), each overriding the
+// level-0 start so separate lists number independently and a list beginning at `3.` keeps its ordinal.
+function numberingXml(rels) {
 	const levels = fmt => {
 		let out = '';
 		for (let l = 0; l < 5; l++) {
@@ -408,12 +501,16 @@ function numberingXml() {
 		}
 		return out;
 	};
+	const orderedInstances = ((rels && rels.orderedLists) || [])
+		.map(o => `<w:num w:numId="${o.numId}"><w:abstractNumId w:val="1"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="${o.start}"/></w:lvlOverride></w:num>`)
+		.join('');
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`
 		+ `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`
 		+ `<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>${levels('bullet')}</w:abstractNum>`
 		+ `<w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="multilevel"/>${levels('decimal')}</w:abstractNum>`
 		+ `<w:num w:numId="${BULLET_NUM_ID}"><w:abstractNumId w:val="0"/></w:num>`
 		+ `<w:num w:numId="${ORDERED_NUM_ID}"><w:abstractNumId w:val="1"/></w:num>`
+		+ orderedInstances
 		+ `</w:numbering>`;
 }
 
@@ -422,7 +519,7 @@ function documentXml(title, subtitle, blocks, rels) {
 	if (title) { body.push(paragraphXml('Title', inlineXml(title, rels))); }
 	if (subtitle) { body.push(paragraphXml('Subtitle', inlineXml(subtitle, rels))); }
 	for (const block of blocks) { body.push(blockXml(block, rels)); }
-	// A section with Letter page size + 1-inch margins, so the printable width matches MAX_IMAGE_EMU.
+	// A section with Letter page size + 1-inch margins, so the printable width matches MAX_IMAGE_WIDTH_EMU.
 	const sectPr = `<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>`;
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`
 		+ `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" `
@@ -548,7 +645,7 @@ function renderDocx(input) {
 		{ name: 'word/document.xml', data: Buffer.from(docXml, 'utf8') },
 		{ name: 'word/_rels/document.xml.rels', data: Buffer.from(documentRels(rels), 'utf8') },
 		{ name: 'word/styles.xml', data: Buffer.from(stylesXml(), 'utf8') },
-		{ name: 'word/numbering.xml', data: Buffer.from(numberingXml(), 'utf8') },
+		{ name: 'word/numbering.xml', data: Buffer.from(numberingXml(rels), 'utf8') },
 	];
 	for (const m of rels.media) {
 		entries.push({ name: `word/${m.partName}`, data: m.buf });

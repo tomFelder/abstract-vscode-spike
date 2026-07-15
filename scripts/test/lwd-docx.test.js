@@ -15,7 +15,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { renderDocx, crc32 } = require('../lwd-docx.js');
+const { renderDocx, parseInline, crc32 } = require('../lwd-docx.js');
 
 /** Extract one named entry from a ZIP buffer via its central directory (validates the archive is well-formed). */
 function readZipEntry(buf, name) {
@@ -108,7 +108,7 @@ function main() {
 
 	// 3. Built-in styles: the body uses these (the leading `# title` is promoted to Title, the `##` sections to
 	// Heading 2), and styles.xml DEFINES the full set (incl. Heading 1) so the receiving org can restyle.
-	for (const styleId of ['Title', 'Subtitle', 'Heading2', 'ListBullet', 'ListNumber', 'TableGrid']) {
+	for (const styleId of ['Title', 'Subtitle', 'Heading2', 'ListBullet', 'ListNumber', 'TableGrid', 'Quote', 'Hyperlink']) {
 		assert.ok(docXml.includes(`w:val="${styleId}"`), `body uses ${styleId}`);
 	}
 	for (const styleId of ['Title', 'Subtitle', 'Heading1', 'Heading2', 'ListBullet', 'ListNumber', 'TableGrid']) {
@@ -125,7 +125,7 @@ function main() {
 	assert.ok(docXml.includes('Weekly Summary'), 'title text');
 	assert.ok(docXml.includes('Key Figures') && docXml.includes('Notes'), 'headings');
 	assert.ok(docXml.includes('<w:tbl>') && docXml.includes('Revenue') && docXml.includes('Signups'), 'GFM table -> w:tbl');
-	assert.ok(docXml.includes('<w:numPr>') && docXml.includes(`w:numId w:val="1"`) && docXml.includes(`w:numId w:val="2"`), 'bullet + ordered numbering');
+	assert.ok(docXml.includes('<w:numPr>') && docXml.includes(`w:numId w:val="1"`) && docXml.includes(`w:numId w:val="100"`), 'bullet + ordered numbering (ordered list uses a per-list instance)');
 	assert.ok(docXml.includes('<w:ilvl w:val="1"/>'), 'nested list level');
 	assert.ok(numberingXml.includes('abstractNum'), 'numbering.xml has abstractNum defs');
 	assert.ok(docXml.includes('<w:hyperlink'), 'hyperlink run');
@@ -139,6 +139,28 @@ function main() {
 	// 6. Plain-Markdown (non-living) still exports cleanly.
 	const plain = renderDocx({ title: 'Plain', markdown: 'Just a paragraph.\n' });
 	assert.ok(readZipEntry(plain, 'word/document.xml').toString('utf8').includes('Just a paragraph.'), 'plain export body');
+
+	// 7. Emphasis parsing keeps intra-word and unmatched `*`/`_` as literal text (never silently dropped), while
+	// still toggling for genuinely paired emphasis. A run is {text, bold, italic}; we assert the literal survives
+	// with no emphasis, and that valid pairs still style.
+	const plainText = t => parseInline(t).map(r => r.text).join('');
+	const isPlainRun = t => { const rs = parseInline(t); return rs.length === 1 && rs[0].kind === 'text' && !rs[0].bold && !rs[0].italic; };
+	assert.ok(isPlainRun('customer_id') && plainText('customer_id') === 'customer_id', 'intra-word underscore kept literal');
+	assert.ok(isPlainRun('a * b') && plainText('a * b') === 'a * b', 'space-flanked asterisk kept literal');
+	assert.ok(isPlainRun('unmatched_') && plainText('unmatched_') === 'unmatched_', 'unmatched underscore kept literal');
+	assert.ok(isPlainRun('a__b') && plainText('a__b') === 'a__b', 'intra-word bold underscore kept literal');
+	assert.ok(parseInline('_hi_').some(r => r.italic && r.text === 'hi'), 'valid italic still toggles');
+	assert.ok(parseInline('**hi**').some(r => r.bold && r.text === 'hi'), 'valid bold still toggles');
+
+	// 8. Ordered lists preserve their starting ordinal and number independently. `3. Third` must start at 3 (a
+	// startOverride), and two separate ordered lists get distinct numbering instances so they do not continue
+	// one another.
+	const ol = renderDocx({ title: 'L', markdown: ['3. Third', '4. Fourth', '', 'A paragraph.', '', '1. One', '2. Two', ''].join('\n') });
+	const olDoc = readZipEntry(ol, 'word/document.xml').toString('utf8');
+	const olNum = readZipEntry(ol, 'word/numbering.xml').toString('utf8');
+	assert.ok(olNum.includes('<w:startOverride w:val="3"/>'), 'first ordered list starts at 3');
+	assert.ok(olNum.includes('<w:startOverride w:val="1"/>'), 'second ordered list starts at 1');
+	assert.ok(olDoc.includes('w:numId w:val="100"') && olDoc.includes('w:numId w:val="101"'), 'two independent ordered numbering instances');
 
 	console.log('lwd-docx.test.js: OK');
 }
