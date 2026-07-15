@@ -1,0 +1,43 @@
+=== fixture.docx (real, full-feature) ===
+HTTP 200 ok= true
+detections: {"comments":true,"trackedChanges":true,"footnotes":false,"textboxes":false,"headersFooters":false}
+
+--- MARKDOWN ---
+# Weekly Summary
+
+## Overview
+
+This is the opening paragraph.
+
+- Top bullet
+  - Child bullet
+    - Grandchild bullet
+- Second top
+
+1. First numbered
+2. Second numbered
+
+| Region | MRR |
+| --- | --- |
+| EMEA | $1,200 |
+| APAC | $980 |
+
+![](assets/Weekly Summary/image-1.png)
+
+![](assets/Weekly Summary/image-2.gif)
+
+Revenue rose sharply.
+
+Commented sentence.
+
+--- IMAGES --- [
+  'image-1.png (image/png, 96 b64 chars)',
+  'image-2.gif (image/gif, 48 b64 chars)'
+]
+--- CARD --- Headings, Paragraphs, Lists, A table (display-only for now), 2 images, The final text of tracked changes kept · Comments, Tracked-change marks (the final text was kept) not imported
+
+=== protected.docx (refusal) === HTTP 200 ok=false reason="The file is password-protected or an older Word format"
+
+=== legacy.doc (refusal) === HTTP 200 ok=false reason="The file is password-protected or an older Word format"
+
+=== broken.docx (refusal) === HTTP 200 ok=false reason="The file could not be read as a Word document"

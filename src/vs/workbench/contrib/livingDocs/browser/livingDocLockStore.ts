@@ -35,6 +35,7 @@ function coerceLock(raw: Partial<ILivingDocLock> | undefined): ILivingDocLock {
 	if (Array.isArray(raw.audit)) { lock.audit = raw.audit; }
 	if (Array.isArray(raw.contextItems)) { lock.contextItems = raw.contextItems; }
 	if (Array.isArray(raw.snapshots)) { lock.snapshots = raw.snapshots; }
+	if (raw.imported && typeof raw.imported.from === 'string') { lock.imported = raw.imported; }
 	return lock;
 }
 
