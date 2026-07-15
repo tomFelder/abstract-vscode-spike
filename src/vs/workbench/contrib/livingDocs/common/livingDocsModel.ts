@@ -162,6 +162,22 @@ export interface ISnapshotEntry {
 // each for beachhead docs, 50 versions is well under a megabyte.
 export const SNAPSHOT_CAP = 50;
 
+// Provenance-from-birth for a document that was IMPORTED from a foreign format (doc 22 section 2, issue
+// #129): the original file is never destroyed, so the lock records where the `.md` came from - the source
+// filename, a hash of the original bytes (identity/staleness compare), when it was imported, and the
+// plain-words kept/dropped fidelity summary the import card showed. Absent on a hand-authored document.
+export interface IImportProvenance {
+	// The original file's name beside the imported document, e.g. "Weekly Summary.docx" (never deleted).
+	readonly from: string;
+	// A hash of the original file's bytes at import time (the same FNV-1a the binding freshness uses).
+	readonly sourceHash: string;
+	readonly importedAt: string;
+	// The plain-words fidelity summary (doc 22 section 2): what the conversion kept and what it dropped,
+	// so the provenance stays honest long after the import card is gone. Each entry is one plain phrase.
+	readonly kept: readonly string[];
+	readonly dropped: readonly string[];
+}
+
 export interface ILivingDocLock {
 	version: number;
 	bindings: Record<string, IBindingEntry>;
@@ -177,6 +193,9 @@ export interface ILivingDocLock {
 	// Named, restorable versions of the body (plan 26 iter 2). Additive field: absent on older locks =
 	// no versions yet; LOCK_VERSION stays 1.
 	snapshots: ISnapshotEntry[];
+	// Import provenance (issue #129): set only on a document born from a foreign-format import; absent on a
+	// hand-authored / template-grown document. Additive field, so older locks read as "not imported".
+	imported?: IImportProvenance;
 }
 
 export function emptyLock(): ILivingDocLock {

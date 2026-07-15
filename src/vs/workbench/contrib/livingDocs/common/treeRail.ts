@@ -30,6 +30,9 @@ export interface ITreeRailItem {
 	readonly note?: string;
 	/** For a workbook/PDF SOURCES row, the "Use as source" action it offers (issue #131). */
 	readonly action?: TreeRailAction;
+	/** For an `unsupported` row we CAN convert (a `.docx`, issue #129): the row shows an "Import as document"
+	 * door instead of a dead reason. Unset (falsy) for a refused format (.doc, password-protected, ...). */
+	readonly importable?: boolean;
 }
 
 export interface ITreeRailFolder {
@@ -49,9 +52,11 @@ export interface ITreeRailDocInput {
 }
 
 // A non-Markdown file discovered in the workspace, classified for the Files tab: a `source` (a CSV / txt /
-// image / data file that belongs in the SOURCES section, F9) or `unsupported` (a .doc/.docx and kin marked
+// image / data file that belongs in the SOURCES section, F9), or `unsupported` - either a `.docx` we can now
+// convert (`importable`, issue #129: the row becomes an "Import as document" door), a workbook/PDF that
+// offers a "Use as source" `action` (issue #131), or a format we still refuse to mangle (.doc/... marked
 // "not yet imported" with a plain-words reason, F10). Anything we should not surface returns undefined.
-export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupported'; reason?: string; action?: TreeRailAction } | undefined {
+export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupported'; reason?: string; action?: TreeRailAction; importable?: boolean } | undefined {
 	if (!name || name.startsWith('.')) { return undefined; }
 	const lower = name.toLowerCase();
 	// Markdown documents are the Reports tree's job; system sidecars and the agents registry are not user data.
@@ -65,6 +70,10 @@ export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupp
 	// workbook offers "Use as source" (sheets -> CSVs), a PDF offers "Use as source" (text -> read-only context).
 	const action = SOURCE_ACTIONS[ext];
 	if (action) { return { kind: 'source', action }; }
+	// `.docx` is the one foreign document format we convert (doc 22 section 2): it offers the import door
+	// rather than a dead reason. A password-protected / unparseable .docx is refused at conversion time (the
+	// proxy sniffs the bytes), so it drops back to a plain-words refusal there - never a silent mangle here.
+	if (ext === 'docx') { return { kind: 'unsupported', importable: true }; }
 	const reason = IMPORT_REASONS[ext];
 	if (reason) { return { kind: 'unsupported', reason }; }
 	return undefined;
@@ -81,10 +90,10 @@ const SOURCE_ACTIONS: Record<string, TreeRailAction> = {
 };
 
 // Formats we cannot yet interpret on open (F10): never silently skipped - the row is shown marked
-// "not yet imported - {reason}" so the user sees the file is there and why it is not opened.
+// "not yet imported - {reason}" so the user sees the file is there and why it is not opened. `.docx` is
+// deliberately absent - it is importable (handled above), not refused.
 const IMPORT_REASONS: Record<string, string> = {
-	doc: 'Word documents are not imported yet',
-	docx: 'Word documents are not imported yet',
+	doc: 'Legacy .doc files are not imported yet - open in Word and save as .docx',
 	rtf: 'Rich Text documents are not imported yet',
 	odt: 'OpenDocument text is not imported yet',
 	pages: 'Pages documents are not imported yet',
@@ -161,7 +170,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 		if (c.kind === 'source') { addSource(name, undefined, c.action); continue; }
 		if (seenUnsupported.has(name)) { continue; }
 		seenUnsupported.add(name);
-		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason });
+		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason, importable: c.importable });
 	}
 	sources.sort((a, b) => a.label.localeCompare(b.label));
 	unsupported.sort((a, b) => a.label.localeCompare(b.label));

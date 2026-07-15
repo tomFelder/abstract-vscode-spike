@@ -96,6 +96,20 @@ export interface ILivingDocSummary {
 }
 
 /**
+ * The outcome of a docx import (issue #129, doc 22 section 2). On success `ok` is true, `resource` is the
+ * created `.md` beside the untouched original, and `kept`/`dropped` are the plain-words fidelity phrases the
+ * summary card shows. On refusal `ok` is false and `reason` names why (password-protected / legacy / could
+ * not be read); the original stays in the tree's "not yet imported" state, never mangled. Real data only.
+ */
+export interface IImportOutcome {
+	readonly ok: boolean;
+	readonly resource?: URI;
+	readonly reason?: string;
+	readonly kept?: readonly string[];
+	readonly dropped?: readonly string[];
+}
+
+/**
  * One document that depends on a file targeted by a rename/delete (docs 20 section 1d / map-D6): the
  * dependent document's resource and display title, for the delete warning's "these documents depend on
  * it" list. A projection over the folder's frontmatter `sources:`/`context:` - the file's own document
@@ -545,6 +559,17 @@ export interface ILivingDocsService {
 	 * unreadable and no edge is created. The PDF stays on disk and is watched like any context source.
 	 */
 	usePdfAsSource(pdf: URI, doc: URI): Promise<IPdfContextResult>;
+
+	/**
+	 * Import a `.docx` file (by its workspace basename) into a Living Document (issue #129, doc 22 section 2).
+	 * Converts it to Markdown through the node/proxy pipeline (mammoth -> HTML -> GFM), writes `<Name>.md`
+	 * BESIDE the untouched original with `imported` provenance (from + sourceHash + the kept/dropped summary)
+	 * in its lock, lifts embedded images to `assets/<Name>/` with relative references, opens the new document,
+	 * and surfaces the plain-words kept/dropped summary card. A password-protected / legacy / unparseable file
+	 * is refused with a plain-words reason and left untouched in the "not yet imported" state - never a silent
+	 * mangle. Returns the outcome; undefined when no folder is open or the named file is gone.
+	 */
+	importDocx(name: string): Promise<IImportOutcome | undefined>;
 
 	/** Discover and parse every `*.template.md` in the workspace (for the Templates screen; plan 28). */
 	listTemplates(): Promise<readonly ITemplateInfo[]>;
