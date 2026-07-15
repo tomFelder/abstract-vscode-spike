@@ -1,0 +1,23 @@
+Red-green demonstration of the History merge/rehydration contract
+=================================================================
+Method: temporarily replaced dedupeAudit() in
+  src/vs/workbench/contrib/livingDocs/common/livingDocsHistory.ts
+with `return [...audit];` (dedupe disabled), transpiled, re-ran the two
+contract tests, then restored the file and re-ran.
+
+RED (dedupe disabled):
+  1) F19: a duplicated audit entry (persisted + in-session copy of the same lock) renders once
+       AssertionError: the same change is shown once, never doubled on a cold-open merge
+  2) dedupes audit entries that share a stable identity (a re-read that overlaps an in-session append)
+       AssertionError: identical audit entries collapse to one
+  0 passing, 2 failing
+
+GREEN (fix restored):
+  ✔ F19: a duplicated audit entry (persisted + in-session copy of the same lock) renders once
+  ✔ dedupes audit entries that share a stable identity (a re-read that overlaps an in-session append)
+  ✔ F19: a cold open rehydrates the audit trail from the persisted lock (not just in-session entries)
+  ✔ X1 within-session persistence: approve writes the new text + audit entry back to the on-disk lock (write-then-read)
+  4 passing
+
+Conclusion: the merge/dedupe/rehydration tests are load-bearing - they fail
+when the fix is removed and pass when it is present.

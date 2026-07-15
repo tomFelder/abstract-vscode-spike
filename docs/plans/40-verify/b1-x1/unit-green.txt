@@ -1,0 +1,26 @@
+  livingDocs History tab (historyHtml)
+    ✔ renders real snapshots and audit from the lock - no fabricated sample
+    ✔ a snapshot row carries a Restore action wired to its id
+    ✔ a published snapshot gets the amber SNAPSHOT badge; the live head gets CURRENT
+    ✔ a published snapshot names the real pin count beside the SNAPSHOT badge (plan 32 iter 4)
+    ✔ a published snapshot with no pinnable sources says so truthfully
+    ✔ truthful empty state when the document has no versions or changes
+    ✔ no document open shows a calm prompt, not a fabricated timeline
+    ✔ restore is recorded on the audit as a "Restored" change, not "Approved"
+    ✔ caps the display at 20 rows and names the remainder rather than truncating silently
+    ✔ F19: a duplicated audit entry (persisted + in-session copy of the same lock) renders once
+    ✔ a template-generated document keeps its real origin row at the base
+    ✔ an approved change carries a "This Was Wrong" feedback affordance with the change ref
+    ✔ an auto-applied figure change also carries the feedback affordance
+    ✔ a rejection and a restore carry no feedback affordance (nothing was applied to disavow)
+  livingDocs History timeline model (livingDocsHistory)
+    ✔ orders snapshots and audit changes newest-first on their timestamps
+    ✔ dedupes audit entries that share a stable identity (a re-read that overlaps an in-session append)
+    ✔ keeps genuinely distinct changes on the same block (different text / time / action)
+    ✔ auditKey separates entries that differ only in one field
+    ✔ a corrupt/unparseable timestamp sorts to the base rather than throwing
+    ✔ an empty lock yields an empty timeline (honest empty state upstream)
+  LivingDocsService
+    ✔ F19: a cold open rehydrates the audit trail from the persisted lock (not just in-session entries)
+    ✔ X1 within-session persistence: approve writes the new text + audit entry back to the on-disk lock (write-then-read)
+  22 passing (88ms)
