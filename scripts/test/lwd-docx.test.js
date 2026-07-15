@@ -162,6 +162,16 @@ function main() {
 	assert.ok(olNum.includes('<w:startOverride w:val="1"/>'), 'second ordered list starts at 1');
 	assert.ok(olDoc.includes('w:numId w:val="100"') && olDoc.includes('w:numId w:val="101"'), 'two independent ordered numbering instances');
 
+	// 9. Image destinations with spaces (angle brackets) or balanced parens are embedded, not dropped: the image
+	// map is keyed by the same decoded path the parser extracts.
+	const imgMd = renderDocx({
+		title: 'I',
+		markdown: ['![A](<assets/Q2 Chart.png>)', '', '![B](assets/foo(bar).png)', ''].join('\n'),
+		images: { 'assets/Q2 Chart.png': PNG_1x1, 'assets/foo(bar).png': PNG_1x1 },
+	});
+	assert.ok(readZipEntry(imgMd, 'word/media/image1.png'), 'space-in-path image embedded');
+	assert.ok(readZipEntry(imgMd, 'word/media/image2.png'), 'parens-in-path image embedded');
+
 	console.log('lwd-docx.test.js: OK');
 }
 

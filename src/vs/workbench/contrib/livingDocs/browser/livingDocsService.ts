@@ -269,6 +269,44 @@ const NEW_TEMPLATE_TEMPLATE = [
 	'',
 ].join('\n');
 
+/**
+ * Match a Markdown inline image `![alt](dest "title")` starting at `i` in `text`. Unlike a `[^)\s]+` regex,
+ * this handles angle-bracket destinations (`<a b.png>` with spaces) and bare destinations that contain
+ * balanced parentheses (`foo(bar).png`), plus an optional title - so a valid local image is never dropped or
+ * truncated. Returns the DECODED destination (brackets stripped), which matches what the Markdown renderer
+ * emits as an `<img src>` and what the docx writer looks up in the image map. Mirrors `matchImageAt` in
+ * `scripts/lwd-docx.js`, so both export paths key images identically.
+ */
+function matchMarkdownImageAt(text: string, i: number): { readonly src: string; readonly end: number } | undefined {
+	if (text[i] !== '!' || text[i + 1] !== '[') { return undefined; }
+	let j = i + 2;
+	while (j < text.length && text[j] !== ']') { j++; }
+	if (text[j] !== ']' || text[j + 1] !== '(') { return undefined; }
+	j += 2;
+	let src = '';
+	if (text[j] === '<') {
+		j++;
+		while (j < text.length && text[j] !== '>') { src += text[j]; j++; }
+		if (text[j] !== '>') { return undefined; }
+		j++;
+	} else {
+		let depth = 0;
+		while (j < text.length) {
+			const c = text[j];
+			if (c === ')' && depth === 0) { break; }
+			if (/\s/.test(c)) { break; } // whitespace begins an optional title (or is malformed) - the dest ends here
+			if (c === '(') { depth++; }
+			if (c === ')') { depth--; }
+			src += c;
+			j++;
+		}
+	}
+	// Skip an optional title and any trailing whitespace up to the closing paren.
+	while (j < text.length && text[j] !== ')') { j++; }
+	if (text[j] !== ')') { return undefined; }
+	return { src, end: j + 1 };
+}
+
 
 export class LivingDocsService extends Disposable implements ILivingDocsService {
 	declare readonly _serviceBrand: undefined;
@@ -2409,22 +2447,42 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return { blocked: false, stale: true, flag: gate.flag };
 	}
 
+	// The proxy's `/export/docx` route caps the request body at 24 MiB. The images travel as base64 `data:` URIs
+	// inside that JSON body, so we hold the aggregate ENCODED image payload under this budget (leaving headroom
+	// for the Markdown and JSON structure) and drop any image that would push a docx export over a limit it must
+	// otherwise fail on. PDF prints locally with no such body, so it passes no budget.
+	private static readonly EXPORT_IMAGE_BUDGET_BYTES = 22 * 1024 * 1024;
+
 	// Resolve every `![alt](src)` in the export Markdown to a `data:` URI (via the same contained, size-capped
 	// reader the webview uses), so a downstream converter that has no access to the project folder still embeds
 	// the real images. Unreadable/oversized images are dropped from the map (the converter names them in text).
-	private async _collectExportImages(resource: URI, markdown: string): Promise<Record<string, string>> {
+	// Destinations with spaces (`<a b.png>`) or balanced parens (`foo(bar).png`) are parsed correctly, so a valid
+	// local image is never silently skipped. When `budgetBytes` is set, images are added only while the aggregate
+	// encoded payload stays within it; anything over-budget is reported via `droppedForBudget`.
+	private async _collectExportImages(resource: URI, markdown: string, budgetBytes?: number): Promise<{ images: Record<string, string>; droppedForBudget: number }> {
 		const images: Record<string, string> = {};
 		const seen = new Set<string>();
-		const re = /!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g;
-		let m: RegExpExecArray | null;
-		while ((m = re.exec(markdown)) !== null) {
-			const src = m[1];
+		let encodedTotal = 0;
+		let droppedForBudget = 0;
+		for (let i = 0; i < markdown.length; i++) {
+			if (markdown[i] !== '!' || markdown[i + 1] !== '[') { continue; }
+			const match = matchMarkdownImageAt(markdown, i);
+			if (!match) { continue; }
+			i = match.end - 1; // skip past this image; the loop's i++ resumes after it
+			const src = match.src;
 			if (seen.has(src) || /^(https?:|data:)/.test(src)) { continue; }
 			seen.add(src);
 			const read = await this.readImageAsset(resource, src);
-			if (read.dataUri) { images[src] = read.dataUri; }
+			if (!read.dataUri) { continue; }
+			if (budgetBytes !== undefined && encodedTotal + read.dataUri.length > budgetBytes) {
+				this._log.warn('[livingDocs] image omitted from export - over the aggregate size budget', src);
+				droppedForBudget++;
+				continue;
+			}
+			encodedTotal += read.dataUri.length;
+			images[src] = read.dataUri;
 		}
-		return images;
+		return { images, droppedForBudget };
 	}
 
 	async exportDocx(resource: URI, force = false): Promise<URI | undefined> {
@@ -2437,7 +2495,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// already leads with `# title` + `_subtitle_` (like the HTML export body), so we do NOT also pass the
 		// title/subtitle separately - that would render them twice.
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
-		const images = await this._collectExportImages(resource, markdown);
+		const { images, droppedForBudget } = await this._collectExportImages(resource, markdown, LivingDocsService.EXPORT_IMAGE_BUDGET_BYTES);
+		if (droppedForBudget > 0) {
+			// Honest, before-the-fact: say what was left out rather than posting an over-cap body that must 413.
+			this._notify.info(`${droppedForBudget} large image(s) were left out of the Word export to keep it under the size limit.`);
+		}
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.docx`);
 		try {
@@ -2483,7 +2545,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// offscreen print has no project-folder dependency (doc 22 §3: reuse the HTML export, no new renderer).
 		let html = renderExportHtml(state.doc, this.getResolved(resource));
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
-		const images = await this._collectExportImages(resource, markdown);
+		const { images } = await this._collectExportImages(resource, markdown);
 		for (const [src, dataUri] of Object.entries(images)) {
 			html = html.split(`src="${src}"`).join(`src="${dataUri}"`);
 		}

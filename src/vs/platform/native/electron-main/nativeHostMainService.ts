@@ -882,25 +882,46 @@ export class NativeHostMainService extends Disposable implements INativeHostMain
 	// BrowserWindow loads the HTML via a data URL, then Electron's webContents.printToPDF renders it - the
 	// cheapest correct path (doc 22 §3), reusing Chromium's own print engine, no new renderer. Fail-soft: any
 	// failure returns undefined so the caller surfaces an honest message rather than throwing.
+	// A generous ceiling on the whole load+print: enough for a large image-heavy page, short enough that a
+	// stalled page or wedged Chromium print never leaves the command pending and the hidden window alive.
+	private static readonly PRINT_TO_PDF_TIMEOUT_MS = 20_000;
+
 	async printToPDF(windowId: number | undefined, html: string): Promise<VSBuffer | undefined> {
 		let win: BrowserWindow | undefined;
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			win = new BrowserWindow({
 				show: false,
-				webPreferences: { sandbox: true, javascript: false, images: true }
+				// A private, in-memory session (own partition) so the request block below is scoped to this window
+				// and never touches the rest of the app's networking.
+				webPreferences: { sandbox: true, javascript: false, images: true, partition: 'lwd-print' }
+			});
+			// Security (issue #130): the export HTML can still reference remote images the renderer chose not to
+			// inline. With images enabled, loading it would have Chromium fetch those authored URLs and leak network
+			// metadata. Deny every non-`data:` resource load on this isolated session; inlined local images are
+			// `data:` URIs and still render.
+			win.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+				callback({ cancel: !/^data:/i.test(details.url) });
 			});
 			const loaded = new Promise<void>((resolve, reject) => {
 				win!.webContents.once('did-finish-load', () => resolve());
 				win!.webContents.once('did-fail-load', (_e, code, desc) => reject(new Error(`load failed ${code}: ${desc}`)));
 			});
-			await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-			await loaded;
-			const data = await win.webContents.printToPDF({ printBackground: true, margins: { marginType: 'default' } });
+			const deadline = new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => reject(new Error('printToPDF timed out')), NativeHostMainService.PRINT_TO_PDF_TIMEOUT_MS);
+			});
+			const work = (async () => {
+				await win!.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+				await loaded;
+				return win!.webContents.printToPDF({ printBackground: true, margins: { marginType: 'default' } });
+			})();
+			const data = await Promise.race([work, deadline]);
 			return VSBuffer.wrap(data);
 		} catch (error) {
 			this.logService.error('[NativeHostMainService] printToPDF failed', error);
 			return undefined;
 		} finally {
+			if (timer) { clearTimeout(timer); }
 			win?.destroy();
 		}
 	}

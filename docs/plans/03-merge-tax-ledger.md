@@ -404,3 +404,11 @@ Why a core patch was unavoidable: `printToPDF` is a Chromium/Electron main-proce
 cannot produce PDF bytes silently (`window.print()` opens a dialog and yields nothing). Adding one
 `getScreenshot`-shaped method to the native host is the minimal, upstream-mergeable seam. **New core-patch
 count: 6 total (was 5).**
+
+Hardening (CodeRabbit review on #162, no new patch - same A2-1 method): the offscreen print window now (a)
+runs on its own in-memory session and **denies every non-`data:` resource load** via a scoped
+`webRequest.onBeforeRequest`, so an authored remote `![](http…)` image can no longer make the export contact
+arbitrary URLs (local/inlined `data:` images still render); and (b) races the whole load+print against a
+20 s deadline, destroying the hidden window on timeout so a stalled page or wedged print can never leave the
+command pending. Both are contained inside the existing `printToPDF` impl and stay fail-soft (any failure
+still returns `undefined`).

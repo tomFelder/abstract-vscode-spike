@@ -43,6 +43,45 @@ function xml(s) {
 // --- inline Markdown -> runs ----------------------------------------------------------------------------
 
 /**
+ * Match a Markdown inline image `![alt](dest "title")` starting at `i` in `text`. Handles angle-bracket
+ * destinations (`<a b.png>` with spaces) and bare destinations containing balanced parentheses
+ * (`foo(bar).png`), plus an optional title, so a valid local image is never dropped or truncated at the first
+ * space or `)`. The returned `src` is the DECODED destination (brackets stripped) - the same key the service's
+ * `matchMarkdownImageAt` produces, so an image collected there is found in this writer's image map.
+ * @param {string} text @param {number} i
+ * @returns {{ alt: string; src: string; len: number } | null}
+ */
+function matchImageAt(text, i) {
+	if (text[i] !== '!' || text[i + 1] !== '[') { return null; }
+	let j = i + 2;
+	let alt = '';
+	while (j < text.length && text[j] !== ']') { alt += text[j]; j++; }
+	if (text[j] !== ']' || text[j + 1] !== '(') { return null; }
+	j += 2;
+	let src = '';
+	if (text[j] === '<') {
+		j++;
+		while (j < text.length && text[j] !== '>') { src += text[j]; j++; }
+		if (text[j] !== '>') { return null; }
+		j++;
+	} else {
+		let depth = 0;
+		while (j < text.length) {
+			const c = text[j];
+			if (c === ')' && depth === 0) { break; }
+			if (/\s/.test(c)) { break; }
+			if (c === '(') { depth++; }
+			if (c === ')') { depth--; }
+			src += c;
+			j++;
+		}
+	}
+	while (j < text.length && text[j] !== ')') { j++; }
+	if (text[j] !== ')') { return null; }
+	return { alt, src, len: j + 1 - i };
+}
+
+/**
  * True when a run of `d` (length `len`) at `i` can CLOSE emphasis: it must be right-flanking (preceded by a
  * non-whitespace char) and, for `_`, not sit intra-word (followed by a word char). This is the guard that keeps
  * `customer_id` from being read as an italic toggle.
@@ -105,11 +144,11 @@ function parseInline(text) {
 	const flush = () => { if (plain) { runs.push({ kind: 'text', text: plain, bold, italic }); plain = ''; } };
 	while (i < text.length) {
 		const rest = text.slice(i);
-		// Inline image: ![alt](src)
-		let m = /^!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/.exec(rest);
-		if (m) { flush(); runs.push({ kind: 'image', alt: m[1], src: m[2] }); i += m[0].length; continue; }
+		// Inline image: ![alt](src) - angle-bracket + balanced-paren aware, so paths with spaces/parens survive.
+		const img = matchImageAt(text, i);
+		if (img) { flush(); runs.push({ kind: 'image', alt: img.alt, src: img.src }); i += img.len; continue; }
 		// Link: [text](href)
-		m = /^\[([^\]]*)\]\(([^)\s]+)[^)]*\)/.exec(rest);
+		let m = /^\[([^\]]*)\]\(([^)\s]+)[^)]*\)/.exec(rest);
 		if (m) { flush(); runs.push({ kind: 'link', text: m[1], href: m[2], bold, italic }); i += m[0].length; continue; }
 		// Inline code: `code`
 		m = /^`([^`]+)`/.exec(rest);
@@ -203,9 +242,10 @@ function parseBlocks(md) {
 			blocks.push({ type: 'list', items, start });
 			continue;
 		}
-		// Standalone image paragraph.
-		m = /^!\[([^\]]*)\]\(([^)\s]+)[^)]*\)\s*$/.exec(line.trim());
-		if (m) { blocks.push({ type: 'image', alt: m[1], src: m[2] }); i++; continue; }
+		// Standalone image paragraph (angle-bracket + balanced-paren aware, and only when it is the whole line).
+		const trimmed = line.trim();
+		const stImg = matchImageAt(trimmed, 0);
+		if (stImg && stImg.len === trimmed.length) { blocks.push({ type: 'image', alt: stImg.alt, src: stImg.src }); i++; continue; }
 		// Paragraph: gather until a blank line or a structural line.
 		const para = [line];
 		i++;
