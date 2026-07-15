@@ -10,6 +10,7 @@ import { Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
+import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { basename, dirname, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -373,6 +374,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IHostService private readonly _host: IHostService,
 		@IAnalyticsService private readonly _analytics: IAnalyticsService,
 		@IStorageService private readonly _storage: IStorageService,
+		@IClipboardService private readonly _clipboard: IClipboardService,
 	) {
 		super();
 		this._lockStore = new SidecarLockStore(this._files);
@@ -2394,9 +2396,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	shareDocument(resource: URI): void {
-		// Live shareable links aren't built yet; point the user at the portable export for now.
-		this._notify.info('A live shareable link is coming soon. Use Download to send a Markdown copy in the meantime.');
+	async shareDocument(resource: URI): Promise<void> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return; }
+		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
+		try {
+			await this._clipboard.writeText(markdown);
+			this._notify.info(`Copied "${state.doc.title}" to the clipboard.`);
+		} catch (e) {
+			this._log.warn('[livingDocs] share to clipboard failed', e);
+			this._notify.error('Could not copy the document to the clipboard.');
+		}
 	}
 
 	// Pasted/dropped images resolve back through this same doc-relative read, capped so a runaway file cannot
