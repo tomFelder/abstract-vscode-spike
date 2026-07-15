@@ -94,4 +94,17 @@ suite('docxImport', () => {
 		const { markdown } = convertDocxHtml('<p>Costs were 50% lower [see *notes*] and _underscored_.</p>', 'Doc');
 		assert.strictEqual(markdown, 'Costs were 50% lower \\[see \\*notes\\*\\] and \\_underscored\\_.\n');
 	});
+
+	test('prose beginning with a block marker is escaped so it is not reinterpreted as a heading/list/quote/table', () => {
+		const html = '<p># Q3 goals</p><p>- pick one</p><p>1. first up</p><p>&gt; quoting a client</p><p>| not a table</p>';
+		const { markdown } = convertDocxHtml(html, 'Doc');
+		assert.strictEqual(markdown,
+			'\\# Q3 goals\n\n\\- pick one\n\n1\\. first up\n\n\\> quoting a client\n\n\\| not a table\n');
+	});
+
+	test('an already-escaped entity decodes exactly once, never double-unescaped into a different character', () => {
+		// mammoth encodes the literal prose text `&lt;` as `&amp;lt;`; a sequential decode would turn it into `<`.
+		const { markdown } = convertDocxHtml('<p>Compare a &amp;lt; b in the query</p>', 'Doc');
+		assert.strictEqual(markdown, 'Compare a &lt; b in the query\n');
+	});
 });

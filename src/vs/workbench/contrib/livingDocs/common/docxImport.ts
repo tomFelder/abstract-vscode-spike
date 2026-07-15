@@ -93,16 +93,22 @@ type HtmlNode = IElementNode | ITextNode;
 const VOID_TAGS = new Set(['img', 'br', 'hr', 'meta', 'link', 'input']);
 
 function decodeEntities(s: string): string {
-	return s
-		.replace(/&nbsp;/g, ' ')
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, '\'')
-		.replace(/&apos;/g, '\'')
-		.replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(parseInt(d, 10)))
-		.replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => String.fromCodePoint(parseInt(h, 16)));
+	// One pass so an already-escaped sequence like `&amp;lt;` (mammoth's encoding of the literal text `&lt;`)
+	// decodes to `&lt;` and stops - a sequential chain would run `&amp;`->`&` first, then re-decode the `&lt;`
+	// it produced into `<`, silently mangling literal prose (the module's "never a silent mangle" rule).
+	return s.replace(/&(?:(?<named>nbsp|amp|lt|gt|quot|apos)|#(?<dec>\d+)|#x(?<hex>[0-9a-fA-F]+));/g, (match: string, named?: string, dec?: string, hex?: string) => {
+		switch (named) {
+			case 'nbsp': return ' ';
+			case 'amp': return '&';
+			case 'lt': return '<';
+			case 'gt': return '>';
+			case 'quot': return '"';
+			case 'apos': return '\'';
+		}
+		if (dec !== undefined) { return String.fromCodePoint(parseInt(dec, 10)); }
+		if (hex !== undefined) { return String.fromCodePoint(parseInt(hex, 16)); }
+		return match;
+	});
 }
 
 function parseAttrs(raw: string): Record<string, string> {
@@ -171,6 +177,20 @@ interface IFeatures {
 function escapeText(s: string): string {
 	// Minimal escaping: backslash first, then the characters that would otherwise start inline Markdown.
 	return s.replace(/([\\`*_[\]])/g, '\\$1');
+}
+
+// escapeText only guards inline-significant characters. A plain paragraph whose text happens to BEGIN with a
+// character that is significant only at the start of a line - '#'/'>' (heading/quote), '-'/'+' (list, '*' is
+// already inline-escaped), an ordered-list '1.'/'1)', or a leading table '|' - would otherwise be reinterpreted
+// as structure by a downstream Markdown renderer. Guard the leading marker, per line, so the prose survives
+// literally (the module's "never a silent mangle" rule). Applied to paragraph blocks only; the headings, lists,
+// quotes and tables this module emits build their own markers deliberately.
+function escapeLeadingBlockMarkers(s: string): string {
+	return s
+		// Heading / blockquote / unordered-list / leading-pipe markers: escape the marker character itself.
+		.replace(/^(?<lead>[ \t]*)(?<marker>#{1,6}(?= |\t|$)|>|[-+](?= |\t)|\|)/gm, '$<lead>\\$<marker>')
+		// Ordered list ('1.' / '1)'): escape the delimiter so the digits stay literal prose.
+		.replace(/^(?<lead>[ \t]*)(?<num>\d{1,9})(?<delim>[.)])(?= |\t|$)/gm, '$<lead>$<num>\\$<delim>');
 }
 
 // Collapse the runs of whitespace mammoth leaves between inline elements to a single space, the way HTML
@@ -328,7 +348,7 @@ function serializeBlocks(nodes: readonly HtmlNode[], ctx: ISerializeCtx): string
 	for (const node of nodes) {
 		if (node.type === 'text') {
 			const text = escapeText(collapseWs(node.text)).trim();
-			if (text) { blocks.push(text); }
+			if (text) { blocks.push(escapeLeadingBlockMarkers(text)); }
 			continue;
 		}
 		switch (node.tag) {
@@ -339,7 +359,7 @@ function serializeBlocks(nodes: readonly HtmlNode[], ctx: ISerializeCtx): string
 			}
 			case 'p': {
 				const inner = serializeInline(node.children, ctx).trim();
-				if (inner) { blocks.push(inner); }
+				if (inner) { blocks.push(escapeLeadingBlockMarkers(inner)); }
 				break;
 			}
 			case 'ul': case 'ol': {
@@ -377,7 +397,7 @@ function serializeBlocks(nodes: readonly HtmlNode[], ctx: ISerializeCtx): string
 			default: {
 				// Any other block-ish element: keep its content as a paragraph rather than dropping it.
 				const inner = serializeInline(node.children, ctx).trim();
-				if (inner) { blocks.push(inner); }
+				if (inner) { blocks.push(escapeLeadingBlockMarkers(inner)); }
 			}
 		}
 	}

@@ -812,7 +812,10 @@ async function importDocx(req, res) {
 	}
 	let mammoth;
 	try { mammoth = require('mammoth'); } catch (e) {
-		sendJson(res, 502, { error: { type: 'import_error', message: 'the docx importer is not installed on the proxy' } });
+		// A missing importer is a refusal like any other (encrypted / invalid-zip / corrupt above): return it
+		// as 200 { ok:false, reason } so the client's asJson (which throws on non-2xx before reading the body)
+		// surfaces this specific, actionable reason instead of its generic transport-error fallback.
+		sendJson(res, 200, { ok: false, reason: 'The docx importer (mammoth) is not installed on the proxy' });
 		return;
 	}
 	try {

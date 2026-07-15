@@ -153,11 +153,21 @@ export class TreeRailView extends ViewPane {
 	private _renderBulkImport(panel: HTMLElement, importable: readonly ITreeRailItem[]): void {
 		const btn = append(panel, $('button.rail-import.rail-import-bulk')) as HTMLButtonElement;
 		btn.textContent = `Import All ${importable.length} Word Documents`;
+		const idleLabel = `Import All ${importable.length} Word Documents`;
 		this._renderDisposables.add(addDisposableListener(btn, 'click', async () => {
 			if (btn.disabled) { return; }
 			btn.disabled = true;
 			btn.textContent = 'Importing…';
-			for (const item of importable) { await this._livingDocs.importDocx(item.label); }
+			// Each successful import fires onDidChange and re-renders this rail; a refusal/error does not, so
+			// restore the button in a finally or a refused file leaves it stuck disabled with no retry. The
+			// per-file plain-words reason is surfaced by the service's own notification. Keep going through the
+			// batch so one refused document does not strand the rest.
+			try {
+				for (const item of importable) { await this._livingDocs.importDocx(item.label); }
+			} finally {
+				btn.disabled = false;
+				btn.textContent = idleLabel;
+			}
 		}));
 	}
 
@@ -175,12 +185,24 @@ export class TreeRailView extends ViewPane {
 			const name = item.label;
 			const importBtn = append(row, $('button.rail-import')) as HTMLButtonElement;
 			importBtn.textContent = 'Import as Document';
-			this._renderDisposables.add(addDisposableListener(importBtn, 'click', e => {
+			this._renderDisposables.add(addDisposableListener(importBtn, 'click', async e => {
 				e.stopPropagation();
 				if (importBtn.disabled) { return; }
 				importBtn.disabled = true;
 				importBtn.textContent = 'Importing\u2026';
-				void this._livingDocs.importDocx(name);
+				// On success the service fires onDidChange and this rail re-renders (the row becomes a document,
+				// so this button is gone). On any refusal or error it does NOT fire, so without this restore the
+				// row is left permanently stuck on a disabled "Importing\u2026" with no retry. The specific plain-words
+				// reason (proxy down, encrypted/legacy/unparseable file, write failure) is surfaced by the
+				// service's own notification - the same channel every other livingDocs refusal uses.
+				try {
+					const outcome = await this._livingDocs.importDocx(name);
+					if (outcome?.ok) { return; }
+				} catch {
+					// A rejected promise falls through to the same restore as an ok:false refusal.
+				}
+				importBtn.disabled = false;
+				importBtn.textContent = 'Import as Document';
 			}));
 		} else if (item.note) {
 			// A file we still cannot import is shown, never dropped, with its plain-words reason (F10).
