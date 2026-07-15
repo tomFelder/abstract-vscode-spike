@@ -663,7 +663,7 @@ function renderTidy(state: IScreenState): string {
 		// The would-orphan warning (map-D6 shape): name the dependent documents that will be re-pointed to the
 		// new location in the same atomic move (their bindings survive), so the move is never a silent break.
 		const deps = it.dependents.length
-			? `<div style="margin-top:8px;display:flex;gap:7px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:8px;padding:8px 10px"><span style="color:#9a6b16;flex:none">&#9888;</span><span style="font:400 11.5px/1.5 system-ui;color:#9a6b16">${it.dependents.length} document${it.dependents.length === 1 ? '' : 's'} reference this file &mdash; their links will be re-pointed so nothing breaks: ${it.dependents.map(esc).join(', ')}</span></div>`
+			? `<div style="margin-top:8px;display:flex;gap:7px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:8px;padding:8px 10px"><span style="color:#9a6b16;flex:none">&#9888;</span><span style="font:400 11.5px/1.5 system-ui;color:#9a6b16">${it.dependents.length} document${it.dependents.length === 1 ? ' references' : 's reference'} this file &mdash; their links will be re-pointed so nothing breaks: ${it.dependents.map(esc).join(', ')}</span></div>`
 			: '';
 		const toggle = skipped
 			? `<button data-msg="tidyApproveOne" data-arg="${i}" style="flex:none;border:1px solid ${ACCENT};background:#fff;border-radius:8px;padding:7px 12px;font:600 12px/1 system-ui;color:${ACCENT_DK};cursor:pointer">Approve</button>`

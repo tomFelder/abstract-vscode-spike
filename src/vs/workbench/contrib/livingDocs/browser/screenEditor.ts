@@ -439,7 +439,7 @@ export class ScreenEditor extends EditorPane {
 		if (dependentTitles.length) {
 			const { confirmed } = await this._dialogService.confirm({
 				type: 'warning',
-				message: `${dependentTitles.length} document${dependentTitles.length === 1 ? '' : 's'} reference files you are moving.`,
+				message: `${dependentTitles.length} document${dependentTitles.length === 1 ? ' references' : 's reference'} files you are moving.`,
 				detail: `Their links will be re-pointed to the new location in the same move, so nothing breaks:\n${dependentTitles.map(t => `\u2022 ${t}`).join('\n')}\n\nYou can undo this.`,
 				primaryButton: 'Move anyway',
 			});
