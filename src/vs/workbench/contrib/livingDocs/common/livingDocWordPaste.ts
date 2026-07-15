@@ -22,7 +22,7 @@
 //
 // The normaliser is structured as an ORDERED TRANSFORM CHAIN (an internal array of `html -> html` steps)
 // so the sibling paste findings can extend the same seam without rewriting the paste listener: #138
-// (pasted Word tables -> table_block) and #139 (tracked-changes residue) append their own step.
+// (pasted tables -> table[data-md] -> table_block) and #139 (tracked-changes residue) each append a step.
 
 /**
  * True when an HTML string looks like a Microsoft Word / Office clipboard payload. Cheap marker sniff
@@ -37,12 +37,12 @@ export function isWordHtml(html: string): boolean {
 }
 
 /**
- * Normalise a Word clipboard `text/html` string for pasting into ProseMirror: rebuild Word list paragraphs
- * into real nested <ul>/<ol>/<li>, drop Word's empty <o:p> spacer runs (the nbsp crumb-paragraphs), and
- * resolve tracked-changes residue as paste-as-accepted (deleted runs removed, inserted runs kept as plain
- * text). Any other content (headings, paragraphs, tables, images) is preserved byte-for-byte apart from that
- * cleanup - lists and tracked changes are the only structures this pass rewrites. Runs an internal ordered
- * transform chain; fail-soft on unexpected input (returns the input string unchanged).
+ * Normalise a clipboard `text/html` string for pasting into ProseMirror: rebuild Word list paragraphs into
+ * real nested <ul>/<ol>/<li>, drop Word's empty <o:p> spacer runs (the nbsp crumb-paragraphs), resolve
+ * tracked-changes residue as paste-as-accepted (deleted runs removed, inserted runs kept as plain text), and
+ * serialise every pasted <table> to GFM pipe text emitted as a `table[data-md]` element the table_block node
+ * adopts. Any other content (headings, paragraphs, images) is preserved byte-for-byte apart from that
+ * cleanup. Runs an internal ordered transform chain; fail-soft on unexpected input (returns it unchanged).
  * Self-contained for webview injection.
  */
 export function normalizeWordPasteHtml(html: string): string {
@@ -230,8 +230,219 @@ export function normalizeWordPasteHtml(html: string): string {
 		return out;
 	}
 
-	// Ordered transform chain. #138 (tables) appends its step here as well.
-	const transforms: Array<(input: string) => string> = [stripOfficeSpacers, rebuildWordLists, stripTrackedChanges];
+	// --- Step: convert pasted <table>s into a table[data-md] element the table_block node parses (#138, T1-B). ---
+	// The editor schema parses a table ONLY from its own serialization - a `table[data-md]` element whose
+	// `data-md` attribute carries the GFM pipe-table Markdown (the table_block node reads that attribute
+	// verbatim as its `markdown`). A pasted external <table> (Word's MsoTableGrid/MsoNormalTable or any plain
+	// browser HTML table) matches nothing, so ProseMirror hoists every <td>'s content out as a separate
+	// paragraph and the table is silently destroyed (a 6-row table lands as ~20 stray one-line paragraphs).
+	// This step serialises each pasted <table> to GFM pipe text and re-emits it as `<table data-md="...">`, so
+	// the SAME table_block node adopts it (rendering, column alignment and the #140 cell editor all for free).
+	// The cell -> Markdown mapping deliberately mirrors the docx importer's table serializer (issue #129), so a
+	// pasted table and an imported one read identically: bold/italic kept as `**`/`*`, links as `[text](href)`,
+	// Word junk (mso spans, <o:p>, conditional comments) dropped, and each cell's pipes escaped as `\|`.
+	//
+	// MERGED CELLS degrade by a stated, deterministic rule - never a silent column misalignment (GFM has no
+	// cell spanning): a `colspan=N` cell REPEATS its content across the N columns it covers, and a `rowspan=N`
+	// cell REPEATS its content down the N rows it covers. Repeat (not blank-fill) is the honest choice - the
+	// reader sees the merged value in every position the merge implied, and every row stays rectangular.
+	// MULTI-PARAGRAPH cells join their blocks with a single space (a GFM cell is one physical line); an
+	// empty or nbsp-only cell becomes an empty cell. Word's per-cell text alignment is NOT mapped (the
+	// alignment row is always the default `---`), matching the docx importer - a stated limitation, not a mangle.
+	// Fail-soft: a table we cannot turn into a grid (no rows) is left byte-for-byte unchanged.
+	function rebuildPastedTables(input: string): string {
+		if (input.indexOf('<table') === -1 && input.indexOf('<TABLE') === -1) {
+			return input;
+		}
+
+		// Resolve the small set of HTML entities a cell's text can carry, so the GFM holds real characters
+		// (matching the docx importer). Named + numeric are handled; '&amp;' is resolved LAST so an escaped
+		// sequence like '&amp;lt;' (the literal text '&lt;') decodes to '&lt;' and stops rather than to '<'.
+		function decodeEntities(s: string): string {
+			let out = s.replace(/&nbsp;|&#160;|&#xA0;/gi, ' ');
+			out = out.replace(/&#(\d+);/g, function (m, d) {
+				const n = parseInt(d, 10);
+				return n > 0 && n < 1114112 ? String.fromCodePoint(n) : m;
+			});
+			out = out.replace(/&#x([0-9a-fA-F]+);/g, function (m, h) {
+				const n = parseInt(h, 16);
+				return n > 0 && n < 1114112 ? String.fromCodePoint(n) : m;
+			});
+			out = out.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&apos;/gi, '\'');
+			out = out.replace(/&amp;/gi, '&');
+			return out;
+		}
+
+		// One table cell's inner HTML -> a single line of GFM cell text. Keeps explicit bold/italic/links as
+		// inline Markdown (the subset GFM table cells support), drops Word junk, joins block breaks to a space,
+		// resolves entities, collapses whitespace and escapes pipes. Pipe-only escaping mirrors the bundle's
+		// own cell serializer (`ca`) so a paste and a parse->serialize round-trip write identical bytes.
+		function cellToMarkdown(cellInner: string): string {
+			let t = cellInner;
+			// Word conditional-comment glyph blocks and any HTML comments.
+			t = t.replace(/<!\[if[^\]]*\]>[\s\S]*?<!\[endif\]>/gi, '');
+			t = t.replace(/<!--[\s\S]*?-->/g, '');
+			// Office runs (usually empty spacers; a rare non-empty one still contributes only its text).
+			t = t.replace(/<o:p>[\s\S]*?<\/o:p>/gi, '');
+			// Links -> [text](href), before the generic tag strip so the href survives.
+			t = t.replace(/<a\b[^>]*\bhref\s*=\s*("([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a>/gi, function (m, q, dq, sq, inner) {
+				let href = dq !== undefined ? dq : (sq !== undefined ? sq : '');
+				let label = inner.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ');
+				label = label.replace(/^\s+/, '').replace(/\s+$/, '');
+				href = href.replace(/^\s+/, '').replace(/\s+$/, '');
+				if (href === '' || label === '') {
+					return label;
+				}
+				return '[' + label + '](' + href + ')';
+			});
+			// Explicit bold / italic tags -> Markdown markers (matches the docx importer; span-based Word bold is
+			// deliberately not inferred - it would double-wrap and is out of the issue's scope).
+			t = t.replace(/<\s*(?:b|strong)\b[^>]*>/gi, '**').replace(/<\s*\/\s*(?:b|strong)\s*>/gi, '**');
+			t = t.replace(/<\s*(?:i|em)\b[^>]*>/gi, '*').replace(/<\s*\/\s*(?:i|em)\s*>/gi, '*');
+			// Block breaks inside a cell -> a single space (a GFM cell cannot hold a newline).
+			t = t.replace(/<br\b[^>]*>/gi, ' ');
+			t = t.replace(/<\/\s*(?:p|div)\s*>/gi, ' ');
+			// Strip every remaining tag, keeping its text.
+			t = t.replace(/<[^>]+>/g, '');
+			t = decodeEntities(t);
+			t = t.replace(/\s+/g, ' ').replace(/^\s+/, '').replace(/\s+$/, '');
+			// Escape pipes so a cell value can never be read as a column separator.
+			return t.replace(/\|/g, '\\|');
+		}
+
+		// Serialise one <table>'s inner HTML to GFM pipe text. Returns '' when there are no rows (fail-soft).
+		function tableToGfm(tableInner: string): string {
+			// Collect source rows, each a list of cells with their span counts. thead/tbody/tfoot need no
+			// special casing - every <tr> is walked in document order regardless of its section wrapper.
+			const rows: Array<Array<{ text: string; colspan: number; rowspan: number }>> = [];
+			const trRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+			let trm: RegExpExecArray | null;
+			while ((trm = trRe.exec(tableInner)) !== null) {
+				const cells: Array<{ text: string; colspan: number; rowspan: number }> = [];
+				const cellRe = /<(td|th)\b([^>]*)>([\s\S]*?)<\/(?:td|th)\s*>/gi;
+				let cm: RegExpExecArray | null;
+				while ((cm = cellRe.exec(trm[1])) !== null) {
+					const attrs = cm[2];
+					let colspan = 1;
+					let rowspan = 1;
+					const csm = /\bcolspan\s*=\s*["']?(\d+)/i.exec(attrs);
+					if (csm) {
+						const cv = parseInt(csm[1], 10);
+						if (cv > 1) {
+							colspan = cv > 1000 ? 1000 : cv;
+						}
+					}
+					const rsm = /\browspan\s*=\s*["']?(\d+)/i.exec(attrs);
+					if (rsm) {
+						const rv = parseInt(rsm[1], 10);
+						if (rv > 1) {
+							rowspan = rv > 1000 ? 1000 : rv;
+						}
+					}
+					cells.push({ text: cellToMarkdown(cm[3]), colspan: colspan, rowspan: rowspan });
+				}
+				if (cells.length > 0) {
+					rows.push(cells);
+				}
+			}
+			if (rows.length === 0) {
+				return '';
+			}
+
+			// Expand colspan/rowspan into a rectangular grid by the stated repeat rule. `pending` carries a
+			// rowspan cell's content down into the later rows it still covers, keyed by the column it occupies.
+			const grid: string[][] = [];
+			const pending: { [col: number]: { text: string; left: number } } = {};
+			for (let r = 0; r < rows.length; r++) {
+				const outRow: string[] = [];
+				let col = 0;
+				const src = rows[r];
+				for (let ci = 0; ci < src.length; ci++) {
+					// Skip past columns still owned by a rowspan opened in an earlier row (fill from it).
+					while (pending[col] && pending[col].left > 0) {
+						outRow[col] = pending[col].text;
+						pending[col].left--;
+						col++;
+					}
+					const cell = src[ci];
+					for (let k = 0; k < cell.colspan; k++) {
+						outRow[col] = cell.text;
+						if (cell.rowspan > 1) {
+							pending[col] = { text: cell.text, left: cell.rowspan - 1 };
+						}
+						col++;
+					}
+				}
+				// Trailing rowspan fills after this row ran out of its own cells.
+				while (pending[col] && pending[col].left > 0) {
+					outRow[col] = pending[col].text;
+					pending[col].left--;
+					col++;
+				}
+				grid.push(outRow);
+			}
+
+			// Rectangularise: pad every row to the widest, any gap becomes an empty cell.
+			let width = 0;
+			for (let g = 0; g < grid.length; g++) {
+				if (grid[g].length > width) {
+					width = grid[g].length;
+				}
+			}
+			if (width === 0) {
+				return '';
+			}
+			for (let g2 = 0; g2 < grid.length; g2++) {
+				for (let c2 = 0; c2 < width; c2++) {
+					if (grid[g2][c2] === undefined) {
+						grid[g2][c2] = '';
+					}
+				}
+				grid[g2].length = width;
+			}
+
+			// Serialise header / default-alignment row / body. Byte-identical in shape to the bundle's `xh`
+			// and the in-place editor's serializeGfmTable, so a pasted table and a round-trip agree on disk.
+			const lines: string[] = [];
+			lines.push('| ' + grid[0].join(' | ') + ' |');
+			const marks: string[] = [];
+			for (let mc = 0; mc < width; mc++) {
+				marks.push('---');
+			}
+			lines.push('| ' + marks.join(' | ') + ' |');
+			for (let br = 1; br < grid.length; br++) {
+				lines.push('| ' + grid[br].join(' | ') + ' |');
+			}
+			return lines.join('\n');
+		}
+
+		// Escape the GFM for a double-quoted HTML attribute value; getAttribute('data-md') resolves these
+		// back to the exact GFM the table_block node stores as its `markdown`. Newlines are legal inside a
+		// quoted attribute value and are preserved, so the multi-line pipe table survives intact.
+		function attrEscape(s: string): string {
+			return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+		}
+
+		// Non-greedy so sibling tables become separate matches; a genuinely nested table degrades to its
+		// inner </table> (Word does not nest tables in this export path - stated limitation, never a crash).
+		const tableRe = /<table\b[^>]*>([\s\S]*?)<\/table>/gi;
+		return input.replace(tableRe, function (whole, inner) {
+			let gfm = '';
+			try {
+				gfm = tableToGfm(inner);
+			} catch (e) {
+				gfm = '';
+			}
+			if (!gfm) {
+				return whole;
+			}
+			return '<table data-md="' + attrEscape(gfm) + '"></table>';
+		});
+	}
+
+	// Ordered transform chain. #138 (tables) appends its step last, so cells are serialised AFTER the office
+	// spacers, Word lists and tracked-changes residue inside them have already been cleaned.
+	const transforms: Array<(input: string) => string> = [stripOfficeSpacers, rebuildWordLists, stripTrackedChanges, rebuildPastedTables];
 	let out = html;
 	for (let i = 0; i < transforms.length; i++) {
 		out = transforms[i](out);

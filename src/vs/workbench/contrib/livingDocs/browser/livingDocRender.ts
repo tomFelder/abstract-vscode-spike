@@ -568,19 +568,24 @@ root.addEventListener('keydown', e => {
 	const b = e.target.closest('[data-block]');
 	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
 });
-// Word-paste interception (issue #137, the T1-A finding). Capture phase so we run BEFORE ProseMirror's own
-// clipboard handler: when the clipboard carries a Word/Office 'text/html' payload pasted INTO the live PM
-// surface, rebuild its list paragraphs into real nested lists (and drop Word's nbsp spacer crumbs) via the
-// injected normaliser, then hand the cleaned HTML to PM's paste pipeline. Any non-Word paste (or a paste
-// into a widget/textarea rather than the document) falls through untouched. Fail-soft: if reading the
-// clipboard or normalising throws, we do nothing and let the default paste proceed.
+// HTML-paste interception (issue #137 the T1-A finding, extended by #138/#139). Capture phase so we run
+// BEFORE ProseMirror's own clipboard handler: when the clipboard carries a 'text/html' payload pasted INTO
+// the live PM surface, rebuild its Word list paragraphs into real nested lists, drop Word's nbsp spacer
+// crumbs, resolve tracked-changes residue, and serialise any pasted <table> to a table[data-md] element the
+// table_block node adopts (#138) - all via the injected normaliser - then hand the cleaned HTML to PM's paste
+// pipeline. We intercept when the payload is a Word/Office paste OR when it contains a <table> (issue #138
+// covers ANY pasted HTML table, Word or plain browser HTML, since PM would otherwise hoist every cell out as
+// a stray paragraph); the normaliser's Word-specific steps gate themselves, so a plain-HTML table paste only
+// gets its table rewritten. Every OTHER non-Word paste - and a paste into a widget/textarea rather than the
+// document - falls through byte-untouched. Fail-soft: if reading the clipboard or normalising throws, we do
+// nothing and let the default paste proceed.
 root.addEventListener('paste', e => {
 	if (!pmView || !window.LWDPM || !pmView.dom || !pmView.dom.contains(e.target)) { return; }
 	const cd = e.clipboardData || window.clipboardData;
 	if (!cd) { return; }
 	let html = '';
 	try { html = cd.getData('text/html') || ''; } catch (err) { return; }
-	if (!html || !isWordHtml(html)) { return; }
+	if (!html || (!isWordHtml(html) && !/<table[\s>]/i.test(html))) { return; }
 	e.preventDefault(); e.stopPropagation();
 	let cleaned;
 	try { cleaned = normalizeWordPasteHtml(html); } catch (err) { cleaned = html; }
