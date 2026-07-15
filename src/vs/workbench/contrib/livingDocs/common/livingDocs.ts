@@ -784,6 +784,21 @@ export interface ILivingDocsService {
 	exportMarkdown(resource: URI, force?: boolean): Promise<URI | undefined>;
 
 	/**
+	 * Export a document's *resolved* state to a clean `.docx` (issue #130), mapped to Word's built-in styles
+	 * with bound values inlined and no Abstract chrome. The conversion runs in the node/proxy layer (doc 22
+	 * §3); a failed before-export gate is honoured exactly like the other exports (`force` = "Export anyway",
+	 * audited). Returns the written file, or `undefined` if the proxy is unreachable (surfaced honestly).
+	 */
+	exportDocx(resource: URI, force?: boolean): Promise<URI | undefined>;
+
+	/**
+	 * Export a document's self-contained HTML page to `.pdf` (issue #130) via the desktop build's
+	 * print-to-PDF (doc 22 §3). Desktop-only: on the web dev harness the native host is absent and this
+	 * surfaces an honest message. `force` proceeds past a failed before-export gate, auditing the override.
+	 */
+	exportPdf(resource: URI, force?: boolean): Promise<URI | undefined>;
+
+	/**
 	 * Persist a pasted/dropped image (issue #141) beside `resource` under `assets/<doc-basename>/` (the #129
 	 * import layout). The name is sanitised (safe chars, extension derived from `mime` when absent) and
 	 * de-duplicated against the folder. Returns the document-relative path (`assets/<doc-basename>/<file>`) the

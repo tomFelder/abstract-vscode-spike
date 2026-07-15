@@ -34,6 +34,7 @@ const { spawn } = require('child_process');
 const { Readable } = require('stream');
 const { SpendMeter } = require('./lwd-spend-meter.js');
 const openaiOAuth = require('./lwd-openai-oauth.js');
+const { renderDocx } = require('./lwd-docx.js');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.LWD_PROXY_PORT || 8090);
@@ -847,6 +848,27 @@ async function postEvent(req, res) {
 	sendJson(res, 200, { ok: true });
 }
 
+// Conversion runs where file access + Node libs live, never in the renderer (doc 22 §3). The docx export
+// (issue #130) is a pure text->bytes transform: the renderer POSTs the already-resolved export Markdown (bind
+// values inlined as plain text) plus a map of image src -> data URI, and this returns the .docx bytes for the
+// renderer to write beside the document. Sibling conversions (docx IMPORT via mammoth, xlsx/PDF sources) live
+// alongside this in the proxy, so all format conversion is one layer. The body cap is raised because inlined
+// images make the payload larger than the default JSON routes.
+const DOCX_MAX_BODY_BYTES = 24 * 1024 * 1024;
+async function exportDocx(req, res) {
+	setCors(res);
+	const body = await readBody(req, DOCX_MAX_BODY_BYTES);
+	let parsed;
+	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+	if (!parsed || typeof parsed.markdown !== 'string') {
+		sendJson(res, 400, { error: { type: 'export_error', message: 'markdown is required' } });
+		return;
+	}
+	const bytes = renderDocx({ title: parsed.title, subtitle: parsed.subtitle, markdown: parsed.markdown, images: parsed.images });
+	res.writeHead(200, { 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'content-length': bytes.length });
+	res.end(bytes);
+}
+
 // --- source extraction: xlsx -> CSV, PDF -> context text (issue #131, doc 22 §4) ----------------------
 // Extraction runs HERE, in the node/proxy layer where file access + the heavy libraries live, never in
 // the renderer (P6 portability + the guardrail that a limitation is named, never a silent misread). The
@@ -1009,6 +1031,14 @@ const server = http.createServer((req, res) => {
 			console.error('[lwd-proxy] event log failed:', err && err.message ? err.message : err);
 			setCors(res);
 			sendJson(res, 502, { error: { type: 'event_error', message: String(err && err.message ? err.message : err) } });
+		});
+		return;
+	}
+	if (req.method === 'POST' && url.startsWith('/export/docx')) {
+		exportDocx(req, res).catch(err => {
+			console.error('[lwd-proxy] docx export failed:', err && err.message ? err.message : err);
+			setCors(res);
+			sendJson(res, 502, { error: { type: 'export_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
 	}

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { decodeBase64, encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
+import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { Limiter } from '../../../../base/common/async.js';
@@ -18,6 +18,7 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { toAction } from '../../../../base/common/actions.js';
 import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
@@ -269,6 +270,44 @@ const NEW_TEMPLATE_TEMPLATE = [
 	'',
 ].join('\n');
 
+/**
+ * Match a Markdown inline image `![alt](dest "title")` starting at `i` in `text`. Unlike a `[^)\s]+` regex,
+ * this handles angle-bracket destinations (`<a b.png>` with spaces) and bare destinations that contain
+ * balanced parentheses (`foo(bar).png`), plus an optional title - so a valid local image is never dropped or
+ * truncated. Returns the DECODED destination (brackets stripped), which matches what the Markdown renderer
+ * emits as an `<img src>` and what the docx writer looks up in the image map. Mirrors `matchImageAt` in
+ * `scripts/lwd-docx.js`, so both export paths key images identically.
+ */
+function matchMarkdownImageAt(text: string, i: number): { readonly src: string; readonly end: number } | undefined {
+	if (text[i] !== '!' || text[i + 1] !== '[') { return undefined; }
+	let j = i + 2;
+	while (j < text.length && text[j] !== ']') { j++; }
+	if (text[j] !== ']' || text[j + 1] !== '(') { return undefined; }
+	j += 2;
+	let src = '';
+	if (text[j] === '<') {
+		j++;
+		while (j < text.length && text[j] !== '>') { src += text[j]; j++; }
+		if (text[j] !== '>') { return undefined; }
+		j++;
+	} else {
+		let depth = 0;
+		while (j < text.length) {
+			const c = text[j];
+			if (c === ')' && depth === 0) { break; }
+			if (/\s/.test(c)) { break; } // whitespace begins an optional title (or is malformed) - the dest ends here
+			if (c === '(') { depth++; }
+			if (c === ')') { depth--; }
+			src += c;
+			j++;
+		}
+	}
+	// Skip an optional title and any trailing whitespace up to the closing paren.
+	while (j < text.length && text[j] !== ')') { j++; }
+	if (text[j] !== ')') { return undefined; }
+	return { src, end: j + 1 };
+}
+
 
 export class LivingDocsService extends Disposable implements ILivingDocsService {
 	declare readonly _serviceBrand: undefined;
@@ -384,6 +423,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IHostService private readonly _host: IHostService,
 		@IAnalyticsService private readonly _analytics: IAnalyticsService,
 		@IStorageService private readonly _storage: IStorageService,
+		@ICommandService private readonly _commands: ICommandService,
 	) {
 		super();
 		this._lockStore = new SidecarLockStore(this._files);
@@ -2714,6 +2754,143 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return target;
 		} catch (e) {
 			this._log.warn('[livingDocs] markdown export failed', e);
+			return undefined;
+		}
+	}
+
+	// The before-export gate, applied uniformly across every export format (plan 32 iter 4): a clean gate
+	// passes; a failed gate blocks WITHOUT `force` and, WITH `force` ("Export anyway"), proceeds and audits the
+	// override so the trail shows a human chose to ship past a flag. Returns `blocked` (caller aborts) and the
+	// `stale` guardrail signal for analytics. Shared by the docx/PDF exports so the gate is written once.
+	private async _gateExport(state: IDocState, force: boolean): Promise<{ blocked: boolean; stale: boolean; flag?: string }> {
+		const gate = this._beforeExportGate(state);
+		if (gate.pass) { return { blocked: false, stale: false }; }
+		if (!force) { return { blocked: true, stale: true, flag: gate.flag }; }
+		this._auditGateOverride(state, 'export', gate.flag ?? 'grader flagged');
+		await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] override audit write failed', e));
+		return { blocked: false, stale: true, flag: gate.flag };
+	}
+
+	// The proxy's `/export/docx` route caps the request body at 24 MiB. The images travel as base64 `data:` URIs
+	// inside that JSON body, so we hold the aggregate ENCODED image payload under this budget (leaving headroom
+	// for the Markdown and JSON structure) and drop any image that would push a docx export over a limit it must
+	// otherwise fail on. PDF prints locally with no such body, so it passes no budget.
+	private static readonly EXPORT_IMAGE_BUDGET_BYTES = 22 * 1024 * 1024;
+
+	// Resolve every `![alt](src)` in the export Markdown to a `data:` URI (via the same contained, size-capped
+	// reader the webview uses), so a downstream converter that has no access to the project folder still embeds
+	// the real images. Unreadable/oversized images are dropped from the map (the converter names them in text).
+	// Destinations with spaces (`<a b.png>`) or balanced parens (`foo(bar).png`) are parsed correctly, so a valid
+	// local image is never silently skipped. When `budgetBytes` is set, images are added only while the aggregate
+	// encoded payload stays within it; anything over-budget is reported via `droppedForBudget`.
+	private async _collectExportImages(resource: URI, markdown: string, budgetBytes?: number): Promise<{ images: Record<string, string>; droppedForBudget: number }> {
+		const images: Record<string, string> = {};
+		const seen = new Set<string>();
+		let encodedTotal = 0;
+		let droppedForBudget = 0;
+		for (let i = 0; i < markdown.length; i++) {
+			if (markdown[i] !== '!' || markdown[i + 1] !== '[') { continue; }
+			const match = matchMarkdownImageAt(markdown, i);
+			if (!match) { continue; }
+			i = match.end - 1; // skip past this image; the loop's i++ resumes after it
+			const src = match.src;
+			if (seen.has(src) || /^(https?:|data:)/.test(src)) { continue; }
+			seen.add(src);
+			const read = await this.readImageAsset(resource, src);
+			if (!read.dataUri) { continue; }
+			if (budgetBytes !== undefined && encodedTotal + read.dataUri.length > budgetBytes) {
+				this._log.warn('[livingDocs] image omitted from export - over the aggregate size budget', src);
+				droppedForBudget++;
+				continue;
+			}
+			encodedTotal += read.dataUri.length;
+			images[src] = read.dataUri;
+		}
+		return { images, droppedForBudget };
+	}
+
+	async exportDocx(resource: URI, force = false): Promise<URI | undefined> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return undefined; }
+		const gate = await this._gateExport(state, force);
+		if (gate.blocked) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
+		// The resolved export Markdown (bind values inlined as plain text) is the single source both docx and
+		// the HTML/Markdown exports build from, so the docx carries the same clean, chrome-free content. It
+		// already leads with `# title` + `_subtitle_` (like the HTML export body), so we do NOT also pass the
+		// title/subtitle separately - that would render them twice.
+		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
+		const { images, droppedForBudget } = await this._collectExportImages(resource, markdown, LivingDocsService.EXPORT_IMAGE_BUDGET_BYTES);
+		if (droppedForBudget > 0) {
+			// Honest, before-the-fact: say what was left out rather than posting an over-cap body that must 413.
+			this._notify.info(`${droppedForBudget} large image(s) were left out of the Word export to keep it under the size limit.`);
+		}
+		const stem = basename(resource).replace(/\.md$/, '');
+		const target = joinPath(dirname(resource), `${stem}.export.docx`);
+		try {
+			// Conversion runs in the node/proxy layer where file access + Node libs live, never the renderer
+			// (doc 22 §3): the proxy's /export/docx route returns the .docx bytes we write beside the document.
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/export/docx`,
+				headers: { 'content-type': 'application/json' },
+				data: JSON.stringify({ markdown, images }),
+				callSite: 'livingDocs.exportDocx',
+			}, CancellationToken.None);
+			if ((context.res.statusCode ?? 0) !== 200) {
+				this._log.warn('[livingDocs] docx export route failed', context.res.statusCode);
+				this._notify.info('Word export needs the local model proxy running. Start it, then export again.');
+				return undefined;
+			}
+			const bytes = await streamToBuffer(context.stream);
+			await this._files.writeFile(target, bytes);
+			this._notify.info(`Exported "${state.doc.title}" to ${basename(target)}.`);
+			// docx inlines resolved values (no bindings), so - like the clean Markdown export - its provenance
+			// mode is 'clean'; `stale_sources_present` is the before-export gate guardrail signal.
+			this._analytics.capture('export_or_publish', { format: 'docx', provenance_mode: 'clean', stale_sources_present: gate.stale });
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] docx export failed', e);
+			this._notify.info('Word export needs the local model proxy running. Start it, then export again.');
+			return undefined;
+		}
+	}
+
+	// The command the desktop build registers (electron-browser/livingDocsPdf.contribution) to print an HTML
+	// page to PDF bytes via Electron's own print engine. It is ABSENT on the web dev harness, where PDF is
+	// honestly unavailable rather than a broken button (doc 22 §3; desktop is the beta vehicle).
+	static readonly PRINT_TO_PDF_COMMAND = '_livingDocs.printToPDF';
+
+	async exportPdf(resource: URI, force = false): Promise<URI | undefined> {
+		const state = this._docs.get(resource.toString());
+		if (!state) { return undefined; }
+		const gate = await this._gateExport(state, force);
+		if (gate.blocked) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
+		// The existing self-contained HTML export IS the PDF's page; images are inlined as data URIs so the
+		// offscreen print has no project-folder dependency (doc 22 §3: reuse the HTML export, no new renderer).
+		let html = renderExportHtml(state.doc, this.getResolved(resource));
+		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
+		const { images } = await this._collectExportImages(resource, markdown);
+		for (const [src, dataUri] of Object.entries(images)) {
+			html = html.split(`src="${src}"`).join(`src="${dataUri}"`);
+		}
+		const stem = basename(resource).replace(/\.md$/, '');
+		const target = joinPath(dirname(resource), `${stem}.export.pdf`);
+		try {
+			// Print-to-PDF runs through Electron's main process (doc 22 §3); the browser service reaches it
+			// through the desktop-only command so it stays free of a desktop dependency. A missing command
+			// (web harness) or a failed print returns undefined -> honest message, never a broken write.
+			const bytes = await this._commands.executeCommand<VSBuffer | undefined>(LivingDocsService.PRINT_TO_PDF_COMMAND, html);
+			if (!bytes) {
+				this._notify.info('PDF export is available in the desktop app. Use Web page or Word here.');
+				return undefined;
+			}
+			await this._files.writeFile(target, bytes);
+			this._notify.info(`Exported "${state.doc.title}" to ${basename(target)}.`);
+			this._analytics.capture('export_or_publish', { format: 'pdf', provenance_mode: 'clean', stale_sources_present: gate.stale });
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] pdf export failed', e);
+			this._notify.info('PDF export is available in the desktop app. Use Web page or Word here.');
 			return undefined;
 		}
 	}

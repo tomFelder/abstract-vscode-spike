@@ -397,3 +397,30 @@ reach for the nav chip/tidy, fails-soft/cosmetic on rename), not behavioural for
 | I6 | `jszip@3.10.1` promoted to a direct dependency (review fix) | dependency | `package.json`, `package-lock.json` | The proxy's `detectDocxFidelity` calls `require('jszip')` directly; it was only transitively hoisted via mammoth, so a stricter install could silently drop fidelity detection. Declaring it directly makes that path robust. Same runtime-only footprint as mammoth |
 
 **A1 docx import: 0 core patches.** The whole feature lives in the `livingDocs` contribution + our node proxy, plus two pure-JS npm dependencies (mammoth + jszip) that only the proxy loads at runtime - so the merge tax is two additive lines in `package.json`, not a fork of any upstream file. Verified: `typecheck-client` 0; `valid-layers-check` 0 in changed files; the conversion pipeline exercised end-to-end against a real `.docx` through the live proxy (`docs/plans/40-verify/a1-import/`).
+### Export round (plan 40, A2 - issue #130): +1 core patch (count 5 -> 6)
+
+Unstubbing docx export and adding PDF (doc 22 §3). docx is entirely our-surface + additive: a
+zero-dependency pure-JS OOXML writer (`scripts/lwd-docx.js`) exposed through a new proxy route
+(`scripts/lwd-anthropic-proxy.js` `POST /export/docx`), driven by `livingDocsService.exportDocx` +
+the present modal - no core edit.
+
+PDF needs Electron's `webContents.printToPDF`, a main-process capability with no existing seam, so it
+takes **the one core patch of this round**:
+
+| Item | Change | Tier | File(s) | Note |
+|------|--------|------|---------|------|
+| A2-1 | `printToPDF(html)` on the native host: offscreen hidden `BrowserWindow` loads the HTML via a data URL and prints to PDF | **core-patch** | `platform/native/common/native.ts` (interface), `platform/native/electron-main/nativeHostMainService.ts` (impl), `workbench/test/electron-browser/workbenchTestServices.ts` (`TestNativeHostService` stub) | One new method on `ICommonNativeHostService`, modelled on the existing `getScreenshot` (also a `webContents`->`VSBuffer` capability). Fail-soft: any failure returns `undefined`. |
+| A2-2 | Desktop-only command `_livingDocs.printToPDF` bridging the browser service to the native host | additive-contribution | `livingDocs/electron-browser/livingDocsPdf.contribution.ts` (new), `workbench.desktop.main.ts` (one import line) | Keeps the browser-layer `LivingDocsService` free of a desktop dependency; on web the command is simply absent and PDF reports honestly. The one desktop-barrel import is the same kind of additive wiring as the existing `browser/livingDocs.contribution` import in `workbench.common.main`. |
+
+Why a core patch was unavoidable: `printToPDF` is a Chromium/Electron main-process API; the renderer
+cannot produce PDF bytes silently (`window.print()` opens a dialog and yields nothing). Adding one
+`getScreenshot`-shaped method to the native host is the minimal, upstream-mergeable seam. **New core-patch
+count: 6 total (was 5).**
+
+Hardening (CodeRabbit review on #162, no new patch - same A2-1 method): the offscreen print window now (a)
+runs on its own in-memory session and **denies every non-`data:` resource load** via a scoped
+`webRequest.onBeforeRequest`, so an authored remote `![](http…)` image can no longer make the export contact
+arbitrary URLs (local/inlined `data:` images still render); and (b) races the whole load+print against a
+20 s deadline, destroying the hidden window on timeout so a stalled page or wedged print can never leave the
+command pending. Both are contained inside the existing `printToPDF` impl and stay fail-soft (any failure
+still returns `undefined`).

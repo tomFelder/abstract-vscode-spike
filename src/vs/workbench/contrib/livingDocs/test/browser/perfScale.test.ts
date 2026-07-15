@@ -20,6 +20,7 @@ import { IConfigurationService } from '../../../../../platform/configuration/com
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IFileDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { IHostService } from '../../../../services/host/browser/host.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
@@ -119,8 +120,9 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: WS, name: 'ws' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
+		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
 
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
 		const clock = new FakeClock();
 		service.setClock(clock);
 		store.add(service);
@@ -253,7 +255,8 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: WS, name: 'ws' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
+		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
 		const clock = new FakeClock();
 		service.setClock(clock);
 		store.add(service);
@@ -338,7 +341,8 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: WS, name: 'ws' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()));
+		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
 		service.setClock(new FakeClock());
 		store.add(service);
 		return { service };
