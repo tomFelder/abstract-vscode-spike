@@ -246,6 +246,12 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 	// not noise); only un-bound loose screenshots are bucketed into the collapsed Assets node (issue #171).
 	const boundLabels = new Set<string>();
 	for (const d of docs) { for (const s of d.sources) { boundLabels.add(s); } }
+	// A leaf's stable identity for the tree's identityProvider (selection reconcile + persisted state). Two
+	// documents in the same folder can share a title, so a label-based id would collide and let the tree
+	// select/reconcile the wrong row. The on-disk resource is unique, so use it when present; only rows with
+	// no backing file (e.g. an api/mcp source) fall back to `kind:label`, which is unique among those rows.
+	const leafId = (idPrefix: string, item: ITreeRailItem): string =>
+		`${idPrefix}/leaf:${item.resource ? item.resource.toString() : `${item.kind}:${item.label}`}`;
 	const toNodes = (group: ITreeRailFolder, idPrefix: string): ITreeRailNode[] => {
 		const nodes: ITreeRailNode[] = [];
 		for (const sub of group.folders) {
@@ -253,7 +259,7 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 			nodes.push({ type: 'folder', id, label: sub.name, children: toNodes(sub, id) });
 		}
 		for (const item of group.items) {
-			nodes.push({ type: 'leaf', id: `${idPrefix}/leaf:${item.label}`, item });
+			nodes.push({ type: 'leaf', id: leafId(idPrefix, item), item });
 		}
 		return nodes;
 	};
@@ -266,14 +272,14 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 			const isAsset = (label: string) => isAssetName(label) && !boundLabels.has(label);
 			const visible = group.items.filter(i => !isAsset(i.label));
 			const assets = group.items.filter(i => isAsset(i.label));
-			const children: ITreeRailNode[] = visible.map(item => ({ type: 'leaf', id: `${id}/leaf:${item.label}`, item }));
+			const children: ITreeRailNode[] = visible.map(item => ({ type: 'leaf', id: leafId(id, item), item }));
 			if (assets.length) {
 				const assetsId = ASSETS_FOLDER_ID;
 				children.push({
 					type: 'folder',
 					id: assetsId,
 					label: `Assets (${assets.length})`,
-					children: assets.map(item => ({ type: 'leaf', id: `${assetsId}/leaf:${item.label}`, item })),
+					children: assets.map(item => ({ type: 'leaf', id: leafId(assetsId, item), item })),
 				});
 			}
 			if (children.length) { result.push({ type: 'folder', id, label: group.name, children }); }

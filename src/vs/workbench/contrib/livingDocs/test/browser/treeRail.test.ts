@@ -171,6 +171,21 @@ suite('treeRail', () => {
 		]);
 	});
 
+	test('buildTreeRailNodes gives same-titled documents distinct resource-based leaf ids so the tree cannot reconcile the wrong row (issue #171)', () => {
+		// Two documents in the same folder can share a title; a label-based leaf id would collide, and the
+		// tree's identityProvider would then select/reconcile the wrong node. Leaf ids derive from the unique
+		// on-disk resource, so the two rows are distinguishable even though their labels are identical.
+		const nodes = buildTreeRailNodes([
+			{ title: 'Status', resource: URI.file('/ws/reports/Status.md'), pendingCount: 0, sources: [], folder: 'reports' },
+			{ title: 'Status', resource: URI.file('/ws/reports/Status-2.md'), pendingCount: 0, sources: [], folder: 'reports' },
+		]);
+		const reports = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'Reports')!;
+		const reportsFolder = reports.children.find((c): c is Extract<ITreeRailNode, { type: 'folder' }> => c.type === 'folder' && c.label === 'reports')!;
+		const leafIds = reportsFolder.children.filter(c => c.type === 'leaf').map(c => c.id);
+		assert.strictEqual(new Set(leafIds).size, 2, 'the two same-titled documents have distinct leaf ids');
+		assert.ok(leafIds.every(id => id.includes('Status')), 'each leaf id carries its own resource');
+	});
+
 	test('buildTreeRailNodes buckets un-bound image assets behind one collapsed Assets node, keeping bound sources visible (issue #171)', () => {
 		const A = URI.file('/ws/report.md');
 		const nodes = buildTreeRailNodes(
