@@ -318,6 +318,36 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		}, { hasBrandCrumb: true, noFileBreadcrumb: true });
 	});
 
+	// Issue #174: every breadcrumb value (project name, document title, file name) is authored data that
+	// reaches the webview HTML, so all three MUST go through esc() and land inert. A hostile filename/title
+	// must appear as escaped text, never as live markup - reverting any esc() on the breadcrumb fails this.
+	test('the breadcrumb escapes hostile project/title/file names so nothing renders as live markup', () => {
+		const content = renderLivingDocContent({
+			doc: { title: '<img src=x onerror="alert(1)">', subtitle: '', sources: [], context: [], blocks: [], isLiving: false, body: '' },
+			pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
+			present: { open: false, choice: 'html' }, syncDiff: [],
+			projectName: '"><script>x</script>', fileName: '</span><b>evil</b>.md',
+		});
+		const h = content.html;
+		assert.deepStrictEqual({
+			// no un-escaped hostile tag survives anywhere in the emitted breadcrumb HTML
+			noLiveImg: !h.includes('<img src=x onerror'),
+			noLiveScript: !h.includes('<script>x</script>'),
+			noLiveSpanBreakout: !h.includes('</span><b>evil</b>'),
+			// the values are present, escaped (proves they were rendered, not merely dropped)
+			titleEscaped: h.includes('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;'),
+			projectEscaped: h.includes('&quot;&gt;&lt;script&gt;x&lt;/script&gt;'),
+			fileEscaped: h.includes('&lt;/span&gt;&lt;b&gt;evil&lt;/b&gt;.md'),
+		}, {
+			noLiveImg: true,
+			noLiveScript: true,
+			noLiveSpanBreakout: true,
+			titleEscaped: true,
+			projectEscaped: true,
+			fileEscaped: true,
+		});
+	});
+
 	// Issue #175: the top bar and formatting toolbar run edge-to-edge. The bars being siblings of .pmwrap is
 	// necessary but not sufficient - it was true since the first commit yet the gutter persisted, because the
 	// webview harness injects `body{padding:0 20px}` and the content CSS only reset margin, so the 20px lateral
