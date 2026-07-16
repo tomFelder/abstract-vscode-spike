@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import {
-	applyFocusRequest, applyReady, applyRender, EditorWebviewEffect, IEditorRenderContent,
+	applyFocusRequest, applyReady, applyRender, applyRevealHeading, EditorWebviewEffect, IEditorRenderContent,
 	initialEditorWebviewState, recordPmBody,
 } from '../../common/editorWebviewProtocol.js';
 
@@ -121,9 +121,26 @@ suite('livingDocs editorWebviewProtocol (plan 30, track 4)', () => {
 	});
 
 	test('a ready with nothing pending is a no-op beyond flipping ready', () => {
-		let s = applyRender(initialEditorWebviewState(), content('<shell/>', 'body')).state;
+		const s = applyRender(initialEditorWebviewState(), content('<shell/>', 'body')).state;
 		const ready = applyReady(s);
 		assert.deepStrictEqual(kinds(ready.effects), [], 'nothing to flush');
 		assert.strictEqual(ready.state.ready, true, 'ready flips true');
+	});
+
+	test('an Outline reveal-heading request is held before ready and flushed on ready, or posted immediately after ready (issue #181)', () => {
+		// Before ready: held (the headings must be laid out before one can be scrolled to), then flushed.
+		const held = applyRender(initialEditorWebviewState(), content('<shell/>', 'body')).state; // initialized, not ready
+		const beforeReady = applyRevealHeading(held, 2);
+		assert.deepStrictEqual(kinds(beforeReady.effects), [], 'a reveal before ready posts nothing yet');
+		assert.strictEqual(beforeReady.state.pendingRevealHeadingIndex, 2, 'the heading target is held');
+		const flushed = applyReady(beforeReady.state);
+		const heldPosted = flushed.effects.find(e => e.kind === 'postRevealHeading');
+		assert.ok(heldPosted && heldPosted.kind === 'postRevealHeading' && heldPosted.headingIndex === 2, 'ready flushes the held heading');
+		assert.strictEqual(flushed.state.pendingRevealHeadingIndex, undefined, 'the heading target is cleared once flushed');
+
+		// After ready: posted immediately.
+		const afterReady = applyRevealHeading(applyReady(held).state, 5);
+		const nowPosted = afterReady.effects.find(e => e.kind === 'postRevealHeading');
+		assert.ok(nowPosted && nowPosted.kind === 'postRevealHeading' && nowPosted.headingIndex === 5, 'a ready webview reveals immediately');
 	});
 });

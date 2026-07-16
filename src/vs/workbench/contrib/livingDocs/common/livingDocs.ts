@@ -508,6 +508,14 @@ export interface ILivingDocsService {
 	readonly onDidRequestFocusChange: Event<{ readonly docId: string; readonly changeId: string }>;
 
 	/**
+	 * Fires when the Outline tab asks the editor to scroll to one of the open document's headings (issue
+	 * #181). `docId` is the document; `headingIndex` is the heading's zero-based ordinal among all heading
+	 * blocks in document order, which the editor's ProseMirror surface reveals by scrolling to that `<hN>`.
+	 * Navigate-only, mirroring `onDidRequestFocusChange`.
+	 */
+	readonly onDidRequestRevealHeading: Event<{ readonly docId: string; readonly headingIndex: number }>;
+
+	/**
 	 * Fires when "Add to chat" (docs 20 section 1d, the 1m entry) attaches a file to the active
 	 * document's chat: the argument is the file name to seed as an `@mention` in the chat composer.
 	 * The review rail listens and appends the mention to its draft; `focusPanel('chat')` reveals the tab.
@@ -519,6 +527,9 @@ export interface ILivingDocsService {
 
 	/** Ask the editor showing a change's document to scroll to and highlight that change's inline diff. */
 	focusChange(changeId: string): void;
+
+	/** Ask the editor showing this document to scroll to the heading at `headingIndex` (Outline tab, #181). */
+	revealHeading(resource: URI, headingIndex: number): void;
 
 	// --- model access: provider picker + survey (plan 35 iter 4) ---
 	/**

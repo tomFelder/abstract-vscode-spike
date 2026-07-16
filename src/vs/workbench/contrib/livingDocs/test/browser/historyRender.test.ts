@@ -75,7 +75,7 @@ suite('livingDocs History tab (historyHtml)', () => {
 
 	test('no document open shows a calm prompt, not a fabricated timeline', () => {
 		const h = historyHtml([], [], undefined, undefined, NOW);
-		assert.ok(h.includes('Open a Living Document to see its version history.'), 'honest no-doc prompt');
+		assert.ok(h.includes('Open a document to see its version history.'), 'honest no-doc prompt (versions apply to any document, not only Living Documents - issue #181)');
 		assert.ok(!h.includes('data-restore') && !h.includes('CURRENT'), 'no version rows without a document');
 	});
 
