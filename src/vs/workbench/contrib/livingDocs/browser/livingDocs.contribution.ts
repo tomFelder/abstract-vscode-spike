@@ -116,6 +116,13 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	},
 });
 
+// (issue #180) The default colour theme id. This MUST stay exactly equal to the `settingsId` of the fork's
+// light theme contribution (`id`/`label` "Abstract", `uiTheme` "vs" in extensions/theme-defaults/package.json)
+// -- `workbench.colorTheme` is resolved by matching this string against installed themes, and a typo does NOT
+// error: it silently falls back to the inherited DARK default on a cold boot. Extracted to a named constant so
+// the load-bearing literal is greppable and the invariant is documented next to it.
+const ABSTRACT_LIGHT_THEME_ID = 'Abstract';
+
 // --- calm shell: hide the IDE chrome by registering product setting defaults ---
 // (plan 16 iter 1, decision 54). The product is a document tool, not an editor, so the workbench
 // shell parts are OFF by default: the status-bar footer, the activity-bar icon column, the editor
@@ -148,7 +155,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		// off so the app stays light even when the OS is in dark mode (beta ships light only). Both are real,
 		// user-overridable settings, so this stays an ADDITIVE contribution (no core patch). The calm chrome has no
 		// theme-picker affordance and the command palette is already neutralised, so there is no user-facing toggle.
-		'workbench.colorTheme': 'Abstract',
+		'workbench.colorTheme': ABSTRACT_LIGHT_THEME_ID,
 		'window.autoDetectColorScheme': false,
 		// iter 2 -- kill the cold-launch noise + trust leaks
 		'security.workspace.trust.enabled': false,
