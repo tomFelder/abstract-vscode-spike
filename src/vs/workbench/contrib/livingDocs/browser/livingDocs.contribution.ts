@@ -151,6 +151,14 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'window.commandCenter': false,
 		'workbench.layoutControl.enabled': false,
 		'workbench.editor.editorActionsLocation': 'hidden',
+		// (issue #182, leak 1) The docs live inside a git repo, so opening the folder makes the built-in
+		// git extension raise the stock "A git repository was found in the parent folders..." toast --
+		// meaningless in a document tool. The `never` value is a real, user-overridable git setting that
+		// suppresses that prompt at the source: the git model only calls `showParentRepositoryNotification()`
+		// when this reads `prompt` (extensions/git/src/model.ts:632-642), so `never` skips it entirely
+		// without opening the parent repo. No livingDocs feature depends on the git extension (the SCM
+		// container is deregistered above), so this is pure settings-tier suppression -- 0 core patch.
+		'git.openRepositoryInParentFolders': 'never',
 		// The window/tab title is the workspace (project) name then the brand, e.g. "Project Brief - Abstract".
 		// ${separator} collapses when a token is empty, so a no-folder window reads simply "Abstract".
 		'window.title': '${rootName}${separator}Abstract',

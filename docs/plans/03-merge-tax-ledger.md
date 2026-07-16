@@ -278,7 +278,7 @@ exit 0 = all shell seams intact; exit 1 names the broken seam(s) to re-pin per t
 per-PR validation alongside `npm run typecheck-client` and `npm run valid-layers-check` for any change that
 touches the de-IDE seams.
 
-## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
+## Core-patch count: **7 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + **1 in plan 40 export round** (A2-1 native `printToPDF`) + **1 in bundle K** (issue #182 K2: nullish-guard in `ViewsService.getActiveViewPaneContainer`) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
@@ -424,3 +424,27 @@ arbitrary URLs (local/inlined `data:` images still render); and (b) races the wh
 20 s deadline, destroying the hidden window on timeout so a stalled page or wedged print can never leave the
 command pending. Both are contained inside the existing `printToPDF` impl and stay fail-soft (any failure
 still returns `undefined`).
+
+### Shell-integrity round (issue #182, bundle K - suppress IDE toasts + silence the broken chat contribution): +1 core patch (count 6 -> 7)
+
+Two IDE leaks on the golden path (open folder inside a git repo -> open doc -> chat). Leak 1 landed
+settings-tier (0 core); leak 2 took **the one core patch of this round** - a one-line nullish-guard at the
+shared views seam that the fork's own container-deregistration breaks.
+
+| Item | Change | Tier | File(s) | Note / re-pin check |
+|------|--------|------|---------|---------------------|
+| K1 | Default `git.openRepositoryInParentFolders: 'never'` in the decision-54 `registerDefaultConfigurations` block, so opening the docs folder (which sits inside the abstract-vscode-spike git repo) no longer raises the stock "A git repository was found in the parent folders..." toast | settings (additive config-default) | `livingDocs/browser/livingDocs.contribution.ts` | Real, user-overridable git setting. Verified semantics against `extensions/git/src/model.ts:632-642`: the git model calls `showParentRepositoryNotification()` only when the setting reads `prompt`; `never` skips the prompt entirely without opening the parent repo. No livingDocs feature depends on the git extension (SCM container already deregistered). No core edit. Re-pin if the git extension renames the setting. |
+| K2 | Nullish-guard `undefined` in `ViewsService.getActiveViewPaneContainer`: change `if (location === null)` to `if (location === null \|\| location === undefined)` | **core-patch** | `src/vs/workbench/services/views/browser/viewsService.ts` | Fixes a genuine latent upstream defect exposed by the fork's de-IDE: `getViewContainerLocation` is typed non-null but its registry lookup (`[...keys].filter(...)[0]`, `common/views.ts:271`) returns `undefined` for a DEREGISTERED container. The strict `=== null` guard let that `undefined` reach `getActivePaneComposite(undefined)` -> `getPartByLocation` -> `assertReturnsDefined` (thrown assertion). Upstream `ChatForegroundSessionCountContribution` calls `isViewVisible(ChatViewId)` on every editor switch; since the fork deregisters the `workbench.panel.chat` container while its view descriptor still maps to it, every switch logged "Unable to create workbench contribution... Assertion Failed". Fails **safe** (missing location -> view treated as not-visible). LOW fragility: a rebase that reverts the guard just re-surfaces the assertion (console noise, not a crash - the throw is caught by the contribution harness); re-pin check: the guard is `=== null \|\| === undefined` (or equivalent `== null`). |
+
+Why a core patch (not the fork's usual additive route): there is **no** public API to deregister a
+`registerWorkbenchContribution2` contribution, so the leaking `ChatForegroundSessionCountContribution`
+cannot be unregistered from our own module. The two candidate patch sites were (a) guarding the upstream
+chat file - narrow but sits in a heavily-churned file - or (b) the shared views seam. Site (b) is the
+**root-cause** fix (the defect is the strict-null guard missing `undefined`), lives in a stable method,
+fails safe, and benefits every hidden-container caller, so it carries less merge tax than repeatedly
+re-pinning a guard inside the chat file. **New core-patch count: 7 total (was 6).**
+
+Not fixed (out of scope, noted): the known pre-existing Extensions-container boot noise
+(`viewsExtensionPoint` registering views into the deregistered `workbench.view.extensions` container ->
+`Cannot read properties of undefined (reading 'id'/'extensionId')`) is a **different** root cause than K2
+and is tracked separately in the 1.127.0 merge log above; bundle K does not touch it.

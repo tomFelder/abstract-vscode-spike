@@ -354,7 +354,15 @@ export class ViewsService extends Disposable implements IViewsService {
 
 	private getActiveViewPaneContainer(viewContainer: ViewContainer): IViewPaneContainer | null {
 		const location = this.viewDescriptorService.getViewContainerLocation(viewContainer);
-		if (location === null) {
+		// `getViewContainerLocation` is typed non-null, but for a DEREGISTERED container the underlying
+		// registry lookup (`[...keys].filter(...)[0]`) returns `undefined`, which the strict `=== null`
+		// check let slip through into `getActivePaneComposite(undefined)` -> `getPartByLocation` ->
+		// `assertReturnsDefined` (a thrown assertion). This fork deregisters IDE view containers (chat,
+		// Explorer, SCM, ...) while their view descriptors still map to the old container, so an upstream
+		// caller such as `ChatForegroundSessionCountContribution` calling `isViewVisible(ChatViewId)` on
+		// every editor switch hit this and logged "Assertion Failed: Argument is undefined or null"
+		// (issue #182, leak 2). Use a nullish check so a missing location fails safe (view not visible).
+		if (location === null || location === undefined) {
 			return null;
 		}
 
