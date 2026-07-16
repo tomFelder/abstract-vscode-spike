@@ -127,6 +127,7 @@ import { ILocalPtyService, LocalReconnectConstants, TerminalIpcChannels, Termina
 import { ElectronPtyHostStarter } from '../../platform/terminal/electron-main/electronPtyHostStarter.js';
 import { PtyHostService } from '../../platform/terminal/node/ptyHostService.js';
 import { ElectronAgentHostStarter } from '../../platform/agentHost/electron-main/electronAgentHostStarter.js';
+import { LivingDocsBrokerService } from '../../platform/livingDocsBroker/electron-main/livingDocsBrokerService.js';
 import { AgentHostProcessManager } from '../../platform/agentHost/node/agentHostService.js';
 import { NODE_REMOTE_RESOURCE_CHANNEL_NAME, NODE_REMOTE_RESOURCE_IPC_METHOD_NAME, NodeRemoteResourceResponse, NodeRemoteResourceRouter } from '../../platform/remote/common/electronRemoteResources.js';
 import { Lazy } from '../../base/common/lazy.js';
@@ -1692,6 +1693,12 @@ export class CodeApplication extends Disposable {
 			});
 		}
 
+		// Supervise the Living Documents model broker (issue #169): spawn it, health-check it, restart it on
+		// crash, and kill it on shutdown, so every model-backed feature works with no terminal step. The service
+		// adopts an already-healthy broker on the port rather than double-spawning, and is a no-op when the broker
+		// script is not present (e.g. a packaged build without scripts).
+		const livingDocsBrokerService = this._register(instantiationService.createInstance(LivingDocsBrokerService));
+		void livingDocsBrokerService.start();
 	}
 
 	private async installMutex(): Promise<void> {

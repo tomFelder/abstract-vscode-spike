@@ -34,20 +34,61 @@ export type LivingDocsPanelTab = 'chat' | 'review' | 'history';
 export type ModelProvider = 'chatgpt' | 'included' | 'none';
 
 /**
+ * The truthful state of the model broker, keyed off /healthz (issues #169/#170). `broker-down` = the broker
+ * did not answer at all (it is not running / not yet up); `unconfigured` = the broker is up but no backend
+ * credential is wired, so the app is on its built-in heuristic path; `budget-paused` = the metered included
+ * tier has spent today's fair-usage cap and calls pause; `ready` = a configured backend can serve now. These
+ * drive honest, state-specific UI copy so no surface ever claims a model is connected when it is not.
+ */
+export type ModelReadiness = 'broker-down' | 'unconfigured' | 'budget-paused' | 'ready';
+
+/**
+ * The single honest fallback line shown when the model cannot answer (issue #170). The app supervises the
+ * broker itself now, so the user is never asked to run a shell script; when the model is genuinely unavailable
+ * (broker still starting, or no backend wired) the app can still read the document and its sources, and the
+ * Model access screen is where the user fixes it. Kept in one place so every surface speaks the same words.
+ */
+export const MODEL_UNAVAILABLE_MESSAGE = 'The model is not available right now. Open Model access to connect a model; meanwhile I can still read this document and its sources.';
+
+/**
  * The model provider + usage snapshot the Settings provider step renders (plan 35 iter 4). Read from the
- * proxy's /healthz: the active backend, whether the user is signed in to ChatGPT, and - only for the metered
+ * broker's /healthz: the active backend, whether the user is signed in to ChatGPT, and - only for the metered
  * `included` tier - today's spend against the daily budget. A subscription (`chatgpt`) tier is the user's own
  * plan, so it carries no daily figure. All real data; never fabricated.
  */
 export interface IModelProviderStatus {
 	/** The door currently serving calls (see ModelProvider). */
 	readonly provider: ModelProvider;
+	/** The truthful broker state driving state-specific UI copy (see ModelReadiness). */
+	readonly readiness: ModelReadiness;
 	/** True when a ChatGPT subscription is signed in (whichever backend is active). */
 	readonly signedIn: boolean;
 	/** The per-user daily budget in US dollars (the `included` tier's fair-usage cap). */
 	readonly dailyBudgetUsd: number;
 	/** Today's spend on the metered `included` tier in US dollars; undefined for the subscription tier. */
 	readonly dailyTotalUsd?: number;
+}
+
+/**
+ * One model the active backend can drive, for the composer's model picker (issue #179). `id` is the upstream
+ * model id the broker sends; `label` is the product-facing name shown in the dropdown (e.g. "Included model",
+ * or the ChatGPT tiers "Sol"/"Terra"/"Luna"); `isDefault` marks the backend's fallback, the one a request
+ * lands on when it carries no (or a stale) selection. Read from the broker's /models endpoint.
+ */
+export interface IModelOption {
+	readonly id: string;
+	readonly label: string;
+	readonly isDefault: boolean;
+}
+
+/**
+ * The model catalogue for the current backend (issue #179): which backend it is (so the renderer can key its
+ * per-backend persisted selection), and the models that backend offers. A single included model for the
+ * openrouter tier; the subscription's models for openai-oauth. Empty models means the picker renders nothing.
+ */
+export interface IModelCatalogue {
+	readonly backend: string;
+	readonly models: readonly IModelOption[];
 }
 
 /** The stage of the "Sign in with ChatGPT" flow the Settings step polls (plan 35 iter 2 + 4). */
@@ -296,7 +337,7 @@ export interface ISourcePeek {
 	 */
 	readonly pinnedLabel?: string;
 	/**
-	 * When the peeked CSV was EXTRACTED from a spreadsheet workbook (issue #131, doc 22 §4), the provenance
+	 * When the peeked CSV was EXTRACTED from a spreadsheet workbook (issue #131, doc 22 section 4), the provenance
 	 * hop the drawer shows above the CSV row: figure → CSV row → extracted from `Budget.xlsx · Sheet "FY26"`
 	 * → synced-at. Absent for a hand-authored CSV. Real data only - read from the extraction manifest.
 	 */
@@ -332,7 +373,7 @@ export interface IExtractedSheet {
 }
 
 /**
- * The result of "Use as source" on a spreadsheet workbook (issue #131, doc 22 §4). On success each sheet
+ * The result of "Use as source" on a spreadsheet workbook (issue #131, doc 22 section 4). On success each sheet
  * became a clean CSV under `data/<workbook>/`; the workbook is now watched and re-extracts on change. On
  * failure the workbook was left untouched and `reason` names why (P6: the original is never destroyed).
  */
@@ -343,7 +384,7 @@ export interface IWorkbookUseResult {
 }
 
 /**
- * The result of "Use as source" on a PDF (issue #131, doc 22 §4 - PDFs are read-only CONTEXT, never value
+ * The result of "Use as source" on a PDF (issue #131, doc 22 section 4 - PDFs are read-only CONTEXT, never value
  * bindings). On success the PDF became a `context` edge on the target document and its extracted text is
  * stored as knowledge. An image-only/scanned or password-protected PDF NAMES itself unreadable (`ok:false`
  * + `reason`) rather than yielding empty context, and no dead edge is created.
@@ -488,6 +529,16 @@ export interface ILivingDocsService {
 	isModelReachable(): Promise<boolean>;
 	/** The current model door + usage snapshot for the Settings provider step (reads the proxy's /healthz). */
 	getModelProviderStatus(): Promise<IModelProviderStatus>;
+	/**
+	 * The models the active backend can drive, for the composer's picker (issue #179). Cached per backend and
+	 * fetched cheaply from the broker's /models (on backend change or first read, never on every healthz poll).
+	 * Returns an empty catalogue when the broker is unreachable; the composer degrades to no picker, never errors.
+	 */
+	getModelCatalogue(): Promise<IModelCatalogue>;
+	/** The id of the model currently selected for the active backend (its default until the user picks one). */
+	getSelectedModelId(): Promise<string | undefined>;
+	/** Persist the user's model choice for the active backend (issue #179); subsequent calls carry it. */
+	setSelectedModelId(modelId: string): Promise<void>;
 	/** Begin "Sign in with ChatGPT": returns the authorize URL to open in a browser (or undefined on failure). */
 	startChatGptSignIn(): Promise<string | undefined>;
 	/** Poll the sign-in flow's stage while the Settings step waits for the browser round-trip to complete. */
@@ -569,7 +620,7 @@ export interface ILivingDocsService {
 	resolveWorkspaceExtra(name: string): Promise<URI | undefined>;
 
 	/**
-	 * "Use as source" on a spreadsheet workbook (issue #131, doc 22 §4): extract each sheet to a clean CSV
+	 * "Use as source" on a spreadsheet workbook (issue #131, doc 22 section 4): extract each sheet to a clean CSV
 	 * under `data/<workbook>/`, write the extraction manifest, and WATCH the workbook so a change re-extracts
 	 * the sheets and flags dependent documents through the normal staleness machinery. The workbook stays on
 	 * disk untouched (P6). Extraction runs in the node/proxy layer, never the renderer.
@@ -577,7 +628,7 @@ export interface ILivingDocsService {
 	useXlsxAsSource(workbook: URI): Promise<IWorkbookUseResult>;
 
 	/**
-	 * "Use as source" on a PDF (issue #131, doc 22 §4): extract its text in the node/proxy layer and, when
+	 * "Use as source" on a PDF (issue #131, doc 22 section 4): extract its text in the node/proxy layer and, when
 	 * readable, register the PDF as a read-only `context` edge on `doc` (framing, never value bindings) with
 	 * its extracted text stored as knowledge. A scanned/image-only or password-protected PDF names itself
 	 * unreadable and no edge is created. The PDF stays on disk and is watched like any context source.
@@ -686,7 +737,7 @@ export interface ILivingDocsService {
 	getProjectDisplayName(): string | undefined;
 
 	/** Prompt for and open a local folder as the workspace (the on-ramp; FSA on web, native dialog on desktop). */
-	openFolder(): Promise<boolean>;
+	openFolder(beforeOpen?: () => void | Promise<void>): Promise<boolean>;
 
 	/**
 	 * Create a new blank Living Document and return its resource. With a `name` the file is born titled
@@ -830,14 +881,14 @@ export interface ILivingDocsService {
 	/**
 	 * Export a document's *resolved* state to a clean `.docx` (issue #130), mapped to Word's built-in styles
 	 * with bound values inlined and no Abstract chrome. The conversion runs in the node/proxy layer (doc 22
-	 * §3); a failed before-export gate is honoured exactly like the other exports (`force` = "Export anyway",
+	 * section 3); a failed before-export gate is honoured exactly like the other exports (`force` = "Export anyway",
 	 * audited). Returns the written file, or `undefined` if the proxy is unreachable (surfaced honestly).
 	 */
 	exportDocx(resource: URI, force?: boolean): Promise<URI | undefined>;
 
 	/**
 	 * Export a document's self-contained HTML page to `.pdf` (issue #130) via the desktop build's
-	 * print-to-PDF (doc 22 §3). Desktop-only: on the web dev harness the native host is absent and this
+	 * print-to-PDF (doc 22 section 3). Desktop-only: on the web dev harness the native host is absent and this
 	 * surfaces an honest message. `force` proceeds past a failed before-export gate, auditing the override.
 	 */
 	exportPdf(resource: URI, force?: boolean): Promise<URI | undefined>;

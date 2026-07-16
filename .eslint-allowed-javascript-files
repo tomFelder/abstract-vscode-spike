@@ -95,8 +95,15 @@ scripts/code-perf.js
 scripts/code-server.js
 scripts/code-sessions-web.js
 scripts/code-web.js
-scripts/lwd-anthropic-proxy.js
+scripts/lwd-model-broker.js
 scripts/lwd-demo-mcp-server.js
+scripts/lwd-docx.js
+scripts/lwd-openai-oauth.js
+scripts/lwd-source-extract.fixtures.js
+scripts/lwd-source-extract.js
+scripts/lwd-source-extract.test.js
+scripts/lwd-spend-meter.js
+scripts/test/lwd-docx.test.js
 scripts/xterm-update.js
 src/vs/base/browser/dompurify/dompurify.js
 src/vs/base/common/marked/marked.js

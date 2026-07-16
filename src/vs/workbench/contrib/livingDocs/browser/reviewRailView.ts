@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -21,12 +22,25 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { IChatMessage, IChatStep, ILivingDocsService, ISkillCheck } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelReadiness } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
+import { ScreenId } from './screenRender.js';
 
 type PanelTab = 'chat' | 'review' | 'history';
+
+// The History body and the Document-Agents disclosure are built as pure HTML strings (historyHtml /
+// checksDisclosureHtml) whose entire visual language is inline `style=` on `<button>`/`<span>`/`<div>`,
+// with `data-*` hooks the click delegation reads. VS Code's Trusted Types CSP blocks a raw `innerHTML`
+// assignment, so both go through `safeSetInnerHtml`, which sanitises then resets the node. The default
+// allow-list keeps neither `<button>` nor `style`, so we augment both; `data-*` and `title` survive by
+// default. All interpolated user content (titles, labels) is already `esc()`-escaped by the builders.
+// Exported so the regression test (`reviewRailSanitize.test.ts`) exercises the REAL production config.
+export const REVIEW_RAIL_HTML_SANITIZER = Object.freeze({
+	allowedTags: { augment: ['button'] },
+	allowedAttributes: { augment: ['style'] },
+});
 
 function esc(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -139,9 +153,17 @@ export class ReviewRailView extends ViewPane {
 	private _streamDoc: string | undefined;
 	// Whether the model provider is signed in to ChatGPT (plan 38): when false, the composer shows one calm
 	// line inviting sign-in for unlimited usage; it disappears once signed in. Fetched async from the live
-	// provider status (the proxy's /healthz) on first render and refreshed on onDidChange (which fires on a
+	// provider status (the broker's /healthz) on first render and refreshed on onDidChange (which fires on a
 	// sign-in/out). Undefined until the first fetch resolves, so nothing flashes before we know the truth.
 	private _signedIn: boolean | undefined;
+	// The truthful broker readiness (issue #170): the composer status line MUST reflect /healthz, never claim
+	// "Using the included model" when the broker is down or no backend is wired. Undefined until first fetch.
+	private _readiness: ModelReadiness | undefined;
+	// The model picker (issue #179): the active backend's models and the selected id, fetched cheaply from the
+	// service (which caches /models) and refreshed alongside the sign-in state. The composer renders a compact
+	// dropdown from these; empty models -> no picker. Undefined until the first fetch resolves.
+	private _models: readonly IModelOption[] | undefined;
+	private _selectedModelId: string | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -243,8 +265,17 @@ export class ReviewRailView extends ViewPane {
 	private async _refreshSignedIn(): Promise<void> {
 		try {
 			const status = await this._livingDocs.getModelProviderStatus();
-			if (this._signedIn !== status.signedIn) {
+			// The model catalogue + selection for the picker (issue #179). Fetched from the service, which caches
+			// /models, so this is cheap on a repeated render; only a real change (backend switch, first fetch, a new
+			// selection) re-renders the composer. Read together with the status so one probe refreshes both.
+			const models = await this._livingDocs.getModelCatalogue();
+			const selected = await this._livingDocs.getSelectedModelId();
+			const modelsChanged = JSON.stringify(this._models ?? null) !== JSON.stringify(models.models) || this._selectedModelId !== selected;
+			if (this._signedIn !== status.signedIn || this._readiness !== status.readiness || modelsChanged) {
 				this._signedIn = status.signedIn;
+				this._readiness = status.readiness;
+				this._models = models.models;
+				this._selectedModelId = selected;
 				this._render();
 			}
 		} catch {
@@ -252,11 +283,36 @@ export class ReviewRailView extends ViewPane {
 		}
 	}
 
-	// The calm, persistent sign-in affordance in the composer (plan 38, doc 18 section 2.1): shown whenever the
-	// model provider is NOT signed in to ChatGPT, one line only (P7 calm-by-default, no modal, no nag). Clicking
-	// "Sign in with ChatGPT" opens the Model Access screen (the sign-in surface). It disappears once signed in.
+	// The composer status line (plan 38, doc 18 section 2.1) - now gated on the truthful broker readiness so it
+	// NEVER claims a model is connected when it is not (issue #170). One calm line only (P7, no modal, no nag),
+	// with a fix-it link that always opens the Model access screen:
+	//   - broker-down / unconfigured -> "Model unavailable" (the model genuinely cannot answer);
+	//   - budget-paused             -> "Daily limit reached" (the included tier's cap is spent for today);
+	//   - ready + not signed in     -> "Using the included model · Sign in with ChatGPT for unlimited.";
+	//   - signed in to ChatGPT      -> nothing (unlimited; no nag).
 	private _renderSignInHint(footer: HTMLElement): void {
-		// Only while we know the user is signed OUT (undefined = not yet probed, so render nothing to avoid a flash).
+		// Undefined = not yet probed, so render nothing to avoid a flash before we know the truth.
+		if (this._readiness === undefined) { return; }
+
+		const openModelAccess = () => void this._openScreen('settings');
+
+		// Model genuinely unavailable, or the day's included usage is spent: an honest state + a fix-it link.
+		if (this._readiness === 'broker-down' || this._readiness === 'unconfigured' || this._readiness === 'budget-paused') {
+			const row = append(footer, $('div'));
+			row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
+			const dot = append(row, $('span'));
+			const dotColour = this._readiness === 'budget-paused' ? '#e0b341' : '#d98a8a';
+			dot.style.cssText = `width:6px;height:6px;flex:none;border-radius:50%;background:${dotColour}`;
+			const text = append(row, $('span'));
+			text.textContent = this._readiness === 'budget-paused' ? 'Daily limit reached · ' : 'Model unavailable · ';
+			const link = append(text, $('button')) as HTMLButtonElement;
+			link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
+			link.textContent = 'Open Model access';
+			this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
+			return;
+		}
+
+		// Ready. Only invite sign-in while signed OUT; once signed in to ChatGPT there is nothing to nag about.
 		if (this._signedIn !== false) { return; }
 		const row = append(footer, $('div'));
 		row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
@@ -267,11 +323,22 @@ export class ReviewRailView extends ViewPane {
 		const link = append(text, $('button')) as HTMLButtonElement;
 		link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
 		link.textContent = 'Sign in with ChatGPT';
-		this._renderDisposables.add(addDisposableListener(link, 'click', () => {
-			void this._editors.openEditor(this.instantiationService.createInstance(ScreenEditorInput, 'settings'), { pinned: true });
-		}));
+		this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
 		const tail = append(text, $('span'));
 		tail.textContent = ' for unlimited.';
+	}
+
+	// Open an Abstract screen (e.g. Model Access) without leaking the transient editor input. `ScreenEditorInput`
+	// is a Singleton with a `matches` override, so when a screen is already open the editor service reuses the
+	// existing editor and does NOT adopt the instance we created - leaving us the owner. We therefore dispose our
+	// instance unless the resolved pane is actually backed by it. Mirrors the fire-and-forget open used elsewhere,
+	// but closes the LEAKED DISPOSABLE the fire-and-forget form produced on a repeat open.
+	private async _openScreen(screen: ScreenId): Promise<void> {
+		const input = this.instantiationService.createInstance(ScreenEditorInput, screen);
+		const pane = await this._editors.openEditor(input, { pinned: true });
+		if (pane?.input !== input) {
+			input.dispose();
+		}
 	}
 
 	private _renderReview(content: HTMLElement, pending: readonly IProposedChange[]): void {
@@ -432,7 +499,7 @@ export class ReviewRailView extends ViewPane {
 		const lock = resource ? this._livingDocs.getLock(resource) : undefined;
 		const snapshots = resource ? this._livingDocs.getSnapshots(resource) : [];
 		const audit = lock ? lock.audit : [];
-		content.innerHTML = historyHtml(snapshots, audit, doc?.title, doc?.fromTemplate);
+		safeSetInnerHtml(content, historyHtml(snapshots, audit, doc?.title, doc?.fromTemplate), REVIEW_RAIL_HTML_SANITIZER);
 		if (!resource) { return; }
 
 		// Delegated click handling: "Save version" snapshots the current body under a user-supplied label;
@@ -491,7 +558,7 @@ export class ReviewRailView extends ViewPane {
 		const title = this._livingDocs.getDoc(resource)?.title;
 		const flags = report.filter(s => s.status === 'flag').length;
 		const section = append(parent, $('div.ldr-checks'));
-		section.innerHTML = checksDisclosureHtml(this._checksExpanded, flags, report, title);
+		safeSetInnerHtml(section, checksDisclosureHtml(this._checksExpanded, flags, report, title), REVIEW_RAIL_HTML_SANITIZER);
 		// The disclosure toggle relocates the agents off the always-on rail. "Run" / "Re-run" re-grade the
 		// live document (Strategy calls the model via the proxy); "Apply fix" applies a skill's deterministic
 		// edit (Formatting title-cases the flagged headings). All re-render when the service fires onDidChange.
@@ -912,6 +979,10 @@ export class ReviewRailView extends ViewPane {
 			picker.update();
 		}));
 
+		// The model picker (issue #179): a compact dropdown of the active backend's models, rendered even when
+		// only one model exists so the surface is consistent across the included tier and a signed-in ChatGPT.
+		this._renderModelPicker(bar);
+
 		const busy = !!doc && this._livingDocs.isChatBusy(doc);
 		const submit = () => {
 			if (!doc || busy) { return; }
@@ -947,6 +1018,45 @@ export class ReviewRailView extends ViewPane {
 
 		// Keep the cursor in the composer across the re-render that each message triggers.
 		if (doc && !busy) { input.focus(); }
+	}
+
+	// The model picker (issue #179): a compact dropdown in the composer footer listing the active backend's
+	// models, sitting beside the +Skill / @Mention chips. Renders only once the catalogue has resolved (nothing
+	// flashes before we know the truth), and renders EVEN when only one model exists so the surface is consistent
+	// between the included tier (one "Included model") and a signed-in ChatGPT (its several tiers) - single-model
+	// case is styled inert (disabled) since there is nothing to choose. Changing the selection persists it per
+	// backend via the service; the broker validates the id and falls back to its default, so a pick never 500s a
+	// call. A native <select> keeps it keyboard-accessible and visually consistent with the rail's quiet chips.
+	private _renderModelPicker(bar: HTMLElement): void {
+		const models = this._models;
+		// Undefined = not yet fetched: render nothing to avoid a flash before the catalogue resolves. An empty
+		// list (broker unreachable) also renders nothing - the composer degrades to no picker, never an error.
+		if (!models || !models.length) { return; }
+
+		const single = models.length === 1;
+		const select = append(bar, $('select')) as HTMLSelectElement;
+		// Quiet chip styling to match the +Skill / @Mention buttons: slate text, hairline border, 8px radius.
+		select.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:4px 6px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer;max-width:120px';
+		select.title = single ? 'The model serving your calls' : 'Choose the model for your calls';
+		if (single) {
+			// One model: inert (disabled) - there is nothing to choose, but the picker still shows for consistency.
+			select.disabled = true;
+			select.style.cursor = 'default';
+			select.style.opacity = '0.7';
+		}
+		for (const model of models) {
+			const opt = append(select, $('option')) as HTMLOptionElement;
+			opt.value = model.id;
+			opt.textContent = model.label;
+			if (model.id === this._selectedModelId) { opt.selected = true; }
+		}
+		if (!single) {
+			this._renderDisposables.add(addDisposableListener(select, 'change', () => {
+				const id = select.value;
+				this._selectedModelId = id;
+				void this._livingDocs.setSelectedModelId(id);
+			}));
+		}
 	}
 
 	// The working-set row in the composer: the documents a single instruction fans out across (plan 18).

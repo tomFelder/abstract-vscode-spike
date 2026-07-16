@@ -1,0 +1,5 @@
+code.log (session runDir 20260716-130132-63426):
+  total ERR_CONNECTION_REFUSED = 0
+  ERR_CONNECTION_REFUSED @ 8090 = 0
+
+Shutdown test: killed Electron main pid 63492; broker pid 80972 (child) died within 1s; lsof -i :8090 empty afterwards - no orphan.

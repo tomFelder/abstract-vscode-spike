@@ -27,7 +27,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
@@ -147,7 +147,7 @@ function bindingIsFresh(current: IResolution | undefined, entry: IBindingEntry):
 }
 
 // Model-backed features (Review-impact rewrites, the Strategy grader, chat) call the model through a local
-// proxy (scripts/lwd-anthropic-proxy.js) so no credential ever reaches the renderer (decision 14). The
+// proxy (scripts/lwd-model-broker.js) so no credential ever reaches the renderer (decision 14). The
 // proxy authenticates against a pluggable backend (plan 35: the founder-funded OpenRouter fallback now, the
 // user's own ChatGPT subscription via OpenAI OAuth next) and speaks the Anthropic Messages shape back, so
 // the renderer/service are backend-agnostic. These are the request defaults; the base URL is configurable
@@ -189,6 +189,17 @@ const SOURCE_COOLDOWN_MS = 30_000;
 // Persisted flag (application scope): has this install ever emitted project_opened? Drives the is_first
 // property of the project_opened analytics event so the activation funnel can tell a first project apart.
 const FIRST_PROJECT_KEY = 'abstract.analytics.firstProjectOpened';
+
+// The user's selected model per backend (issue #179). APPLICATION scope, not PROFILE: the model choice is a
+// property of the machine's broker + credential setup (the broker is spawned once per install, its backend
+// fixed at spawn, its ChatGPT/OpenRouter credential machine-local under ~/.abstract and ~/.config), NOT of the
+// user's editor profile - a second profile on the same machine talks to the SAME broker and the SAME
+// subscription, so the pick belongs to the machine, mirroring the onboarding/first-project keys above which are
+// all APPLICATION-scoped for the same reason. Keyed by backend so the included-tier pick and the ChatGPT pick
+// never overwrite each other; MACHINE target so it is not synced across machines (a different machine may have
+// a different broker/subscription). The value is a model id validated against /models on use.
+const SELECTED_MODEL_KEY_PREFIX = 'abstract.model.selected.';
+function selectedModelKey(backend: string): string { return `${SELECTED_MODEL_KEY_PREFIX}${backend}`; }
 
 // Persisted flag (application scope) armed at the D26 hand-off ("bring a real folder"): the next approved
 // change on the user's OWN file is the T4 aha (doc 15 section 2.1). Persisted because the hand-off opens a
@@ -352,7 +363,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Correlated source watchers, one store per loaded document. Disposed/recreated on reload, and
 	// all torn down when the service is disposed.
 	private readonly _watchers = new Map<string, IDisposable>();
-	// Correlated watchers for spreadsheet WORKBOOKS used as sources (issue #131, doc 22 §4), keyed by the
+	// Correlated watchers for spreadsheet WORKBOOKS used as sources (issue #131, doc 22 section 4), keyed by the
 	// workbook URI. Distinct from `_watchers` (per-document source watchers): a workbook is the origin of
 	// extracted CSVs, not a document source itself, so it needs its own watcher that re-extracts on change.
 	// A DisposableMap so re-registering a workbook disposes the old watcher and disposal tears them all down.
@@ -368,6 +379,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _modelAvailable = false;
 	private _modelProbedAt = 0;
 	private _modelProbe: Promise<boolean> | undefined;
+	// The model catalogue for the active backend (issue #179), fetched cheaply from the broker's /models and
+	// cached so the composer's picker does NOT hit the network on every rail render or healthz poll. Keyed by
+	// backend so a backend change (or a fresh fetch after one) reloads the right list; an in-flight fetch is
+	// reused. Invalidated by _invalidateModelCatalogue() on any sign-in/out (which can change the active backend).
+	private _modelCatalogue: IModelCatalogue | undefined;
+	private _modelCatalogueFetch: Promise<IModelCatalogue> | undefined;
 	// The latest model-backed Strategy verdict per document, surfaced in the Skills rail after a Run.
 	private readonly _strategyGrades = new Map<string, IGradeResult>();
 	// The Chat conversation per document (the right-panel Chat tab) and the in-flight set for the
@@ -1077,9 +1094,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// The on-ramp: prompt for a local folder and open it as the workspace. `showOpenDialog` uses the
 	// browser File System Access picker on web (real-disk, via the html file-system provider) and the
 	// native dialog on desktop; `openWindow` reloads the workbench with the picked folder as the workspace.
-	async openFolder(): Promise<boolean> {
+	async openFolder(beforeOpen?: () => void | Promise<void>): Promise<boolean> {
 		const picked = await this._fileDialog.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, title: 'Open Folder' });
 		if (!picked || !picked.length) { return false; }
+		if (beforeOpen) { await beforeOpen(); }
 		await this._host.openWindow([{ folderUri: picked[0] }], { forceReuseWindow: true });
 		return true;
 	}
@@ -1715,7 +1733,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// --- spreadsheets as CSV sources + PDF as read-only context (issue #131, doc 22 §4) -----------
+	// --- spreadsheets as CSV sources + PDF as read-only context (issue #131, doc 22 section 4) -----------
 	// A workbook's sheets extract to plain CSVs under `data/<workbook>/`; the workbook is watched and
 	// re-extracts on change. A PDF's text is extracted to a portable cache and the PDF becomes a read-only
 	// `context` edge. All heavy parsing runs in the node/proxy layer (P6); the renderer only writes the
@@ -2970,7 +2988,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const target = joinPath(dirname(resource), `${stem}.export.docx`);
 		try {
 			// Conversion runs in the node/proxy layer where file access + Node libs live, never the renderer
-			// (doc 22 §3): the proxy's /export/docx route returns the .docx bytes we write beside the document.
+			// (doc 22 section 3): the proxy's /export/docx route returns the .docx bytes we write beside the document.
 			const context = await this._request.request({
 				type: 'POST',
 				url: `${this._proxyUrl()}/export/docx`,
@@ -2999,7 +3017,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// The command the desktop build registers (electron-browser/livingDocsPdf.contribution) to print an HTML
 	// page to PDF bytes via Electron's own print engine. It is ABSENT on the web dev harness, where PDF is
-	// honestly unavailable rather than a broken button (doc 22 §3; desktop is the beta vehicle).
+	// honestly unavailable rather than a broken button (doc 22 section 3; desktop is the beta vehicle).
 	static readonly PRINT_TO_PDF_COMMAND = '_livingDocs.printToPDF';
 
 	async exportPdf(resource: URI, force = false): Promise<URI | undefined> {
@@ -3008,7 +3026,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const gate = await this._gateExport(state, force);
 		if (gate.blocked) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
 		// The existing self-contained HTML export IS the PDF's page; images are inlined as data URIs so the
-		// offscreen print has no project-folder dependency (doc 22 §3: reuse the HTML export, no new renderer).
+		// offscreen print has no project-folder dependency (doc 22 section 3: reuse the HTML export, no new renderer).
 		let html = renderExportHtml(state.doc, this.getResolved(resource));
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
 		const { images } = await this._collectExportImages(resource, markdown);
@@ -3018,7 +3036,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.pdf`);
 		try {
-			// Print-to-PDF runs through Electron's main process (doc 22 §3); the browser service reaches it
+			// Print-to-PDF runs through Electron's main process (doc 22 section 3); the browser service reaches it
 			// through the desktop-only command so it stays free of a desktop dependency. A missing command
 			// (web harness) or a failed print returns undefined -> honest message, never a broken write.
 			const bytes = await this._commands.executeCommand<VSBuffer | undefined>(LivingDocsService.PRINT_TO_PDF_COMMAND, html);
@@ -3474,23 +3492,93 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	async getModelProviderStatus(): Promise<IModelProviderStatus> {
-		const fallback: IModelProviderStatus = { provider: 'none', signedIn: false, dailyBudgetUsd: 0 };
+		// The broker not answering at all is a DISTINCT state from a reachable-but-unconfigured backend (issue
+		// #170): only the former means "the broker is not up yet". The catch below is the broker-down case.
+		const brokerDown: IModelProviderStatus = { provider: 'none', readiness: 'broker-down', signedIn: false, dailyBudgetUsd: 0 };
 		try {
 			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/healthz`, callSite: 'livingDocs.providerStatus', disableCache: true }, CancellationToken.None);
-			const json = await asJson<{ ok?: boolean; backend?: string; meters?: boolean; signedIn?: boolean; dailyBudgetUsd?: number; dailyTotalUsd?: number }>(context);
-			if (!json) { return fallback; }
+			const json = await asJson<{ ok?: boolean; backend?: string; reason?: string; meters?: boolean; signedIn?: boolean; dailyBudgetUsd?: number; dailyTotalUsd?: number }>(context);
+			if (!json) { return brokerDown; }
 			const signedIn = json.signedIn === true;
 			let provider: ModelProvider = 'none';
 			if (json.ok === true) { provider = json.backend === 'openai-oauth' ? 'chatgpt' : 'included'; }
+			// Map the broker's own `reason` to our readiness; fall back to deriving it from `ok` for older brokers.
+			const readiness: ModelReadiness = json.reason === 'budget-paused' ? 'budget-paused'
+				: json.reason === 'ready' ? 'ready'
+					: json.reason === 'unconfigured' ? 'unconfigured'
+						: json.ok === true ? 'ready' : 'unconfigured';
 			return {
 				provider,
+				readiness,
 				signedIn,
 				dailyBudgetUsd: typeof json.dailyBudgetUsd === 'number' ? json.dailyBudgetUsd : 0,
 				dailyTotalUsd: json.meters === true && typeof json.dailyTotalUsd === 'number' ? json.dailyTotalUsd : undefined,
 			};
 		} catch {
-			return fallback;
+			return brokerDown;
 		}
+	}
+
+	// The model catalogue for the active backend (issue #179). Fetched cheaply from the broker's /models and
+	// cached: a repeated read (e.g. every rail render) returns the cache, so the picker never re-hits the
+	// network per render or per healthz poll. An in-flight fetch is shared. On an unreachable broker or a
+	// malformed body it returns an EMPTY catalogue (the composer then renders no picker) rather than throwing.
+	async getModelCatalogue(): Promise<IModelCatalogue> {
+		if (this._modelCatalogue) { return this._modelCatalogue; }
+		if (this._modelCatalogueFetch) { return this._modelCatalogueFetch; }
+		this._modelCatalogueFetch = (async () => {
+			let catalogue: IModelCatalogue = { backend: '', models: [] };
+			try {
+				const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/models`, callSite: 'livingDocs.models', disableCache: true }, CancellationToken.None);
+				const json = await asJson<{ backend?: string; models?: { id?: string; label?: string; default?: boolean }[] }>(context);
+				if (json && Array.isArray(json.models)) {
+					const models: IModelOption[] = json.models
+						.filter(m => m && typeof m.id === 'string' && m.id.length > 0)
+						.map(m => ({ id: m.id!, label: (typeof m.label === 'string' && m.label) ? m.label : m.id!, isDefault: m.default === true }));
+					catalogue = { backend: typeof json.backend === 'string' ? json.backend : '', models };
+				}
+			} catch {
+				// Broker unreachable / malformed: leave the empty catalogue so the composer degrades to no picker.
+			}
+			// Only cache a non-empty catalogue: a transient empty read (broker still starting) must not stick, so
+			// the next call retries rather than pinning an empty picker forever.
+			if (catalogue.models.length) { this._modelCatalogue = catalogue; }
+			this._modelCatalogueFetch = undefined;
+			return catalogue;
+		})();
+		return this._modelCatalogueFetch;
+	}
+
+	// The model id selected for the active backend, or its default when the user has not picked one (issue #179).
+	// Reads the persisted per-backend choice and validates it against the live catalogue: a stale persisted id
+	// (a model the backend no longer offers) resolves to the catalogue default, never a dead selection. Returns
+	// undefined only when the catalogue is empty (broker unreachable) - the call path then omits `model` and the
+	// broker uses its own default, so a call never fails for lack of a resolvable selection.
+	async getSelectedModelId(): Promise<string | undefined> {
+		const catalogue = await this.getModelCatalogue();
+		if (!catalogue.models.length) { return undefined; }
+		const stored = this._storage.get(selectedModelKey(catalogue.backend), StorageScope.APPLICATION);
+		if (stored && catalogue.models.some(m => m.id === stored)) { return stored; }
+		const fallback = catalogue.models.find(m => m.isDefault) ?? catalogue.models[0];
+		return fallback.id;
+	}
+
+	// Persist the user's model choice for the active backend (issue #179), APPLICATION-scoped + MACHINE target
+	// (see SELECTED_MODEL_KEY_PREFIX for why). Fires onDidChange so the composer re-renders with the new pick.
+	// An unknown id (not in the catalogue) is ignored so a bad caller can never persist a dead selection.
+	async setSelectedModelId(modelId: string): Promise<void> {
+		const catalogue = await this.getModelCatalogue();
+		if (!catalogue.models.some(m => m.id === modelId)) { return; }
+		this._storage.store(selectedModelKey(catalogue.backend), modelId, StorageScope.APPLICATION, StorageTarget.MACHINE);
+		this._onDidChange.fire();
+	}
+
+	// Drop the cached model catalogue so the next read re-fetches (issue #179). Called on any sign-in/out, which
+	// can change the active backend (included <-> ChatGPT) and thus the available models. Cheap: just clears the
+	// cache; the refetch happens lazily on the next getModelCatalogue().
+	private _invalidateModelCatalogue(): void {
+		this._modelCatalogue = undefined;
+		this._modelCatalogueFetch = undefined;
 	}
 
 	async startChatGptSignIn(): Promise<string | undefined> {
@@ -3511,8 +3599,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const stage = json?.status === 'signed-in' ? 'signed-in'
 				: json?.status === 'pending' ? 'pending'
 					: json?.status === 'error' ? 'error' : 'signed-out';
-			// A newly-signed-in ChatGPT tier changes what the app can do; refresh model-backed UI once.
-			if (stage === 'signed-in') { void this._probeModel(); this._onDidChange.fire(); }
+			// A newly-signed-in ChatGPT tier changes what the app can do; refresh model-backed UI once. The active
+			// backend can change with it, so drop the cached model catalogue (issue #179) - the next read re-fetches.
+			if (stage === 'signed-in') { this._invalidateModelCatalogue(); void this._probeModel(); this._onDidChange.fire(); }
 			return { stage, error: json?.error };
 		} catch {
 			return { stage: 'signed-out' };
@@ -3522,6 +3611,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async signOutChatGpt(): Promise<void> {
 		try {
 			await this._request.request({ type: 'POST', url: `${this._proxyUrl()}/auth/openai/signout`, headers: { 'content-type': 'application/json' }, data: '{}', callSite: 'livingDocs.signOut' }, CancellationToken.None);
+			// Signing out can change the active backend (ChatGPT -> included); drop the cached catalogue (issue #179).
+			this._invalidateModelCatalogue();
 			void this._probeModel();
 			this._onDidChange.fire();
 		} catch (e) {
@@ -3595,7 +3686,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._notify.notify({
 			severity: Severity.Info,
 			message: 'Nice - that is the sample. Now bring a real folder: the first change you approve on your own file is the moment Abstract is built for.',
-			actions: { primary: [toAction({ id: 'livingDocs.onboarding.bringFolder', label: 'Bring a real folder', run: async () => { if (await this.openFolder()) { this.recordOnboardingStep('first-folder'); } } })] },
+			actions: { primary: [toAction({ id: 'livingDocs.onboarding.bringFolder', label: 'Bring a real folder', run: async () => { await this.openFolder(() => this.recordOnboardingStep('first-folder')); } })] },
 		});
 	}
 
@@ -3669,6 +3760,20 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return (typeof preferred === 'string' && preferred.length > 0) ? preferred : DEFAULT_MODEL;
 	}
 
+	// The model id to send on a /v1/messages call (issue #179): the user's selected model for the active backend
+	// when the picker resolves one, else the configured/default name. The broker validates it against the active
+	// backend's list and falls back to that backend's default on an absent/unknown id, so this never 500s a call
+	// on a stale pick; passing the selection here is what makes the composer's dropdown load-bearing.
+	private async _requestModelId(): Promise<string> {
+		try {
+			const selected = await this.getSelectedModelId();
+			if (selected) { return selected; }
+		} catch {
+			// Catalogue unreachable - fall through to the configured/default name so the call still goes out.
+		}
+		return this._modelName();
+	}
+
 	private async _hasModel(): Promise<boolean> {
 		if (this._config.getValue<boolean>('livingDocs.useModel') === false) { return false; }
 		return this._probeModel();
@@ -3726,7 +3831,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	private async _callModelOnce(system: string, user: string): Promise<string> {
 		const body = JSON.stringify({
-			model: this._modelName(),
+			model: await this._requestModelId(),
 			max_tokens: MODEL_MAX_TOKENS,
 			thinking: { type: 'adaptive' },
 			output_config: { effort: 'low' },
@@ -3765,8 +3870,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const sub = token.onCancellationRequested(() => controller.abort());
 		try {
 			if (token.isCancellationRequested) { throw new CancellationError(); }
+			const modelId = await this._requestModelId();
+			if (token.isCancellationRequested) { throw new CancellationError(); }
 			const body = JSON.stringify({
-				model: this._modelName(),
+				model: modelId,
 				max_tokens: MODEL_MAX_TOKENS,
 				thinking: { type: 'adaptive' },
 				output_config: { effort: 'low' },
@@ -3998,7 +4105,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		if (!await this._hasModel()) {
 			return {
-				answer: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this project and its sources.',
+				answer: MODEL_UNAVAILABLE_MESSAGE,
 				citations: [],
 				via: 'fallback',
 			};
@@ -4158,7 +4265,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					history.push({ role: 'assistant', via: 'fallback', content: outcome.content, failedDocs: outcome.failedDocs });
 					return;
 				}
-				history.push({ role: 'assistant', via: 'fallback', content: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this document and its sources.' });
+				history.push({ role: 'assistant', via: 'fallback', content: MODEL_UNAVAILABLE_MESSAGE });
 				return;
 			}
 			const reply = workingSet.length

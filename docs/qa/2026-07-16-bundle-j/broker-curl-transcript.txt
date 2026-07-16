@@ -1,0 +1,29 @@
+=== Bundle J broker /models + /v1/messages evidence (2026-07-16) ===
+
+### openrouter backend (supervised default, real OpenRouter key) — port 8090 was used live in-app
+$ curl /models
+{"backend":"openrouter","models":[{"id":"openai/gpt-4.1-mini","label":"Included model","default":true}]}
+
+$ POST /v1/messages model=openai/gpt-4.1-mini (valid) -> real answer
+{"id":"gen-...","model":"openai/gpt-4.1-mini","stop_reason":"end_turn","content":[{"type":"text","text":"PONG"}]}
+$ POST /v1/messages model=totally-bogus-stale-id (invalid) -> HTTP 200 (no 500), fell back to default
+$ POST /v1/messages (absent model) -> HTTP 200 (no 500), used default
+broker log:
+  /v1/messages backend=openrouter requested="openai/gpt-4.1-mini" resolved=openai/gpt-4.1-mini
+  /v1/messages backend=openrouter requested="totally-bogus-stale-id" resolved=openai/gpt-4.1-mini
+  /v1/messages backend=openrouter requested=null resolved=openai/gpt-4.1-mini
+
+### openai-oauth backend (static capability list; LWD_BACKEND=openai-oauth)
+$ curl /models
+{"backend":"openai-oauth","models":[{"id":"gpt-5-codex","label":"Sol","default":true},{"id":"gpt-5","label":"Terra","default":false},{"id":"gpt-5-mini","label":"Luna","default":false}]}
+$ curl /healthz -> {"ok":true,"backend":"openai-oauth","reason":"ready","meters":false,"signedIn":true}
+broker log (validation, live in-app after the user picked Terra):
+  /v1/messages backend=openai-oauth requested="gpt-5-codex" resolved=gpt-5-codex   (default Sol, before pick)
+  /v1/messages backend=openai-oauth requested="gpt-5"       resolved=gpt-5         (Terra, after user picked it in the composer)
+  NOTE: the actual subscription answer 502s because the stored Codex token is a stale test bundle;
+  the model RESOLUTION + routing are live/real, the subscription ANSWER is not (needs a fresh sign-in).
+
+### (d) persistence proof — profile state.vscdb after a real app RESTART (APPLICATION scope, per-backend key)
+sqlite3 state.vscdb 'SELECT key,value FROM ItemTable WHERE key LIKE "abstract.model.selected%"':
+  abstract.model.selected.openai-oauth|gpt-5
+  -> the Terra pick survived the restart, keyed by backend.

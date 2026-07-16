@@ -737,6 +737,47 @@ function renderAwaySection(feed: IAwayFeed): string {
 // The empty-project front door (journey 1w frame 4): a folder is open but has no documents. Cures the 1a
 // empty-folder dead-end with "New from template / Blank document / ...or ask me to create one" - the New-doc
 // sheet (Blank + real templates) plus the whole-project composer, never a dead card.
+// D26: the "Continue your walkthrough" banner when an onboarding is in progress. Rendered on BOTH Home
+// paths (dashboard and empty-project front door): the onboarding screen is displaced by the demo document
+// during the flow, so Home - whose nav item is always present - is the reliable re-entry back into the
+// guide at its saved step, and an empty project (demo doc deleted or not yet generated) still needs it.
+function renderResumeBanner(state: IScreenState): string {
+	return state.onboardingResumeStep
+		? `<div style="display:flex;align-items:center;gap:14px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:12px;padding:14px 18px;margin-bottom:22px">
+				<span style="font-size:18px;color:${ACCENT}">&#10022;</span>
+				<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#26292f">${localize('livingDocs.onboarding.resume.title', "Your walkthrough is in progress")}</div><div style="font:400 12.5px/1.4 system-ui;color:#696e78">${localize('livingDocs.onboarding.resume.body', "Pick up the two-wow tour where you left off.")}</div></div>
+				<button data-msg="openOnboarding" style="flex:none;border:none;border-radius:9px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">${localize('livingDocs.onboarding.resume.action', "Continue Your Walkthrough")}</button>
+			</div>`
+		: '';
+}
+
+// The F17 birth sheets shared by both Home paths: the New-document sheet (whose "From sources..." row
+// obeys the real-data guardrail - present only when the folder scan found at least one source) plus the
+// source picker sheet it opens. The empty-project front door needs these as much as the dashboard: a
+// folder of CSVs with no documents yet is exactly the from-sources moment.
+function renderBirthSheets(state: IScreenState): string {
+	const dataFiles = state.dataFiles ?? [];
+	const docFiles = state.docFiles ?? [];
+	const hasSources = dataFiles.length + docFiles.length > 0;
+	const sourceRows = [
+		...dataFiles.map(f => pickRow(f, f, 'data source')),
+		...docFiles.map(f => pickRow(f, f, 'document')),
+	].join('');
+	const fromSourcesSheet = pickerSheet('fromsources', {
+		title: 'New document from sources',
+		sub: 'Pick the sources to draft from, name it, and the draft arrives as changes to review - nothing is written for you.',
+		nameLabel: 'Document Name',
+		namePlaceholder: 'e.g. Board note - March',
+		note: true,
+		pickLabel: 'Sources',
+		submitMsg: 'newFromSources',
+		submitLabel: 'Draft From Sources',
+		rows: sourceRows,
+		empty: 'This project has no sources yet. Add a csv, json or document to the folder to draft from it.',
+	});
+	return renderNewDocSheet(state.templates ?? [], hasSources) + fromSourcesSheet;
+}
+
 function renderEmptyProjectFrontDoor(state: IScreenState, folderName: string): string {
 	const scroll = (inner: string) => `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">${inner}</div></div>`;
 	const templates = state.templates ?? [];
@@ -744,6 +785,7 @@ function renderEmptyProjectFrontDoor(state: IScreenState, folderName: string): s
 		? `Start from one of your ${templates.length} template${templates.length === 1 ? '' : 's'}, from a blank page, or ask me to draft one.`
 		: 'Start from a blank page, or ask me to draft your first document.';
 	return scroll(`<div style="max-width:760px;margin:0 auto;padding:56px 36px 80px">
+		${renderResumeBanner(state)}
 		<div style="text-align:center;margin-bottom:30px">
 			<div style="font-size:38px;line-height:1;margin-bottom:14px">&#128196;</div>
 			<h1 style="margin:0 0 8px;font:600 24px/1.25 system-ui;color:#15171c;letter-spacing:-.01em">${esc(folderName)} is empty</h1>
@@ -754,7 +796,7 @@ function renderEmptyProjectFrontDoor(state: IScreenState, folderName: string): s
 			<button data-msg="goTemplates" style="border:1px solid #e6e8ed;background:#fff;border-radius:10px;padding:11px 18px;font:500 13px/1 system-ui;color:#52575f;cursor:pointer">Browse templates</button>
 		</div>
 		${renderHomeComposer(state)}
-		${renderNewDocSheet(templates, false)}
+		${renderBirthSheets(state)}
 	</div>`);
 }
 
@@ -871,40 +913,14 @@ function renderHome(state: IScreenState): string {
 	// The "From sources..." birth (F17): its picker offers the project's real data files (csv/json bind
 	// sources) and documents (md/txt knowledge). With none, the New-document sheet omits the row and the
 	// picker shows a calm empty line. Real data only - the options come from the service's folder scan.
-	const dataFiles = state.dataFiles ?? [];
-	const docFiles = state.docFiles ?? [];
-	const hasSources = dataFiles.length + docFiles.length > 0;
-	const sourceRows = [
-		...dataFiles.map(f => pickRow(f, f, 'data source')),
-		...docFiles.map(f => pickRow(f, f, 'document')),
-	].join('');
-	const fromSourcesSheet = pickerSheet('fromsources', {
-		title: 'New document from sources',
-		sub: 'Pick the sources to draft from, name it, and the draft arrives as changes to review - nothing is written for you.',
-		nameLabel: 'Document Name',
-		namePlaceholder: 'e.g. Board note - March',
-		note: true,
-		pickLabel: 'Sources',
-		submitMsg: 'newFromSources',
-		submitLabel: 'Draft From Sources',
-		rows: sourceRows,
-		empty: 'This project has no sources yet. Add a csv, json or document to the folder to draft from it.',
-	});
-	const newDocSheet = renderNewDocSheet(state.templates ?? [], hasSources);
+	const birthSheets = renderBirthSheets(state);
 	// The whole-project chat composer (map-D21/D24) leads the front door; the WHILE YOU WERE AWAY feed +
 	// all-clear promotion (map-D14) sit between it and the NEEDS-YOU cards. Both render from real state only.
 	const composer = renderHomeComposer(state);
 	const awaySection = state.awayFeed ? renderAwaySection(state.awayFeed) : '';
-	// D26: a "Continue your walkthrough" banner when an onboarding is in progress. The onboarding screen is
-	// displaced by the demo document during the flow (the calm shell tears a hidden screen webview down), so
-	// Home - whose nav item is always present - is the reliable re-entry back into the guide at its saved step.
-	const resumeBanner = state.onboardingResumeStep
-		? `<div style="display:flex;align-items:center;gap:14px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:12px;padding:14px 18px;margin-bottom:22px">
-				<span style="font-size:18px;color:${ACCENT}">&#10022;</span>
-				<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#26292f">${localize('livingDocs.onboarding.resume.title', "Your walkthrough is in progress")}</div><div style="font:400 12.5px/1.4 system-ui;color:#696e78">${localize('livingDocs.onboarding.resume.body', "Pick up the two-wow tour where you left off.")}</div></div>
-				<button data-msg="openOnboarding" style="flex:none;border:none;border-radius:9px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">${localize('livingDocs.onboarding.resume.action', "Continue Your Walkthrough")}</button>
-			</div>`
-		: '';
+	// D26: a "Continue your walkthrough" banner when an onboarding is in progress (shared with the
+	// empty-project front door - see renderResumeBanner for why both Home paths carry it).
+	const resumeBanner = renderResumeBanner(state);
 	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
 		${resumeBanner}
 		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
@@ -916,8 +932,7 @@ function renderHome(state: IScreenState): string {
 		${needsYou}
 		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
 		${projectsGrid}
-		${newDocSheet}
-		${fromSourcesSheet}
+		${birthSheets}
 	</div>`);
 }
 
@@ -1509,15 +1524,18 @@ function pendingSignInBlock(authorizeUrl: string | undefined): string {
 }
 
 function renderSettings(state: IScreenState): string {
-	const status = state.providerStatus ?? { provider: 'none' as const, signedIn: false, dailyBudgetUsd: 0 };
+	const status = state.providerStatus ?? { provider: 'none' as const, readiness: 'broker-down' as const, signedIn: false, dailyBudgetUsd: 0 };
 	const stage: ChatGptSignInStage = state.signInStage ?? (status.signedIn ? 'signed-in' : 'signed-out');
 
-	// The live "what is serving you now" line - real data only.
+	// The live "what is serving you now" line - real data only, keyed off the truthful readiness (issue #170)
+	// so the broker-not-up state is distinct from a reachable-but-unconfigured backend.
 	const doorLabel = status.provider === 'chatgpt'
 		? 'Your ChatGPT subscription'
 		: status.provider === 'included'
-			? 'The included model'
-			: 'The built-in fallback (no model connected)';
+			? (status.readiness === 'budget-paused' ? 'The included model (daily limit reached)' : 'The included model')
+			: status.readiness === 'broker-down'
+				? 'Connecting to the model service&hellip;'
+				: 'The built-in fallback (no model connected)';
 	const dot = status.provider === 'none' ? '#cdd1d8' : 'oklch(0.6 0.13 150)';
 
 	// The included-tier usage line + ring (only meaningful for the metered fallback).
@@ -1595,7 +1613,7 @@ function renderSettings(state: IScreenState): string {
 // in-product home of the plain-words data-flow one-pager (docs/27): a single expandable row that shows
 // the answer inline on click - no new panel, no navigation. The copy is a short, faithful retelling of
 // docs/27 and every line traces to a real code path (model calls go through the localhost proxy in
-// scripts/lwd-anthropic-proxy.js; chats/runs send the open/selected documents + attached sources -
+// scripts/lwd-model-broker.js; chats/runs send the open/selected documents + attached sources -
 // livingDocsService.ts _chatRespond/_chatRespondMulti; the default-enabled scheduled agents
 // (agentOrchestrator.ts defaultAgents) may send a checked document's changed sentences + context files
 // through the verify gate's strategy grader - livingDocsService.ts _runFiguresByPolicy/_gradeStrategy;

@@ -51,7 +51,7 @@ suite('livingDocs screenRender', () => {
 
 	test('onboarding open step shows the intro, the consent status and the See it work action', () => {
 		const html = renderScreenHtml('onboarding', { ...state, onboarding: { step: 'open', consentEnabled: true, consentChosen: true, hasModel: true, demoGenerated: false } });
-		assert.ok(html.includes('Two wows, ten minutes, no setup'), 'intro headline');
+		assert.ok(html.includes('Two Wows, Ten Minutes, No Setup'), 'intro headline');
 		assert.ok(/data-msg="onbSeeItWork"/.test(html), 'has the See it work action');
 		assert.ok(html.includes('never your words'), 'shows the plain-words consent line');
 		assert.ok(html.includes('Step 1 of 7'), 'shows funnel progress');
@@ -576,37 +576,37 @@ suite('livingDocs screenRender', () => {
 	// --- Settings: the model-access provider picker + onboarding survey (plan 35 iter 4) ---
 
 	test('the provider picker offers "Sign in with ChatGPT" (primary) and "Use the included model" (secondary)', () => {
-		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } });
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 } });
 		assert.ok(html.includes('Sign in with ChatGPT') && /data-msg="signInChatGpt"/.test(html), 'the primary door signs in with ChatGPT');
 		assert.ok(html.includes('Use the included model') && /data-msg="useIncludedModel"/.test(html), 'the secondary door uses the included model');
 	});
 
 	test('a signed-in ChatGPT tier shows the signed-in state + a Sign out control', () => {
-		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'chatgpt', signedIn: true, dailyBudgetUsd: 1 }, signInStage: 'signed-in' });
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'chatgpt', readiness: 'ready', signedIn: true, dailyBudgetUsd: 1 }, signInStage: 'signed-in' });
 		assert.ok(html.includes('Signed in to ChatGPT'), 'the signed-in state is shown');
 		assert.ok(/data-msg="signOutChatGpt"/.test(html), 'a Sign out control is wired');
 		assert.ok(html.includes('Your ChatGPT subscription'), 'the "serving you now" line names the subscription door');
 	});
 
 	test('the included tier shows today\'s usage in plain words with a D19 usage ring', () => {
-		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.6 } });
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', readiness: 'ready', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.6 } });
 		assert.ok(html.includes('Today&#39;s included usage'), 'the usage block is labelled in plain words');
 		assert.ok(html.includes('US$0.60 of US$1.00 used today'), 'the real spend against the budget is shown');
 		assert.ok(html.includes('<svg') && html.includes('60%'), 'a usage ring reflects the 60% spent fraction');
 	});
 
 	test('a pending sign-in shows the "waiting for your browser" state, and an error shows plain-words copy', () => {
-		const pending = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'pending' });
-		assert.ok(/waiting for your browser/i.test(pending), 'the pending state tells the user to complete sign-in in the browser');
-		const errored = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'error', signInError: 'Sign-in did not complete - please try again.' });
+		const pending = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'pending' });
+		assert.ok(/Waiting for you to finish signing in/i.test(pending), 'the pending state tells the user to complete sign-in in the browser');
+		const errored = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'error', signInError: 'Sign-in did not complete - please try again.' });
 		assert.ok(errored.includes('Sign-in did not complete'), 'a sign-in error is surfaced in plain words');
 	});
 
 	test('the onboarding survey captures the three questions and saves once (thank-you state after)', () => {
-		const form = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } });
+		const form = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 } });
 		assert.ok(form.includes('Which frontier model is your daily driver?') && form.includes('Which subscriptions do you own?') && form.includes('What do you make each week?'), 'all three survey questions are present');
 		assert.ok(/data-survey-save/.test(form), 'the survey has a Save action');
-		const saved = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, surveySaved: true });
+		const saved = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 }, surveySaved: true });
 		// Assert on the rendered Save BUTTON, not the bare `data-survey-save` selector: the client SCRIPT
 		// that ships with every screen contains `querySelectorAll('[data-survey-save]')`, so a loose
 		// `/data-survey-save/` match is always true regardless of state (issue #135: corrected here).
@@ -614,7 +614,7 @@ suite('livingDocs screenRender', () => {
 	});
 
 	test('the Model access screen carries the "What does Abstract send?" data-flow section (issue #135)', () => {
-		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } });
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 } });
 		// The in-product home of the data-flow one-pager: a calm expandable section, not a new panel.
 		assert.ok(html.includes('What does Abstract send?'), 'the data-flow question is reachable on the Model access screen');
 		assert.ok(/<details data-dataflow>/.test(html), 'it is an inline expandable section that shows the answer on click');
@@ -631,7 +631,7 @@ suite('livingDocs screenRender', () => {
 	});
 
 	test('the data-flow card carries the revocable analytics-consent row reflecting On/Off (issue #134)', () => {
-		const base = { ...state, providerStatus: { provider: 'none' as const, signedIn: false, dailyBudgetUsd: 0 } };
+		const base = { ...state, providerStatus: { provider: 'none' as const, readiness: 'unconfigured' as const, signedIn: false, dailyBudgetUsd: 0 } };
 		const off = renderScreenHtml('settings', { ...base, analyticsEnabled: false });
 		const on = renderScreenHtml('settings', { ...base, analyticsEnabled: true });
 		// The row exists on the data-flow card and always drives the one consent seam.
@@ -645,9 +645,9 @@ suite('livingDocs screenRender', () => {
 
 	test('the Settings screen uses plain words only (no "OAuth", "token" or "rate limit")', () => {
 		const html = (
-			renderScreenHtml('settings', { ...state, providerStatus: { provider: 'chatgpt', signedIn: true, dailyBudgetUsd: 1 }, signInStage: 'signed-in' })
-			+ renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.9 } })
-			+ renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 } })
+			renderScreenHtml('settings', { ...state, providerStatus: { provider: 'chatgpt', readiness: 'ready', signedIn: true, dailyBudgetUsd: 1 }, signInStage: 'signed-in' })
+			+ renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', readiness: 'ready', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.9 } })
+			+ renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 } })
 		).toLowerCase();
 		assert.ok(!html.includes('oauth') && !html.includes('rate limit') && !/\btoken\b/.test(html), 'no jargon leaks into the user-facing copy (P5)');
 	});
