@@ -858,8 +858,8 @@ export interface ILivingDocsService {
 	 */
 	readImageAsset(resource: URI, src: string): Promise<{ readonly dataUri?: string; readonly error?: boolean }>;
 
-	/** Share a document. Interim: live links are not built yet, so this surfaces guidance. */
-	shareDocument(resource: URI): void;
+	/** Share a document by copying its resolved, binding-free Markdown to the clipboard. */
+	shareDocument(resource: URI): Promise<void>;
 
 	/**
 	 * Publish a document: snapshot (pin) its sources to current versions for reproducibility. `force`

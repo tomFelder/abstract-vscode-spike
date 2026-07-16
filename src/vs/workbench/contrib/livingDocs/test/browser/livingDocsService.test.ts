@@ -8,6 +8,7 @@ import { bufferToStream, VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { IClipboardService } from '../../../../../platform/clipboard/common/clipboardService.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
 import { NullAnalyticsService } from '../../common/analytics.js';
@@ -217,6 +218,9 @@ suite('LivingDocsService', () => {
 	// test can prove the credential (the secret VALUE) never leaves the proxy - the renderer only names it.
 	let lastMcpBody: string | undefined;
 	let lastProxyFetchBody: string | undefined;
+	// The most recent text the service wrote to the clipboard (share-to-clipboard), so a test can assert
+	// the shared payload is the resolved, binding-free Markdown.
+	let lastClipboard: string | undefined;
 	// Issue #130: capture the HTML the renderer hands the desktop print-to-PDF command, and let a test control
 	// the bytes it returns (undefined mimics the web harness where the command is absent). `lastDocxBody` is
 	// the JSON the renderer POSTs to the proxy's /export/docx route (so a test can prove it carries the
@@ -311,7 +315,7 @@ suite('LivingDocsService', () => {
 		lastNotifications = [];
 		createdFolders = [];
 		const notificationService = {
-			info: () => undefined,
+			info: (message: unknown) => { lastNotifications.push({ message: String(message) }); },
 			error: (message: unknown) => { lastNotifications.push({ message: String(message) }); },
 			notify: (n: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }) => { lastNotifications.push(n); return { close: () => undefined }; },
 		} as unknown as INotificationService;
@@ -361,6 +365,8 @@ suite('LivingDocsService', () => {
 		lastMcpBody = undefined;
 		lastProxyFetchBody = undefined;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
+		lastClipboard = undefined;
+		const clipboardService = { writeText: async (t: string) => { lastClipboard = t; } } as unknown as IClipboardService;
 		lastPrintPdfHtml = undefined;
 		// Fake the desktop-only print-to-PDF command: record the HTML and return the configured bytes (default
 		// undefined = the command is absent, as on the web harness).
@@ -371,7 +377,7 @@ suite('LivingDocsService', () => {
 			},
 		} as unknown as ICommandService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, clipboardService);
 		store.add(service);
 		return service;
 	}
@@ -2052,6 +2058,19 @@ suite('LivingDocsService', () => {
 		assert.ok(!md.includes('bind:') && !md.includes(']('), 'no bind-link syntax in the export');
 	});
 
+	test('shareDocument copies the resolved, binding-free Markdown to the clipboard and confirms', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		await service.refreshFromSources();
+
+		await service.shareDocument(WEEKLY);
+
+		assert.ok(lastClipboard !== undefined, 'something was written to the clipboard');
+		assert.ok(!lastClipboard!.includes('](bind:'), 'no bind-link syntax in the shared markdown');
+		assert.ok(lastClipboard!.includes('$48.6k') && lastClipboard!.includes('427'), 'resolved values inlined');
+		assert.ok(lastNotifications.some(n => n.message.includes('Copied')), 'a confirmation toast was surfaced');
+	});
+
 	test('exportDocx posts the RESOLVED Markdown to the proxy route and writes the .docx beside the document', async () => {
 		const service = createService([]);
 		await service.loadDocument(WEEKLY);
@@ -2483,8 +2502,9 @@ suite('LivingDocsService', () => {
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: mountRoot, name: opts.folderName ?? 'mount' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
+		const clipboardService = { writeText: async () => undefined } as unknown as IClipboardService;
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, clipboardService);
 		store.add(service);
 		return { service, files, registerProvider };
 	}

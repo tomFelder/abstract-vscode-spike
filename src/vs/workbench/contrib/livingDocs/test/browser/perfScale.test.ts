@@ -12,6 +12,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
+import { IClipboardService } from '../../../../../platform/clipboard/common/clipboardService.js';
 import { NullAnalyticsService } from '../../common/analytics.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
@@ -122,7 +123,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
 
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, { writeText: async () => undefined } as unknown as IClipboardService);
 		const clock = new FakeClock();
 		service.setClock(clock);
 		store.add(service);
@@ -168,8 +169,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 			assert.strictEqual(passReadsForCsv, 1, `${s.name} read ${passReadsForCsv} times in the refresh pass - the shared-source cache should read it exactly once`);
 		}
 		const passReads = harness.reads() - readsBefore;
-		console.log(`[plan30] 50-doc full refresh: ${passReads} source reads (post-cache), wall ${wall}ms`);
-		assert.ok(passReads > 0, 'the refresh did real work');
+		assert.ok(passReads > 0, `the refresh did real work (${passReads} source reads post-cache, wall ${wall}ms)`);
 	});
 
 	// --- Iteration 2: incremental, changed-source-only derivation + shared-source single read ---
@@ -201,7 +201,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		assert.strictEqual(service.getResolved(docUri('report-0.md')).get('metrics-0.mrr'), '$99.9k', 'changed-source dependent re-derived to the new value');
 		// A doc bound to an UNCHANGED source keeps its earlier value (no spurious re-derive).
 		assert.strictEqual(service.getResolved(docUri('report-1.md')).get('metrics-1.mrr'), '$49.3k', 'unchanged-source doc untouched');
-		console.log(`[plan30] incremental refresh (1 of 4 CSVs changed): ${readsAfter - readsBefore} source reads`);
+		assert.ok(readsAfter - readsBefore > 0, `the incremental refresh read the changed source (${readsAfter - readsBefore} source reads in the pass)`);
 	});
 
 	test('a shared CSV bound by many docs is read once for value resolution in a pass', async () => {
@@ -256,7 +256,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, { writeText: async () => undefined } as unknown as IClipboardService);
 		const clock = new FakeClock();
 		service.setClock(clock);
 		store.add(service);
@@ -342,7 +342,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, { writeText: async () => undefined } as unknown as IClipboardService);
 		service.setClock(new FakeClock());
 		store.add(service);
 		return { service };

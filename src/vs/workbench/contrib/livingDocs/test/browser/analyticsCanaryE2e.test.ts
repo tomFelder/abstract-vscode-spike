@@ -10,6 +10,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
+import { IClipboardService } from '../../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
@@ -109,10 +110,11 @@ suite('analytics canary E2E (plan 36 iter 2: content never leaves via the live s
 		const workspaceService = { getWorkspace: () => ({ folders: [{ uri: FOLDER, name: 'ws' }] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
+		const clipboardService = { writeText: async () => undefined } as unknown as IClipboardService;
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
 		const service = new LivingDocsService(
 			fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(),
-			requestService, workspaceService, fileDialogService, hostService, analytics, store.add(new InMemoryStorageService()), commandService);
+			requestService, workspaceService, fileDialogService, hostService, analytics, store.add(new InMemoryStorageService()), commandService, clipboardService);
 		store.add(service);
 		return service;
 	}
