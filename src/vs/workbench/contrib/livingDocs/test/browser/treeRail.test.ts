@@ -98,10 +98,10 @@ suite('treeRail', () => {
 			{ label: 'notes.txt', kind: 'source' },
 		]);
 		const notYet = folders.find(f => f.name === 'Not yet imported')!;
-		assert.deepStrictEqual(notYet.items.map(i => ({ label: i.label, kind: i.kind, hasReason: !!i.note })), [
-			{ label: 'brief.docx', kind: 'unsupported', hasReason: true },
-			{ label: 'deck.pptx', kind: 'unsupported', hasReason: true },
-			{ label: 'old.doc', kind: 'unsupported', hasReason: true },
+		assert.deepStrictEqual(notYet.items.map(i => ({ label: i.label, kind: i.kind, hasReason: !!i.note, importable: !!i.importable })), [
+			{ label: 'brief.docx', kind: 'unsupported', hasReason: false, importable: true },
+			{ label: 'deck.pptx', kind: 'unsupported', hasReason: true, importable: false },
+			{ label: 'old.doc', kind: 'unsupported', hasReason: true, importable: false },
 		]);
 	});
 
@@ -111,7 +111,10 @@ suite('treeRail', () => {
 		assert.strictEqual(classifyWorkspaceExtra('notes.txt')?.kind, 'source');
 		const docx = classifyWorkspaceExtra('brief.docx');
 		assert.strictEqual(docx?.kind, 'unsupported');
-		assert.ok(docx?.reason && docx.reason.length > 0, 'an unsupported file carries a plain-words reason');
+		assert.strictEqual(docx?.importable, true, 'a .docx offers the import door rather than a dead reason');
+		assert.ok(!docx?.reason, 'an importable .docx carries no refusal reason');
+		const doc = classifyWorkspaceExtra('old.doc');
+		assert.ok(doc?.reason && doc.reason.length > 0, 'a genuinely-unsupported file carries a plain-words reason');
 		// Never surfaced: Markdown (the Reports tree owns it), lock sidecars, the agents registry, hidden files.
 		assert.strictEqual(classifyWorkspaceExtra('doc.md'), undefined);
 		assert.strictEqual(classifyWorkspaceExtra('report.lock.json'), undefined);
