@@ -45,7 +45,7 @@ const EMPTY_RESOLVED: ReadonlyMap<string, string> = new Map<string, string>();
 // Markdown textarea, reachable from the editor for hand-editing source.
 export type LivingDocViewMode = 'raw' | 'pm';
 
-// (plan 33 iter 4, L8; doc 22 §3) Present offers what Abstract actually produces today: a self-contained
+// (plan 33 iter 4, L8; doc 22 section 3) Present offers what Abstract actually produces today: a self-contained
 // HTML page, clean portable Markdown, a print-to-PDF and a Word .docx mapped to built-in styles. The
 // remaining cloud/spreadsheet destinations (Google Docs, Google Sheets, Excel) are real product goals but
 // not built yet, so they stay honest "Soon" rows (non-selectable) rather than fabricating a format - the
@@ -110,6 +110,18 @@ export interface ILivingDocRenderInput {
 	 * disk). Never fabricate a durable "Saved" state the provider can't back.
 	 */
 	readonly ephemeral?: boolean;
+	/**
+	 * The opened workspace folder's display name (issue #174), e.g. "docs" - the FIRST, clickable segment of
+	 * the editor breadcrumb (project / document title). Absent when no folder is open (e.g. a screen), in
+	 * which case the bar falls back to the brand crumb. Supplied by the editor pane from the workspace service.
+	 */
+	readonly projectName?: string;
+	/**
+	 * The document's on-disk file name (issue #174), e.g. "25-why-abstract.md" - shown in muted grey beside the
+	 * document title so the reader always knows which file they are in, even scrolled deep into a long doc.
+	 * Supplied by the editor pane from the document resource.
+	 */
+	readonly fileName?: string;
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -137,12 +149,23 @@ const ACCENT = 'oklch(0.55 0.13 255)';
 
 // Style and script are single left-aligned template literals so source indentation stays tab-only.
 const STYLE = `*{box-sizing:border-box}
-html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
+/* Reset the webview harness's body padding (0 20px, injected by src/vs/workbench/contrib/webview/browser/pre/index.html)
+ * as well as its margin. The harness inset survives a margin-only reset and pushes the top bar + formatting toolbar
+ * ~20px off each pane rail (issue #175). Zeroing padding lets the full-bleed chrome reach both rails; the centred
+ * 720px prose column keeps its own breathing room via the .pmwrap 40px lateral padding. */
+html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
 .topbar{position:sticky;top:0;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc;z-index:5}
 .brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
 .logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
 .sep{color:#c8cbd2}
 .crumb{color:#868b95;font-weight:400}
+/* File breadcrumb (issue #174): the project segment is a real button (navigates Home), the title is the
+ * document's display title, and the file name trails in muted grey so the reader always knows which file
+ * they are in even scrolled deep into a long doc. */
+.crumb-proj{border:none;background:none;padding:0;font:600 13px/1 system-ui;color:#2a2c32;cursor:pointer}
+.crumb-proj:hover{color:${ACCENT};text-decoration:underline}
+.crumb-title{font:600 13px/1 system-ui;color:#2a2c32;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumb-file{margin-left:9px;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#a9aeb8;flex:none}
 .right{display:flex;align-items:center;gap:10px}
 .pill{display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px;cursor:pointer}
 .pill .dot{width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)}
@@ -294,7 +317,14 @@ table.kpi td:first-child{text-align:left;font-weight:500}
  * reading column]. The gutter is a real reserved column (via the prose column's 30px left padding) so
  * provenance markers live to the LEFT of the prose and the prose NEVER shifts when markers toggle.
  * The .prose element is content-box with max-width:720px (the reading text) + padding-left:30px (the
- * reserved gutter lane), giving a total element width of 750px. */
+ * reserved gutter lane), giving a total element width of 750px.
+ * Edge-to-edge chrome (issue #175): the 32px/40px wrapper padding is scoped to .pmwrap so it insets ONLY
+ * the prose column. The top bar and formatting toolbar are rendered as SIBLINGS of .pmwrap (see the html
+ * assembly in renderLivingDocContent), so their #fbfbfc / white backgrounds and hairline borders run
+ * rail-to-rail with no white gutter, while the reading column stays centred. Do NOT move the bars inside
+ * .pmwrap or they inherit this padding and lose the full-bleed edges. This only reaches the rails because the
+ * html,body rule above resets the webview harness's body padding (0 20px) - without that reset the harness
+ * inset survives and pushes every bar ~20px off each rail. */
 .pmwrap{display:flex;justify-content:center;padding:32px 40px 90px}
 .pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px;padding-right:0;box-sizing:content-box;position:relative}
 .pmwrap .ProseMirror{outline:none;min-height:60vh;white-space:pre-wrap;word-wrap:break-word;-webkit-font-smoothing:antialiased}
@@ -546,6 +576,7 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-approve-all-doc]')) { return vscode.postMessage({ type: 'approveAllDoc' }); }
 	if (el = e.target.closest('[data-approve-all-everywhere]')) { return vscode.postMessage({ type: 'approveAllEverywhere' }); }
 	if (el = e.target.closest('[data-next-doc]')) { return vscode.postMessage({ type: 'nextDoc' }); }
+	if (el = e.target.closest('[data-open-project]')) { return vscode.postMessage({ type: 'openProject' }); }
 	if (el = e.target.closest('[data-refresh]')) { return vscode.postMessage({ type: 'refresh' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
@@ -831,7 +862,6 @@ function docReviewBar(pendingCount: number, totalPendingCount: number, nextChang
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
 	const { doc, pending, dirty, status, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
-	const crumb = isLiving ? 'Living Document' : 'Markdown';
 
 	// PM is the single editing surface for every document (plan 15 iter 5); the chrome shows in 'pm' mode.
 	const isPm = mode === 'pm';
@@ -849,7 +879,19 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		: '';
 	const presentBtn = (doc && isPm) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
 
-	const topbar = `<div class="topbar"><div class="brand"><span class="logo">A</span>Abstract<span class="sep">/</span><span class="crumb">${crumb}</span></div>`
+	// The breadcrumb (issue #174): for a real document, a file breadcrumb - the clickable project (workspace
+	// folder) segment, the document title, and the on-disk file name in muted grey - so the bar is navigation,
+	// not the static "Abstract / Markdown" brand+type noise. The project segment posts `openProject` to
+	// navigate back to Home (the project view). When no document/folder is in play (an empty pane), fall back
+	// to the brand crumb so the bar never reads blank.
+	const brand = `<span class="logo">A</span>`;
+	const crumbHtml = (doc && input.projectName)
+		? `${brand}<button class="crumb-proj" data-open-project title="Go to project">${esc(input.projectName)}</button>`
+		+ `<span class="sep">/</span>`
+		+ `<span class="crumb-title">${esc(doc.title)}</span>`
+		+ (input.fileName ? `<span class="crumb-file">${esc(input.fileName)}</span>` : '')
+		: `${brand}Abstract<span class="sep">/</span><span class="crumb">${isLiving ? 'Living Document' : 'Markdown'}</span>`;
+	const topbar = `<div class="topbar"><div class="brand">${crumbHtml}</div>`
 		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
