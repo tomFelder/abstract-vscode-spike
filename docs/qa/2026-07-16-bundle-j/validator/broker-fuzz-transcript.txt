@@ -1,0 +1,50 @@
+=== Bundle J VALIDATOR independent broker fuzz (2026-07-16) ===
+Branch feat/179-model-picker, reviewing only the 2 commits on origin/fix/169-170-model-broker-lifecycle.
+Node v22.22.3. Broker run directly: node scripts/lwd-model-broker.js (no app).
+
+--- openrouter backend (LWD_PROXY_PORT=8097 LWD_BACKEND=openrouter) ---
+GET /models
+  {"backend":"openrouter","models":[{"id":"openai/gpt-4.1-mini","label":"Included model","default":true}]}
+
+POST /v1/messages fuzz (assert 200 + default fallback, never 500):
+  model:123 (number)            -> HTTP 200   requested=null                resolved=openai/gpt-4.1-mini
+  model:{"a":1} (object)        -> HTTP 200   requested=null                resolved=openai/gpt-4.1-mini
+  model:"🦄🔥🌮" (emoji)         -> HTTP 200   requested="🦄🔥🌮"            resolved=openai/gpt-4.1-mini
+  model:<10240-char string>     -> HTTP 200   requested="xxxx...(10KB)"     resolved=openai/gpt-4.1-mini
+  model:null                    -> HTTP 200   requested=null                resolved=openai/gpt-4.1-mini
+  absent model                  -> HTTP 200   requested=null                resolved=openai/gpt-4.1-mini
+  malformed JSON body           -> HTTP 400 (invalid request body, guarded BEFORE model resolution; not 500)
+
+--- openai-oauth backend (LWD_PROXY_PORT=8098 LWD_BACKEND=openai-oauth) ---
+GET /models  (static list, works without sign-in via listModels() seam)
+  {"backend":"openai-oauth","models":[
+    {"id":"gpt-5-codex","label":"Sol","default":true},
+    {"id":"gpt-5","label":"Terra","default":false},
+    {"id":"gpt-5-mini","label":"Luna","default":false}]}
+
+POST /v1/messages (resolution proven; 502 is downstream, NOT a validation crash):
+  model:"gpt-5" (valid Terra)   -> requested="gpt-5"              resolved=gpt-5          (kept: load-bearing)
+  model:123 (number)            -> requested=null                 resolved=gpt-5-codex    (default fallback)
+  model:"gpt-9-nonexistent"     -> requested="gpt-9-nonexistent"  resolved=gpt-5-codex    (stale-id -> default)
+  502 body: {"type":"error","error":{"type":"proxy_error","message":"openai http 400"}}
+  => the 502 originates from the upstream Codex Responses call (stale test token), AFTER validation ran.
+     Model VALIDATION + RESOLUTION are proven; the subscription ANSWER is the implementer's declared gap.
+
+--- token-shape verification (scripts/lwd-openai-oauth.js) ---
+Bundle is {access_token, refresh_token, id_token, account_id, expiry}; id_token JWT carries only the
+chatgpt_account_id/account_id claim (billing account), no model catalogue. The static OPENAI_MODELS list +
+async listModels() seam is justified: the Codex OAuth token cannot enumerate models live.
+
+--- lifecycle ---
+kill <pid> -> clean exit, no lingering broker process.
+
+--- cache-not-per-poll (renderer, code-verified) ---
+getModelCatalogue() returns this._modelCatalogue immediately when cached; /models is fetched at most once
+until _invalidateModelCatalogue() (sign-in / sign-out ONLY). No setInterval drives it. The healthz probe
+(_probeModel, TTL-cached) does NOT invalidate the catalogue -> no poll-driven /models fetch storm.
+
+--- stale-id degradation (defence in depth) ---
+1. Renderer getSelectedModelId(): stored id not in catalogue -> catalogue default (isDefault ?? [0]).
+2. Broker resolveRequestedModel(): unknown id -> backend default (proven above).
+
+VERDICT: PASS.
