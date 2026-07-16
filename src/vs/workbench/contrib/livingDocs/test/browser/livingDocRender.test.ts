@@ -318,31 +318,37 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		}, { hasBrandCrumb: true, noFileBreadcrumb: true });
 	});
 
-	// Issue #175: the top bar and formatting toolbar run edge-to-edge - they are siblings of the padded prose
-	// wrapper (.pmwrap), not children of it, so their backgrounds/hairline borders reach both rails while only
-	// the prose column carries the 32px/40px wrapper padding + its 30px provenance gutter.
-	test('the header bars are full-bleed siblings of the padded prose wrapper (edge-to-edge chrome)', () => {
+	// Issue #175: the top bar and formatting toolbar run edge-to-edge. The bars being siblings of .pmwrap is
+	// necessary but not sufficient - it was true since the first commit yet the gutter persisted, because the
+	// webview harness injects `body{padding:0 20px}` and the content CSS only reset margin, so the 20px lateral
+	// inset survived and pushed every bar off both rails. The real acceptance is therefore that the generated
+	// CSS resets the harness body padding to 0; only then do the sibling bars actually reach the rails while the
+	// centred 720px prose column keeps its own 40px/30px insets. This is a generated-string test, so we assert
+	// against the CSS text directly - reverting the `padding:0` reset must fail it.
+	test('the generated CSS resets the harness body padding so the sibling header bars reach both rails (edge-to-edge chrome)', () => {
 		const content = renderLivingDocContent({
 			doc: { title: '25 - Why Abstract (the one-pager)', subtitle: '', sources: [], context: [], blocks: [], isLiving: false, body: '' },
 			pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
 			present: { open: false, choice: 'html' }, syncDiff: [], projectName: 'docs', fileName: '25-why-abstract.md',
 		});
 		const h = content.html;
-		// The bars precede .pmwrap in document order and are not nested inside it: everything BEFORE the wrapper
-		// opens is the full-bleed chrome; the wrapper and its centred prose column come after.
+		const shell = renderLivingDocHtml({
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
+			present: { open: false, choice: 'html' }, syncDiff: [],
+		});
 		const wrapAt = h.indexOf('<div class="pmwrap">');
-		const chrome = h.slice(0, wrapAt);
 		assert.deepStrictEqual({
-			topBarBeforeWrap: chrome.includes('class="topbar"'),
-			toolbarBeforeWrap: chrome.includes('class="etoolbar"'),
-			// the bars are not wrapped by .pmwrap (no bar markup appears after the wrapper opens, before its close)
+			// The harness's `body{padding:0 20px}` inset is reset in the content's own html,body rule (the fix for
+			// #175). Without this the bars are inset ~20px off each rail no matter where they sit in the DOM.
+			bodyPaddingReset: shell.includes('html,body{margin:0;padding:0;'),
+			// The bars precede .pmwrap in document order and are not nested inside its padding.
+			topBarBeforeWrap: h.slice(0, wrapAt).includes('class="topbar"'),
+			toolbarBeforeWrap: h.slice(0, wrapAt).includes('class="etoolbar"'),
 			barsNotInsideWrap: !h.slice(wrapAt).includes('class="topbar"') && !h.slice(wrapAt).includes('class="etoolbar"'),
-			// the centred prose column keeps its 720px max-width + 30px provenance gutter (CSS, asserted via the shell)
-			proseCentred: renderLivingDocHtml({
-				doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
-				present: { open: false, choice: 'html' }, syncDiff: [],
-			}).includes('.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px'),
+			// The centred prose column keeps its 720px max-width + 30px provenance gutter (its own inset, not the harness's).
+			proseCentred: shell.includes('.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px'),
 		}, {
+			bodyPaddingReset: true,
 			topBarBeforeWrap: true,
 			toolbarBeforeWrap: true,
 			barsNotInsideWrap: true,

@@ -355,7 +355,11 @@ function pickerSheet(id: string, opts: { title: string; sub?: string; nameLabel:
 const HEAD = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 *{box-sizing:border-box}
-html,body{margin:0;height:100%}
+/* Reset the webview harness's body padding (0 20px, injected by src/vs/workbench/contrib/webview/browser/pre/index.html)
+ * along with its margin, for the same edge-to-edge reason as the doc editor (issue #175). The screen's .topbar
+ * runs full width with a #fbfbfc background + hairline border and must reach both rails; the cards inside .scr-body
+ * float on the #f8f9fb canvas with their own internal padding, so zeroing the harness inset does not crowd them. */
+html,body{margin:0;padding:0;height:100%}
 body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;background:#fff}
 ::selection{background:rgba(80,110,235,.18)}
 ::-webkit-scrollbar{width:11px;height:11px}

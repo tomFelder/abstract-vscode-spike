@@ -45,7 +45,7 @@ const EMPTY_RESOLVED: ReadonlyMap<string, string> = new Map<string, string>();
 // Markdown textarea, reachable from the editor for hand-editing source.
 export type LivingDocViewMode = 'raw' | 'pm';
 
-// (plan 33 iter 4, L8; doc 22 §3) Present offers what Abstract actually produces today: a self-contained
+// (plan 33 iter 4, L8; doc 22 section 3) Present offers what Abstract actually produces today: a self-contained
 // HTML page, clean portable Markdown, a print-to-PDF and a Word .docx mapped to built-in styles. The
 // remaining cloud/spreadsheet destinations (Google Docs, Google Sheets, Excel) are real product goals but
 // not built yet, so they stay honest "Soon" rows (non-selectable) rather than fabricating a format - the
@@ -149,7 +149,11 @@ const ACCENT = 'oklch(0.55 0.13 255)';
 
 // Style and script are single left-aligned template literals so source indentation stays tab-only.
 const STYLE = `*{box-sizing:border-box}
-html,body{margin:0;height:100%;background:#fff;color:#1a1c20;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
+/* Reset the webview harness's body padding (0 20px, injected by src/vs/workbench/contrib/webview/browser/pre/index.html)
+ * as well as its margin. The harness inset survives a margin-only reset and pushes the top bar + formatting toolbar
+ * ~20px off each pane rail (issue #175). Zeroing padding lets the full-bleed chrome reach both rails; the centred
+ * 720px prose column keeps its own breathing room via the .pmwrap 40px lateral padding. */
+html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
 .topbar{position:sticky;top:0;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc;z-index:5}
 .brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
 .logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
@@ -318,7 +322,9 @@ table.kpi td:first-child{text-align:left;font-weight:500}
  * the prose column. The top bar and formatting toolbar are rendered as SIBLINGS of .pmwrap (see the html
  * assembly in renderLivingDocContent), so their #fbfbfc / white backgrounds and hairline borders run
  * rail-to-rail with no white gutter, while the reading column stays centred. Do NOT move the bars inside
- * .pmwrap or they inherit this padding and lose the full-bleed edges. */
+ * .pmwrap or they inherit this padding and lose the full-bleed edges. This only reaches the rails because the
+ * html,body rule above resets the webview harness's body padding (0 20px) - without that reset the harness
+ * inset survives and pushes every bar ~20px off each rail. */
 .pmwrap{display:flex;justify-content:center;padding:32px 40px 90px}
 .pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px;padding-right:0;box-sizing:content-box;position:relative}
 .pmwrap .ProseMirror{outline:none;min-height:60vh;white-space:pre-wrap;word-wrap:break-word;-webkit-font-smoothing:antialiased}
