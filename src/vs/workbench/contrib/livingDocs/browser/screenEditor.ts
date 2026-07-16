@@ -881,10 +881,10 @@ export class ScreenEditor extends EditorPane {
 	// service) and open a real folder via the existing open-folder path (1a). The folder-open reloads the
 	// workbench; the persisted step + the armed aha survive it.
 	private async _onbOpenFolder(): Promise<void> {
-		if (await this._livingDocs.openFolder()) {
+		await this._livingDocs.openFolder(() => {
 			this._livingDocs.recordOnboardingStep('first-folder');
 			this._setOnboardingStep('first-approve-own');
-		}
+		});
 	}
 
 	// Begin "Sign in with ChatGPT": ask the proxy for the authorize URL, open it in the browser, move to the

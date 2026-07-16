@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -25,8 +26,21 @@ import { IChatMessage, IChatStep, ILivingDocsService, ISkillCheck, ModelReadines
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
+import { ScreenId } from './screenRender.js';
 
 type PanelTab = 'chat' | 'review' | 'history';
+
+// The History body and the Document-Agents disclosure are built as pure HTML strings (historyHtml /
+// checksDisclosureHtml) whose entire visual language is inline `style=` on `<button>`/`<span>`/`<div>`,
+// with `data-*` hooks the click delegation reads. VS Code's Trusted Types CSP blocks a raw `innerHTML`
+// assignment, so both go through `safeSetInnerHtml`, which sanitises then resets the node. The default
+// allow-list keeps neither `<button>` nor `style`, so we augment both; `data-*` and `title` survive by
+// default. All interpolated user content (titles, labels) is already `esc()`-escaped by the builders.
+// Exported so the regression test (`reviewRailSanitize.test.ts`) exercises the REAL production config.
+export const REVIEW_RAIL_HTML_SANITIZER = Object.freeze({
+	allowedTags: { augment: ['button'] },
+	allowedAttributes: { augment: ['style'] },
+});
 
 function esc(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -186,9 +200,7 @@ export class ReviewRailView extends ViewPane {
 		// Undefined = not yet probed, so render nothing to avoid a flash before we know the truth.
 		if (this._readiness === undefined) { return; }
 
-		const openModelAccess = () => {
-			void this._editors.openEditor(this.instantiationService.createInstance(ScreenEditorInput, 'settings'), { pinned: true });
-		};
+		const openModelAccess = () => void this._openScreen('settings');
 
 		// Model genuinely unavailable, or the day's included usage is spent: an honest state + a fix-it link.
 		if (this._readiness === 'broker-down' || this._readiness === 'unconfigured' || this._readiness === 'budget-paused') {
@@ -220,6 +232,19 @@ export class ReviewRailView extends ViewPane {
 		this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
 		const tail = append(text, $('span'));
 		tail.textContent = ' for unlimited.';
+	}
+
+	// Open an Abstract screen (e.g. Model Access) without leaking the transient editor input. `ScreenEditorInput`
+	// is a Singleton with a `matches` override, so when a screen is already open the editor service reuses the
+	// existing editor and does NOT adopt the instance we created - leaving us the owner. We therefore dispose our
+	// instance unless the resolved pane is actually backed by it. Mirrors the fire-and-forget open used elsewhere,
+	// but closes the LEAKED DISPOSABLE the fire-and-forget form produced on a repeat open.
+	private async _openScreen(screen: ScreenId): Promise<void> {
+		const input = this.instantiationService.createInstance(ScreenEditorInput, screen);
+		const pane = await this._editors.openEditor(input, { pinned: true });
+		if (pane?.input !== input) {
+			input.dispose();
+		}
 	}
 
 	private _renderReview(content: HTMLElement, pending: readonly IProposedChange[]): void {
@@ -380,7 +405,7 @@ export class ReviewRailView extends ViewPane {
 		const lock = resource ? this._livingDocs.getLock(resource) : undefined;
 		const snapshots = resource ? this._livingDocs.getSnapshots(resource) : [];
 		const audit = lock ? lock.audit : [];
-		content.innerHTML = historyHtml(snapshots, audit, doc?.title, doc?.fromTemplate);
+		safeSetInnerHtml(content, historyHtml(snapshots, audit, doc?.title, doc?.fromTemplate), REVIEW_RAIL_HTML_SANITIZER);
 		if (!resource) { return; }
 
 		// Delegated click handling: "Save version" snapshots the current body under a user-supplied label;
@@ -439,7 +464,7 @@ export class ReviewRailView extends ViewPane {
 		const title = this._livingDocs.getDoc(resource)?.title;
 		const flags = report.filter(s => s.status === 'flag').length;
 		const section = append(parent, $('div.ldr-checks'));
-		section.innerHTML = checksDisclosureHtml(this._checksExpanded, flags, report, title);
+		safeSetInnerHtml(section, checksDisclosureHtml(this._checksExpanded, flags, report, title), REVIEW_RAIL_HTML_SANITIZER);
 		// The disclosure toggle relocates the agents off the always-on rail. "Run" / "Re-run" re-grade the
 		// live document (Strategy calls the model via the proxy); "Apply fix" applies a skill's deterministic
 		// edit (Formatting title-cases the flagged headings). All re-render when the service fires onDidChange.
