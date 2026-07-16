@@ -9,7 +9,7 @@
 // doc 18 section 2.1). It implements the Codex CLI's Authorization-Code-with-PKCE flow against
 // auth.openai.com and stores the resulting token bundle server-side so the user's own ChatGPT
 // subscription pays for their model calls. This module is PURE PLUMBING - no HTTP server, no proxy wiring;
-// scripts/lwd-anthropic-proxy.js owns the routes and calls into here. The credential lives ONLY in this
+// scripts/lwd-model-broker.js owns the routes and calls into here. The credential lives ONLY in this
 // process (decision 14): it is written to a 0600 file under ~/.abstract and is never returned to, or
 // reachable by, the renderer.
 //

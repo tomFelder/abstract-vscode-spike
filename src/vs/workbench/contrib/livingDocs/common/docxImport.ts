@@ -5,7 +5,7 @@
 
 // The pure, DOM-free half of the docx -> Markdown import pipeline (doc 22 section 2, issue #129). The
 // docx-specific parsing (mammoth: docx -> semantic HTML + extracted images + the fidelity detections) runs
-// in the node/proxy layer where file access lives (scripts/lwd-anthropic-proxy.js, POST /import/docx); this
+// in the node/proxy layer where file access lives (scripts/lwd-model-broker.js, POST /import/docx); this
 // module turns that HTML into GFM Markdown, lifts embedded images out to `assets/<doc>/`, and folds the real
 // kept/dropped fidelity summary the import card shows. It is string-in/data-out with no imports so it runs
 // identically in the renderer and in the Node test harness - the fidelity mapping the acceptance criteria
