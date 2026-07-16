@@ -305,7 +305,13 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .prose code{font:400 13px/1.5 'JetBrains Mono',ui-monospace,monospace;background:#f3f3f5;border-radius:4px;padding:1px 5px}
 .prose pre{background:#f7f7f9;border:1px solid #ececf0;border-radius:8px;padding:14px 16px;overflow:auto;margin:0 0 14px}
 .prose pre code{background:none;padding:0}
-.prose blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid #e1e2e8;color:#6a6a73}
+/* (issue #180) background:transparent neutralises the webview host's default blockquote style: its
+ * _defaultStyles block (vs/workbench/contrib/webview/browser/pre/index.html) paints
+ * blockquote background var(--vscode-textBlockQuote-background) in the @layer vscode-default cascade
+ * layer. Our unlayered .prose rule already wins for border/colour, but never set a background, so a
+ * dark theme's grey block-quote fill showed through. Pinning it transparent makes the design-system
+ * block quote (a quiet left rule, no fill) theme-independent - correct even if a future theme leaks. */
+.prose blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid #e1e2e8;color:#6a6a73;background:transparent}
 .prose table{border-collapse:collapse;margin:0 0 14px;font-size:13px}
 .prose th,.prose td{border:1px solid #ececf0;padding:7px 12px;text-align:left}
 .prose img{max-width:100%}
