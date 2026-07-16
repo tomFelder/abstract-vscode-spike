@@ -589,6 +589,15 @@ function resolveRequestedModel(requested, models) {
 	return models.some(m => m && m.id === requested) ? requested : fallback;
 }
 
+// Cap a caller-supplied value before it is echoed into the broker log. `parsed.model` is attacker-controllable
+// (a client can POST a 10KB model string); a real model id is short, so anything longer is truncated with an
+// ellipsis to keep the log line bounded. Harmless on a machine-local broker, but log hygiene regardless.
+const LOG_VALUE_MAX = 80;
+function forLog(value) {
+	const s = String(value);
+	return s.length > LOG_VALUE_MAX ? `${s.slice(0, LOG_VALUE_MAX)}…(${s.length})` : s;
+}
+
 // Meter one metered (openrouter) call: charge the resolved cost, emit a `model_spend` audit record, and
 // return whether the day's included usage is now spent. Not called for a non-metering backend (a user's
 // own subscription is not the founder's budget). Cost uses real API numbers where present, an honest
@@ -630,7 +639,7 @@ async function forwardMessages(req, res) {
 	const models = await modelsForBackend(backend);
 	const resolvedModel = resolveRequestedModel(requestedModel, models);
 	parsed.model = resolvedModel;
-	console.log(`[lwd-proxy] /v1/messages backend=${backend.name} requested=${JSON.stringify(requestedModel ?? null)} resolved=${resolvedModel}`);
+	console.log(`[lwd-proxy] /v1/messages backend=${backend.name} requested=${requestedModel === undefined ? 'null' : JSON.stringify(forLog(requestedModel))} resolved=${resolvedModel}`);
 	// Budget gate (metered backends only): if the day's included usage is already spent, do NOT call the
 	// model - return the plain-words cap message so the renderer pauses the run via D15 and keeps proposals.
 	if (backend.meters && spendMeter.isOverBudget()) {
