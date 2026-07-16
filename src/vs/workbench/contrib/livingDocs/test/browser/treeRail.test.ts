@@ -201,6 +201,36 @@ suite('treeRail', () => {
 		]);
 	});
 
+	test('buildOutline counts list-item-nested headings (markdown-it renders `- # x` inside the <li>) without over-counting lazy/code setext underlines (issue #181 regression)', () => {
+		// markdown-it renders a heading nested in a list item as a real `<hN>` inside the `<li>`, so the Outline
+		// scan must count it or every ordinal after it drifts and clicks scroll to the wrong heading. It must
+		// NOT, however, over-count: a setext underline UNDER a list item only underlines when it reaches the
+		// item's content column (marker width) and sits no more than three columns past it - a less-indented
+		// `===` is a lazy paragraph continuation (no heading) and a more-indented one is a code block (no
+		// heading). Verified against markdown-it in the two-parser harness. Each comment is the rendered <hN>.
+		const body = [
+			'- # Bullet ATX',       // rendered <h1> #0 (ATX inside a `-` list item)
+			'',
+			'1. ## Ordered ATX',    // rendered <h2> #1 (ATX inside a `1.` list item)
+			'',
+			'- Setext In List',     // rendered <h1> #2 (setext: underline reaches the content column)
+			'  ================',
+			'',
+			'- Lazy Not Heading',   // NOT a heading: the `===` is unindented -> lazy paragraph continuation
+			'===',
+			'',
+			'## Tail',              // rendered <h2> #3 (ATX) - proves the count did not drift
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Listy', [], body), isLiving: false, blocks: [] };
+		assert.deepStrictEqual(buildOutline(d), [
+			{ text: 'Bullet ATX', level: 1, headingIndex: 0 },
+			{ text: 'Ordered ATX', level: 2, headingIndex: 1 },
+			{ text: 'Setext In List', level: 1, headingIndex: 2 },
+			{ text: 'Tail', level: 2, headingIndex: 3 },
+		]);
+	});
+
 	test('searchTreeRail matches title or body case-insensitively with a snippet, and ignores blank queries', () => {
 		const docs = [
 			{ title: 'Weekly Summary', resource: WEEKLY, body: 'Revenue grew this week as growth accelerated sharply.' },
