@@ -24,3 +24,14 @@ NONE
 
 ## (e) No ERR_CONNECTION_REFUSED for 8090 in the live session
 renderer console logs containing ERR_CONNECTION_REFUSED: 0
+
+## Unit tests
+
+- All directly-modified tests pass: fanoutOutcome.test.ts (14) and the settings provider-picker / included-tier / signed-in / plain-words screenRender tests (12/12 of the ones this change touches).
+- Pre-existing failures NOT caused by this change (verified identical on `main` @60401cabbf4, the branch point): screenRender "onboarding open step intro headline", "home resume banner", "home From sources... row", and "pending sign-in waiting for your browser". These are in unrelated onboarding/home/pending-sign-in surfaces and were already red on main.
+
+## Notes
+
+- typecheck-client: clean. valid-layers-check: clean.
+- OpenRouter key present on this machine (~/.config/lwd-openrouter.key), so /healthz reports reason=ready and chat replies stream (case b: reply streams).
+- Kill-on-shutdown: the graceful user-quit path (onWillShutdown, Cmd-Q / window close) SIGTERMs the broker via the same idiom ElectronAgentHostStarter uses; a raw `kill -TERM` to the Electron main process (a developer action, not an end-user shutdown) bypasses the JS lifecycle handlers, so a synchronous process 'exit' safety net was added as well.
