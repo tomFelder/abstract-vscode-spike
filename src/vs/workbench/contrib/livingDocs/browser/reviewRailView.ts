@@ -89,19 +89,22 @@ export function activeMention(text: string, caret: number): { start: number; que
 }
 
 /**
- * Replace the partial "@query" the caret sits in with the chosen "@file " token, leaving the rest of the
- * text untouched. When the caret is not in a mention the token is appended at the caret. Pure so the
- * text edit is unit-testable without a real textarea.
+ * Replace the partial "@query" the caret sits in with the chosen "@file" token, leaving the rest of the
+ * text untouched. When the caret is not in a mention the token is appended at the caret. The token gets a
+ * trailing space unless the following text already starts with whitespace (so we never double the
+ * separator). Returns the new text and the caret offset just after the inserted token so the textarea
+ * selection can be restored there. Pure so the text edit is unit-testable without a real textarea.
  */
-export function replaceActiveMention(text: string, caret: number, file: string): string {
+export function replaceActiveMention(text: string, caret: number, file: string): { text: string; caret: number } {
 	const active = activeMention(text, caret);
-	const token = `@${file} `;
+	const suffix = text.slice(caret);
+	const token = `@${file}${/^\s/.test(suffix) ? '' : ' '}`;
 	if (!active) {
 		const before = text.slice(0, caret);
 		const sep = before.length && !before.endsWith(' ') ? ' ' : '';
-		return `${before}${sep}${token}${text.slice(caret)}`;
+		return { text: `${before}${sep}${token}${suffix}`, caret: before.length + sep.length + token.length };
 	}
-	return `${text.slice(0, active.start)}${token}${text.slice(caret)}`;
+	return { text: `${text.slice(0, active.start)}${token}${suffix}`, caret: active.start + token.length };
 }
 
 // The Studio right panel: the comp's exact Chat / Review / History 3-tab surface. Chat is the agent
@@ -822,6 +825,11 @@ export class ReviewRailView extends ViewPane {
 		input.disabled = !doc;
 		input.style.cssText = 'width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;font:400 13px/1.5 system-ui;color:#2c2f36';
 		this._renderDisposables.add(addDisposableListener(input, 'input', () => { this._chatDraft = input.value; this._composerPicker?.update(); }));
+		// Caret-only moves (ArrowLeft/Right, Home/End, a mouse click) change `selectionStart` without an
+		// `input` event, so re-sync the picker on keyup/click too - otherwise it lingers open with stale
+		// matches and could insert the wrong one. `update()` closes it when the caret leaves an "@query".
+		this._renderDisposables.add(addDisposableListener(input, 'keyup', () => this._composerPicker?.update()));
+		this._renderDisposables.add(addDisposableListener(input, 'click', () => this._composerPicker?.update()));
 
 		const mentions = doc ? this._livingDocs.getMentionableFiles(doc) : [];
 		const insertMention = (file: string) => {
@@ -835,8 +843,12 @@ export class ReviewRailView extends ViewPane {
 		// and keydown handlers drive it, and the "@ Mention" button opens it. Registered on the render store
 		// so its listeners are torn down with the composer on the next re-render (no leaked global listeners).
 		const picker = this._composerPicker = this._renderDisposables.add(new MentionPicker(box, input, mentions, chosen => {
-			this._chatDraft = input.value = replaceActiveMention(input.value, input.selectionStart ?? input.value.length, chosen);
+			const replaced = replaceActiveMention(input.value, input.selectionStart ?? input.value.length, chosen);
+			this._chatDraft = input.value = replaced.text;
 			input.focus();
+			// Restore the caret just after the inserted token: assigning `value` otherwise jumps it to the end,
+			// which would strand a mid-draft insertion at the bottom of the textarea.
+			input.setSelectionRange(replaced.caret, replaced.caret);
 		}));
 		this._renderDisposables.add({ dispose: () => { if (this._composerPicker === picker) { this._composerPicker = undefined; } } });
 		if (mentions.length) {
@@ -1151,6 +1163,10 @@ function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined
 class MentionPicker extends Disposable {
 
 	private readonly _list: HTMLUListElement;
+	// Per-render listeners for the option `<li>`s. `_render()` runs on every keystroke and arrow move, so
+	// these must be cleared each render rather than piling up on the picker's own store until it is torn
+	// down (the repo's disposable rule for objects created in repeatedly-called methods).
+	private readonly _optionDisposables = this._register(new DisposableStore());
 	private _matches: string[] = [];
 	private _active = 0;
 	private _open = false;
@@ -1214,6 +1230,7 @@ class MentionPicker extends Disposable {
 	}
 
 	private _render(): void {
+		this._optionDisposables.clear();
 		clearNode(this._list);
 		this._matches.forEach((file, i) => {
 			const item = append(this._list, $('li')) as HTMLLIElement;
@@ -1223,8 +1240,8 @@ class MentionPicker extends Disposable {
 			item.setAttribute('aria-selected', String(selected));
 			item.style.cssText = `font:500 11.5px/1 ui-monospace,monospace;color:#5b6dc4;border-radius:6px;padding:6px 8px;cursor:pointer;${selected ? 'background:#eef1ff' : ''}`;
 			item.textContent = `@${file}`;
-			this._register(addDisposableListener(item, 'mousedown', e => { e.preventDefault(); this._active = i; this._select(); }));
-			this._register(addDisposableListener(item, 'mousemove', () => { if (this._active !== i) { this._active = i; this._render(); } }));
+			this._optionDisposables.add(addDisposableListener(item, 'mousedown', e => { e.preventDefault(); this._active = i; this._select(); }));
+			this._optionDisposables.add(addDisposableListener(item, 'mousemove', () => { if (this._active !== i) { this._active = i; this._render(); } }));
 		});
 		this._list.style.display = 'block';
 		this._open = true;
@@ -1235,6 +1252,7 @@ class MentionPicker extends Disposable {
 	private _close(): void {
 		this._open = false;
 		this._list.style.display = 'none';
+		this._optionDisposables.clear();
 		clearNode(this._list);
 		this._input.setAttribute('aria-expanded', 'false');
 		this._input.removeAttribute('aria-activedescendant');

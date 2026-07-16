@@ -69,8 +69,8 @@ suite('livingDocs composer suggestions', () => {
 			noAt: undefined,
 			spaceEndsIt: undefined,
 			bareAt: { start: 4, query: '' },
-			replacePartial: 'tell me about @overview  now',
-			replaceAtCaretNoMention: 'hi @overview ',
+			replacePartial: { text: 'tell me about @overview now', caret: 23 },
+			replaceAtCaretNoMention: { text: 'hi @overview ', caret: 13 },
 		});
 	});
 });
