@@ -1698,7 +1698,7 @@ export class CodeApplication extends Disposable {
 		// adopts an already-healthy broker on the port rather than double-spawning, and is a no-op when the broker
 		// script is not present (e.g. a packaged build without scripts).
 		const livingDocsBrokerService = this._register(instantiationService.createInstance(LivingDocsBrokerService));
-		livingDocsBrokerService.start();
+		void livingDocsBrokerService.start();
 	}
 
 	private async installMutex(): Promise<void> {
