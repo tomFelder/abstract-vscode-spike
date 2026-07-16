@@ -140,6 +140,14 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'workbench.statusBar.visible': false,
 		'workbench.editor.showTabs': 'none',
 		'breadcrumbs.enabled': false,
+		// (issue #172) Turn on the Modern UI style-override group by default. This is what activates the
+		// Studio styleOverrides (the `.style-override-studio` class the StyleOverridesContribution toggles
+		// only when this is on): the calm floating-card panels AND, critically, the labelled 76px icon-nav
+		// (Home / Editor / Templates / Knowledge / Agents rendered with text labels via studio.css ::after)
+		// plus hiding the redundant Workspace tree-rail icon. Without it, restoring the activity bar (above)
+		// would show a raw, unlabelled IDE icon column with the Workspace viewlet icon leaking through --
+		// exactly what #172 says must not happen. A real, user-overridable setting, so still additive.
+		'workbench.experimental.modernUI': true,
 		// iter 2 -- kill the cold-launch noise + trust leaks
 		'security.workspace.trust.enabled': false,
 		'workbench.welcomePage.experimentalOnboarding': false,
