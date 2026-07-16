@@ -1,0 +1,29 @@
+Bundle K independent validation - console grep transcript
+Validator session: 2026-07-16 20:21 (Code OSS from bundle-k worktree, node v24.15.0)
+Workspace opened: /Users/tommy/Sites/abstract-vscode-spike/docs (confirmed inside git repo /Users/tommy/Sites/abstract-vscode-spike)
+Flow: fresh /tmp profile -> open docs folder -> onboarding -> See It Work (demo report editor) -> switched through 5 docs via tree-rail
+
+=== Renderer console (my post-fix session only: .playwright-cli/console-2026-07-16T10-21-14-752Z.log) - ALL MUST BE 0 ===
+  git repository was found                      : 0
+  parent folders                                : 0
+  chatForegroundSessionCount                    : 0
+  Unable to create workbench contribution       : 0
+  Assertion Failed                              : 0
+  undefined` or `null                           : 0
+  getPartByLocation                             : 0
+
+=== Main process code.log (/tmp/code-oss-dev/20260716-202101-24512/code.log) - ALL MUST BE 0 ===
+  git repository was found                      : 0
+  parent folders                                : 0
+  chatForegroundSessionCount                    : 0
+  Unable to create workbench contribution       : 0
+  Assertion Failed: Argument is undefined       : 0
+
+=== Pre-fix reproduction (implementer's earlier session console-2026-07-16T09-52) for contrast ===
+  chatForegroundSessionCount : 4  (bug reproduced pre-fix)
+
+=== Out-of-scope pre-existing errors still present (NOT #182, documented in ledger) ===
+  ExtensionsViewletViewsContribution 'reading id/extensionId' : 9  (deregistered extensions container - tracked separately)
+  localhost:8090/healthz ERR_CONNECTION_REFUSED : present (analytics probe, no local server - unrelated)
+
+RESULT: all #182 forbidden strings = 0 in the fixed build across startup + 5 editor switches.
