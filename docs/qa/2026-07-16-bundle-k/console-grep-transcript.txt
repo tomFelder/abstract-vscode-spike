@@ -1,0 +1,25 @@
+Bundle K — issue #182 — live E2E console grep transcript
+Date: 2026-07-16
+Build: fork/182-shell-toasts (both fixes: git.openRepositoryInParentFolders=never + viewsService nullish guard)
+Workspace: /Users/tommy/Sites/abstract-vscode-spike/docs (sits INSIDE the abstract-vscode-spike git repo = the exact #182 repro)
+Log file: /tmp/code-oss-dev/20260716-200745-98682/code.log
+Golden path exercised: open folder -> onboarding -> open doc (06-design-notes) -> switch to a second doc via tree-rail -> chat/review rail present.
+
+=== LEAK 2: chat contribution assertion (must be 0) ===
+-- grep -c 'chatForegroundSessionCount' --
+0
+-- grep -c 'Unable to create workbench contribution' --
+0
+-- grep -c "Assertion Failed: Argument is \`undefined\` or \`null\`" --
+0
+
+=== LEAK 1: git parent-repository toast (must be 0) ===
+-- grep -ci 'git repository was found' --
+0
+-- grep -ci 'parent folders' --
+0
+
+=== LEAK 3 sweep: ALL unique ERR lines across the whole session ===
+   2 ERR Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.: TypeError: This document requires 'TrustedHTML' assignment.
+   1 ERR Cannot read properties of undefined (reading 'id'): TypeError: Cannot read properties of undefined (reading 'id')
+   1 ERR Cannot read properties of undefined (reading 'extensionId'): TypeError: Cannot read properties of undefined (reading 'extensionId')

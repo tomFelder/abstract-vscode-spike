@@ -282,7 +282,7 @@ exit 0 = all shell seams intact; exit 1 names the broken seam(s) to re-pin per t
 per-PR validation alongside `npm run typecheck-client` and `npm run valid-layers-check` for any change that
 touches the de-IDE seams.
 
-## Core-patch count: **4 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **2 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding; the sash lock was REVERTED for issue #173, see the struck-through row above) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
+## Core-patch count: **6 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **2 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding; the sash lock was REVERTED for issue #173, see the struck-through row above) + **1 in plan 40 export round** (A2-1 native `printToPDF`) + **1 in bundle K** (issue #182 K2: nullish-guard in `ViewsService.getActiveViewPaneContainer`) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
@@ -401,7 +401,7 @@ reach for the nav chip/tidy, fails-soft/cosmetic on rename), not behavioural for
 | I6 | `jszip@3.10.1` promoted to a direct dependency (review fix) | dependency | `package.json`, `package-lock.json` | The proxy's `detectDocxFidelity` calls `require('jszip')` directly; it was only transitively hoisted via mammoth, so a stricter install could silently drop fidelity detection. Declaring it directly makes that path robust. Same runtime-only footprint as mammoth |
 
 **A1 docx import: 0 core patches.** The whole feature lives in the `livingDocs` contribution + our node proxy, plus two pure-JS npm dependencies (mammoth + jszip) that only the proxy loads at runtime - so the merge tax is two additive lines in `package.json`, not a fork of any upstream file. Verified: `typecheck-client` 0; `valid-layers-check` 0 in changed files; the conversion pipeline exercised end-to-end against a real `.docx` through the live proxy (`docs/plans/40-verify/a1-import/`).
-### Export round (plan 40, A2 - issue #130): +1 core patch (count 5 -> 6)
+### Export round (plan 40, A2 - issue #130): +1 core patch (count 4 -> 5, post-#173 sash revert)
 
 Unstubbing docx export and adding PDF (doc 22 §3). docx is entirely our-surface + additive: a
 zero-dependency pure-JS OOXML writer (`scripts/lwd-docx.js`) exposed through a new proxy route
@@ -419,7 +419,7 @@ takes **the one core patch of this round**:
 Why a core patch was unavoidable: `printToPDF` is a Chromium/Electron main-process API; the renderer
 cannot produce PDF bytes silently (`window.print()` opens a dialog and yields nothing). Adding one
 `getScreenshot`-shaped method to the native host is the minimal, upstream-mergeable seam. **New core-patch
-count: 6 total (was 5).**
+count: 5 total (was 4, post-#173 sash revert).**
 
 Hardening (CodeRabbit review on #162, no new patch - same A2-1 method): the offscreen print window now (a)
 runs on its own in-memory session and **denies every non-`data:` resource load** via a scoped
@@ -428,3 +428,27 @@ arbitrary URLs (local/inlined `data:` images still render); and (b) races the wh
 20 s deadline, destroying the hidden window on timeout so a stalled page or wedged print can never leave the
 command pending. Both are contained inside the existing `printToPDF` impl and stay fail-soft (any failure
 still returns `undefined`).
+
+### Shell-integrity round (issue #182, bundle K - suppress IDE toasts + silence the broken chat contribution): +1 core patch (count 5 -> 6, post-#173 sash revert)
+
+Two IDE leaks on the golden path (open folder inside a git repo -> open doc -> chat). Leak 1 landed
+settings-tier (0 core); leak 2 took **the one core patch of this round** - a one-line nullish-guard at the
+shared views seam that the fork's own container-deregistration breaks.
+
+| Item | Change | Tier | File(s) | Note / re-pin check |
+|------|--------|------|---------|---------------------|
+| K1 | Default `git.openRepositoryInParentFolders: 'never'` in the decision-54 `registerDefaultConfigurations` block, so opening the docs folder (which sits inside the abstract-vscode-spike git repo) no longer raises the stock "A git repository was found in the parent folders..." toast | settings (additive config-default) | `livingDocs/browser/livingDocs.contribution.ts` | Real, user-overridable git setting. Verified semantics against `extensions/git/src/model.ts:632-642`: the git model calls `showParentRepositoryNotification()` only when the setting reads `prompt`; `never` skips the prompt entirely without opening the parent repo. No livingDocs feature depends on the git extension (SCM container already deregistered). No core edit. Re-pin if the git extension renames the setting. |
+| K2 | Nullish-guard `undefined` in `ViewsService.getActiveViewPaneContainer`: change `if (location === null)` to `if (location === null \|\| location === undefined)` | **core-patch** | `src/vs/workbench/services/views/browser/viewsService.ts` | Fixes a genuine latent upstream defect exposed by the fork's de-IDE: `getViewContainerLocation` is typed non-null but its registry lookup (`[...keys].filter(...)[0]`, `common/views.ts:271`) returns `undefined` for a DEREGISTERED container. The strict `=== null` guard let that `undefined` reach `getActivePaneComposite(undefined)` -> `getPartByLocation` -> `assertReturnsDefined` (thrown assertion). Upstream `ChatForegroundSessionCountContribution` calls `isViewVisible(ChatViewId)` on every editor switch; since the fork deregisters the `workbench.panel.chat` container while its view descriptor still maps to it, every switch logged "Unable to create workbench contribution... Assertion Failed". Fails **safe** (missing location -> view treated as not-visible). LOW fragility: a rebase that reverts the guard just re-surfaces the assertion (console noise, not a crash - the throw is caught by the contribution harness); re-pin check: the guard is `=== null \|\| === undefined` (or equivalent `== null`). |
+
+Why a core patch (not the fork's usual additive route): there is **no** public API to deregister a
+`registerWorkbenchContribution2` contribution, so the leaking `ChatForegroundSessionCountContribution`
+cannot be unregistered from our own module. The two candidate patch sites were (a) guarding the upstream
+chat file - narrow but sits in a heavily-churned file - or (b) the shared views seam. Site (b) is the
+**root-cause** fix (the defect is the strict-null guard missing `undefined`), lives in a stable method,
+fails safe, and benefits every hidden-container caller, so it carries less merge tax than repeatedly
+re-pinning a guard inside the chat file. **New core-patch count: 6 total (was 5, post-#173 sash revert).**
+
+Not fixed (out of scope, noted): the known pre-existing Extensions-container boot noise
+(`viewsExtensionPoint` registering views into the deregistered `workbench.view.extensions` container ->
+`Cannot read properties of undefined (reading 'id'/'extensionId')`) is a **different** root cause than K2
+and is tracked separately in the 1.127.0 merge log above; bundle K does not touch it.
