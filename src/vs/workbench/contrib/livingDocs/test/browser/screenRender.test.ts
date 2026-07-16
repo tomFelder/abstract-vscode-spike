@@ -597,7 +597,7 @@ suite('livingDocs screenRender', () => {
 
 	test('a pending sign-in shows the "waiting for your browser" state, and an error shows plain-words copy', () => {
 		const pending = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'pending' });
-		assert.ok(/waiting for your browser/i.test(pending), 'the pending state tells the user to complete sign-in in the browser');
+		assert.ok(/Waiting for you to finish signing in/i.test(pending), 'the pending state tells the user to complete sign-in in the browser');
 		const errored = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'error', signInError: 'Sign-in did not complete - please try again.' });
 		assert.ok(errored.includes('Sign-in did not complete'), 'a sign-in error is surfaced in plain words');
 	});
