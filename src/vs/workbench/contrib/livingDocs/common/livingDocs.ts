@@ -69,6 +69,28 @@ export interface IModelProviderStatus {
 	readonly dailyTotalUsd?: number;
 }
 
+/**
+ * One model the active backend can drive, for the composer's model picker (issue #179). `id` is the upstream
+ * model id the broker sends; `label` is the product-facing name shown in the dropdown (e.g. "Included model",
+ * or the ChatGPT tiers "Sol"/"Terra"/"Luna"); `isDefault` marks the backend's fallback, the one a request
+ * lands on when it carries no (or a stale) selection. Read from the broker's /models endpoint.
+ */
+export interface IModelOption {
+	readonly id: string;
+	readonly label: string;
+	readonly isDefault: boolean;
+}
+
+/**
+ * The model catalogue for the current backend (issue #179): which backend it is (so the renderer can key its
+ * per-backend persisted selection), and the models that backend offers. A single included model for the
+ * openrouter tier; the subscription's models for openai-oauth. Empty models means the picker renders nothing.
+ */
+export interface IModelCatalogue {
+	readonly backend: string;
+	readonly models: readonly IModelOption[];
+}
+
 /** The stage of the "Sign in with ChatGPT" flow the Settings step polls (plan 35 iter 2 + 4). */
 export type ChatGptSignInStage = 'signed-out' | 'pending' | 'signed-in' | 'error';
 
@@ -507,6 +529,16 @@ export interface ILivingDocsService {
 	isModelReachable(): Promise<boolean>;
 	/** The current model door + usage snapshot for the Settings provider step (reads the proxy's /healthz). */
 	getModelProviderStatus(): Promise<IModelProviderStatus>;
+	/**
+	 * The models the active backend can drive, for the composer's picker (issue #179). Cached per backend and
+	 * fetched cheaply from the broker's /models (on backend change or first read, never on every healthz poll).
+	 * Returns an empty catalogue when the broker is unreachable; the composer degrades to no picker, never errors.
+	 */
+	getModelCatalogue(): Promise<IModelCatalogue>;
+	/** The id of the model currently selected for the active backend (its default until the user picks one). */
+	getSelectedModelId(): Promise<string | undefined>;
+	/** Persist the user's model choice for the active backend (issue #179); subsequent calls carry it. */
+	setSelectedModelId(modelId: string): Promise<void>;
 	/** Begin "Sign in with ChatGPT": returns the authorize URL to open in a browser (or undefined on failure). */
 	startChatGptSignIn(): Promise<string | undefined>;
 	/** Poll the sign-in flow's stage while the Settings step waits for the browser round-trip to complete. */

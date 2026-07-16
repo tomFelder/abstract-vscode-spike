@@ -22,7 +22,7 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { IChatMessage, IChatStep, ILivingDocsService, ISkillCheck, ModelReadiness } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelReadiness } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
@@ -78,6 +78,11 @@ export class ReviewRailView extends ViewPane {
 	// The truthful broker readiness (issue #170): the composer status line MUST reflect /healthz, never claim
 	// "Using the included model" when the broker is down or no backend is wired. Undefined until first fetch.
 	private _readiness: ModelReadiness | undefined;
+	// The model picker (issue #179): the active backend's models and the selected id, fetched cheaply from the
+	// service (which caches /models) and refreshed alongside the sign-in state. The composer renders a compact
+	// dropdown from these; empty models -> no picker. Undefined until the first fetch resolves.
+	private _models: readonly IModelOption[] | undefined;
+	private _selectedModelId: string | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -179,9 +184,17 @@ export class ReviewRailView extends ViewPane {
 	private async _refreshSignedIn(): Promise<void> {
 		try {
 			const status = await this._livingDocs.getModelProviderStatus();
-			if (this._signedIn !== status.signedIn || this._readiness !== status.readiness) {
+			// The model catalogue + selection for the picker (issue #179). Fetched from the service, which caches
+			// /models, so this is cheap on a repeated render; only a real change (backend switch, first fetch, a new
+			// selection) re-renders the composer. Read together with the status so one probe refreshes both.
+			const models = await this._livingDocs.getModelCatalogue();
+			const selected = await this._livingDocs.getSelectedModelId();
+			const modelsChanged = JSON.stringify(this._models ?? null) !== JSON.stringify(models.models) || this._selectedModelId !== selected;
+			if (this._signedIn !== status.signedIn || this._readiness !== status.readiness || modelsChanged) {
 				this._signedIn = status.signedIn;
 				this._readiness = status.readiness;
+				this._models = models.models;
+				this._selectedModelId = selected;
 				this._render();
 			}
 		} catch {
@@ -849,6 +862,10 @@ export class ReviewRailView extends ViewPane {
 			input.focus();
 		}));
 
+		// The model picker (issue #179): a compact dropdown of the active backend's models, rendered even when
+		// only one model exists so the surface is consistent across the included tier and a signed-in ChatGPT.
+		this._renderModelPicker(bar);
+
 		const busy = !!doc && this._livingDocs.isChatBusy(doc);
 		const submit = () => {
 			if (!doc || busy) { return; }
@@ -881,6 +898,45 @@ export class ReviewRailView extends ViewPane {
 
 		// Keep the cursor in the composer across the re-render that each message triggers.
 		if (doc && !busy) { input.focus(); }
+	}
+
+	// The model picker (issue #179): a compact dropdown in the composer footer listing the active backend's
+	// models, sitting beside the +Skill / @Mention chips. Renders only once the catalogue has resolved (nothing
+	// flashes before we know the truth), and renders EVEN when only one model exists so the surface is consistent
+	// between the included tier (one "Included model") and a signed-in ChatGPT (its several tiers) - single-model
+	// case is styled inert (disabled) since there is nothing to choose. Changing the selection persists it per
+	// backend via the service; the broker validates the id and falls back to its default, so a pick never 500s a
+	// call. A native <select> keeps it keyboard-accessible and visually consistent with the rail's quiet chips.
+	private _renderModelPicker(bar: HTMLElement): void {
+		const models = this._models;
+		// Undefined = not yet fetched: render nothing to avoid a flash before the catalogue resolves. An empty
+		// list (broker unreachable) also renders nothing - the composer degrades to no picker, never an error.
+		if (!models || !models.length) { return; }
+
+		const single = models.length === 1;
+		const select = append(bar, $('select')) as HTMLSelectElement;
+		// Quiet chip styling to match the +Skill / @Mention buttons: slate text, hairline border, 8px radius.
+		select.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:4px 6px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer;max-width:120px';
+		select.title = single ? 'The model serving your calls' : 'Choose the model for your calls';
+		if (single) {
+			// One model: inert (disabled) - there is nothing to choose, but the picker still shows for consistency.
+			select.disabled = true;
+			select.style.cursor = 'default';
+			select.style.opacity = '0.7';
+		}
+		for (const model of models) {
+			const opt = append(select, $('option')) as HTMLOptionElement;
+			opt.value = model.id;
+			opt.textContent = model.label;
+			if (model.id === this._selectedModelId) { opt.selected = true; }
+		}
+		if (!single) {
+			this._renderDisposables.add(addDisposableListener(select, 'change', () => {
+				const id = select.value;
+				this._selectedModelId = id;
+				void this._livingDocs.setSelectedModelId(id);
+			}));
+		}
 	}
 
 	// The working-set row in the composer: the documents a single instruction fans out across (plan 18).
