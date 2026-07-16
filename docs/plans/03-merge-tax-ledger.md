@@ -424,3 +424,11 @@ arbitrary URLs (local/inlined `data:` images still render); and (b) races the wh
 20 s deadline, destroying the hidden window on timeout so a stalled page or wedged print can never leave the
 command pending. Both are contained inside the existing `printToPDF` impl and stay fail-soft (any failure
 still returns `undefined`).
+
+### Rail-header round (issue #176, Bundle G): 0 core patches
+
+| Item | Change | Tier | File(s) | Note |
+|------|--------|------|---------|------|
+| 176-1 | **Un-strand the aux-bar composite-title hide (issue #176):** re-key the existing `.part.auxiliarybar > .composite.title { display:none }` rule from the dead `.style-override-studio` class to `.style-override` (the class the `StyleOverridesContribution` actually toggles). The rule was already in the ledger's LOW/fail-soft seam list but was inert because its selector referenced a class nothing sets. Once matched, VS Code's outer aux-bar header ("REVIEW" label + Maximize Secondary Side Bar toolbar) is hidden, so the product's own Chat / Review / History tab strip is the rail's only header | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | Appearance-only, fail-soft. This is the SAME re-key that PR #186 (fix/172-173) applies to every studio.css rule; this hunk is byte-identical to #186's so a 3-way merge auto-resolves in either order. #176's *visible* fix additionally needs `modernUI: true` (off by default on main; defaulted-on by #186), so the header only disappears once #186 lands. Registration is untouched (`reviewRailView.ts` and `livingDocs.contribution.ts` unchanged), so no collision with PRs #183/#185. No core edit. |
+
+**Accessibility:** hiding the composite header drops its on-screen maximize button, but the command `workbench.action.toggleMaximizedAuxiliaryBar` keeps `f1: true` + its keybinding, so maximize/restore stays keyboard- and palette-reachable; the tab strip is built from focusable `<button>` elements with text labels, so the rail keeps a screen-reader/keyboard entry point. Verified live: `compositeTitleVisible: false`, tab strip flush at the rail top (1px gap, no clipping), tabs switch (`docs/qa/2026-07-16-bundle-g/`).

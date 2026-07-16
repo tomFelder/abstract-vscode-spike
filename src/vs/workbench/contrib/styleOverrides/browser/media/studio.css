@@ -30,7 +30,7 @@
 
 /* The native auxiliary-bar composite title ("Review" + maximize). The Studio right panel renders
  * its own Chat / Review / History tab strip instead. */
-.style-override-studio .part.auxiliarybar > .composite.title {
+.style-override .part.auxiliarybar > .composite.title {
 	display: none !important;
 }
 
