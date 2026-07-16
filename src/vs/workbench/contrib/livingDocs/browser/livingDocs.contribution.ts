@@ -138,6 +138,18 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'workbench.activityBar.location': 'hidden',
 		'workbench.editor.showTabs': 'none',
 		'breadcrumbs.enabled': false,
+		// (issue #180) -- pin the workbench to the light Abstract palette for beta. VS Code inherits a DARK
+		// default theme, which leaked in three ways: the native title bar + notification toasts rendered dark,
+		// the tree-rail (its CSS reads `--vscode-*` theme vars) rendered dark in folder windows, and the doc
+		// editor's webview default styles painted `blockquote{background:var(--vscode-textBlockQuote-background)}`
+		// a dark panel (the webview host's `_defaultStyles`, `vs/workbench/contrib/webview/browser/pre/index.html`).
+		// Defaulting `workbench.colorTheme` to the fork's own light theme ("Abstract", uiTheme `vs`) resolves every
+		// `--vscode-*` var to the light design-system palette in ONE move. `window.autoDetectColorScheme` is pinned
+		// off so the app stays light even when the OS is in dark mode (beta ships light only). Both are real,
+		// user-overridable settings, so this stays an ADDITIVE contribution (no core patch). The calm chrome has no
+		// theme-picker affordance and the command palette is already neutralised, so there is no user-facing toggle.
+		'workbench.colorTheme': 'Abstract',
+		'window.autoDetectColorScheme': false,
 		// iter 2 -- kill the cold-launch noise + trust leaks
 		'security.workspace.trust.enabled': false,
 		'workbench.welcomePage.experimentalOnboarding': false,
