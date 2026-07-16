@@ -138,24 +138,67 @@ suite('treeRail', () => {
 	});
 
 	test('buildOutline returns headings in order (living OR plain doc), stripped of Markdown/bind syntax, with a stable headingIndex that skips blank headings', () => {
-		// A PLAIN Markdown document (isLiving: false) still gets a full outline (issue #181): the Outline tab
-		// only needs the parsed heading blocks, not source bindings. A blank heading is not shown as a row but
-		// DOES advance headingIndex, so each entry's index still lines up with the Nth rendered `<hN>`.
-		const d: ILivingDoc = {
-			...doc('Notes', [], 'body'), isLiving: false, blocks: [
-				{ id: 'h0', type: 'heading', text: '# Weekly Operating Summary', level: 1, binds: [] },
-				{ id: 'h1', type: 'heading', text: '## [Highlights](bind:x)', level: 2, binds: [] },
-				{ id: 'p0', type: 'paragraph', text: 'Prose in between.', binds: [] },
-				{ id: 'h2', type: 'heading', text: '##   ', level: 2, binds: [] },
-				{ id: 'h3', type: 'heading', text: '## Key metrics', level: 2, binds: [] },
-			]
-		};
+		// A PLAIN Markdown document (isLiving: false) still gets a full outline (issue #181). The outline is
+		// derived from the RAW body the editor renders, so a blank ATX heading (`##` with no text) is not shown
+		// as a row but STILL advances headingIndex, keeping each entry lined up with the Nth rendered `<hN>`.
+		const body = [
+			'# Weekly Operating Summary',
+			'',
+			'## [Highlights](bind:x)',
+			'',
+			'Prose in between.',
+			'',
+			'##   ',
+			'',
+			'## Key metrics',
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Notes', [], body), isLiving: false, blocks: [] };
 		assert.deepStrictEqual(buildOutline(d), [
 			{ text: 'Weekly Operating Summary', level: 1, headingIndex: 0 },
 			{ text: 'Highlights', level: 2, headingIndex: 1 },
 			{ text: 'Key metrics', level: 2, headingIndex: 3 },
 		]);
 		assert.deepStrictEqual(buildOutline(undefined), []);
+	});
+
+	test('buildOutline counts setext + blockquote-nested headings so its indices match the rendered <hN> ordinals (issue #181 regression)', () => {
+		// The DOM the Outline scrolls is rendered by prosemirror-markdown (markdown-it) from the raw body, which
+		// renders SETEXT headings (`Title` underlined by `===`/`---`) and headings nested in a BLOCKQUOTE as real
+		// `<hN>` elements. The old outline counted only single-line ATX headings, so every ordinal after a setext
+		// or blockquote heading drifted and Outline clicks scrolled to the WRONG heading. Deriving the outline
+		// from the same body scan makes the ordinals line up 1:1. `---` after a blank line is a thematic break,
+		// NOT a setext underline, and a fenced code block's `# ...` line is not a heading - both excluded, so the
+		// count matches the DOM exactly. Against the pre-fix (block-ordinal) code the indices would read
+		// 0/1/2/3 and the setext/blockquote headings would be missing entirely, so this asserts the fix.
+		const body = [
+			'Alpha Setext Title',    // rendered <h1> #0 (setext, underlined below)
+			'==================',
+			'',
+			'## Bravo',              // rendered <h2> #1 (ATX)
+			'',
+			'> # Quoted Charlie',    // rendered <h1> #2 (heading inside a blockquote)
+			'',
+			'```',
+			'# Not A Heading',       // inside a fence: NOT rendered as a heading
+			'```',
+			'',
+			'Delta Setext',          // rendered <h2> #3 (setext, `-` underline after content)
+			'------------',
+			'',
+			'---',                   // thematic break (blank line before): NOT a heading
+			'',
+			'### Echo',              // rendered <h3> #4 (ATX)
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Mixed', [], body), isLiving: false, blocks: [] };
+		assert.deepStrictEqual(buildOutline(d), [
+			{ text: 'Alpha Setext Title', level: 1, headingIndex: 0 },
+			{ text: 'Bravo', level: 2, headingIndex: 1 },
+			{ text: 'Quoted Charlie', level: 1, headingIndex: 2 },
+			{ text: 'Delta Setext', level: 2, headingIndex: 3 },
+			{ text: 'Echo', level: 3, headingIndex: 4 },
+		]);
 	});
 
 	test('searchTreeRail matches title or body case-insensitively with a snippet, and ignores blank queries', () => {

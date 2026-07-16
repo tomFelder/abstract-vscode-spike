@@ -66,7 +66,7 @@ export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupp
 	const ext = dot >= 0 ? lower.slice(dot + 1) : '';
 	if (!ext) { return undefined; }
 	if (SOURCE_EXTS.has(ext)) { return { kind: 'source' }; }
-	// Spreadsheets + PDFs are usable sources, not dead "not yet imported" rows (issue #131, doc 22 §4): a
+	// Spreadsheets + PDFs are usable sources, not dead "not yet imported" rows (issue #131, doc 22 section 4): a
 	// workbook offers "Use as source" (sheets -> CSVs), a PDF offers "Use as source" (text -> read-only context).
 	const action = SOURCE_ACTIONS[ext];
 	if (action) { return { kind: 'source', action }; }
@@ -184,27 +184,102 @@ export interface IOutlineEntry {
 	readonly text: string;
 	readonly level: number;
 	/**
-	 * The heading's zero-based ordinal among ALL heading blocks in document order. The editor's ProseMirror
-	 * surface renders one `<h1..h6>` per heading block in the same order, so this index is the anchor the
-	 * Outline tab uses to scroll the surface to a clicked heading (issue #181) - no drifting text/slug match.
-	 * Counts every heading (even a blank one that is not shown as a row) so it lines up with the rendered DOM.
+	 * The heading's zero-based ordinal among the headings the editor actually RENDERS, in document order. The
+	 * ProseMirror surface (prosemirror-markdown / markdown-it over `doc.body`) emits one `<h1..h6>` per
+	 * rendered heading, so this index is the anchor the Outline tab uses to scroll the surface to a clicked
+	 * heading (issue #181) - `revealHeading` selects the Nth `<hN>` by this index, no drifting text/slug match.
 	 */
 	readonly headingIndex: number;
 }
 
-const HEADING_PREFIX_RE = /^#{1,6}\s+/;
 const BIND_LINK_RE = /\[([^\]]*)\]\(bind:[^)\s]+\)/g;
+const FENCE_RE = /^ {0,3}(?<fence>`{3,}|~{3,})/;
+const ATX_RE = /^ {0,3}(?<hashes>#{1,6})(?:[ \t]+(?<text>.*?))?(?:[ \t]+#+)?[ \t]*$/;
+const SETEXT_UNDERLINE_RE = /^ {0,3}(?<underline>=+|-+)[ \t]*$/;
+const BLOCKQUOTE_RE = /^ {0,3}(?:> ?)+/;
+const BLANK_RE = /^[ \t]*$/;
 
-/** The Outline-tab entries: the document's headings in order, stripped of Markdown syntax. */
+/** One rendered heading found by scanning the raw body the ProseMirror surface renders. */
+interface IScannedHeading {
+	readonly level: number;
+	/** The heading's raw inline text (ATX body or setext line), before bind-link/whitespace cleanup. */
+	readonly text: string;
+}
+
+/**
+ * Scan the raw Markdown body for the headings the ProseMirror surface (markdown-it / prosemirror-markdown)
+ * actually renders as `<h1..h6>`, in document order. This is the SAME set the webview's `revealHeading`
+ * scrolls against, so an entry's ordinal in this list lines up 1:1 with the Nth rendered `<hN>` (issue #181).
+ *
+ * It recognises exactly what CommonMark (markdown-it's default) renders as a heading, and no more:
+ *   - ATX headings (`#`..`######`), up to three leading spaces, optional closing `#`s;
+ *   - setext headings (a non-blank text line immediately underlined by `===`/`---`);
+ *   - headings nested in a blockquote (the `>` markers are stripped, then the line is re-tested).
+ * Fenced code blocks (```` ``` ````/`~~~`) are skipped wholesale, since their contents are not parsed as
+ * Markdown - matching the surface, so both sides count the same headings and no index can drift.
+ *
+ * The custom block parser in `livingDocMarkdown.ts` recognised only single-line ATX headings, so its
+ * ordinals drifted from the DOM the moment a setext or blockquote-nested heading appeared; deriving the
+ * outline from this shared scan kills that two-parser divergence at its source.
+ */
+function scanRenderedHeadings(body: string): IScannedHeading[] {
+	const headings: IScannedHeading[] = [];
+	const lines = body.split(/\r?\n/);
+	let fence: string | undefined;
+	let prevContent: string | undefined;
+	for (const rawLine of lines) {
+		// Inside a fenced code block, only its matching closing fence ends it; nothing else is a heading.
+		if (fence !== undefined) {
+			const close = FENCE_RE.exec(rawLine);
+			if (close && close.groups!.fence[0] === fence[0] && close.groups!.fence.length >= fence.length) {
+				fence = undefined;
+			}
+			prevContent = undefined;
+			continue;
+		}
+		// A blockquote-nested heading renders too: strip the `>` markers, then judge the inner line.
+		const line = rawLine.replace(BLOCKQUOTE_RE, '');
+
+		const openFence = FENCE_RE.exec(line);
+		if (openFence) {
+			fence = openFence.groups!.fence;
+			prevContent = undefined;
+			continue;
+		}
+
+		const atx = ATX_RE.exec(line);
+		if (atx) {
+			headings.push({ level: atx.groups!.hashes.length, text: (atx.groups!.text ?? '').trim() });
+			prevContent = undefined;
+			continue;
+		}
+
+		const underline = SETEXT_UNDERLINE_RE.exec(line);
+		if (underline && prevContent !== undefined) {
+			// A setext heading: the previous content line underlined by `=` (h1) or `-` (h2).
+			headings.push({ level: underline.groups!.underline[0] === '=' ? 1 : 2, text: prevContent.trim() });
+			prevContent = undefined;
+			continue;
+		}
+
+		prevContent = BLANK_RE.test(line) ? undefined : line;
+	}
+	return headings;
+}
+
+/**
+ * The Outline-tab entries: the document's rendered headings in order, stripped of Markdown/bind syntax.
+ * Derived from `doc.body` via the same heading scan the editor surface renders against, so each entry's
+ * `headingIndex` is the exact ordinal of its `<hN>` in the DOM the Outline scrolls (issue #181).
+ */
 export function buildOutline(doc: ILivingDoc | undefined): IOutlineEntry[] {
 	if (!doc) { return []; }
 	const entries: IOutlineEntry[] = [];
 	let headingIndex = 0;
-	for (const block of doc.blocks) {
-		if (block.type !== 'heading') { continue; }
-		const text = block.text.replace(HEADING_PREFIX_RE, '').replace(BIND_LINK_RE, '$1').trim();
-		if (text) { entries.push({ text, level: block.level ?? 1, headingIndex }); }
-		// Advance for EVERY heading block, shown or not, so the index tracks the rendered `<hN>` ordinal.
+	for (const heading of scanRenderedHeadings(doc.body)) {
+		const text = heading.text.replace(BIND_LINK_RE, '$1').trim();
+		if (text) { entries.push({ text, level: heading.level, headingIndex }); }
+		// Advance for EVERY rendered heading, shown as a row or not, so the index tracks the `<hN>` ordinal.
 		headingIndex++;
 	}
 	return entries;
