@@ -37,11 +37,13 @@ export interface IEditorWebviewState {
 	readonly pmBody: string | undefined;
 	readonly pendingContent: IEditorRenderContent | undefined;
 	readonly pendingFocusChangeId: string | undefined;
+	/** An Outline reveal target (heading ordinal) held until the body is live, then scrolled to (issue #181). */
+	readonly pendingRevealHeadingIndex: number | undefined;
 }
 
 /** The fresh state for a newly-created webview (a new input, before its first render). */
 export function initialEditorWebviewState(): IEditorWebviewState {
-	return { initialized: false, ready: false, pmBody: undefined, pendingContent: undefined, pendingFocusChangeId: undefined };
+	return { initialized: false, ready: false, pmBody: undefined, pendingContent: undefined, pendingFocusChangeId: undefined, pendingRevealHeadingIndex: undefined };
 }
 
 /**
@@ -58,7 +60,8 @@ export type EditorWebviewEffect =
 	| { readonly kind: 'setHtml' }
 	| { readonly kind: 'postRender'; readonly html: string; readonly pmMd: string | null; readonly pmDeco: unknown; readonly pmReset: string | undefined }
 	| { readonly kind: 'holdPending' }
-	| { readonly kind: 'postFocus'; readonly id: string };
+	| { readonly kind: 'postFocus'; readonly id: string }
+	| { readonly kind: 'postRevealHeading'; readonly headingIndex: number };
 
 export interface IEditorWebviewStep {
 	readonly state: IEditorWebviewState;
@@ -131,8 +134,12 @@ export function applyReady(state: IEditorWebviewState): IEditorWebviewStep {
 	if (state.pendingFocusChangeId) {
 		effects.push({ kind: 'postFocus', id: state.pendingFocusChangeId });
 	}
+	// The body's headings are now laid out; scroll to any Outline reveal target held before ready (#181).
+	if (state.pendingRevealHeadingIndex !== undefined) {
+		effects.push({ kind: 'postRevealHeading', headingIndex: state.pendingRevealHeadingIndex });
+	}
 	return {
-		state: { ...state, ready: true, pendingContent: undefined, pendingFocusChangeId: undefined },
+		state: { ...state, ready: true, pendingContent: undefined, pendingFocusChangeId: undefined, pendingRevealHeadingIndex: undefined },
 		effects,
 	};
 }
@@ -147,4 +154,17 @@ export function applyFocusRequest(state: IEditorWebviewState, changeId: string):
 		return { state, effects: [{ kind: 'postFocus', id: changeId }] };
 	}
 	return { state: { ...state, pendingFocusChangeId: changeId }, effects: [] };
+}
+
+/**
+ * Apply an Outline reveal request (issue #181): scroll the editor's ProseMirror surface to the heading at
+ * `headingIndex` (its ordinal among all heading blocks). When the webview is already ready the reveal is
+ * posted immediately; otherwise it is HELD and flushed on ready, since the headings must be laid out before
+ * one can be scrolled to. Navigate-only, mirroring `applyFocusRequest`.
+ */
+export function applyRevealHeading(state: IEditorWebviewState, headingIndex: number): IEditorWebviewStep {
+	if (state.ready) {
+		return { state, effects: [{ kind: 'postRevealHeading', headingIndex }] };
+	}
+	return { state: { ...state, pendingRevealHeadingIndex: headingIndex }, effects: [] };
 }

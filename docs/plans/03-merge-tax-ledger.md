@@ -153,11 +153,13 @@ small, additive-in-spirit (remove a default, add an opt-in lock), and product-co
 |---|--------|------|------|--------------------------|
 | 1 | Remove the command-palette keybinding + palette listing (`ShowAllCommandsAction`: drop `keybinding` Cmd/Ctrl+Shift+P/F1, set `f1:false`; drop 3 now-unused imports) | `src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts` | **core-patch** | LOW / fails *soft* (a rebase that restores the field just re-adds a keybinding - cosmetic regression, re-drop it). The command still exists for programmatic callers. |
 | 2 | Remove the Quick Open (Go to File) keybinding (`workbench.action.quickOpen`: drop `keybinding` Cmd/Ctrl+P, Cmd/Ctrl+E, set `f1:false`) so command mode (the `>` prefix) is unreachable | `src/vs/workbench/browser/actions/quickAccessActions.ts` | **core-patch** | LOW / fails *soft*. `globalQuickAccessKeybinding` is retained (still used by the in-picker navigate rules). |
-| 3 | Global sash lock: `lockAllSashes()` coerces every `Sash` to `SashState.Disabled` (no user-draggable layout dividers); called once from a `BlockRestore` workbench contribution | `src/vs/base/browser/ui/sash/sash.ts` (+ call site in `livingDocs.contribution.ts`, additive) | **core-patch** | LOW / fails *soft* (a rebase dropping the flag just re-enables dragging - cosmetic). Sticky + global by design; never unlocked. NOTE: do not call `lockAllSashes()` from a unit test - it would leak into splitview/grid tests in the same VM. Verified live (0 of 7 sashes draggable), not by unit test. |
+| 3 | ~~Global sash lock: `lockAllSashes()` coerces every `Sash` to `SashState.Disabled`~~ | ~~`src/vs/base/browser/ui/sash/sash.ts`~~ | ~~core-patch~~ **REMOVED** | **REVERTED (issue #173, bundle-c).** The global sash lock made every rail non-resizable, which users read as broken, not calm. `sash.ts` is now byte-identical to upstream stock (the whole `globalSashesLocked` / `liveSashes` / `lockAllSashes` machinery is gone), and `LockLayoutSashesContribution` is deleted from `livingDocs.contribution.ts`. Rail resizing is now governed by the stock part-level minimum widths (170px) with no maximum; the 264/392 defaults are seeded ONCE per profile by `RailVisibilityContribution` (first-run only, storage-backed) and the workbench persists the user's dragged width natively thereafter. **Core-patch count: 3 -> 2 in v3, 5 -> 4 total.** |
 
 All three remove/neutralise an *affordance* rather than re-architecting core; each fails toward *showing
 IDE optionality* on a bad rebase, so re-pin them in the G4 checklist. **G4 now FULLY passes** (palette
-keybindings dead: Cmd+Shift+P / F1 / Cmd+P all no-op; 0 draggable sashes) - verified live, iter 2.
+keybindings dead: Cmd+Shift+P / F1 / Cmd+P all no-op) - verified live, iter 2. (The sash-lock half of
+this G4 claim was later REVERTED for issue #173: rails are draggable again by design - see the
+struck-through row 3 above and the bundle-c section below.)
 
 ### v6 chat-on-document loop (plan 14) iter 1 — settle + prove: still 0 added core patches
 
@@ -209,8 +211,10 @@ edit.
 | 25-2b | Account + settings styled + confirmed pinned bottom (reverses 25.1's hide of them) | styleOverrides-CSS | `styleOverrides/browser/media/studio.css` | The core `GlobalCompositeBar` already renders them as `.content`'s last child, floated down by the core `.composite-bar{margin-bottom:auto}` — CSS only styles them (44px, faint glyph, no label). Functionality untouched. No core edit. |
 | 25-2c | **Nav tidy (W1/D25-C):** deregister the Explorer container; hide the Workspace container's activity-bar icon (keep the container) | additive-contribution + styleOverrides-CSS | `livingDocs/browser/livingDocs.contribution.ts` (`+'workbench.view.explorer'` in `IDE_VIEW_CONTAINER_IDS`), `styleOverrides/browser/media/studio.css` (`:has(codicon-living-docs-workspace){display:none}`) | **Revises decision 42 / ledger row V6-1** (which had re-added the Explorer icon). Uses the existing `HideIdeContainersContribution` for Explorer (public registry `deregisterViewContainer`) — so the Explorer now rejoins the HIGH-risk "fails-unsafely on id rename" set (see note below). The Workspace icon is hidden by CSS only; its container stays `isDefault`, so the 264px tree-rail is unaffected (verified live). No core edit. |
 | 25-2d | Minors from 25.1 review: (M1) distinct `livingDocs.editorIcon` NLS key for the Editor icon; (M3) drop the `_register(...)` wrapper on the fire-and-forget `disposableTimeout` in `editorNavLauncherView` (was leaking one dead disposable per visibility change) | our-surface | `livingDocs/browser/livingDocs.contribution.ts`, `livingDocs/browser/editorNavLauncherView.ts` | Correctness/hygiene only. No core edit. |
+| 172-a | **Restore the labelled icon-nav (issue #172):** drop the `'workbench.activityBar.location': 'hidden'` config default so the 76px nav renders in folder windows | additive-contribution | `livingDocs/browser/livingDocs.contribution.ts` | The activity bar is the fork's labelled icon-nav; hiding it stranded folder windows with no navigation. Real user-overridable setting. No core edit. |
+| 172-b | **Fix the dead studio styling seam (issue #172):** `studio.css` was gated on `.style-override-studio`, a class nothing sets — the upstream style-override refactor (#322532) consolidated every module to a single `.style-override` class but this fork file was left behind, so the labelled nav / chrome removal / Workspace-icon hide were all inert. Re-key studio.css to `.style-override` and default `workbench.experimental.modernUI: true` so the StyleOverridesContribution actually applies it | our-surface (CSS) + additive-contribution (config default) | `styleOverrides/browser/media/studio.css`, `livingDocs/browser/livingDocs.contribution.ts` | studio.css is fork-authored (Item C), so re-keying it is not a core patch. `modernUI` is a real user-overridable setting. Verified live: five labelled nav items render, Workspace icon hidden, active chip tracks the surface. No core edit. **Re-pin check:** if a future upstream sync renames the toggle class again, re-key studio.css to match the other module CSS files. |
 
-**Core-patch count is unchanged by plan 25 iter 2: still 5 total.** The C1 finish (chip + pins + tidy)
+**Core-patch count is unchanged by plan 25 iter 2: still 5 total at that time** (later reduced to **4** when issue #173 reverted the sash lock — see the authoritative count in the section below). The C1 finish (chip + pins + tidy)
 rode entirely on styleOverrides CSS + two small additive contributions. **Greenfield evidence (Q3):**
 the whole labeled-nav row (plan 25, the item flagged as most likely to need core work) landed across two
 iterations at **0 new core patches**. The residual coupling it adds is the codicon-class DOM reach
@@ -278,7 +282,7 @@ exit 0 = all shell seams intact; exit 1 names the broken seam(s) to re-pin per t
 per-PR validation alongside `npm run typecheck-client` and `npm run valid-layers-check` for any change that
 touches the de-IDE seams.
 
-## Core-patch count: **7 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + **1 in plan 40 export round** (A2-1 native `printToPDF`) + **1 in bundle K** (issue #182 K2: nullish-guard in `ViewsService.getActiveViewPaneContainer`) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
+## Core-patch count: **6 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **2 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding; the sash lock was REVERTED for issue #173, see the struck-through row above) + **1 in plan 40 export round** (A2-1 native `printToPDF`) + **1 in bundle K** (issue #182 K2: nullish-guard in `ViewsService.getActiveViewPaneContainer`) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
@@ -358,7 +362,7 @@ Re-pin result per seam - nothing needed hand-editing; verified post-merge:
 | activity-bar width 76 (`activitybarPart.ts` + guard test) | no | intact (const 76; test 14/14 pass) |
 | palette keybinding removed (`commandsQuickAccess.ts`) | no | intact (`f1: false`) |
 | quick-open keybinding removed (`quickAccessActions.ts`) | no | intact (`f1: false`) |
-| sash lock (`sash.ts` + call site) | no | intact (`lockAllSashes`) |
+| ~~sash lock (`sash.ts` + call site)~~ | n/a | **REMOVED (issue #173)** - `sash.ts` reverted to upstream stock; no longer a seam to re-pin |
 | contrib imports (`workbench.common.main.ts`) | yes (+4, 2 hunks at L145/L392) | **auto-merged** - our livingDocs (L304) + styleOverrides (L342) preserved alongside upstream's agentHostConnectionsService + onboarding imports |
 | HIGH-risk deregister list (explorer/search/scm/debug/extensions) | no | all 5 `VIEWLET_ID` consts still resolve to the exact strings; icons did NOT reappear (verified live) |
 | theme manifest (`theme-defaults/package.json`) | no | intact |
@@ -397,7 +401,7 @@ reach for the nav chip/tidy, fails-soft/cosmetic on rename), not behavioural for
 | I6 | `jszip@3.10.1` promoted to a direct dependency (review fix) | dependency | `package.json`, `package-lock.json` | The proxy's `detectDocxFidelity` calls `require('jszip')` directly; it was only transitively hoisted via mammoth, so a stricter install could silently drop fidelity detection. Declaring it directly makes that path robust. Same runtime-only footprint as mammoth |
 
 **A1 docx import: 0 core patches.** The whole feature lives in the `livingDocs` contribution + our node proxy, plus two pure-JS npm dependencies (mammoth + jszip) that only the proxy loads at runtime - so the merge tax is two additive lines in `package.json`, not a fork of any upstream file. Verified: `typecheck-client` 0; `valid-layers-check` 0 in changed files; the conversion pipeline exercised end-to-end against a real `.docx` through the live proxy (`docs/plans/40-verify/a1-import/`).
-### Export round (plan 40, A2 - issue #130): +1 core patch (count 5 -> 6)
+### Export round (plan 40, A2 - issue #130): +1 core patch (count 4 -> 5, post-#173 sash revert)
 
 Unstubbing docx export and adding PDF (doc 22 §3). docx is entirely our-surface + additive: a
 zero-dependency pure-JS OOXML writer (`scripts/lwd-docx.js`) exposed through a new proxy route
@@ -415,7 +419,7 @@ takes **the one core patch of this round**:
 Why a core patch was unavoidable: `printToPDF` is a Chromium/Electron main-process API; the renderer
 cannot produce PDF bytes silently (`window.print()` opens a dialog and yields nothing). Adding one
 `getScreenshot`-shaped method to the native host is the minimal, upstream-mergeable seam. **New core-patch
-count: 6 total (was 5).**
+count: 5 total (was 4, post-#173 sash revert).**
 
 Hardening (CodeRabbit review on #162, no new patch - same A2-1 method): the offscreen print window now (a)
 runs on its own in-memory session and **denies every non-`data:` resource load** via a scoped
@@ -425,7 +429,7 @@ arbitrary URLs (local/inlined `data:` images still render); and (b) races the wh
 command pending. Both are contained inside the existing `printToPDF` impl and stay fail-soft (any failure
 still returns `undefined`).
 
-### Shell-integrity round (issue #182, bundle K - suppress IDE toasts + silence the broken chat contribution): +1 core patch (count 6 -> 7)
+### Shell-integrity round (issue #182, bundle K - suppress IDE toasts + silence the broken chat contribution): +1 core patch (count 5 -> 6, post-#173 sash revert)
 
 Two IDE leaks on the golden path (open folder inside a git repo -> open doc -> chat). Leak 1 landed
 settings-tier (0 core); leak 2 took **the one core patch of this round** - a one-line nullish-guard at the
@@ -442,7 +446,7 @@ cannot be unregistered from our own module. The two candidate patch sites were (
 chat file - narrow but sits in a heavily-churned file - or (b) the shared views seam. Site (b) is the
 **root-cause** fix (the defect is the strict-null guard missing `undefined`), lives in a stable method,
 fails safe, and benefits every hidden-container caller, so it carries less merge tax than repeatedly
-re-pinning a guard inside the chat file. **New core-patch count: 7 total (was 6).**
+re-pinning a guard inside the chat file. **New core-patch count: 6 total (was 5, post-#173 sash revert).**
 
 Not fixed (out of scope, noted): the known pre-existing Extensions-container boot noise
 (`viewsExtensionPoint` registering views into the deregistered `workbench.view.extensions` container ->

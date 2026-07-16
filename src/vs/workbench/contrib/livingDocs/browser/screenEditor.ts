@@ -757,11 +757,13 @@ export class ScreenEditor extends EditorPane {
 			case 'openExternalUrl':
 				if (message.arg) { this._openInBrowser(message.arg); }
 				break;
-			// "Use the included model": flip the proxy backend intent by re-reading status. The proxy's active
-			// backend is set at launch (LWD_BACKEND); here we simply re-assert the included tier in the UI and
-			// re-read the live door so the card reflects reality (a signed-out ChatGPT already falls back).
+			// "Use the included model" (issue #170): genuinely select the included tier. The broker serves the
+			// included/OpenRouter backend whenever the user is NOT signed in to ChatGPT, so choosing the included
+			// model means signing out of ChatGPT (which forgets the token and drops calls to the included tier),
+			// then re-reading the live door so the card reflects the real state. When already on the included tier
+			// this simply re-reads status - the button is honest either way, never a no-op that pretends.
 			case 'useIncludedModel':
-				void this._refreshSettings();
+				void this._useIncludedModel();
 				break;
 			// The onboarding survey Save: record the model_configured event locally and show the thank-you state.
 			case 'submitSurvey':
@@ -879,10 +881,10 @@ export class ScreenEditor extends EditorPane {
 	// service) and open a real folder via the existing open-folder path (1a). The folder-open reloads the
 	// workbench; the persisted step + the armed aha survive it.
 	private async _onbOpenFolder(): Promise<void> {
-		if (await this._livingDocs.openFolder()) {
+		await this._livingDocs.openFolder(() => {
 			this._livingDocs.recordOnboardingStep('first-folder');
 			this._setOnboardingStep('first-approve-own');
-		}
+		});
 	}
 
 	// Begin "Sign in with ChatGPT": ask the proxy for the authorize URL, open it in the browser, move to the
@@ -931,6 +933,19 @@ export class ScreenEditor extends EditorPane {
 		const status = await this._livingDocs.getModelProviderStatus();
 		this._state = { ...this._state, signInStage: 'signed-out', signInError: undefined, signInAuthorizeUrl: undefined, providerStatus: status };
 		this._render();
+	}
+
+	// "Use the included model" (issue #170): genuinely select the included tier rather than only re-reading
+	// status. The broker serves the included/OpenRouter backend whenever the user is not signed in to ChatGPT,
+	// so selecting the included model means signing out of ChatGPT (if signed in), then re-reading the live door.
+	// When already on the included tier this is just a status refresh, so the card always reflects real state.
+	private async _useIncludedModel(): Promise<void> {
+		const status = await this._livingDocs.getModelProviderStatus();
+		if (status.signedIn) {
+			await this._signOutChatGpt();
+			return;
+		}
+		await this._refreshSettings();
 	}
 
 	private async _submitSurvey(daily: string, subs: string, weekly: string): Promise<void> {

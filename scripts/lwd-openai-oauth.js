@@ -9,7 +9,7 @@
 // doc 18 section 2.1). It implements the Codex CLI's Authorization-Code-with-PKCE flow against
 // auth.openai.com and stores the resulting token bundle server-side so the user's own ChatGPT
 // subscription pays for their model calls. This module is PURE PLUMBING - no HTTP server, no proxy wiring;
-// scripts/lwd-anthropic-proxy.js owns the routes and calls into here. The credential lives ONLY in this
+// scripts/lwd-model-broker.js owns the routes and calls into here. The credential lives ONLY in this
 // process (decision 14): it is written to a 0600 file under ~/.abstract and is never returned to, or
 // reachable by, the renderer.
 //
@@ -51,6 +51,34 @@ const REDIRECT_PATH = '/auth/callback';
 const SCOPE = 'openid profile email offline_access';
 // The Codex model the subscription path serves by default (a capable frontier model). Overridable.
 const OPENAI_MODEL = process.env.LWD_OPENAI_MODEL || 'gpt-5-codex';
+
+// The models the "Sign in with ChatGPT" subscription can drive through the Codex Responses backend (issue
+// #179). This is a STATIC capability list, not a live enumeration: the Codex OAuth bundle we hold
+// ({access_token, refresh_token, id_token, account_id, expiry}) carries NO model-listing entitlement, and the
+// Responses backend (chatgpt.com/backend-api/codex/responses) exposes no models-list route the token is scoped
+// for - only the id_token's account claim, which names the billing account, not a model catalogue. So we ship
+// the known Codex model family here, product-labelled (the beta's "Sol / Terra / Luna" naming in issue #179),
+// mapped to the real upstream model ids the Responses call sends. `listModels()` is the seam a future live
+// enumeration slots behind unchanged: when OpenAI ships a models route the OAuth token can call, it queries
+// there and falls back to this list on any failure, so the picker is never empty and never 500s.
+// The `default` entry MUST resolve to OPENAI_MODEL so an absent/invalid selection lands on the same model the
+// backend already used before this endpoint existed (no behaviour change for a client that sends no model).
+const OPENAI_MODELS = [
+	{ id: OPENAI_MODEL, label: 'Sol', default: true },
+	{ id: 'gpt-5', label: 'Terra', default: false },
+	{ id: 'gpt-5-mini', label: 'Luna', default: false },
+];
+
+/**
+ * The models the signed-in subscription can drive (issue #179). STATIC today (see OPENAI_MODELS): the Codex
+ * OAuth token cannot enumerate models live, so this returns the known Codex family. Async + Promise-returning
+ * deliberately, so a future live query (an OpenAI models route the OAuth token is scoped for) drops in here
+ * without changing the broker's call site - it would fetch live and fall back to OPENAI_MODELS on any failure.
+ * Returns a fresh array copy so a caller can never mutate the module's list.
+ */
+async function listModels() {
+	return OPENAI_MODELS.map(m => ({ id: m.id, label: m.label, default: m.default }));
+}
 
 // The token bundle lives in its own 0600 file (see the header for why it is NOT in secrets.json).
 const STORE_DIR = path.join(os.homedir(), '.abstract');
@@ -284,6 +312,8 @@ module.exports = {
 	// endpoints / model (read by the proxy backend)
 	RESPONSES_URL,
 	OPENAI_MODEL,
+	// the subscription's model catalogue for the picker (issue #179; static today, live-query seam)
+	listModels,
 	// lifecycle
 	isSignedIn,
 	validBundle,

@@ -4,8 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -21,15 +22,103 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { IChatMessage, IChatStep, ILivingDocsService, ISkillCheck } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelReadiness } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
+import { ScreenId } from './screenRender.js';
 
 type PanelTab = 'chat' | 'review' | 'history';
 
+// The History body and the Document-Agents disclosure are built as pure HTML strings (historyHtml /
+// checksDisclosureHtml) whose entire visual language is inline `style=` on `<button>`/`<span>`/`<div>`,
+// with `data-*` hooks the click delegation reads. VS Code's Trusted Types CSP blocks a raw `innerHTML`
+// assignment, so both go through `safeSetInnerHtml`, which sanitises then resets the node. The default
+// allow-list keeps neither `<button>` nor `style`, so we augment both; `data-*` and `title` survive by
+// default. All interpolated user content (titles, labels) is already `esc()`-escaped by the builders.
+// Exported so the regression test (`reviewRailSanitize.test.ts`) exercises the REAL production config.
+export const REVIEW_RAIL_HTML_SANITIZER = Object.freeze({
+	allowedTags: { augment: ['button'] },
+	allowedAttributes: { augment: ['style'] },
+});
+
 function esc(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// How many Attach chips show before the "..." expander (#177). Four fits ~two lines in the 392px rail
+// (Overview / Architecture / What we built / Learnings for the sample corpus) - the rest collapse away
+// so the chat history reclaims the vertical space. Exported for the collapse-cap unit tests.
+export const ATTACH_COLLAPSED_CAP = 4;
+
+/**
+ * Split the mentionable file list into the chips shown while collapsed and whether a "..." expander is
+ * needed. When expanded (or when the list already fits the cap) every file is shown and no expander is
+ * added. Pure so the cap behaviour can be unit-tested without any DOM.
+ */
+export function collapseAttachChips(files: readonly string[], expanded: boolean): { shown: readonly string[]; hasMore: boolean } {
+	if (expanded || files.length <= ATTACH_COLLAPSED_CAP) {
+		return { shown: files, hasMore: files.length > ATTACH_COLLAPSED_CAP };
+	}
+	return { shown: files.slice(0, ATTACH_COLLAPSED_CAP), hasMore: true };
+}
+
+// How many suggestions the caret-anchored @mention picker shows at once (#178). Kept short so the popup
+// never overwhelms the 392px rail; the type-to-filter narrows the candidate set before this cap applies.
+export const MENTION_PICKER_LIMIT = 8;
+
+/**
+ * Filter and rank mentionable files against the partial query typed after "@" (the query excludes the
+ * "@"). A case-insensitive substring match; a prefix match ranks above a mid-string match, then shorter
+ * names, then alphabetical - so "over" surfaces "overview" before "handover-notes". Returns at most
+ * `limit` results. Pure so the ranking can be unit-tested without any DOM.
+ */
+export function filterMentions(files: readonly string[], query: string, limit: number = MENTION_PICKER_LIMIT): string[] {
+	const q = query.toLowerCase();
+	const scored: { file: string; rank: number }[] = [];
+	for (const file of files) {
+		const idx = file.toLowerCase().indexOf(q);
+		if (idx < 0) { continue; }
+		scored.push({ file, rank: idx === 0 ? 0 : 1 });
+	}
+	scored.sort((a, b) => a.rank - b.rank || a.file.length - b.file.length || a.file.localeCompare(b.file));
+	return scored.slice(0, limit).map(s => s.file);
+}
+
+/**
+ * The partial "@" mention the caret sits inside, or undefined when the caret is not in one. An active
+ * mention starts at an "@" that is at the start of the text or preceded by whitespace, runs of non-space
+ * characters up to the caret, and must not itself contain whitespace. Returns the "@" start index and the
+ * query text after it (which may be empty right after typing "@"). Pure - drives both the picker's
+ * filter and the token replacement below.
+ */
+export function activeMention(text: string, caret: number): { start: number; query: string } | undefined {
+	const upto = text.slice(0, caret);
+	const at = upto.lastIndexOf('@');
+	if (at < 0) { return undefined; }
+	if (at > 0 && !/\s/.test(text.charAt(at - 1))) { return undefined; }
+	const query = upto.slice(at + 1);
+	if (/\s/.test(query)) { return undefined; }
+	return { start: at, query };
+}
+
+/**
+ * Replace the partial "@query" the caret sits in with the chosen "@file" token, leaving the rest of the
+ * text untouched. When the caret is not in a mention the token is appended at the caret. The token gets a
+ * trailing space unless the following text already starts with whitespace (so we never double the
+ * separator). Returns the new text and the caret offset just after the inserted token so the textarea
+ * selection can be restored there. Pure so the text edit is unit-testable without a real textarea.
+ */
+export function replaceActiveMention(text: string, caret: number, file: string): { text: string; caret: number } {
+	const active = activeMention(text, caret);
+	const suffix = text.slice(caret);
+	const token = `@${file}${/^\s/.test(suffix) ? '' : ' '}`;
+	if (!active) {
+		const before = text.slice(0, caret);
+		const sep = before.length && !before.endsWith(' ') ? ' ' : '';
+		return { text: `${before}${sep}${token}${suffix}`, caret: before.length + sep.length + token.length };
+	}
+	return { text: `${text.slice(0, active.start)}${token}${suffix}`, caret: active.start + token.length };
 }
 
 // The Studio right panel: the comp's exact Chat / Review / History 3-tab surface. Chat is the agent
@@ -47,6 +136,12 @@ export class ReviewRailView extends ViewPane {
 	// "Workbench v2" comp drops the always-on panel; the agents stay reachable). Collapsed by default so the
 	// Review tab matches the comp; this remembers the open/closed state across re-renders this session.
 	private _checksExpanded = false;
+	// Whether the Attach suggestion row is expanded to the full mentionable-file list (#177). Collapsed by
+	// default each session so the chat history keeps the reclaimed room; a re-render preserves the choice.
+	private _attachExpanded = false;
+	// The live @mention picker for the current composer render (#178), or undefined while none is mounted.
+	// Rebuilt each _renderChatComposer; the textarea input/keydown handlers reach it through this field.
+	private _composerPicker: MentionPicker | undefined;
 	private readonly _renderDisposables = this._register(new DisposableStore());
 	// Plan 27 iter 3: the live streaming turn's DOM handles, so a delta event appends token-by-token
 	// WITHOUT a full re-render (which would reset the scroll position and the composer caret). Rebuilt each
@@ -58,9 +153,17 @@ export class ReviewRailView extends ViewPane {
 	private _streamDoc: string | undefined;
 	// Whether the model provider is signed in to ChatGPT (plan 38): when false, the composer shows one calm
 	// line inviting sign-in for unlimited usage; it disappears once signed in. Fetched async from the live
-	// provider status (the proxy's /healthz) on first render and refreshed on onDidChange (which fires on a
+	// provider status (the broker's /healthz) on first render and refreshed on onDidChange (which fires on a
 	// sign-in/out). Undefined until the first fetch resolves, so nothing flashes before we know the truth.
 	private _signedIn: boolean | undefined;
+	// The truthful broker readiness (issue #170): the composer status line MUST reflect /healthz, never claim
+	// "Using the included model" when the broker is down or no backend is wired. Undefined until first fetch.
+	private _readiness: ModelReadiness | undefined;
+	// The model picker (issue #179): the active backend's models and the selected id, fetched cheaply from the
+	// service (which caches /models) and refreshed alongside the sign-in state. The composer renders a compact
+	// dropdown from these; empty models -> no picker. Undefined until the first fetch resolves.
+	private _models: readonly IModelOption[] | undefined;
+	private _selectedModelId: string | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -162,8 +265,17 @@ export class ReviewRailView extends ViewPane {
 	private async _refreshSignedIn(): Promise<void> {
 		try {
 			const status = await this._livingDocs.getModelProviderStatus();
-			if (this._signedIn !== status.signedIn) {
+			// The model catalogue + selection for the picker (issue #179). Fetched from the service, which caches
+			// /models, so this is cheap on a repeated render; only a real change (backend switch, first fetch, a new
+			// selection) re-renders the composer. Read together with the status so one probe refreshes both.
+			const models = await this._livingDocs.getModelCatalogue();
+			const selected = await this._livingDocs.getSelectedModelId();
+			const modelsChanged = JSON.stringify(this._models ?? null) !== JSON.stringify(models.models) || this._selectedModelId !== selected;
+			if (this._signedIn !== status.signedIn || this._readiness !== status.readiness || modelsChanged) {
 				this._signedIn = status.signedIn;
+				this._readiness = status.readiness;
+				this._models = models.models;
+				this._selectedModelId = selected;
 				this._render();
 			}
 		} catch {
@@ -171,11 +283,36 @@ export class ReviewRailView extends ViewPane {
 		}
 	}
 
-	// The calm, persistent sign-in affordance in the composer (plan 38, doc 18 section 2.1): shown whenever the
-	// model provider is NOT signed in to ChatGPT, one line only (P7 calm-by-default, no modal, no nag). Clicking
-	// "Sign in with ChatGPT" opens the Model Access screen (the sign-in surface). It disappears once signed in.
+	// The composer status line (plan 38, doc 18 section 2.1) - now gated on the truthful broker readiness so it
+	// NEVER claims a model is connected when it is not (issue #170). One calm line only (P7, no modal, no nag),
+	// with a fix-it link that always opens the Model access screen:
+	//   - broker-down / unconfigured -> "Model unavailable" (the model genuinely cannot answer);
+	//   - budget-paused             -> "Daily limit reached" (the included tier's cap is spent for today);
+	//   - ready + not signed in     -> "Using the included model · Sign in with ChatGPT for unlimited.";
+	//   - signed in to ChatGPT      -> nothing (unlimited; no nag).
 	private _renderSignInHint(footer: HTMLElement): void {
-		// Only while we know the user is signed OUT (undefined = not yet probed, so render nothing to avoid a flash).
+		// Undefined = not yet probed, so render nothing to avoid a flash before we know the truth.
+		if (this._readiness === undefined) { return; }
+
+		const openModelAccess = () => void this._openScreen('settings');
+
+		// Model genuinely unavailable, or the day's included usage is spent: an honest state + a fix-it link.
+		if (this._readiness === 'broker-down' || this._readiness === 'unconfigured' || this._readiness === 'budget-paused') {
+			const row = append(footer, $('div'));
+			row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
+			const dot = append(row, $('span'));
+			const dotColour = this._readiness === 'budget-paused' ? '#e0b341' : '#d98a8a';
+			dot.style.cssText = `width:6px;height:6px;flex:none;border-radius:50%;background:${dotColour}`;
+			const text = append(row, $('span'));
+			text.textContent = this._readiness === 'budget-paused' ? 'Daily limit reached · ' : 'Model unavailable · ';
+			const link = append(text, $('button')) as HTMLButtonElement;
+			link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
+			link.textContent = 'Open Model access';
+			this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
+			return;
+		}
+
+		// Ready. Only invite sign-in while signed OUT; once signed in to ChatGPT there is nothing to nag about.
 		if (this._signedIn !== false) { return; }
 		const row = append(footer, $('div'));
 		row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
@@ -186,11 +323,22 @@ export class ReviewRailView extends ViewPane {
 		const link = append(text, $('button')) as HTMLButtonElement;
 		link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
 		link.textContent = 'Sign in with ChatGPT';
-		this._renderDisposables.add(addDisposableListener(link, 'click', () => {
-			void this._editors.openEditor(this.instantiationService.createInstance(ScreenEditorInput, 'settings'), { pinned: true });
-		}));
+		this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
 		const tail = append(text, $('span'));
 		tail.textContent = ' for unlimited.';
+	}
+
+	// Open an Abstract screen (e.g. Model Access) without leaking the transient editor input. `ScreenEditorInput`
+	// is a Singleton with a `matches` override, so when a screen is already open the editor service reuses the
+	// existing editor and does NOT adopt the instance we created - leaving us the owner. We therefore dispose our
+	// instance unless the resolved pane is actually backed by it. Mirrors the fire-and-forget open used elsewhere,
+	// but closes the LEAKED DISPOSABLE the fire-and-forget form produced on a repeat open.
+	private async _openScreen(screen: ScreenId): Promise<void> {
+		const input = this.instantiationService.createInstance(ScreenEditorInput, screen);
+		const pane = await this._editors.openEditor(input, { pinned: true });
+		if (pane?.input !== input) {
+			input.dispose();
+		}
 	}
 
 	private _renderReview(content: HTMLElement, pending: readonly IProposedChange[]): void {
@@ -351,7 +499,7 @@ export class ReviewRailView extends ViewPane {
 		const lock = resource ? this._livingDocs.getLock(resource) : undefined;
 		const snapshots = resource ? this._livingDocs.getSnapshots(resource) : [];
 		const audit = lock ? lock.audit : [];
-		content.innerHTML = historyHtml(snapshots, audit, doc?.title, doc?.fromTemplate);
+		safeSetInnerHtml(content, historyHtml(snapshots, audit, doc?.title, doc?.fromTemplate), REVIEW_RAIL_HTML_SANITIZER);
 		if (!resource) { return; }
 
 		// Delegated click handling: "Save version" snapshots the current body under a user-supplied label;
@@ -410,7 +558,7 @@ export class ReviewRailView extends ViewPane {
 		const title = this._livingDocs.getDoc(resource)?.title;
 		const flags = report.filter(s => s.status === 'flag').length;
 		const section = append(parent, $('div.ldr-checks'));
-		section.innerHTML = checksDisclosureHtml(this._checksExpanded, flags, report, title);
+		safeSetInnerHtml(section, checksDisclosureHtml(this._checksExpanded, flags, report, title), REVIEW_RAIL_HTML_SANITIZER);
 		// The disclosure toggle relocates the agents off the always-on rail. "Run" / "Re-run" re-grade the
 		// live document (Strategy calls the model via the proxy); "Apply fix" applies a skill's deterministic
 		// edit (Formatting title-cases the flagged headings). All re-render when the service fires onDidChange.
@@ -731,7 +879,7 @@ export class ReviewRailView extends ViewPane {
 
 		const box = append(footer, $('div'));
 		// Comp C6: border tinted accent (#d9d7fb), 13px radius, subtle lifted shadow.
-		box.style.cssText = 'border:1px solid #d9d7fb;border-radius:13px;background:#fff;padding:8px 9px;box-shadow:0 6px 16px -12px rgba(86,97,201,.35)';
+		box.style.cssText = 'position:relative;border:1px solid #d9d7fb;border-radius:13px;background:#fff;padding:8px 9px;box-shadow:0 6px 16px -12px rgba(86,97,201,.35)';
 
 		// The working set: the documents this instruction edits across (plan 18, decision 60). A separate
 		// row from the @mention "Attach" source chips below - these are edit targets, not data bindings.
@@ -743,24 +891,57 @@ export class ReviewRailView extends ViewPane {
 		input.rows = 2;
 		input.disabled = !doc;
 		input.style.cssText = 'width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;font:400 13px/1.5 system-ui;color:#2c2f36';
-		this._renderDisposables.add(addDisposableListener(input, 'input', () => { this._chatDraft = input.value; }));
+		this._renderDisposables.add(addDisposableListener(input, 'input', () => { this._chatDraft = input.value; this._composerPicker?.update(); }));
+		// Caret-only moves (ArrowLeft/Right, Home/End, a mouse click) change `selectionStart` without an
+		// `input` event, so re-sync the picker on keyup/click too - otherwise it lingers open with stale
+		// matches and could insert the wrong one. `update()` closes it when the caret leaves an "@query".
+		this._renderDisposables.add(addDisposableListener(input, 'keyup', () => this._composerPicker?.update()));
+		this._renderDisposables.add(addDisposableListener(input, 'click', () => this._composerPicker?.update()));
 
 		const mentions = doc ? this._livingDocs.getMentionableFiles(doc) : [];
+		const insertMention = (file: string) => {
+			const sep = input.value.length && !input.value.endsWith(' ') ? ' ' : '';
+			input.value = `${input.value}${sep}@${file} `;
+			this._chatDraft = input.value;
+			input.focus();
+		};
+
+		// #178: the caret-anchored @mention picker. Owns its popup DOM + keyboard nav; the textarea's input
+		// and keydown handlers drive it, and the "@ Mention" button opens it. Registered on the render store
+		// so its listeners are torn down with the composer on the next re-render (no leaked global listeners).
+		const picker = this._composerPicker = this._renderDisposables.add(new MentionPicker(box, input, mentions, chosen => {
+			const replaced = replaceActiveMention(input.value, input.selectionStart ?? input.value.length, chosen);
+			this._chatDraft = input.value = replaced.text;
+			input.focus();
+			// Restore the caret just after the inserted token: assigning `value` otherwise jumps it to the end,
+			// which would strand a mid-draft insertion at the bottom of the textarea.
+			input.setSelectionRange(replaced.caret, replaced.caret);
+		}));
+		this._renderDisposables.add({ dispose: () => { if (this._composerPicker === picker) { this._composerPicker = undefined; } } });
 		if (mentions.length) {
+			// #177: collapsed to the first few chips (two lines) with a "..." expander so ~30 mentionable
+			// files no longer bury the conversation. Expanding shows the full list; the choice survives the
+			// re-render each message triggers but resets to collapsed next session.
 			const chips = append(box, $('div'));
 			chips.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;padding:8px 0 2px';
 			const hint = append(chips, $('span'));
 			hint.style.cssText = 'font:500 10.5px/1.6 system-ui;color:#bcc0c8';
 			hint.textContent = 'Attach:';
-			for (const file of mentions) {
+			const { shown, hasMore } = collapseAttachChips(mentions, this._attachExpanded);
+			for (const file of shown) {
 				const chip = append(chips, $('button')) as HTMLButtonElement;
 				chip.style.cssText = 'font:500 10.5px/1 ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px;cursor:pointer';
 				chip.textContent = `@${file}`;
-				this._renderDisposables.add(addDisposableListener(chip, 'click', () => {
-					const sep = input.value.length && !input.value.endsWith(' ') ? ' ' : '';
-					input.value = `${input.value}${sep}@${file} `;
-					this._chatDraft = input.value;
-					input.focus();
+				this._renderDisposables.add(addDisposableListener(chip, 'click', () => insertMention(file)));
+			}
+			if (hasMore || this._attachExpanded) {
+				const toggle = append(chips, $('button')) as HTMLButtonElement;
+				toggle.style.cssText = 'font:500 10.5px/1 ui-monospace,monospace;color:#868b95;background:transparent;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px;cursor:pointer';
+				toggle.textContent = this._attachExpanded ? 'Show less' : '…';
+				toggle.title = this._attachExpanded ? 'Show fewer files' : 'Show all mentionable files';
+				this._renderDisposables.add(addDisposableListener(toggle, 'click', () => {
+					this._attachExpanded = !this._attachExpanded;
+					this._render();
 				}));
 			}
 		}
@@ -782,7 +963,8 @@ export class ReviewRailView extends ViewPane {
 			this._openSkillMenu(skillBtn, doc);
 		}));
 
-		// @ Mention: inserts a bare "@" into the composer so the user can type-to-autocomplete a file.
+		// @ Mention: inserts a "@" and opens the caret-anchored picker (#178) so the user can type-to-filter
+		// the mentionable files; selecting one inserts the token the message parser accepts (`@filename`).
 		const mentionBtn = append(bar, $('button')) as HTMLButtonElement;
 		mentionBtn.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:5px 9px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer';
 		mentionBtn.textContent = '@ Mention';
@@ -793,7 +975,13 @@ export class ReviewRailView extends ViewPane {
 			input.value = `${input.value}${sep}@`;
 			this._chatDraft = input.value;
 			input.focus();
+			input.setSelectionRange(input.value.length, input.value.length);
+			picker.update();
 		}));
+
+		// The model picker (issue #179): a compact dropdown of the active backend's models, rendered even when
+		// only one model exists so the surface is consistent across the included tier and a signed-in ChatGPT.
+		this._renderModelPicker(bar);
 
 		const busy = !!doc && this._livingDocs.isChatBusy(doc);
 		const submit = () => {
@@ -821,12 +1009,54 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		this._renderDisposables.add(addDisposableListener(input, 'keydown', (e: KeyboardEvent) => {
+			// Give the @mention picker first crack at navigation keys while it is open (#178) so ArrowUp/Down
+			// move the selection, Enter/Tab insert the mention, and Escape closes the picker (not the chat).
+			if (picker.handleKeydown(e)) { return; }
 			if (e.key === 'Escape' && doc && this._livingDocs.isChatBusy(doc)) { e.preventDefault(); this._livingDocs.cancelChat(doc); return; }
 			if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
 		}));
 
 		// Keep the cursor in the composer across the re-render that each message triggers.
 		if (doc && !busy) { input.focus(); }
+	}
+
+	// The model picker (issue #179): a compact dropdown in the composer footer listing the active backend's
+	// models, sitting beside the +Skill / @Mention chips. Renders only once the catalogue has resolved (nothing
+	// flashes before we know the truth), and renders EVEN when only one model exists so the surface is consistent
+	// between the included tier (one "Included model") and a signed-in ChatGPT (its several tiers) - single-model
+	// case is styled inert (disabled) since there is nothing to choose. Changing the selection persists it per
+	// backend via the service; the broker validates the id and falls back to its default, so a pick never 500s a
+	// call. A native <select> keeps it keyboard-accessible and visually consistent with the rail's quiet chips.
+	private _renderModelPicker(bar: HTMLElement): void {
+		const models = this._models;
+		// Undefined = not yet fetched: render nothing to avoid a flash before the catalogue resolves. An empty
+		// list (broker unreachable) also renders nothing - the composer degrades to no picker, never an error.
+		if (!models || !models.length) { return; }
+
+		const single = models.length === 1;
+		const select = append(bar, $('select')) as HTMLSelectElement;
+		// Quiet chip styling to match the +Skill / @Mention buttons: slate text, hairline border, 8px radius.
+		select.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:4px 6px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer;max-width:120px';
+		select.title = single ? 'The model serving your calls' : 'Choose the model for your calls';
+		if (single) {
+			// One model: inert (disabled) - there is nothing to choose, but the picker still shows for consistency.
+			select.disabled = true;
+			select.style.cursor = 'default';
+			select.style.opacity = '0.7';
+		}
+		for (const model of models) {
+			const opt = append(select, $('option')) as HTMLOptionElement;
+			opt.value = model.id;
+			opt.textContent = model.label;
+			if (model.id === this._selectedModelId) { opt.selected = true; }
+		}
+		if (!single) {
+			this._renderDisposables.add(addDisposableListener(select, 'change', () => {
+				const id = select.value;
+				this._selectedModelId = id;
+				void this._livingDocs.setSelectedModelId(id);
+			}));
+		}
 	}
 
 	// The working-set row in the composer: the documents a single instruction fans out across (plan 18).
@@ -1026,4 +1256,115 @@ function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined
 	<div style="display:flex;align-items:center;gap:9px;border:1px solid #eceef2;background:#fff;border-radius:9px;padding:10px 12px;margin-bottom:14px"><span style="font:400 12px/1.4 system-ui;color:#52575f">Formatting + Financial</span><span style="margin-left:auto;width:34px;height:20px;border-radius:999px;background:oklch(0.55 0.13 255);position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;background:#fff"></span></span></div>
 	<button style="width:100%;border:1px dashed #d4d7de;background:#fff;border-radius:8px;padding:9px;font:500 12px/1 system-ui;color:#868b95;cursor:pointer">&#65291; Add skill from library</button>
 </div>`;
+}
+
+/**
+ * The caret-anchored @mention picker for the chat composer (#178). A hand-rolled listbox rather than a
+ * shared primitive: the composer is plain workbench DOM (not a webview or a Monaco editor), so the
+ * editor's suggest widget and IQuickInputService (a centred modal) both fit poorly in the 392px aux-bar
+ * rail. The popup is absolutely positioned inside the (position:relative) composer box, bottom-aligned so
+ * it opens upward above the textarea - simpler than per-character caret tracking and the right look in the
+ * narrow rail. It watches the textarea for an active "@query" (see activeMention) and shows the top ~8
+ * ranked matches; ArrowUp/Down move a highlighted option, Enter/Tab insert it, Escape closes. Follows the
+ * listbox aria pattern (role=listbox on the ul, role=option + aria-selected on each item, and
+ * aria-activedescendant on the textarea) so the selection is announced. All DOM and listeners are owned by
+ * this disposable, torn down with the composer render.
+ */
+class MentionPicker extends Disposable {
+
+	private readonly _list: HTMLUListElement;
+	// Per-render listeners for the option `<li>`s. `_render()` runs on every keystroke and arrow move, so
+	// these must be cleared each render rather than piling up on the picker's own store until it is torn
+	// down (the repo's disposable rule for objects created in repeatedly-called methods).
+	private readonly _optionDisposables = this._register(new DisposableStore());
+	private _matches: string[] = [];
+	private _active = 0;
+	private _open = false;
+	private static _seq = 0;
+	private readonly _id = `ldp-mention-${MentionPicker._seq++}`;
+
+	constructor(
+		anchor: HTMLElement,
+		private readonly _input: HTMLTextAreaElement,
+		private readonly _files: readonly string[],
+		private readonly _onSelect: (file: string) => void,
+	) {
+		super();
+		this._list = append(anchor, $('ul')) as HTMLUListElement;
+		this._list.id = this._id;
+		this._list.setAttribute('role', 'listbox');
+		this._list.style.cssText = 'display:none;position:absolute;left:9px;right:9px;bottom:calc(100% + 4px);z-index:10;margin:0;padding:4px;list-style:none;max-height:184px;overflow-y:auto;background:#fff;border:1px solid #d9d7fb;border-radius:10px;box-shadow:0 10px 28px -12px rgba(86,97,201,.5)';
+		this._input.setAttribute('role', 'combobox');
+		this._input.setAttribute('aria-autocomplete', 'list');
+		this._input.setAttribute('aria-controls', this._id);
+		this._input.setAttribute('aria-expanded', 'false');
+		this._register({ dispose: () => this._close() });
+	}
+
+	/** Recompute the popup from the textarea's current text + caret. Called on input and when opened. */
+	update(): void {
+		const mention = activeMention(this._input.value, this._input.selectionStart ?? this._input.value.length);
+		if (!mention) { this._close(); return; }
+		this._matches = filterMentions(this._files, mention.query);
+		if (!this._matches.length) { this._close(); return; }
+		this._active = 0;
+		this._render();
+	}
+
+	/**
+	 * Handle a composer keydown while the picker is open. Returns true when the key was consumed (so the
+	 * composer's own Enter=submit / Escape=cancel handling is skipped for that stroke).
+	 */
+	handleKeydown(e: KeyboardEvent): boolean {
+		if (!this._open) { return false; }
+		switch (e.key) {
+			case 'ArrowDown': e.preventDefault(); this._move(1); return true;
+			case 'ArrowUp': e.preventDefault(); this._move(-1); return true;
+			case 'Enter':
+			case 'Tab': e.preventDefault(); this._select(); return true;
+			case 'Escape': e.preventDefault(); this._close(); return true;
+			default: return false;
+		}
+	}
+
+	private _move(delta: number): void {
+		this._active = (this._active + delta + this._matches.length) % this._matches.length;
+		this._render();
+	}
+
+	private _select(): void {
+		const file = this._matches[this._active];
+		if (!file) { return; }
+		this._close();
+		this._onSelect(file);
+	}
+
+	private _render(): void {
+		this._optionDisposables.clear();
+		clearNode(this._list);
+		this._matches.forEach((file, i) => {
+			const item = append(this._list, $('li')) as HTMLLIElement;
+			item.id = `${this._id}-${i}`;
+			item.setAttribute('role', 'option');
+			const selected = i === this._active;
+			item.setAttribute('aria-selected', String(selected));
+			item.style.cssText = `font:500 11.5px/1 ui-monospace,monospace;color:#5b6dc4;border-radius:6px;padding:6px 8px;cursor:pointer;${selected ? 'background:#eef1ff' : ''}`;
+			item.textContent = `@${file}`;
+			this._optionDisposables.add(addDisposableListener(item, 'mousedown', e => { e.preventDefault(); this._active = i; this._select(); }));
+			this._optionDisposables.add(addDisposableListener(item, 'mousemove', () => { if (this._active !== i) { this._active = i; this._render(); } }));
+		});
+		this._list.style.display = 'block';
+		this._open = true;
+		this._input.setAttribute('aria-expanded', 'true');
+		this._input.setAttribute('aria-activedescendant', `${this._id}-${this._active}`);
+	}
+
+	private _close(): void {
+		this._open = false;
+		this._list.style.display = 'none';
+		this._optionDisposables.clear();
+		clearNode(this._list);
+		this._input.setAttribute('aria-expanded', 'false');
+		this._input.removeAttribute('aria-activedescendant');
+	}
 }
