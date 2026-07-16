@@ -236,7 +236,7 @@ export class LivingDocEditor extends EditorPane {
 				if (this._resource) { void this._livingDocs.exportMarkdown(this._resource); }
 				break;
 			case 'share':
-				if (this._resource) { this._livingDocs.shareDocument(this._resource); }
+				if (this._resource) { void this._livingDocs.shareDocument(this._resource); }
 				break;
 			case 'reveal':
 				// Clicking a provenance dot opens the in-surface source pane focused on those cells.

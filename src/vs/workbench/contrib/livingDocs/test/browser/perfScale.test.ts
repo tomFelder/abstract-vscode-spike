@@ -12,6 +12,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
+import { IClipboardService } from '../../../../../platform/clipboard/common/clipboardService.js';
 import { NullAnalyticsService } from '../../common/analytics.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
@@ -122,7 +123,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
 
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, { writeText: async () => undefined } as unknown as IClipboardService);
 		const clock = new FakeClock();
 		service.setClock(clock);
 		store.add(service);
@@ -256,7 +257,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, { writeText: async () => undefined } as unknown as IClipboardService);
 		const clock = new FakeClock();
 		service.setClock(clock);
 		store.add(service);
@@ -342,7 +343,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
 		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
-		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService);
+		const service = new LivingDocsService(harness.fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, { writeText: async () => undefined } as unknown as IClipboardService);
 		service.setClock(new FakeClock());
 		store.add(service);
 		return { service };
