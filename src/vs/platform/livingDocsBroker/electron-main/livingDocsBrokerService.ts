@@ -70,9 +70,16 @@ export class LivingDocsBrokerService extends Disposable {
 	) {
 		super();
 
-		// Kill the child on app shutdown so no broker is left orphaned after the app quits.
+		// Kill the child on the graceful app-shutdown signal so no broker is left orphaned after a normal quit.
 		this._register(this._lifecycleMainService.onWillShutdown(() => this._stop()));
 		this._register(toDisposable(() => this._stop()));
+
+		// Safety net for a plain process exit where the lifecycle `onWillShutdown` did not run: synchronously
+		// SIGTERM the child so it never orphans. `exit` handlers must be synchronous - `child.kill` is - and we
+		// deliberately do NOT hijack SIGTERM/SIGINT here to avoid interfering with Electron's own quit handling.
+		const onExit = () => { const c = this._child; this._child = undefined; if (c) { try { c.kill('SIGTERM'); } catch { /* already gone */ } } };
+		process.once('exit', onExit);
+		this._register(toDisposable(() => process.removeListener('exit', onExit)));
 	}
 
 	/**
