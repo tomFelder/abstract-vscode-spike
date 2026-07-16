@@ -153,7 +153,7 @@ small, additive-in-spirit (remove a default, add an opt-in lock), and product-co
 |---|--------|------|------|--------------------------|
 | 1 | Remove the command-palette keybinding + palette listing (`ShowAllCommandsAction`: drop `keybinding` Cmd/Ctrl+Shift+P/F1, set `f1:false`; drop 3 now-unused imports) | `src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts` | **core-patch** | LOW / fails *soft* (a rebase that restores the field just re-adds a keybinding - cosmetic regression, re-drop it). The command still exists for programmatic callers. |
 | 2 | Remove the Quick Open (Go to File) keybinding (`workbench.action.quickOpen`: drop `keybinding` Cmd/Ctrl+P, Cmd/Ctrl+E, set `f1:false`) so command mode (the `>` prefix) is unreachable | `src/vs/workbench/browser/actions/quickAccessActions.ts` | **core-patch** | LOW / fails *soft*. `globalQuickAccessKeybinding` is retained (still used by the in-picker navigate rules). |
-| 3 | Global sash lock: `lockAllSashes()` coerces every `Sash` to `SashState.Disabled` (no user-draggable layout dividers); called once from a `BlockRestore` workbench contribution | `src/vs/base/browser/ui/sash/sash.ts` (+ call site in `livingDocs.contribution.ts`, additive) | **core-patch** | LOW / fails *soft* (a rebase dropping the flag just re-enables dragging - cosmetic). Sticky + global by design; never unlocked. NOTE: do not call `lockAllSashes()` from a unit test - it would leak into splitview/grid tests in the same VM. Verified live (0 of 7 sashes draggable), not by unit test. |
+| 3 | ~~Global sash lock: `lockAllSashes()` coerces every `Sash` to `SashState.Disabled`~~ | ~~`src/vs/base/browser/ui/sash/sash.ts`~~ | ~~core-patch~~ **REMOVED** | **REVERTED (issue #173, bundle-c).** The global sash lock made every rail non-resizable, which users read as broken, not calm. `sash.ts` is now byte-identical to upstream stock (the whole `globalSashesLocked` / `liveSashes` / `lockAllSashes` machinery is gone), and `LockLayoutSashesContribution` is deleted from `livingDocs.contribution.ts`. Rail resizing is now governed by the stock part-level minimum widths (170px) with no maximum; the 264/392 defaults are seeded ONCE per profile by `RailVisibilityContribution` (first-run only, storage-backed) and the workbench persists the user's dragged width natively thereafter. **Core-patch count: 3 -> 2 in v3, 5 -> 4 total.** |
 
 All three remove/neutralise an *affordance* rather than re-architecting core; each fails toward *showing
 IDE optionality* on a bad rebase, so re-pin them in the G4 checklist. **G4 now FULLY passes** (palette
@@ -278,7 +278,7 @@ exit 0 = all shell seams intact; exit 1 names the broken seam(s) to re-pin per t
 per-PR validation alongside `npm run typecheck-client` and `npm run valid-layers-check` for any change that
 touches the de-IDE seams.
 
-## Core-patch count: **5 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **3 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding, sash lock) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
+## Core-patch count: **4 added total** = 2 in v2 (iter 6 builtin exclusion + iter 9 activity-bar width) + **2 in v3** (iter 2 G4 closure: palette keybinding, quick-open keybinding; the sash lock was REVERTED for issue #173, see the struck-through row above) + 0 from earlier rounds (this phase + build-out + format + orchestration + v1) + **0 in v5 (realdocs) + 0 in v6 iter 1 (chat-on-doc foundations)** (1 pre-existing, from the engine phase). v2/v3 (plans 11/12) permit these - all are one-line/one-field/one-flag, low-fragility, fail-soft, product-correct.
 
 The Studio de-IDE (Items A–G) added **zero new patches to upstream VS Code core**
 (`src/vs/base|platform|editor|workbench/browser|workbench/api` were untouched this phase). To be
@@ -358,7 +358,7 @@ Re-pin result per seam - nothing needed hand-editing; verified post-merge:
 | activity-bar width 76 (`activitybarPart.ts` + guard test) | no | intact (const 76; test 14/14 pass) |
 | palette keybinding removed (`commandsQuickAccess.ts`) | no | intact (`f1: false`) |
 | quick-open keybinding removed (`quickAccessActions.ts`) | no | intact (`f1: false`) |
-| sash lock (`sash.ts` + call site) | no | intact (`lockAllSashes`) |
+| ~~sash lock (`sash.ts` + call site)~~ | n/a | **REMOVED (issue #173)** - `sash.ts` reverted to upstream stock; no longer a seam to re-pin |
 | contrib imports (`workbench.common.main.ts`) | yes (+4, 2 hunks at L145/L392) | **auto-merged** - our livingDocs (L304) + styleOverrides (L342) preserved alongside upstream's agentHostConnectionsService + onboarding imports |
 | HIGH-risk deregister list (explorer/search/scm/debug/extensions) | no | all 5 `VIEWLET_ID` consts still resolve to the exact strings; icons did NOT reappear (verified live) |
 | theme manifest (`theme-defaults/package.json`) | no | intact |
