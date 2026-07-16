@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, addDisposableListener, append, clearNode, isHTMLElement } from '../../../../base/browser/dom.js';
+import { localize } from '../../../../nls.js';
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -142,9 +143,16 @@ export class TreeRailView extends ViewPane {
 		void this._render();
 	}
 
-	private _activeResource(): URI | undefined {
+	// The resource whose document surface the editor is currently rendering - living OR plain Markdown.
+	// The Context and Outline tabs both track "the open document", and the doc editor renders any `.md`
+	// through the same ProseMirror surface, so gating these tabs on `isLiving` made a plainly-open document
+	// invisible to them (issue #181). We only need a PARSED document to shape an outline / its context, and
+	// `getDoc` is populated for every `.md` the editor opens (living or not), so the surface resource is any
+	// active document with a parsed model. `isLiving` still governs where behaviour genuinely differs (e.g.
+	// the source-binding affordances below), not whether the document exists.
+	private _activeSurfaceResource(): URI | undefined {
 		const resource = this._editors.activeEditor?.resource;
-		return resource && this._livingDocs.getDoc(resource)?.isLiving ? resource : undefined;
+		return resource && this._livingDocs.getDoc(resource) ? resource : undefined;
 	}
 
 	private async _render(): Promise<void> {
@@ -469,15 +477,17 @@ export class TreeRailView extends ViewPane {
 	}
 
 	private _renderContext(panel: HTMLElement): void {
-		const resource = this._activeResource();
+		const resource = this._activeSurfaceResource();
 		const doc = resource ? this._livingDocs.getDoc(resource) : undefined;
 		if (!resource || !doc) {
-			append(panel, $('div.rail-empty')).textContent = 'Open a document to see its context.';
+			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.context.noDocument', "Open a document to see its context.");
 			return;
 		}
 		const groups = buildContextGroups(doc, this._livingDocs.getFreshness(resource), this._livingDocs.getAddedContext(resource));
 		if (!groups.length) {
-			append(panel, $('div.rail-empty')).textContent = 'No linked context yet.';
+			// A plain Markdown document with nothing bound yet: say so truthfully rather than claim no
+			// document is open (issue #181). "Add source" / "Add context" below let the user bind data here.
+			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.context.noBindings', "This document has no bound sources yet.");
 		}
 		for (const group of groups) {
 			append(panel, $('div.rail-folder')).textContent = `${group.label.toUpperCase()} \u00B7 ${group.items.length}`;
@@ -620,16 +630,28 @@ export class TreeRailView extends ViewPane {
 	}
 
 	private _renderOutline(panel: HTMLElement): void {
-		const resource = this._activeResource();
+		const resource = this._activeSurfaceResource();
 		const doc = resource ? this._livingDocs.getDoc(resource) : undefined;
 		const entries = buildOutline(doc);
-		if (!entries.length) {
-			append(panel, $('div.rail-empty')).textContent = 'Open a document to see its outline.';
+		if (!resource || !entries.length) {
+			// Distinguish "no document open" from "document open but has no headings" (issue #181).
+			append(panel, $('div.rail-empty')).textContent = resource
+				? localize('livingDocs.outline.noHeadings', "This document has no headings yet.")
+				: localize('livingDocs.outline.noDocument', "Open a document to see its outline.");
 			return;
 		}
 		for (const e of entries) {
+			// Each heading is a navigation target: clicking scrolls the editor surface to it (issue #181),
+			// reusing the same rail-to-editor reveal channel the Review rail uses for pending changes.
 			const row = append(panel, $(`div.rail-outline.lvl-${Math.min(e.level, 3)}`));
 			row.textContent = e.text;
+			row.setAttribute('role', 'button');
+			row.tabIndex = 0;
+			const reveal = () => this._livingDocs.revealHeading(resource, e.headingIndex);
+			this._renderDisposables.add(addDisposableListener(row, 'click', reveal));
+			this._renderDisposables.add(addDisposableListener(row, 'keydown', ev => {
+				if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); reveal(); }
+			}));
 		}
 	}
 
@@ -709,7 +731,8 @@ export class TreeRailView extends ViewPane {
 			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-srcaction,.living-docs-rail .rail-files-tree .rail-tree-actions .rail-import{margin-left:0}
 			.living-docs-rail .rail-files-tree .rail-tree-leaf:hover .rail-srcaction,.living-docs-rail .rail-files-tree .rail-tree-leaf:focus-within .rail-srcaction,.living-docs-rail .rail-files-tree .monaco-list-row:hover .rail-srcaction,.living-docs-rail .rail-files-tree .monaco-list-row:focus-within .rail-srcaction{opacity:1}
 			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-item-dot{margin-left:0}
-		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}
+		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:pointer}
+		.living-docs-rail .rail-outline:hover{background:var(--vscode-list-hoverBackground)}
 		.living-docs-rail .rail-outline.lvl-1{font-weight:600}
 		.living-docs-rail .rail-outline.lvl-2{padding-left:18px;color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-outline.lvl-3{padding-left:30px;color:var(--vscode-descriptionForeground)}

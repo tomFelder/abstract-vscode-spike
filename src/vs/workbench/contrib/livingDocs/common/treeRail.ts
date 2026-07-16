@@ -293,19 +293,137 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 export interface IOutlineEntry {
 	readonly text: string;
 	readonly level: number;
+	/**
+	 * The heading's zero-based ordinal among the headings the editor actually RENDERS, in document order. The
+	 * ProseMirror surface (prosemirror-markdown / markdown-it over `doc.body`) emits one `<h1..h6>` per
+	 * rendered heading, so this index is the anchor the Outline tab uses to scroll the surface to a clicked
+	 * heading (issue #181) - `revealHeading` selects the Nth `<hN>` by this index, no drifting text/slug match.
+	 */
+	readonly headingIndex: number;
 }
 
-const HEADING_PREFIX_RE = /^#{1,6}\s+/;
 const BIND_LINK_RE = /\[([^\]]*)\]\(bind:[^)\s]+\)/g;
+const FENCE_RE = /^ {0,3}(?<fence>`{3,}|~{3,})/;
+const ATX_RE = /^ {0,3}(?<hashes>#{1,6})(?:[ \t]+(?<text>.*?))?(?:[ \t]+#+)?[ \t]*$/;
+const SETEXT_UNDERLINE_RE = /^(?<indent> *)(?<underline>=+|-+)[ \t]*$/;
+const BLOCKQUOTE_RE = /^ {0,3}(?:> ?)+/;
+const BLANK_RE = /^[ \t]*$/;
+// A single leading list-item marker: an unordered bullet (`-`/`*`/`+`) or an ordered marker (`1.`/`1)`),
+// with up to three leading spaces and at least one space before the content. Capturing the whole marker
+// prefix gives the item's CONTENT column, which is what a setext underline must reach to still underline
+// the item's text (see `scanRenderedHeadings`). One level only - markdown-it renders `- # x` as a heading
+// inside the `<li>`, which is the case that shifts the outline; deep nesting is out of scope.
+const LIST_MARKER_RE = /^(?<marker> {0,3}(?:[-*+]|\d{1,9}[.)]) +)/;
 
-/** The Outline-tab entries: the document's headings in order, stripped of Markdown syntax. */
+/** One rendered heading found by scanning the raw body the ProseMirror surface renders. */
+interface IScannedHeading {
+	readonly level: number;
+	/** The heading's raw inline text (ATX body or setext line), before bind-link/whitespace cleanup. */
+	readonly text: string;
+}
+
+/**
+ * Scan the raw Markdown body for the headings the ProseMirror surface (markdown-it / prosemirror-markdown)
+ * actually renders as `<h1..h6>`, in document order. This is the SAME set the webview's `revealHeading`
+ * scrolls against, so an entry's ordinal in this list lines up 1:1 with the Nth rendered `<hN>` (issue #181).
+ *
+ * It recognises exactly what CommonMark (markdown-it's default) renders as a heading, and no more:
+ *   - ATX headings (`#`..`######`), up to three leading spaces, optional closing `#`s;
+ *   - setext headings (a non-blank text line immediately underlined by `===`/`---`);
+ *   - headings nested in a blockquote (the `>` markers are stripped, then the line is re-tested);
+ *   - headings nested in a list item (`- # x`, `1. # x`): the single leading list marker is stripped the
+ *     same way `>` is, then the inner line is re-tested. A setext underline that follows must reach the
+ *     item's CONTENT column (marker width) - and sit no more than three columns past it - to still
+ *     underline the item's text, exactly as markdown-it renders it; a less-indented `===` is a lazy
+ *     paragraph continuation (no heading) and a more-indented one is an indented code block (no heading).
+ * Fenced code blocks (```` ``` ````/`~~~`) are skipped wholesale, since their contents are not parsed as
+ * Markdown - matching the surface, so both sides count the same headings and no index can drift.
+ *
+ * The custom block parser in `livingDocMarkdown.ts` recognised only single-line ATX headings, so its
+ * ordinals drifted from the DOM the moment a setext or blockquote-nested heading appeared; deriving the
+ * outline from this shared scan kills that two-parser divergence at its source.
+ */
+function scanRenderedHeadings(body: string): IScannedHeading[] {
+	const headings: IScannedHeading[] = [];
+	const lines = body.split(/\r?\n/);
+	let fence: string | undefined;
+	let prevContent: string | undefined;
+	// The column at which `prevContent`'s text began (0 for a top-level line, the list marker width for a
+	// list item). A following setext underline must sit within [column, column + 3] to underline it.
+	let prevContentColumn = 0;
+	for (const rawLine of lines) {
+		// Inside a fenced code block, only its matching closing fence ends it; nothing else is a heading.
+		if (fence !== undefined) {
+			const close = FENCE_RE.exec(rawLine);
+			if (close && close.groups!.fence[0] === fence[0] && close.groups!.fence.length >= fence.length) {
+				fence = undefined;
+			}
+			prevContent = undefined;
+			continue;
+		}
+		// A blockquote-nested heading renders too: strip the `>` markers, then judge the inner line.
+		const dequoted = rawLine.replace(BLOCKQUOTE_RE, '');
+		// A list-item-nested heading renders too: strip a single leading list marker, then judge the content
+		// (markdown-it renders `- # x` / `1. # x` as an `<hN>` inside the `<li>`). The marker width is the
+		// item's content column, which a setext underline for this item must reach to still underline it.
+		const marker = LIST_MARKER_RE.exec(dequoted);
+		const line = marker ? dequoted.slice(marker.groups!.marker.length) : dequoted;
+		const column = marker ? marker.groups!.marker.length : 0;
+
+		const openFence = FENCE_RE.exec(line);
+		if (openFence) {
+			fence = openFence.groups!.fence;
+			prevContent = undefined;
+			continue;
+		}
+
+		const atx = ATX_RE.exec(line);
+		if (atx) {
+			headings.push({ level: atx.groups!.hashes.length, text: (atx.groups!.text ?? '').trim() });
+			prevContent = undefined;
+			continue;
+		}
+
+		// A setext underline is measured against the blockquote-stripped line (the `>` markers are already
+		// gone, so `> Foo` / `> ===` still underlines) but BEFORE the list marker is stripped, so its own
+		// indentation can be compared to the underlined content's column: markdown-it treats an underline as
+		// setext only when it is indented within [column, column + 3]; less is a lazy paragraph continuation,
+		// more is code. (The underline line itself carries no list marker - it is the item's continuation.)
+		const underline = SETEXT_UNDERLINE_RE.exec(dequoted);
+		if (underline && prevContent !== undefined) {
+			const relative = underline.groups!.indent.length - prevContentColumn;
+			if (relative >= 0 && relative <= 3) {
+				// A setext heading: the previous content line underlined by `=` (h1) or `-` (h2).
+				headings.push({ level: underline.groups!.underline[0] === '=' ? 1 : 2, text: prevContent.trim() });
+				prevContent = undefined;
+				continue;
+			}
+		}
+
+		if (BLANK_RE.test(line)) {
+			prevContent = undefined;
+		} else {
+			prevContent = line;
+			prevContentColumn = column;
+		}
+	}
+	return headings;
+}
+
+/**
+ * The Outline-tab entries: the document's rendered headings in order, stripped of Markdown/bind syntax.
+ * Derived from `doc.body` via the same heading scan the editor surface renders against, so each entry's
+ * `headingIndex` is the exact ordinal of its `<hN>` in the DOM the Outline scrolls (issue #181).
+ */
 export function buildOutline(doc: ILivingDoc | undefined): IOutlineEntry[] {
 	if (!doc) { return []; }
 	const entries: IOutlineEntry[] = [];
-	for (const block of doc.blocks) {
-		if (block.type !== 'heading') { continue; }
-		const text = block.text.replace(HEADING_PREFIX_RE, '').replace(BIND_LINK_RE, '$1').trim();
-		if (text) { entries.push({ text, level: block.level ?? 1 }); }
+	let headingIndex = 0;
+	for (const heading of scanRenderedHeadings(doc.body)) {
+		const text = heading.text.replace(BIND_LINK_RE, '$1').trim();
+		if (text) { entries.push({ text, level: heading.level, headingIndex }); }
+		// Advance for EVERY rendered heading, shown as a row or not, so the index tracks the `<hN>` ordinal.
+		headingIndex++;
 	}
 	return entries;
 }

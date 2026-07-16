@@ -5,7 +5,6 @@
 
 import { disposableTimeout } from '../../../../base/common/async.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { lockAllSashes } from '../../../../base/browser/ui/sash/sash.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { IKeybindings, KeybindingsRegistry } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
@@ -105,7 +104,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'livingDocs.modelProxyUrl': {
 			type: 'string',
 			default: 'http://localhost:8090',
-			description: localize('livingDocs.modelProxyUrl', "Base URL of the local model proxy (scripts/lwd-anthropic-proxy.js) the renderer calls for model-backed features. The proxy holds the model credential server-side and translates to the configured backend; no credential is ever embedded in the app."),
+			description: localize('livingDocs.modelProxyUrl', "Base URL of the local model broker the app calls for model-backed features. The app starts and supervises the broker automatically; it holds the model credential server-side and translates to the configured backend, so no credential is ever embedded in the app."),
 		},
 		'livingDocs.fanoutContextBudget': {
 			type: 'number',
@@ -118,11 +117,14 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 
 // --- calm shell: hide the IDE chrome by registering product setting defaults ---
 // (plan 16 iter 1, decision 54). The product is a document tool, not an editor, so the workbench
-// shell parts are OFF by default: the status-bar footer, the activity-bar icon column, the editor
-// tab strip, and the breadcrumb. These are all real, user-overridable settings, so this is an
-// ADDITIVE CONTRIBUTION (no core patch) -- a user who wants the IDE shell back can flip any of them.
-// The calm topbar + the tree-rail inside the document surface are the chrome that stays; the desktop
-// title bar (OS window controls) is intentionally NOT touched here. Logged in 06-design-notes ledger.
+// shell parts are OFF by default: the status-bar footer, the editor tab strip, and the breadcrumb.
+// These are all real, user-overridable settings, so this is an ADDITIVE CONTRIBUTION (no core patch)
+// -- a user who wants the IDE shell back can flip any of them. The activity bar is intentionally NOT
+// hidden: the fork repurposes it as the labelled 76px icon-nav (Home / Editor / Templates / Knowledge
+// / Agents), which is how you move between surfaces, so hiding it would strand a folder window with no
+// navigation (issue #172). The calm topbar + the tree-rail inside the document surface are the chrome
+// that stays; the desktop title bar (OS window controls) is intentionally NOT touched here. Logged in
+// 06-design-notes ledger.
 // Registered at module load (an import side effect, the earliest phase) so the layout reads these as
 // the effective defaults on its first startup pass, before any part is laid out.
 // (plan 16 iter 2, decision 55) ALSO kill the cold-launch noise + trust leaks by the same additive
@@ -133,11 +135,19 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 // still 0 core patches. Logged in 06-design-notes ledger D8.
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerDefaultConfigurations([{
 	overrides: {
-		// iter 1 -- strip the IDE shell parts
+		// iter 1 -- strip the IDE shell parts (but keep the activity bar: it is the labelled 76px
+		// icon-nav, issue #172)
 		'workbench.statusBar.visible': false,
-		'workbench.activityBar.location': 'hidden',
 		'workbench.editor.showTabs': 'none',
 		'breadcrumbs.enabled': false,
+		// (issue #172) Turn on the Modern UI style-override group by default. This is what activates the
+		// Studio styleOverrides (the `.style-override` class the StyleOverridesContribution toggles
+		// only when this is on): the calm floating-card panels AND, critically, the labelled 76px icon-nav
+		// (Home / Editor / Templates / Knowledge / Agents rendered with text labels via studio.css ::after)
+		// plus hiding the redundant Workspace tree-rail icon. Without it, restoring the activity bar (above)
+		// would show a raw, unlabelled IDE icon column with the Workspace viewlet icon leaking through --
+		// exactly what #172 says must not happen. A real, user-overridable setting, so still additive.
+		'workbench.experimental.modernUI': true,
 		// iter 2 -- kill the cold-launch noise + trust leaks
 		'security.workspace.trust.enabled': false,
 		'workbench.welcomePage.experimentalOnboarding': false,
@@ -290,19 +300,6 @@ class HideIdeContainersContribution extends Disposable implements IWorkbenchCont
 	}
 }
 registerWorkbenchContribution2(HideIdeContainersContribution.ID, HideIdeContainersContribution, WorkbenchPhase.BlockRestore);
-
-// G4 (remove IDE optionality): the calm shell has no user-resizable panes. Lock every layout
-// sash into a non-draggable state at startup. The lock is global + sticky, so sashes created
-// later (and re-evaluated on every layout) stay non-interactive. CORE-PATCH (merge-tax ledger).
-class LockLayoutSashesContribution extends Disposable implements IWorkbenchContribution {
-	static readonly ID = 'workbench.contrib.livingDocs.lockLayoutSashes';
-
-	constructor() {
-		super();
-		lockAllSashes();
-	}
-}
-registerWorkbenchContribution2(LockLayoutSashesContribution.ID, LockLayoutSashesContribution, WorkbenchPhase.BlockRestore);
 
 // --- Studio right panel (Chat / Review / History) in the auxiliary bar ---
 const reviewIcon = registerIcon('living-docs-review', Codicon.checklist, localize('livingDocs.reviewIcon', "Living Documents review rail"));
@@ -564,12 +561,21 @@ registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContri
 // between a screen and the editor, so a user who pops a rail closed while editing keeps it closed as
 // they move document to document. The 76px labeled nav (ACTIVITYBAR_PART) is intentionally NOT touched
 // here: it is how you move between surfaces. ADDITIVE-CONTRIBUTION (our-surface, no core patch): it
-// only reads the active editor and toggles part visibility + the comp widths via IWorkbenchLayoutService.
+// only reads the active editor and toggles part visibility via IWorkbenchLayoutService.
+//
+// (issue #173) The rail WIDTHS (264/392) are a FIRST-RUN default only, seeded once per profile. After
+// that the sashes are draggable (the global sash lock is gone) and the workbench persists whatever the
+// user drags natively, so we never re-pin -- doing so would clobber the user's chosen width on every
+// screen->editor crossing. The part-level minimum widths (170px, stock) keep the rails usable.
 class RailVisibilityContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.railVisibility';
+	// Set once the first-run 264/392 default has been seeded; afterwards the user's persisted width wins.
+	static readonly RAIL_WIDTHS_SEEDED_KEY = 'livingDocs.railWidthsSeeded';
+	private static readonly DEFAULT_SIDEBAR_WIDTH = 264;
+	private static readonly DEFAULT_AUXILIARYBAR_WIDTH = 392;
 
 	private _lastKind: 'doc' | 'screen' | undefined;
-	// The single pending re-assert/pin timeout (replaced each sync so repeated editor changes never
+	// The single pending re-assert/seed timeout (replaced each sync so repeated editor changes never
 	// accumulate disposables on the class store).
 	private readonly _deferred = this._register(new MutableDisposable());
 
@@ -577,6 +583,7 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 		@IEditorService private readonly _editorService: IEditorService,
 		@IViewsService private readonly _viewsService: IViewsService,
 		@IWorkbenchLayoutService private readonly _layoutService: IWorkbenchLayoutService,
+		@IStorageService private readonly _storageService: IStorageService,
 	) {
 		super();
 		this._sync();
@@ -613,18 +620,30 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 		this._layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
 		this._layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
 		// Land the sidebar on the calm Workspace tree-rail (not the native Explorer) and reveal the review
-		// rail without stealing focus, then pin the comp widths. Sizing runs after a layout tick (and once
-		// more) so it wins the workbench's own size restore; setSize is a no-op while a part is hidden.
+		// rail without stealing focus.
 		void this._viewsService.openView(DOCUMENTS_VIEW_ID, false);
 		void this._viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
-		const pin = () => {
+		this._seedDefaultWidthsOnce();
+	}
+
+	// Seed the 264/392 rail widths ONCE per profile. After the first run the sashes are draggable and the
+	// workbench persists the user's chosen width, so we must not re-apply the default (that would clobber a
+	// dragged width every time the user crosses from a screen back into the editor -- issue #173).
+	private _seedDefaultWidthsOnce(): void {
+		if (this._storageService.getBoolean(RailVisibilityContribution.RAIL_WIDTHS_SEEDED_KEY, StorageScope.PROFILE, false)) {
+			return;
+		}
+		// Seeding runs after a layout tick (and once more) so it wins the workbench's own size restore;
+		// setSize is a no-op while a part is hidden.
+		const seed = () => {
 			try {
-				this._layoutService.setSize(Parts.SIDEBAR_PART, { width: 264, height: this._layoutService.getSize(Parts.SIDEBAR_PART).height });
-				this._layoutService.setSize(Parts.AUXILIARYBAR_PART, { width: 392, height: this._layoutService.getSize(Parts.AUXILIARYBAR_PART).height });
-			} catch (e) { /* layout not ready in some hosts; the default widths still apply */ }
+				this._layoutService.setSize(Parts.SIDEBAR_PART, { width: RailVisibilityContribution.DEFAULT_SIDEBAR_WIDTH, height: this._layoutService.getSize(Parts.SIDEBAR_PART).height });
+				this._layoutService.setSize(Parts.AUXILIARYBAR_PART, { width: RailVisibilityContribution.DEFAULT_AUXILIARYBAR_WIDTH, height: this._layoutService.getSize(Parts.AUXILIARYBAR_PART).height });
+			} catch (e) { /* layout not ready in some hosts; the config default widths still apply */ }
 		};
-		this._deferred.value = disposableTimeout(pin, 0);
-		pin();
+		this._deferred.value = disposableTimeout(seed, 0);
+		seed();
+		this._storageService.store(RailVisibilityContribution.RAIL_WIDTHS_SEEDED_KEY, true, StorageScope.PROFILE, StorageTarget.MACHINE);
 	}
 }
 registerWorkbenchContribution2(RailVisibilityContribution.ID, RailVisibilityContribution, WorkbenchPhase.AfterRestored);

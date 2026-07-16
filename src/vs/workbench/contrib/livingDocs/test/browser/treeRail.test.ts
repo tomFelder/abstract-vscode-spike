@@ -230,18 +230,98 @@ suite('treeRail', () => {
 		);
 	});
 
-	test('buildOutline returns headings in order, stripped of Markdown and bind syntax', () => {
-		const d = doc('Weekly', [
-			{ text: '# Weekly Operating Summary', level: 1 },
-			{ text: '## [Highlights](bind:x)', level: 2 },
-			{ text: '## Key metrics', level: 2 },
-		], 'body');
+	test('buildOutline returns headings in order (living OR plain doc), stripped of Markdown/bind syntax, with a stable headingIndex that skips blank headings', () => {
+		// A PLAIN Markdown document (isLiving: false) still gets a full outline (issue #181). The outline is
+		// derived from the RAW body the editor renders, so a blank ATX heading (`##` with no text) is not shown
+		// as a row but STILL advances headingIndex, keeping each entry lined up with the Nth rendered `<hN>`.
+		const body = [
+			'# Weekly Operating Summary',
+			'',
+			'## [Highlights](bind:x)',
+			'',
+			'Prose in between.',
+			'',
+			'##   ',
+			'',
+			'## Key metrics',
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Notes', [], body), isLiving: false, blocks: [] };
 		assert.deepStrictEqual(buildOutline(d), [
-			{ text: 'Weekly Operating Summary', level: 1 },
-			{ text: 'Highlights', level: 2 },
-			{ text: 'Key metrics', level: 2 },
+			{ text: 'Weekly Operating Summary', level: 1, headingIndex: 0 },
+			{ text: 'Highlights', level: 2, headingIndex: 1 },
+			{ text: 'Key metrics', level: 2, headingIndex: 3 },
 		]);
 		assert.deepStrictEqual(buildOutline(undefined), []);
+	});
+
+	test('buildOutline counts setext + blockquote-nested headings so its indices match the rendered <hN> ordinals (issue #181 regression)', () => {
+		// The DOM the Outline scrolls is rendered by prosemirror-markdown (markdown-it) from the raw body, which
+		// renders SETEXT headings (`Title` underlined by `===`/`---`) and headings nested in a BLOCKQUOTE as real
+		// `<hN>` elements. The old outline counted only single-line ATX headings, so every ordinal after a setext
+		// or blockquote heading drifted and Outline clicks scrolled to the WRONG heading. Deriving the outline
+		// from the same body scan makes the ordinals line up 1:1. `---` after a blank line is a thematic break,
+		// NOT a setext underline, and a fenced code block's `# ...` line is not a heading - both excluded, so the
+		// count matches the DOM exactly. Against the pre-fix (block-ordinal) code the indices would read
+		// 0/1/2/3 and the setext/blockquote headings would be missing entirely, so this asserts the fix.
+		const body = [
+			'Alpha Setext Title',    // rendered <h1> #0 (setext, underlined below)
+			'==================',
+			'',
+			'## Bravo',              // rendered <h2> #1 (ATX)
+			'',
+			'> # Quoted Charlie',    // rendered <h1> #2 (heading inside a blockquote)
+			'',
+			'```',
+			'# Not A Heading',       // inside a fence: NOT rendered as a heading
+			'```',
+			'',
+			'Delta Setext',          // rendered <h2> #3 (setext, `-` underline after content)
+			'------------',
+			'',
+			'---',                   // thematic break (blank line before): NOT a heading
+			'',
+			'### Echo',              // rendered <h3> #4 (ATX)
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Mixed', [], body), isLiving: false, blocks: [] };
+		assert.deepStrictEqual(buildOutline(d), [
+			{ text: 'Alpha Setext Title', level: 1, headingIndex: 0 },
+			{ text: 'Bravo', level: 2, headingIndex: 1 },
+			{ text: 'Quoted Charlie', level: 1, headingIndex: 2 },
+			{ text: 'Delta Setext', level: 2, headingIndex: 3 },
+			{ text: 'Echo', level: 3, headingIndex: 4 },
+		]);
+	});
+
+	test('buildOutline counts list-item-nested headings (markdown-it renders `- # x` inside the <li>) without over-counting lazy/code setext underlines (issue #181 regression)', () => {
+		// markdown-it renders a heading nested in a list item as a real `<hN>` inside the `<li>`, so the Outline
+		// scan must count it or every ordinal after it drifts and clicks scroll to the wrong heading. It must
+		// NOT, however, over-count: a setext underline UNDER a list item only underlines when it reaches the
+		// item's content column (marker width) and sits no more than three columns past it - a less-indented
+		// `===` is a lazy paragraph continuation (no heading) and a more-indented one is a code block (no
+		// heading). Verified against markdown-it in the two-parser harness. Each comment is the rendered <hN>.
+		const body = [
+			'- # Bullet ATX',       // rendered <h1> #0 (ATX inside a `-` list item)
+			'',
+			'1. ## Ordered ATX',    // rendered <h2> #1 (ATX inside a `1.` list item)
+			'',
+			'- Setext In List',     // rendered <h1> #2 (setext: underline reaches the content column)
+			'  ================',
+			'',
+			'- Lazy Not Heading',   // NOT a heading: the `===` is unindented -> lazy paragraph continuation
+			'===',
+			'',
+			'## Tail',              // rendered <h2> #3 (ATX) - proves the count did not drift
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Listy', [], body), isLiving: false, blocks: [] };
+		assert.deepStrictEqual(buildOutline(d), [
+			{ text: 'Bullet ATX', level: 1, headingIndex: 0 },
+			{ text: 'Ordered ATX', level: 2, headingIndex: 1 },
+			{ text: 'Setext In List', level: 1, headingIndex: 2 },
+			{ text: 'Tail', level: 2, headingIndex: 3 },
+		]);
 	});
 
 	test('searchTreeRail matches title or body case-insensitively with a snippet, and ignores blank queries', () => {

@@ -23,7 +23,7 @@ import { ILivingDocsService } from '../common/livingDocs.js';
 import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
-import { applyFocusRequest, applyReady, applyRender, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
+import { applyFocusRequest, applyReady, applyRender, applyRevealHeading, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
 
@@ -83,6 +83,12 @@ export class LivingDocEditor extends EditorPane {
 		this._inputDisposables.add(this._livingDocs.onDidRequestFocusChange(e => {
 			if (this._resource && e.docId === this._resource.toString()) {
 				this._runProto(applyFocusRequest(this._proto, e.changeId));
+			}
+		}));
+		// Outline-to-editor navigation (issue #181): clicking a heading scrolls this surface to it.
+		this._inputDisposables.add(this._livingDocs.onDidRequestRevealHeading(e => {
+			if (this._resource && e.docId === this._resource.toString()) {
+				this._runProto(applyRevealHeading(this._proto, e.headingIndex));
 			}
 		}));
 		await this._livingDocs.loadDocument(input.resource);
@@ -418,6 +424,9 @@ export class LivingDocEditor extends EditorPane {
 					break;
 				case 'postFocus':
 					void this._webview.postMessage({ type: 'focusChange', id: effect.id });
+					break;
+				case 'postRevealHeading':
+					void this._webview.postMessage({ type: 'revealHeading', headingIndex: effect.headingIndex });
 					break;
 				case 'holdPending':
 					// The render is held in the reducer state; nothing to post until the RUNTIME signals ready.
