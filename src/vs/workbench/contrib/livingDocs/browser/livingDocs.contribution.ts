@@ -154,8 +154,10 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		// (issue #182, leak 1) The docs live inside a git repo, so opening the folder makes the built-in
 		// git extension raise the stock "A git repository was found in the parent folders..." toast --
 		// meaningless in a document tool. The `never` value is a real, user-overridable git setting that
-		// suppresses that prompt at the source: the git model only calls `showParentRepositoryNotification()`
-		// when this reads `prompt` (extensions/git/src/model.ts:632-642), so `never` skips it entirely
+		// suppresses that prompt at the source: the git model gates BOTH of its parent-repository prompt sites
+		// on the setting reading `prompt` -- the initial-scan path (extensions/git/src/model.ts:336-339) and the
+		// per-repository open path (extensions/git/src/model.ts:632-642) both call `showParentRepositoryNotification()`
+		// only when `openRepositoryInParentFolders === 'prompt'`, so `never` skips both entirely
 		// without opening the parent repo. No livingDocs feature depends on the git extension (the SCM
 		// container is deregistered above), so this is pure settings-tier suppression -- 0 core patch.
 		'git.openRepositoryInParentFolders': 'never',
