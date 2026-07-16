@@ -27,7 +27,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
@@ -147,7 +147,7 @@ function bindingIsFresh(current: IResolution | undefined, entry: IBindingEntry):
 }
 
 // Model-backed features (Review-impact rewrites, the Strategy grader, chat) call the model through a local
-// proxy (scripts/lwd-anthropic-proxy.js) so no credential ever reaches the renderer (decision 14). The
+// proxy (scripts/lwd-model-broker.js) so no credential ever reaches the renderer (decision 14). The
 // proxy authenticates against a pluggable backend (plan 35: the founder-funded OpenRouter fallback now, the
 // user's own ChatGPT subscription via OpenAI OAuth next) and speaks the Anthropic Messages shape back, so
 // the renderer/service are backend-agnostic. These are the request defaults; the base URL is configurable
@@ -352,7 +352,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Correlated source watchers, one store per loaded document. Disposed/recreated on reload, and
 	// all torn down when the service is disposed.
 	private readonly _watchers = new Map<string, IDisposable>();
-	// Correlated watchers for spreadsheet WORKBOOKS used as sources (issue #131, doc 22 §4), keyed by the
+	// Correlated watchers for spreadsheet WORKBOOKS used as sources (issue #131, doc 22 section 4), keyed by the
 	// workbook URI. Distinct from `_watchers` (per-document source watchers): a workbook is the origin of
 	// extracted CSVs, not a document source itself, so it needs its own watcher that re-extracts on change.
 	// A DisposableMap so re-registering a workbook disposes the old watcher and disposal tears them all down.
@@ -1715,7 +1715,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// --- spreadsheets as CSV sources + PDF as read-only context (issue #131, doc 22 §4) -----------
+	// --- spreadsheets as CSV sources + PDF as read-only context (issue #131, doc 22 section 4) -----------
 	// A workbook's sheets extract to plain CSVs under `data/<workbook>/`; the workbook is watched and
 	// re-extracts on change. A PDF's text is extracted to a portable cache and the PDF becomes a read-only
 	// `context` edge. All heavy parsing runs in the node/proxy layer (P6); the renderer only writes the
@@ -2970,7 +2970,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const target = joinPath(dirname(resource), `${stem}.export.docx`);
 		try {
 			// Conversion runs in the node/proxy layer where file access + Node libs live, never the renderer
-			// (doc 22 §3): the proxy's /export/docx route returns the .docx bytes we write beside the document.
+			// (doc 22 section 3): the proxy's /export/docx route returns the .docx bytes we write beside the document.
 			const context = await this._request.request({
 				type: 'POST',
 				url: `${this._proxyUrl()}/export/docx`,
@@ -2999,7 +2999,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// The command the desktop build registers (electron-browser/livingDocsPdf.contribution) to print an HTML
 	// page to PDF bytes via Electron's own print engine. It is ABSENT on the web dev harness, where PDF is
-	// honestly unavailable rather than a broken button (doc 22 §3; desktop is the beta vehicle).
+	// honestly unavailable rather than a broken button (doc 22 section 3; desktop is the beta vehicle).
 	static readonly PRINT_TO_PDF_COMMAND = '_livingDocs.printToPDF';
 
 	async exportPdf(resource: URI, force = false): Promise<URI | undefined> {
@@ -3008,7 +3008,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const gate = await this._gateExport(state, force);
 		if (gate.blocked) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
 		// The existing self-contained HTML export IS the PDF's page; images are inlined as data URIs so the
-		// offscreen print has no project-folder dependency (doc 22 §3: reuse the HTML export, no new renderer).
+		// offscreen print has no project-folder dependency (doc 22 section 3: reuse the HTML export, no new renderer).
 		let html = renderExportHtml(state.doc, this.getResolved(resource));
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
 		const { images } = await this._collectExportImages(resource, markdown);
@@ -3018,7 +3018,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.pdf`);
 		try {
-			// Print-to-PDF runs through Electron's main process (doc 22 §3); the browser service reaches it
+			// Print-to-PDF runs through Electron's main process (doc 22 section 3); the browser service reaches it
 			// through the desktop-only command so it stays free of a desktop dependency. A missing command
 			// (web harness) or a failed print returns undefined -> honest message, never a broken write.
 			const bytes = await this._commands.executeCommand<VSBuffer | undefined>(LivingDocsService.PRINT_TO_PDF_COMMAND, html);
@@ -3474,22 +3474,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	async getModelProviderStatus(): Promise<IModelProviderStatus> {
-		const fallback: IModelProviderStatus = { provider: 'none', signedIn: false, dailyBudgetUsd: 0 };
+		// The broker not answering at all is a DISTINCT state from a reachable-but-unconfigured backend (issue
+		// #170): only the former means "the broker is not up yet". The catch below is the broker-down case.
+		const brokerDown: IModelProviderStatus = { provider: 'none', readiness: 'broker-down', signedIn: false, dailyBudgetUsd: 0 };
 		try {
 			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/healthz`, callSite: 'livingDocs.providerStatus', disableCache: true }, CancellationToken.None);
-			const json = await asJson<{ ok?: boolean; backend?: string; meters?: boolean; signedIn?: boolean; dailyBudgetUsd?: number; dailyTotalUsd?: number }>(context);
-			if (!json) { return fallback; }
+			const json = await asJson<{ ok?: boolean; backend?: string; reason?: string; meters?: boolean; signedIn?: boolean; dailyBudgetUsd?: number; dailyTotalUsd?: number }>(context);
+			if (!json) { return brokerDown; }
 			const signedIn = json.signedIn === true;
 			let provider: ModelProvider = 'none';
 			if (json.ok === true) { provider = json.backend === 'openai-oauth' ? 'chatgpt' : 'included'; }
+			// Map the broker's own `reason` to our readiness; fall back to deriving it from `ok` for older brokers.
+			const readiness: ModelReadiness = json.reason === 'budget-paused' ? 'budget-paused'
+				: json.reason === 'ready' ? 'ready'
+					: json.reason === 'unconfigured' ? 'unconfigured'
+						: json.ok === true ? 'ready' : 'unconfigured';
 			return {
 				provider,
+				readiness,
 				signedIn,
 				dailyBudgetUsd: typeof json.dailyBudgetUsd === 'number' ? json.dailyBudgetUsd : 0,
 				dailyTotalUsd: json.meters === true && typeof json.dailyTotalUsd === 'number' ? json.dailyTotalUsd : undefined,
 			};
 		} catch {
-			return fallback;
+			return brokerDown;
 		}
 	}
 
@@ -3998,7 +4006,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		if (!await this._hasModel()) {
 			return {
-				answer: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this project and its sources.',
+				answer: MODEL_UNAVAILABLE_MESSAGE,
 				citations: [],
 				via: 'fallback',
 			};
@@ -4158,7 +4166,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					history.push({ role: 'assistant', via: 'fallback', content: outcome.content, failedDocs: outcome.failedDocs });
 					return;
 				}
-				history.push({ role: 'assistant', via: 'fallback', content: 'The agent model is not reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) and I can answer using this document and its sources.' });
+				history.push({ role: 'assistant', via: 'fallback', content: MODEL_UNAVAILABLE_MESSAGE });
 				return;
 			}
 			const reply = workingSet.length

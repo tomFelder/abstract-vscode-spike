@@ -24,10 +24,11 @@ suite('livingDocs fanoutOutcome (F14, issue #123)', () => {
 		assert.strictEqual(outcome.isError, true, 'the run is an honest error');
 		assert.strictEqual(outcome.isPaused, false);
 		assert.deepStrictEqual(outcome.failedDocs, failedDocs, 'all failed docs are carried for Retry failed');
-		// Names the model as unreachable (matching the single-doc rail's tone) and lists every failed document.
-		assert.ok(/The agent model is not reachable/.test(outcome.content), 'names the model as unreachable');
+		// Names the model as unavailable (matching the single-doc rail's tone) and lists every failed document.
+		assert.ok(/The model was not available/.test(outcome.content), 'names the model as unavailable');
 		assert.ok(/Access Control, Acceptable Use, Cryptography/.test(outcome.content), 'lists every failed document');
-		assert.ok(/scripts\/lwd-anthropic-proxy\.sh/.test(outcome.content), 'points at the local proxy like the single-doc rail');
+		assert.ok(/Open Model access to connect a model/.test(outcome.content), 'points at the Model access screen, never a shell script');
+		assert.ok(!/lwd-anthropic-proxy|local proxy|\.sh/.test(outcome.content), 'never references a shell script');
 		assert.ok(/Retry failed/.test(outcome.content), 'offers the surgical retry affordance');
 		// Crucially never an all-clear.
 		assert.ok(!/no changes|nothing to change|did not find anything/i.test(outcome.content), 'never reads as an all-clear');
@@ -40,7 +41,7 @@ suite('livingDocs fanoutOutcome (F14, issue #123)', () => {
 		assert.strictEqual(outcome.isError, true);
 		assert.deepStrictEqual(outcome.failedDocs, failedDocs, 'only the failed doc is offered for retry (surgical)');
 		assert.ok(/2 changes proposed/.test(outcome.content), 'reports the proposals that landed');
-		assert.ok(/The agent model is not reachable for 1 document: Acceptable Use/.test(outcome.content), 'names the single failure');
+		assert.ok(/The model was not available for 1 document: Acceptable Use/.test(outcome.content), 'names the single failure');
 		assert.ok(/Retry failed to re-run just those/.test(outcome.content), 'the retry re-runs just the failed docs');
 		assert.ok(!/no changes|nothing to change/i.test(outcome.content), 'never an all-clear on a partial success');
 	});
