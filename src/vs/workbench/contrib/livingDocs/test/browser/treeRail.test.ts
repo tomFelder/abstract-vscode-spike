@@ -7,7 +7,7 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, isAssetName, ITreeRailNode, searchTreeRail } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, isAssetName, ITreeRailNode, searchTreeRail } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -197,6 +197,22 @@ suite('treeRail', () => {
 		// Ids are stable + path-based so selection + persisted collapse state survive re-renders/restart.
 		const assetsNode = sources.children.find(c => c.type === 'folder')!;
 		assert.strictEqual(assetsNode.id, 'folder:Sources/Assets');
+	});
+
+	test('collectAssetsFolderIds finds the Assets bucket id so the view can seed it collapsed on first open (issue #171)', () => {
+		const A = URI.file('/ws/report.md');
+		const withAssets = buildTreeRailNodes(
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
+			['shot-1.png', 'shot-2.png', 'data.csv'],
+		);
+		const noAssets = buildTreeRailNodes(
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
+			['data.csv'],
+		);
+		assert.deepStrictEqual(
+			{ withAssets: collectAssetsFolderIds(withAssets), noAssets: collectAssetsFolderIds(noAssets), constId: ASSETS_FOLDER_ID },
+			{ withAssets: ['folder:Sources/Assets'], noAssets: [], constId: 'folder:Sources/Assets' },
+		);
 	});
 
 	test('buildOutline returns headings in order, stripped of Markdown and bind syntax', () => {

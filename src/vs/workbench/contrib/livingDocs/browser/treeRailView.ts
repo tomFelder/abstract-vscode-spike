@@ -28,7 +28,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildOutline, buildTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
+import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 
 type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
@@ -94,6 +94,11 @@ export class TreeRailView extends ViewPane {
 	// Persisted (workspace-scoped) collapse state for the Files tree, keyed by folder node id so expansion
 	// survives restart (issue #171). Owned by this view - no reaching into another component's storage keys.
 	private static readonly COLLAPSED_STORAGE_KEY = 'livingDocs.treeRail.filesCollapsed';
+	// One-time flag: the Assets bucket defaults to collapsed on first open (so ~400 screenshots never flood the
+	// tree, issue #171), but after that it behaves like any other folder - user expand/collapse persists. The
+	// collapsed set stores COLLAPSED ids, so we cannot tell "never seeded" from "user expanded Assets" without
+	// this marker; once set we never re-seed, so the user's choice always wins from then on.
+	private static readonly ASSETS_SEEDED_STORAGE_KEY = 'livingDocs.treeRail.assetsSeeded';
 
 	private _readCollapsedFolders(): Set<string> {
 		const raw = this._storageService.get(TreeRailView.COLLAPSED_STORAGE_KEY, StorageScope.WORKSPACE);
@@ -108,6 +113,20 @@ export class TreeRailView extends ViewPane {
 
 	private _persistCollapsedFolders(): void {
 		this._storageService.store(TreeRailView.COLLAPSED_STORAGE_KEY, JSON.stringify([...this._collapsedFolders]), StorageScope.WORKSPACE, StorageTarget.USER);
+	}
+
+	// The one-time default: on the first Files render for a workspace, mark every Assets bucket collapsed so the
+	// screenshot flood never appears (issue #171 acceptance). Guarded by a persisted seed flag so it fires once;
+	// thereafter the user's expand/collapse of Assets persists like any other folder via onDidChangeCollapseState.
+	private _seedAssetsCollapsed(nodes: readonly ITreeRailNode[]): void {
+		if (this._storageService.getBoolean(TreeRailView.ASSETS_SEEDED_STORAGE_KEY, StorageScope.WORKSPACE, false)) { return; }
+		const assetsIds = collectAssetsFolderIds(nodes);
+		// Only seed (and mark seeded) once an Assets bucket actually exists - so a first render before any
+		// screenshots exist does not burn the one-shot and leave a later flood expanded.
+		if (!assetsIds.length) { return; }
+		for (const id of assetsIds) { this._collapsedFolders.add(id); }
+		this._persistCollapsedFolders();
+		this._storageService.store(TreeRailView.ASSETS_SEEDED_STORAGE_KEY, true, StorageScope.WORKSPACE, StorageTarget.USER);
 	}
 
 	protected override renderBody(container: HTMLElement): void {
@@ -171,6 +190,9 @@ export class TreeRailView extends ViewPane {
 			append(panel, $('div.rail-empty')).textContent = 'No documents yet.';
 			return;
 		}
+		// First open of this workspace: seed the Assets bucket(s) collapsed so the screenshot flood never renders.
+		// One-time only - after this the bucket persists whatever the user chooses, like every other folder.
+		this._seedAssetsCollapsed(nodes);
 		panel.classList.add('rail-panel-files');
 
 		// The bulk-import banner (doc 22 section 2, the 2b moment): when several Word documents are waiting,
@@ -248,7 +270,8 @@ export class TreeRailView extends ViewPane {
 	}
 
 	// Map a data node to the widget's element tree, applying the persisted collapse state to folders (a folder
-	// defaults to expanded unless the user collapsed it; leaves are never collapsible).
+	// defaults to expanded unless the user collapsed it - except the Assets bucket, which is seeded collapsed on
+	// first open by _seedAssetsCollapsed so the screenshot flood never renders; leaves are never collapsible).
 	private _toTreeElement(node: ITreeRailNode): IObjectTreeElement<ITreeRailNode> {
 		if (node.type === 'leaf') { return { element: node }; }
 		return {

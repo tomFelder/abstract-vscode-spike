@@ -2,36 +2,49 @@
 
 Branch: `feat/171-tree-rail-real-tree`. Worktree: `/Users/tommy/Sites/abstract-wt-bundle-e`.
 
+## Fix round: Assets bucket defaults collapsed on first open
+
+The blocker from validation was that the "Assets (N)" bucket defaulted to EXPANDED, so on first
+open of the docs workspace all 399 screenshots still flooded the Files tree - the exact thing
+issue #171 forbids. The code comments already claimed the Assets node was "collapsed by default";
+the code now matches.
+
+### Approach
+
+The Assets bucket is now seeded collapsed exactly once per workspace, the first time the Files
+tree is built (`_seedAssetsCollapsed`, `treeRailView.ts`). A one-time boolean workspace-storage
+flag (`livingDocs.treeRail.assetsSeeded`) records that the seed has run. On the first-ever build
+that actually contains an Assets bucket, its id (`folder:Sources/Assets`, discovered via the pure
+`collectAssetsFolderIds` helper in `treeRail.ts`) is added to the existing collapsed set and
+persisted; after that the flag suppresses re-seeding forever. Because the collapsed set stores
+COLLAPSED ids, "user expanded Assets" means the id is simply absent - so once the user touches
+Assets it behaves exactly like any other folder through the existing `onDidChangeCollapseState`
+persistence, and their choice wins on every subsequent restart. This is the least machinery: one
+boolean flag reusing the existing collapse persistence, no new storage schema. The seed is only
+burned once a real Assets bucket exists, so a first render before any screenshots exist does not
+waste the one-shot and leave a later flood expanded.
+
 ## Automated verification (all green)
 
 - `npm run typecheck-client`: 0 errors.
 - `npm run valid-layers-check`: clean.
-- `./scripts/test.sh --grep "livingDocs"`: 127 passing, 4 failing - and the 4 failures are exactly the documented known-baseline screenRender failures (intro headline, resume status, "From sources..." row, pending sign-in). Zero new failures. The new `treeRail` data-shaping tests (`buildTreeRailNodes`, `isAssetName`, plus the pre-existing `buildFileTree` cases) all pass.
+- `./scripts/test.sh --grep "treeRail"`: 12 passing (was 11) - added `collectAssetsFolderIds`
+  coverage; all pre-existing cases still pass.
 
-## Live E2E - blocked by a pre-existing, fork-wide broken extension build
+## Live E2E (captured this round)
 
-Live E2E screenshots (a)-(f) could NOT be captured. Both build paths the launch/web
-skills need require a full built-in-extension compile, and that compile fails on this
-checkout for reasons unrelated to this change:
+Driven via the launch skill against the real workbench, fresh profile, workspace
+`/Users/tommy/Sites/abstract-vscode-spike/docs` (399 loose screenshots). Assets node state read
+directly from the tree widget's `aria-expanded` attribute.
 
-1. The machine's Data volume was at 100% at the start of the run, which truncated the
-   initial `npm install` and corrupted several extensions' `node_modules` (e.g.
-   `references-view/@types/node/process.d.ts` was truncated mid-file: `TS1010 '*/' expected`).
-   Cleaning the npm cache freed space and clean-reinstalling individual extensions fixed the
-   truncated files, but:
-2. A version-skew that is present on `main` too then surfaces: multiple extensions pin
-   `@types/node@24.12.4` with `undici-types@7.16.0`, and that `undici-types` build does not
-   re-export `WebSocket`/`CloseEvent`/`MessageEvent` from its index - so `@types/node`'s
-   `http.d.ts`/`fetch.d.ts` fail with `TS2694`. Verified identical version pair and missing
-   export on the `main` worktree, so a fresh extension rebuild on `main` would fail the same
-   way. `main` only runs because its extension `out/`/`dist` were built earlier and have not
-   been recompiled since.
+- `01-first-open-assets-collapsed-no-flood.png` - **(a)** first open, zero interaction: `Assets (399)`
+  renders `aria-expanded=false`, zero png rows rendered. Sources shows only the data files (csv / json
+  / txt / pdf / xlsx); no screenshot flood.
+- `02-assets-expanded-by-user.png` - user expands Assets manually; png rows appear (`aria-expanded=true`).
+- `03-restart-assets-stays-expanded.png` - **(b)** restart same profile: `Assets (399)` stays
+  `aria-expanded=true`, png rows visible - user intent respected. Persisted collapsed set confirmed to
+  NOT contain the Assets id.
+- `04-restart-collapse-persisted.png` - **(c)** collapse Assets again, restart: `aria-expanded=false`,
+  zero png rows. Persisted collapsed set confirmed to contain `folder:Sources/Assets`.
 
-Because this blocker is a pre-existing environment/dependency condition (reproducible on
-`main`) and is orthogonal to the Files-tab change, the core code was verified via the
-type checker, the layers checker, and the full unit-test suite instead. The core client
-(`out/vs/**`, which is all this change touches) compiles cleanly with `npm run gulp compile-client`.
-
-A follow-up to unblock live E2E: pin `undici-types` to `~6.21` (matching `@types/node@24.x`)
-across the affected built-in extensions, or repair the corrupted extension `node_modules`
-with a clean full `npm install` on a machine with adequate free disk.
+The `validator/` subfolder retains the original validation-round screenshots.

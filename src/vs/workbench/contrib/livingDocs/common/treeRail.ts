@@ -217,6 +217,21 @@ export interface ITreeRailLeafNode {
 
 export type ITreeRailNode = ITreeRailFolderNode | ITreeRailLeafNode;
 
+/** Id of the collapsed screenshot bucket under Sources; the view seeds this collapsed on first open (issue #171). */
+export const ASSETS_FOLDER_ID = 'folder:Sources/Assets';
+
+/** Every Assets bucket id present in a node tree, so the view can seed them collapsed on first build (issue #171). */
+export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[] {
+	const ids: string[] = [];
+	const walk = (node: ITreeRailNode): void => {
+		if (node.type !== 'folder') { return; }
+		if (node.id === ASSETS_FOLDER_ID) { ids.push(node.id); }
+		for (const c of node.children) { walk(c); }
+	};
+	for (const n of nodes) { walk(n); }
+	return ids;
+}
+
 /**
  * The node tree the Files tab renders on the VS Code tree widget (issue #171). Reuses `buildFileTree` for
  * the grouping + on-disk hierarchy, then:
@@ -253,7 +268,7 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 			const assets = group.items.filter(i => isAsset(i.label));
 			const children: ITreeRailNode[] = visible.map(item => ({ type: 'leaf', id: `${id}/leaf:${item.label}`, item }));
 			if (assets.length) {
-				const assetsId = `${id}/Assets`;
+				const assetsId = ASSETS_FOLDER_ID;
 				children.push({
 					type: 'folder',
 					id: assetsId,
