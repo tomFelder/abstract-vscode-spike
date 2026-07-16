@@ -57,16 +57,18 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 	const dot = (color: string) => `<span style="width:10px;height:10px;border-radius:50%;background:${color}"></span>`;
 	const headText = docTitle ? esc(docTitle).toUpperCase() : 'VERSION HISTORY';
 	const label = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;padding:0 2px">${docTitle ? `VERSION HISTORY &middot; ${headText}` : 'VERSION HISTORY'}</div>`;
-	// The manual "Save version" entry point (D26-B): only offered while a living document is open so the
-	// action always has a body to snapshot. Routes through saveSnapshot(..., 'manual').
+	// The manual "Save version" entry point (D26-B): offered while ANY document is open (living or plain
+	// Markdown). saveSnapshot writes the body to the `<doc>.lock.json` regardless of `isLiving`, so a plain
+	// document can pin versions too (issue #181); the action always has a body to snapshot.
 	const saveBtn = docTitle
 		? `<button data-save-version style="border:1px solid #e0e2e8;border-radius:7px;padding:5px 9px;background:#fff;color:#52575f;font:600 10.5px/1 system-ui;cursor:pointer">&#9998; Save version</button>`
 		: '';
 	const head = `<div style="display:flex;align-items:center;gap:8px;padding:0 2px 16px">${label}<span style="flex:1"></span>${saveBtn}</div>`;
 
-	// No document open: a calm, honest prompt rather than a fabricated timeline.
+	// No document open: a calm, honest prompt rather than a fabricated timeline. Versions apply to any open
+	// document, not only Living Documents, so the prompt says "a document" (issue #181).
 	if (!docTitle) {
-		return head + `<div style="font:400 12.5px/1.6 system-ui;color:#a3a8b2;padding:8px 2px">Open a Living Document to see its version history.</div>`;
+		return head + `<div style="font:400 12.5px/1.6 system-ui;color:#a3a8b2;padding:8px 2px">Open a document to see its version history.</div>`;
 	}
 
 	const restoreBtn = (id: string) =>

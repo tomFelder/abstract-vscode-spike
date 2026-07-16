@@ -183,6 +183,13 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 export interface IOutlineEntry {
 	readonly text: string;
 	readonly level: number;
+	/**
+	 * The heading's zero-based ordinal among ALL heading blocks in document order. The editor's ProseMirror
+	 * surface renders one `<h1..h6>` per heading block in the same order, so this index is the anchor the
+	 * Outline tab uses to scroll the surface to a clicked heading (issue #181) - no drifting text/slug match.
+	 * Counts every heading (even a blank one that is not shown as a row) so it lines up with the rendered DOM.
+	 */
+	readonly headingIndex: number;
 }
 
 const HEADING_PREFIX_RE = /^#{1,6}\s+/;
@@ -192,10 +199,13 @@ const BIND_LINK_RE = /\[([^\]]*)\]\(bind:[^)\s]+\)/g;
 export function buildOutline(doc: ILivingDoc | undefined): IOutlineEntry[] {
 	if (!doc) { return []; }
 	const entries: IOutlineEntry[] = [];
+	let headingIndex = 0;
 	for (const block of doc.blocks) {
 		if (block.type !== 'heading') { continue; }
 		const text = block.text.replace(HEADING_PREFIX_RE, '').replace(BIND_LINK_RE, '$1').trim();
-		if (text) { entries.push({ text, level: block.level ?? 1 }); }
+		if (text) { entries.push({ text, level: block.level ?? 1, headingIndex }); }
+		// Advance for EVERY heading block, shown or not, so the index tracks the rendered `<hN>` ordinal.
+		headingIndex++;
 	}
 	return entries;
 }

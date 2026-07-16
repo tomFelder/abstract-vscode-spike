@@ -333,6 +333,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidRequestFocusChange = this._register(new Emitter<{ docId: string; changeId: string }>());
 	readonly onDidRequestFocusChange: Event<{ docId: string; changeId: string }> = this._onDidRequestFocusChange.event;
 
+	private readonly _onDidRequestRevealHeading = this._register(new Emitter<{ docId: string; headingIndex: number }>());
+	readonly onDidRequestRevealHeading: Event<{ docId: string; headingIndex: number }> = this._onDidRequestRevealHeading.event;
+
 	private readonly _docs = new Map<string, IDocState>();
 	// Raw source text by `${docUri}::${source}`, cached during resolution so getSourcePeek (sync) can
 	// build the comp's raw CSV grid for the in-surface source-peek pane.
@@ -708,6 +711,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (change) {
 			this._onDidRequestFocusChange.fire({ docId: change.docId, changeId });
 		}
+	}
+
+	revealHeading(resource: URI, headingIndex: number): void {
+		// The Outline tab (issue #181) asks the editor pane showing this document to scroll to a heading.
+		// Navigate-only, mirroring focusChange: the editor listens and posts the reveal to its webview.
+		this._onDidRequestRevealHeading.fire({ docId: resource.toString(), headingIndex });
 	}
 
 	// --- the "Documents" home ---

@@ -620,6 +620,10 @@ root.addEventListener('focusout', e => {
 // The change's accept/reject widget carries data-approve="<id>"; reveal its surrounding diff/insert block.
 // A short timeout lets the just-applied decorations lay out before we measure/scroll.
 function focusChange(id){ setTimeout(function(){ try { const el = root.querySelector('[data-approve="' + id + '"]'); const block = el && el.closest('.editblock, .insertblock'); if (block) { block.scrollIntoView({ block: 'center', behavior: 'smooth' }); block.classList.add('lwd-focus-flash'); setTimeout(function(){ block.classList.remove('lwd-focus-flash'); }, 1600); } } catch (e) {} }, 30); }
+// Scroll the surface to the Nth heading and flash it (Outline-to-editor navigation, issue #181). The doc
+// renders one <h1..h6> per heading block in document order, so \`index\` (the heading's ordinal from
+// buildOutline) selects the matching element. A short timeout lets a just-mounted body lay out first.
+function revealHeading(index){ setTimeout(function(){ try { const scope = (pmView && pmView.dom) || root; const heads = scope.querySelectorAll('h1, h2, h3, h4, h5, h6'); const head = heads[index]; if (head) { head.scrollIntoView({ block: 'start', behavior: 'smooth' }); head.classList.add('lwd-focus-flash'); setTimeout(function(){ head.classList.remove('lwd-focus-flash'); }, 1600); } } catch (e) {} }, 30); }
 // ---- In-place table cell editing (issue #140) -------------------------------------------------
 // The shipped bundle renders a GFM table as a static \`table.lwd-table\` atom (contenteditable=false):
 // clicking a cell node-selects the whole table, and the next printable key REPLACES it (a one-keystroke
@@ -674,6 +678,7 @@ window.addEventListener('resize', function(){ revalidateCellEditor(); });
 window.addEventListener('message', e => { const m = e.data;
 	if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); }
 	else if (m && m.type === 'focusChange') { focusChange(m.id); }
+	else if (m && m.type === 'revealHeading') { revealHeading(m.headingIndex); }
 	// The host wrote the pasted/dropped image beside the doc and returns its doc-relative path; insert it.
 	else if (m && m.type === 'imageSaved') { if (typeof m.relPath === 'string') { insertImage(m.relPath, m.alt); } }
 	// The host resolved a relative image to a data URI (or flagged it unreadable): cache + swap, or mark broken.

@@ -137,16 +137,23 @@ suite('treeRail', () => {
 		assert.strictEqual(folders.find(f => f.name === 'Not yet imported'), undefined);
 	});
 
-	test('buildOutline returns headings in order, stripped of Markdown and bind syntax', () => {
-		const d = doc('Weekly', [
-			{ text: '# Weekly Operating Summary', level: 1 },
-			{ text: '## [Highlights](bind:x)', level: 2 },
-			{ text: '## Key metrics', level: 2 },
-		], 'body');
+	test('buildOutline returns headings in order (living OR plain doc), stripped of Markdown/bind syntax, with a stable headingIndex that skips blank headings', () => {
+		// A PLAIN Markdown document (isLiving: false) still gets a full outline (issue #181): the Outline tab
+		// only needs the parsed heading blocks, not source bindings. A blank heading is not shown as a row but
+		// DOES advance headingIndex, so each entry's index still lines up with the Nth rendered `<hN>`.
+		const d: ILivingDoc = {
+			...doc('Notes', [], 'body'), isLiving: false, blocks: [
+				{ id: 'h0', type: 'heading', text: '# Weekly Operating Summary', level: 1, binds: [] },
+				{ id: 'h1', type: 'heading', text: '## [Highlights](bind:x)', level: 2, binds: [] },
+				{ id: 'p0', type: 'paragraph', text: 'Prose in between.', binds: [] },
+				{ id: 'h2', type: 'heading', text: '##   ', level: 2, binds: [] },
+				{ id: 'h3', type: 'heading', text: '## Key metrics', level: 2, binds: [] },
+			]
+		};
 		assert.deepStrictEqual(buildOutline(d), [
-			{ text: 'Weekly Operating Summary', level: 1 },
-			{ text: 'Highlights', level: 2 },
-			{ text: 'Key metrics', level: 2 },
+			{ text: 'Weekly Operating Summary', level: 1, headingIndex: 0 },
+			{ text: 'Highlights', level: 2, headingIndex: 1 },
+			{ text: 'Key metrics', level: 2, headingIndex: 3 },
 		]);
 		assert.deepStrictEqual(buildOutline(undefined), []);
 	});
