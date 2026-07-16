@@ -41,7 +41,6 @@ ACTIVITYBAR="src/vs/workbench/browser/parts/activitybar/activitybarPart.ts"
 BUILTIN_SCANNER="src/vs/workbench/services/extensionManagement/browser/builtinExtensionsScannerService.ts"
 CMD_PALETTE="src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts"
 QUICK_OPEN="src/vs/workbench/browser/actions/quickAccessActions.ts"
-SASH="src/vs/base/browser/ui/sash/sash.ts"
 
 echo "check-seams: verifying the merge-tax ledger's shell seams..."
 
@@ -94,13 +93,8 @@ if ! grep -A20 "id: 'workbench.action.quickOpen'," "$QUICK_OPEN" | grep -q "f1: 
 	fail "quickopen-f1" "workbench.action.quickOpen no longer sets f1:false in $QUICK_OPEN (Cmd+P / command mode back)"
 fi
 
-# --- Seam 5: the global sash lock (core-patch, v3 iter 2 - no user-draggable layout dividers) ---
-if ! grep_has "$SASH" "export function lockAllSashes"; then
-	fail "sash-lock-fn" "lockAllSashes() is gone from $SASH (layout sashes become draggable again)"
-fi
-if ! grep_has "$LDC" "lockAllSashes\(\)"; then
-	fail "sash-lock-call" "the lockAllSashes() call site is gone from $LDC (the lock is never applied)"
-fi
+# --- Seam 5 (RETIRED, issue #173): the global sash lock is intentionally GONE. sash.ts is back to
+# upstream stock and the rails are user-resizable by design, so there is no seam to re-pin here. ---
 
 # --- Seam 6: the studio.css chrome-removal + labeled-nav selectors (styleOverrides, fail-soft) ---
 STUDIO_SELECTORS=(
