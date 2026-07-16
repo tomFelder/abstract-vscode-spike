@@ -1077,9 +1077,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// The on-ramp: prompt for a local folder and open it as the workspace. `showOpenDialog` uses the
 	// browser File System Access picker on web (real-disk, via the html file-system provider) and the
 	// native dialog on desktop; `openWindow` reloads the workbench with the picked folder as the workspace.
-	async openFolder(): Promise<boolean> {
+	async openFolder(beforeOpen?: () => void | Promise<void>): Promise<boolean> {
 		const picked = await this._fileDialog.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, title: 'Open Folder' });
 		if (!picked || !picked.length) { return false; }
+		if (beforeOpen) { await beforeOpen(); }
 		await this._host.openWindow([{ folderUri: picked[0] }], { forceReuseWindow: true });
 		return true;
 	}
@@ -3595,7 +3596,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._notify.notify({
 			severity: Severity.Info,
 			message: 'Nice - that is the sample. Now bring a real folder: the first change you approve on your own file is the moment Abstract is built for.',
-			actions: { primary: [toAction({ id: 'livingDocs.onboarding.bringFolder', label: 'Bring a real folder', run: async () => { if (await this.openFolder()) { this.recordOnboardingStep('first-folder'); } } })] },
+			actions: { primary: [toAction({ id: 'livingDocs.onboarding.bringFolder', label: 'Bring a real folder', run: async () => { await this.openFolder(() => this.recordOnboardingStep('first-folder')); } })] },
 		});
 	}
 
