@@ -276,6 +276,80 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		assert.ok(h.includes('if (_pmEchoSuppressed) { return; }'), 'pmOnChange short-circuits only while suppressed');
 	});
 
+	// Issue #174: the editor bar is a real file breadcrumb - the clickable project (workspace folder), the
+	// document title, and the on-disk file name in muted grey - not the static "Abstract / Markdown" noise.
+	test('the top bar shows a real file breadcrumb (project / title + grey file name), project segment clickable', () => {
+		const content = renderLivingDocContent({
+			doc: { title: '25 - Why Abstract (the one-pager)', subtitle: '', sources: [], context: [], blocks: [], isLiving: false, body: '' },
+			pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
+			present: { open: false, choice: 'html' }, syncDiff: [], projectName: 'docs', fileName: '25-why-abstract.md',
+		});
+		const h = content.html;
+		assert.deepStrictEqual({
+			// the project segment is a real button that navigates back to the project view (posts openProject)
+			projectSegmentClickable: h.includes('class="crumb-proj" data-open-project'),
+			projectSegmentIsFolder: h.includes('>docs</button>'),
+			// the document title fills the middle segment (fed from the same model title that drives the H1)
+			titleSegment: h.includes('class="crumb-title">25 - Why Abstract (the one-pager)<'),
+			// the file name trails in its own muted-grey segment
+			fileNameSegment: h.includes('class="crumb-file">25-why-abstract.md<'),
+			// the static brand/type crumb is gone for a real document (no "Markdown" / "Living Document" type)
+			noTypeCrumb: !h.includes('class="crumb">Markdown<') && !h.includes('class="crumb">Living Document<'),
+		}, {
+			projectSegmentClickable: true,
+			projectSegmentIsFolder: true,
+			titleSegment: true,
+			fileNameSegment: true,
+			noTypeCrumb: true,
+		});
+	});
+
+	// Issue #174: with no workspace folder in play (projectName absent), the bar falls back to the brand crumb
+	// rather than rendering a blank/half breadcrumb - the file breadcrumb needs a project segment to anchor.
+	test('the top bar falls back to the brand crumb when no project name is supplied', () => {
+		const content = renderLivingDocContent({
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
+			present: { open: false, choice: 'html' }, syncDiff: [],
+		});
+		const h = content.html;
+		assert.deepStrictEqual({
+			hasBrandCrumb: h.includes('class="crumb">Living Document<'),
+			noFileBreadcrumb: !h.includes('class="crumb-proj"'),
+		}, { hasBrandCrumb: true, noFileBreadcrumb: true });
+	});
+
+	// Issue #175: the top bar and formatting toolbar run edge-to-edge - they are siblings of the padded prose
+	// wrapper (.pmwrap), not children of it, so their backgrounds/hairline borders reach both rails while only
+	// the prose column carries the 32px/40px wrapper padding + its 30px provenance gutter.
+	test('the header bars are full-bleed siblings of the padded prose wrapper (edge-to-edge chrome)', () => {
+		const content = renderLivingDocContent({
+			doc: { title: '25 - Why Abstract (the one-pager)', subtitle: '', sources: [], context: [], blocks: [], isLiving: false, body: '' },
+			pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
+			present: { open: false, choice: 'html' }, syncDiff: [], projectName: 'docs', fileName: '25-why-abstract.md',
+		});
+		const h = content.html;
+		// The bars precede .pmwrap in document order and are not nested inside it: everything BEFORE the wrapper
+		// opens is the full-bleed chrome; the wrapper and its centred prose column come after.
+		const wrapAt = h.indexOf('<div class="pmwrap">');
+		const chrome = h.slice(0, wrapAt);
+		assert.deepStrictEqual({
+			topBarBeforeWrap: chrome.includes('class="topbar"'),
+			toolbarBeforeWrap: chrome.includes('class="etoolbar"'),
+			// the bars are not wrapped by .pmwrap (no bar markup appears after the wrapper opens, before its close)
+			barsNotInsideWrap: !h.slice(wrapAt).includes('class="topbar"') && !h.slice(wrapAt).includes('class="etoolbar"'),
+			// the centred prose column keeps its 720px max-width + 30px provenance gutter (CSS, asserted via the shell)
+			proseCentred: renderLivingDocHtml({
+				doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
+				present: { open: false, choice: 'html' }, syncDiff: [],
+			}).includes('.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px'),
+		}, {
+			topBarBeforeWrap: true,
+			toolbarBeforeWrap: true,
+			barsNotInsideWrap: true,
+			proseCentred: true,
+		});
+	});
+
 	test('raw mode is reachable and offers the way back to the editor without a separate "rendered" mode', () => {
 		const raw = renderLivingDocContent({
 			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
