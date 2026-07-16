@@ -121,6 +121,30 @@ export interface IFileOpDependent {
 }
 
 /**
+ * One proposed move in a Tidy plan (doc 22 section 5, the P2 folder conventions). The agent PROPOSES,
+ * the human disposes: each item is an individually reviewable move through the review grammar, applied
+ * only on approve. `reason` is the plain-words, mechanical justification (a superseded name, a loose data
+ * file, an imported original) - "outdated" is always a stated suggestion, never a silent assumption.
+ * `dependents` are the documents that reference the moved file; when non-empty the apply re-points their
+ * bindings in the same atomic op (the move's "bindings survive" promise), and the UI warns and lists them
+ * exactly like a map-D6 delete before proceeding - never blocking.
+ */
+export interface ITidyPlanItem {
+	/** The file's current location on disk. */
+	readonly fromResource: URI;
+	/** The proposed destination (inside a convention folder, created on demand at apply time). */
+	readonly toResource: URI;
+	/** The current name for the review row, e.g. "Board Note -old.md". */
+	readonly fromLabel: string;
+	/** The destination as a project-relative path for the review row, e.g. "archive/Board Note -old.md". */
+	readonly toLabel: string;
+	/** The plain-words reason this move is proposed (the human decides on this evidence). */
+	readonly reason: string;
+	/** Documents that reference the moved file; their bindings are re-pointed in the same atomic move. */
+	readonly dependents: readonly IFileOpDependent[];
+}
+
+/**
  * One document that draws on a source (plan 29, iter 1): the dependent document plus the exact bind keys
  * it resolves from that source (empty for a context/influence-only dependency). Powers the Knowledge
  * screen's per-source detail drawer (the documents + keys behind a source, with jump-to-doc).
@@ -696,6 +720,26 @@ export interface ILivingDocsService {
 
 	/** Attach a file to the active document's chat as an `@mention` (docs 20 section 1d, the 1m entry). */
 	attachToChat(resource: URI): void;
+
+	// --- the Tidy verb (doc 22 section 5): propose folder-convention moves through the review grammar ---
+
+	/**
+	 * Build the Tidy move plan for the open project (doc 22 section 5): a deterministic, model-free set of
+	 * proposed moves into the soft convention folders (`data/`, `assets/`, `templates/`, `archive/`,
+	 * `archive/originals/`, `working-files/`), each with a stated mechanical reason. Conservative by design -
+	 * only root files, only clear signals; an already-tidy project returns an empty plan (nothing to tidy).
+	 * Nothing moves here: this only proposes.
+	 */
+	buildTidyPlan(): Promise<readonly ITidyPlanItem[]>;
+
+	/**
+	 * Apply a set of APPROVED Tidy moves (doc 22 section 5, requires F16). Each move is atomic on the lock
+	 * (document + `.lock.json` sidecar together or neither), creates its destination folder on demand,
+	 * re-points every dependent lock's `source` path in the same operation so bindings survive, and refuses
+	 * a clashing destination with a named error (nothing half-applies). Shows one sticky Undo toast that
+	 * inverts every applied move. The caller passes only the items the human approved.
+	 */
+	applyTidyMoves(items: readonly ITidyPlanItem[]): Promise<void>;
 
 	/** The folder's data files (csv/json) not already bound to the document, for the Add-source picker. */
 	getSourceCandidates(resource: URI): Promise<readonly string[]>;
