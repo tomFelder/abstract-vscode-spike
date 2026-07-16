@@ -36,7 +36,8 @@ type PanelTab = 'chat' | 'review' | 'history';
 // assignment, so both go through `safeSetInnerHtml`, which sanitises then resets the node. The default
 // allow-list keeps neither `<button>` nor `style`, so we augment both; `data-*` and `title` survive by
 // default. All interpolated user content (titles, labels) is already `esc()`-escaped by the builders.
-const REVIEW_RAIL_HTML_SANITIZER = Object.freeze({
+// Exported so the regression test (`reviewRailSanitize.test.ts`) exercises the REAL production config.
+export const REVIEW_RAIL_HTML_SANITIZER = Object.freeze({
 	allowedTags: { augment: ['button'] },
 	allowedAttributes: { augment: ['style'] },
 });
