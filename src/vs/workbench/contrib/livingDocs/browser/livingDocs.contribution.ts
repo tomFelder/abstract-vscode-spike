@@ -141,7 +141,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'workbench.editor.showTabs': 'none',
 		'breadcrumbs.enabled': false,
 		// (issue #172) Turn on the Modern UI style-override group by default. This is what activates the
-		// Studio styleOverrides (the `.style-override-studio` class the StyleOverridesContribution toggles
+		// Studio styleOverrides (the `.style-override` class the StyleOverridesContribution toggles
 		// only when this is on): the calm floating-card panels AND, critically, the labelled 76px icon-nav
 		// (Home / Editor / Templates / Knowledge / Agents rendered with text labels via studio.css ::after)
 		// plus hiding the redundant Workspace tree-rail icon. Without it, restoring the activity bar (above)

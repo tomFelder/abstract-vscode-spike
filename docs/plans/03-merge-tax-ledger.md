@@ -157,7 +157,9 @@ small, additive-in-spirit (remove a default, add an opt-in lock), and product-co
 
 All three remove/neutralise an *affordance* rather than re-architecting core; each fails toward *showing
 IDE optionality* on a bad rebase, so re-pin them in the G4 checklist. **G4 now FULLY passes** (palette
-keybindings dead: Cmd+Shift+P / F1 / Cmd+P all no-op; 0 draggable sashes) - verified live, iter 2.
+keybindings dead: Cmd+Shift+P / F1 / Cmd+P all no-op) - verified live, iter 2. (The sash-lock half of
+this G4 claim was later REVERTED for issue #173: rails are draggable again by design - see the
+struck-through row 3 above and the bundle-c section below.)
 
 ### v6 chat-on-document loop (plan 14) iter 1 — settle + prove: still 0 added core patches
 

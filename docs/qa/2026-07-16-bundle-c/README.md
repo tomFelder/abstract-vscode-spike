@@ -1,6 +1,6 @@
 # Bundle C QA - issues #172 (icon-nav) + #173 (rail resizing)
 
-Branch `fix/172-173-iconnav-sashes`. Live evidence captured by driving a from-sources Code OSS build (launch skill) against the `docs/` folder. All checks pass: `typecheck-client` clean, `valid-layers-check` clean (exit 0), `check-seams.sh` OK, and no new unit-test failures (livingDocs 127 passing / 4 pre-existing screenRender failures known on main; Splitview 17, Grid 49, Activitybar 14, treeRail 8 all passing).
+Branch `fix/172-173-iconnav-sashes`. Live evidence captured by driving a from-sources Code OSS build (launch skill) against the `docs/` folder. Required checks pass: `typecheck-client` clean, `valid-layers-check` clean (exit 0), `check-seams.sh` OK, and no new unit-test failures; the four `screenRender` failures are pre-existing on main (livingDocs 127 passing / 4 pre-existing screenRender failures known on main; Splitview 17, Grid 49, Activitybar 14, treeRail 8 all passing).
 
 | Shot | What it proves |
 |------|----------------|
