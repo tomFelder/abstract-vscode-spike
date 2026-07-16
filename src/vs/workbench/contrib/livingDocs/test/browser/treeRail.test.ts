@@ -7,7 +7,15 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { buildFileTree, buildOutline, classifyWorkspaceExtra, searchTreeRail } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, isAssetName, ITreeRailNode, searchTreeRail } from '../../common/treeRail.js';
+
+// Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
+// show label + kind. Ids are checked separately where they matter (persistence + identity).
+function project(nodes: readonly ITreeRailNode[]): unknown {
+	return nodes.map(n => n.type === 'folder'
+		? { folder: n.label, children: project(n.children) }
+		: { leaf: n.item.label, kind: n.item.kind });
+}
 
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
 const BOARD = URI.file('/ws/Board Note.md');
@@ -135,6 +143,91 @@ suite('treeRail', () => {
 			{ label: 'Report.pdf', kind: 'source', action: 'use-pdf' },
 		]);
 		assert.strictEqual(folders.find(f => f.name === 'Not yet imported'), undefined);
+	});
+
+	test('isAssetName flags image/screenshot files (case-insensitive) and nothing else', () => {
+		assert.deepStrictEqual(
+			['shot.png', 'photo.JPG', 'a.jpeg', 'b.gif', 'c.svg', 'd.webp', 'data.csv', 'notes.txt', 'report.md', 'noext'].map(isAssetName),
+			[true, true, true, true, true, true, false, false, false, false],
+		);
+	});
+
+	test('buildTreeRailNodes shapes the grouped tree into collapsible folder + leaf nodes (issue #171)', () => {
+		const A = URI.file('/ws/root.md');
+		const B = URI.file('/ws/reports/2025/q1.md');
+		const nodes = buildTreeRailNodes([
+			{ title: 'Root Doc', resource: A, pendingCount: 0, sources: ['metrics.csv'], folder: '' },
+			{ title: 'Q1', resource: B, pendingCount: 0, sources: [], folder: 'reports/2025' },
+		]);
+		// Reports keeps the on-disk hierarchy as nested folder nodes; Sources becomes a folder of leaves.
+		assert.deepStrictEqual(project(nodes), [
+			{
+				folder: 'Reports', children: [
+					{ folder: 'reports', children: [{ folder: '2025', children: [{ leaf: 'Q1', kind: 'doc' }] }] },
+					{ leaf: 'Root Doc', kind: 'doc' },
+				]
+			},
+			{ folder: 'Sources', children: [{ leaf: 'metrics.csv', kind: 'source' }] },
+		]);
+	});
+
+	test('buildTreeRailNodes gives same-titled documents distinct resource-based leaf ids so the tree cannot reconcile the wrong row (issue #171)', () => {
+		// Two documents in the same folder can share a title; a label-based leaf id would collide, and the
+		// tree's identityProvider would then select/reconcile the wrong node. Leaf ids derive from the unique
+		// on-disk resource, so the two rows are distinguishable even though their labels are identical.
+		const nodes = buildTreeRailNodes([
+			{ title: 'Status', resource: URI.file('/ws/reports/Status.md'), pendingCount: 0, sources: [], folder: 'reports' },
+			{ title: 'Status', resource: URI.file('/ws/reports/Status-2.md'), pendingCount: 0, sources: [], folder: 'reports' },
+		]);
+		const reports = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'Reports')!;
+		const reportsFolder = reports.children.find((c): c is Extract<ITreeRailNode, { type: 'folder' }> => c.type === 'folder' && c.label === 'reports')!;
+		const leafIds = reportsFolder.children.filter(c => c.type === 'leaf').map(c => c.id);
+		assert.strictEqual(new Set(leafIds).size, 2, 'the two same-titled documents have distinct leaf ids');
+		assert.ok(leafIds.every(id => id.includes('Status')), 'each leaf id carries its own resource');
+	});
+
+	test('buildTreeRailNodes buckets un-bound image assets behind one collapsed Assets node, keeping bound sources visible (issue #171)', () => {
+		const A = URI.file('/ws/report.md');
+		const nodes = buildTreeRailNodes(
+			// chart.png is a BOUND source (referenced by the doc) and stays visible; the loose screenshots are assets.
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: ['chart.png', 'metrics.csv'], folder: '' }],
+			['shot-1.png', 'shot-2.png', 'shot-3.jpg', 'data.csv'],
+		);
+		const sources = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'Sources')!;
+		assert.deepStrictEqual(project([sources]), [{
+			folder: 'Sources', children: [
+				// Non-image sources (bound + discovered), then a single collapsed Assets bucket for the images.
+				{ leaf: 'chart.png', kind: 'source' },
+				{ leaf: 'data.csv', kind: 'source' },
+				{ leaf: 'metrics.csv', kind: 'source' },
+				{
+					folder: 'Assets (3)', children: [
+						{ leaf: 'shot-1.png', kind: 'source' },
+						{ leaf: 'shot-2.png', kind: 'source' },
+						{ leaf: 'shot-3.jpg', kind: 'source' },
+					]
+				},
+			],
+		}]);
+		// Ids are stable + path-based so selection + persisted collapse state survive re-renders/restart.
+		const assetsNode = sources.children.find(c => c.type === 'folder')!;
+		assert.strictEqual(assetsNode.id, 'folder:Sources/Assets');
+	});
+
+	test('collectAssetsFolderIds finds the Assets bucket id so the view can seed it collapsed on first open (issue #171)', () => {
+		const A = URI.file('/ws/report.md');
+		const withAssets = buildTreeRailNodes(
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
+			['shot-1.png', 'shot-2.png', 'data.csv'],
+		);
+		const noAssets = buildTreeRailNodes(
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
+			['data.csv'],
+		);
+		assert.deepStrictEqual(
+			{ withAssets: collectAssetsFolderIds(withAssets), noAssets: collectAssetsFolderIds(noAssets), constId: ASSETS_FOLDER_ID },
+			{ withAssets: ['folder:Sources/Assets'], noAssets: [], constId: 'folder:Sources/Assets' },
+		);
 	});
 
 	test('buildOutline returns headings in order (living OR plain doc), stripped of Markdown/bind syntax, with a stable headingIndex that skips blank headings', () => {

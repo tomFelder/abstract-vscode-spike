@@ -82,6 +82,17 @@ export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupp
 // Data/source file extensions that belong in the SOURCES section (F9).
 const SOURCE_EXTS = new Set(['csv', 'tsv', 'json', 'txt', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'yaml', 'yml']);
 
+// Image / screenshot extensions. These ARE valid sources, but with a real folder open they flood the
+// default view (~200 screenshot PNGs in the repo docs folder, issue #171). The tree buckets any asset
+// that is not bound to a document behind a single collapsed "Assets" node so it never floods the pane.
+const ASSET_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp']);
+
+/** True when `name` is an image/screenshot asset (drives the tree's collapsed "Assets" bucket, issue #171). */
+export function isAssetName(name: string): boolean {
+	const dot = name.lastIndexOf('.');
+	return dot >= 0 && ASSET_EXTS.has(name.slice(dot + 1).toLowerCase());
+}
+
 // File types that appear in SOURCES with a "Use as source" action rather than as inert rows (issue #131).
 const SOURCE_ACTIONS: Record<string, TreeRailAction> = {
 	xls: 'use-xlsx',
@@ -178,6 +189,105 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	if (sources.length) { folders.push({ name: 'Sources', items: sources, folders: [] }); }
 	if (unsupported.length) { folders.push({ name: 'Not yet imported', items: unsupported, folders: [] }); }
 	return folders;
+}
+
+// --- The Files-tab tree model (issue #171) ---
+// `buildFileTree` above shapes the raw grouping (Reports / Sources / Not-yet-imported, on-disk hierarchy).
+// `buildTreeRailNodes` below turns that into the node model the `WorkbenchObjectTree` renders: a `folder`
+// node (a group header or a real on-disk directory, collapsible) or a `leaf` node (a document / source /
+// unsupported row, carrying the underlying `ITreeRailItem`). Every node has a stable `id` so the tree can
+// keep identity (selection, focus, and persisted collapse state) across re-renders. Kept pure and unit-
+// tested; the DOM view (`treeRailView.ts`) owns only widget wiring.
+
+/** A collapsible folder in the Files tree: a top-level group (Reports/Sources/...) or a real disk directory. */
+export interface ITreeRailFolderNode {
+	readonly type: 'folder';
+	/** Stable identity for tree selection + persisted collapse state (e.g. "folder:Reports/reports/2025"). */
+	readonly id: string;
+	readonly label: string;
+	readonly children: readonly ITreeRailNode[];
+}
+
+/** A leaf row in the Files tree: a document, a source, or a not-yet-imported file. Carries the raw item. */
+export interface ITreeRailLeafNode {
+	readonly type: 'leaf';
+	readonly id: string;
+	readonly item: ITreeRailItem;
+}
+
+export type ITreeRailNode = ITreeRailFolderNode | ITreeRailLeafNode;
+
+/** Id of the collapsed screenshot bucket under Sources; the view seeds this collapsed on first open (issue #171). */
+export const ASSETS_FOLDER_ID = 'folder:Sources/Assets';
+
+/** Every Assets bucket id present in a node tree, so the view can seed them collapsed on first build (issue #171). */
+export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[] {
+	const ids: string[] = [];
+	const walk = (node: ITreeRailNode): void => {
+		if (node.type !== 'folder') { return; }
+		if (node.id === ASSETS_FOLDER_ID) { ids.push(node.id); }
+		for (const c of node.children) { walk(c); }
+	};
+	for (const n of nodes) { walk(n); }
+	return ids;
+}
+
+/**
+ * The node tree the Files tab renders on the VS Code tree widget (issue #171). Reuses `buildFileTree` for
+ * the grouping + on-disk hierarchy, then:
+ *  - buckets un-bound image/screenshot assets behind one collapsed "Assets" node so ~200 screenshots never
+ *    flood the default view (sources that ARE bound to a document stay visible in Sources);
+ *  - assigns every node a stable id (path-based for folders) for selection + persisted collapse state.
+ * Empty groups are omitted. Pure - the widget wiring lives in the view.
+ */
+export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = []): ITreeRailNode[] {
+	const folders = buildFileTree(docs, extras);
+	// Sources a document actually binds to stay visible even when they are images (a bound chart PNG is data,
+	// not noise); only un-bound loose screenshots are bucketed into the collapsed Assets node (issue #171).
+	const boundLabels = new Set<string>();
+	for (const d of docs) { for (const s of d.sources) { boundLabels.add(s); } }
+	// A leaf's stable identity for the tree's identityProvider (selection reconcile + persisted state). Two
+	// documents in the same folder can share a title, so a label-based id would collide and let the tree
+	// select/reconcile the wrong row. The on-disk resource is unique, so use it when present; only rows with
+	// no backing file (e.g. an api/mcp source) fall back to `kind:label`, which is unique among those rows.
+	const leafId = (idPrefix: string, item: ITreeRailItem): string =>
+		`${idPrefix}/leaf:${item.resource ? item.resource.toString() : `${item.kind}:${item.label}`}`;
+	const toNodes = (group: ITreeRailFolder, idPrefix: string): ITreeRailNode[] => {
+		const nodes: ITreeRailNode[] = [];
+		for (const sub of group.folders) {
+			const id = `${idPrefix}/${sub.name}`;
+			nodes.push({ type: 'folder', id, label: sub.name, children: toNodes(sub, id) });
+		}
+		for (const item of group.items) {
+			nodes.push({ type: 'leaf', id: leafId(idPrefix, item), item });
+		}
+		return nodes;
+	};
+	const result: ITreeRailNode[] = [];
+	for (const group of folders) {
+		const id = `folder:${group.name}`;
+		if (group.name === 'Sources') {
+			// Split the flat Sources list: un-bound image assets go behind one collapsed child so the default
+			// view is calm; bound sources + all data files (csv/json/txt) stay directly visible.
+			const isAsset = (label: string) => isAssetName(label) && !boundLabels.has(label);
+			const visible = group.items.filter(i => !isAsset(i.label));
+			const assets = group.items.filter(i => isAsset(i.label));
+			const children: ITreeRailNode[] = visible.map(item => ({ type: 'leaf', id: leafId(id, item), item }));
+			if (assets.length) {
+				const assetsId = ASSETS_FOLDER_ID;
+				children.push({
+					type: 'folder',
+					id: assetsId,
+					label: `Assets (${assets.length})`,
+					children: assets.map(item => ({ type: 'leaf', id: leafId(assetsId, item), item })),
+				});
+			}
+			if (children.length) { result.push({ type: 'folder', id, label: group.name, children }); }
+			continue;
+		}
+		result.push({ type: 'folder', id, label: group.name, children: toNodes(group, id) });
+	}
+	return result;
 }
 
 export interface IOutlineEntry {

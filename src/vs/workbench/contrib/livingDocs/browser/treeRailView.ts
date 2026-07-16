@@ -3,12 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { $, addDisposableListener, append, clearNode, EventHelper } from '../../../../base/browser/dom.js';
+import { $, addDisposableListener, append, clearNode, isHTMLElement } from '../../../../base/browser/dom.js';
 import { localize } from '../../../../nls.js';
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
+import { IAnchor } from '../../../../base/browser/ui/contextview/contextview.js';
+import { IObjectTreeElement } from '../../../../base/browser/ui/tree/tree.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -16,8 +18,10 @@ import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+import { WorkbenchObjectTree } from '../../../../platform/list/browser/listService.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
@@ -25,7 +29,8 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildFileTree, buildOutline, ITreeRailFolder, ITreeRailItem, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
+import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
+import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 
 type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
 
@@ -56,6 +61,15 @@ export class TreeRailView extends ViewPane {
 	private _srcAdding = false;
 	private _srcCandidates: readonly string[] = [];
 	private readonly _renderDisposables = this._register(new DisposableStore());
+	// The Files-tab file tree (issue #171): a WorkbenchObjectTree that persists across re-renders (rebuilding
+	// it would lose focus + in-session state), re-parented into the freshly-built panel each render. Its
+	// per-leaf action listeners (import / use-as-source) live in a store cleared on each setChildren.
+	private _filesTree: WorkbenchObjectTree<ITreeRailNode, void> | undefined;
+	private _filesTreeContainer: HTMLElement | undefined;
+	// Folder ids the user has collapsed, persisted so expansion survives restart (issue #171 acceptance).
+	private _collapsedFolders = new Set<string>();
+	// Set while reveal-to-active expands ancestor folders, so those programmatic expansions are not persisted.
+	private _suppressCollapsePersist = false;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -72,8 +86,48 @@ export class TreeRailView extends ViewPane {
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IQuickInputService private readonly _quickInput: IQuickInputService,
+		@IStorageService private readonly _storageService: IStorageService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+		this._collapsedFolders = this._readCollapsedFolders();
+	}
+
+	// Persisted (workspace-scoped) collapse state for the Files tree, keyed by folder node id so expansion
+	// survives restart (issue #171). Owned by this view - no reaching into another component's storage keys.
+	private static readonly COLLAPSED_STORAGE_KEY = 'livingDocs.treeRail.filesCollapsed';
+	// One-time flag: the Assets bucket defaults to collapsed on first open (so ~400 screenshots never flood the
+	// tree, issue #171), but after that it behaves like any other folder - user expand/collapse persists. The
+	// collapsed set stores COLLAPSED ids, so we cannot tell "never seeded" from "user expanded Assets" without
+	// this marker; once set we never re-seed, so the user's choice always wins from then on.
+	private static readonly ASSETS_SEEDED_STORAGE_KEY = 'livingDocs.treeRail.assetsSeeded';
+
+	private _readCollapsedFolders(): Set<string> {
+		const raw = this._storageService.get(TreeRailView.COLLAPSED_STORAGE_KEY, StorageScope.WORKSPACE);
+		if (!raw) { return new Set(); }
+		try {
+			const ids = JSON.parse(raw);
+			return Array.isArray(ids) ? new Set(ids.filter((id: unknown): id is string => typeof id === 'string')) : new Set();
+		} catch {
+			return new Set();
+		}
+	}
+
+	private _persistCollapsedFolders(): void {
+		this._storageService.store(TreeRailView.COLLAPSED_STORAGE_KEY, JSON.stringify([...this._collapsedFolders]), StorageScope.WORKSPACE, StorageTarget.USER);
+	}
+
+	// The one-time default: on the first Files render for a workspace, mark every Assets bucket collapsed so the
+	// screenshot flood never appears (issue #171 acceptance). Guarded by a persisted seed flag so it fires once;
+	// thereafter the user's expand/collapse of Assets persists like any other folder via onDidChangeCollapseState.
+	private _seedAssetsCollapsed(nodes: readonly ITreeRailNode[]): void {
+		if (this._storageService.getBoolean(TreeRailView.ASSETS_SEEDED_STORAGE_KEY, StorageScope.WORKSPACE, false)) { return; }
+		const assetsIds = collectAssetsFolderIds(nodes);
+		// Only seed (and mark seeded) once an Assets bucket actually exists - so a first render before any
+		// screenshots exist does not burn the one-shot and leave a later flood expanded.
+		if (!assetsIds.length) { return; }
+		for (const id of assetsIds) { this._collapsedFolders.add(id); }
+		this._persistCollapsedFolders();
+		this._storageService.store(TreeRailView.ASSETS_SEEDED_STORAGE_KEY, true, StorageScope.WORKSPACE, StorageTarget.USER);
 	}
 
 	protected override renderBody(container: HTMLElement): void {
@@ -132,28 +186,152 @@ export class TreeRailView extends ViewPane {
 		}
 	}
 
+	// The Files tab (issue #171): a real collapsible file tree on the VS Code tree widget. The widget is
+	// created once and re-parented into the freshly-rendered panel on every re-render, so its focus, keyboard
+	// state and selection survive the onDidChange/onDidActiveEditorChange re-renders that drive this rail.
 	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
-		const folders = buildFileTree(
+		const nodes = buildTreeRailNodes(
 			documents.map(d => ({ title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder })),
 			extras,
 		);
-		if (!folders.length) {
+		if (!nodes.length) {
 			append(panel, $('div.rail-empty')).textContent = 'No documents yet.';
 			return;
 		}
-		// Render each group, recursing into nested subfolders so the on-disk hierarchy is preserved (F7).
-		const renderFolder = (folder: ITreeRailFolder, depth: number): void => {
-			const header = append(panel, $('div.rail-folder'));
-			header.textContent = folder.name;
-			if (depth > 0) { header.style.paddingLeft = `${6 + depth * 12}px`; }
-			// The bulk-import affordance (doc 22 section 2, the 2b moment): when several Word documents are
-			// waiting, offer to import them all at once - "I found N Word documents - import them?".
-			const importable = folder.items.filter(i => i.kind === 'unsupported' && i.importable);
-			if (importable.length > 1) { this._renderBulkImport(panel, importable); }
-			for (const item of folder.items) { this._renderFileItem(panel, item, depth); }
-			for (const sub of folder.folders) { renderFolder(sub, depth + 1); }
+		// First open of this workspace: seed the Assets bucket(s) collapsed so the screenshot flood never renders.
+		// One-time only - after this the bucket persists whatever the user chooses, like every other folder.
+		this._seedAssetsCollapsed(nodes);
+		panel.classList.add('rail-panel-files');
+
+		// The bulk-import banner (doc 22 section 2, the 2b moment): when several Word documents are waiting,
+		// offer to import them all at once - "I found N Word documents - import them?". A banner above the tree.
+		const importable = this._collectImportable(nodes);
+		if (importable.length > 1) { this._renderBulkImport(panel, importable); }
+
+		this._ensureFilesTree();
+		const tree = this._filesTree!;
+		const container = this._filesTreeContainer!;
+		append(panel, container);
+
+		// Per-leaf action listeners (import / use-as-source) are owned by the renderer's per-row template store,
+		// cleared when a row is recycled or disposed - so a rebuild never leaks the previous generation.
+		tree.setChildren(null, nodes.map(n => this._toTreeElement(n)));
+		this._layoutFilesTree();
+		this._highlightActiveDoc();
+	}
+
+	private _ensureFilesTree(): void {
+		if (this._filesTree) { return; }
+		const container = $('div.rail-files-tree');
+		this._filesTreeContainer = container;
+		const tree = this._register(this.instantiationService.createInstance(
+			WorkbenchObjectTree<ITreeRailNode, void>,
+			'livingDocsFilesTree',
+			container,
+			new TreeRailDelegate(),
+			[
+				new TreeRailFolderRenderer(),
+				new TreeRailLeafRenderer({ renderLeafActions: (node, host) => this._renderLeafActions(node, host) }),
+			],
+			{
+				accessibilityProvider: new TreeRailAccessibilityProvider(),
+				identityProvider: { getId: (e: ITreeRailNode) => e.id },
+				expandOnlyOnTwistieClick: false,
+				overrideStyles: { listBackground: 'sideBar.background' },
+			},
+		)) as WorkbenchObjectTree<ITreeRailNode, void>;
+		this._filesTree = tree;
+
+		// Persist the collapse state so expansion survives restart (issue #171 acceptance). Programmatic
+		// reveal-to-active expansions are suppressed so they never overwrite the user's own collapse choices.
+		this._register(tree.onDidChangeCollapseState(e => {
+			if (this._suppressCollapsePersist) { return; }
+			const node = e.node.element;
+			if (!node || node.type !== 'folder') { return; }
+			if (e.node.collapsed) { this._collapsedFolders.add(node.id); } else { this._collapsedFolders.delete(node.id); }
+			this._persistCollapsedFolders();
+		}));
+
+		// Selecting a document opens it (click or keyboard Enter, both funnel through onDidOpen).
+		this._register(tree.onDidOpen(e => {
+			const el = e.element;
+			if (el?.type === 'leaf' && el.item.kind === 'doc' && el.item.resource) {
+				void this._editors.openEditor({ resource: el.item.resource, options: { pinned: true, preserveFocus: e.browserEvent?.type === 'keydown' ? false : true } });
+			}
+		}));
+
+		// The provenance-safe file menu (docs 20 section 1d): Rename / Delete / Add to chat on real-file rows.
+		this._register(tree.onContextMenu(e => {
+			const el = e.element;
+			if (el?.type === 'leaf' && el.item.resource) {
+				// The tree's anchor is the row element (right-click) or a mouse position (keyboard menu key).
+				const anchor = isHTMLElement(e.anchor) ? e.anchor : { x: e.anchor.posx, y: e.anchor.posy };
+				this._showFileMenu(anchor, el.item.resource, el.item.label);
+			}
+		}));
+	}
+
+	private _layoutFilesTree(): void {
+		if (!this._filesTree || !this._filesTreeContainer) { return; }
+		const height = this._filesTreeContainer.clientHeight || this._body?.clientHeight || 400;
+		this._filesTree.layout(height, this._filesTreeContainer.clientWidth || undefined);
+	}
+
+	// Map a data node to the widget's element tree, applying the persisted collapse state to folders (a folder
+	// defaults to expanded unless the user collapsed it - except the Assets bucket, which is seeded collapsed on
+	// first open by _seedAssetsCollapsed so the screenshot flood never renders; leaves are never collapsible).
+	private _toTreeElement(node: ITreeRailNode): IObjectTreeElement<ITreeRailNode> {
+		if (node.type === 'leaf') { return { element: node }; }
+		return {
+			element: node,
+			collapsible: true,
+			collapsed: this._collapsedFolders.has(node.id),
+			children: node.children.map(c => this._toTreeElement(c)),
 		};
-		for (const folder of folders) { renderFolder(folder, 0); }
+	}
+
+	// Reveal + select the active document's node so the open document is highlighted in the tree (issue #171).
+	// Ancestor folders are expanded (transiently, without persisting) so the highlighted row is actually visible.
+	private _highlightActiveDoc(): void {
+		const tree = this._filesTree;
+		if (!tree) { return; }
+		const resource = this._editors.activeEditor?.resource;
+		if (!resource) { tree.setSelection([]); return; }
+		let match: ITreeRailLeafNode | undefined;
+		let ancestors: ITreeRailNode[] = [];
+		const walk = (node: ITreeRailNode, path: ITreeRailNode[]): void => {
+			if (match) { return; }
+			if (node.type === 'leaf') {
+				if (node.item.resource?.toString() === resource.toString()) { match = node; ancestors = path; }
+			} else {
+				for (const c of node.children) { walk(c, [...path, node]); }
+			}
+		};
+		for (const root of tree.getNode().children.map(c => c.element)) { if (root) { walk(root, []); } }
+		if (!match) { tree.setSelection([]); return; }
+		this._suppressCollapsePersist = true;
+		try {
+			for (const folder of ancestors) { tree.expand(folder); }
+		} finally {
+			this._suppressCollapsePersist = false;
+		}
+		tree.reveal(match);
+		tree.setSelection([match]);
+		tree.setFocus([match]);
+	}
+
+	// Collect every importable `.docx` across the whole tree (for the bulk-import banner count).
+	private _collectImportable(nodes: readonly ITreeRailNode[]): ITreeRailItem[] {
+		const out: ITreeRailItem[] = [];
+		const walk = (node: ITreeRailNode): void => {
+			if (node.type === 'leaf') {
+				if (node.item.kind === 'unsupported' && node.item.importable) { out.push(node.item); }
+			} else {
+				for (const c of node.children) { walk(c); }
+			}
+		};
+		for (const n of nodes) { walk(n); }
+		return out;
 	}
 
 	// "I found N Word documents - import them?" (doc 22 section 2): one button that imports every waiting
@@ -179,21 +357,20 @@ export class TreeRailView extends ViewPane {
 		}));
 	}
 
-	private _renderFileItem(panel: HTMLElement, item: ITreeRailItem, depth: number = 0): void {
-		const row = append(panel, $(`div.rail-item.rail-item-${item.kind}`));
-		if (depth > 0) { row.style.paddingLeft = `${18 + depth * 12}px`; }
-		const glyph = item.kind === 'doc' ? '\u25A3'
-			: item.kind === 'unsupported' ? '\u2298'
-				: (item.sourceKind === 'api' ? '\u21C4' : (item.sourceKind === 'mcp' ? '\u25F7' : '\u229E'));
-		append(row, $('span.rail-item-glyph')).textContent = glyph;
-		append(row, $('span.rail-item-label')).textContent = item.label;
+	// Fill the trailing action area of one leaf row in the file tree (issue #171): the import door, the
+	// "Use as source" button, the pending dot, or the not-yet-imported note. The tree renderer calls this on
+	// every (re)render of a row and disposes the returned store when the row is recycled - so listeners are
+	// scoped to the row's lifetime, not this view's. Open + context-menu are handled by the tree widget.
+	private _renderLeafActions(node: ITreeRailLeafNode, host: HTMLElement): DisposableStore {
+		const store = new DisposableStore();
+		const item = node.item;
 		// A `.docx` we CAN convert turns the F10 marker into a door: an "Import as document" button that
 		// converts it to a Living Document beside the untouched original (issue #129, doc 22 section 2).
 		if (item.kind === 'unsupported' && item.importable) {
 			const name = item.label;
-			const importBtn = append(row, $('button.rail-import')) as HTMLButtonElement;
+			const importBtn = append(host, $('button.rail-import')) as HTMLButtonElement;
 			importBtn.textContent = 'Import as Document';
-			this._renderDisposables.add(addDisposableListener(importBtn, 'click', async e => {
+			store.add(addDisposableListener(importBtn, 'click', async e => {
 				e.stopPropagation();
 				if (importBtn.disabled) { return; }
 				importBtn.disabled = true;
@@ -214,48 +391,30 @@ export class TreeRailView extends ViewPane {
 			}));
 		} else if (item.note) {
 			// A file we still cannot import is shown, never dropped, with its plain-words reason (F10).
-			const note = append(row, $('div.rail-item-note'));
+			const note = append(host, $('span.rail-item-note'));
 			note.textContent = `not yet imported \u2014 ${item.note}`;
+			note.title = item.note;
 		}
-		if (item.pending) { append(row, $('span.rail-item-dot')); }
 		// A workbook / PDF SOURCES row offers "Use as source" (issue #131): extract sheets to CSVs, or a PDF's
 		// text to read-only context. Inline button (the row has no backing document, so no context menu).
 		if (item.action) {
 			const action = item.action;
 			const label = item.label;
-			const button = append(row, $('button.rail-srcaction')) as HTMLButtonElement;
+			const button = append(host, $('button.rail-srcaction')) as HTMLButtonElement;
 			button.textContent = 'Use as source';
-			this._renderDisposables.add(addDisposableListener(button, 'click', e => {
+			store.add(addDisposableListener(button, 'click', e => {
 				e.stopPropagation();
 				void this._useAsSource(action, label);
 			}));
 		}
-		if (item.resource) {
-			const resource = item.resource;
-			// Document rows open in the editor on click/Enter; source-file rows are not openable (a csv/json
-			// has no Living Document editor), so they only carry the context menu below.
-			if (item.kind === 'doc') {
-				row.setAttribute('role', 'button');
-				row.tabIndex = 0;
-				const open = () => void this._editors.openEditor({ resource, options: { pinned: true } });
-				this._renderDisposables.add(addDisposableListener(row, 'click', open));
-				this._renderDisposables.add(addDisposableListener(row, 'keydown', e => {
-					if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
-				}));
-			}
-			// The provenance-safe file menu (docs 20 section 1d): Rename / Delete / Add to chat. Only rows
-			// backed by a real file get it - so an empty list is never a broken empty menu container.
-			this._renderDisposables.add(addDisposableListener(row, 'contextmenu', e => {
-				EventHelper.stop(e, true);
-				this._showFileMenu(row, resource, item.label);
-			}));
-		}
+		if (item.pending) { append(host, $('span.rail-item-dot')); }
+		return store;
 	}
 
 	// The Files-tab context menu (docs 20 section 1d, the 1m entry): the minimal-v1 provenance-safe ops.
 	// Rename and Delete route through the service, which moves the lock sidecar atomically and shows the
 	// Undo toast; the warn-and-list on delete (map-D6) is the confirm dialog below.
-	private _showFileMenu(anchor: HTMLElement, resource: URI, label: string): void {
+	private _showFileMenu(anchor: HTMLElement | IAnchor, resource: URI, label: string): void {
 		const actions: IAction[] = [
 			toAction({ id: 'livingDocs.file.rename', label: 'Rename\u2026', run: () => void this._renameFile(resource) }),
 			toAction({ id: 'livingDocs.file.delete', label: 'Delete\u2026', run: () => void this._deleteFile(resource, label) }),
@@ -538,6 +697,14 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-tab.active{color:var(--vscode-foreground);border-bottom-color:oklch(0.55 0.13 255)}
 		.living-docs-rail .rail-tab-glyph{font-size:12px}
 		.living-docs-rail .rail-panel{flex:1;overflow-y:auto;padding:10px 8px}
+		.living-docs-rail .rail-panel.rail-panel-files{display:flex;flex-direction:column;overflow:hidden;padding:6px 4px}
+		.living-docs-rail .rail-files-tree{flex:1;min-height:0}
+		.living-docs-rail .rail-files-tree .rail-tree-folder{display:flex;align-items:center;height:100%;min-width:0}
+		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 11px/1 system-ui;color:var(--vscode-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:7px;height:100%;min-width:0;font:400 13px/1.3 system-ui;color:var(--vscode-foreground)}
+		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:var(--vscode-descriptionForeground);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px}
+		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-glyph{color:var(--vscode-descriptionForeground)}
+		.living-docs-rail .rail-files-tree .rail-tree-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
 		.living-docs-rail .rail-empty{font:400 12px/1.5 system-ui;color:var(--vscode-descriptionForeground);padding:8px 6px}
 		.living-docs-rail .rail-folder{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:var(--vscode-descriptionForeground);text-transform:uppercase;padding:10px 6px 6px}
 		.living-docs-rail .rail-item{display:flex;align-items:center;gap:7px;padding:6px 8px 6px 18px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}
@@ -560,6 +727,10 @@ export class TreeRailView extends ViewPane {
 			.living-docs-rail .rail-import:hover{background:oklch(0.55 0.13 255);color:#fff}
 			.living-docs-rail .rail-import:disabled{opacity:.6;cursor:default;background:none;color:var(--vscode-descriptionForeground);border-color:var(--vscode-input-border,#d3d8e0)}
 			.living-docs-rail .rail-import-bulk{display:block;width:100%;box-sizing:border-box;margin:2px 0 8px;padding:8px;text-align:center}
+			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-item-note{width:auto;padding:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-srcaction,.living-docs-rail .rail-files-tree .rail-tree-actions .rail-import{margin-left:0}
+			.living-docs-rail .rail-files-tree .rail-tree-leaf:hover .rail-srcaction,.living-docs-rail .rail-files-tree .rail-tree-leaf:focus-within .rail-srcaction,.living-docs-rail .rail-files-tree .monaco-list-row:hover .rail-srcaction,.living-docs-rail .rail-files-tree .monaco-list-row:focus-within .rail-srcaction{opacity:1}
+			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-item-dot{margin-left:0}
 		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:pointer}
 		.living-docs-rail .rail-outline:hover{background:var(--vscode-list-hoverBackground)}
 		.living-docs-rail .rail-outline.lvl-1{font-weight:600}
@@ -589,5 +760,7 @@ export class TreeRailView extends ViewPane {
 	protected override layoutBody(height: number, width: number): void {
 		super.layoutBody(height, width);
 		if (this._body) { this._body.style.height = `${height}px`; }
+		// The Files tree fills the panel below the tab strip; re-flow its virtual rows on resize.
+		if (this._tab === 'files') { this._layoutFilesTree(); }
 	}
 }
