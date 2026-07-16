@@ -8,8 +8,8 @@
 // model could not be reached for is a FAILURE, not a document that ran and found nothing. This pure module
 // aggregates the per-document outcomes of a fan-out into an honest, plain-words result: it names the model
 // as unreachable, lists which documents failed, and (on a partial success) reports the proposals that DID
-// land alongside the failures - matching the single-doc rail's named-error standard ("The agent model is
-// not reachable ..."). No DOM, no service, no model - deterministic string formatting, unit-tested directly
+// land alongside the failures - matching the single-doc rail's named-error standard ("The model was not
+// available ..."). No DOM, no service, no model - deterministic string formatting, unit-tested directly
 // and reused by the service's fan-out composer and the run screen.
 
 /** One document a fan-out could not process because the model was unreachable/errored: id + human title. */
@@ -44,11 +44,11 @@ export interface IFanoutSummaryInput {
 	readonly pausedMessage?: string;
 }
 
-// The named-error standard, matching the single-doc rail's reference string ("The agent model is not
-// reachable. Start the local proxy (scripts/lwd-anthropic-proxy.sh) ...") so the fan-out speaks the SAME
-// plain words (P5). Kept as constants so the tone stays in one place.
-const NOT_REACHABLE = 'The agent model is not reachable';
-const PROXY_HINT = 'Start the local proxy (scripts/lwd-anthropic-proxy.sh)';
+// The named-error standard the fan-out speaks (issue #170): honest, plain words, no shell-script reference
+// (the app supervises the broker itself now). When the model cannot be reached the fix-it path is the Model
+// access screen, not a terminal. Kept as constants so the tone stays in one place.
+const NOT_REACHABLE = 'The model was not available';
+const RETRY_HINT = 'Open Model access to connect a model';
 
 /** The neutral honest line when a clean run genuinely proposed nothing (no failures, no pause). */
 export const FANOUT_NO_CHANGES = 'I did not find anything to change across those documents.';
@@ -85,8 +85,8 @@ export function summarizeFanoutRun(input: IFanoutSummaryInput): IFanoutRunOutcom
 		const n = failedDocs.length;
 		const list = names(failedDocs);
 		const content = input.proposedCount > 0
-			? `${input.proposedCount} change${plural(input.proposedCount)} proposed. ${NOT_REACHABLE} for ${n} document${plural(n)}: ${list}. ${PROXY_HINT}, then Retry failed to re-run just those.`
-			: `${NOT_REACHABLE}, so I could not propose changes for ${n} document${plural(n)}: ${list}. ${PROXY_HINT}, then Retry failed.`;
+			? `${input.proposedCount} change${plural(input.proposedCount)} proposed. ${NOT_REACHABLE} for ${n} document${plural(n)}: ${list}. ${RETRY_HINT}, then Retry failed to re-run just those.`
+			: `${NOT_REACHABLE}, so I could not propose changes for ${n} document${plural(n)}: ${list}. ${RETRY_HINT}, then Retry failed.`;
 		return { content, failedDocs, isError: true, isPaused: false };
 	}
 	const content = input.reply || (input.proposedCount ? '' : FANOUT_NO_CHANGES);

@@ -1,0 +1,9 @@
+[main 2026-07-16T02:40:05.142Z] [livingDocsBroker] spawning broker: node /Users/tommy/Sites/abstract-wt-bundle-b/scripts/lwd-model-broker.js (cwd /Users/tommy/Sites/abstract-wt-bundle-b)
+[main 2026-07-16T02:40:05.224Z] [livingDocsBroker] [lwd-proxy] listening on http://127.0.0.1:8090 (backend openrouter, model openai/gpt-4.1-mini)
+[main 2026-07-16T02:40:05.651Z] [livingDocsBroker] broker healthy on 127.0.0.1:8090
+[main 2026-07-16T02:44:17.805Z] [livingDocsBroker] broker exited unexpectedly (code null, signal SIGKILL); scheduling restart
+[main 2026-07-16T02:44:17.805Z] [livingDocsBroker] restarting broker in 1000ms
+[main 2026-07-16T02:44:18.807Z] [livingDocsBroker] spawning broker: node /Users/tommy/Sites/abstract-wt-bundle-b/scripts/lwd-model-broker.js (cwd /Users/tommy/Sites/abstract-wt-bundle-b)
+[main 2026-07-16T02:44:18.886Z] [livingDocsBroker] [lwd-proxy] listening on http://127.0.0.1:8090 (backend openrouter, model openai/gpt-4.1-mini)
+[main 2026-07-16T02:44:18.887Z] [livingDocsBroker] [lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$1/user
+[main 2026-07-16T02:44:19.319Z] [livingDocsBroker] broker healthy on 127.0.0.1:8090

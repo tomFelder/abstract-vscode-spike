@@ -105,7 +105,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'livingDocs.modelProxyUrl': {
 			type: 'string',
 			default: 'http://localhost:8090',
-			description: localize('livingDocs.modelProxyUrl', "Base URL of the local model proxy (scripts/lwd-anthropic-proxy.js) the renderer calls for model-backed features. The proxy holds the model credential server-side and translates to the configured backend; no credential is ever embedded in the app."),
+			description: localize('livingDocs.modelProxyUrl', "Base URL of the local model broker the app calls for model-backed features. The app starts and supervises the broker automatically; it holds the model credential server-side and translates to the configured backend, so no credential is ever embedded in the app."),
 		},
 		'livingDocs.fanoutContextBudget': {
 			type: 'number',

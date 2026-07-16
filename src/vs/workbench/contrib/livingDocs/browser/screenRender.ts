@@ -1524,15 +1524,18 @@ function pendingSignInBlock(authorizeUrl: string | undefined): string {
 }
 
 function renderSettings(state: IScreenState): string {
-	const status = state.providerStatus ?? { provider: 'none' as const, signedIn: false, dailyBudgetUsd: 0 };
+	const status = state.providerStatus ?? { provider: 'none' as const, readiness: 'broker-down' as const, signedIn: false, dailyBudgetUsd: 0 };
 	const stage: ChatGptSignInStage = state.signInStage ?? (status.signedIn ? 'signed-in' : 'signed-out');
 
-	// The live "what is serving you now" line - real data only.
+	// The live "what is serving you now" line - real data only, keyed off the truthful readiness (issue #170)
+	// so the broker-not-up state is distinct from a reachable-but-unconfigured backend.
 	const doorLabel = status.provider === 'chatgpt'
 		? 'Your ChatGPT subscription'
 		: status.provider === 'included'
-			? 'The included model'
-			: 'The built-in fallback (no model connected)';
+			? (status.readiness === 'budget-paused' ? 'The included model (daily limit reached)' : 'The included model')
+			: status.readiness === 'broker-down'
+				? 'Connecting to the model service&hellip;'
+				: 'The built-in fallback (no model connected)';
 	const dot = status.provider === 'none' ? '#cdd1d8' : 'oklch(0.6 0.13 150)';
 
 	// The included-tier usage line + ring (only meaningful for the metered fallback).
@@ -1610,7 +1613,7 @@ function renderSettings(state: IScreenState): string {
 // in-product home of the plain-words data-flow one-pager (docs/27): a single expandable row that shows
 // the answer inline on click - no new panel, no navigation. The copy is a short, faithful retelling of
 // docs/27 and every line traces to a real code path (model calls go through the localhost proxy in
-// scripts/lwd-anthropic-proxy.js; chats/runs send the open/selected documents + attached sources -
+// scripts/lwd-model-broker.js; chats/runs send the open/selected documents + attached sources -
 // livingDocsService.ts _chatRespond/_chatRespondMulti; the default-enabled scheduled agents
 // (agentOrchestrator.ts defaultAgents) may send a checked document's changed sentences + context files
 // through the verify gate's strategy grader - livingDocsService.ts _runFiguresByPolicy/_gradeStrategy;
