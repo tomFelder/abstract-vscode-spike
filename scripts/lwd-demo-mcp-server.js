@@ -8,7 +8,7 @@
 // A tiny, offline MCP server over stdio (plan 29, iter 4) so the `mcp` source kind resolves end-to-end
 // without any hosted service. It speaks the MCP stdio transport - newline-delimited JSON-RPC 2.0 on
 // stdin/stdout - and exposes ONE tool, `query`, which serves the latest row of a JSON data file (a small
-// pipeline dataset). The proxy (scripts/lwd-anthropic-proxy.js `/mcp/resolve`) spawns this, calls
+// pipeline dataset). The proxy (scripts/lwd-model-broker.js `/mcp/resolve`) spawns this, calls
 // `initialize` then `tools/call`, and extracts a `field` from the returned row. Nothing here is hosted,
 // authenticated, or committed with secrets: it reads its data file from argv[2] (default: a sibling
 // pipeline.json), so the demo is fully reproducible.

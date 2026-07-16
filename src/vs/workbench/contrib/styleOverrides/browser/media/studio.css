@@ -13,31 +13,31 @@
  *     top bar; with tabs hidden the group title is pure leftover chrome), and
  *   - the auxiliary-bar composite title (the right "Review" panel renders its own tab strip).
  *
- * All rules are gated behind the `.style-override-studio` class, which the StyleOverridesContribution
+ * All rules are gated behind the `.style-override` class, which the StyleOverridesContribution
  * toggles onto the workbench container(s) when `workbench.experimental.modernUI` is enabled.
  */
 
 /* The empty-editor watermark / "Editor Group N (empty)" hint. */
-.style-override-studio .editor-group-watermark {
+.style-override .editor-group-watermark {
 	display: none !important;
 }
 
 /* The editor group title bar (close affordance, leftover actions). Tabs are already hidden, and
  * the Living Document webview provides its own brand row, so this strip is pure residual chrome. */
-.style-override-studio .editor-group-container > .title {
+.style-override .editor-group-container > .title {
 	display: none !important;
 }
 
 /* The native auxiliary-bar composite title ("Review" + maximize). The Studio right panel renders
  * its own Chat / Review / History tab strip instead. */
-.style-override-studio .part.auxiliarybar > .composite.title {
+.style-override .part.auxiliarybar > .composite.title {
 	display: none !important;
 }
 
 /* The compact menu ("Application Menu" hamburger). In modernUI the menubar renders inside the
  * activity bar and ignores `window.menuBarVisibility`, so remove it here -- the product is a word
  * processor with no application menu (decision log 25, G4: remove IDE optionality). */
-.style-override-studio .part.activitybar .menubar {
+.style-override .part.activitybar .menubar {
 	display: none !important;
 }
 
@@ -46,7 +46,7 @@
  * living-docs items (Home . Editor . Templates . Knowledge . Agents). Hide just the icon; the
  * container itself stays registered as the default primary sidebar, so the tree-rail is unaffected.
  * (plan 25 iter 2, W1 nav tidy, decision D25-C.) */
-.style-override-studio .part.activitybar .action-item.icon:has(> .action-label.codicon-living-docs-workspace) {
+.style-override .part.activitybar .action-item.icon:has(> .action-label.codicon-living-docs-workspace) {
 	display: none !important;
 }
 
@@ -54,14 +54,14 @@
  * `panel` bg (#F6F7F9), with 60px-wide items, an 18px stroke glyph above a 10px label. The container
  * name is on each action-label's aria-label, so render the label via ::after. (decision log 29, G3
  * icon-nav; Part B tokens re-pinned in plan 25 iter 1.) */
-.style-override-studio .part.activitybar {
+.style-override .part.activitybar {
 	background-color: #F6F7F9 !important;
 	border-right: 1px solid #E9EAEE;
 }
-.style-override-studio .part.activitybar .monaco-action-bar .action-item.icon {
+.style-override .part.activitybar .monaco-action-bar .action-item.icon {
 	height: auto !important;
 }
-.style-override-studio .part.activitybar .action-label.codicon {
+.style-override .part.activitybar .action-label.codicon {
 	display: flex !important;
 	flex-direction: column;
 	align-items: center;
@@ -78,7 +78,7 @@
  * `!important` rule at the SAME (0,9,0) specificity that lands later in the cascade, so it wins the
  * tie. Add the real `.composite-bar` ancestor to reach (0,10,0) and win outright. (plan 25 iter 3
  * polish: close the inactive-glyph colour gap #606060 -> #868B95.) */
-.style-override-studio.monaco-workbench .part.activitybar .composite-bar .action-item.icon .action-label.action-label.codicon {
+.style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon .action-label.action-label.codicon {
 	color: #868B95 !important;
 }
 /* A 1px hairline after Editor, separating the document group (Home . Editor) from the collections
@@ -87,12 +87,12 @@
  * matched by its stable codicon class, mirroring the workspace-hide rule above) so it sits between
  * the two groups without a spacer element. The item is `display: block`, so the `::before` stacks
  * above its label; center it with auto margins. (plan 25 iter 3 polish: divider after Editor.) */
-.style-override-studio .part.activitybar .action-item.icon:has(> .action-label.codicon-living-docs-templates) {
+.style-override .part.activitybar .action-item.icon:has(> .action-label.codicon-living-docs-templates) {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 }
-.style-override-studio .part.activitybar .action-item.icon:has(> .action-label.codicon-living-docs-templates)::before {
+.style-override .part.activitybar .action-item.icon:has(> .action-label.codicon-living-docs-templates)::before {
 	content: '';
 	display: block;
 	width: 34px;
@@ -102,10 +102,10 @@
 }
 
 /* 18px stroke glyph (the codicon font-size drives the glyph; the default is the 24px core ICON_SIZE). */
-.style-override-studio .part.activitybar .action-label.codicon::before {
+.style-override .part.activitybar .action-label.codicon::before {
 	font-size: 18px !important;
 }
-.style-override-studio .part.activitybar .action-label.codicon::after {
+.style-override .part.activitybar .action-label.codicon::after {
 	content: attr(aria-label);
 	font: 500 10px/1 system-ui;
 	letter-spacing: .005em;
@@ -120,7 +120,7 @@
 /* The glyph colour is set inline by the composite bar (updateStyles) and the theme also emits a
  * high-specificity `!important` foreground rule, so the chip's accent glyph needs a selector at least
  * as specific as the theme's: scope under `.monaco-workbench` and double the label class. */
-.style-override-studio.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon {
+.style-override.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon {
 	background: #FFFFFF;
 	color: #4650B8 !important;
 	box-shadow: 0 1px 2px rgba(20, 22, 28, .05);
@@ -128,7 +128,7 @@
 	/* Keep the chip the same size as an inactive item despite the 1px border. */
 	padding: 8px 0 6px;
 }
-.style-override-studio.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon::after {
+.style-override.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon::after {
 	font-weight: 600;
 }
 
@@ -137,7 +137,7 @@
  * `.composite-bar { margin-bottom: auto }` rule already floats to the bottom. Match the comp's quiet
  * treatment: 19px glyph, `faint` #A3A8B2, no label row. Functionality is untouched -- clicking still
  * opens the accounts / manage menus. (plan 25 iter 2, C1 bottom pins.) */
-.style-override-studio .part.activitybar > .content > div:not(.menubar):not(.composite-bar) {
+.style-override .part.activitybar > .content > div:not(.menubar):not(.composite-bar) {
 	flex: none;
 	display: flex;
 	flex-direction: column;
@@ -145,19 +145,19 @@
 	gap: 6px;
 	padding: 10px 0 12px;
 }
-.style-override-studio .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon {
+.style-override .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon {
 	width: 44px !important;
 	gap: 0;
 	padding: 7px 0;
 }
-.style-override-studio.monaco-workbench .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-item.icon .action-label.action-label.codicon {
+.style-override.monaco-workbench .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-item.icon .action-label.action-label.codicon {
 	color: #A3A8B2 !important;
 }
-.style-override-studio .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon::before {
+.style-override .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon::before {
 	font-size: 19px !important;
 }
 /* The account / settings items carry no visible aria-label chip in the comp -- suppress the label
  * row that the shared codicon rule would otherwise print beneath them. */
-.style-override-studio .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon::after {
+.style-override .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon::after {
 	content: none;
 }

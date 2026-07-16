@@ -8,12 +8,15 @@ import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { isWeb } from '../../../../base/common/platform.js';
+import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { EditorPane } from '../../../browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
@@ -23,9 +26,10 @@ import { ILivingDocsService } from '../common/livingDocs.js';
 import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
-import { applyFocusRequest, applyReady, applyRender, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
+import { applyFocusRequest, applyReady, applyRender, applyRevealHeading, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
+import { ScreenEditorInput } from './screenEditorInput.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -57,6 +61,8 @@ export class LivingDocEditor extends EditorPane {
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 		@IEditorService private readonly _editorService: IEditorService,
 		@IDialogService private readonly _dialogService: IDialogService,
+		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
+		@IInstantiationService private readonly _instantiation: IInstantiationService,
 	) {
 		super(LivingDocEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -83,6 +89,12 @@ export class LivingDocEditor extends EditorPane {
 		this._inputDisposables.add(this._livingDocs.onDidRequestFocusChange(e => {
 			if (this._resource && e.docId === this._resource.toString()) {
 				this._runProto(applyFocusRequest(this._proto, e.changeId));
+			}
+		}));
+		// Outline-to-editor navigation (issue #181): clicking a heading scrolls this surface to it.
+		this._inputDisposables.add(this._livingDocs.onDidRequestRevealHeading(e => {
+			if (this._resource && e.docId === this._resource.toString()) {
+				this._runProto(applyRevealHeading(this._proto, e.headingIndex));
 			}
 		}));
 		await this._livingDocs.loadDocument(input.resource);
@@ -225,6 +237,12 @@ export class LivingDocEditor extends EditorPane {
 			case 'nextDoc':
 				// Editor action bar: step the editor pane to the next document that still has pending changes.
 				this._openNextChangedDoc();
+				break;
+			case 'openProject':
+				// The breadcrumb's clickable project segment (issue #174): navigate back to the project view -
+				// the Home screen, which lists the workspace's documents and recent activity. Opened through
+				// IEditorService (revealIfOpened) so an already-open Home is reused rather than duplicated.
+				void this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'home'), { pinned: true, revealIfOpened: true });
 				break;
 			case 'askAi':
 				this._livingDocs.focusPanel('chat');
@@ -395,6 +413,14 @@ export class LivingDocEditor extends EditorPane {
 			// `isWeb` is false there and the normal Saved chip stands. There is no file-provider capability
 			// flag for "survives reload", so the build type is the honest signal for this contract.
 			ephemeral: isWeb,
+			// The editor breadcrumb (issue #174): the clickable project segment is the opened workspace
+			// folder's display name, and the grey file-name segment is the document resource's basename, so the
+			// bar reads `project / title  file.md` instead of the static brand/type crumb. The workspace folder
+			// name comes from the workspace service (the same source the rest of the contrib uses for the
+			// project root); it is undefined when no folder is open, in which case the render falls back to the
+			// brand crumb.
+			projectName: this._workspace.getWorkspace().folders[0]?.name,
+			fileName: basename(resource),
 		};
 		const content = renderLivingDocContent(input);
 		// The mount-once lifecycle (first-render setHtml, pmReset only on a model-driven body change,
@@ -418,6 +444,9 @@ export class LivingDocEditor extends EditorPane {
 					break;
 				case 'postFocus':
 					void this._webview.postMessage({ type: 'focusChange', id: effect.id });
+					break;
+				case 'postRevealHeading':
+					void this._webview.postMessage({ type: 'revealHeading', headingIndex: effect.headingIndex });
 					break;
 				case 'holdPending':
 					// The render is held in the reducer state; nothing to post until the RUNTIME signals ready.

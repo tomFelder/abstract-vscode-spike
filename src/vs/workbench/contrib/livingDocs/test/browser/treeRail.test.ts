@@ -7,7 +7,15 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { buildFileTree, buildOutline, classifyWorkspaceExtra, searchTreeRail } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, isAssetName, ITreeRailNode, searchTreeRail } from '../../common/treeRail.js';
+
+// Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
+// show label + kind. Ids are checked separately where they matter (persistence + identity).
+function project(nodes: readonly ITreeRailNode[]): unknown {
+	return nodes.map(n => n.type === 'folder'
+		? { folder: n.label, children: project(n.children) }
+		: { leaf: n.item.label, kind: n.item.kind });
+}
 
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
 const BOARD = URI.file('/ws/Board Note.md');
@@ -137,18 +145,183 @@ suite('treeRail', () => {
 		assert.strictEqual(folders.find(f => f.name === 'Not yet imported'), undefined);
 	});
 
-	test('buildOutline returns headings in order, stripped of Markdown and bind syntax', () => {
-		const d = doc('Weekly', [
-			{ text: '# Weekly Operating Summary', level: 1 },
-			{ text: '## [Highlights](bind:x)', level: 2 },
-			{ text: '## Key metrics', level: 2 },
-		], 'body');
+	test('isAssetName flags image/screenshot files (case-insensitive) and nothing else', () => {
+		assert.deepStrictEqual(
+			['shot.png', 'photo.JPG', 'a.jpeg', 'b.gif', 'c.svg', 'd.webp', 'data.csv', 'notes.txt', 'report.md', 'noext'].map(isAssetName),
+			[true, true, true, true, true, true, false, false, false, false],
+		);
+	});
+
+	test('buildTreeRailNodes shapes the grouped tree into collapsible folder + leaf nodes (issue #171)', () => {
+		const A = URI.file('/ws/root.md');
+		const B = URI.file('/ws/reports/2025/q1.md');
+		const nodes = buildTreeRailNodes([
+			{ title: 'Root Doc', resource: A, pendingCount: 0, sources: ['metrics.csv'], folder: '' },
+			{ title: 'Q1', resource: B, pendingCount: 0, sources: [], folder: 'reports/2025' },
+		]);
+		// Reports keeps the on-disk hierarchy as nested folder nodes; Sources becomes a folder of leaves.
+		assert.deepStrictEqual(project(nodes), [
+			{
+				folder: 'Reports', children: [
+					{ folder: 'reports', children: [{ folder: '2025', children: [{ leaf: 'Q1', kind: 'doc' }] }] },
+					{ leaf: 'Root Doc', kind: 'doc' },
+				]
+			},
+			{ folder: 'Sources', children: [{ leaf: 'metrics.csv', kind: 'source' }] },
+		]);
+	});
+
+	test('buildTreeRailNodes gives same-titled documents distinct resource-based leaf ids so the tree cannot reconcile the wrong row (issue #171)', () => {
+		// Two documents in the same folder can share a title; a label-based leaf id would collide, and the
+		// tree's identityProvider would then select/reconcile the wrong node. Leaf ids derive from the unique
+		// on-disk resource, so the two rows are distinguishable even though their labels are identical.
+		const nodes = buildTreeRailNodes([
+			{ title: 'Status', resource: URI.file('/ws/reports/Status.md'), pendingCount: 0, sources: [], folder: 'reports' },
+			{ title: 'Status', resource: URI.file('/ws/reports/Status-2.md'), pendingCount: 0, sources: [], folder: 'reports' },
+		]);
+		const reports = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'Reports')!;
+		const reportsFolder = reports.children.find((c): c is Extract<ITreeRailNode, { type: 'folder' }> => c.type === 'folder' && c.label === 'reports')!;
+		const leafIds = reportsFolder.children.filter(c => c.type === 'leaf').map(c => c.id);
+		assert.strictEqual(new Set(leafIds).size, 2, 'the two same-titled documents have distinct leaf ids');
+		assert.ok(leafIds.every(id => id.includes('Status')), 'each leaf id carries its own resource');
+	});
+
+	test('buildTreeRailNodes buckets un-bound image assets behind one collapsed Assets node, keeping bound sources visible (issue #171)', () => {
+		const A = URI.file('/ws/report.md');
+		const nodes = buildTreeRailNodes(
+			// chart.png is a BOUND source (referenced by the doc) and stays visible; the loose screenshots are assets.
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: ['chart.png', 'metrics.csv'], folder: '' }],
+			['shot-1.png', 'shot-2.png', 'shot-3.jpg', 'data.csv'],
+		);
+		const sources = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'Sources')!;
+		assert.deepStrictEqual(project([sources]), [{
+			folder: 'Sources', children: [
+				// Non-image sources (bound + discovered), then a single collapsed Assets bucket for the images.
+				{ leaf: 'chart.png', kind: 'source' },
+				{ leaf: 'data.csv', kind: 'source' },
+				{ leaf: 'metrics.csv', kind: 'source' },
+				{
+					folder: 'Assets (3)', children: [
+						{ leaf: 'shot-1.png', kind: 'source' },
+						{ leaf: 'shot-2.png', kind: 'source' },
+						{ leaf: 'shot-3.jpg', kind: 'source' },
+					]
+				},
+			],
+		}]);
+		// Ids are stable + path-based so selection + persisted collapse state survive re-renders/restart.
+		const assetsNode = sources.children.find(c => c.type === 'folder')!;
+		assert.strictEqual(assetsNode.id, 'folder:Sources/Assets');
+	});
+
+	test('collectAssetsFolderIds finds the Assets bucket id so the view can seed it collapsed on first open (issue #171)', () => {
+		const A = URI.file('/ws/report.md');
+		const withAssets = buildTreeRailNodes(
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
+			['shot-1.png', 'shot-2.png', 'data.csv'],
+		);
+		const noAssets = buildTreeRailNodes(
+			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
+			['data.csv'],
+		);
+		assert.deepStrictEqual(
+			{ withAssets: collectAssetsFolderIds(withAssets), noAssets: collectAssetsFolderIds(noAssets), constId: ASSETS_FOLDER_ID },
+			{ withAssets: ['folder:Sources/Assets'], noAssets: [], constId: 'folder:Sources/Assets' },
+		);
+	});
+
+	test('buildOutline returns headings in order (living OR plain doc), stripped of Markdown/bind syntax, with a stable headingIndex that skips blank headings', () => {
+		// A PLAIN Markdown document (isLiving: false) still gets a full outline (issue #181). The outline is
+		// derived from the RAW body the editor renders, so a blank ATX heading (`##` with no text) is not shown
+		// as a row but STILL advances headingIndex, keeping each entry lined up with the Nth rendered `<hN>`.
+		const body = [
+			'# Weekly Operating Summary',
+			'',
+			'## [Highlights](bind:x)',
+			'',
+			'Prose in between.',
+			'',
+			'##   ',
+			'',
+			'## Key metrics',
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Notes', [], body), isLiving: false, blocks: [] };
 		assert.deepStrictEqual(buildOutline(d), [
-			{ text: 'Weekly Operating Summary', level: 1 },
-			{ text: 'Highlights', level: 2 },
-			{ text: 'Key metrics', level: 2 },
+			{ text: 'Weekly Operating Summary', level: 1, headingIndex: 0 },
+			{ text: 'Highlights', level: 2, headingIndex: 1 },
+			{ text: 'Key metrics', level: 2, headingIndex: 3 },
 		]);
 		assert.deepStrictEqual(buildOutline(undefined), []);
+	});
+
+	test('buildOutline counts setext + blockquote-nested headings so its indices match the rendered <hN> ordinals (issue #181 regression)', () => {
+		// The DOM the Outline scrolls is rendered by prosemirror-markdown (markdown-it) from the raw body, which
+		// renders SETEXT headings (`Title` underlined by `===`/`---`) and headings nested in a BLOCKQUOTE as real
+		// `<hN>` elements. The old outline counted only single-line ATX headings, so every ordinal after a setext
+		// or blockquote heading drifted and Outline clicks scrolled to the WRONG heading. Deriving the outline
+		// from the same body scan makes the ordinals line up 1:1. `---` after a blank line is a thematic break,
+		// NOT a setext underline, and a fenced code block's `# ...` line is not a heading - both excluded, so the
+		// count matches the DOM exactly. Against the pre-fix (block-ordinal) code the indices would read
+		// 0/1/2/3 and the setext/blockquote headings would be missing entirely, so this asserts the fix.
+		const body = [
+			'Alpha Setext Title',    // rendered <h1> #0 (setext, underlined below)
+			'==================',
+			'',
+			'## Bravo',              // rendered <h2> #1 (ATX)
+			'',
+			'> # Quoted Charlie',    // rendered <h1> #2 (heading inside a blockquote)
+			'',
+			'```',
+			'# Not A Heading',       // inside a fence: NOT rendered as a heading
+			'```',
+			'',
+			'Delta Setext',          // rendered <h2> #3 (setext, `-` underline after content)
+			'------------',
+			'',
+			'---',                   // thematic break (blank line before): NOT a heading
+			'',
+			'### Echo',              // rendered <h3> #4 (ATX)
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Mixed', [], body), isLiving: false, blocks: [] };
+		assert.deepStrictEqual(buildOutline(d), [
+			{ text: 'Alpha Setext Title', level: 1, headingIndex: 0 },
+			{ text: 'Bravo', level: 2, headingIndex: 1 },
+			{ text: 'Quoted Charlie', level: 1, headingIndex: 2 },
+			{ text: 'Delta Setext', level: 2, headingIndex: 3 },
+			{ text: 'Echo', level: 3, headingIndex: 4 },
+		]);
+	});
+
+	test('buildOutline counts list-item-nested headings (markdown-it renders `- # x` inside the <li>) without over-counting lazy/code setext underlines (issue #181 regression)', () => {
+		// markdown-it renders a heading nested in a list item as a real `<hN>` inside the `<li>`, so the Outline
+		// scan must count it or every ordinal after it drifts and clicks scroll to the wrong heading. It must
+		// NOT, however, over-count: a setext underline UNDER a list item only underlines when it reaches the
+		// item's content column (marker width) and sits no more than three columns past it - a less-indented
+		// `===` is a lazy paragraph continuation (no heading) and a more-indented one is a code block (no
+		// heading). Verified against markdown-it in the two-parser harness. Each comment is the rendered <hN>.
+		const body = [
+			'- # Bullet ATX',       // rendered <h1> #0 (ATX inside a `-` list item)
+			'',
+			'1. ## Ordered ATX',    // rendered <h2> #1 (ATX inside a `1.` list item)
+			'',
+			'- Setext In List',     // rendered <h1> #2 (setext: underline reaches the content column)
+			'  ================',
+			'',
+			'- Lazy Not Heading',   // NOT a heading: the `===` is unindented -> lazy paragraph continuation
+			'===',
+			'',
+			'## Tail',              // rendered <h2> #3 (ATX) - proves the count did not drift
+			'',
+		].join('\n');
+		const d: ILivingDoc = { ...doc('Listy', [], body), isLiving: false, blocks: [] };
+		assert.deepStrictEqual(buildOutline(d), [
+			{ text: 'Bullet ATX', level: 1, headingIndex: 0 },
+			{ text: 'Ordered ATX', level: 2, headingIndex: 1 },
+			{ text: 'Setext In List', level: 1, headingIndex: 2 },
+			{ text: 'Tail', level: 2, headingIndex: 3 },
+		]);
 	});
 
 	test('searchTreeRail matches title or body case-insensitively with a snippet, and ignores blank queries', () => {

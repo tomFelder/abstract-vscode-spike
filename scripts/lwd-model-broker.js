@@ -5,13 +5,18 @@
 
 // @ts-check
 
-// Localhost-only model proxy for the Living Documents web build (served by @vscode/test-web at
-// http://localhost:8080). The engine speaks the Anthropic Messages protocol internally; this proxy
+// Localhost-only model broker for the Living Documents web build (served by @vscode/test-web at
+// http://localhost:8080). The engine speaks the Messages protocol internally; this broker
 // authenticates against a pluggable backend and translates the request/response so no credential ever
 // reaches the renderer (decision 14: the credential lives only in this process). No CSP/CORS changes are
-// needed - the sources build sets no connect-src CSP and this proxy owns the CORS policy (localhost-bind
+// needed - the sources build sets no connect-src CSP and this broker owns the CORS policy (localhost-bind
 // only). If no backend is configured (or it errors) the renderer degrades to its built-in heuristic path,
 // so the app stays demoable with ZERO backends.
+//
+// The app supervises this broker itself (issue #169): the Electron main process spawns it on startup,
+// health-checks /healthz, restarts it on crash with backoff, and kills it on shutdown - so no terminal
+// step is ever required. Running the script by hand still works; the supervisor adopts an already-healthy
+// broker on 8090 rather than double-spawning.
 //
 // Backends are pluggable behind one interface (see `backends` below):
 //   - `openrouter` - founder-funded fallback tier, budget-metered per user/day (plan 35 iter 3).
@@ -22,7 +27,8 @@
 // The Anthropic Console-OAuth backend was removed in plan 35 iter 1 (doc 18 section 2.1): Anthropic
 // banned subscription OAuth in third-party tools and the Console-billed path burned unfunded API credit.
 //
-// Run it with ./scripts/lwd-anthropic-proxy.sh (Node 24). Nothing is committed except this script.
+// The app starts it automatically; to run it by hand use ./scripts/lwd-model-broker.sh (Node 24).
+// Nothing is committed except this script.
 
 'use strict';
 
@@ -54,7 +60,7 @@ const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4.1-mini';
 // Bound the request body so a runaway client cannot exhaust memory; model calls here are tiny.
 const MAX_BODY_BYTES = 1 * 1024 * 1024;
 // The source-extraction routes carry a base64-encoded workbook/PDF, which is larger than a model
-// call; a beta user's weekly pack is well under this (doc 22 §4). Kept separate so raising it never
+// call; a beta user's weekly pack is well under this (doc 22 section 4). Kept separate so raising it never
 // widens the model-call surface.
 const MAX_SOURCE_BYTES = 32 * 1024 * 1024;
 
@@ -135,6 +141,7 @@ function proxyError(message) {
 // The plain-words body the renderer surfaces when the daily included usage is spent (P5: never "rate
 // limit" or "budget"). Shaped as a normal Anthropic message so the existing parser reads it as prose; the
 // `stop_reason: 'pause'` signals the service to pause the run via D15 and keep proposals reviewable.
+// eslint-disable-next-line local/code-no-unexternalized-strings -- a Node script has no nls; this user-facing string is intentionally double-quoted for its apostrophes.
 const CAP_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
 function capReached() {
 	return {
@@ -187,6 +194,7 @@ function writeReauthStream(res) {
 // normal Anthropic message the parser reads as prose - with `stop_reason: 'pause'` so the run pauses via D15
 // and keeps proposals, rather than dying. The user's next step is to sign in again (or switch to the included
 // model); this pause is NOT retryable (a retry just refuses again until they re-auth).
+// eslint-disable-next-line local/code-no-unexternalized-strings -- a Node script has no nls; this user-facing string is intentionally double-quoted for its apostrophes.
 const REAUTH_MESSAGE = "Your ChatGPT sign-in needs a refresh - sign in again to keep going, or switch to the included model.";
 function reauthReached() {
 	return {
@@ -211,11 +219,11 @@ function reauthReached() {
 
 function openRouterKey() {
 	if (process.env.OPENROUTER_API_KEY) { return process.env.OPENROUTER_API_KEY.trim(); }
-	const file = process.env.OPENROUTER_API_KEY_FILE;
-	if (file) {
-		try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; }
-	}
-	return '';
+	// The key file, either explicit (OPENROUTER_API_KEY_FILE) or the default location. The default used to live
+	// only in lwd-model-broker.sh; keeping it here too means the app-supervised broker (spawned as `node ...`
+	// directly, without the shell wrapper) finds the same key, so the included model works out of the box (#169).
+	const file = process.env.OPENROUTER_API_KEY_FILE || path.join(os.homedir(), '.config', 'lwd-openrouter.key');
+	try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; }
 }
 
 // Flatten an Anthropic Messages request into the OpenAI-style `messages` array OpenRouter expects. Shared by
@@ -391,7 +399,10 @@ function toResponsesRequest(req, stream) {
 		content: [{ type: m.role === 'assistant' ? 'output_text' : 'input_text', text: m.content }],
 	}));
 	const body = {
-		model: openaiOAuth.OPENAI_MODEL,
+		// The resolved model id (issue #179): forwardMessages stamps `req.model` after validating it against the
+		// subscription's list, so the user's pick is load-bearing here. Falls back to the backend default model
+		// when the request carried none (a direct hand-run call), never an undefined model.
+		model: (typeof req.model === 'string' && req.model) ? req.model : openaiOAuth.OPENAI_MODEL,
 		input,
 		max_output_tokens: req.max_tokens || 1024,
 	};
@@ -538,6 +549,55 @@ function activeBackend() {
 	return backends[BACKEND] || backends.openrouter;
 }
 
+// --- model listing (issue #179) -----------------------------------------------------------------------
+// The models the ACTIVE backend can drive, shaped as { id, label, default } for the composer's picker. Every
+// backend exposes exactly one `default:true` entry - the model a request lands on when it sends no `model` or
+// a stale/unknown one (never a 500 on a persisted id). The openrouter backend serves ONE included model, so
+// its list is a single product-labelled entry; the openai-oauth backend returns the subscription's catalogue
+// (static today - the Codex OAuth token cannot enumerate models live - behind lwd-openai-oauth.listModels(),
+// which is the seam a future live query slots into). #120 note: the backend is fixed at spawn (LWD_BACKEND) and
+// does not switch after a mid-session ChatGPT sign-in; this reports for whatever backend is active NOW and, for
+// a backend that is not configured, still returns its catalogue so the picker renders consistently (the call
+// path itself degrades via /healthz + the renderer's heuristic fallback, not by an empty picker).
+async function modelsForBackend(backend) {
+	if (backend.name === 'openai-oauth') {
+		try {
+			const models = await openaiOAuth.listModels();
+			if (Array.isArray(models) && models.length) { return models; }
+		} catch { /* fall through to a safe single-entry default below */ }
+		// A listModels failure must never empty the picker: fall back to the one known default model.
+		return [{ id: openaiOAuth.OPENAI_MODEL, label: 'ChatGPT model', default: true }];
+	}
+	// openrouter: a single founder-funded included model, product-labelled (never the raw upstream id).
+	return [{ id: OPENROUTER_MODEL, label: 'Included model', default: true }];
+}
+
+// The default model id for a backend's list (the entry flagged default, else the first). Used to resolve an
+// absent/invalid `model` on /v1/messages so a stale persisted id can never 500 - it just lands on the default.
+function defaultModelId(models) {
+	const flagged = models.find(m => m && m.default);
+	return (flagged && flagged.id) || (models[0] && models[0].id) || '';
+}
+
+// Resolve the caller's requested model against the active backend's list: keep it when it is a known id,
+// otherwise fall back to the backend default (absent OR unknown/stale). Returns the id to actually use. Note
+// the resolved id is currently ADVISORY for the openrouter backend (it serves its single included model
+// regardless); it becomes load-bearing for openai-oauth, whose Responses request already carries a model id.
+function resolveRequestedModel(requested, models) {
+	const fallback = defaultModelId(models);
+	if (typeof requested !== 'string' || !requested) { return fallback; }
+	return models.some(m => m && m.id === requested) ? requested : fallback;
+}
+
+// Cap a caller-supplied value before it is echoed into the broker log. `parsed.model` is attacker-controllable
+// (a client can POST a 10KB model string); a real model id is short, so anything longer is truncated with an
+// ellipsis to keep the log line bounded. Harmless on a machine-local broker, but log hygiene regardless.
+const LOG_VALUE_MAX = 80;
+function forLog(value) {
+	const s = String(value);
+	return s.length > LOG_VALUE_MAX ? `${s.slice(0, LOG_VALUE_MAX)}…(${s.length})` : s;
+}
+
 // Meter one metered (openrouter) call: charge the resolved cost, emit a `model_spend` audit record, and
 // return whether the day's included usage is now spent. Not called for a non-metering backend (a user's
 // own subscription is not the founder's budget). Cost uses real API numbers where present, an honest
@@ -570,6 +630,16 @@ async function forwardMessages(req, res) {
 	}
 	const backend = activeBackend();
 	const streaming = parsed.stream === true;
+	// Resolve the caller's optional `model` against the active backend's list (issue #179): an absent, unknown,
+	// or stale-persisted id falls back to the backend default rather than 500ing. The resolved id is stamped
+	// onto the parsed request so the backend forwarders use it, and logged so the E2E can prove which model a
+	// call actually ran on. openrouter still serves its single included model (the id is advisory there); for
+	// openai-oauth the id is load-bearing (it becomes the Responses request's `model`).
+	const requestedModel = typeof parsed.model === 'string' ? parsed.model : undefined;
+	const models = await modelsForBackend(backend);
+	const resolvedModel = resolveRequestedModel(requestedModel, models);
+	parsed.model = resolvedModel;
+	console.log(`[lwd-proxy] /v1/messages backend=${backend.name} requested=${requestedModel === undefined ? 'null' : JSON.stringify(forLog(requestedModel))} resolved=${resolvedModel}`);
 	// Budget gate (metered backends only): if the day's included usage is already spent, do NOT call the
 	// model - return the plain-words cap message so the renderer pauses the run via D15 and keeps proposals.
 	if (backend.meters && spendMeter.isOverBudget()) {
@@ -848,7 +918,7 @@ async function postEvent(req, res) {
 	sendJson(res, 200, { ok: true });
 }
 
-// Conversion runs where file access + Node libs live, never in the renderer (doc 22 §3). The docx export
+// Conversion runs where file access + Node libs live, never in the renderer (doc 22 section 3). The docx export
 // (issue #130) is a pure text->bytes transform: the renderer POSTs the already-resolved export Markdown (bind
 // values inlined as plain text) plus a map of image src -> data URI, and this returns the .docx bytes for the
 // renderer to write beside the document. Sibling conversions (docx IMPORT via mammoth, xlsx/PDF sources) live
@@ -869,7 +939,7 @@ async function exportDocx(req, res) {
 	res.end(bytes);
 }
 
-// --- source extraction: xlsx -> CSV, PDF -> context text (issue #131, doc 22 §4) ----------------------
+// --- source extraction: xlsx -> CSV, PDF -> context text (issue #131, doc 22 section 4) ----------------------
 // Extraction runs HERE, in the node/proxy layer where file access + the heavy libraries live, never in
 // the renderer (P6 portability + the guardrail that a limitation is named, never a silent misread). The
 // renderer POSTs the file's bytes (base64) and receives clean CSV text / extracted context text back; it
@@ -957,14 +1027,36 @@ const server = http.createServer((req, res) => {
 		// much of today's included usage is spent. A subscription backend (openai-oauth) is NOT metered, so it
 		// reports no daily figure; today's spend comes from the same authoritative SpendMeter the cap uses.
 		const backend = activeBackend();
+		const configured = backend.isConfigured();
+		// A single honest `reason` the renderer can key its status copy off without re-deriving the logic here
+		// (issue #170): the broker is the only place that knows the true state. `unconfigured` = the backend has
+		// no credential wired (renderer stays on the heuristic path); `budget-paused` = the metered fallback has
+		// spent today's included cap (calls pause, never 500); `ready` = a configured backend that can serve now.
+		let reason = 'unconfigured';
+		if (configured) {
+			reason = (backend.meters && spendMeter.isOverBudget()) ? 'budget-paused' : 'ready';
+		}
 		sendJson(res, 200, {
-			ok: backend.isConfigured(),
+			ok: configured,
 			backend: BACKEND,
+			reason,
 			meters: backend.meters,
 			signedIn: openaiOAuth.isSignedIn(),
 			dailyBudgetUsd: DAILY_BUDGET_USD,
 			dailyTotalUsd: backend.meters ? Number(spendMeter.dailyTotalUsd().toFixed(6)) : undefined,
 		});
+		return;
+	}
+	// GET /models (issue #179): the models the ACTIVE backend can drive, for the composer's picker. Shape:
+	// { backend, models: [{ id, label, default }] }. The renderer fetches this cheaply (on backend change or
+	// rail render, not on every healthz poll) and passes the chosen id on /v1/messages. Reports for whatever
+	// backend is active now; #120 (backend fixed at spawn, does not switch after sign-in) is out of scope here.
+	if (req.method === 'GET' && url.startsWith('/models')) {
+		setCors(res);
+		const backend = activeBackend();
+		modelsForBackend(backend)
+			.then(models => sendJson(res, 200, { backend: BACKEND, models }))
+			.catch(err => sendJson(res, 502, { error: { type: 'models_error', message: String(err && err.message ? err.message : err) } }));
 		return;
 	}
 	// --- "Sign in with ChatGPT" OAuth routes (plan 35 iter 2) ---
@@ -1062,13 +1154,13 @@ const server = http.createServer((req, res) => {
 	sendJson(res, 404, { type: 'error', error: { type: 'not_found', message: 'unknown route' } });
 });
 
-// CLI: `node scripts/lwd-anthropic-proxy.js set-secret <name> <value>` stores a proxy-side secret (D29-C)
+// CLI: `node scripts/lwd-model-broker.js set-secret <name> <value>` stores a broker-side secret (D29-C)
 // and exits without starting the server, so a credential is written only to ~/.abstract/secrets.json (0600).
 if (process.argv[2] === 'set-secret') {
 	const name = process.argv[3];
 	const value = process.argv.slice(4).join(' ');
 	if (!name || !value) {
-		console.error('usage: node scripts/lwd-anthropic-proxy.js set-secret <name> <value>');
+		console.error('usage: node scripts/lwd-model-broker.js set-secret <name> <value>');
 		process.exit(1);
 	}
 	writeSecret(name, value);
