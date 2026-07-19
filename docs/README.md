@@ -44,7 +44,7 @@ written once the T1 audit and beta evidence land.*
 | [12-north-star-and-future-features.md](12-north-star-and-future-features.md) | The north-star narrative and the post-plan-33 future-feature roadmap (trust deepening, liveness, collaboration, platform) — the vision every plan is checkable against |
 | [19-website-feedback.md](19-website-feedback.md) | abstractdocs.com reviewed against the ratified strategy: the missing ITE story, pricing/publish/model-access corrections — the copy fixes are still open action items |
 | [research/](research/) | **The user-evidence container** (pseudonymised, consent-first): session notes per the [template](research/session-note.template.md), interviews, survey exports, weekly digests that update the doc-24 scoreboard |
-| [plans/](plans/) | The handoff prompts that drove (and will drive) the work, kept verbatim. UI Redesign set (`20`-`25`) **done**; product-completion set (`26`-`33`) **merged**; the **live set is the beta gate, plans `34`-`38`** (34 done, 35 mostly done — #120 open, 36-38 pending) |
+| [plans/](plans/) | The handoff prompts that drove (and will drive) the work, kept verbatim. UI Redesign set (`20`-`25`) **done**; product-completion set (`26`-`33`) **merged**; beta-gate set `34`-`38` (34 done, 35 mostly done — #120 open, 36-38 pending); QA wave of 16 Jul (issues #168-#182) **merged**; the **live plan is [42-light-path-loop.md](plans/42-light-path-loop.md)** — editor-first cold start, self-contained loop prompt inside |
 | [lwd-pm-bundle-build.md](lwd-pm-bundle-build.md) | Engineering recipe: how to rebuild the vendored ProseMirror bundle (`prosemirrorBundle.ts`) offline, so it is always reproducible |
 
 ## Layer 3 — The archive (history and superseded records; each carries a dated banner)
