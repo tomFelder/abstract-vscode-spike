@@ -191,7 +191,12 @@ export class TreeRailView extends ViewPane {
 	// state and selection survive the onDidChange/onDidActiveEditorChange re-renders that drive this rail.
 	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
 		const nodes = buildTreeRailNodes(
-			documents.map(d => ({ title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder })),
+			documents.map(d => ({
+				title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder,
+				// The Files-rail status dot inputs (issue #212): passed straight through from the summary so the pure
+				// tree module computes each doc's leading dot via the shared precedence ladder.
+				unseenAgentEdits: d.unseenAgentEdits, relinkCount: d.relinkCount, stale: d.stale, fanoutFailed: d.fanoutFailed,
+			})),
 			extras,
 		);
 		if (!nodes.length) {

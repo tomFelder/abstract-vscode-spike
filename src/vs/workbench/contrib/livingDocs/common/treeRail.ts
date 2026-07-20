@@ -7,6 +7,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { ILivingDoc, SourceKind } from './livingDocsModel.js';
 import { sourceKindOf } from './contextGroups.js';
+import { docRailDot, IRailDot, sourceRailDot } from './railStatus.js';
 
 // Pure data shaping for the left tree-rail (the comp's Files / Outline / Search tabs). The Context tab
 // reuses `buildContextGroups`; these three helpers cover the rest and are unit-tested independently of
@@ -24,6 +25,9 @@ export interface ITreeRailItem {
 	readonly kind: 'doc' | 'source' | 'unsupported';
 	/** A document with pending meaning-changes shows the amber dot (mirrors the Review count). */
 	readonly pending: boolean;
+	/** The leading status indicator (issue #212): a coloured dot for a document, a grey dash for a
+	 * source/unsupported row, with the plain-words reason + count in its hover tooltip. */
+	readonly dot: IRailDot;
 	/** For source rows, the binding kind (file | api | mcp) - drives the row glyph. */
 	readonly sourceKind?: SourceKind;
 	/** For an `unsupported` (not-yet-imported) row, the plain-words reason; unset otherwise (plan 37 F10). */
@@ -49,6 +53,16 @@ export interface ITreeRailDocInput {
 	readonly sources: readonly string[];
 	/** The document's directory relative to the workspace root ('' = root), '/'-joined (plan 37 F7). */
 	readonly folder?: string;
+	// --- Files-rail status-dot inputs (issue #212), mirroring the ILivingDocSummary fields; the tree computes
+	// the doc's leading dot from these via `docRailDot`. All default to 0/false (grey) when the caller omits them. ---
+	/** Agent auto-applies newer than the doc's last-viewed anchor (the ACTIVE doc reports 0) -> green band. */
+	readonly unseenAgentEdits?: number;
+	/** Relink-flagged pending proposals for this document -> red band. */
+	readonly relinkCount?: number;
+	/** True when a binding/context source has drifted since last sync/review -> red band. */
+	readonly stale?: boolean;
+	/** True when a whole-project fan-out run failed to reach the model for this document -> red band. */
+	readonly fanoutFailed?: boolean;
 }
 
 // A non-Markdown file discovered in the workspace, classified for the Files tab: a `source` (a CSV / txt /
@@ -133,7 +147,14 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	const rootItems: ITreeRailItem[] = [];
 	const roots = new Map<string, IMutableFolder>();
 	for (const d of [...docs].sort((a, b) => a.title.localeCompare(b.title))) {
-		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0 };
+		const dot = docRailDot({
+			pendingCount: d.pendingCount,
+			unseenAgentEdits: d.unseenAgentEdits ?? 0,
+			relinkCount: d.relinkCount ?? 0,
+			stale: d.stale ?? false,
+			fanoutFailed: d.fanoutFailed ?? false,
+		});
+		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, dot };
 		const segments = (d.folder ?? '').split('/').filter(s => s.length > 0);
 		if (!segments.length) { rootItems.push(item); continue; }
 		let level = roots;
@@ -164,7 +185,8 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	const addSource = (label: string, resource?: URI, action?: TreeRailAction) => {
 		if (seen.has(label)) { return; }
 		seen.add(label);
-		sources.push({ label, resource, kind: 'source', pending: false, sourceKind: sourceKindOf(label), ...(action ? { action } : {}) });
+		const sourceKind = sourceKindOf(label);
+		sources.push({ label, resource, kind: 'source', pending: false, sourceKind, dot: sourceRailDot('source', sourceKind), ...(action ? { action } : {}) });
 	};
 	for (const d of docs) {
 		for (const s of d.sources) {
@@ -181,7 +203,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 		if (c.kind === 'source') { addSource(name, undefined, c.action); continue; }
 		if (seenUnsupported.has(name)) { continue; }
 		seenUnsupported.add(name);
-		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason, importable: c.importable });
+		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason, importable: c.importable, dot: sourceRailDot('unsupported', undefined, c.reason) });
 	}
 	sources.sort((a, b) => a.label.localeCompare(b.label));
 	unsupported.sort((a, b) => a.label.localeCompare(b.label));

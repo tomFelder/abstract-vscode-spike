@@ -54,6 +54,31 @@ suite('treeRail', () => {
 		]);
 	});
 
+	test('buildFileTree computes each row\'s status dot: doc precedence (grey/green/yellow/red) + grey source/unsupported dashes (livingDocs #212)', () => {
+		const folders = buildFileTree([
+			{ title: 'Calm', resource: URI.file('/ws/Calm.md'), pendingCount: 0, sources: ['metrics.csv'] },
+			{ title: 'Applied', resource: URI.file('/ws/Applied.md'), pendingCount: 0, sources: [], unseenAgentEdits: 2 },
+			{ title: 'Pending', resource: URI.file('/ws/Pending.md'), pendingCount: 3, sources: [] },
+			{ title: 'Needs input', resource: URI.file('/ws/Needs.md'), pendingCount: 1, sources: [], stale: true },
+		], ['legacy.doc']);
+		const projection = folders.map(f => ({
+			name: f.name,
+			items: f.items.map(i => ({ label: i.label, kind: i.kind, shape: i.dot.shape, color: i.dot.color })),
+		}));
+		assert.deepStrictEqual(projection, [
+			{
+				name: 'Reports', items: [
+					{ label: 'Applied', kind: 'doc', shape: 'dot', color: 'green' },
+					{ label: 'Calm', kind: 'doc', shape: 'dot', color: 'grey' },
+					{ label: 'Needs input', kind: 'doc', shape: 'dot', color: 'red' },
+					{ label: 'Pending', kind: 'doc', shape: 'dot', color: 'yellow' },
+				]
+			},
+			{ name: 'Sources', items: [{ label: 'metrics.csv', kind: 'source', shape: 'dash', color: 'grey' }] },
+			{ name: 'Not yet imported', items: [{ label: 'legacy.doc', kind: 'unsupported', shape: 'dash', color: 'grey' }] },
+		]);
+	});
+
 	test('buildFileTree resolves a file source to a URI in the referencing document\'s folder (for the Files-tab menu), but not an api (URL) source', () => {
 		const folders = buildFileTree([
 			{ title: 'Weekly Summary', resource: WEEKLY, pendingCount: 0, sources: ['metrics.csv', 'https://api.example.com/mrr'] },
