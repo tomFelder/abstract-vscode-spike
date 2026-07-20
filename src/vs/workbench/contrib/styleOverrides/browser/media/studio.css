@@ -161,3 +161,41 @@
 .style-override .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon::after {
 	content: none;
 }
+
+/* The slim "AI door" edge tab (plan 42 slice L4 - quiet shell on entry). While the review rail is
+ * collapsed on the editor surface, the RailAffordanceContribution appends this button to the editor
+ * part so the Chat door stays one click away. It is pinned to the right edge, vertically centred, with
+ * a calm word-processor treatment (no loud IDE chrome): a soft pill that reads as a tab, not a toolbar
+ * button. Clicking it opens the Chat tab focused. */
+.style-override .part.editor > .lwd-rail-affordance {
+	position: absolute;
+	top: 50%;
+	right: 0;
+	transform: translateY(-50%);
+	z-index: 6;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 60px;
+	padding: 0;
+	border: 1px solid var(--vscode-widget-border, rgba(0, 0, 0, 0.08));
+	border-right: none;
+	border-radius: 6px 0 0 6px;
+	background: var(--vscode-editorWidget-background, #ffffff);
+	color: var(--vscode-icon-foreground, #61656c);
+	cursor: pointer;
+	box-shadow: -1px 0 4px rgba(0, 0, 0, 0.06);
+	transition: color 0.1s ease, background 0.1s ease;
+}
+.style-override .part.editor > .lwd-rail-affordance:hover {
+	color: var(--vscode-textLink-foreground, #2b64d4);
+	background: var(--vscode-list-hoverBackground, #f2f3f5);
+}
+.style-override .part.editor > .lwd-rail-affordance:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder, #2b64d4);
+	outline-offset: -1px;
+}
+.style-override .part.editor > .lwd-rail-affordance > .codicon {
+	font-size: 16px;
+}

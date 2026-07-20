@@ -7,6 +7,8 @@ import { $, addDisposableListener, append, clearNode } from '../../../../base/br
 import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
+import { Codicon } from '../../../../base/common/codicons.js';
+import { ThemeIcon } from '../../../../base/common/themables.js';
 import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
@@ -254,6 +256,16 @@ export class ReviewRailView extends ViewPane {
 		addTab('chat', 'Chat');
 		addTab('review', 'Review', pending.length);
 		addTab('history', 'History');
+
+		// The calm collapse control (plan 42 slice L4): a slim chevron pinned to the right of the tab strip
+		// that returns to the quiet shell. It is the discoverable counterpart to the slim edge affordance
+		// (which peeks the rail open); activating it collapses the rail AND records `collapsed` as the user's
+		// manual choice, so the quiet shell is restorable through the UI and the choice persists.
+		const collapseLabel = localize("livingDocs.collapseReviewRail", "Collapse");
+		const collapse = append(tabs, $('button.ldp-collapse', { 'aria-label': collapseLabel, 'tabindex': '0' })) as HTMLButtonElement;
+		collapse.appendChild($(ThemeIcon.asCSSSelector(Codicon.chevronRight)));
+		this._renderDisposables.add(this.hoverService.setupDelayedHover(collapse, () => ({ content: collapseLabel })));
+		this._renderDisposables.add(addDisposableListener(collapse, 'click', () => this._livingDocs.collapseReviewRail()));
 
 		// --- content ---
 		const content = append(root, $('div.ldp-content'));
@@ -1235,6 +1247,10 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldp-tab.active{color:#1a1c20;font-weight:600}
 		.living-docs-panel .ldp-tab.active::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:2px;background:oklch(0.55 0.13 255)}
 		.living-docs-panel .ldp-tab-count{font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#fff;background:oklch(0.66 0.16 45);border-radius:999px;padding:3px 5px}
+		.living-docs-panel .ldp-collapse{margin-left:auto;align-self:center;border:none;background:transparent;border-radius:6px;padding:5px;color:#868b95;cursor:pointer;display:flex;align-items:center}
+		.living-docs-panel .ldp-collapse:hover{color:#1a1c20;background:#f0f1f4}
+		.living-docs-panel .ldp-collapse:focus-visible{outline:2px solid oklch(0.55 0.13 255);outline-offset:1px}
+		.living-docs-panel .ldp-collapse .codicon{font-size:14px}
 		.living-docs-panel .ldp-content{flex:1;overflow-y:auto}
 		.living-docs-panel .ldr-content,.living-docs-panel .ldp-content{padding:14px 12px}
 		.living-docs-panel .ldr-status{font:400 11.5px/1.5 system-ui;color:#868b95;margin-bottom:14px}

@@ -536,8 +536,23 @@ export interface ILivingDocsService {
 	 */
 	readonly onDidRequestChatAttach: Event<string>;
 
+	/**
+	 * Fires when the review rail's own calm collapse control (the header chevron) is activated. The
+	 * RailVisibilityContribution listens: it hides the auxiliary-bar part AND records the user's manual
+	 * `collapsed` choice so the quiet shell is restored and remembered across the next entry / restart.
+	 * This is the ONLY user gesture that records a manual choice; every `focusPanel`-driven reveal is a
+	 * peek (plan 42 slice L4).
+	 */
+	readonly onDidRequestCollapseReviewRail: Event<void>;
+
 	/** Reveal the right panel and switch it to the given tab. */
 	focusPanel(tab: LivingDocsPanelTab): void;
+
+	/**
+	 * Collapse the review rail from its own calm collapse control and record it as the user's manual
+	 * `collapsed` choice (plan 42 slice L4). Fires `onDidRequestCollapseReviewRail`.
+	 */
+	collapseReviewRail(): void;
 
 	/** Ask the editor showing a change's document to scroll to and highlight that change's inline diff. */
 	focusChange(changeId: string): void;

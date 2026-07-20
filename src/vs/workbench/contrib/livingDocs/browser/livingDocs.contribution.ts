@@ -4,7 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { disposableTimeout } from '../../../../base/common/async.js';
+import { $, addDisposableListener, append } from '../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../base/browser/window.js';
+import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { IKeybindings, KeybindingsRegistry } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
@@ -32,6 +34,7 @@ import { IHistoryService } from '../../../services/history/common/history.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
+import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, ReviewRailManualChoice } from '../common/railVisibility.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
@@ -609,33 +612,122 @@ registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContri
 // that the sashes are draggable (the global sash lock is gone) and the workbench persists whatever the
 // user drags natively, so we never re-pin -- doing so would clobber the user's chosen width on every
 // screen->editor crossing. The part-level minimum widths (170px, stock) keep the rails usable.
+//
+// (plan 42 slice L4 - quiet shell on entry) The LEFT rail (tree-rail) always comes up on the editor
+// surface as above. The RIGHT rail (review rail) is now QUIET on entry: it starts collapsed when it has
+// nothing to say (no pending review, no chat history for the document), and opens only when it does.
+// It still expands automatically on first AI invocation and when a review arrives -- those paths run
+// through LivingDocsService.focusPanel() -> IViewsService.openView(), which un-hides the part -- so no
+// extra wiring is needed for auto-expand; this contribution only sets the DEFAULT on entry and records
+// the user's MANUAL choice so it wins on the next crossing and across restart. A slim edge affordance
+// (RailAffordanceContribution below) keeps the AI door one click away while collapsed.
+//
+// The RECORDING RULE (plan 42 slice L4, fix-round for defect 1): a manual choice is recorded ONLY by an
+// explicit gesture on the rail itself. Every focusPanel-driven reveal -- the edge affordance, an AI
+// invocation, the L2 held-prompt, a proposal arriving -- is a PEEK: it fires onDidRequestPanel, which we
+// guard so the openView-driven visibility change is not mistaken for a deliberate `open`. The sole
+// recorder is the rail's calm collapse control (onDidRequestCollapseReviewRail -> `collapsed`). After the
+// fix, NO UI gesture records `open`; that is intentional -- precedence still honours a stored `collapsed`,
+// and the has-something-to-say default (chat history / pending review) covers the "opens on its own" cases.
+// The decision itself is the pure decideReviewRailOpenOnEntry() (common/railVisibility.ts, unit-tested):
+// a pending proposal ALWAYS forces the rail open (the agent-edit trust grammar is untouchable), then the
+// manual choice, then the has-something-to-say default.
 class RailVisibilityContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.railVisibility';
-	// Set once the first-run 264/392 default has been seeded; afterwards the user's persisted width wins.
+	// Set once the first-run 264 sidebar / 392 review default has been seeded; afterwards the user's
+	// persisted width wins. The review width seeds independently (below) since the review rail can start
+	// collapsed, so its width must be seeded the first time it actually opens, not on the first doc entry.
 	static readonly RAIL_WIDTHS_SEEDED_KEY = 'livingDocs.railWidthsSeeded';
+	static readonly REVIEW_WIDTH_SEEDED_KEY = 'livingDocs.reviewWidthSeeded';
+	// The user's persisted manual open/collapse choice for the review rail (plan 42 L4). PROFILE scope so
+	// it follows the user across windows and survives restart; MACHINE target since it is a UI preference.
+	static readonly REVIEW_RAIL_CHOICE_KEY = 'livingDocs.reviewRailManualChoice';
 	private static readonly DEFAULT_SIDEBAR_WIDTH = 264;
 	private static readonly DEFAULT_AUXILIARYBAR_WIDTH = 392;
 
 	private _lastKind: 'doc' | 'screen' | undefined;
+	// True while THIS contribution is toggling the review-rail part, so the resulting part-visibility
+	// event is not mistaken for a user's manual open/collapse.
+	private _programmaticReviewToggle = false;
 	// The single pending re-assert/seed timeout (replaced each sync so repeated editor changes never
 	// accumulate disposables on the class store).
 	private readonly _deferred = this._register(new MutableDisposable());
+	// (plan 42 slice L4, defect 1) Every reveal driven by ILivingDocsService.focusPanel() -- the AI door
+	// affordance, a chat send, the L2 held-prompt, a proposal arriving -- fires onDidRequestPanel and then
+	// un-hides the auxiliary bar via IViewsService.openView(). Those reveals are PEEKS, not decisions: only
+	// an explicit collapse/expand gesture on the rail itself records a manual choice. openView un-hides the
+	// part on a LATER microtask, so a synchronous flag would already be cleared; this clears the guard on a
+	// deferred tick, after the peek's visibility event has been swallowed.
+	private readonly _peekGuard = this._register(new MutableDisposable());
 
 	constructor(
 		@IEditorService private readonly _editorService: IEditorService,
 		@IViewsService private readonly _viewsService: IViewsService,
 		@IWorkbenchLayoutService private readonly _layoutService: IWorkbenchLayoutService,
 		@IStorageService private readonly _storageService: IStorageService,
+		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 	) {
 		super();
 		this._sync();
 		this._register(this._editorService.onDidActiveEditorChange(() => this._sync()));
+		// Record the user's manual open/collapse of the review rail so it wins on the next entry. Only a
+		// toggle the user made while ON the editor surface counts -- our own programmatic toggles are
+		// flagged out, and toggles on a screen surface (where the rail is always hidden) are ignored.
+		this._register(this._layoutService.onDidChangePartVisibility(e => this._onPartVisibilityChange(e.partId, e.visible)));
+		// (defect 1) A focusPanel-driven reveal is a PEEK: guard the visibility event it will raise so it is
+		// not recorded as a manual `open`. onDidRequestPanel fires synchronously just before openView, whose
+		// visibility change lands on a later tick, so hold the guard across one deferred tick.
+		this._register(this._livingDocs.onDidRequestPanel(() => this._beginPeek()));
+		// (defect 2) The rail's own calm collapse control: hide the part AND record `collapsed` as the manual
+		// choice, so the quiet shell is restorable through the UI and the choice sticks (the counterpart to
+		// the slim edge affordance, which only PEEKS the rail open).
+		this._register(this._livingDocs.onDidRequestCollapseReviewRail(() => this._collapseReviewRailAsChoice()));
+	}
+
+	// Mark the imminent focusPanel-driven reveal as a peek: set the programmatic guard so the openView
+	// visibility change is not recorded as a manual choice, then release it on the next tick.
+	private _beginPeek(): void {
+		this._programmaticReviewToggle = true;
+		this._peekGuard.value = disposableTimeout(() => { this._programmaticReviewToggle = false; }, 0);
+	}
+
+	// The user activated the rail's calm collapse control: hide the part programmatically (so the resulting
+	// visibility event is guarded out) and record the choice the pure rule assigns to this gesture
+	// (`collapsed`). Keeping the classification in recordedChoiceForRailGesture() keeps the recording rule
+	// unit-testable and single-sourced.
+	private _collapseReviewRailAsChoice(): void {
+		this._setReviewRailHidden(true);
+		const choice = recordedChoiceForRailGesture(RailGesture.CollapseControl);
+		if (choice) {
+			this._storageService.store(RailVisibilityContribution.REVIEW_RAIL_CHOICE_KEY, choice, StorageScope.PROFILE, StorageTarget.MACHINE);
+		}
 	}
 
 	private _surfaceKind(): 'doc' | 'screen' {
 		// The editor surface is any open Living Document (living or plain .md); everything else -- the
 		// ScreenEditor screens and the no-editor case -- is a screen surface.
 		return this._editorService.activeEditor instanceof LivingDocEditorInput ? 'doc' : 'screen';
+	}
+
+	private _onPartVisibilityChange(partId: string, visible: boolean): void {
+		if (partId !== Parts.AUXILIARYBAR_PART || this._programmaticReviewToggle || this._surfaceKind() !== 'doc') {
+			return;
+		}
+		// A genuine user toggle of the review rail while editing (NOT a programmatic sync and NOT a guarded
+		// focusPanel peek): persist it so it wins on the next entry and across restart (the pending-review
+		// force-open still overrides a stored "collapsed"). In the calm shell the only such gesture is the
+		// rail's own collapse control, which records `collapsed` directly; this remains the safety net for
+		// any residual native hide/show gesture.
+		this._storageService.store(RailVisibilityContribution.REVIEW_RAIL_CHOICE_KEY, visible ? ReviewRailManualChoice.Open : ReviewRailManualChoice.Collapsed, StorageScope.PROFILE, StorageTarget.MACHINE);
+		if (visible) {
+			// The user opened the rail: seed its default width if this is the first time it has ever opened.
+			this._seedReviewWidthOnce();
+		}
+	}
+
+	private _reviewRailManualChoice(): ReviewRailManualChoice {
+		const stored = this._storageService.get(RailVisibilityContribution.REVIEW_RAIL_CHOICE_KEY, StorageScope.PROFILE);
+		return stored === ReviewRailManualChoice.Open || stored === ReviewRailManualChoice.Collapsed ? stored : ReviewRailManualChoice.None;
 	}
 
 	private _sync(): void {
@@ -647,48 +739,150 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 			this._lastKind = 'screen';
 			const hide = () => {
 				this._layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
-				this._layoutService.setPartHidden(true, Parts.AUXILIARYBAR_PART);
+				this._setReviewRailHidden(true);
 			};
 			hide();
 			this._deferred.value = disposableTimeout(hide, 0);
 			return;
 		}
-		// kind === 'doc': only force the rails open when CROSSING into the editor from a screen, so a user who
-		// popped a rail closed while editing keeps it closed as they move document to document.
+		// kind === 'doc': only assert the rail defaults when CROSSING into the editor from a screen, so a user
+		// who pops a rail closed (or open) while editing keeps that choice as they move document to document.
 		if (this._lastKind === 'doc') {
 			return;
 		}
 		this._lastKind = 'doc';
+		// The left tree-rail always comes up on the editor surface (L4 leaves the left rail unchanged).
 		this._layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
-		this._layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
-		// Land the sidebar on the calm Workspace tree-rail (not the native Explorer) and reveal the review
-		// rail without stealing focus.
 		void this._viewsService.openView(DOCUMENTS_VIEW_ID, false);
-		void this._viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
-		this._seedDefaultWidthsOnce();
+		// The right review rail is quiet on entry: open it only when the pure decision says so -- a pending
+		// proposal forces it (trust grammar), else the user's stored manual choice, else has-something-to-say.
+		const activeResource = this._editorService.activeEditor?.resource;
+		const openReview = decideReviewRailOpenOnEntry({
+			hasPendingReview: activeResource ? this._livingDocs.getPendingForDoc(activeResource).length > 0 : this._livingDocs.getAllPending().length > 0,
+			hasChatHistory: activeResource ? this._livingDocs.getChatMessages(activeResource).length > 0 : false,
+			manualChoice: this._reviewRailManualChoice(),
+		});
+		this._setReviewRailHidden(!openReview);
+		if (openReview) {
+			// Reveal the review rail without stealing focus; seed its width the first time it opens.
+			void this._viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
+			this._seedReviewWidthOnce();
+		}
+		this._seedSidebarWidthOnce();
 	}
 
-	// Seed the 264/392 rail widths ONCE per profile. After the first run the sashes are draggable and the
+	// Toggle the review-rail part while flagging the change as programmatic, so the resulting
+	// part-visibility event is not recorded as a user's manual choice.
+	private _setReviewRailHidden(hidden: boolean): void {
+		if (this._layoutService.isVisible(Parts.AUXILIARYBAR_PART, mainWindow) === !hidden) {
+			return;
+		}
+		this._programmaticReviewToggle = true;
+		try {
+			this._layoutService.setPartHidden(hidden, Parts.AUXILIARYBAR_PART);
+		} finally {
+			this._programmaticReviewToggle = false;
+		}
+	}
+
+	// Seed the 264 tree-rail width ONCE per profile. After the first run the sash is draggable and the
 	// workbench persists the user's chosen width, so we must not re-apply the default (that would clobber a
 	// dragged width every time the user crosses from a screen back into the editor -- issue #173).
-	private _seedDefaultWidthsOnce(): void {
+	private _seedSidebarWidthOnce(): void {
 		if (this._storageService.getBoolean(RailVisibilityContribution.RAIL_WIDTHS_SEEDED_KEY, StorageScope.PROFILE, false)) {
 			return;
 		}
-		// Seeding runs after a layout tick (and once more) so it wins the workbench's own size restore;
-		// setSize is a no-op while a part is hidden.
 		const seed = () => {
 			try {
 				this._layoutService.setSize(Parts.SIDEBAR_PART, { width: RailVisibilityContribution.DEFAULT_SIDEBAR_WIDTH, height: this._layoutService.getSize(Parts.SIDEBAR_PART).height });
-				this._layoutService.setSize(Parts.AUXILIARYBAR_PART, { width: RailVisibilityContribution.DEFAULT_AUXILIARYBAR_WIDTH, height: this._layoutService.getSize(Parts.AUXILIARYBAR_PART).height });
-			} catch (e) { /* layout not ready in some hosts; the config default widths still apply */ }
+			} catch (e) { /* layout not ready in some hosts; the config default width still applies */ }
 		};
 		this._deferred.value = disposableTimeout(seed, 0);
 		seed();
 		this._storageService.store(RailVisibilityContribution.RAIL_WIDTHS_SEEDED_KEY, true, StorageScope.PROFILE, StorageTarget.MACHINE);
 	}
+
+	// Seed the 392 review-rail width ONCE per profile, the first time the rail actually opens. Because the
+	// rail can start collapsed (quiet shell), its width cannot be seeded on first doc entry -- setSize is a
+	// no-op while a part is hidden -- so this runs from the open paths (#173: never re-pin a dragged width).
+	private _seedReviewWidthOnce(): void {
+		if (this._storageService.getBoolean(RailVisibilityContribution.REVIEW_WIDTH_SEEDED_KEY, StorageScope.PROFILE, false)) {
+			return;
+		}
+		const seed = () => {
+			try {
+				this._layoutService.setSize(Parts.AUXILIARYBAR_PART, { width: RailVisibilityContribution.DEFAULT_AUXILIARYBAR_WIDTH, height: this._layoutService.getSize(Parts.AUXILIARYBAR_PART).height });
+			} catch (e) { /* layout not ready in some hosts; the config default width still applies */ }
+		};
+		this._deferred.value = disposableTimeout(seed, 0);
+		seed();
+		this._storageService.store(RailVisibilityContribution.REVIEW_WIDTH_SEEDED_KEY, true, StorageScope.PROFILE, StorageTarget.MACHINE);
+	}
 }
 registerWorkbenchContribution2(RailVisibilityContribution.ID, RailVisibilityContribution, WorkbenchPhase.AfterRestored);
+
+// --- the slim "AI door" affordance while the review rail is collapsed (plan 42 slice L4) ---
+// When the quiet shell starts (or the user collapses) the review rail, the native way back -- the
+// auxiliary bar's own activity strip -- disappears with the part, and the toggle chord is neutralised
+// in the calm shell (NEUTRALISED_IDE_CHORDS above). So the AI door would be more than one click away.
+// This contribution keeps it ONE click away: a slim edge tab pinned to the right edge of the editor
+// area, shown only while editing a document AND the review rail is collapsed, that opens the Chat tab
+// (focused) in one click. ADDITIVE-CONTRIBUTION (our-surface, no core patch): it appends its own element
+// to the editor part container and toggles part visibility via ILivingDocsService.focusPanel(); the
+// `.style-override .lwd-rail-affordance` CSS in studio.css paints it.
+class RailAffordanceContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.railAffordance';
+
+	private _tab: HTMLElement | undefined;
+	private readonly _tabStore = this._register(new MutableDisposable<DisposableStore>());
+
+	constructor(
+		@IEditorService private readonly _editorService: IEditorService,
+		@IWorkbenchLayoutService private readonly _layoutService: IWorkbenchLayoutService,
+		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+		@IHoverService private readonly _hoverService: IHoverService,
+	) {
+		super();
+		this._update();
+		this._register(this._editorService.onDidActiveEditorChange(() => this._update()));
+		this._register(this._layoutService.onDidChangePartVisibility(e => {
+			if (e.partId === Parts.AUXILIARYBAR_PART) {
+				this._update();
+			}
+		}));
+	}
+
+	private _isDocSurface(): boolean {
+		return this._editorService.activeEditor instanceof LivingDocEditorInput;
+	}
+
+	private _update(): void {
+		// Show the affordance only while a document is open AND the review rail is collapsed.
+		const shouldShow = this._isDocSurface() && !this._layoutService.isVisible(Parts.AUXILIARYBAR_PART, mainWindow);
+		if (!shouldShow) {
+			this._tabStore.clear();
+			this._tab = undefined;
+			return;
+		}
+		if (this._tab) {
+			return;
+		}
+		const editorContainer = this._layoutService.getContainer(mainWindow, Parts.EDITOR_PART);
+		if (!editorContainer) {
+			return;
+		}
+		const store = new DisposableStore();
+		const label = localize("livingDocs.openAiRail", "Open Chat");
+		const tab = append(editorContainer, $('button.lwd-rail-affordance', { 'aria-label': label, 'tabindex': '0' }));
+		tab.appendChild($(ThemeIcon.asCSSSelector(Codicon.commentDiscussion)));
+		store.add(this._hoverService.setupDelayedHover(tab, () => ({ content: label })));
+		store.add(addDisposableListener(tab, 'click', () => this._livingDocs.focusPanel('chat')));
+		store.add({ dispose: () => tab.remove() });
+		this._tab = tab;
+		this._tabStore.value = store;
+	}
+}
+registerWorkbenchContribution2(RailAffordanceContribution.ID, RailAffordanceContribution, WorkbenchPhase.AfterRestored);
 
 // --- active nav chip (Part C1) ---
 // The comp marks the CURRENT surface with a white chip in the icon-nav. The activity bar's own

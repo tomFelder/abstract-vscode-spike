@@ -332,6 +332,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
 	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
 
+	// Plan 42 slice L4: the calm collapse control on the review rail header asks to close the rail. The
+	// RailVisibilityContribution owns the manual-choice storage, so it listens here and both hides the part
+	// and records the `collapsed` choice.
+	private readonly _onDidRequestCollapseReviewRail = this._register(new Emitter<void>());
+	readonly onDidRequestCollapseReviewRail: Event<void> = this._onDidRequestCollapseReviewRail.event;
+
 	// "Add to chat" (docs 20 section 1d, the 1m entry): the review rail seeds the fired file name as an
 	// `@mention` in its chat composer draft. Kept in the service so the Files-tab view stays thin.
 	private readonly _onDidRequestChatAttach = this._register(new Emitter<string>());
@@ -729,6 +735,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidRequestPanel.fire(tab);
 		// Reveal the right panel; take focus only for Chat so the user can type straight away.
 		this._views.openView(REVIEW_RAIL_VIEW_ID, tab === 'chat').catch(e => this._log.warn('[livingDocs] focusPanel failed', e));
+	}
+
+	collapseReviewRail(): void {
+		// The RailVisibilityContribution owns the manual-choice storage: it hides the part and records
+		// `collapsed`. This is the sole user gesture that records a manual choice (plan 42 slice L4).
+		this._onDidRequestCollapseReviewRail.fire();
 	}
 
 	focusChange(changeId: string): void {
@@ -3424,11 +3436,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			: 'No model available - showing heuristic suggestions';
 		await this._persist(state);
 		this._onDidChange.fire();
-		try {
-			await this._views.openView(REVIEW_RAIL_VIEW_ID, false);
-		} catch (e) {
-			this._log.warn('[livingDocs] could not reveal review rail', e);
-		}
+		// Reveal the rail on the Review tab. Route through focusPanel so the reveal fires onDidRequestPanel:
+		// the RailVisibilityContribution treats every focusPanel-driven reveal as a PEEK, so this automatic
+		// expand is never mis-recorded as the user's manual `open` choice (plan 42 slice L4, defect 1).
+		this.focusPanel('review');
 	}
 
 	// The prose targets the impact pass should consider: authored lock claims (relocated by fuzzy
