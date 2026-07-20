@@ -1,0 +1,23 @@
+=== Plan 42 L2 broker evidence (2026-07-20) ===
+
+### UNCONFIGURED state (no OPENROUTER key, HOME=empty so no ~/.abstract/openai-oauth.json)
+$ HOME=/tmp/lp-l2-emptyhome LWD_BACKEND=openrouter OPENROUTER_API_KEY= OPENROUTER_API_KEY_FILE=/tmp/lp-l2-nokey.key node scripts/lwd-model-broker.js
+$ curl /healthz
+{"ok":false,"backend":"openrouter","reason":"unconfigured","meters":true,"signedIn":false,"dailyBudgetUsd":1,"dailyTotalUsd":0}
+  -> maps to provider:'none', readiness:'unconfigured' -> needsModelChoice=TRUE (inline choice renders)
+
+### CONFIGURED included tier (real OpenRouter key, HOME=empty so ChatGPT signed out -> door 'included')
+$ curl /healthz  (after restart with OPENROUTER_API_KEY_FILE=~/.config/lwd-openrouter.key)
+[lwd-proxy] listening on http://127.0.0.1:8090 (backend openrouter, model openai/gpt-4.1-mini)
+[lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$1/user
+{"ok":true,"backend":"openrouter","reason":"ready","meters":true,"signedIn":false,...}
+  -> provider:'included', readiness:'ready' -> needsModelChoice=FALSE (serves the request)
+$ POST /v1/messages model=openai/gpt-4.1-mini 'Reply with exactly PONG' -> live answer:
+  PONG
+  -> the included-model path answers LIVE via the real OpenRouter backend.
+
+### LIVE in-app replay (after clicking 'Use the included model' in the inline rail choice)
+broker log line captured immediately after the click:
+[lwd-proxy] /v1/messages backend=openrouter requested="openai/gpt-4.1-mini" resolved=openai/gpt-4.1-mini
+  -> the held prompt was replayed and reached the live OpenRouter backend; the rail streamed a real
+     proposal (inline red/green diff + Apply/Reject) and the composer flipped to the included-tier hint.
