@@ -27,10 +27,11 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IHistoryService } from '../../../services/history/common/history.js';
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
+import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 
 type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
@@ -90,6 +91,7 @@ export class TreeRailView extends ViewPane {
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IQuickInputService private readonly _quickInput: IQuickInputService,
 		@IStorageService private readonly _storageService: IStorageService,
+		@IHistoryService private readonly _history: IHistoryService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		this._hoverService = hoverService;
@@ -202,6 +204,7 @@ export class TreeRailView extends ViewPane {
 				unseenAgentEdits: d.unseenAgentEdits, relinkCount: d.relinkCount, stale: d.stale, fanoutFailed: d.fanoutFailed,
 			})),
 			extras,
+			this._recentDocResources(documents),
 		);
 		if (!nodes.length) {
 			append(panel, $('div.rail-empty')).textContent = 'No documents yet.';
@@ -227,6 +230,24 @@ export class TreeRailView extends ViewPane {
 		tree.setChildren(null, nodes.map(n => this._toTreeElement(n)));
 		this._layoutFilesTree();
 		this._highlightActiveDoc();
+	}
+
+	// The MRU document resources for the "Recent" group (issue #212): walk the editor history newest-first and
+	// keep the entries that are documents in the current folder set, de-duplicated. The pure tree module caps the
+	// list and hides the group when it holds fewer than two, so this only supplies the ordered candidate list.
+	private _recentDocResources(documents: readonly ILivingDocSummary[]): URI[] {
+		const docKeys = new Set(documents.map(d => d.resource.toString()));
+		const out: URI[] = [];
+		const seen = new Set<string>();
+		for (const entry of this._history.getHistory()) {
+			const resource = entry.resource;
+			if (!resource) { continue; }
+			const key = resource.toString();
+			if (seen.has(key) || !docKeys.has(key)) { continue; }
+			seen.add(key);
+			out.push(resource);
+		}
+		return out;
 	}
 
 	private _ensureFilesTree(): void {
@@ -324,6 +345,9 @@ export class TreeRailView extends ViewPane {
 		let ancestors: ITreeRailNode[] = [];
 		const walk = (node: ITreeRailNode, path: ITreeRailNode[]): void => {
 			if (match) { return; }
+			// The Recent group (issue #212) mirrors documents that live canonically under Reports; skip its subtree
+			// so the highlight lands on the real Reports row, not its Recent shortcut (which shares the resource).
+			if (node.type === 'folder' && node.id === RECENT_FOLDER_ID) { return; }
 			if (node.type === 'leaf') {
 				if (node.item.resource?.toString() === resource.toString()) { match = node; ancestors = path; }
 			} else {
