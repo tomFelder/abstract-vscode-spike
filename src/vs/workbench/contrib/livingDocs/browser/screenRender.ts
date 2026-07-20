@@ -167,6 +167,11 @@ export interface IScreenState {
 	readonly onboarding?: IOnboardingScreenState;
 	/** Home (D26): the persisted in-progress onboarding step, drives the "Continue your walkthrough" banner. */
 	readonly onboardingResumeStep?: OnboardingStep;
+	/**
+	 * Home (plan 42 L1): true once the user has dismissed the "See a 90-second demo" card. The card is the
+	 * demoted walkthrough entry point -- reachable but never a gate -- so once dismissed it stays hidden.
+	 */
+	readonly demoCardDismissed?: boolean;
 }
 
 /**
@@ -741,18 +746,30 @@ function renderAwaySection(feed: IAwayFeed): string {
 // The empty-project front door (journey 1w frame 4): a folder is open but has no documents. Cures the 1a
 // empty-folder dead-end with "New from template / Blank document / ...or ask me to create one" - the New-doc
 // sheet (Blank + real templates) plus the whole-project composer, never a dead card.
-// D26: the "Continue your walkthrough" banner when an onboarding is in progress. Rendered on BOTH Home
-// paths (dashboard and empty-project front door): the onboarding screen is displaced by the demo document
-// during the flow, so Home - whose nav item is always present - is the reliable re-entry back into the
-// guide at its saved step, and an empty project (demo doc deleted or not yet generated) still needs it.
+// The demoted walkthrough entry point (plan 42 slice L1). Rendered on BOTH Home paths (dashboard and
+// empty-project front door): the cold start now lands in the editor, never on the walkthrough, so the demo has
+// to be REACHABLE from Home rather than forced on entry. Two mutually-exclusive shapes:
+//  - an onboarding is in progress -> the "Continue your walkthrough" banner re-enters the guide at its saved
+//    step (the onboarding screen is displaced by the demo document during the flow, so Home is the reliable
+//    re-entry, and an empty project - demo doc deleted or not yet generated - still needs it);
+//  - otherwise -> a DISMISSIBLE "See a 90-second demo" card (never a gate: a small x removes it for good).
 function renderResumeBanner(state: IScreenState): string {
-	return state.onboardingResumeStep
-		? `<div style="display:flex;align-items:center;gap:14px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:12px;padding:14px 18px;margin-bottom:22px">
+	if (state.onboardingResumeStep) {
+		return `<div style="display:flex;align-items:center;gap:14px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:12px;padding:14px 18px;margin-bottom:22px">
 				<span style="font-size:18px;color:${ACCENT}">&#10022;</span>
 				<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#26292f">${localize('livingDocs.onboarding.resume.title', "Your walkthrough is in progress")}</div><div style="font:400 12.5px/1.4 system-ui;color:#696e78">${localize('livingDocs.onboarding.resume.body', "Pick up the two-wow tour where you left off.")}</div></div>
 				<button data-msg="openOnboarding" style="flex:none;border:none;border-radius:9px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">${localize('livingDocs.onboarding.resume.action', "Continue Your Walkthrough")}</button>
-			</div>`
-		: '';
+			</div>`;
+	}
+	if (state.demoCardDismissed) {
+		return '';
+	}
+	return `<div style="display:flex;align-items:center;gap:14px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:12px;padding:14px 18px;margin-bottom:22px">
+			<span style="font-size:18px;color:${ACCENT}">&#10022;</span>
+			<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#26292f">${localize('livingDocs.onboarding.demoCard.title', "See a 90-second demo")}</div><div style="font:400 12.5px/1.4 system-ui;color:#696e78">${localize('livingDocs.onboarding.demoCard.body', "Watch Abstract keep a figure bound to its source and turn one prompt into a single reviewable edit.")}</div></div>
+			<button data-msg="openOnboarding" style="flex:none;border:none;border-radius:9px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:pointer">${localize('livingDocs.onboarding.demoCard.action', "See a 90-Second Demo")}</button>
+			<button data-msg="dismissDemoCard" title="${localize('livingDocs.onboarding.demoCard.dismiss', "Dismiss")}" aria-label="${localize('livingDocs.onboarding.demoCard.dismiss', "Dismiss")}" style="flex:none;border:none;background:none;color:#9aa0aa;font:400 18px/1 system-ui;cursor:pointer;padding:2px 4px">&#215;</button>
+		</div>`;
 }
 
 // The F17 birth sheets shared by both Home paths: the New-document sheet (whose "From sources..." row

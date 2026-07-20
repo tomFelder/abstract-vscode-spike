@@ -28,6 +28,10 @@ import { IEditorResolverService, RegisteredEditorPriority } from '../../../servi
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IHistoryService } from '../../../services/history/common/history.js';
+import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
+import { Schemas } from '../../../../base/common/network.js';
+import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
@@ -515,22 +519,27 @@ registerAction2(class extends Action2 {
 
 // --- first-run flow: launch reads as a document app, not an IDE ---
 // The Welcome / Getting Started editor is the last IDE tell on launch. Close it so the workspace
-// lands on the Documents home (sidebar) with a clean editor area, and reveal the Studio right panel
-// so Review is one glance away. ADDITIVE-CONTRIBUTION (merge-tax ledger).
+// lands in the editor with a document open, not on a wizard. ADDITIVE-CONTRIBUTION (merge-tax ledger).
 const WELCOME_INPUT_TYPE_ID = 'workbench.editors.gettingStartedInput';
 
+// Plan 42 slice L1 (editor-first cold start): opening the app lands in the editor surface with a document open
+// and focused -- never the Welcome walkthrough, never Home. With a folder, that is the most-recently-opened
+// document, else the folder's first document, else a new untitled Markdown doc; with no folder, a blank untitled
+// Markdown doc (the "Open a folder" affordance lives on the always-present Home nav item and the tree rail, so the
+// user is never gated by a wizard). VS Code restores editors per-workspace natively, so this routing runs ONLY in
+// the `editors.length === 0` branch -- a restored editor or a deep-link always wins. The walkthrough survives as a
+// dismissible "See a 90-second demo" entry point on Home + first-run, reached through the palette / a Home card,
+// never as a cold-start destination. The routing DECISION is the pure decideStartupRoute() (unit-tested); this
+// contribution only gathers the facts and executes the chosen route.
 class StudioStartupContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.studioStartup';
-
-	// First-run guard (plan 35 iter 4; D26): a profile-scoped flag so the fresh-profile onboarding surface opens
-	// exactly once, then never auto-opens again (the "Onboarding" + "Model Access" palette commands still reach it).
-	private static readonly MODEL_ACCESS_SEEN_KEY = 'livingDocs.modelAccessSeen';
 
 	constructor(
 		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
 		@IEditorService private readonly _editorService: IEditorService,
-		@IInstantiationService private readonly _instantiation: IInstantiationService,
-		@IStorageService private readonly _storageService: IStorageService,
+		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
+		@IHistoryService private readonly _history: IHistoryService,
+		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -542,31 +551,37 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 			this._closeWelcomeEditors();
 			once.dispose();
 		}));
-		// First run drives the D26 two-wow onboarding (doc 20 section D26): on a fresh profile, land on the
-		// onboarding surface so the user reaches the demo report + both wows (and, from there, Model Access +
-		// bring-a-real-folder) within ten minutes. On every later launch this flag is set, so startup lands on
-		// Home as before; the palette "Onboarding" command reopens the flow any time.
-		const firstRun = !this._storageService.getBoolean(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, StorageScope.PROFILE, false);
+		// Editor-first cold start: only when nothing was restored (a restored editor / deep-link wins natively).
 		if (this._editorService.editors.length === 0) {
-			if (firstRun) {
-				this._storageService.store(StudioStartupContribution.MODEL_ACCESS_SEEN_KEY, true, StorageScope.PROFILE, StorageTarget.MACHINE);
-			}
-			void this._openStartupScreen(firstRun);
+			void this._openStartupDocument();
 		}
-		// The two rails (tree-rail + review rail) are EDITOR companions, not global chrome: they are
-		// revealed + sized only when the document editor is the active surface, and hidden on the screen
-		// surfaces (Home / Templates / Knowledge / Agents / project-run / review-project). That is owned by
-		// RailVisibilityContribution below -- startup lands on Home, so both rails begin hidden and the
-		// Workspace-rail selection + the 264/392 pinning happen there when the editor surface opens.
+		// The two rails (tree-rail + review rail) are EDITOR companions, revealed + sized when the document editor
+		// is the active surface (RailVisibilityContribution below). Cold start now lands ON the editor surface, so
+		// the rails come up for the open document -- and because the walkthrough demo no longer runs on entry, the
+		// review rail reflects only the open document's real pending work, not left-over demo proposals.
 	}
 
-	// Route the startup surface: a fresh profile begins the two-wow walkthrough, while returning users land on
-	// Home. Re-check that no editor opened while dispatching so a restored editor or deep-link still wins.
-	private async _openStartupScreen(firstRun: boolean): Promise<void> {
-		const screen: ScreenId = firstRun ? 'onboarding' : 'home';
-		if (this._editorService.editors.length === 0) {
-			await this._editorService.openEditor(this._instantiation.createInstance(ScreenEditorInput, screen), { pinned: true });
+	// Execute the L1 cold-start routing decision: gather the facts (folder open?, most-recently-opened file, the
+	// folder's Markdown documents) and open the document decideStartupRoute() picks -- or a new untitled Markdown
+	// doc when there is nothing to open. Re-check `editors.length === 0` before each open so a restored editor or a
+	// deep-link that arrived while we were gathering facts still wins.
+	private async _openStartupDocument(): Promise<void> {
+		const state = this._workspace.getWorkbenchState();
+		const hasFolder = state === WorkbenchState.FOLDER || state === WorkbenchState.WORKSPACE;
+		const folderDocuments = hasFolder ? (await this._livingDocs.listDocuments()).map(d => d.resource) : [];
+		const lastActiveFile = this._history.getLastActiveFile(Schemas.file);
+		const route = decideStartupRoute({ hasFolder, lastActiveFile, folderDocuments });
+		if (this._editorService.editors.length !== 0) {
+			return;
 		}
+		if (route.kind === StartupRouteKind.OpenDocument) {
+			await this._editorService.openEditor({ resource: route.resource, options: { pinned: true } });
+			return;
+		}
+		// A new, blank untitled Markdown document so the cursor lands in editable text (zero-ceremony plain
+		// Markdown -- no living-doc artefacts until an agent touches it). The "Open a folder" affordance stays
+		// one click away on the Home nav item; the no-folder case is a blank page, never a wizard.
+		await this._editorService.openEditor({ resource: undefined, languageId: 'markdown', options: { pinned: true } });
 	}
 
 	private _closeWelcomeEditors(): void {
