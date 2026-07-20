@@ -7,7 +7,7 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { decideReviewRailOpenOnEntry, IReviewRailEntryContext, RailGesture, recordedChoiceForRailGesture, ReviewRailManualChoice } from '../../common/railVisibility.js';
 
-suite('LivingDoc review-rail quiet-shell entry (plan 42 L4)', () => {
+suite('livingDocs review-rail quiet-shell entry (plan 42 L4)', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
