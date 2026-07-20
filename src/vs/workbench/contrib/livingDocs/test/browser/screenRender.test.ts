@@ -622,10 +622,10 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('Abstract sends content only when you ask it to work'), 'the plain-words summary is shown');
 		assert.ok(html.includes('or when an agent you have left running does its scheduled check'), 'the summary owns the scheduled-agent path (default-enabled agents can send without a gesture at that moment)');
 		assert.ok(html.includes('built-in agents run on their own') && html.includes('Pause any agent on the Agents screen'), 'the proactive-agent path is named with its off switch');
-		// The honesty claim after analytics became real (issue #134): consent-first, and even when on it stays
-		// on the machine because forwarding is not built. This is the true successor to the "no analytics today"
-		// line - it must keep guarding the claim, just the honest one.
-		assert.ok(/off unless you turn it on/i.test(html), 'the consent-first honesty claim is present');
+		// The honesty claim after analytics became real (issue #134): default-on with a visible off switch, and
+		// even when on it stays on the machine because forwarding is not built. This is the true successor to
+		// the "no analytics today" line - it must keep guarding the claim, just the honest one.
+		assert.ok(/on by default and you can turn it off/i.test(html), 'the default-on honesty claim is present with its off switch');
 		assert.ok(/counts your actions, never your words/i.test(html) && /forwarding it anywhere is not built yet/i.test(html), 'it says analytics counts actions not words and does not leave the machine');
 		assert.ok(html.includes('docs/27-data-flow-one-pager.md'), 'it points to the full one-pager');
 	});
