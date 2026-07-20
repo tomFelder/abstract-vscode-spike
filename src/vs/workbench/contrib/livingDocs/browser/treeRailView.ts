@@ -485,9 +485,12 @@ export class TreeRailView extends ViewPane {
 		}
 		const groups = buildContextGroups(doc, this._livingDocs.getFreshness(resource), this._livingDocs.getAddedContext(resource));
 		if (!groups.length) {
-			// A plain Markdown document with nothing bound yet: say so truthfully rather than claim no
-			// document is open (issue #181). "Add source" / "Add context" below let the user bind data here.
-			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.context.noBindings', "This document has no bound sources yet.");
+			// A plain Markdown document that has not connected any data yet. On the entry path this is the
+			// common state, so the copy stays markdown-first (plan 42 L3): it invites connecting data rather
+			// than leading with "no bound sources" lock/provenance ceremony before the user has met an agent.
+			// It stays truthful (issue #181) -- a document IS open, it simply has nothing connected -- and the
+			// "Add source" / "Add context" affordances below are the doors that connect data here.
+			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.context.noBindings', "Connect a data source to keep figures in this document up to date.");
 		}
 		for (const group of groups) {
 			append(panel, $('div.rail-folder')).textContent = `${group.label.toUpperCase()} \u00B7 ${group.items.length}`;

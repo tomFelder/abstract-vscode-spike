@@ -16,6 +16,7 @@ import { relativeSyncedLabel } from '../common/livingDocPmDecorations.js';
 import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAnswer, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 import { IAwayFeed } from '../common/projectHomeFeed.js';
 import { ONBOARDING_STEPS, onboardingStepIndex, OnboardingStep } from '../common/onboarding.js';
+import { projectHasLivingSurface } from '../common/livingUpgrade.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings' | 'onboarding';
 
@@ -564,26 +565,41 @@ function page(body: string): string {
 // The comp's global top bar, shown on every main-area screen (the doc editor renders its own variant
 // in livingDocRender). Brand + per-screen crumb on the left; sync-status pill, Present (posts the
 // same `present` message the host already handles), and the user avatar on the right.
-function topBar(crumb: string): string {
+//
+// The "All sources synced" pill is entry-path source vocabulary (plan 42 L3 copy audit): it may only claim
+// source-sync state once the project actually has a living surface (a bound source / a living document).
+// A fresh folder of plain Markdown has no sources to be "synced", so the pill is omitted rather than
+// fabricated, keeping the shell truthful before the user has bound anything or met an agent.
+function topBar(crumb: string, showSyncPill: boolean): string {
+	const syncPill = showSyncPill
+		? `<span class="pill"><span class="dot"></span>${esc(localize("livingDocs.topbar.allSynced", "All sources synced"))}</span>`
+		: '';
 	return `<div class="topbar"><div class="brand"><span class="logo">A</span>Abstract<span class="sep">/</span><span class="crumb">${esc(crumb)}</span></div>`
-		+ `<div class="right"><span class="pill"><span class="dot"></span>All sources synced</span>`
+		+ `<div class="right">${syncPill}`
 		+ `<button class="tb-present" data-msg="present">&#8599; Present</button>`
 		+ `<span class="av">TS</span></div></div>`;
 }
 
 // Insert the top bar as the first flex child of the screen column (each renderer opens with .screen).
-function withTopBar(html: string, crumb: string): string {
-	return html.replace('<div class="screen">', `<div class="screen">${topBar(crumb)}`);
+function withTopBar(html: string, crumb: string, showSyncPill: boolean): string {
+	return html.replace('<div class="screen">', `<div class="screen">${topBar(crumb, showSyncPill)}`);
 }
 
 export function renderScreenHtml(screen: ScreenId, state: IScreenState): string {
+	// The "All sources synced" pill only tells the truth once the project has a living surface -- a bound
+	// source in the registry or at least one living document. A fresh folder of plain Markdown has nothing
+	// to be "synced", so the pill is omitted (plan 42 L3: no source vocabulary before the first source use).
+	const showSyncPill = projectHasLivingSurface({
+		anyDocLiving: state.docs?.some(d => d.isLiving),
+		boundSourceCount: state.sources?.length,
+	});
 	switch (screen) {
-		case 'home': return page(withTopBar(renderHome(state), 'Home'));
-		case 'templates': return page(withTopBar(renderTemplates(state), 'Templates'));
-		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge'));
-		case 'agents': return page(withTopBar(renderAgents(state), 'Agents'));
-		case 'settings': return page(withTopBar(renderSettings(state), 'Settings'));
-		case 'onboarding': return page(withTopBar(renderOnboarding(state), 'Welcome'));
+		case 'home': return page(withTopBar(renderHome(state), 'Home', showSyncPill));
+		case 'templates': return page(withTopBar(renderTemplates(state), 'Templates', showSyncPill));
+		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge', showSyncPill));
+		case 'agents': return page(withTopBar(renderAgents(state), 'Agents', showSyncPill));
+		case 'settings': return page(withTopBar(renderSettings(state), 'Settings', showSyncPill));
+		case 'onboarding': return page(withTopBar(renderOnboarding(state), 'Welcome', showSyncPill));
 		case 'project-run': return page(renderProjectRun(state));
 		case 'review-project': return page(renderReviewProject(state));
 	}
