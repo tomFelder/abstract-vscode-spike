@@ -253,6 +253,14 @@ export class TreeRailView extends ViewPane {
 				identityProvider: { getId: (e: ITreeRailNode) => e.id },
 				expandOnlyOnTwistieClick: false,
 				overrideStyles: { listBackground: 'sideBar.background' },
+				// Fast navigation (issue #212): type-to-filter (type-ahead) + the Ctrl/Cmd+F find widget. The label
+				// provider gives the tree each row's searchable text (a folder's name, a leaf's item label); the
+				// WorkbenchObjectTree already supplies the contextViewProvider, so this lights up BOTH the type-ahead
+				// highlight and the find widget with no extra wiring.
+				keyboardNavigationLabelProvider: {
+					getKeyboardNavigationLabel: (e: ITreeRailNode) => e.type === 'folder' ? e.label : e.item.label,
+				},
+				findWidgetEnabled: true,
 			},
 		)) as WorkbenchObjectTree<ITreeRailNode, void>;
 		this._filesTree = tree;
