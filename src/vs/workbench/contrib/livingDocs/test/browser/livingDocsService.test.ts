@@ -924,12 +924,16 @@ suite('LivingDocsService', () => {
 	});
 
 	test('cancelChat stops an in-flight reply: no pending changes, busy cleared, a muted stopped turn (plan 27)', async () => {
+		// A configured model (opts.model) keeps the first-AI-use gate closed (healthy /healthz -> `needsModelChoice`
+		// is false), so this genuine send proceeds to the reply rather than being held - the behaviour under test.
 		const service = createService([], { model: chatReply('should never be applied', [{ heading: 'Commentary', oldText: 'Growth accelerated sharply this week.', newText: 'x', rationale: 'y' }]) });
 		await service.loadDocument(WEEKLY);
 
-		// The cancellation source is registered synchronously (before the first await inside sendChatMessage),
-		// so cancelling here aborts the streaming model call before it runs - a partial reply is never committed.
+		// The cancellation source is registered once the reply is in flight (after the model-status probe that opens
+		// sendChatMessage resolves). Wait until the reply is busy, then cancel: this aborts the streaming model call
+		// mid-flight so a partial reply is never committed and the turn is recorded as a muted stop.
 		const inFlight = service.sendChatMessage(WEEKLY, 'Rewrite the commentary');
+		while (!service.isChatBusy(WEEKLY)) { await new Promise(r => setTimeout(r, 0)); }
 		service.cancelChat(WEEKLY);
 		await inFlight;
 
@@ -1565,16 +1569,56 @@ suite('LivingDocsService', () => {
 		assert.strictEqual(doc.isLiving, false, 'accepting chat content does NOT turn a plain doc into a living one (affordances stay tied to real bindings)');
 	});
 
-	test('with no model reachable, chat is honest (fallback turn, no faked reply, nothing queued)', async () => {
-		const service = createService(); // no opts.model -> /healthz is unhealthy -> no model
+	test('with no backend configured, a genuine send HOLDS the prompt for the first-use choice - no faked reply, nothing queued (plan 42 L2)', async () => {
+		// no opts.model -> /healthz is unhealthy -> `needsModelChoice` is true. The first-AI-use gate now HOLDS the
+		// typed prompt and renders the inline sign-in vs included-model choice instead of emitting a fallback turn:
+		// the user turn stays visible (the prompt is preserved), no assistant turn is faked, and nothing is queued.
+		const service = createService();
 		await service.loadDocument(WEEKLY);
 
 		await service.sendChatMessage(WEEKLY, 'Summarise this week');
 
-		const assistant = service.getChatMessages(WEEKLY).at(-1)!;
-		assert.strictEqual(assistant.via, 'fallback', 'the no-model turn is marked as a fallback');
-		assert.ok(/proxy|model/i.test(assistant.content), `the fallback names the missing model: ${assistant.content}`);
-		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'no edits queued without a model');
+		const msgs = service.getChatMessages(WEEKLY);
+		assert.deepStrictEqual(
+			{
+				messages: msgs.map(m => ({ role: m.role, content: m.content })),
+				held: service.getPendingModelPrompt(WEEKLY),
+				pending: service.getPendingForDoc(WEEKLY).length,
+				busy: service.isChatBusy(WEEKLY),
+			},
+			{
+				// The user turn is preserved verbatim; no fallback/answer assistant turn is emitted.
+				messages: [{ role: 'user', content: 'Summarise this week' }],
+				// The exact prompt is held for replay once a door is chosen.
+				held: { resource: WEEKLY, text: 'Summarise this week', displayText: undefined },
+				pending: 0,
+				busy: false,
+			},
+		);
+	});
+
+	test('the onboarding demo path (a substituted displayText) is exempt from the first-use gate - it answers, not held (plan 42 L2)', async () => {
+		// A send WITH displayText is the walkthrough deliberately driving the model (its own no-model guidance
+		// covers it), so it is NOT held even with no backend: the gate opens only for a genuine user send. With no
+		// model the reply is the honest fallback turn - proving the exemption reaches `_deliverChatReply`.
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Generate the first draft from the Weekly template.', 'Draft from the Weekly template.');
+
+		const msgs = service.getChatMessages(WEEKLY);
+		assert.deepStrictEqual(
+			{
+				roles: msgs.map(m => ({ role: m.role, via: m.via })),
+				fallbackNamesModel: /proxy|model/i.test(msgs.at(-1)!.content),
+				held: service.getPendingModelPrompt(WEEKLY),
+			},
+			{
+				roles: [{ role: 'user', via: undefined }, { role: 'assistant', via: 'fallback' }],
+				fallbackNamesModel: true,
+				held: undefined,
+			},
+		);
 	});
 
 	test('getMentionableFiles resolves real folder files (md/csv/json), not just frontmatter-declared ones', async () => {
