@@ -307,7 +307,7 @@ suite('livingDocs Service', () => {
 			},
 		} as unknown as IFileService;
 
-		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; }, findEditors: () => [], closeEditors: async () => undefined } as unknown as IEditorService;
+		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; }, findEditors: () => [], closeEditors: async () => undefined, onDidActiveEditorChange: Event.None, activeEditor: undefined } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		// Most settings the service reads are booleans that default to true (useModel); the fan-out context
 		// budget (plan 30, track 3) is a number a test can lower to force multi-batch packing over few docs.
@@ -2542,7 +2542,7 @@ suite('livingDocs Service', () => {
 		} as unknown as IFileService;
 		store.add(registrations);
 		const registerProvider = () => { providerReady = true; registrations.fire({ added: true, scheme: mountRoot.scheme }); };
-		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const editorService = { openEditor: async () => undefined, onDidActiveEditorChange: Event.None, activeEditor: undefined } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
