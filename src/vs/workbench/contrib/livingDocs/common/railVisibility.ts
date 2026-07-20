@@ -63,3 +63,35 @@ export function decideReviewRailOpenOnEntry(context: IReviewRailEntryContext): b
 	// 3. No manual choice yet: open only when the rail has something to say (existing chat history).
 	return context.hasChatHistory;
 }
+
+/**
+ * The ways the review rail's visibility can change while the user is on the editor surface (plan 42 slice
+ * L4). The RECORDING layer classifies each of these peek-vs-choice.
+ */
+export const enum RailGesture {
+	/**
+	 * A reveal driven by ILivingDocsService.focusPanel(): the slim edge AI-door affordance, an AI
+	 * invocation, the L2 held-prompt choice, or a proposal arriving. This is a PEEK, not a decision.
+	 */
+	Peek = 'peek',
+	/** The rail's own calm collapse control was activated: an explicit user gesture to leave the rail. */
+	CollapseControl = 'collapse-control',
+}
+
+/**
+ * The manual choice (if any) a rail-visibility gesture should RECORD (plan 42 slice L4, fix-round for
+ * defect 1). The design rule: only an explicit collapse/expand gesture on the rail itself records a
+ * choice; every focusPanel-driven reveal is a peek and records nothing. After the fix the ONLY recorder is
+ * the calm collapse control, which records `collapsed`; no UI gesture records `open` (that is acceptable -
+ * precedence still honours a stored `collapsed`, and the has-something-to-say default covers auto-open).
+ *
+ * Returns the choice to persist, or `undefined` when the gesture records nothing.
+ */
+export function recordedChoiceForRailGesture(gesture: RailGesture): ReviewRailManualChoice | undefined {
+	switch (gesture) {
+		case RailGesture.Peek:
+			return undefined;
+		case RailGesture.CollapseControl:
+			return ReviewRailManualChoice.Collapsed;
+	}
+}

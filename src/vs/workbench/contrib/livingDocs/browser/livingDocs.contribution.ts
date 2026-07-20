@@ -34,7 +34,7 @@ import { IHistoryService } from '../../../services/history/common/history.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
-import { decideReviewRailOpenOnEntry, ReviewRailManualChoice } from '../common/railVisibility.js';
+import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, ReviewRailManualChoice } from '../common/railVisibility.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
@@ -619,8 +619,16 @@ registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContri
 // It still expands automatically on first AI invocation and when a review arrives -- those paths run
 // through LivingDocsService.focusPanel() -> IViewsService.openView(), which un-hides the part -- so no
 // extra wiring is needed for auto-expand; this contribution only sets the DEFAULT on entry and records
-// the user's MANUAL open/collapse so their choice wins on the next crossing and across restart. A slim
-// edge affordance (RailAffordanceContribution below) keeps the AI door one click away while collapsed.
+// the user's MANUAL choice so it wins on the next crossing and across restart. A slim edge affordance
+// (RailAffordanceContribution below) keeps the AI door one click away while collapsed.
+//
+// The RECORDING RULE (plan 42 slice L4, fix-round for defect 1): a manual choice is recorded ONLY by an
+// explicit gesture on the rail itself. Every focusPanel-driven reveal -- the edge affordance, an AI
+// invocation, the L2 held-prompt, a proposal arriving -- is a PEEK: it fires onDidRequestPanel, which we
+// guard so the openView-driven visibility change is not mistaken for a deliberate `open`. The sole
+// recorder is the rail's calm collapse control (onDidRequestCollapseReviewRail -> `collapsed`). After the
+// fix, NO UI gesture records `open`; that is intentional -- precedence still honours a stored `collapsed`,
+// and the has-something-to-say default (chat history / pending review) covers the "opens on its own" cases.
 // The decision itself is the pure decideReviewRailOpenOnEntry() (common/railVisibility.ts, unit-tested):
 // a pending proposal ALWAYS forces the rail open (the agent-edit trust grammar is untouchable), then the
 // manual choice, then the has-something-to-say default.
@@ -644,6 +652,13 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	// The single pending re-assert/seed timeout (replaced each sync so repeated editor changes never
 	// accumulate disposables on the class store).
 	private readonly _deferred = this._register(new MutableDisposable());
+	// (plan 42 slice L4, defect 1) Every reveal driven by ILivingDocsService.focusPanel() -- the AI door
+	// affordance, a chat send, the L2 held-prompt, a proposal arriving -- fires onDidRequestPanel and then
+	// un-hides the auxiliary bar via IViewsService.openView(). Those reveals are PEEKS, not decisions: only
+	// an explicit collapse/expand gesture on the rail itself records a manual choice. openView un-hides the
+	// part on a LATER microtask, so a synchronous flag would already be cleared; this clears the guard on a
+	// deferred tick, after the peek's visibility event has been swallowed.
+	private readonly _peekGuard = this._register(new MutableDisposable());
 
 	constructor(
 		@IEditorService private readonly _editorService: IEditorService,
@@ -659,6 +674,33 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 		// toggle the user made while ON the editor surface counts -- our own programmatic toggles are
 		// flagged out, and toggles on a screen surface (where the rail is always hidden) are ignored.
 		this._register(this._layoutService.onDidChangePartVisibility(e => this._onPartVisibilityChange(e.partId, e.visible)));
+		// (defect 1) A focusPanel-driven reveal is a PEEK: guard the visibility event it will raise so it is
+		// not recorded as a manual `open`. onDidRequestPanel fires synchronously just before openView, whose
+		// visibility change lands on a later tick, so hold the guard across one deferred tick.
+		this._register(this._livingDocs.onDidRequestPanel(() => this._beginPeek()));
+		// (defect 2) The rail's own calm collapse control: hide the part AND record `collapsed` as the manual
+		// choice, so the quiet shell is restorable through the UI and the choice sticks (the counterpart to
+		// the slim edge affordance, which only PEEKS the rail open).
+		this._register(this._livingDocs.onDidRequestCollapseReviewRail(() => this._collapseReviewRailAsChoice()));
+	}
+
+	// Mark the imminent focusPanel-driven reveal as a peek: set the programmatic guard so the openView
+	// visibility change is not recorded as a manual choice, then release it on the next tick.
+	private _beginPeek(): void {
+		this._programmaticReviewToggle = true;
+		this._peekGuard.value = disposableTimeout(() => { this._programmaticReviewToggle = false; }, 0);
+	}
+
+	// The user activated the rail's calm collapse control: hide the part programmatically (so the resulting
+	// visibility event is guarded out) and record the choice the pure rule assigns to this gesture
+	// (`collapsed`). Keeping the classification in recordedChoiceForRailGesture() keeps the recording rule
+	// unit-testable and single-sourced.
+	private _collapseReviewRailAsChoice(): void {
+		this._setReviewRailHidden(true);
+		const choice = recordedChoiceForRailGesture(RailGesture.CollapseControl);
+		if (choice) {
+			this._storageService.store(RailVisibilityContribution.REVIEW_RAIL_CHOICE_KEY, choice, StorageScope.PROFILE, StorageTarget.MACHINE);
+		}
 	}
 
 	private _surfaceKind(): 'doc' | 'screen' {
@@ -671,8 +713,11 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 		if (partId !== Parts.AUXILIARYBAR_PART || this._programmaticReviewToggle || this._surfaceKind() !== 'doc') {
 			return;
 		}
-		// A genuine user toggle of the review rail while editing: persist it so it wins on the next entry
-		// and across restart (the pending-review force-open still overrides a stored "collapsed").
+		// A genuine user toggle of the review rail while editing (NOT a programmatic sync and NOT a guarded
+		// focusPanel peek): persist it so it wins on the next entry and across restart (the pending-review
+		// force-open still overrides a stored "collapsed"). In the calm shell the only such gesture is the
+		// rail's own collapse control, which records `collapsed` directly; this remains the safety net for
+		// any residual native hide/show gesture.
 		this._storageService.store(RailVisibilityContribution.REVIEW_RAIL_CHOICE_KEY, visible ? ReviewRailManualChoice.Open : ReviewRailManualChoice.Collapsed, StorageScope.PROFILE, StorageTarget.MACHINE);
 		if (visible) {
 			// The user opened the rail: seed its default width if this is the first time it has ever opened.

@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { decideReviewRailOpenOnEntry, IReviewRailEntryContext, ReviewRailManualChoice } from '../../common/railVisibility.js';
+import { decideReviewRailOpenOnEntry, IReviewRailEntryContext, RailGesture, recordedChoiceForRailGesture, ReviewRailManualChoice } from '../../common/railVisibility.js';
 
 suite('LivingDoc review-rail quiet-shell entry (plan 42 L4)', () => {
 
@@ -42,5 +42,21 @@ suite('LivingDoc review-rail quiet-shell entry (plan 42 L4)', () => {
 
 	test('a manual "collapse" choice keeps the rail collapsed even when it has chat history', () => {
 		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasChatHistory: true, manualChoice: ReviewRailManualChoice.Collapsed })), false);
+	});
+
+	// The recording rule (plan 42 slice L4, fix-round for defect 1): only an explicit gesture on the rail
+	// records a manual choice; every focusPanel-driven reveal (AI door affordance, AI invocation, held
+	// prompt, proposal arrival) is a peek and records nothing. The sole recorder is the calm collapse
+	// control, which records `collapsed`; after the fix NO gesture records `open`.
+	test('the recording rule: a focusPanel peek records nothing, the collapse control records "collapsed"', () => {
+		assert.deepStrictEqual(
+			{
+				peek: recordedChoiceForRailGesture(RailGesture.Peek),
+				collapseControl: recordedChoiceForRailGesture(RailGesture.CollapseControl),
+			},
+			{
+				peek: undefined,
+				collapseControl: ReviewRailManualChoice.Collapsed,
+			});
 	});
 });
