@@ -412,8 +412,9 @@ export class TreeRailView extends ViewPane {
 	}
 
 	// The Files-tab context menu (docs 20 section 1d, the 1m entry): the minimal-v1 provenance-safe ops.
-	// Rename and Delete route through the service, which moves the lock sidecar atomically and shows the
-	// Undo toast; the warn-and-list on delete (map-D6) is the confirm dialog below.
+	// Rename and Delete route through the service, which moves the lock sidecar atomically. A rename succeeds
+	// silently (plan 42 L5 - no ceremony on plain human edits); delete keeps its Undo toast as the safety net
+	// for a destructive op, and the warn-and-list on delete (map-D6) is the confirm dialog below.
 	private _showFileMenu(anchor: HTMLElement | IAnchor, resource: URI, label: string): void {
 		const actions: IAction[] = [
 			toAction({ id: 'livingDocs.file.rename', label: 'Rename\u2026', run: () => void this._renameFile(resource) }),

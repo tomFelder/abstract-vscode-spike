@@ -1201,12 +1201,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// A renamed SOURCE keeps its dependents bound: rewrite their frontmatter + lock provenance references.
 		await this._rewriteDependentReferences(oldName, nextName);
 		this._onDidChange.fire();
-		this._notify.notify({
-			severity: Severity.Info,
-			message: `Renamed "${oldName}" to "${nextName}".`,
-			sticky: true,
-			actions: { primary: [toAction({ id: 'livingDocs.file.rename.undo', label: 'Undo', run: () => this._undoRename(target, resource, nextName, oldName) })] },
-		});
+		// A rename is a deliberate, named human edit on the entry path (plan 42 L5): it succeeds silently, with
+		// no toast to dismiss. Renaming again inverts it; only the error paths above still speak up. Delete, which
+		// is destructive, keeps its Undo toast as the safety net - rename does not need one.
 	}
 
 	// Move a file and its `.lock.json` sidecar together, atomically on the pair: move the file, then the
@@ -1271,21 +1268,6 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		return touched;
-	}
-
-	private async _undoRename(current: URI, original: URI, currentName: string, originalName: string): Promise<void> {
-		if (await this._files.exists(original)) {
-			this._notify.error(`Cannot undo: "${originalName}" already exists again.`);
-			return;
-		}
-		try {
-			await this._moveFileWithSidecar(current, original);
-		} catch (e) {
-			this._notify.error(`Undo failed: ${e instanceof Error ? e.message : String(e)}.`);
-			return;
-		}
-		await this._rewriteDependentReferences(currentName, originalName);
-		this._onDidChange.fire();
 	}
 
 	async deleteFile(resource: URI): Promise<void> {
