@@ -34,9 +34,7 @@ import { Schemas } from '../../../../base/common/network.js';
 import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
-import { Severity } from '../../../../platform/notification/common/notification.js';
 import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { AnalyticsService } from './analyticsService.js';
@@ -91,8 +89,8 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	properties: {
 		'abstract.analytics.enabled': {
 			type: 'boolean',
-			default: false,
-			description: localize('abstract.analytics.enabled', "Help us improve Abstract by sharing anonymous product analytics. We count actions (how often features are used), never your words - document content never leaves your machine. You choose this on first run; change it here any time."),
+			default: true,
+			description: localize('abstract.analytics.enabled', "Help us improve Abstract by sharing anonymous product analytics. We count actions (how often features are used), never your words - document content never leaves your machine. On by default; turn it off here any time."),
 			tags: ['usesOnlineServices'],
 		},
 		'livingDocs.useModel': {
@@ -768,54 +766,39 @@ class ActiveNavChipContribution extends Disposable implements IWorkbenchContribu
 }
 registerWorkbenchContribution2(ActiveNavChipContribution.ID, ActiveNavChipContribution, WorkbenchPhase.AfterRestored);
 
-// --- analytics consent moment + Settings mirror (plan 36 iter 1) ---
-// Trust-first: nothing is captured until the user makes an explicit choice. On first run this shows a
-// plain-words, declinable dialog ("Help us improve Abstract - we count actions, never your words"). The
-// choice is mirrored both ways with the `abstract.analytics.enabled` setting, so the Settings toggle is a
-// real, revisitable control and flipping it there enables/disables capture through the same one seam. This
-// contribution is the ONLY caller of the consent API; the rest of the app captures through IAnalyticsService.
+// --- analytics Settings mirror (plan 36 iter 1; first-run dialog removed) ---
+// Analytics is on by default: the `abstract.analytics.enabled` setting (default true) is the single visible
+// control, and unticking it in Settings opts out at any time. There is no first-run consent dialog - on
+// startup this contribution adopts the setting into the service, and thereafter keeps the two in step, so
+// flipping the toggle enables/disables capture through the same one seam. This contribution is the ONLY
+// caller of the consent API; the rest of the app captures through IAnalyticsService.
 class AnalyticsConsentContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.abstract.analyticsConsent';
 
 	constructor(
 		@IAnalyticsService private readonly _analytics: IAnalyticsService,
 		@IConfigurationService private readonly _configuration: IConfigurationService,
-		@IDialogService private readonly _dialogs: IDialogService,
 		@IProductService private readonly _productService: IProductService,
 	) {
 		super();
-		// Keep the service and the Settings toggle in step: a change in Settings drives the service (and vice
-		// versa the moment writes the setting), so there is a single source of truth the user can always see.
+		// Keep the service and the Settings toggle in step: the setting is the single source of truth the user
+		// can always see, and a change there drives the service.
 		this._register(this._configuration.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('abstract.analytics.enabled')) {
-				const enabled = this._configuration.getValue<boolean>('abstract.analytics.enabled') === true;
-				if (enabled !== this._analytics.isEnabled) {
-					this._analytics.setConsent(enabled);
-				}
+				this._adoptSetting();
 			}
 		}));
-		void this._showConsentMomentThenOpen();
+		const firstOpen = !this._analytics.hasChosen;
+		this._adoptSetting();
+		// The first UI funnel event (doc 15 section 3.1): captured only when analytics is on (the service gates it).
+		this._analytics.capture('app_opened', { version: this._productService.version, first_open: firstOpen });
 	}
 
-	private async _showConsentMomentThenOpen(): Promise<void> {
-		const firstOpen = !this._analytics.hasChosen;
-		if (firstOpen) {
-			const { result } = await this._dialogs.prompt<boolean>({
-				type: Severity.Info,
-				message: localize("abstract.analytics.consent.title", "Help Us Improve Abstract"),
-				detail: localize("abstract.analytics.consent.detail", "We'd like to count actions - how often features are used - so we can make Abstract better. We never see your words: document content never leaves your machine. You can change this any time in Settings."),
-				buttons: [
-					{ label: localize("abstract.analytics.consent.allow", "Share Anonymous Analytics"), run: () => true },
-					{ label: localize("abstract.analytics.consent.decline", "No Thanks"), run: () => false },
-				],
-			});
-			const enabled = result === true;
+	private _adoptSetting(): void {
+		const enabled = this._configuration.getValue<boolean>('abstract.analytics.enabled') === true;
+		if (!this._analytics.hasChosen || enabled !== this._analytics.isEnabled) {
 			this._analytics.setConsent(enabled);
-			// Persist the choice into the visible Settings toggle so the two never drift.
-			await this._configuration.updateValue('abstract.analytics.enabled', enabled);
 		}
-		// The first UI funnel event (doc 15 section 3.1): captured only when consent is on (the service gates it).
-		this._analytics.capture('app_opened', { version: this._productService.version, first_open: firstOpen });
 	}
 }
 registerWorkbenchContribution2(AnalyticsConsentContribution.ID, AnalyticsConsentContribution, WorkbenchPhase.AfterRestored);

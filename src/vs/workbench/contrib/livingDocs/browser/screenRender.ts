@@ -1657,7 +1657,7 @@ function dataFlowCard(analyticsEnabled: boolean): string {
 					${line('Three <strong>built-in agents run on their own</strong> &mdash; when a source file changes, every six hours, and on Monday mornings. When a document&#39;s figures need updating, the double-check may send that document&#39;s changed sentences and its attached context files. Pause any agent on the Agents screen to stop this.')}
 					${line('Model calls go through your own <strong>ChatGPT sign-in</strong>, or the <strong>included model</strong> when you are not signed in. Your sign-in stays on this computer &mdash; the app never sees it.')}
 					${line('<strong>Files that are not documents, attached sources, or @-mentions &mdash; and your edit history &mdash; stay on your computer.</strong> A folder listing is never sent.')}
-					${line('<strong>Usage analytics is off unless you turn it on</strong>, and even then it stays on this computer &mdash; it counts your actions, never your words, and forwarding it anywhere is not built yet.')}
+					${line('<strong>Usage analytics is on by default and you can turn it off here any time</strong> &mdash; it stays on this computer, counts your actions, never your words, and forwarding it anywhere is not built yet.')}
 				</ul>
 				${analyticsConsentRow(analyticsEnabled)}
 				<p style="margin:0;font:400 12.5px/1.5 system-ui;color:#a3a8b2">The full plain-words page: <span style="font:500 12.5px/1.5 ui-monospace,monospace;color:#696e78">docs/27-data-flow-one-pager.md</span></p>
