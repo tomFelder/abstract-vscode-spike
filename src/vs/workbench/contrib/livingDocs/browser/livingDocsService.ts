@@ -48,6 +48,7 @@ import { WorkspaceAgentStore } from './agentStore.js';
 import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
 import { classifyWorkspaceExtra } from '../common/treeRail.js';
+import { countUnseenAgentEdits } from '../common/railStatus.js';
 import { projectDisplayName } from '../common/projectDisplayName.js';
 
 // The verdict from one Skill acting as a grader in the verify gate (maker != checker, spec 5).
@@ -190,6 +191,14 @@ const SOURCE_COOLDOWN_MS = 30_000;
 // Persisted flag (application scope): has this install ever emitted project_opened? Drives the is_first
 // property of the project_opened analytics event so the activation funnel can tell a first project apart.
 const FIRST_PROJECT_KEY = 'abstract.analytics.firstProjectOpened';
+
+// The since-last-looked anchor per document (issue #212): a WORKSPACE-scoped JSON map { [docUriString]: isoTime }
+// of when the user last had each document active. Owned EXCLUSIVELY by this service (no other component touches
+// this key): it stamps a document seen on active-editor change and prunes the map to the current doc set on write,
+// and the Files-rail green dot compares a document's shared audit times against its local anchor. Kept out of the
+// lock deliberately: the lock is committed/shared, but reading position is per-user - comparing a colleague's
+// committed agent edits against a LOCAL anchor is exactly what surfaces "changed since YOU last looked".
+const DOC_LAST_VIEWED_KEY = 'livingDocs.docLastViewed';
 
 // The user's selected model per backend (issue #179). APPLICATION scope, not PROFILE: the model choice is a
 // property of the machine's broker + credential setup (the broker is spawned once per install, its backend
@@ -369,6 +378,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// highlighted (closing the "provenance falls back to the CSV" gap for api/mcp kinds).
 	private readonly _payloadRawCache = new Map<string, string>();
 	private _pending: IProposedChange[] = [];
+	// The since-last-looked anchor per document (issue #212), keyed by doc URI string -> ISO time last active.
+	// Read once from storage at construction (DOC_LAST_VIEWED_KEY, WORKSPACE), stamped on active-editor change,
+	// and pruned to the current doc set on each write. The Files-rail green dot reads it via _summarize.
+	private readonly _docLastViewed = new Map<string, string>();
 	// True while approveAll fans out, so each approve's proposal_resolved analytics event carries bulk:true.
 	private _inBulkApprove = false;
 	// True while rejectAll fans out, so each reject's proposal_resolved analytics event carries bulk:true.
@@ -504,6 +517,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// Plan 42 slice L2: forward the model-access gate's pending-prompt changes onto onDidChange so the rail
 		// (which re-renders on onDidChange) shows and clears the inline first-use choice with no extra wiring.
 		this._register(this._modelAccessGate.onDidChangePending(() => this._onDidChange.fire()));
+		// (issue #212) Read the since-last-looked anchor map once at startup, then stamp a document seen as the
+		// user leaves it for another. No new event fires - the rail already re-renders on onDidActiveEditorChange
+		// and onDidChange, so a fresh stamp is picked up on the render that the same editor change triggers.
+		this._readDocLastViewed();
+		this._register(this._editors.onDidActiveEditorChange(() => this._recordDocViewed()));
+		// Stamp whatever document is already active at startup so its green dot clears from the first render.
+		this._recordDocViewed();
 	}
 
 	// True once this session's project_opened has fired, so a re-scan (marker retry, folder change) does not
@@ -531,6 +551,62 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		} catch (e) {
 			this._log.trace('[livingDocs] project_opened capture skipped', e instanceof Error ? e.message : String(e));
 		}
+	}
+
+	// The document whose editor was active when we last stamped (issue #212), so a switch can stamp the OUTGOING
+	// document seen (it just changed under the user's eyes) as well as the incoming one. undefined = none yet.
+	private _lastStampedDoc: string | undefined;
+
+	// Read the since-last-looked anchor map once from storage into the in-memory map (issue #212). A missing /
+	// unreadable / malformed value leaves the map empty (every document then reads as never-viewed, the honest
+	// state). Only `.md` string keys with ISO-string values are kept - anything else is ignored, never trusted.
+	private _readDocLastViewed(): void {
+		const raw = this._storage.get(DOC_LAST_VIEWED_KEY, StorageScope.WORKSPACE);
+		if (!raw) { return; }
+		try {
+			const parsed: unknown = JSON.parse(raw);
+			if (!parsed || typeof parsed !== 'object') { return; }
+			for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+				if (typeof value === 'string') { this._docLastViewed.set(key, value); }
+			}
+		} catch {
+			// A corrupt map just means no anchors yet - every doc reads never-viewed, which is safe.
+		}
+	}
+
+	// Persist the since-last-looked map, pruned to the documents currently in the workspace so a deleted /
+	// renamed document does not leave a stale anchor behind forever (issue #212). Owned exclusively here.
+	private _persistDocLastViewed(currentDocIds: ReadonlySet<string>): void {
+		for (const key of [...this._docLastViewed.keys()]) {
+			if (!currentDocIds.has(key)) { this._docLastViewed.delete(key); }
+		}
+		const map: Record<string, string> = {};
+		for (const [key, value] of this._docLastViewed) { map[key] = value; }
+		this._storage.store(DOC_LAST_VIEWED_KEY, JSON.stringify(map), StorageScope.WORKSPACE, StorageTarget.USER);
+	}
+
+	// Stamp the active document (and the one just left) as seen NOW (issue #212), clearing their Files-rail green
+	// dot on the next render. Called on every active-editor change: the OUTGOING document is stamped too, because
+	// a change that landed on the document while the user was reading it should not surface as "unseen" the moment
+	// they look away. Only `.md` resources are anchored (screens/webviews carry no rail dot). The write prunes the
+	// map to the current doc set, so this also does the housekeeping for a removed document's stale anchor.
+	private _recordDocViewed(): void {
+		const now = new Date().toISOString();
+		const seen = new Set<string>();
+		if (this._lastStampedDoc) { this._docLastViewed.set(this._lastStampedDoc, now); seen.add(this._lastStampedDoc); }
+		const active = this._editors.activeEditor?.resource;
+		if (active && active.path.endsWith('.md')) {
+			const id = active.toString();
+			this._docLastViewed.set(id, now);
+			this._lastStampedDoc = id;
+			seen.add(id);
+		} else {
+			this._lastStampedDoc = undefined;
+		}
+		if (!seen.size) { return; }
+		// Persist without a full prune here: pruning to the real doc set needs a folder scan (too heavy to run on
+		// every editor switch), so `listDocuments` does the scoped prune. Keep every current anchor on this write.
+		this._persistDocLastViewed(new Set(this._docLastViewed.keys()));
 	}
 
 	// Read the `.abstract-name` marker in the open folder, if any, into the cache. A missing/unreadable
@@ -777,6 +853,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (summary) { summaries.push(summary); }
 		}
 		summaries.sort((a, b) => a.title.localeCompare(b.title));
+		// (issue #212) This is the one place with the real current doc set in hand, so prune the since-last-looked
+		// anchor map to it - a deleted/renamed document's stale anchor is dropped here rather than growing forever.
+		if (this._docLastViewed.size) {
+			const currentDocIds = new Set<string>();
+			for (const uri of found.values()) { currentDocIds.add(uri.toString()); }
+			// Only prune when the scan actually returned documents, so a transient empty scan (provider not yet
+			// registered) never wipes every anchor.
+			if (currentDocIds.size) { this._persistDocLastViewed(currentDocIds); }
+		}
 		return summaries;
 	}
 
@@ -2092,6 +2177,26 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			for (const source of doc.sources) { kinds.add(sourceKind(source)); }
 			const id = uri.toString();
 			const bound = doc.blocks.reduce((n, b) => n + b.binds.length, 0);
+			const pendingForDoc = this._pending.filter(c => c.docId === id);
+			// --- Files-rail status dot inputs (issue #212) ---
+			// Green: agent auto-applies newer than the user's last-viewed anchor. Audit comes from the loaded doc's
+			// lock when it is open; otherwise the tolerant sidecar read (a plain doc with NO lock returns undefined
+			// -> no audit -> 0, so it stays grey, the L3 earned-living rule). The ACTIVE document always reports 0:
+			// the user is looking at it right now, so nothing on it is "unseen".
+			// NOTE (accepted cost, issue #212): this reads the lock sidecar per doc per listDocuments render for docs
+			// that are not already loaded (~doubles rail render I/O). Acceptable at rail scale (tens of docs).
+			const isActive = this._editors.activeEditor?.resource?.toString() === id;
+			let unseenAgentEdits = 0;
+			if (!isActive) {
+				const loadedLock = this._docs.get(id)?.lock;
+				const audit = loadedLock ? loadedLock.audit : ((await this._lockStore.read(uri))?.audit ?? []);
+				unseenAgentEdits = countUnseenAgentEdits(audit, this._docLastViewed.get(id));
+			}
+			// Red: a relink-flagged pending proposal, a stale binding/context drift (freshness computes on load, so a
+			// never-loaded doc reports false - a truthful, partial signal), or a failed whole-project fan-out run.
+			const relinkCount = pendingForDoc.filter(c => c.relink).length;
+			const stale = this._docs.has(id) ? this.getFreshness(uri).dirty : false;
+			const fanoutFailed = [...this._fanoutProgress.values()].some(p => p.failedDocIds.includes(id));
 			return {
 				resource: uri,
 				// Never a bare "Untitled" for an odd/blank-heading file: fall back to the filename (F8).
@@ -2100,8 +2205,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				sourceKinds: [...kinds],
 				sources: doc.sources,
 				lastSynced: doc.context.length ? `${doc.context.length} context` : (bound ? `${bound} bound` : ''),
-				pendingCount: this._pending.filter(c => c.docId === id).length,
+				pendingCount: pendingForDoc.length,
 				folder: this._relativeFolder(uri),
+				unseenAgentEdits,
+				relinkCount,
+				stale,
+				fanoutFailed,
 			};
 		} catch (e) {
 			this._log.trace('[livingDocs] summarize skipped', e instanceof Error ? e.message : String(e));

@@ -7,6 +7,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { ILivingDoc, SourceKind } from './livingDocsModel.js';
 import { sourceKindOf } from './contextGroups.js';
+import { docRailDot, IRailDot, sourceRailDot } from './railStatus.js';
 
 // Pure data shaping for the left tree-rail (the comp's Files / Outline / Search tabs). The Context tab
 // reuses `buildContextGroups`; these three helpers cover the rest and are unit-tested independently of
@@ -24,6 +25,9 @@ export interface ITreeRailItem {
 	readonly kind: 'doc' | 'source' | 'unsupported';
 	/** A document with pending meaning-changes shows the amber dot (mirrors the Review count). */
 	readonly pending: boolean;
+	/** The leading status indicator (issue #212): a coloured dot for a document, a grey dash for a
+	 * source/unsupported row, with the plain-words reason + count in its hover tooltip. */
+	readonly dot: IRailDot;
 	/** For source rows, the binding kind (file | api | mcp) - drives the row glyph. */
 	readonly sourceKind?: SourceKind;
 	/** For an `unsupported` (not-yet-imported) row, the plain-words reason; unset otherwise (plan 37 F10). */
@@ -49,6 +53,16 @@ export interface ITreeRailDocInput {
 	readonly sources: readonly string[];
 	/** The document's directory relative to the workspace root ('' = root), '/'-joined (plan 37 F7). */
 	readonly folder?: string;
+	// --- Files-rail status-dot inputs (issue #212), mirroring the ILivingDocSummary fields; the tree computes
+	// the doc's leading dot from these via `docRailDot`. All default to 0/false (grey) when the caller omits them. ---
+	/** Agent auto-applies newer than the doc's last-viewed anchor (the ACTIVE doc reports 0) -> green band. */
+	readonly unseenAgentEdits?: number;
+	/** Relink-flagged pending proposals for this document -> red band. */
+	readonly relinkCount?: number;
+	/** True when a binding/context source has drifted since last sync/review -> red band. */
+	readonly stale?: boolean;
+	/** True when a whole-project fan-out run failed to reach the model for this document -> red band. */
+	readonly fanoutFailed?: boolean;
 }
 
 // A non-Markdown file discovered in the workspace, classified for the Files tab: a `source` (a CSV / txt /
@@ -133,7 +147,14 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	const rootItems: ITreeRailItem[] = [];
 	const roots = new Map<string, IMutableFolder>();
 	for (const d of [...docs].sort((a, b) => a.title.localeCompare(b.title))) {
-		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0 };
+		const dot = docRailDot({
+			pendingCount: d.pendingCount,
+			unseenAgentEdits: d.unseenAgentEdits ?? 0,
+			relinkCount: d.relinkCount ?? 0,
+			stale: d.stale ?? false,
+			fanoutFailed: d.fanoutFailed ?? false,
+		});
+		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, dot };
 		const segments = (d.folder ?? '').split('/').filter(s => s.length > 0);
 		if (!segments.length) { rootItems.push(item); continue; }
 		let level = roots;
@@ -164,7 +185,8 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	const addSource = (label: string, resource?: URI, action?: TreeRailAction) => {
 		if (seen.has(label)) { return; }
 		seen.add(label);
-		sources.push({ label, resource, kind: 'source', pending: false, sourceKind: sourceKindOf(label), ...(action ? { action } : {}) });
+		const sourceKind = sourceKindOf(label);
+		sources.push({ label, resource, kind: 'source', pending: false, sourceKind, dot: sourceRailDot('source', sourceKind), ...(action ? { action } : {}) });
 	};
 	for (const d of docs) {
 		for (const s of d.sources) {
@@ -181,7 +203,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 		if (c.kind === 'source') { addSource(name, undefined, c.action); continue; }
 		if (seenUnsupported.has(name)) { continue; }
 		seenUnsupported.add(name);
-		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason, importable: c.importable });
+		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason, importable: c.importable, dot: sourceRailDot('unsupported', undefined, c.reason) });
 	}
 	sources.sort((a, b) => a.label.localeCompare(b.label));
 	unsupported.sort((a, b) => a.label.localeCompare(b.label));
@@ -220,6 +242,13 @@ export type ITreeRailNode = ITreeRailFolderNode | ITreeRailLeafNode;
 /** Id of the collapsed screenshot bucket under Sources; the view seeds this collapsed on first open (issue #171). */
 export const ASSETS_FOLDER_ID = 'folder:Sources/Assets';
 
+/** Id of the MRU "Recent" group above Reports (issue #212). Its leaf ids carry a distinct prefix so a document
+ * that appears BOTH in Recent and in Reports keeps two collision-free ids (the identityProvider stays unique). */
+export const RECENT_FOLDER_ID = 'folder:Recent';
+
+/** The largest number of documents the Recent group ever shows (issue #212); older MRU entries are dropped. */
+export const RECENT_GROUP_CAP = 5;
+
 /** Every Assets bucket id present in a node tree, so the view can seed them collapsed on first build (issue #171). */
 export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[] {
 	const ids: string[] = [];
@@ -240,7 +269,7 @@ export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[
  *  - assigns every node a stable id (path-based for folders) for selection + persisted collapse state.
  * Empty groups are omitted. Pure - the widget wiring lives in the view.
  */
-export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = []): ITreeRailNode[] {
+export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], recentResources: readonly URI[] = []): ITreeRailNode[] {
 	const folders = buildFileTree(docs, extras);
 	// Sources a document actually binds to stay visible even when they are images (a bound chart PNG is data,
 	// not noise); only un-bound loose screenshots are bucketed into the collapsed Assets node (issue #171).
@@ -286,6 +315,31 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 			continue;
 		}
 		result.push({ type: 'folder', id, label: group.name, children: toNodes(group, id) });
+	}
+
+	// --- Recent: an MRU shortcut group above Reports (issue #212) ---
+	// A collapsible "Recent" group of the most-recently-opened documents, capped at RECENT_GROUP_CAP and shown
+	// only when it holds at least two (one recent doc is not worth a whole group). Each row reuses the SAME doc
+	// item (so it carries the same status dot) but under the distinct RECENT_FOLDER_ID prefix, so a document that
+	// also appears in Reports keeps two collision-free ids. The on-disk hierarchy below is untouched.
+	const docItemByResource = new Map<string, ITreeRailItem>();
+	for (const d of docs) {
+		docItemByResource.set(d.resource.toString(), { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, dot: docRailDot({ pendingCount: d.pendingCount, unseenAgentEdits: d.unseenAgentEdits ?? 0, relinkCount: d.relinkCount ?? 0, stale: d.stale ?? false, fanoutFailed: d.fanoutFailed ?? false }) });
+	}
+	const recentItems: ITreeRailItem[] = [];
+	const seenRecent = new Set<string>();
+	for (const resource of recentResources) {
+		const key = resource.toString();
+		if (seenRecent.has(key)) { continue; }
+		const item = docItemByResource.get(key);
+		if (!item) { continue; } // a history entry that is not a current folder document is skipped
+		seenRecent.add(key);
+		recentItems.push(item);
+		if (recentItems.length >= RECENT_GROUP_CAP) { break; }
+	}
+	if (recentItems.length >= 2) {
+		const recentChildren: ITreeRailNode[] = recentItems.map(item => ({ type: 'leaf', id: `${RECENT_FOLDER_ID}/leaf:${item.resource!.toString()}`, item }));
+		result.unshift({ type: 'folder', id: RECENT_FOLDER_ID, label: 'Recent', children: recentChildren });
 	}
 	return result;
 }

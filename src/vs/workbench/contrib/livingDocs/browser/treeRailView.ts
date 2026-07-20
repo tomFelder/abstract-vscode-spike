@@ -10,6 +10,7 @@ import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IAnchor } from '../../../../base/browser/ui/contextview/contextview.js';
+import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { IObjectTreeElement } from '../../../../base/browser/ui/tree/tree.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
@@ -26,10 +27,11 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IHistoryService } from '../../../services/history/common/history.js';
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
+import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 
 type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
@@ -70,6 +72,8 @@ export class TreeRailView extends ViewPane {
 	private _collapsedFolders = new Set<string>();
 	// Set while reveal-to-active expands ancestor folders, so those programmatic expansions are not persisted.
 	private _suppressCollapsePersist = false;
+	// The hover service, backing the status-dot tooltips the Files-tree leaf renderer attaches (issue #212).
+	private readonly _hoverService: IHoverService;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -87,8 +91,10 @@ export class TreeRailView extends ViewPane {
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IQuickInputService private readonly _quickInput: IQuickInputService,
 		@IStorageService private readonly _storageService: IStorageService,
+		@IHistoryService private readonly _history: IHistoryService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+		this._hoverService = hoverService;
 		this._collapsedFolders = this._readCollapsedFolders();
 	}
 
@@ -191,8 +197,14 @@ export class TreeRailView extends ViewPane {
 	// state and selection survive the onDidChange/onDidActiveEditorChange re-renders that drive this rail.
 	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
 		const nodes = buildTreeRailNodes(
-			documents.map(d => ({ title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder })),
+			documents.map(d => ({
+				title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder,
+				// The Files-rail status dot inputs (issue #212): passed straight through from the summary so the pure
+				// tree module computes each doc's leading dot via the shared precedence ladder.
+				unseenAgentEdits: d.unseenAgentEdits, relinkCount: d.relinkCount, stale: d.stale, fanoutFailed: d.fanoutFailed,
+			})),
 			extras,
+			this._recentDocResources(documents),
 		);
 		if (!nodes.length) {
 			append(panel, $('div.rail-empty')).textContent = 'No documents yet.';
@@ -220,6 +232,24 @@ export class TreeRailView extends ViewPane {
 		this._highlightActiveDoc();
 	}
 
+	// The MRU document resources for the "Recent" group (issue #212): walk the editor history newest-first and
+	// keep the entries that are documents in the current folder set, de-duplicated. The pure tree module caps the
+	// list and hides the group when it holds fewer than two, so this only supplies the ordered candidate list.
+	private _recentDocResources(documents: readonly ILivingDocSummary[]): URI[] {
+		const docKeys = new Set(documents.map(d => d.resource.toString()));
+		const out: URI[] = [];
+		const seen = new Set<string>();
+		for (const entry of this._history.getHistory()) {
+			const resource = entry.resource;
+			if (!resource) { continue; }
+			const key = resource.toString();
+			if (seen.has(key) || !docKeys.has(key)) { continue; }
+			seen.add(key);
+			out.push(resource);
+		}
+		return out;
+	}
+
 	private _ensureFilesTree(): void {
 		if (this._filesTree) { return; }
 		const container = $('div.rail-files-tree');
@@ -231,13 +261,27 @@ export class TreeRailView extends ViewPane {
 			new TreeRailDelegate(),
 			[
 				new TreeRailFolderRenderer(),
-				new TreeRailLeafRenderer({ renderLeafActions: (node, host) => this._renderLeafActions(node, host) }),
+				new TreeRailLeafRenderer({
+					renderLeafActions: (node, host) => this._renderLeafActions(node, host),
+					// The status dot's hover (issue #212): a managed IHoverService hover with the mouse delegate, so
+					// the tooltip follows the rail's hover timing. The renderer registers the returned disposable in the
+					// per-row template store, so a recycled row disposes its hover - no leak across the tree's row pool.
+					setupHover: (el, content) => this._hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), el, content),
+				}),
 			],
 			{
 				accessibilityProvider: new TreeRailAccessibilityProvider(),
 				identityProvider: { getId: (e: ITreeRailNode) => e.id },
 				expandOnlyOnTwistieClick: false,
 				overrideStyles: { listBackground: 'sideBar.background' },
+				// Fast navigation (issue #212): type-to-filter (type-ahead) + the Ctrl/Cmd+F find widget. The label
+				// provider gives the tree each row's searchable text (a folder's name, a leaf's item label); the
+				// WorkbenchObjectTree already supplies the contextViewProvider, so this lights up BOTH the type-ahead
+				// highlight and the find widget with no extra wiring.
+				keyboardNavigationLabelProvider: {
+					getKeyboardNavigationLabel: (e: ITreeRailNode) => e.type === 'folder' ? e.label : e.item.label,
+				},
+				findWidgetEnabled: true,
 			},
 		)) as WorkbenchObjectTree<ITreeRailNode, void>;
 		this._filesTree = tree;
@@ -301,6 +345,9 @@ export class TreeRailView extends ViewPane {
 		let ancestors: ITreeRailNode[] = [];
 		const walk = (node: ITreeRailNode, path: ITreeRailNode[]): void => {
 			if (match) { return; }
+			// The Recent group (issue #212) mirrors documents that live canonically under Reports; skip its subtree
+			// so the highlight lands on the real Reports row, not its Recent shortcut (which shares the resource).
+			if (node.type === 'folder' && node.id === RECENT_FOLDER_ID) { return; }
 			if (node.type === 'leaf') {
 				if (node.item.resource?.toString() === resource.toString()) { match = node; ancestors = path; }
 			} else {
@@ -358,7 +405,8 @@ export class TreeRailView extends ViewPane {
 	}
 
 	// Fill the trailing action area of one leaf row in the file tree (issue #171): the import door, the
-	// "Use as source" button, the pending dot, or the not-yet-imported note. The tree renderer calls this on
+	// "Use as source" button, or the not-yet-imported note (the status dot is the LEADING indicator, drawn by the
+	// renderer from item.dot - issue #212). The tree renderer calls this on
 	// every (re)render of a row and disposes the returned store when the row is recycled - so listeners are
 	// scoped to the row's lifetime, not this view's. Open + context-menu are handled by the tree widget.
 	private _renderLeafActions(node: ITreeRailLeafNode, host: HTMLElement): DisposableStore {
@@ -407,7 +455,8 @@ export class TreeRailView extends ViewPane {
 				void this._useAsSource(action, label);
 			}));
 		}
-		if (item.pending) { append(host, $('span.rail-item-dot')); }
+		// The trailing amber pending dot is gone (issue #212): pending changes now show as the LEADING yellow
+		// status dot the renderer draws from `item.dot`, so a document has one status indicator, not two.
 		return store;
 	}
 
@@ -707,7 +756,13 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 11px/1 system-ui;color:var(--vscode-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:7px;height:100%;min-width:0;font:400 13px/1.3 system-ui;color:var(--vscode-foreground)}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:var(--vscode-descriptionForeground);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px}
-		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-glyph{color:var(--vscode-descriptionForeground)}
+		.living-docs-rail .rail-files-tree .rail-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:9px;height:9px}
+		.living-docs-rail .rail-files-tree .rail-status-dot{width:7px;height:7px;border-radius:50%}
+		.living-docs-rail .rail-files-tree .rail-status-dash{width:8px;height:2px;border-radius:1px;background:var(--vscode-descriptionForeground);opacity:.45}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-grey{background:var(--vscode-descriptionForeground);opacity:.45}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-green{background:oklch(0.6 0.14 150)}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-yellow{background:oklch(0.7 0.15 85)}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-red{background:oklch(0.55 0.2 25)}
 		.living-docs-rail .rail-files-tree .rail-tree-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
 		.living-docs-rail .rail-empty{font:400 12px/1.5 system-ui;color:var(--vscode-descriptionForeground);padding:8px 6px}
 		.living-docs-rail .rail-folder{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:var(--vscode-descriptionForeground);text-transform:uppercase;padding:10px 6px 6px}
@@ -719,7 +774,6 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-item-source .rail-item-glyph{color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		.living-docs-rail .rail-item-detail{margin-left:auto;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
-		.living-docs-rail .rail-item-dot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}
 		.living-docs-rail .rail-item-snippet{width:100%;padding-left:0;font:400 11.5px/1.5 system-ui;color:var(--vscode-descriptionForeground)}
 			.living-docs-rail .rail-item-unsupported{align-items:flex-start;flex-wrap:wrap;cursor:default}
 			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:var(--vscode-descriptionForeground)}
@@ -734,7 +788,6 @@ export class TreeRailView extends ViewPane {
 			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-item-note{width:auto;padding:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-srcaction,.living-docs-rail .rail-files-tree .rail-tree-actions .rail-import{margin-left:0}
 			.living-docs-rail .rail-files-tree .rail-tree-leaf:hover .rail-srcaction,.living-docs-rail .rail-files-tree .rail-tree-leaf:focus-within .rail-srcaction,.living-docs-rail .rail-files-tree .monaco-list-row:hover .rail-srcaction,.living-docs-rail .rail-files-tree .monaco-list-row:focus-within .rail-srcaction{opacity:1}
-			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-item-dot{margin-left:0}
 		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:pointer}
 		.living-docs-rail .rail-outline:hover{background:var(--vscode-list-hoverBackground)}
 		.living-docs-rail .rail-outline.lvl-1{font-weight:600}

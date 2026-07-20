@@ -148,6 +148,16 @@ export interface ILivingDocSummary {
 	/** The document's directory relative to the workspace root ('' = root), '/'-joined; drives the
 	 * tree-rail's folder hierarchy so nested subfolders are not flattened (plan 37 F7). */
 	readonly folder: string;
+	// --- Files-rail status dot inputs (issue #212): the cheap change signals the rail's dot reads. ---
+	/** Agent auto-applies newer than this doc's last-viewed anchor; the ACTIVE doc always reports 0 -> green band. */
+	readonly unseenAgentEdits: number;
+	/** Relink-flagged pending proposals for this document (the claim anchor no longer matches) -> red band. */
+	readonly relinkCount: number;
+	/** True when a binding/context source has drifted since last sync/review (freshness dirty) -> red band. A
+	 * never-loaded document reports false (freshness only computes on load) - a truthful, partial signal (#212). */
+	readonly stale: boolean;
+	/** True when a whole-project fan-out run failed to reach the model for this document -> red band. */
+	readonly fanoutFailed: boolean;
 }
 
 /**

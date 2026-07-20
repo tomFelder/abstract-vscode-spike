@@ -50,6 +50,7 @@ import { ScreenEditor } from './screenEditor.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenLauncherView } from './screenLauncherView.js';
 import { EditorNavLauncherView, openEditorNavTarget } from './editorNavLauncherView.js';
+import { openDocQuickSwitch } from './docQuickSwitch.js';
 import { ScreenId } from './screenRender.js';
 
 // The built-in IDE view containers (Search, Source Control, Run and Debug, Extensions) are the
@@ -244,6 +245,22 @@ for (const chord of NEUTRALISED_IDE_CHORDS) {
 	// Weight 1000 sits above ExternalExtension (400) so this swallow always wins the chord resolution.
 	KeybindingsRegistry.registerKeybindingRule({ id: 'noop', weight: 1000, when: undefined, ...chord });
 }
+
+// --- Cmd/Ctrl+P document switcher (issue #212) ---
+// The core patch stripped Cmd+P from workbench.action.quickOpen (Seam 4) and the calm-shell chord neutralisation
+// above does not claim it, so Cmd/Ctrl+P is a FREE chord. We bind it to a livingDocs-owned command via the public
+// KeybindingsRegistry - zero core patch (check-seams Seam 4 only guards the two core files) - that opens an
+// MRU-ranked quick pick of the folder's documents (docQuickSwitch.ts). Weight 1000 matches the chord-shadow tier
+// so the binding wins resolution over any residual core/extension claim. Cmd+O is bound as a FALLBACK for the
+// document-editor (ProseMirror webview) surface, which can swallow a bare Cmd+P before it reaches the workbench.
+KeybindingsRegistry.registerCommandAndKeybindingRule({
+	id: 'livingDocs.quickSwitchDoc',
+	weight: 1000,
+	when: undefined,
+	primary: KeyMod.CtrlCmd | KeyCode.KeyP,
+	secondary: [KeyMod.CtrlCmd | KeyCode.KeyO],
+	handler: accessor => void accessor.get(IInstantiationService).invokeFunction(openDocQuickSwitch),
+});
 
 // --- editor pane ---
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(

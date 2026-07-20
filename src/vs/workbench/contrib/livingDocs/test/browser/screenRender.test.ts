@@ -27,7 +27,7 @@ suite('livingDocs screenRender', () => {
 	];
 
 	// A project with a living surface (one living doc) so the truthful sync pill renders.
-	const livingState: IScreenState = { ...state, docs: [{ resource: URI.file('/ws/A.md'), title: 'A', isLiving: true, sourceKinds: ['file'], sources: ['a.csv'], lastSynced: '', pendingCount: 0, folder: '' }] };
+	const livingState: IScreenState = { ...state, docs: [{ resource: URI.file('/ws/A.md'), title: 'A', isLiving: true, sourceKinds: ['file'], sources: ['a.csv'], lastSynced: '', pendingCount: 0, folder: '', unseenAgentEdits: 0, relinkCount: 0, stale: false, fanoutFailed: false }] };
 
 	for (const { id, crumb } of screens) {
 		test(`${id} renders the global top bar (brand, ${crumb} crumb, sync pill, Present, avatar)`, () => {
@@ -123,7 +123,7 @@ suite('livingDocs screenRender', () => {
 	// --- Home reflects the real open folder (the folder IS the project; decision #39) ---
 
 	function summary(path: string, title: string, isLiving: boolean, pendingCount = 0): ILivingDocSummary {
-		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount, folder: '' };
+		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount, folder: '', unseenAgentEdits: 0, relinkCount: 0, stale: false, fanoutFailed: false };
 	}
 
 	test('home with no folder open shows the empty state and an Open folder action (no demo projects)', () => {

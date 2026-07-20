@@ -7,7 +7,7 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, isAssetName, ITreeRailNode, searchTreeRail } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, isAssetName, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -52,6 +52,62 @@ suite('treeRail', () => {
 				]
 			},
 		]);
+	});
+
+	test('buildFileTree computes each row\'s status dot: doc precedence (grey/green/yellow/red) + grey source/unsupported dashes (livingDocs #212)', () => {
+		const folders = buildFileTree([
+			{ title: 'Calm', resource: URI.file('/ws/Calm.md'), pendingCount: 0, sources: ['metrics.csv'] },
+			{ title: 'Applied', resource: URI.file('/ws/Applied.md'), pendingCount: 0, sources: [], unseenAgentEdits: 2 },
+			{ title: 'Pending', resource: URI.file('/ws/Pending.md'), pendingCount: 3, sources: [] },
+			{ title: 'Needs input', resource: URI.file('/ws/Needs.md'), pendingCount: 1, sources: [], stale: true },
+		], ['legacy.doc']);
+		const projection = folders.map(f => ({
+			name: f.name,
+			items: f.items.map(i => ({ label: i.label, kind: i.kind, shape: i.dot.shape, color: i.dot.color })),
+		}));
+		assert.deepStrictEqual(projection, [
+			{
+				name: 'Reports', items: [
+					{ label: 'Applied', kind: 'doc', shape: 'dot', color: 'green' },
+					{ label: 'Calm', kind: 'doc', shape: 'dot', color: 'grey' },
+					{ label: 'Needs input', kind: 'doc', shape: 'dot', color: 'red' },
+					{ label: 'Pending', kind: 'doc', shape: 'dot', color: 'yellow' },
+				]
+			},
+			{ name: 'Sources', items: [{ label: 'metrics.csv', kind: 'source', shape: 'dash', color: 'grey' }] },
+			{ name: 'Not yet imported', items: [{ label: 'legacy.doc', kind: 'unsupported', shape: 'dash', color: 'grey' }] },
+		]);
+	});
+
+	test('buildTreeRailNodes adds a capped, MRU-ordered Recent group above Reports with distinct collision-free ids, hidden below two (livingDocs #212)', () => {
+		const docInputs = ['A', 'B', 'C', 'D', 'E', 'F'].map(t => ({ title: t, resource: URI.file(`/ws/${t}.md`), pendingCount: 0, sources: [] }));
+		// Six MRU resources (newest first); the group caps at five and drops the rest, in MRU order.
+		const recent = ['F', 'E', 'D', 'C', 'B', 'A'].map(t => URI.file(`/ws/${t}.md`));
+		const nodes = buildTreeRailNodes(docInputs, [], recent);
+		const recentNode = nodes.find(n => n.type === 'folder' && n.id === RECENT_FOLDER_ID);
+		assert.ok(recentNode && recentNode.type === 'folder', 'Recent is the first group above Reports');
+		assert.deepStrictEqual(
+			{
+				firstGroupIsRecent: nodes[0].type === 'folder' && nodes[0].id === RECENT_FOLDER_ID,
+				recentLeaves: recentNode.children.map(c => c.type === 'leaf' ? { label: c.item.label, id: c.id } : { folder: c.label }),
+				// A Recent leaf carries the distinct RECENT_FOLDER_ID prefix, never colliding with its Reports twin.
+				idsAllDistinctFromReports: recentNode.children.every(c => c.id.startsWith(`${RECENT_FOLDER_ID}/leaf:`)),
+				// One recent doc is not worth a group.
+				hiddenBelowTwo: buildTreeRailNodes(docInputs, [], [URI.file('/ws/A.md')]).some(n => n.type === 'folder' && n.id === RECENT_FOLDER_ID),
+			},
+			{
+				firstGroupIsRecent: true,
+				recentLeaves: [
+					{ label: 'F', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/F.md').toString()}` },
+					{ label: 'E', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/E.md').toString()}` },
+					{ label: 'D', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/D.md').toString()}` },
+					{ label: 'C', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/C.md').toString()}` },
+					{ label: 'B', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/B.md').toString()}` },
+				],
+				idsAllDistinctFromReports: true,
+				hiddenBelowTwo: false,
+			},
+		);
 	});
 
 	test('buildFileTree resolves a file source to a URI in the referencing document\'s folder (for the Files-tab menu), but not an api (URL) source', () => {
