@@ -2657,6 +2657,42 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(lastNotifications.some(n => n.message === 'Deleted "Weekly Summary.md".'), false, 'no success toast for a failed delete');
 	});
 
+	// --- plan 42 L5: a rename is a plain human edit and succeeds SILENTLY (no toast to dismiss) ---
+
+	test('renaming a document moves the file and raises NO toast (only the error paths speak up)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // a living doc, so a lock sidecar exists and moves with the file
+
+		await service.renameFile(WEEKLY, 'Board Summary');
+
+		const target = URI.file('/ws/Board Summary.md');
+		assert.deepStrictEqual(
+			{
+				movedFile: lastFiles!.has(target.toString()),
+				oldFileGone: lastFiles!.has(WEEKLY.toString()),
+				movedLock: lastFiles!.has(URI.file('/ws/Board Summary.lock.json').toString()),
+				oldLockGone: lastFiles!.has(URI.file('/ws/Weekly Summary.lock.json').toString()),
+				toasts: lastNotifications.map(n => n.message),
+			},
+			{ movedFile: true, oldFileGone: false, movedLock: true, oldLockGone: false, toasts: [] },
+			'the file + lock move together and the rename is silent - no success/Undo toast'
+		);
+	});
+
+	test('renaming onto an existing name refuses and names the clash (a legitimate error still speaks up)', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/Board Notes.md').toString(), '# Board Notes\n');
+		await service.loadDocument(README);
+
+		await service.renameFile(README, 'Board Notes');
+
+		assert.deepStrictEqual(
+			{ stillThere: lastFiles!.has(README.toString()), toasts: lastNotifications.map(n => n.message) },
+			{ stillThere: true, toasts: ['Cannot rename to "Board Notes.md" - a file with that name already exists.'] },
+			'nothing moved and the one error names the clash'
+		);
+	});
+
 	// --- the Tidy verb: folder-convention moves through the review grammar (issue #132, doc 22 section 5) ---
 
 	// A move plan item addressing a real file, built by hand so the move op can be exercised directly (the
