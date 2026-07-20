@@ -39,6 +39,9 @@ import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IRev
 // displaces the onboarding screen - so the guide is re-entered from Home and must restore its place.
 const ONBOARDING_STEP_KEY = 'livingDocs.onboardingStep';
 const ONBOARDING_DEMO_KEY = 'livingDocs.onboardingDemoUri';
+// Plan 42 slice L1: set once the user dismisses the "See a 90-second demo" card on Home. Profile-scoped so the
+// demoted walkthrough entry point stays hidden across sessions once the user has waved it away.
+const DEMO_CARD_DISMISSED_KEY = 'livingDocs.demoCardDismissed';
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -116,6 +119,8 @@ interface IScreenEditorState {
 	onboardingHasModel?: boolean;
 	// Home only: the persisted in-progress onboarding step, to show the "Continue your walkthrough" banner.
 	onboardingResumeStep?: OnboardingStep;
+	// Home only (plan 42 L1): whether the "See a 90-second demo" card has been dismissed (persisted, profile-scoped).
+	demoCardDismissed?: boolean;
 	// Home: the Tidy verb's review surface (doc 22 section 5) - the proposed moves as approve/skip rows, or
 	// the applied summary. Absent until "Tidy this project" is invoked; the full plan (with file URIs) is held
 	// separately in `_tidyPlan` so apply can address the real resources while this projection drives the HTML.
@@ -257,7 +262,11 @@ export class ScreenEditor extends EditorPane {
 		// final aha), so the guide is re-enterable after it was displaced by the demo document (D26).
 		if (this._screen === 'home') {
 			const saved = this._storageService.get(ONBOARDING_STEP_KEY, StorageScope.PROFILE) as OnboardingStep | undefined;
-			this._state = { ...this._state, onboardingResumeStep: saved && saved !== 'first-approve-own' && (ONBOARDING_STEPS as readonly string[]).includes(saved) ? saved : undefined };
+			this._state = {
+				...this._state,
+				onboardingResumeStep: saved && saved !== 'first-approve-own' && (ONBOARDING_STEPS as readonly string[]).includes(saved) ? saved : undefined,
+				demoCardDismissed: this._storageService.getBoolean(DEMO_CARD_DISMISSED_KEY, StorageScope.PROFILE, false),
+			};
 		}
 		this._inputDisposables.clear();
 		this._signInPoll.clear();
@@ -810,9 +819,16 @@ export class ScreenEditor extends EditorPane {
 				this._livingDocs.endOnboardingWalkthrough();
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'home'), { pinned: true });
 				break;
-			// Home "Continue your walkthrough": re-enter the onboarding surface at its persisted step.
+			// Home "Continue your walkthrough" / "See a 90-second demo": re-enter the onboarding surface. The demo
+			// entry point is reachable but never a gate (plan 42 L1) - "See It Work" still runs the whole demo.
 			case 'openOnboarding':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'onboarding'), { pinned: true });
+				break;
+			// Home: dismiss the "See a 90-second demo" card for good (plan 42 L1). Persist + re-render so it goes.
+			case 'dismissDemoCard':
+				this._storageService.store(DEMO_CARD_DISMISSED_KEY, true, StorageScope.PROFILE, StorageTarget.MACHINE);
+				this._state = { ...this._state, demoCardDismissed: true };
+				this._render();
 				break;
 		}
 	}

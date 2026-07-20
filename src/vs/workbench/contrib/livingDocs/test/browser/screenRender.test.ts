@@ -89,6 +89,23 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!fresh.includes('Your walkthrough is in progress'), 'does not show a resume banner without a saved step');
 	});
 
+	test('home offers the dismissible "See a 90-second demo" entry point (plan 42 L1), never a gate', () => {
+		// With no in-progress walkthrough, Home shows the demoted walkthrough entry point: a card that opens
+		// onboarding AND a dismiss control, so the demo is reachable but never forced.
+		const card = renderScreenHtml('home', { ...state, hasFolder: true });
+		assert.ok(card.includes('See a 90-second demo'), 'shows the demo entry card');
+		assert.ok(/data-msg="openOnboarding"/.test(card), 'the demo card opens the walkthrough');
+		assert.ok(/data-msg="dismissDemoCard"/.test(card), 'the demo card is dismissible');
+
+		// Once dismissed, the card is gone for good.
+		const dismissed = renderScreenHtml('home', { ...state, hasFolder: true, demoCardDismissed: true });
+		assert.ok(!dismissed.includes('See a 90-second demo'), 'a dismissed demo card stays hidden');
+
+		// An in-progress walkthrough shows the resume banner INSTEAD of the demo card (mutually exclusive).
+		const inProgress = renderScreenHtml('home', { ...state, hasFolder: true, onboardingResumeStep: 'provenance-peek' });
+		assert.ok(!inProgress.includes('See a 90-second demo'), 'the resume banner replaces the demo card mid-walkthrough');
+	});
+
 	// --- Home reflects the real open folder (the folder IS the project; decision #39) ---
 
 	function summary(path: string, title: string, isLiving: boolean, pendingCount = 0): ILivingDocSummary {
