@@ -17,7 +17,8 @@ suite('livingDocs screenRender', () => {
 	const state: IScreenState = { knScope: 'org', agents: [], filter: 'all' };
 
 	// Every main-area screen carries the comp's global top bar: brand + per-screen crumb on the left,
-	// the sync-status pill + Present + the user avatar on the right.
+	// the sync-status pill + Present + the user avatar on the right. The "All sources synced" pill is
+	// entry-path source vocabulary (plan 42 L3): it shows only once the project has a living surface.
 	const screens: { id: ScreenId; crumb: string }[] = [
 		{ id: 'home', crumb: 'Home' },
 		{ id: 'templates', crumb: 'Templates' },
@@ -25,20 +26,33 @@ suite('livingDocs screenRender', () => {
 		{ id: 'agents', crumb: 'Agents' },
 	];
 
+	// A project with a living surface (one living doc) so the truthful sync pill renders.
+	const livingState: IScreenState = { ...state, docs: [{ resource: URI.file('/ws/A.md'), title: 'A', isLiving: true, sourceKinds: ['file'], sources: ['a.csv'], lastSynced: '', pendingCount: 0, folder: '' }] };
+
 	for (const { id, crumb } of screens) {
 		test(`${id} renders the global top bar (brand, ${crumb} crumb, sync pill, Present, avatar)`, () => {
-			const html = renderScreenHtml(id, state);
+			const html = renderScreenHtml(id, livingState);
 			const head = html.indexOf('class="topbar"');
 			assert.ok(head >= 0, 'has a top bar');
 			// The top bar precedes the screen content (it is the first flex child of .screen).
 			assert.ok(head < html.indexOf('class="scr-body"') || html.indexOf('class="scr-body"') === -1, 'top bar is above the body');
 			assert.ok(html.includes('Abstract'), 'shows the product brand');
 			assert.ok(html.includes(`class="crumb">${crumb}<`), `crumb reads ${crumb}`);
-			assert.ok(html.includes('All sources synced'), 'shows the sync-status pill');
+			assert.ok(html.includes('All sources synced'), 'shows the sync-status pill once the project has a living surface');
 			assert.ok(/data-msg="present"[^>]*class="tb-present"|class="tb-present"[^>]*data-msg="present"/.test(html), 'has a Present control wired to the present message');
 			assert.ok(html.includes('class="av">TS<'), 'shows the user avatar');
 		});
 	}
+
+	test('the sync pill is omitted on a fresh project with no living surface (plan 42 L3)', () => {
+		// A plain folder (no living doc, no bound source) has nothing to be "synced": the pill must not
+		// claim source-sync state before the user has bound anything or met an agent, but the top bar stays.
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, docs: [], sources: [] });
+		assert.deepStrictEqual({
+			topBar: html.includes('class="topbar"'),
+			syncPill: html.includes('All sources synced'),
+		}, { topBar: true, syncPill: false });
+	});
 
 	test('exactly one top bar is rendered per screen', () => {
 		for (const { id } of screens) {

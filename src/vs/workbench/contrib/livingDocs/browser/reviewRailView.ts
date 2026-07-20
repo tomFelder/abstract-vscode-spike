@@ -440,9 +440,12 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		const status = append(content, $('div.ldr-status'));
+		// The empty state is on the entry path (the rail's Review tab is reachable before any AI/source use),
+		// so it stays markdown-first (plan 42 L3): it says what the tab is FOR -- agent edits land here to
+		// review -- without the "Living Document" / "Refresh from sources" ceremony a fresh user has not met yet.
 		status.textContent = pending.length
 			? `${pending.length} change${pending.length > 1 ? 's' : ''} ${pending.length > 1 ? 'need' : 'needs'} approval across ${groups.size} document${groups.size > 1 ? 's' : ''}.`
-			: 'No changes waiting. Open a Living Document and click "Refresh from sources".';
+			: localize("livingDocs.review.empty", "No changes waiting. When the agent proposes an edit, it lands here for you to review.");
 
 		for (const [docTitle, changes] of groups) {
 			const group = append(content, $('div.ldr-group'));
