@@ -91,6 +91,20 @@ export interface IModelCatalogue {
 	readonly models: readonly IModelOption[];
 }
 
+/**
+ * A chat send that hit an unconfigured backend and is held until the user picks a model door (plan 42 slice L2,
+ * issue #198). The typed prompt is preserved and replayed against `resource` the moment a door is chosen - across
+ * the ChatGPT sign-in round-trip too. Lives here (not in modelAccessGate.ts) so the interface stays one-directional.
+ */
+export interface IPendingModelPrompt {
+	/** The document the send targeted; the prompt is replayed against this resource. */
+	readonly resource: URI;
+	/** The instruction to re-send once a door is chosen (the real prompt, not the shown text). */
+	readonly text: string;
+	/** The shown text for the transcript, when it differs from `text` (a substituted brief). */
+	readonly displayText?: string;
+}
+
 /** The stage of the "Sign in with ChatGPT" flow the Settings step polls (plan 35 iter 2 + 4). */
 export type ChatGptSignInStage = 'signed-out' | 'pending' | 'signed-in' | 'error';
 
@@ -558,6 +572,21 @@ export interface ILivingDocsService {
 	signOutChatGpt(): Promise<void>;
 	/** Record the onboarding survey locally as the `model_configured` event (plan 36 wires it to PostHog). */
 	submitOnboardingSurvey(survey: IOnboardingSurvey): Promise<void>;
+
+	// --- Plan 42 slice L2: the inline first-AI-use model-access choice (issue #198) ---
+	// No model/account decision on the entry path; the first send with no backend configured HOLDS the typed
+	// prompt and the rail renders the sign-in vs included-model choice inline. Picking a door replays the exact
+	// prompt so the original request proceeds - across the ChatGPT sign-in round-trip too.
+	/** The prompt held for `resource` at the first-AI-use moment (an unconfigured backend), or undefined. */
+	getPendingModelPrompt(resource: URI): IPendingModelPrompt | undefined;
+	/** Drop the held first-use prompt for `resource` without replaying it (the user dismissed the choice). */
+	dismissModelChoice(resource: URI): void;
+	/** Choose "Use the included model" at first use: select the included tier, then replay the held prompt. */
+	chooseIncludedModelAndReplay(resource: URI): Promise<void>;
+	/** Begin "Sign in with ChatGPT" from the rail's first-use choice; returns the authorize URL to open. */
+	startSignInForChat(): Promise<string | undefined>;
+	/** After the ChatGPT sign-in round-trip lands signed-in, replay the prompt held for `resource`. */
+	completeSignInAndReplay(resource: URI): Promise<void>;
 
 	// --- D26 onboarding funnel + feedback verb (doc 20 section D26; doc 15 section 2.1; doc 18 sections 2.4/2.5) ---
 	// Consent + capture are the analytics service's job (IAnalyticsService, already on this base): every event

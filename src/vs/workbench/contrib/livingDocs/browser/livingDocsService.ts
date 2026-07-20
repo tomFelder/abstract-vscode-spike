@@ -27,7 +27,8 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
@@ -347,6 +348,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidRequestRevealHeading = this._register(new Emitter<{ docId: string; headingIndex: number }>());
 	readonly onDidRequestRevealHeading: Event<{ docId: string; headingIndex: number }> = this._onDidRequestRevealHeading.event;
 
+	// Plan 42 slice L2: the first-AI-use model-access gate. When a chat send hits an unconfigured backend the
+	// prompt is HELD here (never lost) and the rail renders the inline sign-in vs included-model choice; picking
+	// a door replays the held prompt. Its change event is forwarded onto onDidChange so the rail, which already
+	// re-renders on onDidChange, surfaces and clears the inline choice without a new subscription.
+	private readonly _modelAccessGate = this._register(new ModelAccessGate());
+
 	private readonly _docs = new Map<string, IDocState>();
 	// Raw source text by `${docUri}::${source}`, cached during resolution so getSourcePeek (sync) can
 	// build the comp's raw CSV grid for the in-surface source-peek pane.
@@ -488,6 +495,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// (plan 36 iter 2) Emit project_opened once per session when a folder is open and its documents have been
 		// listed. Consent-gated in the service, so this is a no-op before consent; carries counts only, no paths.
 		void this._captureProjectOpenedOnce();
+		// Plan 42 slice L2: forward the model-access gate's pending-prompt changes onto onDidChange so the rail
+		// (which re-renders on onDidChange) shows and clears the inline first-use choice with no extra wiring.
+		this._register(this._modelAccessGate.onDidChangePending(() => this._onDidChange.fire()));
 	}
 
 	// True once this session's project_opened has fired, so a re-scan (marker retry, folder change) does not
@@ -4097,7 +4107,84 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const mentions = this._parseMentions(resource, trimmed);
 		const shown = (displayText ?? '').trim();
 		history.push({ role: 'user', content: shown || trimmed, prompt: shown ? trimmed : undefined, mentions: mentions.length ? mentions : undefined });
+
+		// Plan 42 slice L2 - model access moves to first AI use. When no backend is configured yet, this is the
+		// first-AI-use moment: rather than answering with the honest "model unavailable" line, HOLD the prompt and
+		// render the inline sign-in vs included-model choice in the rail (the user turn above stays visible, so the
+		// typed prompt is preserved). Picking a door replays this exact prompt. The onboarding demo path (a signed
+		// substituted `displayText`) is exempt - the walkthrough drives the model deliberately and its own no-model
+		// guidance already covers it - so only a genuine user send (no displayText) opens the first-use choice.
+		if (!shown && needsModelChoice(await this.getModelProviderStatus())) {
+			this._modelAccessGate.holdPrompt(resource, trimmed);
+			// Reveal the chat rail so the inline choice is seen at the moment it appears (the send may have come
+			// from a skill/AI door, not only the visible composer). holdPrompt already fired onDidChange to render it.
+			this.focusPanel('chat');
+			return;
+		}
 		await this._deliverChatReply(resource, trimmed, mentions);
+	}
+
+	// --- Plan 42 slice L2: the inline first-AI-use model-access choice (rendered in the chat rail) ---
+
+	/** The prompt held for `resource` at the first-AI-use moment (an unconfigured backend), or undefined. */
+	getPendingModelPrompt(resource: URI): IPendingModelPrompt | undefined {
+		return this._modelAccessGate.getPending(resource);
+	}
+
+	/** Drop the held first-use prompt for `resource` without replaying it (the user dismissed the choice). */
+	dismissModelChoice(resource: URI): void {
+		this._modelAccessGate.clear(resource);
+	}
+
+	/**
+	 * The user chose "Use the included model" at the first-AI-use moment (issue #198). Select the included tier
+	 * exactly as the settings screen does (sign out of any ChatGPT session so the broker serves the included/
+	 * OpenRouter backend), then replay the held prompt so the ORIGINAL request proceeds. When a backend is now
+	 * serving the reply streams into the rail; if it still cannot serve (broker genuinely down), the existing
+	 * honest fallback turn shows - the prompt is never silently dropped.
+	 */
+	async chooseIncludedModelAndReplay(resource: URI): Promise<void> {
+		const pending = this._modelAccessGate.takePending(resource);
+		const status = await this.getModelProviderStatus();
+		if (status.signedIn) {
+			await this.signOutChatGpt();
+		}
+		this._invalidateModelProbe();
+		if (pending) {
+			const mentions = this._parseMentions(resource, pending.text);
+			await this._deliverChatReply(resource, pending.text, mentions);
+		}
+	}
+
+	/**
+	 * The user chose "Sign in with ChatGPT" at the first-AI-use moment (issue #198). Begin the same loopback
+	 * sign-in flow the settings screen uses (returning the authorize URL for the rail to open), leaving the held
+	 * prompt in place - it is replayed by `completeSignInAndReplay` once the round-trip lands signed-in, so the
+	 * typed prompt survives the browser round-trip. Returns undefined when the flow could not start.
+	 */
+	startSignInForChat(): Promise<string | undefined> {
+		return this.startChatGptSignIn();
+	}
+
+	/**
+	 * Called by the rail once the ChatGPT sign-in round-trip has landed signed-in: replays the prompt held for
+	 * `resource` so the ORIGINAL request proceeds on the freshly signed-in subscription. A no-op when nothing was
+	 * held (the user never had a pending prompt, or dismissed it). The sign-in poll runs in-process, so the held
+	 * prompt is still in memory here - it is replayed verbatim.
+	 */
+	async completeSignInAndReplay(resource: URI): Promise<void> {
+		const pending = this._modelAccessGate.takePending(resource);
+		this._invalidateModelProbe();
+		if (pending) {
+			const mentions = this._parseMentions(resource, pending.text);
+			await this._deliverChatReply(resource, pending.text, mentions);
+		}
+	}
+
+	/** Force the next model probe to re-hit /healthz, so a door just chosen is reflected immediately (not TTL-stale). */
+	private _invalidateModelProbe(): void {
+		this._modelProbedAt = 0;
+		this._modelProbe = undefined;
 	}
 
 	// Answer a read-only whole-project question for the Project Home composer (F15 / journey 1w, map-D24). This

@@ -6,7 +6,8 @@
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
 import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
-import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { disposableTimeout } from '../../../../base/common/async.js';
+import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -164,6 +165,12 @@ export class ReviewRailView extends ViewPane {
 	// dropdown from these; empty models -> no picker. Undefined until the first fetch resolves.
 	private _models: readonly IModelOption[] | undefined;
 	private _selectedModelId: string | undefined;
+	// Plan 42 slice L2 (issue #198): the inline first-use ChatGPT sign-in state. Undefined = no sign-in in flight
+	// (the two-door choice shows); a string (possibly empty) = the round-trip is pending, so the choice renders
+	// the "open the sign-in page" affordance + spinner. Reset once the flow completes, errors, or is dismissed.
+	private _inlineSignInUrl: string | undefined;
+	// The single in-flight inline sign-in poll timer; a MutableDisposable so a re-open / completion never leaks one.
+	private readonly _inlineSignInPoll = this._register(new MutableDisposable());
 
 	constructor(
 		options: IViewPaneOptions,
@@ -326,6 +333,88 @@ export class ReviewRailView extends ViewPane {
 		this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
 		const tail = append(text, $('span'));
 		tail.textContent = ' for unlimited.';
+	}
+
+	// Plan 42 slice L2 (issue #198): the inline sign-in vs included-model choice shown in the chat rail when a
+	// send hit an unconfigured backend. Rendered above the composer with the typed prompt already visible in the
+	// transcript, so choosing a door replays the ORIGINAL request (the service holds and replays the prompt).
+	// While the ChatGPT sign-in round-trip is in flight this shows the "open the sign-in page" affordance + a
+	// spinner; a completed sign-in (or the included pick) replays the prompt and the choice disappears.
+	private _renderInlineModelChoice(footer: HTMLElement, doc: URI): void {
+		const card = append(footer, $('div'));
+		card.style.cssText = 'margin:0 0 10px;border:1px solid #d9d7fb;border-radius:12px;background:#fff;padding:14px 15px;box-shadow:0 6px 16px -12px rgba(86,97,201,.35)';
+
+		const title = append(card, $('div'));
+		title.style.cssText = 'font:600 13px/1.35 system-ui;color:#15171c;margin:0 0 4px';
+		title.textContent = localize('livingDocs.inlineModel.title', "Choose how to run your request");
+		const sub = append(card, $('div'));
+		sub.style.cssText = 'font:400 12px/1.5 system-ui;color:#696e78;margin:0 0 13px';
+		sub.textContent = localize('livingDocs.inlineModel.sub', "Your message is ready to send. Pick a model to answer it - your typed prompt is kept either way.");
+
+		// The pending sign-in state: once the user clicks "Sign in with ChatGPT" we show a clickable sign-in link
+		// (never popup-dependent) + a spinner, and poll the flow. A completed sign-in replays the held prompt.
+		if (this._inlineSignInUrl !== undefined) {
+			const waiting = append(card, $('div'));
+			waiting.style.cssText = 'display:flex;align-items:center;gap:9px;font:600 12.5px/1 system-ui;color:#52575f;margin:0 0 12px';
+			const spin = append(waiting, $('span'));
+			spin.style.cssText = 'width:12px;height:12px;border:2px solid #d3d6dd;border-top-color:oklch(0.55 0.13 255);border-radius:50%;animation:lwdSpin .8s linear infinite';
+			append(waiting, $('span')).textContent = localize('livingDocs.inlineModel.waiting', "Waiting for you to finish signing in…");
+			if (this._inlineSignInUrl) {
+				const open = append(card, $('a')) as HTMLAnchorElement;
+				open.href = this._inlineSignInUrl;
+				open.style.cssText = 'display:inline-flex;align-items:center;gap:7px;border-radius:9px;padding:10px 16px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;text-decoration:none;cursor:pointer';
+				open.textContent = localize('livingDocs.inlineModel.openSignIn', "Open the sign-in page");
+				this._renderDisposables.add(addDisposableListener(open, 'click', (e: MouseEvent) => { e.preventDefault(); this.openerService.open(URI.parse(this._inlineSignInUrl!), { openExternal: true }); }));
+			}
+			return;
+		}
+
+		const buttons = append(card, $('div'));
+		buttons.style.cssText = 'display:flex;flex-direction:column;gap:9px';
+
+		// "Sign in with ChatGPT" - the user's own subscription (unlimited); starts the same loopback flow the
+		// settings screen uses, kept in place so the held prompt replays once the round-trip lands signed-in.
+		const signIn = append(buttons, $('button')) as HTMLButtonElement;
+		signIn.style.cssText = 'border:none;border-radius:10px;padding:11px 16px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1.3 system-ui;cursor:pointer;text-align:left';
+		signIn.textContent = localize('livingDocs.inlineModel.signIn', "Sign in with ChatGPT - use your own plan, no limit");
+		this._renderDisposables.add(addDisposableListener(signIn, 'click', () => void this._inlineSignIn(doc)));
+
+		// "Use the included model" - the free metered tier; selects it and replays the prompt immediately.
+		const included = append(buttons, $('button')) as HTMLButtonElement;
+		included.style.cssText = 'border:1px solid #d4d7dd;border-radius:10px;padding:11px 16px;background:#fff;color:#52575f;font:600 13px/1.3 system-ui;cursor:pointer;text-align:left';
+		included.textContent = localize('livingDocs.inlineModel.included', "Use the included model - free, a little each day");
+		this._renderDisposables.add(addDisposableListener(included, 'click', () => void this._livingDocs.chooseIncludedModelAndReplay(doc)));
+	}
+
+	// Begin the ChatGPT sign-in from the inline choice: fetch the authorize URL, open it externally, move to the
+	// pending state, and poll until the round-trip lands signed-in (then replay the held prompt) or resets. The
+	// poll re-reads the pending flag so a completion or dismissal never leaves a stale spinner.
+	private async _inlineSignIn(doc: URI): Promise<void> {
+		const url = await this._livingDocs.startSignInForChat();
+		if (!url) { return; }
+		this._inlineSignInUrl = url;
+		this.openerService.open(URI.parse(url), { openExternal: true });
+		this._render();
+		this._pollInlineSignIn(doc);
+	}
+
+	private _pollInlineSignIn(doc: URI): void {
+		this._inlineSignInPoll.value = disposableTimeout(async () => {
+			// The user dismissed or the prompt was replayed elsewhere: stop polling and drop the pending state.
+			if (!this._livingDocs.getPendingModelPrompt(doc)) { this._inlineSignInUrl = undefined; return; }
+			const { stage } = await this._livingDocs.pollChatGptSignIn();
+			if (stage === 'signed-in') {
+				this._inlineSignInUrl = undefined;
+				await this._livingDocs.completeSignInAndReplay(doc);
+				return;
+			}
+			if (stage === 'error') {
+				this._inlineSignInUrl = undefined;
+				this._render();
+				return;
+			}
+			this._pollInlineSignIn(doc);
+		}, 1200);
 	}
 
 	// Open an Abstract screen (e.g. Model Access) without leaking the transient editor input. `ScreenEditorInput`
@@ -874,8 +963,17 @@ export class ReviewRailView extends ViewPane {
 		const footer = append(content, $('div'));
 		footer.style.cssText = 'flex:none;border-top:1px solid #eef0f3;padding:10px 12px;background:#fbfbfc';
 
-		// The persistent, calm sign-in affordance (plan 38): one line above the composer while signed out.
-		this._renderSignInHint(footer);
+		// Plan 42 slice L2 (issue #198): when the user's first send hit an unconfigured backend, the typed prompt
+		// is held and the sign-in vs included-model choice renders INLINE here, right above the composer. The user
+		// turn is already visible in the transcript, so the prompt is preserved; picking a door replays it. While
+		// the choice is up we render it INSTEAD of the persistent sign-in hint (they would say the same thing).
+		const pendingPrompt = doc ? this._livingDocs.getPendingModelPrompt(doc) : undefined;
+		if (doc && pendingPrompt) {
+			this._renderInlineModelChoice(footer, doc);
+		} else {
+			// The persistent, calm sign-in affordance (plan 38): one line above the composer while signed out.
+			this._renderSignInHint(footer);
+		}
 
 		const box = append(footer, $('div'));
 		// Comp C6: border tinted accent (#d9d7fb), 13px radius, subtle lifted shadow.
