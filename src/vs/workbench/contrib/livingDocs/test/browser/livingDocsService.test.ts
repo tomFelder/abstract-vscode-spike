@@ -199,7 +199,11 @@ const PDF_TEXT = { readable: true, text: 'Board pack: revenue is up week on week
 const PDF_IMAGE_ONLY = { readable: false, text: '', pages: 4, reason: 'This PDF has no selectable text - it looks scanned or image-only.' };
 const PDF_FILE = URI.file('/ws/Board Pack.pdf');
 
-suite('LivingDocsService', () => {
+// The suite title starts with the grep-stable "livingDocs" token (matching the sibling suites'
+// "livingDocs <topic>" convention) so the standard gate `./scripts/test.sh --grep "livingDocs"`
+// catches it. Previously titled "LivingDocsService", it was silently skipped by that case-sensitive
+// grep, hiding a fan-out failure (issue #203). Keep any new livingDocs suite title lower-case "livingDocs".
+suite('livingDocs Service', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
@@ -1479,7 +1483,7 @@ suite('LivingDocsService', () => {
 			[WEEKLY.toString(), BOARD.toString(), README.toString()].sort(),
 			'the failed set is exactly the working set',
 		);
-		assert.ok(/The agent model is not reachable/.test(turn.content), 'the turn names the model as unreachable');
+		assert.ok(/The model was not available/.test(turn.content), 'the turn names the model as unreachable');
 		assert.ok(/Retry failed/.test(turn.content), 'the turn offers the surgical retry');
 		assert.ok(!/no changes|nothing to change|did not find anything/i.test(turn.content), 'never a silent all-clear');
 		assert.strictEqual(service.getAllPending().length, 0, 'nothing is proposed when the model was down');
