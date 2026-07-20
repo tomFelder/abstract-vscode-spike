@@ -205,3 +205,7 @@ against.
 | #131 | P1 | xlsx → CSV sources + PDF as read-only context (doc 22 §4) |
 | #132 | P2 | Folder conventions + the Tidy verb (doc 22 §5; depends on #125) |
 | #133 | P2 | Real-folder hardening probes (the §6 predictions) |
+
+## Amendments
+
+Entry re-sequenced by plan 42 on 20 Jul 2026: the walkthrough is demoted to an optional Home card, model access is deferred to first AI use, plain markdown is the entry default with living earned at first source bind, and the review rail starts quiet. See [docs/plans/42-light-path-loop.md](plans/42-light-path-loop.md) and the run tracker #196.

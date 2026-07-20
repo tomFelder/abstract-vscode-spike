@@ -630,3 +630,7 @@ The sample approve (step 5) exercises the 1e persistence contract on seeded data
 - [ ] The onboarding survey (daily-driver model, owned subscriptions, weekly output) is captured to `model_configured`.
 - [ ] Onboarding hands off to "bring a real folder" (1a); the own-file aha (T4) is reachable within 10 minutes.
 - [ ] Each `onboarding_step` fires so every drop-off is visible (T5).
+
+## Amendments
+
+Entry re-sequenced by plan 42 on 20 Jul 2026: the walkthrough is demoted to an optional Home card, model access is deferred to first AI use, plain markdown is the entry default with living earned at first source bind, and the review rail starts quiet. See [docs/plans/42-light-path-loop.md](plans/42-light-path-loop.md) and the run tracker #196.
