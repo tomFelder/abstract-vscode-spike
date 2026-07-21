@@ -1,0 +1,138 @@
+{
+	"results": {
+		"1440x900": {
+			"hasOverride": true,
+			"surfaces": {
+				"Home": {
+					"shot": "home-1440x900.png"
+				},
+				"Editor": {
+					"shot": "editor-1440x900.png"
+				},
+				"Templates": {
+					"shot": "templates-1440x900.png"
+				},
+				"Knowledge": {
+					"shot": "knowledge-1440x900.png"
+				},
+				"Agents": {
+					"shot": "agents-1440x900.png"
+				}
+			}
+		},
+		"1760x1000": {
+			"hasOverride": true,
+			"surfaces": {
+				"Home": {
+					"shot": "home-1760x1000.png"
+				},
+				"Editor": {
+					"shot": "editor-1760x1000.png"
+				},
+				"Templates": {
+					"shot": "templates-1760x1000.png"
+				},
+				"Knowledge": {
+					"shot": "knowledge-1760x1000.png"
+				},
+				"Agents": {
+					"shot": "agents-1760x1000.png"
+				}
+			}
+		}
+	},
+	"measure": {
+		"navContainer": {
+			"width": 76,
+			"background": "rgba(0, 0, 0, 0)",
+			"borderRight": "0px none rgba(0, 0, 0, 0)"
+		},
+		"items": {
+			"Home": {
+				"chipWidth": 60,
+				"chipHeight": 45,
+				"background": "rgba(0, 0, 0, 0)",
+				"color": "rgb(134, 139, 149)",
+				"borderRadius": "10px",
+				"boxShadow": "none",
+				"paddingTop": "8px",
+				"paddingBottom": "6px",
+				"gap": "3px",
+				"active": false,
+				"top": 50,
+				"glyphFontSize": "18px",
+				"labelFontSize": "10px",
+				"labelFontWeight": "500"
+			},
+			"Editor": {
+				"chipWidth": 60,
+				"chipHeight": 45,
+				"background": "rgb(255, 255, 255)",
+				"color": "rgb(70, 80, 184)",
+				"borderRadius": "10px",
+				"boxShadow": "rgba(20, 22, 28, 0.05) 0px 1px 2px 0px",
+				"paddingTop": "8px",
+				"paddingBottom": "6px",
+				"gap": "3px",
+				"active": true,
+				"top": 95,
+				"glyphFontSize": "18px",
+				"labelFontSize": "10px",
+				"labelFontWeight": "600"
+			},
+			"Templates": {
+				"chipWidth": 60,
+				"chipHeight": 45,
+				"background": "rgba(0, 0, 0, 0)",
+				"color": "rgb(134, 139, 149)",
+				"borderRadius": "10px",
+				"boxShadow": "none",
+				"paddingTop": "8px",
+				"paddingBottom": "6px",
+				"gap": "3px",
+				"active": false,
+				"top": 140,
+				"glyphFontSize": "18px",
+				"labelFontSize": "10px",
+				"labelFontWeight": "500"
+			},
+			"Knowledge": {
+				"chipWidth": 60,
+				"chipHeight": 45,
+				"background": "rgba(0, 0, 0, 0)",
+				"color": "rgb(134, 139, 149)",
+				"borderRadius": "10px",
+				"boxShadow": "none",
+				"paddingTop": "8px",
+				"paddingBottom": "6px",
+				"gap": "3px",
+				"active": false,
+				"top": 185,
+				"glyphFontSize": "18px",
+				"labelFontSize": "10px",
+				"labelFontWeight": "500"
+			},
+			"Agents": {
+				"chipWidth": 60,
+				"chipHeight": 45,
+				"background": "rgba(0, 0, 0, 0)",
+				"color": "rgb(134, 139, 149)",
+				"borderRadius": "10px",
+				"boxShadow": "none",
+				"paddingTop": "8px",
+				"paddingBottom": "6px",
+				"gap": "3px",
+				"active": false,
+				"top": 230,
+				"glyphFontSize": "18px",
+				"labelFontSize": "10px",
+				"labelFontWeight": "500"
+			},
+			"Settings": {
+				"missing": true
+			}
+		},
+		"settingsIsLowest": false,
+		"homeHoverColor": "rgb(82, 87, 95)"
+	}
+}
