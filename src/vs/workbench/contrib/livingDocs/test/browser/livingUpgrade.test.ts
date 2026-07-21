@@ -15,25 +15,22 @@ suite('livingDocs earned-upgrade rule (plan 42 L3)', () => {
 		hasFrontmatterSources: false,
 		hasFrontmatterContext: false,
 		hasBindLinks: false,
-		hasSiblingLock: false,
 		...over,
 	});
 
 	test('a plain doc has NOT earned living; each upgrade trigger earns it', () => {
 		// One snapshot over the whole truth table: plain Markdown stays plain, and any single trigger --
-		// a bound source, bound context, an inline bind link, or a sibling lock -- earns living status.
+		// a bound source, bound context, or an inline bind link -- earns living status.
 		assert.deepStrictEqual({
 			plain: docHasEarnedLiving(facts()),
 			frontmatterSources: docHasEarnedLiving(facts({ hasFrontmatterSources: true })),
 			frontmatterContext: docHasEarnedLiving(facts({ hasFrontmatterContext: true })),
 			bindLinks: docHasEarnedLiving(facts({ hasBindLinks: true })),
-			siblingLock: docHasEarnedLiving(facts({ hasSiblingLock: true })),
 		}, {
 			plain: false,
 			frontmatterSources: true,
 			frontmatterContext: true,
 			bindLinks: true,
-			siblingLock: true,
 		});
 	});
 
