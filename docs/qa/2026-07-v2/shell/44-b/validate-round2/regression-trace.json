@@ -1,0 +1,124 @@
+{
+  "navSample": [
+    {
+      "t": "",
+      "title": "Go Back (⌃-)"
+    },
+    {
+      "t": "",
+      "title": "Go Forward (⌃⇧-)"
+    },
+    {
+      "t": "/ [Test Files] - Abstract",
+      "title": ""
+    },
+    {
+      "t": "/ [Test Files] - Abstract",
+      "title": ""
+    },
+    {
+      "t": "",
+      "title": "Workspace"
+    },
+    {
+      "t": "",
+      "title": "Home"
+    },
+    {
+      "t": "",
+      "title": "Editor"
+    },
+    {
+      "t": "",
+      "title": "Templates"
+    },
+    {
+      "t": "",
+      "title": "Knowledge"
+    },
+    {
+      "t": "",
+      "title": "Agents"
+    },
+    {
+      "t": "",
+      "title": "Accounts"
+    },
+    {
+      "t": "",
+      "title": "Manage"
+    },
+    {
+      "t": "",
+      "title": "Maximize Panel"
+    },
+    {
+      "t": "",
+      "title": "Hide Panel"
+    },
+    {
+      "t": "",
+      "title": "Maximize Secondary Side Bar"
+    }
+  ],
+  "surfaces": {
+    "Editor_initial": {
+      "headerCount": 2,
+      "height": 48,
+      "top": 0,
+      "width": 1440,
+      "bg": "rgb(237, 239, 243)",
+      "inbodyTopbars": 0
+    },
+    "Home": {
+      "clicked": true,
+      "header": {
+        "headerCount": 2,
+        "height": 48,
+        "top": 0,
+        "width": 1440,
+        "bg": "rgb(237, 239, 243)",
+        "inbodyTopbars": 0
+      }
+    },
+    "Templates": {
+      "clicked": true,
+      "header": {
+        "headerCount": 2,
+        "height": 48,
+        "top": 0,
+        "width": 1440,
+        "bg": "rgb(237, 239, 243)",
+        "inbodyTopbars": 0
+      }
+    },
+    "Knowledge": {
+      "clicked": true,
+      "header": {
+        "headerCount": 2,
+        "height": 48,
+        "top": 0,
+        "width": 1440,
+        "bg": "rgb(237, 239, 243)",
+        "inbodyTopbars": 0
+      }
+    },
+    "Agents": {
+      "clicked": true,
+      "header": {
+        "headerCount": 2,
+        "height": 48,
+        "top": 0,
+        "width": 1440,
+        "bg": "rgb(237, 239, 243)",
+        "inbodyTopbars": 0
+      }
+    }
+  },
+  "groupsBeforeSplit": 1,
+  "groupsAfterBackslash": 1,
+  "treeBeforeB": 0,
+  "treeAfterB": 264,
+  "treeAfterB2": 0,
+  "pageErrors": []
+}
