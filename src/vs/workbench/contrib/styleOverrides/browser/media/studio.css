@@ -50,13 +50,18 @@
 	display: none !important;
 }
 
-/* The comp's icon-nav (Part C1): a 76px rail (allocated by the core ACTIVITYBAR_WIDTH patch) on the
- * `panel` bg (#F6F7F9), with 60px-wide items, an 18px stroke glyph above a 10px label. The container
- * name is on each action-label's aria-label, so render the label via ::after. (decision log 29, G3
- * icon-nav; Part B tokens re-pinned in plan 25 iter 1.) */
+/* The comp's icon-nav (Part C1 / plan 44 pin 3): a 76px rail (allocated by the core ACTIVITYBAR_WIDTH
+ * patch) that in v2 loses its panel background - the items sit directly on the #EDEFF3 chrome (P3.1).
+ * Items are 60px wide with an 18px stroke glyph above a 10px label. The container name is on each
+ * action-label's aria-label, so render the label via ::after. (decision log 29, G3 icon-nav; Part B
+ * tokens re-pinned in plan 25 iter 1; v2 nav-on-chrome, plan 44 pin 3.)
+ *
+ * The part paints its own inline background in updateStyles() from the activityBar.* theme colours;
+ * override to `transparent` so the workbench chrome (#EDEFF3, elevation.css) shows through, and drop
+ * the border-right so the nav column reads as bare chrome, not a bordered panel. */
 .style-override .part.activitybar {
-	background-color: #F6F7F9 !important;
-	border-right: 1px solid #E9EAEE;
+	background-color: transparent !important;
+	border-right: none;
 }
 .style-override .part.activitybar .monaco-action-bar .action-item.icon {
 	height: auto !important;
@@ -66,12 +71,15 @@
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
-	gap: 5px;
+	gap: 3px;
 	width: 60px !important;
 	height: auto !important;
 	margin: 0 auto;
-	padding: 9px 0 7px;
-	border-radius: 10px;
+	padding: 8px 0 6px;
+	/* radius 10 (plan 44 pin 3 P3.2/P3.3). `!important` beats the controls-tier 4px that
+	 * `roundedCorners.css` pins on every `.monaco-action-bar .action-label` - the nav chip is a
+	 * 10px card, not a 4px control. */
+	border-radius: 10px !important;
 }
 /* Inactive glyph = `muted` #868B95 (comp C1). The colour is set inline by the composite bar and
  * `activityBar.css` also paints inactive items `--vscode-descriptionForeground` (#606060) via an
@@ -80,6 +88,12 @@
  * polish: close the inactive-glyph colour gap #606060 -> #868B95.) */
 .style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon .action-label.action-label.codicon {
 	color: #868B95 !important;
+}
+/* Idle hover = `slate` #52575F (comp C1 / mock `style-hover`, plan 44 pin 3 P3.3). Matches the idle
+ * rule's specificity (0,10,0) and lands later in the cascade, plus `!important` to win over the inline
+ * composite-bar colour. Excludes the active chip so hovering it keeps the #4650B8 accent. */
+.style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon:not(.lwd-nav-active):hover .action-label.action-label.codicon {
+	color: #52575F !important;
 }
 /* A 1px hairline after Editor, separating the document group (Home . Editor) from the collections
  * group (Templates . Knowledge . Agents), per the comp's icon-nav: a 34px x 1px `#E4E6EA` rule with
@@ -108,7 +122,6 @@
 .style-override .part.activitybar .action-label.codicon::after {
 	content: attr(aria-label);
 	font: 500 10px/1 system-ui;
-	letter-spacing: .005em;
 }
 
 /* Active nav item = a WHITE chip behind the item, an `accent-hover` (#4650B8) glyph + label, and e1
@@ -121,12 +134,11 @@
  * high-specificity `!important` foreground rule, so the chip's accent glyph needs a selector at least
  * as specific as the theme's: scope under `.monaco-workbench` and double the label class. */
 .style-override.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon {
-	background: #FFFFFF;
+	background: var(--abstract-paper-bg, #FFFFFF);
 	color: #4650B8 !important;
-	box-shadow: 0 1px 2px rgba(20, 22, 28, .05);
-	border: 1px solid #E7E9EF;
-	/* Keep the chip the same size as an inactive item despite the 1px border. */
-	padding: 8px 0 6px;
+	/* e1 (plan 20 Part B / plan 43 section 1): the base card lift. The chip carries no border in v2 -
+	 * it floats on the chrome as a bare white 60px chip (plan 44 pin 3 / mock icon-nav, P3.2). */
+	box-shadow: var(--abstract-shadow-e1, 0 1px 2px rgba(20, 22, 28, .05));
 }
 .style-override.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon::after {
 	font-weight: 600;

@@ -1,0 +1,170 @@
+{
+  "measurements": {
+    "container": {
+      "rect": {
+        "w": 76,
+        "h": 852,
+        "top": 48,
+        "left": 6
+      },
+      "background-color": "rgba(0, 0, 0, 0)",
+      "border-right-width": "0px",
+      "border-right-style": "none",
+      "width": "76px"
+    },
+    "chrome": {
+      "workbenchBg": "rgb(237, 239, 243)"
+    },
+    "activeChip": {
+      "rect": {
+        "w": 60,
+        "h": 45,
+        "top": 95,
+        "left": 22
+      },
+      "background-color": "rgb(255, 255, 255)",
+      "color": "rgb(70, 80, 184)",
+      "border-top-left-radius": "10px",
+      "box-shadow": "rgba(20, 22, 28, 0.05) 0px 1px 2px 0px",
+      "border-top-width": "0px",
+      "width": "60px",
+      "height": "45px"
+    },
+    "activeLabelAfter": {
+      "fontWeight": "600",
+      "fontSize": "10px",
+      "lineHeight": "10px",
+      "content": "\"Editor\""
+    },
+    "activeGlyph": {
+      "glyphFontSize": "18px"
+    },
+    "idleItem": {
+      "color": "rgb(134, 139, 149)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "labelWeight": "500",
+      "labelSize": "10px",
+      "glyphSize": "18px"
+    },
+    "bottomItems": [
+      {
+        "aria": "Workspace",
+        "top": 0,
+        "codicon": "codicon-living-docs-workspace"
+      },
+      {
+        "aria": "Home",
+        "top": 50,
+        "codicon": "codicon-living-docs-home"
+      },
+      {
+        "aria": "Editor",
+        "top": 95,
+        "codicon": "codicon-living-docs-editor"
+      },
+      {
+        "aria": "Templates",
+        "top": 140,
+        "codicon": "codicon-living-docs-templates"
+      },
+      {
+        "aria": "Knowledge",
+        "top": 185,
+        "codicon": "codicon-living-docs-knowledge"
+      },
+      {
+        "aria": "Agents",
+        "top": 230,
+        "codicon": "codicon-living-docs-agents"
+      },
+      {
+        "aria": "Accounts",
+        "top": 816,
+        "codicon": "codicon-accounts-view-bar-icon"
+      },
+      {
+        "aria": "Manage",
+        "top": 849,
+        "codicon": "codicon-settings-view-bar-icon"
+      }
+    ],
+    "hoverHome": {
+      "colorOnHover": "rgb(82, 87, 95)"
+    }
+  },
+  "navigation": {
+    "round1": [
+      {
+        "clicked": "Home",
+        "activeChip": "Home",
+        "breadcrumb": "A Living Docs Sample / Home All sources synced ＋ Open Folder TS",
+        "newErrors": []
+      },
+      {
+        "clicked": "Editor",
+        "activeChip": "Editor",
+        "breadcrumb": "A Living Docs Sample / Home All sources synced ＋ Open Folder TS",
+        "newErrors": []
+      },
+      {
+        "clicked": "Templates",
+        "activeChip": "Templates",
+        "breadcrumb": "A Living Docs Sample / Templates ＋ New Template TS",
+        "newErrors": []
+      },
+      {
+        "clicked": "Knowledge",
+        "activeChip": "Knowledge",
+        "breadcrumb": "A Living Docs Sample / Knowledge All sources synced ＋ Add Source TS",
+        "newErrors": []
+      },
+      {
+        "clicked": "Agents",
+        "activeChip": "Agents",
+        "breadcrumb": "A Living Docs Sample / Agents 5 agents active TS",
+        "newErrors": []
+      }
+    ],
+    "round2": [
+      {
+        "clicked": "Home",
+        "activeChip": "Home",
+        "breadcrumb": "A Living Docs Sample / Home All sources synced ＋ Open Folder TS",
+        "newErrors": []
+      },
+      {
+        "clicked": "Editor",
+        "activeChip": "Editor",
+        "breadcrumb": "A Living Docs Sample / Home All sources synced ＋ Open Folder TS",
+        "newErrors": []
+      },
+      {
+        "clicked": "Templates",
+        "activeChip": "Templates",
+        "breadcrumb": "A Living Docs Sample / Templates ＋ New Template TS",
+        "newErrors": []
+      },
+      {
+        "clicked": "Knowledge",
+        "activeChip": "Knowledge",
+        "breadcrumb": "A Living Docs Sample / Knowledge All sources synced ＋ Add Source TS",
+        "newErrors": []
+      },
+      {
+        "clicked": "Agents",
+        "activeChip": "Agents",
+        "breadcrumb": "A Living Docs Sample / Agents 5 agents active TS",
+        "newErrors": []
+      }
+    ],
+    "totalErrorsAfterNav": 6
+  },
+  "consoleErrors": {
+    "all": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "%c  ERR color: #f33 Cannot read properties of undefined (reading 'extensionId'): TypeError: Cannot read properties of undefined (reading 'extensionId')",
+      "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "%c  ERR color: #f33 Cannot read properties of undefined (reading 'id'): TypeError: Cannot read properties of undefined (reading 'id')"
+    ]
+  }
+}
