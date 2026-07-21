@@ -348,13 +348,10 @@ export function parseLivingDoc(text: string): ILivingDoc {
 	const hasBinds = blocks.some(b => b.binds.length > 0);
 	// "Living is earned" (plan 42 L3): a `.md` earns living status only once a source is bound -- frontmatter
 	// `sources:`/`context:`, or an inline bind link. Plain Markdown (a doc the user merely wrote) stays plain.
-	// The sibling-lock trigger (an accepted agent edit) is a service-only signal the parser cannot see, so it
-	// is not a factor here; the shared predicate keeps the parse rule and the service rule stated in one place.
 	const isLiving = docHasEarnedLiving({
 		hasFrontmatterSources: fm.sources.length > 0,
 		hasFrontmatterContext: fm.context.length > 0,
 		hasBindLinks: hasBinds,
-		hasSiblingLock: false,
 	});
 
 	let title = fm.title;
