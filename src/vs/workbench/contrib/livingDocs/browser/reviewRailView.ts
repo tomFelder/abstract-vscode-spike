@@ -25,6 +25,7 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelReadiness } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
@@ -510,8 +511,19 @@ export class ReviewRailView extends ViewPane {
 				const framing = reviewFraming(change, change.sourceCells.join(', '));
 
 				const top = append(card, $('div.ldr-card-top'));
-				const name = append(top, $('span.ldr-card-name'));
+				const nameWrap = append(top, $('span.ldr-card-name-wrap'));
+				const name = append(nameWrap, $('span.ldr-card-name'));
 				name.textContent = change.blockLabel;
+				// Cite the same gutter address the inline widget cites (spec 43 section 3.1 / pin 11): resolve the
+				// change's durable block id to its current display line against the live doc and render the shared
+				// "Line N" string in the same mono/accent treatment. Recomputed display-time; omitted (like the
+				// inline widget) when the doc is not loaded or the block is gone.
+				const changeDoc = this._livingDocs.getDoc(URI.parse(change.docId));
+				const addressLine = changeDoc ? resolveBlockLine(changeDoc, change.blockId) : undefined;
+				if (typeof addressLine === 'number') {
+					const addr = append(nameWrap, $('span.ldr-card-addr'));
+					addr.textContent = addressLabel(addressLine);
+				}
 				const tag = append(top, $(framing.kindAttention ? 'span.ldr-tag.attn' : 'span.ldr-tag.ok'));
 				tag.textContent = framing.kindLabel;
 
@@ -1269,7 +1281,9 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldr-group-btn.approve:hover{background:oklch(0.5 0.13 255)}
 		.living-docs-panel .ldr-card{border:1px solid #eceef2;border-radius:10px;padding:13px;margin-bottom:12px;background:#fff}
 		.living-docs-panel .ldr-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+		.living-docs-panel .ldr-card-name-wrap{display:inline-flex;align-items:baseline;gap:8px;min-width:0}
 		.living-docs-panel .ldr-card-name{font:600 12.5px/1 system-ui;color:#1a1c20}
+		.living-docs-panel .ldr-card-addr{font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;color:oklch(0.55 0.13 255);flex:none}
 		.living-docs-panel .ldr-tag{font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;border-radius:999px;padding:4px 7px}
 		.living-docs-panel .ldr-tag.attn{color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4}
 		.living-docs-panel .ldr-tag.ok{color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc}
