@@ -36,11 +36,11 @@
 		"tab.activeBackground": "#ffffff",
 		"tab.inactiveBackground": "#fbfbfc",
 
-		"sideBar.background": "#fbfbfc",
+		"sideBar.background": "#fbfcfd",
 		"sideBar.foreground": "#1a1c20",
 		"sideBar.border": "#e9eaee",
 		"sideBarTitle.foreground": "#52575f",
-		"sideBarSectionHeader.background": "#fbfbfc",
+		"sideBarSectionHeader.background": "#fbfcfd",
 		"sideBarSectionHeader.foreground": "#52575f",
 		"sideBarSectionHeader.border": "#e9eaee",
 

@@ -1,0 +1,124 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * Style-override module: "Elevation" (Abstract Editor v2, plan 44 pin 1).
+ *
+ * The v2 read is "the white paper floats above the tool": a darker chrome window
+ * background with the three work panels rendered as floating cards. The workbench
+ * already ships an experimental **floating panels** feature (core
+ * `browser/media/floatingPanels.css` + `AbstractPaneCompositePart`) that renders
+ * the side bar, auxiliary bar and editor as cards with a real margin, border and
+ * radius - and, crucially, reduces each part's *content* dimensions in code so the
+ * inner layout stays in sync (no clipping). That feature is on whenever
+ * `workbench.experimental.modernUI` is set, which is exactly when `.style-override`
+ * is applied. So the elevation model rides on that mechanism instead of
+ * re-implementing the card layout: this module re-skins the existing floating
+ * cards to the v2 spec and paints the chrome backdrop behind them. No core seam is
+ * needed - the gaps (6px inter-card margins doubled to 12px on window edges via
+ * the `floating-*-outer-*` classes toggled in core) already match the spec's 12px
+ * gaps + 12px frame insets; we only change colours, radius and the shadows.
+ *
+ * The new v2 tokens (plan 43 section 1) are declared once here as CSS custom properties
+ * so the rules below (and later v2 lanes) read from a single source of truth.
+ *
+ *   - chrome        #EDEFF3 (window/frame bg the cards float on)
+ *   - card-border   #E9EAEE (floating panel borders)
+ *   - rail bg       #FBFCFD (tree rail + right rail)
+ *   - paper bg      #FFFFFF (editor card)
+ *   - shadow-rail   0 8px 28px -14px rgba(20,22,28,.22)  (+ e1)
+ *   - shadow-editor 0 12px 36px -16px rgba(20,22,28,.26) (+ e1)
+ *   - tabwell       #F3F4F7 (product tab-strip bg, consumed by plan 45)
+ *   - gutter-idle   #C6CAD2 (idle line numbers, consumed by plan 45)
+ *
+ * All rules are gated behind the `.style-override` class, which the
+ * StyleOverridesContribution toggles onto the workbench container(s) when the
+ * `workbench.experimental.modernUI` (Modern UI Update) setting is enabled.
+ * Without that class these rules never apply.
+ */
+
+.style-override {
+	/* Plan 43 section 1 - the v2 elevation tokens. */
+	--abstract-chrome: #EDEFF3;
+	--abstract-chrome-border: #DDE0E7;
+	--abstract-tabwell: #F3F4F7;
+	--abstract-gutter-idle: #C6CAD2;
+	--abstract-card-border: #E9EAEE;
+	--abstract-rail-bg: #FBFCFD;
+	--abstract-paper-bg: #FFFFFF;
+	/* e1 (plan 20 Part B): the base card lift, layered under every card shadow. */
+	--abstract-shadow-e1: 0 1px 2px rgba(20, 22, 28, .05);
+	--abstract-shadow-rail: 0 8px 28px -14px rgba(20, 22, 28, .22);
+	--abstract-shadow-editor: 0 12px 36px -16px rgba(20, 22, 28, .26);
+	/* The v2 card corner radius (the floating cards; wins over the 8px large tier). */
+	--abstract-card-radius: 14px;
+}
+
+/* =============================================================================
+ * Chrome - the darker window background the cards float on (plan 44 P1.1).
+ * The workbench root paints #EDEFF3 so it reads on every surface. The floating
+ * grid backdrop is set to the editor background (white) by core
+ * floatingPanels.css; repaint it to the chrome so the gaps + frame inset around
+ * every card read as the darker frame, not white.
+ * ========================================================================== */
+.style-override.monaco-workbench {
+	background-color: var(--abstract-chrome);
+}
+
+.style-override.monaco-workbench.floating-panels > .monaco-grid-view {
+	background-color: var(--abstract-chrome);
+}
+
+/* =============================================================================
+ * The three floating cards (plan 44 P1.3 / P1.4).
+ * Re-skin the core floating cards: radius 14, border #E9EAEE, per-part bg and
+ * shadow. `!important` on border/bg mirrors floatingPanels.css, which sets those
+ * with `!important` (we must match to win); radius is raised over the 8px large
+ * tier the core feature uses.
+ * ========================================================================== */
+
+/* Shared card treatment: radius + border for all three work cards. */
+.style-override.monaco-workbench.floating-panels .part.sidebar,
+.style-override.monaco-workbench.floating-panels .part.auxiliarybar,
+.style-override.monaco-workbench.floating-panels > .monaco-grid-view .part.editor:not(.modal-editor-part) {
+	border: 1px solid var(--abstract-card-border) !important;
+	border-radius: var(--abstract-card-radius) !important;
+}
+
+/* --- Tree rail (side bar) + right rail (auxiliary bar): #FBFCFD, shadow-rail + e1. */
+.style-override.monaco-workbench.floating-panels .part.sidebar,
+.style-override.monaco-workbench.floating-panels .part.auxiliarybar {
+	background-color: var(--abstract-rail-bg) !important;
+	box-shadow: var(--abstract-shadow-rail), var(--abstract-shadow-e1);
+}
+
+/* --- Editor (the paper): #FFFFFF, shadow-editor + e1 (top of the stack). ----
+ * The editor part is transparent (its webview / Monaco paints the surface); pin
+ * the card bg to white so the paper is opaque even before content mounts, and
+ * layer the deeper editor shadow so the paper reads as the top of the stack. */
+.style-override.monaco-workbench.floating-panels > .monaco-grid-view .part.editor:not(.modal-editor-part) {
+	background-color: var(--abstract-paper-bg) !important;
+	box-shadow: var(--abstract-shadow-editor), var(--abstract-shadow-e1);
+}
+
+/* The editor part paints a leading-edge separator shadow (via its `::after`
+ * overlay) to set itself off from the side bar. With the card shadow above that
+ * overlay is redundant and would smudge the gap, so suppress it (mirrors
+ * editorBorder.css handling of the same overlay). */
+.style-override.monaco-workbench .part.editor:not(.modal-editor-part)::after {
+	box-shadow: none;
+}
+
+/* =============================================================================
+ * Keep the paper opaque white under the document (plan 44 P1.5).
+ * The Monaco editor background must never be transparent - the chrome must not
+ * bleed through the paper. (Living-doc surfaces render a webview whose own body
+ * is white; this pins the Monaco case for any text editor opened on the paper.)
+ * ========================================================================== */
+.style-override.monaco-workbench .part.editor .monaco-editor,
+.style-override.monaco-workbench .part.editor .monaco-editor-background,
+.style-override.monaco-workbench .part.editor .monaco-editor .margin {
+	background-color: var(--abstract-paper-bg) !important;
+}

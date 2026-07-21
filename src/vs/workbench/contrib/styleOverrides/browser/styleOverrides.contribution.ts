@@ -16,6 +16,7 @@ import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js'
 import './media/activityBar.css';
 import './media/commandCenter.css';
 import './media/editorBorder.css';
+import './media/elevation.css';
 import './media/fontRamp.css';
 import './media/keyboardFocusOnly.css';
 import './media/padding.css';
@@ -57,6 +58,7 @@ const STYLE_OVERRIDE_MODULES: readonly IStyleOverrideModule[] = [
 	{ id: 'activityBar' },
 	{ id: 'commandCenter' },
 	{ id: 'editorBorder' },
+	{ id: 'elevation' },
 	{ id: 'fontRamp' },
 	{ id: 'keyboardFocusOnly' },
 	{ id: 'padding' },
