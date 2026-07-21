@@ -4,19 +4,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 // The shared surface for the "main-area" Abstract screens (Home, Templates, Knowledge, Agents and the
-// misc surfaces): the webview page/head/script scaffolding, the global top bar, the escape/format helpers,
-// the shared card/pill/sheet builders, and `renderScreenHtml` -- the dispatcher that routes a ScreenId to
-// its per-screen module. Each screen lives in its own `screenRender<Name>.ts` module (Home, Templates,
+// misc surfaces): the webview page/head/script scaffolding, the escape/format helpers, the shared
+// card/pill/sheet builders, and `renderScreenHtml` -- the dispatcher that routes a ScreenId to its
+// per-screen module. Each screen lives in its own `screenRender<Name>.ts` module (Home, Templates,
 // Knowledge, Agents, Misc) so parallel work lanes never collide in one file; the pieces used by more than
-// one screen live here. These are our own surfaces (no core patch): the HTML is ported from the locked
-// design comp, with the comp's non-ASCII glyphs written as HTML entities to satisfy the source-hygiene rule.
+// one screen live here. The brand/crumb top bar the screens used to draw is gone (plan 44-b): the one
+// global Abstract header (the repurposed title bar) carries it. These are our own surfaces (no core
+// patch): the HTML is ported from the locked design comp, with the comp's non-ASCII glyphs written as
+// HTML entities to satisfy the source-hygiene rule.
 
 import { IAgentDef, IAgentRun, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary } from '../common/livingDocsModel.js';
-import { localize } from '../../../../nls.js';
 import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAnswer, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
 import { IAwayFeed } from '../common/projectHomeFeed.js';
 import { OnboardingStep } from '../common/onboarding.js';
-import { projectHasLivingSurface } from '../common/livingUpgrade.js';
 import { renderHome } from './screenRenderHome.js';
 import { renderTemplates } from './screenRenderTemplates.js';
 import { renderKnowledge } from './screenRenderKnowledge.js';
@@ -367,9 +367,10 @@ const HEAD = `<meta charset="utf-8"><meta name="viewport" content="width=device-
 <style>
 *{box-sizing:border-box}
 /* Reset the webview harness's body padding (0 20px, injected by src/vs/workbench/contrib/webview/browser/pre/index.html)
- * along with its margin, for the same edge-to-edge reason as the doc editor (issue #175). The screen's .topbar
- * runs full width with a #fbfbfc background + hairline border and must reach both rails; the cards inside .scr-body
- * float on the #f8f9fb canvas with their own internal padding, so zeroing the harness inset does not crowd them. */
+ * along with its margin, for the same edge-to-edge reason as the doc editor (issue #175). The screen surface runs
+ * full width; the cards inside .scr-body float on the #f8f9fb canvas with their own internal padding, so zeroing the
+ * harness inset does not crowd them. The 48px brand/crumb top bar the screens used to draw is gone (plan 44-b): the
+ * one global Abstract header (the repurposed title bar) now carries it. */
 html,body{margin:0;padding:0;height:100%}
 body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;background:#fff}
 ::selection{background:rgba(80,110,235,.18)}
@@ -394,16 +395,6 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 .sheet-input:focus{border-color:${ACCENT};box-shadow:0 0 0 3px rgba(80,110,235,.14)}
 .sheet-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:#fff;border:1px solid #ececf0;border-radius:10px;padding:11px 13px;cursor:pointer;margin-top:8px}
 .sheet-row:hover{background:#f7f8fb;border-color:#dfe1e7}
-.topbar{flex:none;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc}
-.brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
-.logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
-.sep{color:#c8cbd2}
-.crumb{color:#868b95;font-weight:400}
-.right{display:flex;align-items:center;gap:8px}
-.pill{display:flex;align-items:center;gap:7px;font:500 12px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px}
-.pill .dot{width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)}
-.tb-present{border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer;display:flex;align-items:center;gap:6px}
-.av{flex:none;width:27px;height:27px;border-radius:50%;background:${ACCENT};color:#fff;font:600 11px/27px system-ui;text-align:center}
 </style>`;
 
 // Generic message bridge: any element with data-msg posts {type:<msg>, arg:<data-arg>} to the host.
@@ -471,6 +462,13 @@ for (const el of document.querySelectorAll('[data-pick]')) {
 for (const el of document.querySelectorAll('[data-sheet-open]')) {
 	el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); lwdOpen(el.getAttribute('data-sheet-open'), el.getAttribute('data-arg'), el.getAttribute('data-name')); });
 }
+// (plan 44-b) The global Abstract header (native DOM, outside this webview) drives the surface action
+// button - "+ Add Source" on Knowledge opens the same sheet the in-body button opens. The host posts
+// { type:'openSheet', sheet:<id> } and we open it here, so the header and the body share one sheet path.
+window.addEventListener('message', (e) => {
+	const m = e.data;
+	if (m && m.type === 'openSheet' && m.sheet) { lwdOpen(m.sheet); }
+});
 for (const el of document.querySelectorAll('[data-sheet-close]')) {
 	el.addEventListener('click', () => lwdClose(el.getAttribute('data-sheet-close')));
 }
@@ -567,44 +565,18 @@ function page(body: string): string {
 	return `<!DOCTYPE html><html><head>${HEAD}</head><body>${body}<script>${SCRIPT}</script></body></html>`;
 }
 
-// The comp's global top bar, shown on every main-area screen (the doc editor renders its own variant
-// in livingDocRender). Brand + per-screen crumb on the left; sync-status pill, Present (posts the
-// same `present` message the host already handles), and the user avatar on the right.
-//
-// The "All sources synced" pill is entry-path source vocabulary (plan 42 L3 copy audit): it may only claim
-// source-sync state once the project actually has a living surface (a bound source / a living document).
-// A fresh folder of plain Markdown has no sources to be "synced", so the pill is omitted rather than
-// fabricated, keeping the shell truthful before the user has bound anything or met an agent.
-function topBar(crumb: string, showSyncPill: boolean): string {
-	const syncPill = showSyncPill
-		? `<span class="pill"><span class="dot"></span>${esc(localize("livingDocs.topbar.allSynced", "All sources synced"))}</span>`
-		: '';
-	return `<div class="topbar"><div class="brand"><span class="logo">A</span>Abstract<span class="sep">/</span><span class="crumb">${esc(crumb)}</span></div>`
-		+ `<div class="right">${syncPill}`
-		+ `<button class="tb-present" data-msg="present">&#8599; Present</button>`
-		+ `<span class="av">TS</span></div></div>`;
-}
-
-// Insert the top bar as the first flex child of the screen column (each renderer opens with .screen).
-function withTopBar(html: string, crumb: string, showSyncPill: boolean): string {
-	return html.replace('<div class="screen">', `<div class="screen">${topBar(crumb, showSyncPill)}`);
-}
-
+// The screens no longer draw their own brand/crumb top bar (plan 44-b): the one global Abstract header
+// (the repurposed title bar) carries the breadcrumb, the sync pill and the surface action for every
+// surface. The ScreenEditor publishes each screen's header content (breadcrumb + pill + "+ Open Folder" /
+// "+ New Template" / "+ Add Source") to IAbstractHeaderService; here we render only the screen body.
 export function renderScreenHtml(screen: ScreenId, state: IScreenState): string {
-	// The "All sources synced" pill only tells the truth once the project has a living surface -- a bound
-	// source in the registry or at least one living document. A fresh folder of plain Markdown has nothing
-	// to be "synced", so the pill is omitted (plan 42 L3: no source vocabulary before the first source use).
-	const showSyncPill = projectHasLivingSurface({
-		anyDocLiving: state.docs?.some(d => d.isLiving),
-		boundSourceCount: state.sources?.length,
-	});
 	switch (screen) {
-		case 'home': return page(withTopBar(renderHome(state), 'Home', showSyncPill));
-		case 'templates': return page(withTopBar(renderTemplates(state), 'Templates', showSyncPill));
-		case 'knowledge': return page(withTopBar(renderKnowledge(state), 'Knowledge', showSyncPill));
-		case 'agents': return page(withTopBar(renderAgents(state), 'Agents', showSyncPill));
-		case 'settings': return page(withTopBar(renderSettings(state), 'Settings', showSyncPill));
-		case 'onboarding': return page(withTopBar(renderOnboarding(state), 'Welcome', showSyncPill));
+		case 'home': return page(renderHome(state));
+		case 'templates': return page(renderTemplates(state));
+		case 'knowledge': return page(renderKnowledge(state));
+		case 'agents': return page(renderAgents(state));
+		case 'settings': return page(renderSettings(state));
+		case 'onboarding': return page(renderOnboarding(state));
 		case 'project-run': return page(renderProjectRun(state));
 		case 'review-project': return page(renderReviewProject(state));
 	}

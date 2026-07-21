@@ -154,25 +154,10 @@ const STYLE = `*{box-sizing:border-box}
  * ~20px off each pane rail (issue #175). Zeroing padding lets the full-bleed chrome reach both rails; the centred
  * 720px prose column keeps its own breathing room via the .pmwrap 40px lateral padding. */
 html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
-.topbar{position:sticky;top:0;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 14px;border-bottom:1px solid #e9eaee;background:#fbfbfc;z-index:5}
-.brand{display:flex;align-items:center;gap:10px;font:600 13px/1 system-ui;color:#2a2c32}
-.logo{width:20px;height:20px;border-radius:6px;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px/1 system-ui}
-.sep{color:#c8cbd2}
-.crumb{color:#868b95;font-weight:400}
-/* File breadcrumb (issue #174): the project segment is a real button (navigates Home), the title is the
- * document's display title, and the file name trails in muted grey so the reader always knows which file
- * they are in even scrolled deep into a long doc. */
-.crumb-proj{border:none;background:none;padding:0;font:600 13px/1 system-ui;color:#2a2c32;cursor:pointer}
-.crumb-proj:hover{color:${ACCENT};text-decoration:underline}
-.crumb-title{font:600 13px/1 system-ui;color:#2a2c32;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.crumb-file{margin-left:9px;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#a9aeb8;flex:none}
-.right{display:flex;align-items:center;gap:10px}
-.pill{display:flex;align-items:center;gap:7px;font:500 11.5px/1 system-ui;color:#5d8a66;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:6px 11px;cursor:pointer}
-.pill .dot{width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150)}
-.pill.warn{color:#9a6b16;background:#fdf2dc;border-color:#f0e2c0}
-.pill.warn .dot{background:oklch(0.66 0.16 45)}
-.btn{border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
-.av{flex:none;width:27px;height:27px;border-radius:50%;background:${ACCENT};color:#fff;font:600 11px/27px system-ui;text-align:center}
+/* The per-document brand/crumb top bar the doc used to draw is gone (plan 44-b): the one global Abstract
+ * header (the repurposed title bar) carries the breadcrumb, the sync pill and the Present action. The
+ * formatting toolbar (.etoolbar) now sticks at the top of the webview; the raw-mode exit lives in .rawtop. */
+.rawtop{position:sticky;top:0;height:46px;z-index:5;flex:none;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid #eef0f3;background:#fff}
 /* The PM proposal widgets (inline diff / insert) sit full-width in a .pcell column. */
 .pcell{min-width:0}
 /* A source-bound figure inline in the prose: the comp's faint-blue highlight + underline, so the reader
@@ -216,7 +201,7 @@ table.kpi td:first-child{text-align:left;font-weight:500}
  * essentials only): borderless heading dropdown + B/I/U + list/ordered/quote, with a quiet "Saved" status
  * on the right. Sticks just below the 48px top bar. No Link-to-source / Run-skill / History (the comp
  * dropped them to keep the editor calm). */
-.etoolbar{position:sticky;top:48px;z-index:4;height:46px;flex:none;display:flex;align-items:center;gap:2px;padding:0 16px;border-bottom:1px solid #eef0f3;background:#fff}
+.etoolbar{position:sticky;top:0;z-index:4;height:46px;flex:none;display:flex;align-items:center;gap:2px;padding:0 16px;border-bottom:1px solid #eef0f3;background:#fff}
 .etoolbar select.tb-h{border:none;background:transparent;border-radius:7px;padding:7px 24px 7px 9px;font:500 12.5px/1 system-ui;color:#3a3f49;cursor:pointer}
 .etoolbar select.tb-h:hover{background:#f4f5f7}
 .etoolbar .tb-div{width:1px;height:18px;background:#eceef2;margin:0 8px}
@@ -232,11 +217,11 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .etoolbar .tb-saved.tb-ephemeral{color:#9a6b16;cursor:help}
 /* Floating review bar (plan 19 iter 7): a calm affordance that floats DIRECTLY BELOW the formatting
  * toolbar - never inside the WYSIWYG header - and is present ONLY while there are pending changes in this
- * or another document. It sticks under the sticky topbar (top:48px, h48) + formatting toolbar (top:48px,
- * h46) at top:94px, spans the full document width, and reads as its own affordance via a warm amber tint
+ * or another document. It sticks under the formatting toolbar (top:0, h46) at top:46px, spans the full
+ * document width, and reads as its own affordance via a warm amber tint
  * + soft elevation so it is distinct from the grey formatting chrome. When the last change is approved the
  * bar simply disappears (no persistent end state) - that disappearance is the "done" signal. */
-.reviewbar{position:sticky;top:94px;z-index:5;display:flex;align-items:center;gap:8px;padding:9px 16px;border-bottom:1px solid oklch(0.9 0.05 75);background:oklch(0.985 0.02 75);box-shadow:0 6px 16px -6px rgba(120,90,20,.18)}
+.reviewbar{position:sticky;top:46px;z-index:5;display:flex;align-items:center;gap:8px;padding:9px 16px;border-bottom:1px solid oklch(0.9 0.05 75);background:oklch(0.985 0.02 75);box-shadow:0 6px 16px -6px rgba(120,90,20,.18)}
 .reviewbar .rv-spacer{flex:1}
 .reviewbar .rv-count{font:500 11.5px/1 system-ui;color:#9a6b16;background:oklch(0.97 0.04 75);border:1px solid oklch(0.9 0.05 75);border-radius:999px;padding:5px 9px}
 .reviewbar .rv-clear{display:flex;align-items:center;gap:8px;font:500 12px/1 system-ui;color:#1f7a44}
@@ -582,15 +567,12 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-approve-all-doc]')) { return vscode.postMessage({ type: 'approveAllDoc' }); }
 	if (el = e.target.closest('[data-approve-all-everywhere]')) { return vscode.postMessage({ type: 'approveAllEverywhere' }); }
 	if (el = e.target.closest('[data-next-doc]')) { return vscode.postMessage({ type: 'nextDoc' }); }
-	if (el = e.target.closest('[data-open-project]')) { return vscode.postMessage({ type: 'openProject' }); }
-	if (el = e.target.closest('[data-refresh]')) { return vscode.postMessage({ type: 'refresh' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
 	if (el = e.target.closest('.pm-gutter')) { const key = gutterKeyFor(el); if (key) { return vscode.postMessage({ type: 'reveal', cells: [key] }); } }
 	if (el = e.target.closest('[data-to-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
 	if (el = e.target.closest('[data-source-close]')) { return vscode.postMessage({ type: 'closeSource' }); }
 	if (el = e.target.closest('[data-sync]')) { return vscode.postMessage({ type: 'sync' }); }
-	if (el = e.target.closest('[data-present-open]')) { return vscode.postMessage({ type: 'presentOpen' }); }
 	if (el = e.target.closest('[data-present-choice]')) { return vscode.postMessage({ type: 'presentChoice', choice: el.getAttribute('data-present-choice') }); }
 	if (el = e.target.closest('[data-present-cta-force]')) { return vscode.postMessage({ type: 'presentCtaForce' }); }
 	if (el = e.target.closest('[data-present-fix-first]')) { return vscode.postMessage({ type: 'presentFixFirst' }); }
@@ -866,39 +848,19 @@ function docReviewBar(pendingCount: number, totalPendingCount: number, nextChang
 }
 
 export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDocContent {
-	const { doc, pending, dirty, status, recent, mode, rawText } = input;
+	const { doc, pending, dirty, recent, mode, rawText } = input;
 	const isLiving = !!doc?.isLiving;
 
 	// PM is the single editing surface for every document (plan 15 iter 5); the chrome shows in 'pm' mode.
 	const isPm = mode === 'pm';
 
-	// The comp's calm 48px bar carries only: brand/crumb + the sync pill + Present + avatar. The status
-	// pill IS the refresh affordance (click to re-derive from sources) - no separate Refresh/Download
-	// buttons (Download is covered by the Present & export modal; per-doc sync by the Sync-across pane).
-	const warn = (pending.length || dirty) ? 'warn' : '';
-	const livingControls = isLiving
-		? `<span class="pill ${warn}" data-refresh title="Refresh from sources"><span class="dot"></span>${esc(status)}</span>`
+	// (plan 44-b) The per-document brand/crumb top bar is gone: the one global Abstract header (the repurposed
+	// title bar) now carries the breadcrumb, the sync pill and the Present action. The editor pane publishes
+	// this document's header content (breadcrumb, sync state, Present action) to IAbstractHeaderService.
+	// In raw mode we keep a slim in-webview bar with the one way back to the PM surface (apply the raw text).
+	const rawTop = mode === 'raw'
+		? `<div class="rawtop"><button class="toggle" data-apply-raw>&#10003; Done editing source</button></div>`
 		: '';
-	// In raw mode, offer the way back to the editor (apply the raw text and return to the PM surface).
-	const rawToggleTop = mode === 'raw'
-		? `<button class="toggle" data-apply-raw>&#10003; Done editing source</button>`
-		: '';
-	const presentBtn = (doc && isPm) ? `<button class="toggle" data-present-open>&#8599; Present</button>` : '';
-
-	// The breadcrumb (issue #174): for a real document, a file breadcrumb - the clickable project (workspace
-	// folder) segment, the document title, and the on-disk file name in muted grey - so the bar is navigation,
-	// not the static "Abstract / Markdown" brand+type noise. The project segment posts `openProject` to
-	// navigate back to Home (the project view). When no document/folder is in play (an empty pane), fall back
-	// to the brand crumb so the bar never reads blank.
-	const brand = `<span class="logo">A</span>`;
-	const crumbHtml = (doc && input.projectName)
-		? `${brand}<button class="crumb-proj" data-open-project title="Go to project">${esc(input.projectName)}</button>`
-		+ `<span class="sep">/</span>`
-		+ `<span class="crumb-title">${esc(doc.title)}</span>`
-		+ (input.fileName ? `<span class="crumb-file">${esc(input.fileName)}</span>` : '')
-		: `${brand}Abstract<span class="sep">/</span><span class="crumb">${isLiving ? 'Living Document' : 'Markdown'}</span>`;
-	const topbar = `<div class="topbar"><div class="brand">${crumbHtml}</div>`
-		+ `<div class="right">${livingControls}${rawToggleTop}${presentBtn}<span class="av">TS</span></div></div>`;
 
 	const modal = input.present.open && doc ? renderPresentModal(input.present, doc.title) : '';
 
@@ -983,7 +945,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	const reviewBar = (!!doc && isPm)
 		? docReviewBar(pending.length, input.totalPendingCount ?? pending.length, input.nextChangedDocTitle)
 		: '';
-	return { html: `${topbar}${docToolbar}${reviewBar}${body}${hint}${modal}`, pmMd, pmDeco };
+	return { html: `${rawTop}${docToolbar}${reviewBar}${body}${hint}${modal}`, pmMd, pmDeco };
 }
 
 // The full webview document: the calm chrome + the dynamic content in a persistent #lwd-root, the vendored
