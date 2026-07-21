@@ -12,7 +12,7 @@ import { IPaneComposite } from '../../common/panecomposite.js';
 import { IViewDescriptorService, ViewContainerLocation } from '../../common/views.js';
 import { DisposableStore, MutableDisposable } from '../../../base/common/lifecycle.js';
 import { IView } from '../../../base/browser/ui/grid/grid.js';
-import { IWorkbenchLayoutService, Parts, SINGLE_WINDOW_PARTS, FLOATING_PANEL_MARGIN, getFloatingOuterGutterEdges } from '../../services/layout/browser/layoutService.js';
+import { IWorkbenchLayoutService, Parts, SINGLE_WINDOW_PARTS, FLOATING_PANEL_MARGIN, FLOATING_PANEL_MODERN_FRAME_INSET, getFloatingOuterGutterEdges } from '../../services/layout/browser/layoutService.js';
 import { CompositePart, ICompositePartOptions, ICompositeTitleLabel } from './compositePart.js';
 import { IPaneCompositeBarOptions, PaneCompositeBar } from './paneCompositeBar.js';
 import { Dimension, EventHelper, trackFocus, $, addDisposableListener, EventType, prepend, getWindow } from '../../../base/browser/dom.js';
@@ -655,13 +655,21 @@ export abstract class AbstractPaneCompositePart extends CompositePart<PaneCompos
 
 		const borderTotal = 2; // 1px border on each side
 		const margin = FLOATING_PANEL_MARGIN;
-		const topMargin = this.partId === Parts.PANEL_PART ? margin : 0; // side bars are flush with the title bar
 		const outerGutter = this.getFloatingOuterGutterEdges();
 		const leftMargin = outerGutter.left ? margin * 2 : margin;
 		const rightMargin = outerGutter.right ? margin * 2 : margin;
+
+		// The bottom panel keeps its stock single-margin gutter. The side bars stock-hug the
+		// title bar (0px top); the v2 elevation model (fork seam V2-1, plan 44) instead floats
+		// them 12px clear of the top and bottom frame edges so every frame edge reads at the
+		// same 12px inset. The matching `margin-top` / `margin-bottom` is applied in the fork's
+		// `styleOverrides/media/elevation.css`; keep the reservation in sync so the rail
+		// contents are not clipped.
+		const topMargin = this.partId === Parts.PANEL_PART ? margin : FLOATING_PANEL_MODERN_FRAME_INSET;
+		const bottomMargin = this.partId === Parts.PANEL_PART ? margin : FLOATING_PANEL_MODERN_FRAME_INSET;
 		return {
 			width: leftMargin + rightMargin + borderTotal,
-			height: topMargin + margin + borderTotal
+			height: topMargin + bottomMargin + borderTotal
 		};
 	}
 

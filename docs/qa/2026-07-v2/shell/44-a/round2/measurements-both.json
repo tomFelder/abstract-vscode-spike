@@ -1,0 +1,128 @@
+{
+  "1440": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "has": {
+      "grid": true,
+      "sidebar": true,
+      "editor": true,
+      "aux": true
+    },
+    "sidebar": {
+      "rect": {
+        "top": 12,
+        "bottom": 888,
+        "left": 88,
+        "right": 340,
+        "width": 252,
+        "height": 876
+      },
+      "topInset": 12,
+      "bottomInset": 12,
+      "leftInset": 88
+    },
+    "editor": {
+      "rect": {
+        "top": 12,
+        "bottom": 888,
+        "left": 352,
+        "right": 1428,
+        "width": 1076,
+        "height": 876
+      },
+      "topInset": 12,
+      "bottomInset": 12,
+      "rightInsetNoAux": 12
+    },
+    "interCard_sidebar_editor": 12,
+    "interCard_editor_aux": -1428,
+    "aux": {
+      "rect": {
+        "top": 0,
+        "bottom": 0,
+        "left": 0,
+        "right": 0,
+        "width": 0,
+        "height": 0
+      },
+      "topInset": 0,
+      "bottomInset": 900,
+      "rightInset": 1440
+    },
+    "grid": {
+      "top": 0,
+      "bottom": 900,
+      "left": 0,
+      "right": 1440,
+      "width": 1440,
+      "height": 900
+    },
+    "gridBg": "rgb(237, 239, 243)",
+    "wbBg": "rgb(237, 239, 243)"
+  },
+  "1760": {
+    "viewport": {
+      "w": 1760,
+      "h": 1000
+    },
+    "has": {
+      "grid": true,
+      "sidebar": true,
+      "editor": true,
+      "aux": true
+    },
+    "sidebar": {
+      "rect": {
+        "top": 12,
+        "bottom": 988,
+        "left": 88,
+        "right": 340,
+        "width": 252,
+        "height": 976
+      },
+      "topInset": 12,
+      "bottomInset": 12,
+      "leftInset": 88
+    },
+    "editor": {
+      "rect": {
+        "top": 12,
+        "bottom": 988,
+        "left": 352,
+        "right": 1748,
+        "width": 1396,
+        "height": 976
+      },
+      "topInset": 12,
+      "bottomInset": 12,
+      "rightInsetNoAux": 12
+    },
+    "interCard_sidebar_editor": 12,
+    "interCard_editor_aux": -1748,
+    "aux": {
+      "rect": {
+        "top": 0,
+        "bottom": 0,
+        "left": 0,
+        "right": 0,
+        "width": 0,
+        "height": 0
+      },
+      "topInset": 0,
+      "bottomInset": 1000,
+      "rightInset": 1760
+    },
+    "grid": {
+      "top": 0,
+      "bottom": 1000,
+      "left": 0,
+      "right": 1760,
+      "width": 1760,
+      "height": 1000
+    },
+    "gridBg": "rgb(237, 239, 243)",
+    "wbBg": "rgb(237, 239, 243)"
+  }
+}

@@ -62,6 +62,26 @@ export const enum LayoutSettings {
  */
 export const FLOATING_PANEL_MARGIN = 6;
 
+/**
+ * Abstract Editor v2 (fork seam V2-1, plan 44): the top and bottom inset (in pixels)
+ * reserved between the floating card stack and the frame edges when the Modern UI
+ * Update experiment (`LayoutSettings.MODERN_UI`) is enabled. Stock floating panels keep
+ * the side bars and editor flush under the title bar (0px top) and give the editor a
+ * single {@link FLOATING_PANEL_MARGIN} bottom gap (6px); the v2 elevation model floats
+ * the whole stack 12px clear of the frame on the top and bottom edges so every frame
+ * edge reads at the same 12px inset as the (doubled) left/right gutters and the 12px
+ * inter-card gaps. The top inset sits below the title bar part, so once bundle 44-b
+ * repurposes the title bar into the 48px header this 12px becomes the header-to-cards
+ * gap (it is not measured from the window top).
+ *
+ * Fail-soft: this is only reserved when Modern UI is on (the same signal that toggles
+ * the `.floating-panels` / `.style-override` classes and the matching CSS margins), so
+ * with the experiment off the layout is exactly the stock layout. Keep in sync with the
+ * `margin-top` / `margin-bottom` applied in the fork's
+ * `styleOverrides/browser/media/elevation.css`.
+ */
+export const FLOATING_PANEL_MODERN_FRAME_INSET = 12;
+
 export const enum ActivityBarPosition {
 	DEFAULT = 'default',
 	TOP = 'top',

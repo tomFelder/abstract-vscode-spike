@@ -39,6 +39,9 @@ LDC="src/vs/workbench/contrib/livingDocs/browser/livingDocs.contribution.ts"
 STUDIO_CSS="src/vs/workbench/contrib/styleOverrides/browser/media/studio.css"
 ELEVATION_CSS="src/vs/workbench/contrib/styleOverrides/browser/media/elevation.css"
 FLOATING_PANELS_CSS="src/vs/workbench/browser/media/floatingPanels.css"
+LAYOUT_SERVICE="src/vs/workbench/services/layout/browser/layoutService.ts"
+EDITOR_PART="src/vs/workbench/browser/parts/editor/editorPart.ts"
+PANE_COMPOSITE_PART="src/vs/workbench/browser/parts/paneCompositePart.ts"
 ACTIVITYBAR="src/vs/workbench/browser/parts/activitybar/activitybarPart.ts"
 BUILTIN_SCANNER="src/vs/workbench/services/extensionManagement/browser/builtinExtensionsScannerService.ts"
 CMD_PALETTE="src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts"
@@ -136,13 +139,12 @@ if ! grep_has "$LDC" "NeutraliseIdeChords|neutralise.*[Cc]hord|lwd.noop|livingDo
 	fail "ide-chord-neutralise" "the IDE-chord neutralisation (plan 33 iter 3) is gone from $LDC (Cmd+J panel / terminal chords leak again)"
 fi
 
-# --- Seam 9: the v2 elevation model (plan 44-a, styleOverrides-CSS, fail-soft; ledger row V2-1 "not
-# taken - 0 core"). The elevation.css cards RIDE the core "floating panels" feature
-# (browser/media/floatingPanels.css + AbstractPaneCompositePart, which reserves FLOATING_PANEL_MARGIN
-# so the card content never clips). We took NO core seam; elevation.css only re-skins those cards
-# (chrome backdrop, radius 14, #E9EAEE border, rail/paper bg, shadow-rail/shadow-editor) and gates on
-# the `.floating-panels` class core toggles when modernUI is on. If a rebase renames that class or
-# removes the feature, the cards silently lose their gaps/dims - this asserts the coupling loudly. ---
+# --- Seam 9: the v2 elevation model (plan 44-a, ledger row V2-1). The elevation.css cards RIDE the
+# core "floating panels" feature (browser/media/floatingPanels.css + AbstractPaneCompositePart, which
+# reserves FLOATING_PANEL_MARGIN so the card content never clips) and re-skin it (chrome backdrop,
+# radius 14, #E9EAEE border, rail/paper bg, shadow-rail/shadow-editor), gating on the `.floating-panels`
+# class core toggles when modernUI is on. If a rebase renames that class or removes the feature, the
+# cards silently lose their gaps/dims - this asserts the coupling loudly. ---
 if ! grep_has "$ELEVATION_CSS" "floating-panels"; then
 	fail "elevation-floating-panels" "elevation.css no longer gates on the core .floating-panels class ($ELEVATION_CSS) - the v2 cards ride that feature; re-pin per ledger V2-1"
 fi
@@ -156,6 +158,28 @@ for token in "#EDEFF3" "#E9EAEE" "0 8px 28px -14px rgba\(20, 22, 28, .22\)" "0 1
 		fail "elevation-tokens" "the elevation token '${token}' is gone from $ELEVATION_CSS (v2 chrome/card/shadow drifted from plan 43 section 1)"
 	fi
 done
+
+# --- Seam 9b: the v2 12px top/bottom frame inset (plan 44-a round 2, ledger row V2-1: the ONE core
+# seam of the wave, PENDING-merge). Stock floating panels keep the cards flush under the title bar
+# (0px top) and give the editor a single 6px bottom gap; the elevation model floats the whole stack
+# 12px clear of the top + bottom frame edges. This is a REAL core coupling: a CSS-only margin would
+# clip card contents, so the reservation lives in core (FLOATING_PANEL_MODERN_FRAME_INSET in
+# layoutService.ts, consumed by editorPart + paneCompositePart) and MUST stay in lock-step with the
+# margin in elevation.css. If a rebase drops the constant, its consumers, or the CSS margins, the top
+# frame edge silently returns to 0px (P1.2 defect) - assert every leg of the coupling loudly. ---
+if ! grep_has "$LAYOUT_SERVICE" "FLOATING_PANEL_MODERN_FRAME_INSET = 12"; then
+	fail "frame-inset-constant" "FLOATING_PANEL_MODERN_FRAME_INSET is no longer 12 in $LAYOUT_SERVICE (the v2 12px top/bottom frame inset drifts; re-pin per ledger V2-1)"
+fi
+if ! grep_has "$EDITOR_PART" "FLOATING_PANEL_MODERN_FRAME_INSET"; then
+	fail "frame-inset-editor" "editorPart no longer reserves FLOATING_PANEL_MODERN_FRAME_INSET ($EDITOR_PART) - the editor card contents will clip or the top inset reverts to 0px"
+fi
+if ! grep_has "$PANE_COMPOSITE_PART" "FLOATING_PANEL_MODERN_FRAME_INSET"; then
+	fail "frame-inset-panecomposite" "paneCompositePart no longer reserves FLOATING_PANEL_MODERN_FRAME_INSET ($PANE_COMPOSITE_PART) - the rail cards will clip or the top inset reverts to 0px"
+fi
+# The matching CSS margins must stay in elevation.css or the reserved space shows as an empty gap.
+if ! grep_has "$ELEVATION_CSS" "margin-top: var\(--vscode-spacing-size120"; then
+	fail "frame-inset-css" "the 12px top/bottom card margin is gone from $ELEVATION_CSS (core reserves the space but the cards no longer float clear of the frame edges)"
+fi
 
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
