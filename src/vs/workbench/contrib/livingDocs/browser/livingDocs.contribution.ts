@@ -39,6 +39,9 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IAbstractHeaderService } from '../common/abstractHeader.js';
+import { AbstractHeaderService } from './abstractHeaderService.js';
+import { AbstractHeaderContribution } from './abstractHeader.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocEditor } from './livingDocEditor.js';
@@ -83,6 +86,9 @@ registerSingleton(ILivingDocsService, LivingDocsService, InstantiationType.Delay
 // The product-analytics seam (plan 36). Eager so it is ready to read consent + capture app_opened at the
 // first-run consent moment below; the rest of the app captures only through IAnalyticsService.
 registerSingleton(IAnalyticsService, AnalyticsService, InstantiationType.Eager);
+// The 48px header's per-surface content service (plan 43 section 3.3, plan 44-b). Delayed: only the header view
+// and the surfaces that publish content read it.
+registerSingleton(IAbstractHeaderService, AbstractHeaderService, InstantiationType.Delayed);
 
 // --- configuration ---
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
@@ -183,7 +189,13 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		// showing the command-centre "Review Project" search pill, the layout-toggle icons and the
 		// editor-group action icons; the window/tab title still read the old brand. All three are real,
 		// user-overridable workbench settings, so turning them off by default stays an additive contribution.
-		'window.commandCenter': false,
+		// (plan 44-b) The 48px Abstract header repurposes the title bar part (decision 170). The title bar is
+		// hidden in web when it is "empty"; we make it non-empty by ENABLING the command centre by default, then
+		// hide the stock command-centre / toolbars / window-title with the `.abstract-header` rules in studio.css
+		// and paint the Abstract header over the container (AbstractHeaderContribution). This keeps the title
+		// bar's VISIBILITY a settings-tier default (0 core); only its 48px HEIGHT needs the one sanctioned core
+		// seam of this bundle (V2-2). Layout + editor actions stay hidden so nothing stock renders behind it.
+		'window.commandCenter': true,
 		'workbench.layoutControl.enabled': false,
 		'workbench.editor.editorActionsLocation': 'hidden',
 		// (issue #182, leak 1) The docs live inside a git repo, so opening the folder makes the built-in
@@ -245,6 +257,32 @@ for (const chord of NEUTRALISED_IDE_CHORDS) {
 	// Weight 1000 sits above ExternalExtension (400) so this swallow always wins the chord resolution.
 	KeybindingsRegistry.registerKeybindingRule({ id: 'noop', weight: 1000, when: undefined, ...chord });
 }
+
+// --- v2 header rail-toggle chords (plan 44-b, P2.2) ---
+// The 48px header's two rail toggles also carry keyboard chords: Cmd+\ collapses the tree rail, Cmd+Shift+\
+// collapses the right rail. These re-use the stock part-toggle commands, so a keyboard toggle and a header
+// button toggle are the same action (no divergence).
+//
+// Cmd+\ is the stock split-editor chord (workbench.action.splitEditor, weight WorkbenchContrib ~200). Binding
+// the tree-rail toggle to Cmd+\ at weight 1000 both wires our chord AND neutralises the split-editor chord in
+// one registration (the higher weight wins resolution, so split-editor never fires) - the "neutralised via
+// keybinding registration, weight 1000" the plan calls for, with no core patch to the keybinding tables.
+//
+// Cmd+B (the stock Primary Side Bar toggle) is deliberately UNTOUCHED (P2.6): it keeps its dual role - Bold
+// inside the ProseMirror writing surface (the webview swallows it in editor focus) and tree-rail toggle in
+// shell focus. We do not re-bind or shadow it here.
+KeybindingsRegistry.registerKeybindingRule({
+	id: 'workbench.action.toggleSidebarVisibility',
+	weight: 1000,
+	when: undefined,
+	primary: KeyMod.CtrlCmd | KeyCode.Backslash,
+});
+KeybindingsRegistry.registerKeybindingRule({
+	id: 'workbench.action.toggleAuxiliaryBar',
+	weight: 1000,
+	when: undefined,
+	primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Backslash,
+});
 
 // --- Cmd/Ctrl+P document switcher (issue #212) ---
 // The core patch stripped Cmd+P from workbench.action.quickOpen (Seam 4) and the calm-shell chord neutralisation
@@ -900,6 +938,12 @@ class RailAffordanceContribution extends Disposable implements IWorkbenchContrib
 	}
 }
 registerWorkbenchContribution2(RailAffordanceContribution.ID, RailAffordanceContribution, WorkbenchPhase.AfterRestored);
+
+// --- the 48px Abstract header (plan 44-b, pins 1/2 + the header block) ---
+// Renders the header DOM into the titlebar part container (decision 170: the titlebar is repurposed, not
+// a new part). AfterRestored so the titlebar container exists; the contribution guards + rebuilds if the
+// part is (re)created.
+registerWorkbenchContribution2(AbstractHeaderContribution.ID, AbstractHeaderContribution, WorkbenchPhase.AfterRestored);
 
 // --- active nav chip (Part C1) ---
 // The comp marks the CURRENT surface with a white chip in the icon-nav. The activity bar's own

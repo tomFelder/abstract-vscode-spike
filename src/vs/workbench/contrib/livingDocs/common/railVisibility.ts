@@ -27,7 +27,11 @@ export const enum ReviewRailManualChoice {
  * crossing into the editor surface with.
  */
 export interface IReviewRailEntryContext {
-	/** True when the document has one or more pending agent proposals (trust grammar: never hide these). */
+	/**
+	 * True when the document has one or more pending agent proposals. Opens the rail on first look (no
+	 * manual choice); once the user has collapsed the rail, the proposal is surfaced by the badge dot on
+	 * the right toggle instead (plan 44-b P2.5).
+	 */
 	readonly hasPendingReview: boolean;
 	/** True when the document already has chat history (a prior conversation the user may want to resume). */
 	readonly hasChatHistory: boolean;
@@ -37,31 +41,32 @@ export interface IReviewRailEntryContext {
 
 /**
  * Decide whether the review rail should be OPEN when the editor surface is entered for a document
- * (plan 42 slice L4). Precedence, in order:
+ * (plan 42 slice L4, revised by plan 44-b P2.5). Precedence, in order:
  *
- * 1. A pending review FORCES the rail open - the agent-edit trust grammar is untouchable, so a pending
- *    proposal is never hidden, even against a manual "collapsed" choice.
- * 2. Otherwise the user's manual choice wins: if they have opened or collapsed the rail while editing,
- *    that choice is honoured on entry (and persists across restart).
- * 3. Otherwise the rail opens only when it has "something to say": the document has chat history. A plain
- *    doc with no pending review and no chat history opens quiet - editor + left rail only.
+ * 1. The user's manual choice wins: if they have opened or collapsed the rail while editing, that choice
+ *    is honoured on entry (and persists across restart). A manual "collapsed" is now RESPECTED even when a
+ *    proposal is pending - the pending proposal is surfaced quietly by the 8px amber badge dot on the
+ *    right rail toggle (plan 44-b P2.5) instead of yanking the rail open. This RETIRES the old
+ *    trust-grammar force-open: a proposal is never hidden (the badge shows it), but it no longer overrides
+ *    the calm shell the user asked for.
+ * 2. Otherwise the rail opens when it has "something to say": a pending proposal to review, or existing
+ *    chat history. A plain doc with no pending review and no chat history opens quiet - editor + left rail
+ *    only. With no manual choice yet, a pending proposal still opens the rail (the first-look default), so
+ *    the badge dot is only needed once the user has actively collapsed the rail.
  *
  * Returns true to open the rail, false to leave it collapsed.
  */
 export function decideReviewRailOpenOnEntry(context: IReviewRailEntryContext): boolean {
-	// 1. Trust grammar: a pending proposal always forces the rail open, overriding any manual collapse.
-	if (context.hasPendingReview) {
-		return true;
-	}
-	// 2. The user's manual choice wins over the quiet default (persisted across restart).
+	// 1. The user's manual choice wins over the quiet default (persisted across restart). A stored
+	//    "collapsed" is respected even with a pending proposal - the badge dot surfaces it (P2.5).
 	if (context.manualChoice === ReviewRailManualChoice.Open) {
 		return true;
 	}
 	if (context.manualChoice === ReviewRailManualChoice.Collapsed) {
 		return false;
 	}
-	// 3. No manual choice yet: open only when the rail has something to say (existing chat history).
-	return context.hasChatHistory;
+	// 2. No manual choice yet: open when the rail has something to say - a pending proposal or chat history.
+	return context.hasPendingReview || context.hasChatHistory;
 }
 
 /**
