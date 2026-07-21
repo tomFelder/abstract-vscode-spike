@@ -199,3 +199,200 @@
 .style-override .part.editor > .lwd-rail-affordance > .codicon {
 	font-size: 16px;
 }
+
+/* =============================================================================
+ * The 48px Abstract header (plan 44-b, pins 1/2 + the header block).
+ *
+ * The header repurposes the title bar part (decision 170): the AbstractHeaderContribution appends a
+ * `.abstract-header` element into the title bar container, and these rules (a) hide the stock title bar
+ * content the fork does not want (command centre, action toolbars, window title, drag region) and (b)
+ * paint the title bar as the 48px header and style our overlay to the mock.
+ *
+ * The command centre is enabled by default (livingDocs.contribution.ts) only to keep the title bar
+ * non-empty so it stays visible in web; its UI is hidden here. The 48px HEIGHT is reserved by the one
+ * sanctioned core seam (ABSTRACT_HEADER_HEIGHT); these rules only paint within that reserved slot.
+ * ========================================================================== */
+
+/* Hide the stock title bar content - our header overlays the container instead. */
+.style-override .part.titlebar > .titlebar-container > .titlebar-left,
+.style-override .part.titlebar > .titlebar-container > .titlebar-center,
+.style-override .part.titlebar > .titlebar-container > .titlebar-right,
+.style-override .part.titlebar > .titlebar-container > .titlebar-drag-region {
+	display: none !important;
+}
+
+/* Paint the title bar part as the 48px header slot. The part sets its own inline background +
+ * border-bottom in updateStyles() (from the titleBar.* theme colours) on theme events, so we paint the
+ * chrome + hairline on the `.abstract-header` overlay we fully own (below) rather than fighting that
+ * inline style. Here we only pin the height and neutralise the stock shadow. */
+.style-override .part.titlebar {
+	color: #1A1C20 !important;
+	height: 48px;
+	box-shadow: none !important;
+}
+.style-override .part.titlebar > .titlebar-container {
+	height: 48px;
+	line-height: normal;
+}
+
+/* The Abstract header row (mirrors the mock's 48px flex row). Paints the chrome background + hairline
+ * bottom border itself so it never depends on the part's theme-driven inline styles. */
+.style-override .abstract-header {
+	position: absolute;
+	inset: 0;
+	height: 48px;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 0 16px;
+	box-sizing: border-box;
+	background: var(--abstract-chrome, #EDEFF3);
+	border-bottom: 1px solid #E2E4EA;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	-webkit-app-region: no-drag;
+}
+
+/* The two 28px rail-toggle buttons (P2.1): panel glyph, hover bg #E2E4EA. */
+.style-override .abstract-header-toggle {
+	position: relative;
+	flex: none;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #52575F;
+	background: transparent;
+	cursor: pointer;
+}
+.style-override .abstract-header-toggle:hover {
+	background: #E2E4EA;
+}
+.style-override .abstract-header-toggle:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder, #5B6DC4);
+	outline-offset: -1px;
+}
+
+/* The 8px amber badge dot on the right toggle (P2.5): a pending proposal while the rail is collapsed. */
+.style-override .abstract-header-badge {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 8px;
+	height: 8px;
+	border-radius: 999px;
+	background: #C99A2E;
+	box-shadow: 0 0 0 2px var(--abstract-chrome, #EDEFF3);
+}
+
+/* Brand cluster: logo + workspace / breadcrumb (file). */
+.style-override .abstract-header-brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+.style-override .abstract-header-logo {
+	flex: none;
+	width: 22px;
+	height: 22px;
+	border-radius: 6px;
+	background: #5B6DC4;
+	color: #fff;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-weight: 700;
+	font-size: 12px;
+}
+.style-override .abstract-header-workspace {
+	flex: none;
+	font-size: 13.5px;
+	font-weight: 600;
+	color: #1A1C20;
+}
+.style-override .abstract-header-sep {
+	flex: none;
+	color: #C6CAD2;
+}
+.style-override .abstract-header-crumb {
+	font-size: 13.5px;
+	color: #868B95;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.style-override .abstract-header-file {
+	flex: none;
+	margin-left: 3px;
+	font-family: 'JetBrains Mono', ui-monospace, monospace;
+	font-size: 11px;
+	color: #A9AEB8;
+}
+
+.style-override .abstract-header-spacer {
+	flex: 1;
+}
+
+/* Right-side sync / agent-health pill (26px ok pill). */
+.style-override .abstract-header-pill {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 26px;
+	padding: 0 10px;
+	border-radius: 999px;
+	background: #EEF7F0;
+	border: 1px solid #D7ECDC;
+	color: #2C8159;
+	font-size: 12px;
+	font-weight: 500;
+	white-space: nowrap;
+}
+.style-override .abstract-header-pill-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 999px;
+	background: #2C8159;
+}
+
+/* Right-side surface action button (30px). */
+.style-override .abstract-header-action {
+	flex: none;
+	height: 30px;
+	padding: 0 12px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	border-radius: 9px;
+	border: 1px solid #E6E8EC;
+	background: #fff;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: #52575F;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.style-override .abstract-header-action:hover {
+	border-color: #5B6DC4;
+	color: #4650B8;
+}
+
+/* 27px avatar circle (navy). */
+.style-override .abstract-header-avatar {
+	flex: none;
+	width: 27px;
+	height: 27px;
+	border-radius: 999px;
+	background: #3B4D8F;
+	color: #fff;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 11px;
+	font-weight: 600;
+}

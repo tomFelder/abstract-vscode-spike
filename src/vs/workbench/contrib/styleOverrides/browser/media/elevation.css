@@ -142,3 +142,58 @@
 .style-override.monaco-workbench .part.editor .monaco-editor .margin {
 	background-color: var(--abstract-paper-bg) !important;
 }
+
+/* =============================================================================
+ * Rail collapse / expand animation (plan 44 pin 2 / P2.3).
+ *
+ * The two rails are the tree rail (side bar) and the right rail (auxiliary bar),
+ * each hosted in a horizontal `.split-view-view` of the workbench's main grid. On
+ * a toggle the SplitView sets the view's inline `width` to 0 AND removes its
+ * `.visible` class, which the base splitview.css turns into `display: none` - so
+ * the width snaps to 0 in a single frame with no chance to animate (validated R1:
+ * width trace [252, 0, 0, ...]).
+ *
+ * To get the spec's "~150ms ease width->0 + fade" we (a) keep the collapsing rail
+ * DISPLAYED through the transition by overriding that `display: none` for just the
+ * two rail views, and (b) ease their inline `width` + `opacity` over 150ms. The
+ * override + transition are scoped by `:has(> .part.sidebar / .part.auxiliarybar)`
+ * so no other split view (the editor grid, nested panel splits, list widgets)
+ * is affected. Collapsed rails also drop pointer events so the 0-width card never
+ * swallows clicks while it lingers in the DOM.
+ *
+ * DRAG SAFETY: a live sash drag changes the same inline `width` continuously; a
+ * width transition would lag the drag. While a sash in the rail's split view is
+ * `.active` (the class Sash adds for the duration of a drag) we disable the
+ * transition, so resizing stays instant/native and only the toggle animates.
+ *
+ * Motion is verified by frame sampling + the computed transition-duration
+ * (plan 43 section 3.6: duration/easing by inspection + one live observation, no
+ * frame-perfect assertions). CSS-only: no core seam.
+ * ========================================================================== */
+.style-override.monaco-workbench.floating-panels .monaco-split-view2.horizontal > .monaco-scrollable-element > .split-view-container > .split-view-view:has(> .part.sidebar),
+.style-override.monaco-workbench.floating-panels .monaco-split-view2.horizontal > .monaco-scrollable-element > .split-view-container > .split-view-view:has(> .part.auxiliarybar) {
+	overflow: hidden;
+	transition: width 150ms ease, opacity 150ms ease;
+}
+
+/* Keep the collapsing rail rendered so its width + opacity can ease to 0 (the base
+ * rule hides `.split-view-view:not(.visible)` with display:none, which would snap). */
+.style-override.monaco-workbench.floating-panels .monaco-split-view2.horizontal > .monaco-scrollable-element > .split-view-container > .split-view-view:not(.visible):has(> .part.sidebar),
+.style-override.monaco-workbench.floating-panels .monaco-split-view2.horizontal > .monaco-scrollable-element > .split-view-container > .split-view-view:not(.visible):has(> .part.auxiliarybar) {
+	display: block;
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* The expanded rail is fully opaque; the fade rides the visibility flip only. */
+.style-override.monaco-workbench.floating-panels .monaco-split-view2.horizontal > .monaco-scrollable-element > .split-view-container > .split-view-view.visible:has(> .part.sidebar),
+.style-override.monaco-workbench.floating-panels .monaco-split-view2.horizontal > .monaco-scrollable-element > .split-view-container > .split-view-view.visible:has(> .part.auxiliarybar) {
+	opacity: 1;
+}
+
+/* DRAG SAFETY: while a sash in the rail's own split view is being dragged, drop the
+ * transition so the resize tracks the pointer with no easing lag. */
+.style-override.monaco-workbench.floating-panels .monaco-split-view2.horizontal:has(> .sash-container > .monaco-sash.active) > .monaco-scrollable-element > .split-view-container > .split-view-view:has(> .part.sidebar),
+.style-override.monaco-workbench.floating-panels .monaco-split-view2.horizontal:has(> .sash-container > .monaco-sash.active) > .monaco-scrollable-element > .split-view-container > .split-view-view:has(> .part.auxiliarybar) {
+	transition: none;
+}

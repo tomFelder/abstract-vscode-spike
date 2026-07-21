@@ -1,0 +1,68 @@
+{
+  "initial": {
+    "file": "Appendix.md",
+    "treeVisible": true,
+    "treeW": 264,
+    "rightVisible": false,
+    "rightW": 0,
+    "storage": {
+      "tree": null,
+      "right": null
+    }
+  },
+  "bothOpen": {
+    "file": "Appendix.md",
+    "treeVisible": true,
+    "treeW": 264,
+    "rightVisible": true,
+    "rightW": 392,
+    "storage": {
+      "tree": null,
+      "right": null
+    }
+  },
+  "afterCollapse": {
+    "file": "Appendix.md",
+    "treeVisible": false,
+    "treeW": 0,
+    "rightVisible": false,
+    "rightW": 0,
+    "storage": {
+      "tree": null,
+      "right": null
+    }
+  },
+  "afterReloadCollapsed": {
+    "file": "Appendix.md",
+    "treeVisible": false,
+    "treeW": 0,
+    "rightVisible": false,
+    "rightW": 0,
+    "storage": {
+      "tree": null,
+      "right": null
+    }
+  },
+  "afterExpand": {
+    "file": "Appendix.md",
+    "treeVisible": true,
+    "treeW": 264,
+    "rightVisible": true,
+    "rightW": 392,
+    "storage": {
+      "tree": null,
+      "right": null
+    }
+  },
+  "afterReloadOpen": {
+    "file": "Appendix.md",
+    "treeVisible": true,
+    "treeW": 264,
+    "rightVisible": true,
+    "rightW": 392,
+    "storage": {
+      "tree": null,
+      "right": null
+    }
+  }
+}

@@ -23,6 +23,8 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
+import { HeaderPillKind, IAbstractHeaderService } from '../common/abstractHeader.js';
+import { localize } from '../../../../nls.js';
 import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
@@ -63,6 +65,7 @@ export class LivingDocEditor extends EditorPane {
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
+		@IAbstractHeaderService private readonly _header: IAbstractHeaderService,
 	) {
 		super(LivingDocEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -180,9 +183,9 @@ export class LivingDocEditor extends EditorPane {
 				break;
 			case 'presentOpen':
 				// Compute the before-export gate as the modal opens (plan 32 iter 4), so a failed grader is SHOWN
-				// with "Export anyway" + "Fix first" rather than silently blocking the export write.
-				this._present = { ...this._present, open: true, gate: this._resource ? this._livingDocs.previewExportGate(this._resource) : undefined };
-				this._render();
+				// with "Export anyway" + "Fix first" rather than silently blocking the export write. Shared with
+				// the header's Present action (plan 44-b).
+				this._openPresent();
 				break;
 			case 'presentClose':
 				this._present = { ...this._present, open: false };
@@ -294,7 +297,7 @@ export class LivingDocEditor extends EditorPane {
 
 	// The Present/export CTA maps each real destination onto the export Abstract actually writes:
 	// "Web page" -> self-contained HTML; "Markdown" -> clean resolved Markdown; "PDF" -> desktop print-to-PDF
-	// of that HTML; "Word" -> a .docx mapped to Word's built-in styles (doc 22 §3). The cloud/spreadsheet
+	// of that HTML; "Word" -> a .docx mapped to Word's built-in styles (doc 22 section 3). The cloud/spreadsheet
 	// destinations stay "Soon" and non-selectable, so only these four reach here.
 	private async _runPresent(force: boolean): Promise<void> {
 		if (!this._resource) { return; }
@@ -422,11 +425,40 @@ export class LivingDocEditor extends EditorPane {
 			projectName: this._workspace.getWorkspace().folders[0]?.name,
 			fileName: basename(resource),
 		};
+		this._publishHeader(input);
 		const content = renderLivingDocContent(input);
 		// The mount-once lifecycle (first-render setHtml, pmReset only on a model-driven body change,
 		// hold-until-ready) is decided by the pure reducer; this shell just carries out its effects. The
 		// setHtml effect needs the FULL shell HTML, built here on demand so the reducer stays DOM-free.
 		this._runProto(applyRender(this._proto, content), () => renderLivingDocHtml(input));
+	}
+
+	// (plan 44-b PH.2/PH.3) Publish this document's content to the one global Abstract header (the repurposed
+	// title bar): the breadcrumb tail is the document title with its file name suffix; the sync pill reads
+	// "All sources synced" for a living document (a pending proposal is surfaced by the right-toggle badge,
+	// not here); the action is Present; the editor surface shows both rail toggles. The pill is omitted for a
+	// plain Markdown doc (no sources to be synced) - the shell stays truthful before the first source use.
+	private _publishHeader(input: ILivingDocRenderInput): void {
+		const isLiving = !!input.doc?.isLiving;
+		this._header.setContent({
+			breadcrumb: input.doc?.title ?? '',
+			fileName: input.fileName,
+			pill: isLiving
+				? { kind: HeaderPillKind.Sync, label: localize("livingDocs.header.allSynced", "All sources synced") }
+				: undefined,
+			action: (input.doc && this._mode === 'pm')
+				// allow-any-unicode-next-line
+				? { label: localize("livingDocs.header.present", "↗ Present"), run: () => this._openPresent() }
+				: undefined,
+			showRailToggles: true,
+		});
+	}
+
+	// The header's Present action mirrors the in-webview `presentOpen` message: compute the before-export
+	// gate and open the modal (plan 44-b - the Present button moved from the per-doc top bar to the header).
+	private _openPresent(): void {
+		this._present = { ...this._present, open: true, gate: this._resource ? this._livingDocs.previewExportGate(this._resource) : undefined };
+		this._render();
 	}
 
 	// Advance the mount-once lifecycle state and carry out the reducer's effects against the live webview.

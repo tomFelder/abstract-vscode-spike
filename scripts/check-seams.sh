@@ -43,6 +43,8 @@ LAYOUT_SERVICE="src/vs/workbench/services/layout/browser/layoutService.ts"
 EDITOR_PART="src/vs/workbench/browser/parts/editor/editorPart.ts"
 PANE_COMPOSITE_PART="src/vs/workbench/browser/parts/paneCompositePart.ts"
 ACTIVITYBAR="src/vs/workbench/browser/parts/activitybar/activitybarPart.ts"
+WINDOW_TS="src/vs/platform/window/common/window.ts"
+TITLEBAR_PART="src/vs/workbench/browser/parts/titlebar/titlebarPart.ts"
 BUILTIN_SCANNER="src/vs/workbench/services/extensionManagement/browser/builtinExtensionsScannerService.ts"
 CMD_PALETTE="src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts"
 QUICK_OPEN="src/vs/workbench/browser/actions/quickAccessActions.ts"
@@ -115,8 +117,12 @@ for sel in "${STUDIO_SELECTORS[@]}"; do
 done
 
 # --- Seam 7: the shell-identity config defaults (settings, plan 33 iters 1-2, fail-soft) ---
+# (plan 44-b) window.commandCenter is now `true`, not `false`: the 48px Abstract header repurposes the
+# title bar (decision 170), which is hidden in web when "empty", so the command centre is enabled to keep
+# the title bar visible - its stock UI is then hidden by studio.css's `.abstract-header` rules. Re-pin: if
+# a rebase resets this to false the title bar goes empty and the Abstract header disappears in web.
 IDENTITY_DEFAULTS=(
-	"'window.commandCenter': false"
+	"'window.commandCenter': true"
 	"'workbench.layoutControl.enabled': false"
 	"'workbench.editor.editorActionsLocation': 'hidden'"
 )
@@ -179,6 +185,24 @@ fi
 # The matching CSS margins must stay in elevation.css or the reserved space shows as an empty gap.
 if ! grep_has "$ELEVATION_CSS" "margin-top: var\(--vscode-spacing-size120"; then
 	fail "frame-inset-css" "the 12px top/bottom card margin is gone from $ELEVATION_CSS (core reserves the space but the cards no longer float clear of the frame edges)"
+fi
+
+# --- Seam 10: the 48px Abstract header (plan 44-b, ledger row V2-2 - the wave's SECOND + final core seam,
+# decision 169/170). The header repurposes the title bar part; its 48px height is the grid slot the layout
+# reserves for the part, so a CSS-only height would clip. One fork constant (ABSTRACT_HEADER_HEIGHT = 48 in
+# window.ts) lifts the reserved height, consumed in BrowserTitlebarPart.minimumHeight - the ACTIVITYBAR_WIDTH
+# 48->76 precedent. If a rebase drops the constant or its consumer the header shrinks to the stock 35px and
+# clips; if the title-bar visibility default or the studio.css overlay go, the header disappears - assert
+# every leg loudly. ---
+if ! grep_has "$WINDOW_TS" "ABSTRACT_HEADER_HEIGHT = 48"; then
+	fail "header-height-constant" "ABSTRACT_HEADER_HEIGHT is no longer 48 in $WINDOW_TS (the 48px Abstract header shrinks to the stock title bar height; re-pin per ledger V2-2)"
+fi
+if ! grep_has "$TITLEBAR_PART" "ABSTRACT_HEADER_HEIGHT"; then
+	fail "header-height-consumer" "BrowserTitlebarPart no longer reserves ABSTRACT_HEADER_HEIGHT ($TITLEBAR_PART) - the header's grid slot reverts to 35px and clips"
+fi
+# The studio.css overlay + the 48px paint must stay, or the title bar shows stock chrome / the wrong height.
+if ! grep_has "$STUDIO_CSS" "abstract-header"; then
+	fail "header-overlay-css" "the .abstract-header rules are gone from $STUDIO_CSS (the stock title bar shows through / the Abstract header is unstyled)"
 fi
 
 echo ""

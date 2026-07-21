@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, Dimension } from '../../../../base/browser/dom.js';
+import { localize } from '../../../../nls.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { matchesSomeScheme, Schemas } from '../../../../base/common/network.js';
@@ -27,6 +28,8 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateInfo, ITidyPlanItem } from '../common/livingDocs.js';
+import { HeaderPillKind, IAbstractHeaderContent, IAbstractHeaderService } from '../common/abstractHeader.js';
+import { projectHasLivingSurface } from '../common/livingUpgrade.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { buildAwayFeed, classifyProjectChat, IAwayFeed } from '../common/projectHomeFeed.js';
 import { DEMO_ITERATION_PROMPT, nextOnboardingStep, ONBOARDING_STEPS, OnboardingStep } from '../common/onboarding.js';
@@ -170,6 +173,7 @@ export class ScreenEditor extends EditorPane {
 		@IOpenerService private readonly _openerService: IOpenerService,
 		@IConfigurationService private readonly _configuration: IConfigurationService,
 		@IAnalyticsService private readonly _analytics: IAnalyticsService,
+		@IAbstractHeaderService private readonly _header: IAbstractHeaderService,
 	) {
 		super(ScreenEditor.ID, group, telemetryService, themeService, _storageService);
 		this._storage = _storageService;
@@ -1221,6 +1225,9 @@ export class ScreenEditor extends EditorPane {
 		// (plan 33 iter 2, L5) Use the truthful DISPLAY name (resolves the web/memfs "mount" stub via the
 		// sample's `.abstract-name` marker) for every user-facing project label - Home, the crumb and tiles.
 		const folderName = this._livingDocs.getProjectDisplayName();
+		// (plan 44-b) Publish this screen's header content to the one global Abstract header (the repurposed
+		// title bar). Screens show no rail toggles - no rails render on them.
+		this._publishHeader();
 		this._webview?.setHtml(renderScreenHtml(this._screen, {
 			...this._state,
 			projectRun: this._projectRunState(),
@@ -1240,6 +1247,82 @@ export class ScreenEditor extends EditorPane {
 			} : undefined,
 			onboardingResumeStep: this._state.onboardingResumeStep,
 		}));
+	}
+
+	// (plan 44-b PH.2/PH.3) Publish this screen's header content to the one global Abstract header (the
+	// repurposed title bar). Per-surface: the breadcrumb tail (surface name), the right-side pill (sync on
+	// Home/Knowledge, agent-health on Agents, none on Templates) and the action button ("Open Folder" /
+	// "New Template" / "Add Source", each with the mock's leading glyph). Screens never show rail toggles.
+	private _publishHeader(): void {
+		// The sync pill only tells the truth once the project has a living surface (plan 42 L3): a fresh
+		// folder of plain Markdown has no sources to be "synced", so the pill is omitted rather than
+		// fabricated. Computed from the live screen state's docs + bound sources.
+		const hasLivingSurface = projectHasLivingSurface({
+			anyDocLiving: this._state.docs?.some(d => d.isLiving),
+			boundSourceCount: this._state.sources?.length,
+		});
+		const syncPill = hasLivingSurface
+			? { kind: HeaderPillKind.Sync, label: localize("livingDocs.header.allSynced", "All sources synced") }
+			: undefined;
+
+		let content: IAbstractHeaderContent;
+		switch (this._screen) {
+			case 'home':
+				content = {
+					breadcrumb: localize("livingDocs.header.home", "Home"),
+					pill: syncPill,
+					// allow-any-unicode-next-line
+					action: { label: localize("livingDocs.header.openFolder", "＋ Open Folder"), run: () => void this._livingDocs.openFolder() },
+					showRailToggles: false,
+				};
+				break;
+			case 'templates':
+				content = {
+					breadcrumb: localize("livingDocs.header.templates", "Templates"),
+					// allow-any-unicode-next-line
+					action: { label: localize("livingDocs.header.newTemplate", "＋ New Template"), run: () => void this._livingDocs.createTemplate() },
+					showRailToggles: false,
+				};
+				break;
+			case 'knowledge':
+				content = {
+					breadcrumb: localize("livingDocs.header.knowledge", "Knowledge"),
+					pill: syncPill,
+					// allow-any-unicode-next-line
+					action: { label: localize("livingDocs.header.addSource", "＋ Add Source"), run: () => this._openScreenSheet('addsource') },
+					showRailToggles: false,
+				};
+				break;
+			case 'agents': {
+				// Agent-health pill: the count of active (enabled) agents, truthful from the live registry.
+				const active = this._livingDocs.getAgents().filter(a => !a.disabled).length;
+				content = {
+					breadcrumb: localize("livingDocs.header.agents", "Agents"),
+					pill: active > 0
+						? { kind: HeaderPillKind.AgentHealth, label: active === 1 ? localize("livingDocs.header.oneAgentActive", "1 agent active") : localize("livingDocs.header.nAgentsActive", "{0} agents active", active) }
+						: undefined,
+					showRailToggles: false,
+				};
+				break;
+			}
+			case 'settings':
+				content = { breadcrumb: localize("livingDocs.header.settings", "Settings"), showRailToggles: false };
+				break;
+			case 'onboarding':
+				content = { breadcrumb: localize("livingDocs.header.welcome", "Welcome"), showRailToggles: false };
+				break;
+			default:
+				// project-run / review-project: bare breadcrumb, no pill/action (transient project surfaces).
+				content = { breadcrumb: '', showRailToggles: false };
+				break;
+		}
+		this._header.setContent(content);
+	}
+
+	// Ask the screen webview to open one of its own sheets (the header's native action button is outside the
+	// webview, so it posts a message the shell script turns into an lwdOpen call - plan 44-b).
+	private _openScreenSheet(sheet: string): void {
+		void this._webview?.postMessage({ type: 'openSheet', sheet });
 	}
 
 	// Recompute the cross-document review screen state (C5, plan 24) from the LIVE service each render: the

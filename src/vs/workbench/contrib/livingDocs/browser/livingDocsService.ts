@@ -27,6 +27,8 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
+import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+import { mainWindow } from '../../../../base/browser/window.js';
 import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
@@ -473,6 +475,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		@IStorageService private readonly _storage: IStorageService,
 		@ICommandService private readonly _commands: ICommandService,
 		@IClipboardService private readonly _clipboard: IClipboardService,
+		@IWorkbenchLayoutService private readonly _layoutService: IWorkbenchLayoutService,
 	) {
 		super();
 		this._lockStore = new SidecarLockStore(this._files);
@@ -3545,10 +3548,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			: 'No model available - showing heuristic suggestions';
 		await this._persist(state);
 		this._onDidChange.fire();
-		// Reveal the rail on the Review tab. Route through focusPanel so the reveal fires onDidRequestPanel:
-		// the RailVisibilityContribution treats every focusPanel-driven reveal as a PEEK, so this automatic
-		// expand is never mis-recorded as the user's manual `open` choice (plan 42 slice L4, defect 1).
-		this.focusPanel('review');
+		// (plan 44-b P2.5) The old trust-grammar force-open is RETIRED: a proposal arriving no longer yanks
+		// the review rail open. If the rail is already visible we switch it to the Review tab (a courtesy,
+		// not a force-open); if the user has collapsed the rail the proposal is surfaced quietly by the 8px
+		// amber badge dot on the right rail toggle (AbstractHeaderContribution, driven by onDidChange above).
+		if (this._layoutService.isVisible(Parts.AUXILIARYBAR_PART, mainWindow)) {
+			this.focusPanel('review');
+		}
 	}
 
 	// The prose targets the impact pass should consider: authored lock claims (relocated by fuzzy

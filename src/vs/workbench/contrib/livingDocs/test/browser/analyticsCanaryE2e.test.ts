@@ -11,6 +11,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
 import { IClipboardService } from '../../../../../platform/clipboard/common/clipboardService.js';
+import { IWorkbenchLayoutService } from '../../../../services/layout/browser/layoutService.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
@@ -114,7 +115,8 @@ suite('analytics canary E2E (plan 36 iter 2: content never leaves via the live s
 		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
 		const service = new LivingDocsService(
 			fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(),
-			requestService, workspaceService, fileDialogService, hostService, analytics, store.add(new InMemoryStorageService()), commandService, clipboardService);
+			requestService, workspaceService, fileDialogService, hostService, analytics, store.add(new InMemoryStorageService()), commandService, clipboardService,
+			{ isVisible: () => false } as unknown as IWorkbenchLayoutService);
 		store.add(service);
 		return service;
 	}

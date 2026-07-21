@@ -10,7 +10,9 @@
 	"workbench.layoutControl.enabled": false,
 	"workbench.statusBar.visible": false,
 	"window.menuBarVisibility": "hidden",
-	"window.commandCenter": false,
+	// (plan 44-b) The command centre is left at the contribution default (true) so the title bar is not
+	// "empty" and stays visible in web -- the 48px Abstract header repurposes it. The stock command-centre
+	// UI is hidden by studio.css's `.abstract-header` rules.
 	"breadcrumbs.enabled": false,
 	"editor.minimap.enabled": false,
 	"workbench.tips.enabled": false,
