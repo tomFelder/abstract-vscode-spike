@@ -939,7 +939,14 @@
 		"--vscode-widget-border",
 		"--vscode-widget-shadow",
 		"--vscode-window-activeBorder",
-		"--vscode-window-inactiveBorder"
+		"--vscode-window-inactiveBorder",
+		"--abstract-chrome",
+		"--abstract-chrome-border",
+		"--abstract-tabwell",
+		"--abstract-gutter-idle",
+		"--abstract-card-border",
+		"--abstract-rail-bg",
+		"--abstract-paper-bg"
 	],
 	"others": [
 		"--activity-bar-action-height",
@@ -1086,7 +1093,10 @@
 		"--vscode-inline-chat-affordance-height",
 		"--collapse-from-width",
 		"--slide-from-x",
-		"--slide-from-y"
+		"--slide-from-y",
+		"--abstract-shadow-e1",
+		"--abstract-shadow-rail",
+		"--abstract-shadow-editor"
 	],
 	"sizes": [
 		"--vscode-agents-fontSize-body1",
@@ -1125,6 +1135,7 @@
 		"--vscode-spacing-size320",
 		"--vscode-spacing-size360",
 		"--vscode-spacing-size400",
-		"--vscode-strokeThickness"
+		"--vscode-strokeThickness",
+		"--abstract-card-radius"
 	]
 }

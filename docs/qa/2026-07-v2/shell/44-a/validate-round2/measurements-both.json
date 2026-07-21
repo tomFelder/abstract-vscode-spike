@@ -1,0 +1,108 @@
+{
+  "1440x900": {
+    "gridR": {
+      "top": 0,
+      "left": 0,
+      "right": 1440,
+      "bottom": 900,
+      "width": 1440,
+      "height": 900
+    },
+    "sbR": {
+      "top": 12,
+      "left": 88,
+      "right": 340,
+      "bottom": 888,
+      "width": 252,
+      "height": 876
+    },
+    "edR": {
+      "top": 12,
+      "left": 352,
+      "right": 1428,
+      "bottom": 888,
+      "width": 1076,
+      "height": 876
+    },
+    "chromeBg": {
+      "workbench": "rgb(237, 239, 243)",
+      "grid": "rgb(237, 239, 243)",
+      "body": "rgba(0, 0, 0, 0)"
+    },
+    "sidebarSkin": {
+      "radius": "14px",
+      "borderColor": "rgb(233, 234, 238)",
+      "borderWidth": "1px",
+      "bg": "rgb(251, 252, 253)",
+      "boxShadow": "rgba(20, 22, 28, 0.22) 0px 8px 28px -14px, rgba(20, 22, 28, 0.05) 0px 1px 2px 0px"
+    },
+    "editorSkin": {
+      "radius": "14px",
+      "borderColor": "rgb(233, 234, 238)",
+      "borderWidth": "1px",
+      "bg": "rgb(255, 255, 255)",
+      "boxShadow": "rgba(20, 22, 28, 0.26) 0px 12px 36px -16px, rgba(20, 22, 28, 0.05) 0px 1px 2px 0px"
+    },
+    "insets": {
+      "sidebar_top": 12,
+      "sidebar_bottom": 12,
+      "editor_top": 12,
+      "editor_bottom": 12,
+      "editor_right": 12,
+      "intercard_gap": 12
+    }
+  },
+  "1760x1000": {
+    "gridR": {
+      "top": 0,
+      "left": 0,
+      "right": 1760,
+      "bottom": 1000,
+      "width": 1760,
+      "height": 1000
+    },
+    "sbR": {
+      "top": 12,
+      "left": 88,
+      "right": 340,
+      "bottom": 988,
+      "width": 252,
+      "height": 976
+    },
+    "edR": {
+      "top": 12,
+      "left": 352,
+      "right": 1748,
+      "bottom": 988,
+      "width": 1396,
+      "height": 976
+    },
+    "chromeBg": {
+      "workbench": "rgb(237, 239, 243)",
+      "grid": "rgb(237, 239, 243)",
+      "body": "rgba(0, 0, 0, 0)"
+    },
+    "sidebarSkin": {
+      "radius": "14px",
+      "borderColor": "rgb(233, 234, 238)",
+      "borderWidth": "1px",
+      "bg": "rgb(251, 252, 253)",
+      "boxShadow": "rgba(20, 22, 28, 0.22) 0px 8px 28px -14px, rgba(20, 22, 28, 0.05) 0px 1px 2px 0px"
+    },
+    "editorSkin": {
+      "radius": "14px",
+      "borderColor": "rgb(233, 234, 238)",
+      "borderWidth": "1px",
+      "bg": "rgb(255, 255, 255)",
+      "boxShadow": "rgba(20, 22, 28, 0.26) 0px 12px 36px -16px, rgba(20, 22, 28, 0.05) 0px 1px 2px 0px"
+    },
+    "insets": {
+      "sidebar_top": 12,
+      "sidebar_bottom": 12,
+      "editor_top": 12,
+      "editor_bottom": 12,
+      "editor_right": 12,
+      "intercard_gap": 12
+    }
+  }
+}

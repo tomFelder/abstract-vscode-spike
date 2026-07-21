@@ -1,0 +1,72 @@
+{
+  "viewport": {
+    "w": 1440,
+    "h": 900
+  },
+  "wbBg": "rgb(237, 239, 243)",
+  "gridBg": "rgb(237, 239, 243)",
+  "sidebar": {
+    "rect": {
+      "x": 88,
+      "y": 0,
+      "w": 252,
+      "h": 894,
+      "right": 340,
+      "bottom": 894
+    },
+    "bg": "rgb(251, 252, 253)",
+    "borderColor": "rgb(233, 234, 238)",
+    "borderWidth": "1px",
+    "radius": "14px",
+    "boxShadow": "rgba(20, 22, 28, 0.22) 0px 8px 28px -14px, rgba(20, 22, 28, 0.05) 0px 1px 2px 0px"
+  },
+  "editor": {
+    "rect": {
+      "x": 352,
+      "y": 0,
+      "w": 1076,
+      "h": 894,
+      "right": 1428,
+      "bottom": 894
+    },
+    "bg": "rgb(255, 255, 255)",
+    "borderColor": "rgb(233, 234, 238)",
+    "borderWidth": "1px",
+    "radius": "14px",
+    "boxShadow": "rgba(20, 22, 28, 0.26) 0px 12px 36px -16px, rgba(20, 22, 28, 0.05) 0px 1px 2px 0px"
+  },
+  "auxbar": {
+    "visible": false,
+    "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0,
+      "right": 0,
+      "bottom": 0
+    },
+    "bg": "rgb(251, 252, 253)",
+    "borderColor": "rgb(233, 234, 238)",
+    "radius": "14px",
+    "boxShadow": "rgba(20, 22, 28, 0.22) 0px 8px 28px -14px, rgba(20, 22, 28, 0.05) 0px 1px 2px 0px"
+  },
+  "frame": {
+    "x": 0,
+    "y": 0,
+    "right": 1440,
+    "bottom": 900,
+    "w": 1440,
+    "h": 900
+  },
+  "insets": {
+    "frameLeftToSidebar": 88,
+    "sidebarTop": 0,
+    "sidebarBottom": 6,
+    "editorTop": 0,
+    "editorBottom": 6,
+    "editorToFrameRight": 12
+  },
+  "gaps": {
+    "sidebarToEditor": 12
+  }
+}

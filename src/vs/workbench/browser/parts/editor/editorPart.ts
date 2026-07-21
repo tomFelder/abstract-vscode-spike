@@ -24,7 +24,7 @@ import { EditorDropTarget } from './editorDropTarget.js';
 import { Color } from '../../../../base/common/color.js';
 import { CenteredViewLayout, CenteredViewState } from '../../../../base/browser/ui/centered/centeredViewLayout.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
-import { Parts, IWorkbenchLayoutService, Position, FLOATING_PANEL_MARGIN, getFloatingOuterEdgeOwners } from '../../../services/layout/browser/layoutService.js';
+import { Parts, IWorkbenchLayoutService, Position, FLOATING_PANEL_MARGIN, FLOATING_PANEL_MODERN_FRAME_INSET, getFloatingOuterEdgeOwners } from '../../../services/layout/browser/layoutService.js';
 import { DeepPartial, assertType } from '../../../../base/common/types.js';
 import { CompositeDragAndDropObserver } from '../../dnd.js';
 import { DeferredPromise, Promises } from '../../../../base/common/async.js';
@@ -1392,7 +1392,13 @@ export class EditorPart extends Part<IEditorPartMemento> implements IEditorPart,
 			const rightMargin = outerRight ? FLOATING_PANEL_MARGIN * 2 : FLOATING_PANEL_MARGIN;
 
 			width = Math.max(0, width - leftMargin - rightMargin);
-			height = Math.max(0, height - FLOATING_PANEL_MARGIN);
+
+			// v2 elevation (fork seam V2-1, plan 44): float the card stack 12px clear of the
+			// top and bottom frame edges instead of hugging the title bar (stock reserves only
+			// a single bottom margin). The matching `margin-top` / `margin-bottom` is applied in
+			// the fork's `styleOverrides/media/elevation.css`; keep the reservation in sync so
+			// the editor contents are not clipped by the wider gutter.
+			height = Math.max(0, height - FLOATING_PANEL_MODERN_FRAME_INSET * 2);
 
 			// Reserve space for the Modern UI editor border (styleOverrides/media/editorBorder.css) so content doesn't get clipped.
 			if (!this.element.classList.contains('modal-editor-part')) {
