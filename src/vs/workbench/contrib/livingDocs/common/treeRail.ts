@@ -344,6 +344,29 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 	return result;
 }
 
+/**
+ * Narrow the Files tree to the rows whose label matches `query` (case-insensitive substring), keeping every
+ * ancestor folder of a match so the match stays reachable in place - the type-to-filter that folds the old
+ * Search tab into Files (P4.2). A blank query returns the tree unchanged. A folder whose own name matches is
+ * kept whole (all its rows), so filtering by a folder name reveals that folder's contents. Pure - the DOM
+ * view feeds it the built node tree and re-renders with the pruned result; no widget state is touched here.
+ */
+export function filterTreeRailNodes(nodes: readonly ITreeRailNode[], query: string): ITreeRailNode[] {
+	const q = query.trim().toLowerCase();
+	if (!q) { return [...nodes]; }
+	const prune = (node: ITreeRailNode): ITreeRailNode | undefined => {
+		if (node.type === 'leaf') {
+			return node.item.label.toLowerCase().includes(q) ? node : undefined;
+		}
+		// A folder whose own name matches is kept whole so its rows stay visible; otherwise keep only the
+		// branches that still hold a match, dropping folders that prune down to nothing.
+		if (node.label.toLowerCase().includes(q)) { return node; }
+		const children = node.children.map(prune).filter((c): c is ITreeRailNode => c !== undefined);
+		return children.length ? { ...node, children } : undefined;
+	};
+	return nodes.map(prune).filter((n): n is ITreeRailNode => n !== undefined);
+}
+
 export interface IOutlineEntry {
 	readonly text: string;
 	readonly level: number;

@@ -7,7 +7,7 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, isAssetName, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -391,5 +391,39 @@ suite('treeRail', () => {
 			{ count: 1, title: 'Weekly Summary', hasSnippet: true },
 		);
 		assert.strictEqual(searchTreeRail(docs, '   ').length, 0, 'blank query returns nothing');
+	});
+
+	test('filterTreeRailNodes narrows to matching rows, keeps ancestor folders, and passes a blank query through', () => {
+		// Two docs in nested Reports folders + one loose source, so the filter must prune folders that hold no match.
+		const nodes = buildTreeRailNodes(
+			[
+				{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), pendingCount: 0, sources: [], folder: 'reports/2025' },
+				{ title: 'Board Note', resource: URI.file('/ws/reports/Board Note.md'), pendingCount: 0, sources: [], folder: 'reports' },
+			],
+			['metrics.csv'],
+		);
+		// Collect every leaf label reachable under a filtered tree, so one deepStrictEqual reads the whole shape.
+		const labels = (roots: readonly ITreeRailNode[]): string[] => {
+			const out: string[] = [];
+			const walk = (n: ITreeRailNode): void => n.type === 'leaf' ? void out.push(n.item.label) : n.children.forEach(walk);
+			roots.forEach(walk);
+			return out.sort();
+		};
+		assert.deepStrictEqual(
+			{
+				weekly: labels(filterTreeRailNodes(nodes, 'weekly')),
+				metrics: labels(filterTreeRailNodes(nodes, 'metrics')),
+				noMatch: filterTreeRailNodes(nodes, 'zzz').length,
+				blankUnchanged: labels(filterTreeRailNodes(nodes, '   ')),
+				original: labels(nodes),
+			},
+			{
+				weekly: ['Weekly Summary'],
+				metrics: ['metrics.csv'],
+				noMatch: 0,
+				blankUnchanged: ['Board Note', 'Weekly Summary', 'metrics.csv'],
+				original: ['Board Note', 'Weekly Summary', 'metrics.csv'],
+			},
+		);
 	});
 });
