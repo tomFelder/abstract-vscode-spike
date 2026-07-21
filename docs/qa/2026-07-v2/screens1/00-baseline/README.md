@@ -7,7 +7,15 @@ Lane C, Abstract Editor v2 wave. This directory captures the before-state for pl
 - Base commit: `3ec16a6333e` - `feat(livingDocs): v2 shell - icon-nav on chrome + regression sweep (#216) (#220)` (current `origin/main`). The plan-44 v2 shell (48px `abstractHeader.ts`, icon-nav on chrome) has already landed on this main; the Home/Templates screen bodies below are still the pre-v2 renders.
 - Gate check: PASS. `src/vs/workbench/contrib/livingDocs/browser/screenRenderHome.ts` exists (the pre-step `screenRender.ts` split landed), so lane C is unblocked. Siblings present: `screenRenderTemplates.ts`, `screenRenderShell.ts`, `screenRenderKnowledge.ts`, `screenRenderAgents.ts`, `screenRenderMisc.ts`.
 
-## Live-screenshot blocker (ENOSPC - environmental, not a plan blocker)
+## Live baselines captured (22 Jul 2026, disk freed - the ENOSPC deferral below is now resolved)
+
+The deferred PNGs are now in this directory (`./scripts/code-web.sh ./living-docs-sample --port 8083`, Chrome for Testing, deviceScaleFactor 2):
+
+- `home-1440x900.png` / `home-1760x1000.png` - the pre-v2 Home dashboard on the sample folder: the hardcoded "Good morning, Tom", the ASK THIS PROJECT composer, the "Tidy this project" surface, the all-clear banner, and the "ALL PROJECTS" folder grid. The sample ships zero pending documents, so this is the all-clear variant of the dashboard (no NEEDS-YOU cards render here).
+- `home-empty-1440x900.png` / `home-empty-1760x1000.png` - the closest reachable "empty Home" through the web harness: an **empty-project front door** (a folder is open but has no documents - "mount is empty", New document / Browse templates / ASK THIS PROJECT composer). NOTE: the true `hasFolder:false` **no-folder** state (the #211 items 1-2 target with the "Living Documents / sources / agents" copy) is **not reachable through `code-web`**, which always mounts a workspace folder; that state is asserted directly in the unit test `screenRender.test.ts` (H1.5: product-vocabulary word count must be 0). The empty-project front door here is the other empty surface #211 touches (its "sources" vocabulary appears in the front-door copy, not the no-folder copy).
+- `templates-1440x900.png` / `templates-1760x1000.png` - the pre-v2 Templates surface: "Reusable starting points", an auto-fill card grid, no filter field, no skeleton thumbnails, no STARTERS row.
+
+## Live-screenshot blocker (ENOSPC - environmental, not a plan blocker) [RESOLVED - see above]
 
 Live baseline screenshots (Home-with-pendings, Home-all-clear, Home-no-folder, Templates at 1440x900 and 1760x1000) could **not** be captured this iteration: the machine's data volume was full (`/System/Volumes/Data` at 97-100%, dropping to ~130Mi free during the run) and could not hold a VS Code build (`npm install` ~1.7GB + `out/` compile output). This is the shared machine under load from the concurrent v2 lanes (editor / tree / shell baselines all installing + compiling at once), not anything specific to this lane.
 
