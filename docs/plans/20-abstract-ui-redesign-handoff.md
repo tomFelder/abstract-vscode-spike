@@ -1,5 +1,7 @@
 # Plan 20 — Abstract UI Redesign: Design Implementation Handoff (spec of record)
 
+> **Revised by Abstract Editor v2 (plan 43, 21 Jul 2026):** the elevation model (chrome `#EDEFF3`, floating panels) is added on top of this spec; **§C2's gutter is superseded** (70px numbered gutter replaces the 30px dot gutter, decision 168); §C1's header becomes one full-width 48px surface with rail toggles (decision 170); §C6 gains the composer model selector and loses the Skills tab. [43-editor-v2-spec.md](43-editor-v2-spec.md) carries the deltas and the new tokens; this doc remains canonical for everything plan 43 does not list.
+>
 > **This is the master spec** for the Abstract UI Redesign work. Plans 21-25 are the
 > executable loop-plans that implement it, row by row, as stacked PRs off `main`.
 >
@@ -109,7 +111,7 @@ The document body is a **sans** (chosen over the serif 4a). Three roles:
 ### C2 · The editor (the heart)
 - **Toolbar (44px):** `Heading ▾` · divider · **B** · *I* · divider · • list · 1. ordered · ❝ quote · (right) quiet `✦ Ask AI` + `● Saved · v14`. **No underline** (not in Markdown). Wire through `LWDPM.cmd(view, name)`.
 - **Reading column:** max **720px**, centered in the editor pane, with a **30px gutter** to its left (`flex:none`).
-- **Provenance gutter (30px):** a **9px dot** (centered) beside a bound line; a **3px vertical bar** spanning the rows of a multi-line edited paragraph. Colors: bound = `accent`; pending/edited = `attention`. **No line numbers.** Hover a marker → source-peek.
+- **Provenance gutter (30px):** a **9px dot** (centered) beside a bound line; a **3px vertical bar** spanning the rows of a multi-line edited paragraph. Colors: bound = `accent`; pending/edited = `attention`. ~~**No line numbers.**~~ *(Superseded by plan 43 pin 9 / decision 168: the gutter is now a 70px line-numbered rail; provenance rides the numbers.)* Hover a marker → source-peek.
 - **Bound figure:** inline non-editable atom, text `accent-hover` (`#4650B8`), `border-bottom: 2px dotted` at ~40% accent (`#9AA2E0`). Round-trips to `[label](bind:key)`.
 - **Inline proposal (meaning change):** rendered *in the document* as a word-diff — addition `bg #E9F6EE / #2C8159`, removal `bg #FBEEEE / strike #CF5A53` — with a widget beneath: an `attention` tag ("Meaning change · needs your call") + one-line rationale + **Approve** (accent) / **Reject** (ghost).
 - **Source-peek drawer:** `position: fixed; left:0; right:0; bottom:0; height:52–54%; z-index:25;` border-top `line`, drawer shadow. Header = source chip + one-line context + **Sync to report** (accent, filled) + close. Body = the source (e.g. CSV) with the referenced row highlighted in `accent-tint`. **The document stays full-width; never open a second editor group.**

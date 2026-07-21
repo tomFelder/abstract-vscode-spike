@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body { margin:0; background:#E4E7ED; font-family:'Instrument Sans',system-ui,sans-serif; color:#26292F; }
+a { color:#5B6DC4; text-decoration:none; }
+a:hover { color:#4650B8; }
+</style>
+</helmet>
+<div style="padding:28px; display:flex; flex-direction:column; gap:28px; align-items:flex-start;">
+
+<!-- ============ WORKBENCH MOCK ============ -->
+<div style="width:1760px; flex:none;">
+  <div style="display:flex; align-items:baseline; gap:12px; margin:0 4px 12px;">
+    <div style="font-size:20px; font-weight:600; color:#14161A;">Abstract — Editor surface v2</div>
+    <div style="font-size:13px; color:#868B95;">Obsidian-informed shell · plan-20 tokens · numbered pins map to the handoff ledger below</div>
+  </div>
+
+  <div style="width:1760px; height:1000px; background:#EDEFF3; border:1px solid #DDE0E7; border-radius:18px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 24px 50px -28px rgba(20,22,28,.34);">
+
+    <!-- HEADER 48px -->
+    <div style="height:48px; flex:none; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid #E2E4EA; position:relative;">
+      <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:118px; top:-11px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">2</div></sc-if>
+      <div title="Collapse left rail (⌘\)" style="width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#52575F; cursor:pointer;" style-hover="background:#E2E4EA;">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="#52575F"></rect><rect x="3" y="4" width="3.5" height="8" rx="1" fill="#52575F"></rect></svg>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="width:22px; height:22px; border-radius:6px; background:#5B6DC4; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px;">A</div>
+        <div style="font-size:13.5px; font-weight:600; color:#1A1C20;">Opportunity OS</div>
+        <div style="color:#C6CAD2;">/</div>
+        <div style="font-size:13.5px; color:#868B95;">Weekly Summary</div>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="display:flex; align-items:center; gap:6px; height:26px; padding:0 10px; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-size:12px; font-weight:500;"><span style="width:7px; height:7px; border-radius:999px; background:#2C8159;"></span> All sources synced</div>
+      <div style="height:30px; padding:0 12px; display:flex; align-items:center; gap:6px; border-radius:9px; border:1px solid #E6E8EC; background:#fff; font-size:12.5px; font-weight:600; color:#52575F; cursor:pointer;" style-hover="border-color:#5B6DC4; color:#4650B8;">↗ Present</div>
+      <div style="width:27px; height:27px; border-radius:999px; background:#3B4D8F; color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600;">TS</div>
+      <div title="Collapse right rail (⌘⇧\)" style="width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#52575F; cursor:pointer;" style-hover="background:#E2E4EA;">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="#52575F"></rect><rect x="9.5" y="4" width="3.5" height="8" rx="1" fill="#52575F"></rect></svg>
+      </div>
+      <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; right:8px; bottom:-11px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">1</div></sc-if>
+    </div>
+
+    <!-- BODY -->
+    <div style="flex:1; display:flex; gap:12px; padding:12px; min-height:0;">
+
+      <!-- ICON NAV 76 -->
+      <div style="width:76px; flex:none; display:flex; flex-direction:column; align-items:center; gap:6px; padding-top:4px; position:relative;">
+        <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:58px; top:-6px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">3</div></sc-if>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 8.5 9 3l6 5.5V15a1 1 0 0 1-1 1h-3.5v-4h-3v4H4a1 1 0 0 1-1-1V8.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Home</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; background:#fff; box-shadow:0 1px 2px rgba(20,22,28,.08); display:flex; flex-direction:column; align-items:center; gap:3px; color:#4650B8;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M12.5 2.5 15.5 5.5 6.5 14.5 3 15l.5-3.5 9-9Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:600;">Editor</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2.5" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="2.5" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect></svg><span style="font-size:10px; font-weight:500;">Templates</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 3.5h3.5V15H3zM8 3.5h3.5V15H8zM12.8 4l2.7.8-2.6 10-2.7-.8 2.6-10Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Knowledge</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M14 4.5a6 6 0 1 0 1.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path><path d="M15.5 2.5v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Agents</span></div>
+        <div style="flex:1;"></div>
+        <div style="width:60px; padding:8px 0 6px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.2" stroke="currentColor" stroke-width="1.5"></circle><path d="M9 2v2M9 14v2M2 9h2M14 9h2M4 4l1.4 1.4M12.6 12.6 14 14M14 4l-1.4 1.4M5.4 12.6 4 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg><span style="font-size:10px; font-weight:500;">Settings</span></div>
+      </div>
+
+      <!-- TREE RAIL 264 (floating) -->
+      <div style="width:264px; flex:none; background:#FBFCFD; border:1px solid #E9EAEE; border-radius:14px; box-shadow:0 8px 28px -14px rgba(20,22,28,.22), 0 1px 2px rgba(20,22,28,.05); display:flex; flex-direction:column; overflow:hidden; position:relative;">
+        <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; right:-9px; top:-6px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">4</div></sc-if>
+        <div style="height:38px; flex:none; display:flex; align-items:center; gap:2px; padding:0 10px; border-bottom:1px solid #EEF0F3;">
+          <div style="height:26px; padding:0 10px; display:flex; align-items:center; border-radius:8px; background:#fff; box-shadow:0 1px 2px rgba(20,22,28,.06); font-size:12px; font-weight:600; color:#1A1C20;">Files</div>
+          <div style="height:26px; padding:0 10px; display:flex; align-items:center; border-radius:8px; font-size:12px; font-weight:500; color:#868B95; cursor:pointer;" style-hover="color:#52575F;">Context</div>
+          <div style="height:26px; padding:0 10px; display:flex; align-items:center; border-radius:8px; font-size:12px; font-weight:500; color:#868B95; cursor:pointer;" style-hover="color:#52575F;">Outline</div>
+          <div style="flex:1;"></div>
+          <div title="New document" style="width:24px; height:24px; border-radius:7px; display:flex; align-items:center; justify-content:center; color:#868B95; cursor:pointer; font-size:15px;" style-hover="background:#EEF0F3; color:#52575F;">＋</div>
+        </div>
+        <div style="flex:1; overflow:auto; padding:8px 8px 12px; position:relative;">
+          <div style="display:flex; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:8px; cursor:pointer; color:#52575F;" style-hover="background:#F1F2F6;">
+            <span style="font-size:9px; color:#A3A8B2; transform:rotate(90deg); display:inline-block;">▶</span>
+            <span style="font-size:12.5px; font-weight:600;">Reports</span>
+            <span style="flex:1;"></span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">6</span>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:1px; padding-left:14px;">
+            <div style="display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; border-radius:8px; background:#F4F5FD; border:1px solid #E0E5FB; cursor:pointer;">
+              <span style="width:7px; height:7px; border-radius:999px; background:#2C8159; flex:none;"></span>
+              <span style="font-size:13px; font-weight:500; color:#2A2F60; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Weekly Summary</span>
+              <span style="flex:1;"></span>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; color:#5B6DC4; background:#fff; border:1px solid #E0E5FB; border-radius:5px; padding:2px 5px;">LWD</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; border-radius:8px; cursor:pointer; position:relative;" style-hover="background:#F1F2F6;">
+              <span style="width:7px; height:7px; border-radius:999px; background:#C99A2E; flex:none;"></span>
+              <span style="font-size:13px; color:#26292F; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Board Note</span>
+              <span style="flex:1;"></span>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; color:#8A6D1A; background:#FDFAF2; border:1px solid #E4DCCB; border-radius:999px; padding:2px 6px;">2</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; border-radius:8px; cursor:pointer;" style-hover="background:#F1F2F6;">
+              <span style="width:7px; height:7px; border-radius:999px; background:#D5D8DE; flex:none;"></span>
+              <span style="font-size:13px; color:#26292F;">Executive Summary</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; border-radius:8px; cursor:pointer;" style-hover="background:#F1F2F6;">
+              <span style="width:7px; height:7px; border-radius:999px; background:#D5D8DE; flex:none;"></span>
+              <span style="font-size:13px; color:#26292F;">Project Brief — Northwind</span>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:8px; cursor:pointer; color:#52575F; margin-top:4px;" style-hover="background:#F1F2F6;">
+            <span style="font-size:9px; color:#A3A8B2; display:inline-block;">▶</span>
+            <span style="font-size:12.5px; font-weight:600;">Archive</span>
+            <span style="flex:1;"></span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">12</span>
+          </div>
+          <div style="margin-top:14px; padding:0 8px; font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">SOURCES</div>
+          <div style="display:flex; flex-direction:column; gap:1px; margin-top:4px;">
+            <div style="display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; border-radius:8px; cursor:pointer;" style-hover="background:#F1F2F6;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#5B6DC4;">⊞</span>
+              <span style="font-size:12.5px; color:#26292F;">metrics.csv</span>
+              <span style="flex:1;"></span>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#5D8A66;">synced</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; border-radius:8px; cursor:pointer;" style-hover="background:#F1F2F6;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#5B6DC4;">◍</span>
+              <span style="font-size:12.5px; color:#26292F;">board-transcript.md</span>
+              <span style="flex:1;"></span>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">2m ago</span>
+            </div>
+          </div>
+          <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:6px; top:96px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">5</div></sc-if>
+
+          <!-- CONTEXT MENU -->
+          <sc-if value="{{ menu }}" hint-placeholder-val="{{ false }}">
+            <div style="position:absolute; left:96px; top:78px; width:208px; background:#fff; border:1px solid #E6E8EC; border-radius:12px; box-shadow:0 22px 48px -20px rgba(20,22,28,.4); padding:6px; z-index:50;">
+              <div style="display:flex; align-items:center; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#26292F; background:#F4F5FD; cursor:pointer;">Open</div>
+              <div style="display:flex; align-items:center; justify-content:space-between; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#26292F; cursor:pointer;" style-hover="background:#F6F7F9;">Open to the right <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">⌥↵</span></div>
+              <div style="height:1px; background:#EEF0F3; margin:6px 4px;"></div>
+              <div style="display:flex; align-items:center; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#26292F; cursor:pointer;" style-hover="background:#F6F7F9;">Rename…</div>
+              <div style="display:flex; align-items:center; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#26292F; cursor:pointer;" style-hover="background:#F6F7F9;">Duplicate</div>
+              <div style="display:flex; align-items:center; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#26292F; cursor:pointer;" style-hover="background:#F6F7F9;">Move to…</div>
+              <div style="height:1px; background:#EEF0F3; margin:6px 4px;"></div>
+              <div style="display:flex; align-items:center; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#26292F; cursor:pointer;" style-hover="background:#F6F7F9;">Bind sources…</div>
+              <div style="display:flex; align-items:center; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#26292F; cursor:pointer;" style-hover="background:#F6F7F9;">View history</div>
+              <div style="display:flex; align-items:center; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#26292F; cursor:pointer;" style-hover="background:#F6F7F9;">Present</div>
+              <div style="height:1px; background:#EEF0F3; margin:6px 4px;"></div>
+              <div style="display:flex; align-items:center; height:30px; padding:0 10px; border-radius:7px; font-size:12.5px; color:#B5514B; cursor:pointer;" style-hover="background:#FBEEEE;">Delete</div>
+              <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; right:-9px; top:-9px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25);">6</div></sc-if>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+
+      <!-- EDITOR (floating white card) -->
+      <div style="flex:1; min-width:0; background:#FFFFFF; border:1px solid #E9EAEE; border-radius:14px; box-shadow:0 12px 36px -16px rgba(20,22,28,.26), 0 1px 2px rgba(20,22,28,.05); display:flex; flex-direction:column; overflow:hidden; position:relative;">
+
+        <!-- TAB STRIP -->
+        <div style="height:40px; flex:none; background:#F3F4F7; display:flex; align-items:flex-end; gap:4px; padding:6px 10px 0; border-bottom:1px solid #E9EAEE; position:relative;">
+          <div style="height:34px; display:flex; align-items:center; gap:8px; padding:0 12px; background:#fff; border:1px solid #E9EAEE; border-bottom:none; border-radius:9px 9px 0 0; font-size:12.5px; font-weight:600; color:#1A1C20; position:relative; top:1px;">
+            <span style="width:6px; height:6px; border-radius:999px; background:#2C8159;"></span> Weekly Summary
+            <span style="color:#A3A8B2; font-size:13px; cursor:pointer; margin-left:2px;" style-hover="color:#52575F;">×</span>
+          </div>
+          <div style="height:32px; display:flex; align-items:center; gap:8px; padding:0 12px; border-radius:9px 9px 0 0; font-size:12.5px; font-weight:500; color:#868B95; cursor:pointer;" style-hover="background:#ECEDF1; color:#52575F;">
+            Board Note <span style="width:6px; height:6px; border-radius:999px; background:#C99A2E;"></span>
+          </div>
+          <div style="height:32px; display:flex; align-items:center; gap:8px; padding:0 12px; border-radius:9px 9px 0 0; font-size:12.5px; font-weight:500; color:#868B95; cursor:pointer;" style-hover="background:#ECEDF1; color:#52575F;">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#5B6DC4;">⊞</span> metrics.csv
+          </div>
+          <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:388px; top:8px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">7</div></sc-if>
+        </div>
+
+        <!-- TOOLBAR 44 -->
+        <div style="height:44px; flex:none; display:flex; align-items:center; gap:2px; padding:0 16px; border-bottom:1px solid #EEF0F3; position:relative;">
+          <div style="display:flex; align-items:center; gap:6px; height:30px; padding:0 10px; border-radius:8px; font-size:13px; font-weight:500; color:#26292F; cursor:pointer;" style-hover="background:#F6F7F9;">Paragraph <span style="font-size:9px; color:#A3A8B2;">▼</span></div>
+          <div style="width:1px; height:18px; background:#E9EAEE; margin:0 8px;"></div>
+          <div style="width:28px; height:28px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; color:#52575F; cursor:pointer;" style-hover="background:#F6F7F9;">B</div>
+          <div style="width:28px; height:28px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-style:italic; font-size:13px; color:#52575F; cursor:pointer;" style-hover="background:#F6F7F9;">I</div>
+          <div style="width:1px; height:18px; background:#E9EAEE; margin:0 8px;"></div>
+          <div style="width:28px; height:28px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#52575F; cursor:pointer;" style-hover="background:#F6F7F9;">•≡</div>
+          <div style="width:28px; height:28px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:11px; color:#52575F; cursor:pointer;" style-hover="background:#F6F7F9;">1.</div>
+          <div style="width:28px; height:28px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#52575F; cursor:pointer;" style-hover="background:#F6F7F9;">❝</div>
+          <div style="flex:1;"></div>
+          <div style="display:flex; align-items:center; gap:6px; height:30px; padding:0 10px; border-radius:8px; font-size:12.5px; font-weight:600; color:#4650B8; cursor:pointer;" style-hover="background:#F4F5FD;">✦ Ask AI</div>
+          <div style="display:flex; align-items:center; gap:6px; height:30px; padding:0 10px; border-radius:8px; font-size:12.5px; font-weight:500; color:#52575F; cursor:pointer; background:{{ propsBtnBg }};" style-hover="background:#F6F7F9;">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M2 7h10M2 10h6" stroke="#52575F" stroke-width="1.5" stroke-linecap="round"></path></svg> Properties
+          </div>
+          <div style="display:flex; align-items:center; gap:6px; margin-left:8px; font-size:12px; color:#A3A8B2;"><span style="width:7px; height:7px; border-radius:999px; background:#2C8159;"></span> Saved · <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">v14</span></div>
+          <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:300px; bottom:-11px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">8</div></sc-if>
+          <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; right:170px; bottom:-11px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">12</div></sc-if>
+        </div>
+
+        <!-- EDITOR CONTENT -->
+        <div style="flex:1; display:flex; min-height:0;">
+          <div style="flex:1; overflow:auto; padding:56px 24px 80px; min-width:0;">
+            <div style="max-width:790px; margin:0 auto; position:relative;">
+              <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-26px; top:130px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">9</div></sc-if>
+
+              <!-- line rows: 70px gutter + 720px text -->
+              <div style="display:flex; gap:0;">
+                <div style="width:70px; flex:none; text-align:right; padding:6px 22px 0 0; font-family:'JetBrains Mono',monospace; font-size:11px; color:#C6CAD2; line-height:1;">1</div>
+                <div style="flex:1; font-size:30px; line-height:1.12; font-weight:600; letter-spacing:-0.02em; color:#14161A; padding-bottom:10px;">Weekly Summary — 14 Jul 2026</div>
+              </div>
+
+              <div style="display:flex;">
+                <div style="width:70px; flex:none; text-align:right; padding:10px 22px 0 0; font-family:'JetBrains Mono',monospace; font-size:11px; color:#C6CAD2; line-height:1;">2</div>
+                <div style="flex:1; font-size:16px; line-height:1.7; color:#26292F; padding:4px 0 8px;">Operating summary for the week of 8–14 July, prepared for Monday's leadership sync. Figures are drawn live from the bound sources below; commentary is maintained by the reporting agent and approved by Tom.</div>
+              </div>
+
+              <div style="display:flex;">
+                <div style="width:70px; flex:none; text-align:right; padding:26px 22px 0 0; font-family:'JetBrains Mono',monospace; font-size:11px; color:#C6CAD2; line-height:1;">3</div>
+                <div style="flex:1; font-size:18px; line-height:1.3; font-weight:600; color:#1A1C20; padding:18px 0 6px;">Highlights</div>
+              </div>
+
+              <!-- bound line: blue number + dot -->
+              <div style="display:flex; position:relative;">
+                <div style="width:70px; flex:none; display:flex; align-items:flex-start; justify-content:flex-end; gap:8px; padding:10px 22px 0 0; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600; color:#5B6DC4; line-height:1;"><span style="width:9px; height:9px; border-radius:999px; background:#5B6DC4; margin-top:-1px;"></span>4</div>
+                <div style="flex:1; font-size:16px; line-height:1.7; color:#26292F; padding:4px 0 8px;">Revenue grew <span style="color:#4650B8; font-weight:500; border-bottom:2px dotted #9AA2E0; cursor:pointer;">+18%</span> week-on-week to <span style="color:#4650B8; font-weight:500; border-bottom:2px dotted #9AA2E0; cursor:pointer;">$48.6k</span> MRR, on <span style="color:#4650B8; font-weight:500; border-bottom:2px dotted #9AA2E0; cursor:pointer;">427</span> new signups. Churn eased to <span style="color:#4650B8; font-weight:500; border-bottom:2px dotted #9AA2E0; cursor:pointer;">2.4%</span>, the third consecutive weekly improvement and the lowest figure since March.</div>
+                <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; right:-10px; top:8px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">10</div></sc-if>
+              </div>
+
+              <div style="display:flex;">
+                <div style="width:70px; flex:none; text-align:right; padding:10px 22px 0 0; font-family:'JetBrains Mono',monospace; font-size:11px; color:#C6CAD2; line-height:1;">5</div>
+                <div style="flex:1; font-size:16px; line-height:1.7; color:#26292F; padding:4px 0 8px;">Enterprise pipeline advanced: two of the four open evaluations moved to security review, and the Northwind pilot expanded from one team to three.</div>
+              </div>
+
+              <!-- pending edit: amber bar in gutter + inline diff -->
+              <div style="display:flex; position:relative;">
+                <div style="width:70px; flex:none; display:flex; align-items:stretch; justify-content:flex-end; gap:8px; padding:10px 22px 4px 0;">
+                  <div style="width:3px; border-radius:999px; background:#C99A2E;"></div>
+                  <div style="font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600; color:#8A6D1A; line-height:1;">6</div>
+                </div>
+                <div style="flex:1; padding:4px 0 8px;">
+                  <div style="font-size:16px; line-height:1.7; color:#26292F;"><span style="background:#FBEEEE; color:#B5514B; text-decoration:line-through; padding:1px 3px; border-radius:4px;">Momentum is steady; we continue to track plan with no surprises this week.</span> <span style="background:#E9F6EE; color:#2C8159; padding:1px 3px; border-radius:4px;">Momentum steady; on plan with no surprises.</span></div>
+                  <div style="margin-top:10px; border:1px solid #E4DCCB; background:#FDFAF2; border-radius:10px; padding:10px 12px; display:flex; align-items:center; gap:12px;">
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; letter-spacing:.1em; color:#8A6D1A;">MEANING CHANGE · NEEDS YOUR CALL</span>
+                    <span style="font-size:12.5px; color:#52575F; flex:1;">Shortened without changing the meaning.</span>
+                    <span style="height:28px; padding:0 14px; display:inline-flex; align-items:center; border-radius:8px; background:#5B6DC4; color:#fff; font-size:12.5px; font-weight:600; cursor:pointer;" style-hover="background:#4650B8;">Approve</span>
+                    <span style="height:28px; padding:0 12px; display:inline-flex; align-items:center; border-radius:8px; border:1px solid #E6E8EC; color:#52575F; font-size:12.5px; font-weight:500; cursor:pointer; background:#fff;" style-hover="border-color:#CF5A53; color:#B5514B;">Reject</span>
+                  </div>
+                </div>
+                <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; right:-10px; top:34px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">11</div></sc-if>
+              </div>
+
+              <div style="display:flex;">
+                <div style="width:70px; flex:none; text-align:right; padding:26px 22px 0 0; font-family:'JetBrains Mono',monospace; font-size:11px; color:#C6CAD2; line-height:1;">7</div>
+                <div style="flex:1; font-size:18px; line-height:1.3; font-weight:600; color:#1A1C20; padding:18px 0 6px;">Focus for next week</div>
+              </div>
+              <div style="display:flex;">
+                <div style="width:70px; flex:none; text-align:right; padding:10px 22px 0 0; font-family:'JetBrains Mono',monospace; font-size:11px; color:#C6CAD2; line-height:1;">8</div>
+                <div style="flex:1; font-size:16px; line-height:1.7; color:#26292F; padding:4px 0 8px;">Close the two security reviews, ship the pricing-page experiment, and land the churn-cohort analysis ahead of the board note on Friday.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PROPERTIES PANEL -->
+          <sc-if value="{{ propsPanel }}" hint-placeholder-val="{{ true }}">
+            <div style="width:284px; flex:none; border-left:1px solid #EEF0F3; background:#FBFCFD; display:flex; flex-direction:column; position:relative;">
+              <div style="height:44px; flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 14px; border-bottom:1px solid #EEF0F3;">
+                <span style="font-size:12.5px; font-weight:600; color:#1A1C20;">Properties</span>
+                <span style="color:#A3A8B2; cursor:pointer; font-size:14px;" style-hover="color:#52575F;">×</span>
+              </div>
+              <div style="flex:1; overflow:auto; padding:14px;">
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                  <div style="display:flex; flex-direction:column; gap:4px;"><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">TITLE</span><span style="font-size:13px; color:#26292F;">Weekly Summary</span></div>
+                  <div style="display:flex; gap:16px;">
+                    <div style="display:flex; flex-direction:column; gap:4px; flex:1;"><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">CREATED</span><span style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#52575F;">2026-05-02</span></div>
+                    <div style="display:flex; flex-direction:column; gap:4px; flex:1;"><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">UPDATED</span><span style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#52575F;">2m ago · v14</span></div>
+                  </div>
+                  <div style="display:flex; flex-direction:column; gap:6px;"><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">STATUS</span><span style="align-self:flex-start; height:22px; padding:0 9px; display:inline-flex; align-items:center; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-size:11.5px; font-weight:500;">in-progress</span></div>
+                  <div style="display:flex; flex-direction:column; gap:6px;"><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">TAGS</span>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                      <span style="height:22px; padding:0 9px; display:inline-flex; align-items:center; border-radius:999px; background:#F4F5FD; border:1px solid #E0E5FB; color:#2A2F60; font-size:11.5px;">weekly</span>
+                      <span style="height:22px; padding:0 9px; display:inline-flex; align-items:center; border-radius:999px; background:#F4F5FD; border:1px solid #E0E5FB; color:#2A2F60; font-size:11.5px;">ops</span>
+                      <span style="height:22px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; border:1px dashed #C6CAD2; color:#A3A8B2; font-size:11.5px; cursor:pointer;" style-hover="color:#52575F; border-color:#A3A8B2;">＋</span>
+                    </div>
+                  </div>
+                  <div style="height:1px; background:#EEF0F3;"></div>
+                  <div style="display:flex; flex-direction:column; gap:6px;"><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">BOUND SOURCES</span>
+                    <div style="display:flex; align-items:center; gap:8px; height:32px; padding:0 10px; border-radius:8px; background:#fff; border:1px solid #E9EAEE;">
+                      <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#5B6DC4;">⊞</span>
+                      <span style="font-size:12px; color:#26292F; flex:1;">metrics.csv</span>
+                      <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#5D8A66;">4 binds</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px; height:32px; padding:0 10px; border-radius:8px; background:#fff; border:1px solid #E9EAEE;">
+                      <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#5B6DC4;">◍</span>
+                      <span style="font-size:12px; color:#26292F; flex:1;">board-transcript.md</span>
+                      <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">context</span>
+                    </div>
+                  </div>
+                  <div style="display:flex; flex-direction:column; gap:6px;"><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">AGENT POLICY</span><span style="font-size:12px; color:#52575F; line-height:1.5;">Figures auto-apply · meaning changes ask first</span></div>
+                </div>
+              </div>
+              <div style="flex:none; padding:12px 14px; border-top:1px solid #EEF0F3;">
+                <a href="#" style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;" style-hover="color:#4650B8;">Edit raw YAML →</a>
+              </div>
+              <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-11px; top:120px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">12</div></sc-if>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+
+      <!-- RIGHT RAIL 392 (floating) -->
+      <div style="width:392px; flex:none; background:#FBFCFD; border:1px solid #E9EAEE; border-radius:14px; box-shadow:0 8px 28px -14px rgba(20,22,28,.22), 0 1px 2px rgba(20,22,28,.05); display:flex; flex-direction:column; overflow:hidden; position:relative;">
+        <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-9px; top:-6px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">13</div></sc-if>
+        <div style="height:44px; flex:none; display:flex; align-items:center; gap:2px; padding:0 12px; border-bottom:1px solid #EEF0F3;">
+          <div style="height:28px; padding:0 12px; display:flex; align-items:center; border-radius:8px; background:#fff; box-shadow:0 1px 2px rgba(20,22,28,.06); font-size:12.5px; font-weight:600; color:#1A1C20;">Chat</div>
+          <div style="height:28px; padding:0 12px; display:flex; align-items:center; gap:6px; border-radius:8px; font-size:12.5px; font-weight:500; color:#868B95; cursor:pointer;" style-hover="color:#52575F;">Review <span style="min-width:16px; height:16px; padding:0 4px; border-radius:999px; background:#C99A2E; color:#fff; font-size:10px; font-weight:600; display:inline-flex; align-items:center; justify-content:center;">1</span></div>
+          <div style="height:28px; padding:0 12px; display:flex; align-items:center; border-radius:8px; font-size:12.5px; font-weight:500; color:#868B95; cursor:pointer;" style-hover="color:#52575F;">History</div>
+        </div>
+        <div style="flex:1; overflow:auto; padding:14px; display:flex; flex-direction:column; gap:12px;">
+          <div style="align-self:flex-end; max-width:85%; background:#F4F5FD; border:1px solid #E0E5FB; border-radius:12px 12px 4px 12px; padding:10px 12px; font-size:13px; line-height:1.55; color:#2A2F60;">Refresh the highlights from <span style="display:inline-flex; align-items:center; gap:4px; height:20px; padding:0 7px; border-radius:999px; background:#fff; border:1px solid #E0E5FB; font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#4650B8; vertical-align:-4px;">@metrics.csv</span> and tighten the board note line.</div>
+          <div style="align-self:flex-start; max-width:92%; display:flex; flex-direction:column; gap:8px;">
+            <div style="background:#F6F7F9; border:1px solid #EEF0F3; border-radius:9px; padding:8px 10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#2C8159;">✓ Read metrics.csv · 12 rows</div>
+            <div style="font-size:13px; line-height:1.55; color:#26292F;">Refreshed 4 bound figures against this week's rows — all applied automatically and reversible:</div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <span style="height:24px; padding:0 9px; display:inline-flex; align-items:center; gap:5px; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-family:'JetBrains Mono',monospace; font-size:10.5px;">MRR $48.6k</span>
+              <span style="height:24px; padding:0 9px; display:inline-flex; align-items:center; gap:5px; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-family:'JetBrains Mono',monospace; font-size:10.5px;">+18%</span>
+              <span style="height:24px; padding:0 9px; display:inline-flex; align-items:center; gap:5px; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-family:'JetBrains Mono',monospace; font-size:10.5px;">churn 2.4%</span>
+            </div>
+            <div style="border:1px solid #E4DCCB; background:#FDFAF2; border-radius:10px; padding:10px 12px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.1em; color:#8A6D1A; margin-bottom:4px;">1 MEANING CHANGE WAITING</div>
+              <div style="font-size:12.5px; color:#52575F; line-height:1.5;">Line 6 — shortened the momentum sentence. <a href="#" style="font-weight:600;">Review →</a></div>
+            </div>
+          </div>
+        </div>
+        <!-- COMPOSER -->
+        <div style="flex:none; padding:12px; border-top:1px solid #EEF0F3; position:relative;">
+          <div style="background:#fff; border:1px solid #E6E8EC; border-radius:12px; padding:10px 12px 8px;">
+            <div style="font-size:13px; color:#A3A8B2; min-height:38px;">Ask about this document, or @mention a source…</div>
+            <div style="display:flex; align-items:center; gap:4px; padding-top:6px; border-top:1px solid #F3F4F7;">
+              <div style="height:26px; padding:0 9px; display:flex; align-items:center; gap:5px; border-radius:7px; font-size:12px; font-weight:500; color:#52575F; cursor:pointer;" style-hover="background:#F6F7F9;">＋ Skill</div>
+              <div style="height:26px; padding:0 9px; display:flex; align-items:center; border-radius:7px; font-size:12px; font-weight:500; color:#52575F; cursor:pointer;" style-hover="background:#F6F7F9;">@</div>
+              <div style="flex:1;"></div>
+              <div style="height:26px; padding:0 9px; display:flex; align-items:center; gap:5px; border-radius:7px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95; cursor:pointer;" style-hover="background:#F6F7F9; color:#52575F;"><span style="width:6px; height:6px; border-radius:999px; background:#2C8159;"></span> claude-sonnet-4.5 <span style="font-size:8px;">▼</span></div>
+              <div style="width:28px; height:28px; border-radius:8px; background:#5B6DC4; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:#4650B8;"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 11V2M6.5 2 2.5 6M6.5 2l4 4" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+            </div>
+          </div>
+          <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-11px; top:34px; width:22px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">14</div></sc-if>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ HANDOFF LEDGER ============ -->
+<div style="width:1760px; flex:none;">
+  <div style="font-size:20px; font-weight:600; color:#14161A; margin:8px 4px 4px;">Engineering handoff — annotation ledger</div>
+  <div style="font-size:13px; color:#868B95; margin:0 4px 16px; max-width:900px; line-height:1.6;">Each pin above maps to an entry below. Tokens are the plan-20 Part-B set (verbatim). "Code surface" names the file/contribution to touch; "Tier" follows the merge-tax discipline — our-surface = livingDocs contribution / livingDocRender webview / service; core = shared workbench (log in <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">03-merge-tax-ledger.md</span>).</div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">1</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Elevation model — white editor over darker chrome</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">The app frame is no longer flat. Chrome (window bg) is <b>#EDEFF3</b> — a step darker than <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">hairline</span> — and the three work panels <b>float</b> on it with 12px gaps: tree rail + right rail on <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#FBFCFD</span>, editor on <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">paper #FFFFFF</span>. Radius 14 (cards), border <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">line #E9EAEE</span>. Shadows: rails <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">0 8px 28px -14px rgba(20,22,28,.22)</span>; editor (top of stack) <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">0 12px 36px -16px rgba(20,22,28,.26)</span>, both + e1. The white paper is the visual focus — the Obsidian trick, in Abstract's light palette. Monaco note: keep <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">.monaco-editor-background</span> opaque #FFFFFF (never transparent).</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: workbench layout CSS + livingDocRender shell &nbsp;·&nbsp; <span style="color:#8A6D1A;">Tier: 1 small core CSS seam (part backgrounds/margins) — log it</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">2</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Rail toggles live in the header</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">Two 28px icon buttons at the header's far left / far right collapse the tree rail and right rail (Obsidian's pattern — <b>never</b> a floating chevron mid-editor). Icons: panel glyph with the filled half indicating which side. Keybindings ⌘\ and ⌘⇧\. Collapse animates width→0 + fade over 150ms ease; state persists per-workspace (storage service). When the right rail is collapsed but a proposal is pending, the Review badge count moves onto the toggle button (8px amber dot) so trust-grammar force-open is no longer needed.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: livingDocRender top bar + rail contributions (visibility commands exist) &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">3</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Icon-nav sits on chrome, not in a panel</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">76px labeled nav (plan-25 build) keeps its items but loses its <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">panel</span> background — items sit directly on the #EDEFF3 chrome. Active item = 60px white chip, radius 10, e1 shadow, glyph + label <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">accent-hover #4650B8</span>. Idle = <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">muted #868B95</span>, hover <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">slate</span>. 18px stroke glyphs, 10px/500 labels. Settings pinned bottom.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: labeled-nav contribution (plan 25) — CSS only &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">4</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Tree rail — floating panel, 3 tabs + ＋</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">264px floating card. 38px tab strip: <b>Files · Context · Outline</b> (Search folds into Files as type-to-filter — 3 tabs read calmer than 4). Active tab = white chip + e1. A quiet ＋ (new document) sits right of the tabs. The whole rail scrolls as one; SOURCES group keeps its mono UPPER label (10px/.12em/<span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">faint</span>).</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: tree-rail ViewPane &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">5</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Collapsible tree — status at a glance</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">Folder rows: 28px, chevron (9px, rotates 90°) + 12.5/600 name + mono doc-count right-aligned. Doc rows: 30px, radius 8, 7px status dot (<span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">ok</span> = synced · <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">attention</span> = changes waiting · <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#D5D8DE</span> = plain) + name + right meta: <b>LWD chip</b> for living docs, amber count pill for docs with pending approvals. Selected row = <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">accent-tint #F4F5FD</span> bg + <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#E0E5FB</span> border, text <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">accent-ink</span>. Children indent 14px. Twist animates 150ms.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: tree-rail ViewPane (VS Code tree widget, restyled) &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">6</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Full right-click menu on documents</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">Context menu (toggle the tweak to see it): 208px popover, radius 12, popover shadow, 6px padding, 30px rows, hairline dividers. Groups: <b>Open / Open to the right</b> · <b>Rename / Duplicate / Move to…</b> · <b>Bind sources… / View history / Present</b> · <b>Delete</b> (<span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">removed-ink #B5514B</span>, hover bg <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#FBEEEE</span>). "Open to the right" is the ONE sanctioned split (side-by-side reference reading) — it may never leave a blank group: closing the last editor in a group closes the group. Delete confirms; Rename is inline in the tree.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: tree-rail ViewPane + menu service (native ContextMenuService, restyled) &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">7</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Tabbed working surface (product tabs, not IDE tabs)</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">40px strip on <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#F3F4F7</span> inside the editor card. Our own tab row (VS Code's tab strip stays disabled via <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">showTabs:'none'</span>): active tab = white, radius 9 9 0 0, 1px border merging into the toolbar edge, 12.5/600 + status dot + quiet ×; idle tabs text-only, hover <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#ECEDF1</span>. Sources (metrics.csv) open as tabs too — same surface, ⊞ mono glyph — replacing nothing about the bottom source-drawer (pin 10). No drag-to-split, no reorder-into-groups; overflow scrolls horizontally. Middle-click closes. Cap visible tabs ~8, then overflow menu.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: livingDocRender shell (own DOM above the webview) or a thin editor-group header replacement &nbsp;·&nbsp; <span style="color:#8A6D1A;">Tier: our-surface, possibly 1 core seam if group header is replaced</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">8</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Toolbar unchanged — plus Properties entry</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">The pared 44px toolbar ships as-is (borderless Paragraph ▾, B/I, list/ordered/quote, all via <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">LWDPM.cmd</span>; no underline). Right side gains one control: <b>Properties</b> (list glyph + label), which toggles pin 12. Order: ✦ Ask AI · Properties · ● Saved · v14. Nothing else is added — the calm-toolbar rule from the v4 loop holds.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: livingDocRender .etoolbar &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">9</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Numbered gutter — the annotation rail (revises plan-20 §C2)</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;"><b>Design change, Tom-approved:</b> the 30px dot-only gutter becomes a 70px <b>line-numbered</b> gutter (Obsidian learning). Numbers: JetBrains Mono 11px, right-aligned, 22px from the text edge, idle <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#C6CAD2</span> (quieter than faint — invisible until useful). Numbering follows the D1 wrap rule: one number per <b>Markdown line/block</b>; wrapped visual rows show blank gutter. Provenance rides the numbers: a <b>bound</b> line's number turns <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">accent #5B6DC4</span>/600 + 9px dot to its left; a <b>pending-edit</b> block gets an <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">attention</span> number + 3px vertical bar spanning its rows. Hover a marked number → source-peek drawer. Numbers give chat/review a shared address ("line 6") — use them in proposal cards. Implement as a PM gutter decoration column (flex:none, left of the 720px doc column; prose never shifts).</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: PM decorations in livingDocRender bundle (replaces margin-dot deco) &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span> &nbsp;·&nbsp; update plan-20 §C2 + decision log</div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">10</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Bound figures + source drawer (unchanged)</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">Bound figures stay per spec: non-editable PM atom, text <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#4650B8</span>/500, 2px dotted underline <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#9AA2E0</span>, round-trips to <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">[label](bind:key)</span>. Click → fixed bottom source drawer (52–54%, z-25, referenced row in accent-tint) — never a second editor group. The drawer and the metrics.csv <b>tab</b> coexist: drawer = quick provenance peek; tab = working in the source.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: shipped — no change &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">11</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Inline proposal — now addressed by line</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">Word-diff in the document (add <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#E9F6EE/#2C8159</span>, remove <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#FBEEEE</span> strike <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">#CF5A53</span>) + attention widget with mono tag, one-line rationale, Approve (accent fill) / Reject (ghost). New: the widget and the rail card both cite the gutter address ("Line 6") — the number rail (pin 9) makes changes referenceable in conversation.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: PM widget decoration (shipped) + address string in proposal model &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">12</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Properties panel — frontmatter without the YAML</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">284px inset panel inside the editor card (right edge, <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">rail</span> bg, hairline left border) — Obsidian's Properties, Abstract-calm. Reads/writes the doc's YAML frontmatter + lock.json: TITLE · CREATED/UPDATED (mono) · STATUS chip · TAGS (accent-tint chips + ＋) · BOUND SOURCES (rows with bind counts; click → drawer) · AGENT POLICY (plain-language, per-doc "ask me first"). Footer: "Edit raw YAML →" opens the raw view — plain front door, pro back door. Toggled from the toolbar (pin 8); state per-doc. Field labels: mono 9.5px UPPER .12em faint. The 720px reading column re-centers in the remaining width when open.</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: livingDocRender shell panel + parseLivingDoc frontmatter API &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">13</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Right rail — floating, same 3 tabs</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">392px floating card, Chat · Review (amber count badge) · History. Tab treatment matches the tree rail (white chip + e1 active). Content per plan-20 §C6 — no structural change beyond the float + the line-address references (pin 11).</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: right-rail contribution CSS &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+    <div style="background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span style="width:24px; height:24px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 12px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">14</span><span style="font-size:15px; font-weight:600; color:#1A1C20;">Composer — model selector</span></div>
+      <div style="font-size:13px; color:#52575F; line-height:1.65;">The composer gains a quiet model control on its action row: mono 11px, <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px;">muted</span>, green health dot + model id + ▾. Click → popover listing the broker's models (included tier vs own-key, per plan 35), current checked, health per row. Selection persists per-workspace. It reads as metadata until you need it — calm by default, powerful on demand. Row order: ＋ Skill · @ · (spacer) · model · send (28px accent square, radius 8).</div>
+      <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: chat composer in right-rail contribution + lwd-model-broker list API &nbsp;·&nbsp; <span style="color:#2C8159;">Tier: our-surface</span></div>
+    </div>
+
+  </div>
+
+  <!-- token strip -->
+  <div style="margin-top:16px; background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:16px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+    <div style="font-size:13px; font-weight:600; color:#1A1C20; margin-bottom:10px;">New/changed tokens introduced by this pass (everything else = plan-20 Part B verbatim)</div>
+    <div style="display:flex; gap:22px; flex-wrap:wrap; font-family:'JetBrains Mono',monospace; font-size:11px; color:#52575F;">
+      <span style="display:flex; align-items:center; gap:7px;"><span style="width:14px; height:14px; border-radius:4px; background:#EDEFF3; border:1px solid #DDE0E7;"></span>chrome #EDEFF3 (app frame bg)</span>
+      <span style="display:flex; align-items:center; gap:7px;"><span style="width:14px; height:14px; border-radius:4px; background:#F3F4F7; border:1px solid #E6E8EC;"></span>tabwell #F3F4F7 (tab strip bg)</span>
+      <span style="display:flex; align-items:center; gap:7px;"><span style="width:14px; height:14px; border-radius:4px; background:#C6CAD2; border:1px solid #E6E8EC;"></span>gutter-idle #C6CAD2 (line numbers)</span>
+      <span>shadow-rail: 0 8px 28px -14px rgba(20,22,28,.22)</span>
+      <span>shadow-editor: 0 12px 36px -16px rgba(20,22,28,.26)</span>
+      <span>gutter width 70px · numbers 11px right-aligned, 22px gap</span>
+    </div>
+  </div>
+</div>
+</div>
+<div style="padding:0 28px 28px; display:flex; flex-direction:column; gap:28px; align-items:flex-start;">
+
+<!-- ============ HOME ============ -->
+<div style="width:1760px; flex:none;">
+  <div style="display:flex; align-items:baseline; gap:12px; margin:0 4px 12px;">
+    <div style="font-size:20px; font-weight:600; color:#14161A;">Home</div>
+    <div style="font-size:13px; color:#868B95;">the on-ramp — no rails, one floating surface on chrome</div>
+  </div>
+  <div style="width:1760px; height:860px; background:#EDEFF3; border:1px solid #DDE0E7; border-radius:18px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 24px 50px -28px rgba(20,22,28,.34);">
+    <div style="height:48px; flex:none; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid #E2E4EA;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="width:22px; height:22px; border-radius:6px; background:#5B6DC4; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px;">A</div>
+        <div style="font-size:13.5px; font-weight:600; color:#1A1C20;">Opportunity OS</div>
+        <div style="color:#C6CAD2;">/</div>
+        <div style="font-size:13.5px; color:#868B95;">Home</div>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="display:flex; align-items:center; gap:6px; height:26px; padding:0 10px; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-size:12px; font-weight:500;"><span style="width:7px; height:7px; border-radius:999px; background:#2C8159;"></span> All sources synced</div>
+      <div style="height:30px; padding:0 12px; display:flex; align-items:center; gap:6px; border-radius:9px; border:1px solid #E6E8EC; background:#fff; font-size:12.5px; font-weight:600; color:#52575F; cursor:pointer;" style-hover="border-color:#5B6DC4; color:#4650B8;">＋ Open folder</div>
+      <div style="width:27px; height:27px; border-radius:999px; background:#3B4D8F; color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600;">TS</div>
+    </div>
+    <div style="flex:1; display:flex; gap:12px; padding:12px; min-height:0;">
+      <div style="width:76px; flex:none; display:flex; flex-direction:column; align-items:center; gap:6px; padding-top:4px;">
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; background:#fff; box-shadow:0 1px 2px rgba(20,22,28,.08); display:flex; flex-direction:column; align-items:center; gap:3px; color:#4650B8;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 8.5 9 3l6 5.5V15a1 1 0 0 1-1 1h-3.5v-4h-3v4H4a1 1 0 0 1-1-1V8.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:600;">Home</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M12.5 2.5 15.5 5.5 6.5 14.5 3 15l.5-3.5 9-9Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Editor</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2.5" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="2.5" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect></svg><span style="font-size:10px; font-weight:500;">Templates</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 3.5h3.5V15H3zM8 3.5h3.5V15H8zM12.8 4l2.7.8-2.6 10-2.7-.8 2.6-10Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Knowledge</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M14 4.5a6 6 0 1 0 1.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path><path d="M15.5 2.5v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Agents</span></div>
+        <div style="flex:1;"></div>
+        <div style="width:60px; padding:8px 0 6px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.2" stroke="currentColor" stroke-width="1.5"></circle><path d="M9 2v2M9 14v2M2 9h2M14 9h2M4 4l1.4 1.4M12.6 12.6 14 14M14 4l-1.4 1.4M5.4 12.6 4 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg><span style="font-size:10px; font-weight:500;">Settings</span></div>
+      </div>
+      <div style="flex:1; min-width:0; background:#FFFFFF; border:1px solid #E9EAEE; border-radius:14px; box-shadow:0 12px 36px -16px rgba(20,22,28,.26), 0 1px 2px rgba(20,22,28,.05); overflow:auto;">
+        <div style="max-width:1080px; margin:0 auto; padding:64px 48px 80px;">
+          <div style="display:flex; align-items:baseline; gap:14px; margin-bottom:10px; position:relative;">
+            <div style="font-size:30px; line-height:1.12; font-weight:600; letter-spacing:-0.02em; color:#14161A; flex:none; white-space:nowrap;">Good morning, Tom.</div>
+            <div style="font-size:13px; color:#A3A8B2; flex:none; font-family:'JetBrains Mono',monospace;">Mon 14 Jul</div>
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; right:0; top:2px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">H1</div></sc-if>
+          </div>
+          <div style="font-size:14px; color:#868B95; margin-bottom:36px;">2 documents need you · everything else is in sync.</div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; letter-spacing:.12em; color:#A3A8B2; margin-bottom:10px;">NEEDS YOU</div>
+          <div style="display:flex; gap:16px; margin-bottom:40px; position:relative;">
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:-8px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">H2</div></sc-if>
+            <div style="flex:1; background:#fff; border:1px solid #E6E8EC; border-top:3px solid #5B6DC4; border-radius:13px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;"><span style="width:8px; height:8px; border-radius:999px; background:#C99A2E;"></span><span style="font-size:14.5px; font-weight:600; color:#1A1C20;">Weekly Summary</span><span style="flex:1;"></span><span style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; color:#8A6D1A; background:#FDFAF2; border:1px solid #E4DCCB; border-radius:999px; padding:3px 8px;">1 TO APPROVE</span></div>
+              <div style="font-size:13px; color:#52575F; line-height:1.55; margin-bottom:14px;">The reporting agent shortened the momentum sentence — a meaning change waiting on your call at line 6.</div>
+              <div style="display:flex; align-items:center; gap:10px;"><span style="height:30px; padding:0 14px; display:inline-flex; align-items:center; border-radius:8px; background:#5B6DC4; color:#fff; font-size:12.5px; font-weight:600; cursor:pointer;" style-hover="background:#4650B8;">Review</span><span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#A3A8B2;">refreshed 2m ago</span></div>
+            </div>
+            <div style="flex:1; background:#fff; border:1px solid #E6E8EC; border-top:3px solid #5B6DC4; border-radius:13px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;"><span style="width:8px; height:8px; border-radius:999px; background:#C99A2E;"></span><span style="font-size:14.5px; font-weight:600; color:#1A1C20;">Board Note</span><span style="flex:1;"></span><span style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; color:#8A6D1A; background:#FDFAF2; border:1px solid #E4DCCB; border-radius:999px; padding:3px 8px;">2 TO APPROVE</span></div>
+              <div style="font-size:13px; color:#52575F; line-height:1.55; margin-bottom:14px;">Two figure narratives were rewritten from Friday's transcript — both traced, both waiting.</div>
+              <div style="display:flex; align-items:center; gap:10px;"><span style="height:30px; padding:0 14px; display:inline-flex; align-items:center; border-radius:8px; background:#5B6DC4; color:#fff; font-size:12.5px; font-weight:600; cursor:pointer;" style-hover="background:#4650B8;">Review</span><span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#A3A8B2;">refreshed 1h ago</span></div>
+            </div>
+          </div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; letter-spacing:.12em; color:#A3A8B2; margin-bottom:10px;">ALL DOCUMENTS</div>
+          <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; position:relative;">
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:-8px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">H3</div></sc-if>
+            <div style="background:#FBFCFD; border:1px solid #E9EAEE; border-radius:13px; padding:14px 16px; cursor:pointer;" style-hover="border-color:#E0E5FB; background:#F4F5FD;">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="width:26px; height:26px; border-radius:8px; background:#5B6DC4; color:#fff; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600;">WS</span><span style="font-size:13px; font-weight:600; color:#1A1C20;">Weekly Summary</span></div>
+              <div style="display:flex; align-items:center; gap:6px;"><span style="height:20px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; background:#FDFAF2; border:1px solid #E4DCCB; color:#8A6D1A; font-size:10.5px; font-weight:500;">needs you</span><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">2 sources</span></div>
+            </div>
+            <div style="background:#FBFCFD; border:1px solid #E9EAEE; border-radius:13px; padding:14px 16px; cursor:pointer;" style-hover="border-color:#E0E5FB; background:#F4F5FD;">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="width:26px; height:26px; border-radius:8px; background:#3B4D8F; color:#fff; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600;">BN</span><span style="font-size:13px; font-weight:600; color:#1A1C20;">Board Note</span></div>
+              <div style="display:flex; align-items:center; gap:6px;"><span style="height:20px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; background:#FDFAF2; border:1px solid #E4DCCB; color:#8A6D1A; font-size:10.5px; font-weight:500;">needs you</span><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">3 sources</span></div>
+            </div>
+            <div style="background:#FBFCFD; border:1px solid #E9EAEE; border-radius:13px; padding:14px 16px; cursor:pointer;" style-hover="border-color:#E0E5FB; background:#F4F5FD;">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="width:26px; height:26px; border-radius:8px; background:#0E7C66; color:#fff; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600;">ES</span><span style="font-size:13px; font-weight:600; color:#1A1C20;">Executive Summary</span></div>
+              <div style="display:flex; align-items:center; gap:6px;"><span style="height:20px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-size:10.5px; font-weight:500;">in sync</span><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">1 source</span></div>
+            </div>
+            <div style="background:#FBFCFD; border:1px solid #E9EAEE; border-radius:13px; padding:14px 16px; cursor:pointer;" style-hover="border-color:#E0E5FB; background:#F4F5FD;">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="width:26px; height:26px; border-radius:8px; background:#5A3EA8; color:#fff; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600;">PB</span><span style="font-size:13px; font-weight:600; color:#1A1C20;">Project Brief</span></div>
+              <div style="display:flex; align-items:center; gap:6px;"><span style="height:20px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; background:#F6F7F9; border:1px solid #E9EAEE; color:#868B95; font-size:10.5px; font-weight:500;">markdown</span><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">no binds</span></div>
+            </div>
+            <div style="border:1px dashed #C6CAD2; border-radius:13px; padding:14px 16px; display:flex; align-items:center; justify-content:center; gap:8px; color:#868B95; cursor:pointer; min-height:76px;" style-hover="color:#4650B8; border-color:#9AA2E0;"><span style="font-size:16px;">＋</span><span style="font-size:13px; font-weight:500;">New document</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div style="margin-top:12px; background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:16px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05); display:flex; flex-direction:column; gap:10px;">
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">H1</span><span><b>Greeting row</b> — baseline-aligned (v4 D1 fix holds): title 30/600 nowrap flex:none + mono date flex:none. No rails render on Home — one white surface floats on chrome with the editor-card shadow; reading column max 1080px. Header swaps Present for "＋ Open folder". <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: home contribution · Tier: our-surface</span></span></div>
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">H2</span><span><b>NEEDS YOU cards</b> — max 2 visible, 3px accent top-border, radius 13. Anatomy: 8px attention pulse dot (opacity 1↔.35, 2.4s ease) + name 14.5/600 + mono amber "N TO APPROVE" pill; one-line plain-language reason citing the gutter address ("line 6" — pin 9's shared vocabulary); accent Review button deep-links to the doc with the Review tab open; mono freshness stamp. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: home contribution ← livingDocsService pending counts · Tier: our-surface</span></span></div>
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">H3</span><span><b>ALL DOCUMENTS grid</b> — 4-col, reads the open folder (decision 39: the folder IS the project — no fixture cards). Card: 26px two-letter avatar (spec palette) + 13/600 name + status chip (needs you / in sync / markdown) + mono source count; hover = accent-tint. Dashed "New document" tile last. Empty state: one line, one button, nothing else. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: home contribution · Tier: our-surface</span></span></div>
+  </div>
+</div>
+</div><div style="padding:0 28px 28px; display:flex; flex-direction:column; gap:28px; align-items:flex-start;">
+
+<!-- ============ TEMPLATES ============ -->
+<div style="width:1760px; flex:none;">
+  <div style="display:flex; align-items:baseline; gap:12px; margin:0 4px 12px;">
+    <div style="font-size:20px; font-weight:600; color:#14161A;">Templates</div>
+    <div style="font-size:13px; color:#868B95;">gallery on the white surface — a template is a living doc with empty binds</div>
+  </div>
+  <div style="width:1760px; height:820px; background:#EDEFF3; border:1px solid #DDE0E7; border-radius:18px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 24px 50px -28px rgba(20,22,28,.34);">
+    <div style="height:48px; flex:none; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid #E2E4EA;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="width:22px; height:22px; border-radius:6px; background:#5B6DC4; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px;">A</div>
+        <div style="font-size:13.5px; font-weight:600; color:#1A1C20;">Opportunity OS</div>
+        <div style="color:#C6CAD2;">/</div>
+        <div style="font-size:13.5px; color:#868B95;">Templates</div>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="height:30px; padding:0 12px; display:flex; align-items:center; gap:6px; border-radius:9px; border:1px solid #E6E8EC; background:#fff; font-size:12.5px; font-weight:600; color:#52575F; cursor:pointer;" style-hover="border-color:#5B6DC4; color:#4650B8;">＋ New template</div>
+      <div style="width:27px; height:27px; border-radius:999px; background:#3B4D8F; color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600;">TS</div>
+    </div>
+    <div style="flex:1; display:flex; gap:12px; padding:12px; min-height:0;">
+      <div style="width:76px; flex:none; display:flex; flex-direction:column; align-items:center; gap:6px; padding-top:4px;">
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 8.5 9 3l6 5.5V15a1 1 0 0 1-1 1h-3.5v-4h-3v4H4a1 1 0 0 1-1-1V8.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Home</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M12.5 2.5 15.5 5.5 6.5 14.5 3 15l.5-3.5 9-9Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Editor</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; background:#fff; box-shadow:0 1px 2px rgba(20,22,28,.08); display:flex; flex-direction:column; align-items:center; gap:3px; color:#4650B8;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2.5" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="2.5" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect></svg><span style="font-size:10px; font-weight:600;">Templates</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 3.5h3.5V15H3zM8 3.5h3.5V15H8zM12.8 4l2.7.8-2.6 10-2.7-.8 2.6-10Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Knowledge</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M14 4.5a6 6 0 1 0 1.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path><path d="M15.5 2.5v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Agents</span></div>
+        <div style="flex:1;"></div>
+        <div style="width:60px; padding:8px 0 6px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.2" stroke="currentColor" stroke-width="1.5"></circle><path d="M9 2v2M9 14v2M2 9h2M14 9h2M4 4l1.4 1.4M12.6 12.6 14 14M14 4l-1.4 1.4M5.4 12.6 4 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg><span style="font-size:10px; font-weight:500;">Settings</span></div>
+      </div>
+      <div style="flex:1; min-width:0; background:#FFFFFF; border:1px solid #E9EAEE; border-radius:14px; box-shadow:0 12px 36px -16px rgba(20,22,28,.26), 0 1px 2px rgba(20,22,28,.05); overflow:auto;">
+        <div style="max-width:1180px; margin:0 auto; padding:56px 48px 80px;">
+          <div style="display:flex; align-items:center; gap:14px; margin-bottom:6px; position:relative;">
+            <div style="font-size:30px; line-height:1.12; font-weight:600; letter-spacing:-0.02em; color:#14161A;">Templates</div>
+            <div style="flex:1;"></div>
+            <div style="display:flex; align-items:center; gap:8px; height:32px; padding:0 12px; border-radius:9px; border:1px solid #E9EAEE; background:#FBFCFD; color:#A3A8B2; font-size:12.5px; width:240px;">⌕ <span>Filter templates…</span></div>
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:6px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">T1</div></sc-if>
+          </div>
+          <div style="font-size:14px; color:#868B95; margin-bottom:32px;">Start a living document from a pattern. Sources bind after creation.</div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; letter-spacing:.12em; color:#A3A8B2; margin-bottom:10px;">YOUR TEMPLATES</div>
+          <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; margin-bottom:36px; position:relative;">
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:-8px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">T2</div></sc-if>
+            <div style="background:#fff; border:1px solid #E6E8EC; border-radius:13px; overflow:hidden; cursor:pointer; box-shadow:0 1px 2px rgba(20,22,28,.05);" style-hover="border-color:#9AA2E0; box-shadow:0 8px 24px -12px rgba(20,22,28,.2);">
+              <div style="height:110px; background:#F6F7F9; border-bottom:1px solid #EEF0F3; padding:16px 18px 0; display:flex; flex-direction:column; gap:6px;">
+                <div style="width:60%; height:9px; border-radius:3px; background:#D5D8DE;"></div>
+                <div style="width:92%; height:6px; border-radius:3px; background:#E9EAEE;"></div>
+                <div style="width:88%; height:6px; border-radius:3px; background:#E9EAEE;"></div>
+                <div style="display:flex; gap:5px; margin-top:2px;"><span style="width:44px; height:12px; border-radius:4px; background:#E0E5FB;"></span><span style="width:36px; height:12px; border-radius:4px; background:#E0E5FB;"></span></div>
+                <div style="width:80%; height:6px; border-radius:3px; background:#E9EAEE;"></div>
+              </div>
+              <div style="padding:14px 18px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;"><span style="font-size:14px; font-weight:600; color:#1A1C20;">Weekly Summary</span><span style="flex:1;"></span><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; color:#5B6DC4; background:#F4F5FD; border:1px solid #E0E5FB; border-radius:5px; padding:2px 5px;">LWD</span></div>
+                <div style="font-size:12.5px; color:#868B95; line-height:1.5;">Operating recap with 4 bound figure slots · expects a metrics CSV</div>
+                <div style="display:flex; align-items:center; gap:6px; margin-top:10px;"><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">4 bind slots · used 12×</span><span style="flex:1;"></span><span style="height:26px; padding:0 11px; display:inline-flex; align-items:center; border-radius:7px; background:#5B6DC4; color:#fff; font-size:12px; font-weight:600;">Use</span></div>
+              </div>
+            </div>
+            <div style="background:#fff; border:1px solid #E6E8EC; border-radius:13px; overflow:hidden; cursor:pointer; box-shadow:0 1px 2px rgba(20,22,28,.05);" style-hover="border-color:#9AA2E0; box-shadow:0 8px 24px -12px rgba(20,22,28,.2);">
+              <div style="height:110px; background:#F6F7F9; border-bottom:1px solid #EEF0F3; padding:16px 18px 0; display:flex; flex-direction:column; gap:6px;">
+                <div style="width:48%; height:9px; border-radius:3px; background:#D5D8DE;"></div>
+                <div style="width:90%; height:6px; border-radius:3px; background:#E9EAEE;"></div>
+                <div style="display:flex; gap:5px; margin-top:2px;"><span style="width:56px; height:12px; border-radius:4px; background:#E0E5FB;"></span></div>
+                <div style="width:86%; height:6px; border-radius:3px; background:#E9EAEE;"></div>
+                <div style="width:70%; height:6px; border-radius:3px; background:#E9EAEE;"></div>
+              </div>
+              <div style="padding:14px 18px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;"><span style="font-size:14px; font-weight:600; color:#1A1C20;">Board Note</span><span style="flex:1;"></span><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; color:#5B6DC4; background:#F4F5FD; border:1px solid #E0E5FB; border-radius:5px; padding:2px 5px;">LWD</span></div>
+                <div style="font-size:12.5px; color:#868B95; line-height:1.5;">Monthly narrative for the board · binds metrics + meeting transcript</div>
+                <div style="display:flex; align-items:center; gap:6px; margin-top:10px;"><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">6 bind slots · used 5×</span><span style="flex:1;"></span><span style="height:26px; padding:0 11px; display:inline-flex; align-items:center; border-radius:7px; background:#5B6DC4; color:#fff; font-size:12px; font-weight:600;">Use</span></div>
+              </div>
+            </div>
+            <div style="border:1px dashed #C6CAD2; border-radius:13px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:#868B95; cursor:pointer; min-height:220px;" style-hover="color:#4650B8; border-color:#9AA2E0;">
+              <span style="font-size:22px;">＋</span><span style="font-size:13px; font-weight:500;">Save current doc as template</span>
+            </div>
+          </div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; letter-spacing:.12em; color:#A3A8B2; margin-bottom:10px;">STARTERS</div>
+          <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; position:relative;">
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:-8px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">T3</div></sc-if>
+            <div style="background:#FBFCFD; border:1px solid #E9EAEE; border-radius:13px; padding:14px 16px; cursor:pointer;" style-hover="border-color:#E0E5FB; background:#F4F5FD;"><div style="font-size:13px; font-weight:600; color:#1A1C20; margin-bottom:3px;">Blank living doc</div><div style="font-size:12px; color:#868B95;">Empty page, agent-ready</div></div>
+            <div style="background:#FBFCFD; border:1px solid #E9EAEE; border-radius:13px; padding:14px 16px; cursor:pointer;" style-hover="border-color:#E0E5FB; background:#F4F5FD;"><div style="font-size:13px; font-weight:600; color:#1A1C20; margin-bottom:3px;">Project brief</div><div style="font-size:12px; color:#868B95;">Goals · scope · risks</div></div>
+            <div style="background:#FBFCFD; border:1px solid #E9EAEE; border-radius:13px; padding:14px 16px; cursor:pointer;" style-hover="border-color:#E0E5FB; background:#F4F5FD;"><div style="font-size:13px; font-weight:600; color:#1A1C20; margin-bottom:3px;">Meeting notes</div><div style="font-size:12px; color:#868B95;">Binds a transcript source</div></div>
+            <div style="background:#FBFCFD; border:1px solid #E9EAEE; border-radius:13px; padding:14px 16px; cursor:pointer;" style-hover="border-color:#E0E5FB; background:#F4F5FD;"><div style="font-size:13px; font-weight:600; color:#1A1C20; margin-bottom:3px;">Metrics digest</div><div style="font-size:12px; color:#868B95;">Table + figure narrative</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div style="margin-top:12px; background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:16px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05); display:flex; flex-direction:column; gap:10px;">
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">T1</span><span><b>Surface + filter</b> — same no-rails shell as Home (white card on chrome, 1180px column). Title row carries a quiet 240px filter field (type-to-filter, no separate search page). Header button: "＋ New template". <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: templates contribution (new ViewPane in editor area) · Tier: our-surface</span></span></div>
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">T2</span><span><b>Template card</b> — 3-col grid. 110px skeleton thumbnail (grey bars = prose, accent-tint bars = bind slots — the thumbnail literally shows where live data lands; render from the template's PM doc, no screenshots). Body: name 14/600 + LWD chip, one-line description naming the expected source, mono meta "N bind slots · used N×", accent Use button. Use = duplicate into the open folder with binds empty → doc opens with a "bind sources" nudge in the tree row. Dashed tile = save current doc as template (writes to <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">.abstract/templates/</span>). <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: templates contribution + livingDocsService template API · Tier: our-surface</span></span></div>
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">T3</span><span><b>Starters row</b> — 4 built-ins, quieter cards (rail bg, no thumbnail): name + one-line purpose. These are compact seeds, not user templates — visually subordinate so YOUR TEMPLATES stays the hero. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: templates contribution (static manifest) · Tier: our-surface</span></span></div>
+  </div>
+</div>
+</div><div style="padding:0 28px 28px; display:flex; flex-direction:column; gap:28px; align-items:flex-start;">
+
+<!-- ============ KNOWLEDGE ============ -->
+<div style="width:1760px; flex:none;">
+  <div style="display:flex; align-items:baseline; gap:12px; margin:0 4px 12px;">
+    <div style="font-size:20px; font-weight:600; color:#14161A;">Knowledge</div>
+    <div style="font-size:13px; color:#868B95;">every source in the folder, its health, and what depends on it</div>
+  </div>
+  <div style="width:1760px; height:840px; background:#EDEFF3; border:1px solid #DDE0E7; border-radius:18px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 24px 50px -28px rgba(20,22,28,.34);">
+    <div style="height:48px; flex:none; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid #E2E4EA;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="width:22px; height:22px; border-radius:6px; background:#5B6DC4; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px;">A</div>
+        <div style="font-size:13.5px; font-weight:600; color:#1A1C20;">Opportunity OS</div>
+        <div style="color:#C6CAD2;">/</div>
+        <div style="font-size:13.5px; color:#868B95;">Knowledge</div>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="display:flex; align-items:center; gap:6px; height:26px; padding:0 10px; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-size:12px; font-weight:500;"><span style="width:7px; height:7px; border-radius:999px; background:#2C8159;"></span> All sources synced</div>
+      <div style="height:30px; padding:0 12px; display:flex; align-items:center; gap:6px; border-radius:9px; border:1px solid #E6E8EC; background:#fff; font-size:12.5px; font-weight:600; color:#52575F; cursor:pointer;" style-hover="border-color:#5B6DC4; color:#4650B8;">＋ Add source</div>
+      <div style="width:27px; height:27px; border-radius:999px; background:#3B4D8F; color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600;">TS</div>
+    </div>
+    <div style="flex:1; display:flex; gap:12px; padding:12px; min-height:0;">
+      <div style="width:76px; flex:none; display:flex; flex-direction:column; align-items:center; gap:6px; padding-top:4px;">
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 8.5 9 3l6 5.5V15a1 1 0 0 1-1 1h-3.5v-4h-3v4H4a1 1 0 0 1-1-1V8.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Home</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M12.5 2.5 15.5 5.5 6.5 14.5 3 15l.5-3.5 9-9Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Editor</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2.5" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="2.5" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect></svg><span style="font-size:10px; font-weight:500;">Templates</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; background:#fff; box-shadow:0 1px 2px rgba(20,22,28,.08); display:flex; flex-direction:column; align-items:center; gap:3px; color:#4650B8;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 3.5h3.5V15H3zM8 3.5h3.5V15H8zM12.8 4l2.7.8-2.6 10-2.7-.8 2.6-10Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:600;">Knowledge</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M14 4.5a6 6 0 1 0 1.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path><path d="M15.5 2.5v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Agents</span></div>
+        <div style="flex:1;"></div>
+        <div style="width:60px; padding:8px 0 6px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.2" stroke="currentColor" stroke-width="1.5"></circle><path d="M9 2v2M9 14v2M2 9h2M14 9h2M4 4l1.4 1.4M12.6 12.6 14 14M14 4l-1.4 1.4M5.4 12.6 4 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg><span style="font-size:10px; font-weight:500;">Settings</span></div>
+      </div>
+      <div style="flex:1; min-width:0; background:#FFFFFF; border:1px solid #E9EAEE; border-radius:14px; box-shadow:0 12px 36px -16px rgba(20,22,28,.26), 0 1px 2px rgba(20,22,28,.05); overflow:auto;">
+        <div style="max-width:1180px; margin:0 auto; padding:56px 48px 80px;">
+          <div style="display:flex; align-items:center; gap:14px; margin-bottom:6px; position:relative;">
+            <div style="font-size:30px; line-height:1.12; font-weight:600; letter-spacing:-0.02em; color:#14161A;">Knowledge</div>
+            <div style="flex:1;"></div>
+            <div style="display:flex; align-items:center; gap:8px; height:32px; padding:0 12px; border-radius:9px; border:1px solid #E9EAEE; background:#FBFCFD; color:#A3A8B2; font-size:12.5px; width:240px;">⌕ <span>Filter sources…</span></div>
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:6px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">K1</div></sc-if>
+          </div>
+          <div style="font-size:14px; color:#868B95; margin-bottom:32px;">4 sources in this folder · 7 bound figures depend on them.</div>
+          <div style="border:1px solid #E9EAEE; border-radius:13px; overflow:hidden; position:relative;">
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:14px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">K2</div></sc-if>
+            <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1.4fr 90px; gap:0; padding:10px 18px; background:#FBFCFD; border-bottom:1px solid #EEF0F3; font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.12em; color:#A3A8B2;">
+              <span>SOURCE</span><span>KIND</span><span>SYNC</span><span>FEEDS</span><span style="text-align:right;">BINDS</span>
+            </div>
+            <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1.4fr 90px; align-items:center; padding:13px 18px; border-bottom:1px solid #EEF0F3; cursor:pointer;" style-hover="background:#F6F7F9;">
+              <span style="display:flex; align-items:center; gap:9px;"><span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#5B6DC4;">⊞</span><span style="font-size:13.5px; font-weight:600; color:#1A1C20;">metrics.csv</span></span>
+              <span style="font-size:12.5px; color:#52575F;">Table</span>
+              <span style="display:flex; align-items:center; gap:6px; font-size:12px; color:#2C8159;"><span style="width:7px; height:7px; border-radius:999px; background:#2C8159;"></span> 2m ago</span>
+              <span style="display:flex; gap:5px;"><span style="height:20px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; background:#F4F5FD; border:1px solid #E0E5FB; color:#2A2F60; font-size:11px;">Weekly Summary</span><span style="height:20px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; background:#F4F5FD; border:1px solid #E0E5FB; color:#2A2F60; font-size:11px;">Board Note</span></span>
+              <span style="text-align:right; font-family:'JetBrains Mono',monospace; font-size:12px; color:#4650B8; font-weight:600;">6</span>
+            </div>
+            <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1.4fr 90px; align-items:center; padding:13px 18px; border-bottom:1px solid #EEF0F3; cursor:pointer;" style-hover="background:#F6F7F9;">
+              <span style="display:flex; align-items:center; gap:9px;"><span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#5B6DC4;">◍</span><span style="font-size:13.5px; font-weight:600; color:#1A1C20;">board-transcript.md</span></span>
+              <span style="font-size:12.5px; color:#52575F;">Transcript</span>
+              <span style="display:flex; align-items:center; gap:6px; font-size:12px; color:#2C8159;"><span style="width:7px; height:7px; border-radius:999px; background:#2C8159;"></span> 1h ago</span>
+              <span style="display:flex; gap:5px;"><span style="height:20px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; background:#F4F5FD; border:1px solid #E0E5FB; color:#2A2F60; font-size:11px;">Board Note</span></span>
+              <span style="text-align:right; font-family:'JetBrains Mono',monospace; font-size:12px; color:#4650B8; font-weight:600;">1</span>
+            </div>
+            <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1.4fr 90px; align-items:center; padding:13px 18px; border-bottom:1px solid #EEF0F3; cursor:pointer; background:#FDFAF2;" style-hover="background:#FBF5E8;">
+              <span style="display:flex; align-items:center; gap:9px;"><span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#5B6DC4;">⊞</span><span style="font-size:13.5px; font-weight:600; color:#1A1C20;">pipeline.csv</span></span>
+              <span style="font-size:12.5px; color:#52575F;">Table</span>
+              <span style="display:flex; align-items:center; gap:6px; font-size:12px; color:#8A6D1A;"><span style="width:7px; height:7px; border-radius:999px; background:#C99A2E;"></span> stale · 9d</span>
+              <span style="display:flex; gap:5px;"><span style="height:20px; padding:0 8px; display:inline-flex; align-items:center; border-radius:999px; background:#F4F5FD; border:1px solid #E0E5FB; color:#2A2F60; font-size:11px;">Executive Summary</span></span>
+              <span style="text-align:right; font-family:'JetBrains Mono',monospace; font-size:12px; color:#4650B8; font-weight:600;">1</span>
+            </div>
+            <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1.4fr 90px; align-items:center; padding:13px 18px; cursor:pointer;" style-hover="background:#F6F7F9;">
+              <span style="display:flex; align-items:center; gap:9px;"><span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#A3A8B2;">◇</span><span style="font-size:13.5px; font-weight:600; color:#1A1C20;">brand-guidelines.md</span></span>
+              <span style="font-size:12.5px; color:#52575F;">Reference</span>
+              <span style="display:flex; align-items:center; gap:6px; font-size:12px; color:#868B95;"><span style="width:7px; height:7px; border-radius:999px; background:#D5D8DE;"></span> context only</span>
+              <span style="display:flex; gap:5px;"><span style="font-size:11px; color:#A3A8B2;">available to all docs</span></span>
+              <span style="text-align:right; font-family:'JetBrains Mono',monospace; font-size:12px; color:#A3A8B2;">—</span>
+            </div>
+          </div>
+          <div style="display:flex; gap:16px; margin-top:28px; position:relative;">
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:-8px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">K3</div></sc-if>
+            <div style="flex:1; border:1px solid #E4DCCB; background:#FDFAF2; border-radius:12px; padding:14px 16px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.1em; color:#8A6D1A; margin-bottom:5px;">STALE SOURCE</div>
+              <div style="font-size:13px; color:#52575F; line-height:1.55;">pipeline.csv hasn't changed in 9 days but Executive Summary cites it. <a href="#">Re-sync</a> or <a href="#">mark as expected</a>.</div>
+            </div>
+            <div style="flex:1; border:1px solid #E9EAEE; background:#FBFCFD; border-radius:12px; padding:14px 16px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:600; letter-spacing:.1em; color:#A3A8B2; margin-bottom:5px;">HOW BINDING WORKS</div>
+              <div style="font-size:13px; color:#52575F; line-height:1.55;">A bound figure is a live reference into one of these sources — edit the source and every citing document updates through the approval rules you set per doc.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div style="margin-top:12px; background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:16px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05); display:flex; flex-direction:column; gap:10px;">
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">K1</span><span><b>Surface</b> — same no-rails shell; header button "＋ Add source" (file picker into the folder's <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">sources/</span>). Summary line counts sources + dependent binds from livingDocsService. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: knowledge contribution · Tier: our-surface</span></span></div>
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">K2</span><span><b>Source table</b> — the heart of the view: SOURCE (kind glyph ⊞ table / ◍ transcript / ◇ reference) · KIND · SYNC (dot + relative time; <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">ok</span> fresh, <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">attention</span> stale row on cream, grey = context-only) · FEEDS (accent-tint doc chips — click opens that doc) · BINDS (mono count, accent when >0). Row click opens the source in an editor tab (pin 7). Mono UPPER headers, 13px rows, hairline dividers — table borrows the spec's meta typography. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: knowledge contribution ← bind index from parseLivingDoc · Tier: our-surface</span></span></div>
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">K3</span><span><b>Health strip</b> — at most one attention card (stale source, with Re-sync / mark-expected actions — trust grammar: warn, never auto-fix) beside one static explainer. No dashboards, no charts — the table already tells the story. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: knowledge contribution · Tier: our-surface</span></span></div>
+  </div>
+</div>
+</div><div style="padding:0 28px 28px; display:flex; flex-direction:column; gap:28px; align-items:flex-start;">
+
+<!-- ============ AGENTS ============ -->
+<div style="width:1760px; flex:none;">
+  <div style="display:flex; align-items:baseline; gap:12px; margin:0 4px 12px;">
+    <div style="font-size:20px; font-weight:600; color:#14161A;">Agents</div>
+    <div style="font-size:13px; color:#868B95;">who works for you, under what rules, and what they did — the trust ledger</div>
+  </div>
+  <div style="width:1760px; height:840px; background:#EDEFF3; border:1px solid #DDE0E7; border-radius:18px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 24px 50px -28px rgba(20,22,28,.34);">
+    <div style="height:48px; flex:none; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid #E2E4EA;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="width:22px; height:22px; border-radius:6px; background:#5B6DC4; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px;">A</div>
+        <div style="font-size:13.5px; font-weight:600; color:#1A1C20;">Opportunity OS</div>
+        <div style="color:#C6CAD2;">/</div>
+        <div style="font-size:13.5px; color:#868B95;">Agents</div>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="display:flex; align-items:center; gap:6px; height:26px; padding:0 10px; border-radius:999px; background:#EEF7F0; border:1px solid #D7ECDC; color:#2C8159; font-size:12px; font-weight:500;"><span style="width:7px; height:7px; border-radius:999px; background:#2C8159;"></span> 1 agent active</div>
+      <div style="width:27px; height:27px; border-radius:999px; background:#3B4D8F; color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600;">TS</div>
+    </div>
+    <div style="flex:1; display:flex; gap:12px; padding:12px; min-height:0;">
+      <div style="width:76px; flex:none; display:flex; flex-direction:column; align-items:center; gap:6px; padding-top:4px;">
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 8.5 9 3l6 5.5V15a1 1 0 0 1-1 1h-3.5v-4h-3v4H4a1 1 0 0 1-1-1V8.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Home</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M12.5 2.5 15.5 5.5 6.5 14.5 3 15l.5-3.5 9-9Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Editor</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2.5" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="2.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="2.5" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect><rect x="10" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" stroke-width="1.5"></rect></svg><span style="font-size:10px; font-weight:500;">Templates</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 3.5h3.5V15H3zM8 3.5h3.5V15H8zM12.8 4l2.7.8-2.6 10-2.7-.8 2.6-10Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:500;">Knowledge</span></div>
+        <div style="width:60px; padding:8px 0 6px; border-radius:10px; background:#fff; box-shadow:0 1px 2px rgba(20,22,28,.08); display:flex; flex-direction:column; align-items:center; gap:3px; color:#4650B8;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M14 4.5a6 6 0 1 0 1.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path><path d="M15.5 2.5v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span style="font-size:10px; font-weight:600;">Agents</span></div>
+        <div style="flex:1;"></div>
+        <div style="width:60px; padding:8px 0 6px; display:flex; flex-direction:column; align-items:center; gap:3px; color:#868B95; cursor:pointer;" style-hover="color:#52575F;"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.2" stroke="currentColor" stroke-width="1.5"></circle><path d="M9 2v2M9 14v2M2 9h2M14 9h2M4 4l1.4 1.4M12.6 12.6 14 14M14 4l-1.4 1.4M5.4 12.6 4 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg><span style="font-size:10px; font-weight:500;">Settings</span></div>
+      </div>
+      <div style="flex:1; min-width:0; background:#FFFFFF; border:1px solid #E9EAEE; border-radius:14px; box-shadow:0 12px 36px -16px rgba(20,22,28,.26), 0 1px 2px rgba(20,22,28,.05); overflow:auto;">
+        <div style="max-width:1180px; margin:0 auto; padding:56px 48px 80px;">
+          <div style="display:flex; align-items:center; gap:14px; margin-bottom:6px; position:relative;">
+            <div style="font-size:30px; line-height:1.12; font-weight:600; letter-spacing:-0.02em; color:#14161A;">Agents</div>
+            <div style="flex:1;"></div>
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:6px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">A1</div></sc-if>
+          </div>
+          <div style="font-size:14px; color:#868B95; margin-bottom:32px;">Agents only act on documents that opted in. Every action lands in the ledger below.</div>
+          <div style="display:flex; gap:16px; margin-bottom:36px; position:relative;">
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:-8px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">A2</div></sc-if>
+            <div style="flex:1; background:#fff; border:1px solid #E6E8EC; border-radius:13px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05);">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                <span style="width:34px; height:34px; border-radius:10px; background:#F4F5FD; border:1px solid #E0E5FB; display:flex; align-items:center; justify-content:center; color:#4650B8; font-size:15px;">✦</span>
+                <span><span style="display:block; font-size:14.5px; font-weight:600; color:#1A1C20;">Reporting agent</span><span style="display:block; font-family:'JetBrains Mono',monospace; font-size:10px; color:#2C8159;">● active · watching 2 sources</span></span>
+                <span style="flex:1;"></span>
+                <span style="width:36px; height:20px; border-radius:999px; background:#5B6DC4; position:relative; cursor:pointer;"><span style="position:absolute; right:2px; top:2px; width:16px; height:16px; border-radius:999px; background:#fff;"></span></span>
+              </div>
+              <div style="font-size:12.5px; color:#52575F; line-height:1.55; margin-bottom:12px;">Keeps Weekly Summary and Board Note current when their sources change.</div>
+              <div style="display:flex; flex-direction:column; gap:5px; font-size:12px; color:#52575F;">
+                <span style="display:flex; justify-content:space-between;"><span>Figures &amp; dates</span><span style="color:#2C8159; font-weight:500;">auto-apply</span></span>
+                <span style="display:flex; justify-content:space-between;"><span>Meaning changes</span><span style="color:#8A6D1A; font-weight:500;">ask first</span></span>
+                <span style="display:flex; justify-content:space-between;"><span>Structure changes</span><span style="color:#B5514B; font-weight:500;">never</span></span>
+              </div>
+              <div style="margin-top:12px; padding-top:10px; border-top:1px solid #EEF0F3; display:flex; align-items:center; gap:8px;"><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">runs on</span><span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#52575F;">claude-sonnet-4.5</span><span style="flex:1;"></span><a href="#" style="font-size:12px; font-weight:500;">Edit policy</a></div>
+            </div>
+            <div style="flex:1; background:#fff; border:1px solid #E6E8EC; border-radius:13px; padding:18px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05); opacity:.75;">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                <span style="width:34px; height:34px; border-radius:10px; background:#F6F7F9; border:1px solid #E9EAEE; display:flex; align-items:center; justify-content:center; color:#868B95; font-size:15px;">◍</span>
+                <span><span style="display:block; font-size:14.5px; font-weight:600; color:#1A1C20;">Meeting agent</span><span style="display:block; font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">○ paused</span></span>
+                <span style="flex:1;"></span>
+                <span style="width:36px; height:20px; border-radius:999px; background:#D5D8DE; position:relative; cursor:pointer;"><span style="position:absolute; left:2px; top:2px; width:16px; height:16px; border-radius:999px; background:#fff;"></span></span>
+              </div>
+              <div style="font-size:12.5px; color:#52575F; line-height:1.55; margin-bottom:12px;">Turns new transcripts into meeting notes and flags decisions for the Board Note.</div>
+              <div style="display:flex; flex-direction:column; gap:5px; font-size:12px; color:#52575F;">
+                <span style="display:flex; justify-content:space-between;"><span>New note drafts</span><span style="color:#8A6D1A; font-weight:500;">ask first</span></span>
+                <span style="display:flex; justify-content:space-between;"><span>Decision flags</span><span style="color:#2C8159; font-weight:500;">auto-apply</span></span>
+              </div>
+              <div style="margin-top:12px; padding-top:10px; border-top:1px solid #EEF0F3; display:flex; align-items:center; gap:8px;"><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">runs on</span><span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#52575F;">claude-haiku-4</span><span style="flex:1;"></span><a href="#" style="font-size:12px; font-weight:500;">Edit policy</a></div>
+            </div>
+            <div style="width:280px; flex:none; border:1px dashed #C6CAD2; border-radius:13px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:#868B95; cursor:pointer;" style-hover="color:#4650B8; border-color:#9AA2E0;"><span style="font-size:22px;">＋</span><span style="font-size:13px; font-weight:500;">New agent</span><span style="font-size:11.5px; color:#A3A8B2;">from a skill or from scratch</span></div>
+          </div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; letter-spacing:.12em; color:#A3A8B2; margin-bottom:10px;">ACTIVITY</div>
+          <div style="border:1px solid #E9EAEE; border-radius:13px; overflow:hidden; position:relative;">
+            <sc-if value="{{ ann }}" hint-placeholder-val="{{ true }}"><div style="position:absolute; left:-34px; top:12px; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 3px rgba(91,109,196,.25); z-index:40;">A3</div></sc-if>
+            <div style="display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid #EEF0F3;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#A3A8B2; width:52px; flex:none;">09:41</span>
+              <span style="width:7px; height:7px; border-radius:999px; background:#C99A2E; flex:none;"></span>
+              <span style="font-size:13px; color:#26292F;">Reporting agent proposed a meaning change in <a href="#">Weekly Summary · line 6</a></span>
+              <span style="flex:1;"></span>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; color:#8A6D1A; background:#FDFAF2; border:1px solid #E4DCCB; border-radius:999px; padding:2px 8px;">WAITING</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid #EEF0F3;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#A3A8B2; width:52px; flex:none;">09:41</span>
+              <span style="width:7px; height:7px; border-radius:999px; background:#2C8159; flex:none;"></span>
+              <span style="font-size:13px; color:#26292F;">Refreshed 4 bound figures in <a href="#">Weekly Summary</a> from metrics.csv</span>
+              <span style="flex:1;"></span>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#2C8159;">auto-applied · reversible</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid #EEF0F3;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#A3A8B2; width:52px; flex:none;">08:15</span>
+              <span style="width:7px; height:7px; border-radius:999px; background:#2C8159; flex:none;"></span>
+              <span style="font-size:13px; color:#26292F;">Approved 2 narrative rewrites in <a href="#">Board Note</a></span>
+              <span style="flex:1;"></span>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">by Tom</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px; padding:12px 18px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#A3A8B2; width:52px; flex:none;">Fri</span>
+              <span style="width:7px; height:7px; border-radius:999px; background:#D5D8DE; flex:none;"></span>
+              <span style="font-size:13px; color:#26292F;">Meeting agent paused by Tom</span>
+              <span style="flex:1;"></span>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#A3A8B2;">policy unchanged</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div style="margin-top:12px; background:#fff; border:1px solid #E6E8EC; border-radius:14px; padding:16px 20px; box-shadow:0 1px 2px rgba(20,22,28,.05); display:flex; flex-direction:column; gap:10px;">
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">A1</span><span><b>Surface</b> — same no-rails shell. Header pill switches to agent health ("1 agent active"). The framing line states the trust contract up front: agents act only on opted-in docs; everything lands in the ledger. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: agents contribution · Tier: our-surface</span></span></div>
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">A2</span><span><b>Agent card</b> — 34px tinted glyph tile + name 14.5/600 + mono status line (● active green / ○ paused faint) + accent toggle switch. Body: one-line purpose, then the <b>policy table</b> — the same three-tier trust grammar as the editor (auto-apply <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">ok</span> / ask first <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">attention</span> / never <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">removed-ink</span>) so policy reads identically everywhere. Footer: mono model id (from the broker, pin 14's list) + Edit policy link → same plain-language policy editor as the doc Properties panel. Paused card at 75% opacity. Dashed "New agent" tile. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: agents contribution + lwd-model-broker · Tier: our-surface</span></span></div>
+    <div style="display:flex; gap:12px; font-size:13px; color:#52575F; line-height:1.6;"><span style="flex:none; width:26px; height:22px; border-radius:999px; background:#5B6DC4; color:#fff; font:600 10px 'JetBrains Mono',monospace; display:inline-flex; align-items:center; justify-content:center;">A3</span><span><b>Activity ledger</b> — flat chronological list, newest first: mono timestamp · status dot (amber waiting / green applied / grey admin) · plain-language sentence with deep links that cite gutter addresses ("line 6" — pin 9's shared vocabulary) · right-aligned mono badge. WAITING rows deep-link to the doc's Review tab. This is the audit trail behind the editor's trust chips — same events, calendar view. <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#868B95;">Code: agents contribution ← livingDocsService event log · Tier: our-surface</span></span></div>
+  </div>
+</div>
+</div></x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showAnnotations&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Handoff&quot;},&quot;showContextMenu&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;States&quot;},&quot;showProperties&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;States&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const propsPanel = this.props.showProperties ?? true;
+    return {
+      ann: this.props.showAnnotations ?? true,
+      menu: this.props.showContextMenu ?? false,
+      propsPanel,
+      propsBtnBg: propsPanel ? '#F4F5FD' : 'transparent'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 # Plan 22 — Project home dashboard (NEEDS YOU · ALL PROJECTS)
 
+> **Delta (21 Jul 2026):** Home is re-specified by Abstract Editor v2 (no-rails white surface on chrome, line-addressed NEEDS YOU cards). See [43-editor-v2-spec.md](43-editor-v2-spec.md) H1-H3 and [48-screens-home-templates-loop.md](48-screens-home-templates-loop.md); this plan's build remains the base the v2 loop revises.
+
 > **For agentic workers:** implement with `superpowers:subagent-driven-development`. Small,
 > live-verified, stacked PRs off `main`. Spec of record: [[20-abstract-ui-redesign-handoff]]
 > (Parts B, C3, E row 6a). Handoff wins over pixels.

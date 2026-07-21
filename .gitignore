@@ -51,3 +51,11 @@ dist
 
 # Plan 30 generated scale fixture (throwaway performance folder; only the generator is tracked)
 /living-docs-scale-sample/
+
+# App-run artifacts from opening the app with docs/ (or the repo root) as the folder
+/docs/*.lock.json
+/docs/agents.json
+/docs/Demo Report*
+/docs/demo-metrics*.csv
+/docs/Untitled*.md
+/screenshots/

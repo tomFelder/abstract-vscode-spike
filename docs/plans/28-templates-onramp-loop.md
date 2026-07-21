@@ -1,5 +1,7 @@
 # Plan 28 - Templates and the new-document on-ramp
 
+> **Delta (21 Jul 2026):** the Templates screen is re-specified by Abstract Editor v2 (skeleton thumbnails, save-current-doc-as-template, starters row). See [43-editor-v2-spec.md](43-editor-v2-spec.md) T1-T3 and [48-screens-home-templates-loop.md](48-screens-home-templates-loop.md); this plan's build remains the base the v2 loop revises.
+
 > **For agentic workers:** implement with `superpowers:subagent-driven-development`.
 > Small, live-verified, stacked PRs off `main`.
 > Context of record: [11-product-review-2026-07.md](../11-product-review-2026-07.md) finding P0-3; the Templates screen has been a "Soon" stub since plan 17 iter 7 (PR #45); Home already advertises "New doc from template - Weekly report, Quote, SOP..." without delivering it.

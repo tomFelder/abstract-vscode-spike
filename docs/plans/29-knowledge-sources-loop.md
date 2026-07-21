@@ -1,5 +1,7 @@
 # Plan 29 - Knowledge, sources and real MCP
 
+> **Delta (21 Jul 2026):** the Knowledge screen is re-specified by Abstract Editor v2 (single source table with SOURCE/KIND/SYNC/FEEDS/BINDS, one-card health strip). See [43-editor-v2-spec.md](43-editor-v2-spec.md) K1-K3 and [49-screens-knowledge-agents-loop.md](49-screens-knowledge-agents-loop.md); this plan's build remains the base the v2 loop revises.
+
 > **For agentic workers:** implement with `superpowers:subagent-driven-development`.
 > Small, live-verified, stacked PRs off `main`.
 > Context of record: [11-product-review-2026-07.md](../11-product-review-2026-07.md) findings P0-3 and P1-1; format spec [08](../08-living-documents-format-spec.md); the `mcp` source kind has been an honest stub since decision 9.

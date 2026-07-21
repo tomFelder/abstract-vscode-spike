@@ -1,5 +1,7 @@
 # Plan 21 — Editor & rail polish (provenance gutter · reading ramp · ＋Skill composer)
 
+> **Delta (21 Jul 2026):** the editor surface is re-specified by Abstract Editor v2 - the 30px dot gutter this plan built is superseded by the 70px numbered gutter (decision 168). See [43-editor-v2-spec.md](43-editor-v2-spec.md) pin 9 and [45-editor-card-loop.md](45-editor-card-loop.md); this plan's build remains the base the v2 loop revises.
+
 > **For agentic workers:** implement with `superpowers:subagent-driven-development` (fresh
 > sub-agent per iteration, keep context clean). Each iteration is a small, live-verified,
 > stacked PR off `main`. Spec of record: [[20-abstract-ui-redesign-handoff]] (Parts B, C2, C6,

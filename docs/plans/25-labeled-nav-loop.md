@@ -1,5 +1,7 @@
 # Plan 25 — Labeled 76px icon-nav (the calm primary nav)
 
+> **Delta (21 Jul 2026):** the nav is re-specified by Abstract Editor v2 - same items and width, but it loses its panel background and sits directly on the `#EDEFF3` chrome (white-chip active state). See [43-editor-v2-spec.md](43-editor-v2-spec.md) pin 3 and [44-elevation-shell-loop.md](44-elevation-shell-loop.md); this plan's build remains the base the v2 loop revises.
+
 > **For agentic workers:** implement with `superpowers:subagent-driven-development`. Stacked PRs
 > off `main`, live-verified. Spec of record: [[20-abstract-ui-redesign-handoff]] (Parts B, C1,
 > E row 7). Handoff wins over pixels. **This is the one item expected to need a core patch** -

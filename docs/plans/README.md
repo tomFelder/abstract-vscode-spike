@@ -63,6 +63,21 @@ Motivated and sequenced by [../18-beta-plan.md](../18-beta-plan.md) (the gate: "
 | [37-journey-robustness-loop.md](37-journey-robustness-loop.md) | **Authored by plan 34's output.** Fix the prioritised journey findings in tier order: the persistence tier first (re-scoped Electron-only by decision 162 → #121), then the cheap aha-path off-path fixes, then the silent-model-outage trust breach, then the smallest walkable v1 of the MISSING aha-path surfaces (1w, 1d, 1b "From sources", 1x). Validated against the [docs/20](../20-journey-specs-aha-path.md) specs; closes doc 18 §2.3 R2/R3. |
 | [39-t1-editor-audit-loop.md](39-t1-editor-audit-loop.md) | **The T1 editor audit as a runnable loop** (paste into a fresh session): 8 graded areas (paste-from-Word first), Word-clipboard fixtures, evidence per probe, gating-vs-polish triage, verdict PROCEED/FIX-FIRST/DISQUALIFIED posted to #128. Its verdict gates the import/export work (#129/#130). |
 
+### Abstract Editor v2 (the live wave — plans 43-49, ratified 21 Jul 2026)
+
+The next major UI iteration: elevation shell (floating panels on `#EDEFF3` chrome, one 48px header), numbered gutter with shared line addresses (supersedes plan-20 §C2, decision 168), product tabs, Properties panel, and redesigned Home/Templates/Knowledge/Agents. Pixel source: [../design/abstract-editor-v2/](../design/abstract-editor-v2/) (decision 167: docs win over pixels). Decisions 167-174. Sequencing: 44 alone first, then max 3 lanes (45 ∥ 46→47 ∥ 48→49); the orchestration protocol (Fable orchestrator, Opus 4.8 implementers, adversarial validators ticking PR checklists) is plan 43 §5.
+
+| File | What it is |
+|---|---|
+| [43-editor-v2-spec.md](43-editor-v2-spec.md) | **Spec of record, not a loop.** New/changed tokens, every pin transcribed with px/hex values (editor 1-14, H/T/K/A), the shared contracts (line addresses, tabs↔groups, header service, shared policy editor, tolerances), the wave map + file-ownership matrix, THE PROTOCOL, and the 2-seam budget. |
+| [44-elevation-shell-loop.md](44-elevation-shell-loop.md) | **The sequential opener.** Chrome + floating cards + shadows, the full-width 48px header with rail toggles (⌘\ / ⌘⇧\), icon-nav on chrome, per-webview top bars removed. Owns `studio.css` + the theme for the whole wave; owns both sanctioned core seams. |
+| [45-editor-card-loop.md](45-editor-card-loop.md) | **Lane A, the biggest loop.** Numbered gutter + the line-address model (gates plan 47), product tabs + sources-as-tabs, toolbar Properties entry, the Properties panel (closes #122 F11 via the shared policy editor), proposal widgets addressed by line, drawer/figure regression hold. |
+| [46-tree-rail-loop.md](46-tree-rail-loop.md) | **Lane B first.** Three tabs (Search folds into Files as type-to-filter) + quiet ＋, row anatomy (dots, LWD chips, pending pills), and the full document context menu with "Open to the right" as the one sanctioned split. |
+| [47-right-rail-loop.md](47-right-rail-loop.md) | **Lane B second (after 45-a).** Chat · Review · History (Skills folds into ＋ Skill), amber Review badge, line-addressed cards, and the composer model selector reading the broker's list (absorbs #211 item 4; #120 note-and-link only). |
+| [48-screens-home-templates-loop.md](48-screens-home-templates-loop.md) | **Lane C first.** Home as one white surface (NEEDS YOU with line addresses, folder-backed grid, closes #211 items 1-2) and Templates with skeleton thumbnails, Use/save-as-template flows, and the starters row. |
+| [49-screens-knowledge-agents-loop.md](49-screens-knowledge-agents-loop.md) | **Lane C second.** Knowledge as the SOURCE/KIND/SYNC/FEEDS/BINDS table + one-card health strip (absorbs #131 surfaces, #122 F12), and Agents as the trust ledger: policy-table cards (shared editor) + the line-addressed activity ledger. |
+| [RUN-editor-v2-loop.md](RUN-editor-v2-loop.md) | **The master loop prompt for the wave.** Paste into a fresh session: bootstrap + pre-step `screenRender` split PR, plan 44 alone, then 3 lanes under plan 43 §5 THE PROTOCOL, iteration budget 40, wave closing audit against the mock. |
+
 ## How to use a handoff
 Paste the relevant file into a fresh Claude Code session. The handoffs are self-contained: repo /
 branch / build / conventions / design source / ordered work items / verification. Plans 06–33 are

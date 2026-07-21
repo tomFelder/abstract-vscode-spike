@@ -452,3 +452,16 @@ Not fixed (out of scope, noted): the known pre-existing Extensions-container boo
 (`viewsExtensionPoint` registering views into the deregistered `workbench.view.extensions` container ->
 `Cannot read properties of undefined (reading 'id'/'extensionId')`) is a **different** root cause than K2
 and is tracked separately in the 1.127.0 merge log above; bundle K does not touch it.
+
+### Editor v2 wave (plans 43-49) - sanctioned seam budget: 2 (decision 169)
+
+The elevation shell (plan 44) is the only loop in the wave permitted core seams, and only these
+two, budgeted up front. Every other v2 loop runs at 0 core patches. Both rows stay PENDING until
+plan 44 lands them (or records that CSS-only sufficed); `scripts/check-seams.sh` must gain an
+assertion for each seam actually taken. A third seam anywhere in the wave is a stop-and-escalate,
+not a judgement call (plan 43 §6).
+
+| Item | Change | Tier | File(s) | Note / re-pin check |
+|------|--------|------|---------|---------------------|
+| V2-1 | **PENDING (plan 44-a).** Part backgrounds/margins so the tree rail / editor / right rail read as floating cards (12px gaps, radius 14) on the `#EDEFF3` chrome | core CSS seam (budgeted) | TBD at landing - attempt the styleOverrides inner-inset trick first; take the part-margins seam only if part internals clip | Re-pin check TBD at landing; must keep `.monaco-editor-background` opaque `#FFFFFF` and leave sash hit-areas working. If CSS-only sufficed, convert this row to "not taken - 0 core" with the evidence link. |
+| V2-2 | **PENDING (plan 44-b).** Titlebar height constant to 48px for the full-width Abstract header (titlebar part repurposed, decision 170) | core-patch (constants-style, budgeted) | TBD at landing - the `ACTIVITYBAR_WIDTH 48->76` precedent: one constant + guard test + check-seams assertion | Re-pin check TBD at landing (constant value + guard test). Desktop: macOS traffic-light inset must clear the left rail toggle (founder smoke). If CSS-only sufficed, convert to "not taken". |
