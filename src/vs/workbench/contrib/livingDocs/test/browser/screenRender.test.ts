@@ -16,9 +16,10 @@ suite('livingDocs screenRender', () => {
 
 	const state: IScreenState = { knScope: 'org', agents: [], filter: 'all' };
 
-	// Every main-area screen carries the comp's global top bar: brand + per-screen crumb on the left,
-	// the sync-status pill + Present + the user avatar on the right. The "All sources synced" pill is
-	// entry-path source vocabulary (plan 42 L3): it shows only once the project has a living surface.
+	// (plan 44-b PH.4) The per-webview brand/crumb top bar is GONE from every main-area screen: the one
+	// global Abstract header (the repurposed title bar, painted natively above the webviews) now carries
+	// the breadcrumb, the sync pill, the surface action and the avatar. The screen body must draw NO top
+	// bar of its own, so there is never a double header on any surface.
 	const screens: { id: ScreenId; crumb: string }[] = [
 		{ id: 'home', crumb: 'Home' },
 		{ id: 'templates', crumb: 'Templates' },
@@ -26,40 +27,19 @@ suite('livingDocs screenRender', () => {
 		{ id: 'agents', crumb: 'Agents' },
 	];
 
-	// A project with a living surface (one living doc) so the truthful sync pill renders.
+	// A project with a living surface (one living doc): even so, the screen body draws no top bar and no
+	// in-body sync pill - the header owns both now.
 	const livingState: IScreenState = { ...state, docs: [{ resource: URI.file('/ws/A.md'), title: 'A', isLiving: true, sourceKinds: ['file'], sources: ['a.csv'], lastSynced: '', pendingCount: 0, folder: '', unseenAgentEdits: 0, relinkCount: 0, stale: false, fanoutFailed: false }] };
 
-	for (const { id, crumb } of screens) {
-		test(`${id} renders the global top bar (brand, ${crumb} crumb, sync pill, Present, avatar)`, () => {
+	for (const { id } of screens) {
+		test(`${id} draws no per-webview top bar (the global Abstract header carries it - PH.4)`, () => {
 			const html = renderScreenHtml(id, livingState);
-			const head = html.indexOf('class="topbar"');
-			assert.ok(head >= 0, 'has a top bar');
-			// The top bar precedes the screen content (it is the first flex child of .screen).
-			assert.ok(head < html.indexOf('class="scr-body"') || html.indexOf('class="scr-body"') === -1, 'top bar is above the body');
-			assert.ok(html.includes('Abstract'), 'shows the product brand');
-			assert.ok(html.includes(`class="crumb">${crumb}<`), `crumb reads ${crumb}`);
-			assert.ok(html.includes('All sources synced'), 'shows the sync-status pill once the project has a living surface');
-			assert.ok(/data-msg="present"[^>]*class="tb-present"|class="tb-present"[^>]*data-msg="present"/.test(html), 'has a Present control wired to the present message');
-			assert.ok(html.includes('class="av">TS<'), 'shows the user avatar');
+			assert.deepStrictEqual({
+				topBar: html.includes('class="topbar"'),
+				inBodyPresent: /class="tb-present"/.test(html),
+			}, { topBar: false, inBodyPresent: false });
 		});
 	}
-
-	test('the sync pill is omitted on a fresh project with no living surface (plan 42 L3)', () => {
-		// A plain folder (no living doc, no bound source) has nothing to be "synced": the pill must not
-		// claim source-sync state before the user has bound anything or met an agent, but the top bar stays.
-		const html = renderScreenHtml('home', { ...state, hasFolder: true, docs: [], sources: [] });
-		assert.deepStrictEqual({
-			topBar: html.includes('class="topbar"'),
-			syncPill: html.includes('All sources synced'),
-		}, { topBar: true, syncPill: false });
-	});
-
-	test('exactly one top bar is rendered per screen', () => {
-		for (const { id } of screens) {
-			const html = renderScreenHtml(id, state);
-			assert.strictEqual(html.split('class="topbar"').length - 1, 1, `${id} has a single top bar`);
-		}
-	});
 
 	// --- D26 onboarding surface: the guided two-wow flow renders the current funnel step + its real action ---
 

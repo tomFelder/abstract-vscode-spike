@@ -28,12 +28,12 @@ suite('livingDocs review-rail quiet-shell entry (plan 42 L4)', () => {
 		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasChatHistory: true })), true);
 	});
 
-	test('a pending review forces the rail open (trust grammar: never hide a proposal)', () => {
+	test('a pending review opens the rail on first look (no manual choice yet)', () => {
 		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasPendingReview: true })), true);
 	});
 
-	test('a pending review overrides a stored manual collapse (the proposal still shows)', () => {
-		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasPendingReview: true, manualChoice: ReviewRailManualChoice.Collapsed })), true);
+	test('a stored manual collapse is respected even with a pending proposal (the badge dot surfaces it - P2.5)', () => {
+		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasPendingReview: true, manualChoice: ReviewRailManualChoice.Collapsed })), false);
 	});
 
 	test('a manual "open" choice wins over the quiet default', () => {

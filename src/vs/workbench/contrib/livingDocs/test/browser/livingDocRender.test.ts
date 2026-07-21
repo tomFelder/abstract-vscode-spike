@@ -69,13 +69,16 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		assert.ok(!/<button[^>]*data-present-cta-force/.test(h), 'no Export-anyway override button when the gate passes');
 	});
 
-	test('the editor top bar carries the user avatar, matching the screens and the comp', () => {
+	test('the editor draws no per-webview top bar or avatar (the global Abstract header carries them - PH.4)', () => {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',
 			recent: new Set(), mode: 'pm', rawText: '', present: { open: false, choice: 'html' }, syncDiff: [],
 		};
 		const h = renderLivingDocHtml(input);
-		assert.ok(h.includes('class="topbar"') && h.includes('class="av">TS<'), 'top bar shows the TS avatar');
+		assert.deepStrictEqual({
+			topBar: h.includes('class="topbar"'),
+			avatar: h.includes('class="av">TS<'),
+		}, { topBar: false, avatar: false });
 	});
 
 	test('the Present CTA reflects the real export it will write', () => {
@@ -165,14 +168,18 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		}, { showsSyncedChip: true, noSyncButton: true });
 	});
 
-	test('the calm formatting toolbar lives in PM: wired to LWDPM.cmd (data-pmcmd), heading dropdown + B/I/lists/quote, Underline dropped, Present available', () => {
+	test('the calm formatting toolbar lives in PM: wired to LWDPM.cmd (data-pmcmd), heading dropdown + B/I/lists/quote, Underline dropped', () => {
 		const input: ILivingDocRenderInput = {
 			doc, pending: [], resolved: new Map(), dirty: false, status: 'All sources synced',
 			recent: new Set(), mode: 'pm', rawText: '', present: { open: false, choice: 'html' }, syncDiff: [],
 		};
 		const h = renderLivingDocHtml(input);
 		assert.deepStrictEqual({
-			pillIsRefresh: h.includes('class="pill ') && h.includes('data-refresh'),
+			// (plan 44-b PH.4) The per-doc top bar - brand/crumb, sync pill, Present - is gone: the one global
+			// Abstract header carries them now. The doc webview draws NO top bar and NO in-body Present button.
+			noTopBar: !h.includes('class="topbar"'),
+			noInBodyPill: !h.includes('class="pill '),
+			noInBodyPresent: !h.includes('data-present-open'),
 			// the persistent calm toolbar is present and wired to the ProseMirror command bridge, NOT execCommand
 			hasCalmToolbar: h.includes('class="etoolbar"'),
 			wiredToPmCmd: h.includes('data-pmcmd="bold"') && h.includes('data-pmcmd="italic"'),
@@ -188,9 +195,10 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 			noHistoryButton: !h.includes('>History<'),
 			// raw Markdown stays reachable via the hint affordance
 			rawEditReachable: h.includes('class="hint-raw" data-to-raw'),
-			present: h.includes('data-present-open'),
 		}, {
-			pillIsRefresh: true,
+			noTopBar: true,
+			noInBodyPill: true,
+			noInBodyPresent: true,
 			hasCalmToolbar: true,
 			wiredToPmCmd: true,
 			noExecCommand: true,
@@ -201,7 +209,6 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 			noRunSkill: true,
 			noHistoryButton: true,
 			rawEditReachable: true,
-			present: true,
 		});
 	});
 
@@ -217,7 +224,8 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		assert.deepStrictEqual({
 			hasCalmToolbar: h.includes('class="etoolbar"'),
 			wiredToPmCmd: h.includes('data-pmcmd="bold"') && h.includes('data-pmcmd="blockquote"'),
-			crumbIsMarkdown: h.includes('class="crumb">Markdown<'),
+			// (plan 44-b PH.4) No in-webview crumb; the header carries the breadcrumb for every doc.
+			noInPageCrumb: !h.includes('class="crumb'),
 			// living-only chrome stays off for a plain doc
 			noSyncBar: !h.includes('class="syncbar"'),
 			noFigureHint: !h.includes('Bound figures are highlighted'),
@@ -226,7 +234,7 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		}, {
 			hasCalmToolbar: true,
 			wiredToPmCmd: true,
-			crumbIsMarkdown: true,
+			noInPageCrumb: true,
 			noSyncBar: true,
 			noFigureHint: true,
 			isPmSurface: true,
@@ -276,76 +284,26 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		assert.ok(h.includes('if (_pmEchoSuppressed) { return; }'), 'pmOnChange short-circuits only while suppressed');
 	});
 
-	// Issue #174: the editor bar is a real file breadcrumb - the clickable project (workspace folder), the
-	// document title, and the on-disk file name in muted grey - not the static "Abstract / Markdown" noise.
-	test('the top bar shows a real file breadcrumb (project / title + grey file name), project segment clickable', () => {
-		const content = renderLivingDocContent({
+	// (plan 44-b PH.4) The breadcrumb moved off the doc webview onto the one global Abstract header (the
+	// repurposed title bar): the LivingDocEditor publishes { breadcrumb: doc.title, fileName } to the header
+	// content service, and AbstractHeaderContribution paints it natively via textContent (injection-safe by
+	// construction). So the doc webview HTML must carry NO breadcrumb of its own - crumb, project button and
+	// file segment are all gone - for a real document and for the no-project fallback alike.
+	test('the doc webview draws no in-page breadcrumb (the global Abstract header carries it - PH.4)', () => {
+		const realDoc = renderLivingDocContent({
 			doc: { title: '25 - Why Abstract (the one-pager)', subtitle: '', sources: [], context: [], blocks: [], isLiving: false, body: '' },
 			pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
 			present: { open: false, choice: 'html' }, syncDiff: [], projectName: 'docs', fileName: '25-why-abstract.md',
-		});
-		const h = content.html;
-		assert.deepStrictEqual({
-			// the project segment is a real button that navigates back to the project view (posts openProject)
-			projectSegmentClickable: h.includes('class="crumb-proj" data-open-project'),
-			projectSegmentIsFolder: h.includes('>docs</button>'),
-			// the document title fills the middle segment (fed from the same model title that drives the H1)
-			titleSegment: h.includes('class="crumb-title">25 - Why Abstract (the one-pager)<'),
-			// the file name trails in its own muted-grey segment
-			fileNameSegment: h.includes('class="crumb-file">25-why-abstract.md<'),
-			// the static brand/type crumb is gone for a real document (no "Markdown" / "Living Document" type)
-			noTypeCrumb: !h.includes('class="crumb">Markdown<') && !h.includes('class="crumb">Living Document<'),
-		}, {
-			projectSegmentClickable: true,
-			projectSegmentIsFolder: true,
-			titleSegment: true,
-			fileNameSegment: true,
-			noTypeCrumb: true,
-		});
-	});
-
-	// Issue #174: with no workspace folder in play (projectName absent), the bar falls back to the brand crumb
-	// rather than rendering a blank/half breadcrumb - the file breadcrumb needs a project segment to anchor.
-	test('the top bar falls back to the brand crumb when no project name is supplied', () => {
-		const content = renderLivingDocContent({
+		}).html;
+		const noProject = renderLivingDocContent({
 			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
 			present: { open: false, choice: 'html' }, syncDiff: [],
-		});
-		const h = content.html;
+		}).html;
 		assert.deepStrictEqual({
-			hasBrandCrumb: h.includes('class="crumb">Living Document<'),
-			noFileBreadcrumb: !h.includes('class="crumb-proj"'),
-		}, { hasBrandCrumb: true, noFileBreadcrumb: true });
-	});
-
-	// Issue #174: every breadcrumb value (project name, document title, file name) is authored data that
-	// reaches the webview HTML, so all three MUST go through esc() and land inert. A hostile filename/title
-	// must appear as escaped text, never as live markup - reverting any esc() on the breadcrumb fails this.
-	test('the breadcrumb escapes hostile project/title/file names so nothing renders as live markup', () => {
-		const content = renderLivingDocContent({
-			doc: { title: '<img src=x onerror="alert(1)">', subtitle: '', sources: [], context: [], blocks: [], isLiving: false, body: '' },
-			pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(), mode: 'pm', rawText: '',
-			present: { open: false, choice: 'html' }, syncDiff: [],
-			projectName: '"><script>x</script>', fileName: '</span><b>evil</b>.md',
-		});
-		const h = content.html;
-		assert.deepStrictEqual({
-			// no un-escaped hostile tag survives anywhere in the emitted breadcrumb HTML
-			noLiveImg: !h.includes('<img src=x onerror'),
-			noLiveScript: !h.includes('<script>x</script>'),
-			noLiveSpanBreakout: !h.includes('</span><b>evil</b>'),
-			// the values are present, escaped (proves they were rendered, not merely dropped)
-			titleEscaped: h.includes('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;'),
-			projectEscaped: h.includes('&quot;&gt;&lt;script&gt;x&lt;/script&gt;'),
-			fileEscaped: h.includes('&lt;/span&gt;&lt;b&gt;evil&lt;/b&gt;.md'),
-		}, {
-			noLiveImg: true,
-			noLiveScript: true,
-			noLiveSpanBreakout: true,
-			titleEscaped: true,
-			projectEscaped: true,
-			fileEscaped: true,
-		});
+			realDocNoCrumb: !realDoc.includes('class="crumb') && !realDoc.includes('data-open-project'),
+			realDocNoBrandLogo: !realDoc.includes('class="logo"'),
+			noProjectNoCrumb: !noProject.includes('class="crumb') && !noProject.includes('class="topbar"'),
+		}, { realDocNoCrumb: true, realDocNoBrandLogo: true, noProjectNoCrumb: true });
 	});
 
 	// Issue #175: the top bar and formatting toolbar run edge-to-edge. The bars being siblings of .pmwrap is
@@ -371,15 +329,16 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 			// The harness's `body{padding:0 20px}` inset is reset in the content's own html,body rule (the fix for
 			// #175). Without this the bars are inset ~20px off each rail no matter where they sit in the DOM.
 			bodyPaddingReset: shell.includes('html,body{margin:0;padding:0;'),
-			// The bars precede .pmwrap in document order and are not nested inside its padding.
-			topBarBeforeWrap: h.slice(0, wrapAt).includes('class="topbar"'),
+			// (plan 44-b PH.4) The per-doc top bar is gone; the formatting toolbar is now the first bar and
+			// precedes .pmwrap in document order, not nested inside its padding.
+			noTopBar: !h.includes('class="topbar"'),
 			toolbarBeforeWrap: h.slice(0, wrapAt).includes('class="etoolbar"'),
-			barsNotInsideWrap: !h.slice(wrapAt).includes('class="topbar"') && !h.slice(wrapAt).includes('class="etoolbar"'),
+			barsNotInsideWrap: !h.slice(wrapAt).includes('class="etoolbar"'),
 			// The centred prose column keeps its 720px max-width + 30px provenance gutter (its own inset, not the harness's).
 			proseCentred: shell.includes('.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px'),
 		}, {
 			bodyPaddingReset: true,
-			topBarBeforeWrap: true,
+			noTopBar: true,
 			toolbarBeforeWrap: true,
 			barsNotInsideWrap: true,
 			proseCentred: true,
