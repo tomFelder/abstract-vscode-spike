@@ -295,6 +295,15 @@ export function getWindowControlsStyle(configurationService: IConfigurationServi
 
 export const DEFAULT_CUSTOM_TITLEBAR_HEIGHT = 35; // includes space for command center
 
+// Abstract fork seam (plan 44-b, merge-tax ledger V2-2, decision 170): the Abstract Editor v2 repurposes
+// the custom title bar as its full-width 48px header. The title bar's height is the grid slot the layout
+// reserves for the part, so a CSS-only height would render 48px but the grid would allocate only 35px and
+// clip the header. This one constant lifts the reserved height to 48 in the web path where the header is
+// used (BrowserTitlebarPart.minimumHeight). Minimal + fail-soft: it changes only the reserved height in
+// web; if the fork header CSS were dropped, the slot would just be a taller empty title bar. Re-pinned by
+// scripts/check-seams.sh (seam 10) - the ACTIVITYBAR_WIDTH 48->76 precedent.
+export const ABSTRACT_HEADER_HEIGHT = 48;
+
 export function useWindowControlsOverlay(configurationService: IConfigurationService): boolean {
 	if (isWeb) {
 		return false; // only supported on desktop instances
