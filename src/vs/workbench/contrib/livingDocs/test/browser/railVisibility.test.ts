@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { decideReviewRailOpenOnEntry, IReviewRailEntryContext, RailGesture, recordedChoiceForRailGesture, ReviewRailManualChoice } from '../../common/railVisibility.js';
+import { decideReviewRailOpenOnEntry, IReviewRailEntryContext, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, treeRailHiddenOnEntry } from '../../common/railVisibility.js';
 
 suite('livingDocs review-rail quiet-shell entry (plan 42 L4)', () => {
 
@@ -57,6 +57,38 @@ suite('livingDocs review-rail quiet-shell entry (plan 42 L4)', () => {
 			{
 				peek: undefined,
 				collapseControl: ReviewRailManualChoice.Collapsed,
+			});
+	});
+
+	// Per-workspace collapse persistence (plan 44-b P2.4, keys `livingDocs.v2.treeRailCollapsed` /
+	// `livingDocs.v2.rightRailCollapsed`). The right rail's stored boolean is the single source of truth for
+	// the user's explicit choice: unset -> the quiet-shell default applies; true/false -> honoured on entry.
+	test('the persisted right-rail collapse boolean maps onto the review-rail manual choice tri-state', () => {
+		assert.deepStrictEqual(
+			{
+				unset: reviewRailManualChoiceFromPersistedCollapse(undefined),
+				collapsed: reviewRailManualChoiceFromPersistedCollapse(true),
+				open: reviewRailManualChoiceFromPersistedCollapse(false),
+			},
+			{
+				unset: ReviewRailManualChoice.None,
+				collapsed: ReviewRailManualChoice.Collapsed,
+				open: ReviewRailManualChoice.Open,
+			});
+	});
+
+	// The tree rail has no quiet-shell default: it opens on entry unless the user has explicitly collapsed it.
+	test('the tree rail hides on entry only when the persisted collapse flag is true', () => {
+		assert.deepStrictEqual(
+			{
+				unset: treeRailHiddenOnEntry(undefined),
+				collapsed: treeRailHiddenOnEntry(true),
+				open: treeRailHiddenOnEntry(false),
+			},
+			{
+				unset: false,
+				collapsed: true,
+				open: false,
 			});
 	});
 });

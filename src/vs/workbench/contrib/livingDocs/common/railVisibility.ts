@@ -70,6 +70,34 @@ export function decideReviewRailOpenOnEntry(context: IReviewRailEntryContext): b
 }
 
 /**
+ * Map the per-workspace `livingDocs.v2.rightRailCollapsed` value (plan 43 section 3.5) onto the review
+ * rail's manual-choice tri-state. The storage key is the single source of truth for the user's explicit
+ * open/collapse choice on the right rail (plan 44-b fix-round 2, reconciling the old
+ * `reviewRailManualChoice` key): an UNSET key means the user has not chosen, so the quiet-shell
+ * has-something-to-say default applies; `true` records an explicit collapse; `false` an explicit open.
+ *
+ * @param persistedCollapsed the stored boolean, or `undefined` when the key has never been written.
+ */
+export function reviewRailManualChoiceFromPersistedCollapse(persistedCollapsed: boolean | undefined): ReviewRailManualChoice {
+	if (persistedCollapsed === undefined) {
+		return ReviewRailManualChoice.None;
+	}
+	return persistedCollapsed ? ReviewRailManualChoice.Collapsed : ReviewRailManualChoice.Open;
+}
+
+/**
+ * Decide whether the TREE rail (the left SIDEBAR part) should be HIDDEN when the editor surface is
+ * entered for a document (plan 44-b P2.4). Unlike the right rail there is no quiet-shell default: the
+ * tree rail simply opens by default and stays collapsed only when the user has explicitly collapsed it,
+ * persisted per-workspace under `livingDocs.v2.treeRailCollapsed`.
+ *
+ * @param persistedCollapsed the stored boolean, or `undefined` when the key has never been written.
+ */
+export function treeRailHiddenOnEntry(persistedCollapsed: boolean | undefined): boolean {
+	return persistedCollapsed === true;
+}
+
+/**
  * The ways the review rail's visibility can change while the user is on the editor surface (plan 42 slice
  * L4). The RECORDING layer classifies each of these peek-vs-choice.
  */

@@ -34,7 +34,7 @@ import { IHistoryService } from '../../../services/history/common/history.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
-import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, ReviewRailManualChoice } from '../common/railVisibility.js';
+import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, treeRailHiddenOnEntry } from '../common/railVisibility.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
@@ -694,9 +694,17 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	// collapsed, so its width must be seeded the first time it actually opens, not on the first doc entry.
 	static readonly RAIL_WIDTHS_SEEDED_KEY = 'livingDocs.railWidthsSeeded';
 	static readonly REVIEW_WIDTH_SEEDED_KEY = 'livingDocs.reviewWidthSeeded';
-	// The user's persisted manual open/collapse choice for the review rail (plan 42 L4). PROFILE scope so
-	// it follows the user across windows and survives restart; MACHINE target since it is a UI preference.
-	static readonly REVIEW_RAIL_CHOICE_KEY = 'livingDocs.reviewRailManualChoice';
+	// The per-workspace rail collapse state (plan 43 section 3.5, plan 44-b P2.4). WORKSPACE scope /
+	// MACHINE target: this is per-workspace UI state that survives reload but does not roam. Presence
+	// records an EXPLICIT user choice; an unset key means "no choice yet" (the tree rail then defaults
+	// open, the right rail falls back to the quiet-shell has-something-to-say rule). These keys are the
+	// single source of truth for the user's explicit collapse choice, superseding the old profile-scoped
+	// `livingDocs.reviewRailManualChoice` (migrated on first read below).
+	static readonly TREE_RAIL_COLLAPSED_KEY = 'livingDocs.v2.treeRailCollapsed';
+	static readonly RIGHT_RAIL_COLLAPSED_KEY = 'livingDocs.v2.rightRailCollapsed';
+	// The legacy profile-scoped review-rail choice (plan 42 L4). Read once and migrated into
+	// RIGHT_RAIL_COLLAPSED_KEY so there is only one source of truth; never written again.
+	private static readonly LEGACY_REVIEW_RAIL_CHOICE_KEY = 'livingDocs.reviewRailManualChoice';
 	private static readonly DEFAULT_SIDEBAR_WIDTH = 264;
 	private static readonly DEFAULT_AUXILIARYBAR_WIDTH = 392;
 
@@ -704,6 +712,9 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	// True while THIS contribution is toggling the review-rail part, so the resulting part-visibility
 	// event is not mistaken for a user's manual open/collapse.
 	private _programmaticReviewToggle = false;
+	// True while THIS contribution is toggling the tree-rail (SIDEBAR) part on sync, so the resulting
+	// part-visibility event is not persisted as a user's manual collapse choice (plan 44-b P2.4).
+	private _programmaticTreeToggle = false;
 	// The single pending re-assert/seed timeout (replaced each sync so repeated editor changes never
 	// accumulate disposables on the class store).
 	private readonly _deferred = this._register(new MutableDisposable());
@@ -723,11 +734,13 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 	) {
 		super();
+		this._migrateLegacyReviewRailChoice();
 		this._sync();
 		this._register(this._editorService.onDidActiveEditorChange(() => this._sync()));
-		// Record the user's manual open/collapse of the review rail so it wins on the next entry. Only a
-		// toggle the user made while ON the editor surface counts -- our own programmatic toggles are
-		// flagged out, and toggles on a screen surface (where the rail is always hidden) are ignored.
+		// Record the user's manual open/collapse of either rail so it wins on the next entry AND across
+		// reload (plan 44-b P2.4). Only a toggle the user made while ON the editor surface counts -- our own
+		// programmatic toggles are flagged out, and toggles on a screen surface (where both rails are always
+		// hidden) are ignored.
 		this._register(this._layoutService.onDidChangePartVisibility(e => this._onPartVisibilityChange(e.partId, e.visible)));
 		// (defect 1) A focusPanel-driven reveal is a PEEK: guard the visibility event it will raise so it is
 		// not recorded as a manual `open`. onDidRequestPanel fires synchronously just before openView, whose
@@ -753,9 +766,35 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	private _collapseReviewRailAsChoice(): void {
 		this._setReviewRailHidden(true);
 		const choice = recordedChoiceForRailGesture(RailGesture.CollapseControl);
-		if (choice) {
-			this._storageService.store(RailVisibilityContribution.REVIEW_RAIL_CHOICE_KEY, choice, StorageScope.PROFILE, StorageTarget.MACHINE);
+		if (choice === ReviewRailManualChoice.Collapsed) {
+			this._storeRightRailCollapsed(true);
 		}
+	}
+
+	// One-time migration (plan 44-b P2.4): fold the legacy profile-scoped `livingDocs.reviewRailManualChoice`
+	// into the new per-workspace `livingDocs.v2.rightRailCollapsed`, then clear the legacy key so there is a
+	// single source of truth. Only runs when the new key is unset (a genuine new choice must never be
+	// clobbered by stale legacy state).
+	private _migrateLegacyReviewRailChoice(): void {
+		if (this._storageService.getBoolean(RailVisibilityContribution.RIGHT_RAIL_COLLAPSED_KEY, StorageScope.WORKSPACE) !== undefined) {
+			return;
+		}
+		const legacy = this._storageService.get(RailVisibilityContribution.LEGACY_REVIEW_RAIL_CHOICE_KEY, StorageScope.PROFILE);
+		if (legacy === ReviewRailManualChoice.Open || legacy === ReviewRailManualChoice.Collapsed) {
+			this._storeRightRailCollapsed(legacy === ReviewRailManualChoice.Collapsed);
+		}
+		this._storageService.remove(RailVisibilityContribution.LEGACY_REVIEW_RAIL_CHOICE_KEY, StorageScope.PROFILE);
+	}
+
+	// Persist an explicit right-rail collapse choice per-workspace (plan 43 section 3.5 key). WORKSPACE /
+	// MACHINE: survives reload, does not roam. Presence of the key records that the user has chosen.
+	private _storeRightRailCollapsed(collapsed: boolean): void {
+		this._storageService.store(RailVisibilityContribution.RIGHT_RAIL_COLLAPSED_KEY, collapsed, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+	}
+
+	// Persist an explicit tree-rail collapse choice per-workspace (plan 43 section 3.5 key, P2.4).
+	private _storeTreeRailCollapsed(collapsed: boolean): void {
+		this._storageService.store(RailVisibilityContribution.TREE_RAIL_COLLAPSED_KEY, collapsed, StorageScope.WORKSPACE, StorageTarget.MACHINE);
 	}
 
 	private _surfaceKind(): 'doc' | 'screen' {
@@ -765,15 +804,28 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	}
 
 	private _onPartVisibilityChange(partId: string, visible: boolean): void {
-		if (partId !== Parts.AUXILIARYBAR_PART || this._programmaticReviewToggle || this._surfaceKind() !== 'doc') {
+		if (this._surfaceKind() !== 'doc') {
+			return;
+		}
+		// A genuine user toggle of the TREE rail while editing (NOT a programmatic sync): persist the
+		// collapse choice per-workspace so it survives reload (plan 44-b P2.4). The header's left toggle,
+		// the Cmd+\ chord and Cmd+B all route through toggleSidebarVisibility, so every user gesture lands
+		// here as a SIDEBAR visibility flip.
+		if (partId === Parts.SIDEBAR_PART) {
+			if (!this._programmaticTreeToggle) {
+				this._storeTreeRailCollapsed(!visible);
+			}
+			return;
+		}
+		if (partId !== Parts.AUXILIARYBAR_PART || this._programmaticReviewToggle) {
 			return;
 		}
 		// A genuine user toggle of the review rail while editing (NOT a programmatic sync and NOT a guarded
-		// focusPanel peek): persist it so it wins on the next entry and across restart (the pending-review
-		// force-open still overrides a stored "collapsed"). In the calm shell the only such gesture is the
-		// rail's own collapse control, which records `collapsed` directly; this remains the safety net for
-		// any residual native hide/show gesture.
-		this._storageService.store(RailVisibilityContribution.REVIEW_RAIL_CHOICE_KEY, visible ? ReviewRailManualChoice.Open : ReviewRailManualChoice.Collapsed, StorageScope.PROFILE, StorageTarget.MACHINE);
+		// focusPanel peek): persist it so it wins on the next entry and across reload (a pending review no
+		// longer force-opens; the badge dot surfaces it, P2.5). In the calm shell the only such gesture is
+		// the rail's own collapse control, which records `collapsed` directly; this remains the safety net
+		// for any residual native hide/show gesture.
+		this._storeRightRailCollapsed(!visible);
 		if (visible) {
 			// The user opened the rail: seed its default width if this is the first time it has ever opened.
 			this._seedReviewWidthOnce();
@@ -781,8 +833,8 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	}
 
 	private _reviewRailManualChoice(): ReviewRailManualChoice {
-		const stored = this._storageService.get(RailVisibilityContribution.REVIEW_RAIL_CHOICE_KEY, StorageScope.PROFILE);
-		return stored === ReviewRailManualChoice.Open || stored === ReviewRailManualChoice.Collapsed ? stored : ReviewRailManualChoice.None;
+		return reviewRailManualChoiceFromPersistedCollapse(
+			this._storageService.getBoolean(RailVisibilityContribution.RIGHT_RAIL_COLLAPSED_KEY, StorageScope.WORKSPACE));
 	}
 
 	private _sync(): void {
@@ -793,7 +845,7 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 			// rail), so re-assert the hide on the next tick to win that race; otherwise the tree-rail lingers.
 			this._lastKind = 'screen';
 			const hide = () => {
-				this._layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
+				this._setTreeRailHidden(true);
 				this._setReviewRailHidden(true);
 			};
 			hide();
@@ -806,9 +858,14 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 			return;
 		}
 		this._lastKind = 'doc';
-		// The left tree-rail always comes up on the editor surface (L4 leaves the left rail unchanged).
-		this._layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
-		void this._viewsService.openView(DOCUMENTS_VIEW_ID, false);
+		// The left tree-rail opens by default on the editor surface UNLESS the user has explicitly collapsed
+		// it (persisted per-workspace, plan 44-b P2.4). Respect the stored choice instead of force-showing.
+		const treeHidden = treeRailHiddenOnEntry(
+			this._storageService.getBoolean(RailVisibilityContribution.TREE_RAIL_COLLAPSED_KEY, StorageScope.WORKSPACE));
+		this._setTreeRailHidden(treeHidden);
+		if (!treeHidden) {
+			void this._viewsService.openView(DOCUMENTS_VIEW_ID, false);
+		}
 		// The right review rail is quiet on entry: open it only when the pure decision says so -- a pending
 		// proposal forces it (trust grammar), else the user's stored manual choice, else has-something-to-say.
 		const activeResource = this._editorService.activeEditor?.resource;
@@ -824,6 +881,20 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 			this._seedReviewWidthOnce();
 		}
 		this._seedSidebarWidthOnce();
+	}
+
+	// Toggle the tree-rail (SIDEBAR) part while flagging the change as programmatic, so the resulting
+	// part-visibility event is not persisted as a user's manual collapse choice (plan 44-b P2.4).
+	private _setTreeRailHidden(hidden: boolean): void {
+		if (this._layoutService.isVisible(Parts.SIDEBAR_PART, mainWindow) === !hidden) {
+			return;
+		}
+		this._programmaticTreeToggle = true;
+		try {
+			this._layoutService.setPartHidden(hidden, Parts.SIDEBAR_PART);
+		} finally {
+			this._programmaticTreeToggle = false;
+		}
 	}
 
 	// Toggle the review-rail part while flagging the change as programmatic, so the resulting
