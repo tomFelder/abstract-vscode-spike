@@ -37,6 +37,8 @@ grep_has() { grep -Eq -- "$2" "$1" 2>/dev/null; }
 
 LDC="src/vs/workbench/contrib/livingDocs/browser/livingDocs.contribution.ts"
 STUDIO_CSS="src/vs/workbench/contrib/styleOverrides/browser/media/studio.css"
+ELEVATION_CSS="src/vs/workbench/contrib/styleOverrides/browser/media/elevation.css"
+FLOATING_PANELS_CSS="src/vs/workbench/browser/media/floatingPanels.css"
 ACTIVITYBAR="src/vs/workbench/browser/parts/activitybar/activitybarPart.ts"
 BUILTIN_SCANNER="src/vs/workbench/services/extensionManagement/browser/builtinExtensionsScannerService.ts"
 CMD_PALETTE="src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts"
@@ -133,6 +135,27 @@ fi
 if ! grep_has "$LDC" "NeutraliseIdeChords|neutralise.*[Cc]hord|lwd.noop|livingDocs\.noopChord"; then
 	fail "ide-chord-neutralise" "the IDE-chord neutralisation (plan 33 iter 3) is gone from $LDC (Cmd+J panel / terminal chords leak again)"
 fi
+
+# --- Seam 9: the v2 elevation model (plan 44-a, styleOverrides-CSS, fail-soft; ledger row V2-1 "not
+# taken - 0 core"). The elevation.css cards RIDE the core "floating panels" feature
+# (browser/media/floatingPanels.css + AbstractPaneCompositePart, which reserves FLOATING_PANEL_MARGIN
+# so the card content never clips). We took NO core seam; elevation.css only re-skins those cards
+# (chrome backdrop, radius 14, #E9EAEE border, rail/paper bg, shadow-rail/shadow-editor) and gates on
+# the `.floating-panels` class core toggles when modernUI is on. If a rebase renames that class or
+# removes the feature, the cards silently lose their gaps/dims - this asserts the coupling loudly. ---
+if ! grep_has "$ELEVATION_CSS" "floating-panels"; then
+	fail "elevation-floating-panels" "elevation.css no longer gates on the core .floating-panels class ($ELEVATION_CSS) - the v2 cards ride that feature; re-pin per ledger V2-1"
+fi
+# The core feature the elevation cards ride must still exist and still toggle that class.
+if ! grep_has "$FLOATING_PANELS_CSS" "floating-panels .part.sidebar"; then
+	fail "floating-panels-feature" "the core floating-panels card feature is gone/renamed in $FLOATING_PANELS_CSS (the v2 elevation cards lose their margins + content-dim sync)"
+fi
+# The elevation chrome + card tokens must stay pinned to the plan-43 section 1 values.
+for token in "#EDEFF3" "#E9EAEE" "0 8px 28px -14px rgba\(20, 22, 28, .22\)" "0 12px 36px -16px rgba\(20, 22, 28, .26\)"; do
+	if ! grep_has "$ELEVATION_CSS" "$token"; then
+		fail "elevation-tokens" "the elevation token '${token}' is gone from $ELEVATION_CSS (v2 chrome/card/shadow drifted from plan 43 section 1)"
+	fi
+done
 
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
