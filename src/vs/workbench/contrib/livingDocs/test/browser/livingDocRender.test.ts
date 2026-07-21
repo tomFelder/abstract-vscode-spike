@@ -6,7 +6,8 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDocRenderInput, IPresentState, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from '../../browser/livingDocRender.js';
-import { ILivingDoc } from '../../common/livingDocsModel.js';
+import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { ILivingDoc, IProposedChange } from '../../common/livingDocsModel.js';
 
 // Plan 15 iter 5 flipped the default: every living document now opens in the unified ProseMirror surface
 // ('pm'), the bespoke renderDoc HTML body is retired, and the calm chrome (formatting toolbar + Present)
@@ -27,7 +28,7 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		return renderLivingDocHtml(input);
 	}
 
-	// (plan 33 iter 4, L8; doc 22 §3) Present is honest: the exports Abstract genuinely writes (HTML,
+	// (plan 33 iter 4, L8; doc 22 section 3) Present is honest: the exports Abstract genuinely writes (HTML,
 	// Markdown, PDF and a built-in-styled Word .docx) are selectable; the cloud/spreadsheet destinations
 	// stay "Soon" and cannot be chosen or fired.
 	test('Present offers the four real exports as selectable, and keeps gdoc/gsheet/xlsx "Soon"', () => {
@@ -117,6 +118,45 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 			noServerBoundSpan: true,
 			noContentEditableBlock: true,
 		});
+	});
+
+	test('the numbered rail (pin 9): one gutter number per Markdown block in the deco payload, with the bound tone', () => {
+		// Three blocks: a heading (line 1, idle), a plain paragraph (line 2, idle), a source-bound paragraph
+		// (line 3, bound). The deco payload's ordered `numbers` carries one entry per block with its tone.
+		const md = [
+			'---', 'title: T', 'sources:', '  - metrics.csv', '---', '',
+			'## Highlights', '', 'Revenue grew.', '', 'Margins held [40%](bind:metrics.margin).',
+		].join('\n') + '\n';
+		const parsed = parseLivingDoc(md);
+		const content = renderLivingDocContent({
+			doc: parsed, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'pm', rawText: md, present: { open: false, choice: 'html' }, syncDiff: [],
+		});
+		assert.deepStrictEqual(content.pmDeco?.numbers, [
+			{ id: parsed.blocks[0].id, line: 1, tone: 'idle', keys: [], recent: false },
+			{ id: parsed.blocks[1].id, line: 2, tone: 'idle', keys: [], recent: false },
+			{ id: parsed.blocks[2].id, line: 3, tone: 'bound', keys: ['metrics.margin'], recent: false },
+		]);
+	});
+
+	test('the inline proposal widget cites the gutter address (pin 11 / P11.1): "Line N" in the mono tag row', () => {
+		const md = ['## Highlights', '', 'Revenue grew fast this week.'].join('\n') + '\n';
+		const parsed = parseLivingDoc(md);
+		const target = parsed.blocks.find(b => b.text.startsWith('Revenue'))!; // block index 1 => Line 2
+		const pending: IProposedChange[] = [{
+			id: 'c1', docId: 'd', docTitle: 'T', blockId: target.id, blockLabel: 'Highlights',
+			oldText: target.text, newText: 'Revenue dropped sharply this week.', kind: 'meaning',
+			confidence: 0.85, rationale: '', sourceCells: [],
+		}];
+		const content = renderLivingDocContent({
+			doc: parsed, pending, resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'pm', rawText: md, present: { open: false, choice: 'html' }, syncDiff: [],
+		});
+		const widgetHtml = content.pmDeco?.edits[0]?.html ?? '';
+		assert.deepStrictEqual({
+			citesAddress: widgetHtml.includes('>Line 2</span>'),
+			addressIsMono: widgetHtml.includes('class="src pm-addr">Line 2'),
+		}, { citesAddress: true, addressIsMono: true });
 	});
 
 	test('source-peek is a bottom in-surface drawer (never splits the editor): grip + header + sync action over the CSV grid', () => {
@@ -334,8 +374,10 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 			noTopBar: !h.includes('class="topbar"'),
 			toolbarBeforeWrap: h.slice(0, wrapAt).includes('class="etoolbar"'),
 			barsNotInsideWrap: !h.slice(wrapAt).includes('class="etoolbar"'),
-			// The centred prose column keeps its 720px max-width + 30px provenance gutter (its own inset, not the harness's).
-			proseCentred: shell.includes('.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px'),
+			// The centred prose column keeps its 720px max-width and now reserves a 70px numbered-gutter lane (its
+			// own inset, not the harness's). The translateX(-18px) pulls the reading group left by half the 40px
+			// the wider lane added, so the prose TEXT never shifts from the 30px-lane baseline (P9.1).
+			proseCentred: shell.includes('.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:70px;padding-right:0;box-sizing:content-box;position:relative;transform:translateX(-18px)}'),
 		}, {
 			bodyPaddingReset: true,
 			noTopBar: true,

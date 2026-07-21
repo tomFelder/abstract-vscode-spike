@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { buildBlockGutterEntries, IBlockGutterEntry, resolveBlockLine } from './livingDocAddress.js';
 import { scopeBlockEdit } from './livingDocMarkdown.js';
 import { ChangeKind, ILivingDoc, ILivingDocLock, IProposedChange } from './livingDocsModel.js';
 
@@ -81,6 +82,9 @@ export interface IPmEditDecoration {
 	readonly rationale: string;
 	readonly newText: string;
 	readonly sourceLine?: number;
+	// The block's display address line (spec 43 section 3.1 / pin 11): the widget's mono tag row cites "Line N" so
+	// the proposal, the gutter and the rail all speak one address. Absent when the target block is gone.
+	readonly addressLine?: number;
 }
 
 // A generative insertion, anchored after the heading block it follows (or `null` = end of document).
@@ -95,22 +99,21 @@ export interface IPmInsertDecoration {
 	readonly sourceLine?: number;
 }
 
-// A provenance gutter marker painted in the 30px gutter column left of the reading column.
-//   - a `dot` marks a source-bound block (colour `accent`), vertically centred on the line; it carries the
-//     block's bind keys + a `recent` flash flag.
-//   - a `bar` spans the rows of a multi-line edited paragraph (colour `attention`); it is anchored by the
-//     block's whitespace-collapsed text so the bundle can resolve the same ProseMirror node the edit widget
-//     targets. A single-line edit gets no bar (there are no rows to span).
+// A `bar` gutter marker (pin 9): a 3px `attention` bar spanning the rows of a multi-line pending-edit
+// paragraph. It is anchored by the block's whitespace-collapsed text so the bundle can resolve the same
+// ProseMirror node the edit widget targets. A single-line edit gets no bar (there are no rows to span).
 export type IPmGutterMarker =
-	| { readonly kind: 'dot'; readonly keys: readonly string[]; readonly recent: boolean }
 	| { readonly kind: 'bar'; readonly anchorText: string };
 
 // The full serializable decoration spec sent to the webview; the bundle resolves the text anchors into
-// ProseMirror positions and builds the DecorationSet from it.
+// ProseMirror positions and builds the DecorationSet from it. `numbers` carries the ordered per-block
+// gutter descriptors (spec 43 section 3.1): one number per Markdown block, in document order, so the bundle zips
+// them 1:1 with the ProseMirror node order without any text matching (pin 9 - the numbered rail).
 export interface IPmDecorationSpec {
 	readonly edits: readonly IPmEditDecoration[];
 	readonly inserts: readonly IPmInsertDecoration[];
 	readonly gutters: readonly IPmGutterMarker[];
+	readonly numbers: readonly IBlockGutterEntry[];
 }
 
 const BIND_LINK_RE = /\[([^\]]*)\]\(bind:([^)\s]+)\)/g;
@@ -199,6 +202,9 @@ export function buildPmDecorationSpec(doc: ILivingDoc, pending: readonly IPropos
 		const anchorSource = scopeBlockEdit(oldSource, newSource).oldText;
 		const anchorText = anchorNormalize(anchorSource);
 		const diff = wordDiffSegments(anchorSource, newSource);
+		// The block's display address (spec 43 section 3.1): resolve the change's durable block id to its current
+		// 1-based line so the widget can cite "Line N". Undefined (block gone) => no address string, no error.
+		const addressLine = resolveBlockLine(doc, change.blockId);
 		edits.push({
 			id: change.id,
 			anchorText,
@@ -211,6 +217,7 @@ export function buildPmDecorationSpec(doc: ILivingDoc, pending: readonly IPropos
 			rationale: change.rationale,
 			newText: newSource,
 			...(typeof change.sourceLine === 'number' ? { sourceLine: change.sourceLine } : {}),
+			...(typeof addressLine === 'number' ? { addressLine } : {}),
 		});
 		// The bar spans the rows of a MULTI-line paragraph: detect multi-line off the (scoped) anchor source
 		// which still carries the hard newlines of a wrapped paragraph, keyed on the same collapsed anchor.
@@ -219,17 +226,18 @@ export function buildPmDecorationSpec(doc: ILivingDoc, pending: readonly IPropos
 		}
 	}
 
-	// Provenance gutter markers: a `dot` for each source-bound block (a recently-applied block flashes),
-	// plus an `attention` `bar` for each multi-line edited paragraph. Dots come first (document order).
+	// The numbered rail (spec 43 section 3.1 / pin 9): one number per Markdown block, in document order, each with
+	// its provenance tone (idle / bound / pending) and bind keys for the hover source-peek. Computed from the
+	// address model so the printed numbers are a display-time projection of the durable block ids.
+	const numbers = buildBlockGutterEntries(doc, pending, recent);
+
+	// The `attention` bar for each multi-line pending-edit paragraph (single-line edits get none). The bound
+	// dot is gone (pin 9): a bound block now reads as an accent number + a small dot on its number, driven by
+	// the `numbers` array above, not a separate gutter marker.
 	const gutters: IPmGutterMarker[] = [];
-	for (const block of doc.blocks) {
-		if (block.binds.length > 0) {
-			gutters.push({ kind: 'dot', keys: block.binds.map(b => b.key), recent: recent.has(block.id) });
-		}
-	}
 	for (const anchorText of barAnchors) {
 		gutters.push({ kind: 'bar', anchorText });
 	}
 
-	return { edits, inserts, gutters };
+	return { edits, inserts, gutters, numbers };
 }
