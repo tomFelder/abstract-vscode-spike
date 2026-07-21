@@ -12,22 +12,47 @@
 import { localize } from '../../../../nls.js';
 import { countTemplateSlots } from '../common/livingDocMarkdown.js';
 import { ILivingDocSummary, ITemplateInfo } from '../common/livingDocs.js';
-import { IAwayFeed } from '../common/projectHomeFeed.js';
-import { ACCENT, ACCENT_DK, avatar, esc, IRecentProject, IScreenState, ITidyReviewItem, pickerSheet, pickRow, sheet } from './screenRenderShell.js';
+import { docRailDot } from '../common/railStatus.js';
+import { ACCENT, ACCENT_DK, avatar, esc, IHomeNeedsYou, IScreenState, pickerSheet, pickRow, sheet } from './screenRenderShell.js';
 
-// Health indicator for a project tile. Comp pattern: In Sync = small `ok`-token green dot (no text);
-// pending = amber chip with just the count number (attention tokens). Matches Part B tokens exactly.
-function healthIndicator(pending: number): string {
-	if (pending === 0) {
-		// `ok` green dot: 6px, `oklch(0.6 0.13 150)` = #2C8159 approx
-		return `<span style="display:flex;align-items:center;gap:5px;font:500 11px/1 system-ui;color:#5d8a66;flex:none"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)"></span></span>`;
-	}
-	// `attention` amber chip: just the number, no "to approve" text (matches comp exactly)
-	return `<span style="font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:3px 6px;flex:none">${pending}</span>`;
+// The time-of-day greeting, the real date, and the document status chip (H1.2 / H3.1 / H3.4). All three read
+// real facts (the wall clock; the doc's live status signals) so Home never fabricates a mood or a state.
+
+/** The time-of-day half of the greeting ("Good morning/afternoon/evening"), from the real local hour. */
+function greetingTimeOfDay(hour: number): string {
+	if (hour < 12) { return localize("livingDocs.home.morning", "Good morning"); }
+	if (hour < 18) { return localize("livingDocs.home.afternoon", "Good afternoon"); }
+	return localize("livingDocs.home.evening", "Good evening");
 }
 
-// ---- Home front-door pieces (F15 / journey 1w): the whole-project chat composer, the WHILE YOU WERE AWAY
-// feed + all-clear promotion, and the empty-project front door. All are DOM-free HTML over the real state. ----
+/** The mono date stamp beside the greeting, e.g. "Mon 14 Jul" - the real current date, weekday + day + month. */
+function greetingDate(now: Date): string {
+	const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+	const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+	return `${days[now.getDay()]} ${now.getDate()} ${months[now.getMonth()]}`;
+}
+
+/**
+ * The ALL DOCUMENTS status chip (H3.1 / H3.4). Derived from the SAME `docRailDot` helper the tree rail's dots
+ * read, so a chip and its row dot can never disagree: any coloured band (red/yellow/green - something to
+ * attend to) reads "needs you"; a calm living doc reads "in sync"; a plain (non-living) document reads
+ * "markdown". Three visual bands, one truth. Palette exact to the mock (attention cream / ok green / muted).
+ */
+function docStatusChip(d: ILivingDocSummary): string {
+	const dot = docRailDot(d);
+	const chip = (bg: string, border: string, colour: string, label: string) =>
+		`<span style="height:20px;padding:0 8px;display:inline-flex;align-items:center;border-radius:999px;background:${bg};border:1px solid ${border};color:${colour};font:500 10.5px/1 system-ui">${label}</span>`;
+	if (dot.color !== 'grey') {
+		return chip('#FDFAF2', '#E4DCCB', '#8A6D1A', localize("livingDocs.home.chip.needsYou", "needs you"));
+	}
+	if (d.isLiving) {
+		return chip('#EEF7F0', '#D7ECDC', '#2C8159', localize("livingDocs.home.chip.inSync", "in sync"));
+	}
+	return chip('#F6F7F9', '#E9EAEE', '#868B95', localize("livingDocs.home.chip.markdown", "markdown"));
+}
+
+// ---- Home front-door pieces (F15 / journey 1w): the whole-project chat composer and the empty-project front
+// door. All are DOM-free HTML over the real state. ----
 
 // The whole-project chat composer (map-D21/D24): "Ask this project anything..." defaulting to whole-project
 // scope. A question answers read-only with citations (rendered below the box); a change request opens the
@@ -61,112 +86,6 @@ function renderHomeComposer(state: IScreenState): string {
 		</div>
 		${busy}${answerBlock}
 	</div>`;
-}
-
-// The Tidy verb surface (doc 22 section 5, the P2 folder conventions): "Tidy this project" proposes a move
-// plan through the review grammar - each move an individually approve/skip-able row, applied only on Apply,
-// nothing moved before that. Model-free: the plan is deterministic heuristics with a stated reason per row.
-// Collapsed to a single entry button until invoked; an empty plan renders the honest "nothing to tidy".
-function renderTidy(state: IScreenState): string {
-	const review = state.tidyReview;
-	if (!review) {
-		return `<button data-msg="tidyProject" style="display:flex;align-items:center;gap:11px;width:100%;text-align:left;margin:0 0 34px;padding:14px 16px;background:#fff;border:1px solid #e6e8ed;border-radius:12px;cursor:pointer">
-			<span style="width:26px;height:26px;flex:none;border-radius:8px;background:#f4f5fd;color:${ACCENT};font:600 14px/26px system-ui;text-align:center">&#10022;</span>
-			<span style="flex:1"><span style="display:block;font:600 13px/1.3 system-ui;color:#26292f">Tidy this project</span><span style="display:block;font:400 12px/1.4 system-ui;color:#868b95">Propose moving loose files into data/, assets/, archive/ &mdash; you approve every move.</span></span>
-			<span style="flex:none;font:600 12px/1 system-ui;color:${ACCENT_DK}">Review &#8594;</span>
-		</button>`;
-	}
-	// The applied summary: a calm confirmation that points at the sticky Undo toast the service raised.
-	if (review.applied !== undefined) {
-		return `<div style="display:flex;align-items:center;gap:11px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:12px;padding:14px 16px;margin-bottom:34px">
-			<span style="width:22px;height:22px;flex:none;border-radius:50%;background:oklch(0.6 0.13 150);color:#fff;font:600 13px/22px system-ui;text-align:center">&#10003;</span>
-			<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#2f6b45">Tidied ${review.applied} file${review.applied === 1 ? '' : 's'}</div><div style="font:400 12px/1.4 system-ui;color:#5d8a66">Each move is undoable from the notification. Nothing else was touched.</div></div>
-			<button data-msg="tidyCancel" style="flex:none;border:1px solid #cfe4d4;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#2f6b45;cursor:pointer">Done</button>
-		</div>`;
-	}
-	// The honest empty plan (doc 22: never a fabricated row): the project is already well organised.
-	if (!review.items.length) {
-		return `<div style="display:flex;align-items:center;gap:11px;background:#fff;border:1px solid #e6e8ed;border-radius:12px;padding:14px 16px;margin-bottom:34px">
-			<span style="width:22px;height:22px;flex:none;border-radius:50%;background:#eef1ff;color:${ACCENT};font:600 12px/22px system-ui;text-align:center">&#10003;</span>
-			<div style="flex:1"><div style="font:600 13.5px/1.3 system-ui;color:#26292f">Nothing to tidy</div><div style="font:400 12px/1.4 system-ui;color:#868b95">This project is already well organised &mdash; no loose files to move.</div></div>
-			<button data-msg="tidyCancel" style="flex:none;border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Close</button>
-		</div>`;
-	}
-	const approved = review.items.filter(i => i.decision === 'approved').length;
-	const card = (it: ITidyReviewItem, i: number) => {
-		const skipped = it.decision === 'skipped';
-		// The would-orphan warning (map-D6 shape): name the dependent documents that will be re-pointed to the
-		// new location in the same atomic move (their bindings survive), so the move is never a silent break.
-		const deps = it.dependents.length
-			? `<div style="margin-top:8px;display:flex;gap:7px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:8px;padding:8px 10px"><span style="color:#9a6b16;flex:none">&#9888;</span><span style="font:400 11.5px/1.5 system-ui;color:#9a6b16">${it.dependents.length} document${it.dependents.length === 1 ? ' references' : 's reference'} this file &mdash; their links will be re-pointed so nothing breaks: ${it.dependents.map(esc).join(', ')}</span></div>`
-			: '';
-		const toggle = skipped
-			? `<button data-msg="tidyApproveOne" data-arg="${i}" style="flex:none;border:1px solid ${ACCENT};background:#fff;border-radius:8px;padding:7px 12px;font:600 12px/1 system-ui;color:${ACCENT_DK};cursor:pointer">Approve</button>`
-			: `<button data-msg="tidySkipOne" data-arg="${i}" style="flex:none;border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#868b95;cursor:pointer">Skip</button>`;
-		const opacity = skipped ? 'opacity:.55;' : '';
-		return `<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-bottom:1px solid #f0f1f4;${opacity}">
-			<div style="flex:1;min-width:0">
-				<div style="font:600 13px/1.35 system-ui;color:#1a1c20;word-break:break-word">${esc(it.fromLabel)} <span style="color:#c2c5cd">&#8594;</span> <span style="font:500 12.5px/1.35 'JetBrains Mono',ui-monospace,monospace;color:${ACCENT_DK}">${esc(it.toLabel)}</span></div>
-				<div style="margin-top:4px;font:400 12px/1.5 system-ui;color:#696e78">${esc(it.reason)}${skipped ? ' <span style="color:#a3a8b2">&middot; will stay put</span>' : ''}</div>
-				${deps}
-			</div>
-			${toggle}
-		</div>`;
-	};
-	return `<div style="margin-bottom:34px">
-		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px">
-			<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:${ACCENT}">TIDY &middot; ${review.items.length} PROPOSED MOVE${review.items.length === 1 ? '' : 'S'}</div>
-			<span style="font:400 11px/1.4 system-ui;color:#a3a8b2">Nothing moves until you apply.</span>
-		</div>
-		<div style="background:#fff;border:1px solid #e9eaee;border-radius:14px;overflow:hidden">${review.items.map(card).join('')}
-			<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;background:#fbfbfd">
-				<span style="font:400 12px/1.4 system-ui;color:#696e78">${approved} of ${review.items.length} approved</span>
-				<div style="display:flex;gap:8px">
-					<button data-msg="tidyCancel" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:500 12.5px/1 system-ui;color:#52575f;cursor:pointer">Cancel</button>
-					<button data-msg="tidyApply"${approved === 0 ? ' disabled' : ''} style="border:none;border-radius:9px;padding:9px 16px;background:${approved === 0 ? '#c7cbe8' : ACCENT};color:#fff;font:600 12.5px/1 system-ui;cursor:${approved === 0 ? 'default' : 'pointer'}">Apply ${approved} move${approved === 1 ? '' : 's'}</button>
-				</div>
-			</div>
-		</div>
-	</div>`;
-}
-
-// The WHILE YOU WERE AWAY feed + the all-clear promotion (map-D14). Real data only: the rows are agent runs
-// since the last visit (from the persisted run log); when nothing ran the section is absent, and when nothing
-// needs review the calm all-clear promotion is shown ("Everything is in sync") rather than a fabricated feed.
-function renderAwaySection(feed: IAwayFeed): string {
-	// The all-clear promotion (map-D14): nothing pending -> a calm green banner, the honest "in sync" state.
-	const allClear = feed.allClear
-		? `<div style="display:flex;align-items:center;gap:11px;background:#eef7f0;border:1px solid #d7ecdc;border-radius:12px;padding:14px 16px;margin-bottom:26px">
-			<span style="width:22px;height:22px;flex:none;border-radius:50%;background:oklch(0.6 0.13 150);color:#fff;font:600 13px/22px system-ui;text-align:center">&#10003;</span>
-			<div><div style="font:600 13.5px/1.3 system-ui;color:#2f6b45">Everything is in sync</div><div style="font:400 12px/1.4 system-ui;color:#5d8a66">Nothing needs your review right now.</div></div>
-		</div>`
-		: '';
-	if (!feed.hasActivity) {
-		// No runs in the window: show the all-clear if clear, else nothing (a non-empty pending set already
-		// surfaces through NEEDS YOU below - the feed never invents activity to fill the space).
-		return allClear;
-	}
-	const row = (r: IAwayFeed['rows'][number]) => {
-		const av = avatar(r.agentName);
-		// Honest per-run outcome: a failure names itself; a skip says why; otherwise the applied/queued tally.
-		const outcome = r.failed
-			? `<span style="font:500 11.5px/1.3 system-ui;color:#9a6b16">Failed${r.error ? ` &mdash; ${esc(r.error)}` : ''}</span>`
-			: r.skipped
-				? `<span style="font:500 11.5px/1.3 system-ui;color:#a3a8b2">Skipped &mdash; a previous run was still going</span>`
-				: `<span style="font:400 11.5px/1.3 system-ui;color:#52575f">${r.docsTouched} doc${r.docsTouched === 1 ? '' : 's'} &middot; ${r.applied} applied</span>`;
-		const needs = r.queued > 0
-			? `<span style="flex:none;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.03em;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:4px 7px">${r.queued} NEEDS YOU</span>`
-			: `<span style="flex:none;display:flex;align-items:center"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)"></span></span>`;
-		return `<div style="display:flex;align-items:center;gap:11px;padding:12px 14px;border-bottom:1px solid #f0f1f4">
-			<span style="width:26px;height:26px;flex:none;border-radius:7px;background:${av.color};color:#fff;font:600 10px/26px system-ui;text-align:center">${av.text}</span>
-			<div style="flex:1;min-width:0"><div style="font:600 13px/1.3 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.agentName)}</div>${outcome}</div>
-			<span style="flex:none;font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${esc(r.whenLabel)}</span>
-			${needs}
-		</div>`;
-	};
-	const label = feed.firstVisit ? 'RECENT ACTIVITY' : 'WHILE YOU WERE AWAY';
-	return `${allClear}<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:12px">${label}</div>
-		<div style="background:#fff;border:1px solid #e9eaee;border-radius:14px;overflow:hidden;margin-bottom:34px">${feed.rows.map(row).join('')}</div>`;
 }
 
 // The empty-project front door (journey 1w frame 4): a folder is open but has no documents. Cures the 1a
@@ -226,7 +145,7 @@ function renderBirthSheets(state: IScreenState): string {
 }
 
 function renderEmptyProjectFrontDoor(state: IScreenState, folderName: string): string {
-	const scroll = (inner: string) => `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">${inner}</div></div>`;
+	const scroll = (inner: string) => `<div class="screen" style="background:transparent"><div style="flex:1;overflow-y:auto;background:transparent">${inner}</div></div>`;
 	const templates = state.templates ?? [];
 	const templateHint = templates.length
 		? `Start from one of your ${templates.length} template${templates.length === 1 ? '' : 's'}, from a blank page, or ask me to draft one.`
@@ -250,16 +169,19 @@ function renderEmptyProjectFrontDoor(state: IScreenState, folderName: string): s
 // ---- Home: the landing dashboard. The open folder IS the project (decision #39): an empty state when no
 // folder is open, otherwise the folder's name + every Markdown document (living ones badged). ----
 export function renderHome(state: IScreenState): string {
-	const scroll = (inner: string) => `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb">${inner}</div></div>`;
+	// The screen body floats on the plan-44 elevation card (the editor part paints the white paper + radius 14
+	// + shadow-editor on chrome); the webview body is transparent so that card shows through - Home never
+	// repaints its own canvas (shell CSS belongs to plan 44).
+	const scroll = (inner: string) => `<div class="screen" style="background:transparent"><div style="flex:1;overflow-y:auto;background:transparent">${inner}</div></div>`;
 
-	// No folder open: a single calm invitation to open one (the on-ramp).
+	// No folder open: one plain-words line + one button, nothing else (H1.5, closes #211 items 1-2). Zero
+	// product vocabulary - no "Living Documents", "sources" or "agents"; just an honest invitation to open a
+	// folder of files to work on.
 	if (!state.hasFolder) {
-		return `<div class="screen"><div style="flex:1;overflow-y:auto;background:#f8f9fb;display:flex;align-items:center;justify-content:center">
-			<div style="text-align:center;max-width:430px;padding:40px">
-				<div style="font-size:42px;line-height:1;margin-bottom:16px">&#128193;</div>
-				<h1 style="margin:0 0 10px;font:600 23px/1.25 system-ui;color:#15171c;letter-spacing:-.01em">Open a folder to begin</h1>
-				<p style="margin:0 0 24px;font:400 14px/1.6 system-ui;color:#696e78">Living Documents works on a folder of Markdown files on your computer. Open one to see its documents, sources and agents &mdash; everything stays on disk.</p>
-				<button data-msg="openFolder" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">Open folder&hellip;</button>
+		return `<div class="screen" style="background:transparent"><div style="flex:1;overflow-y:auto;background:transparent;display:flex;align-items:center;justify-content:center">
+			<div style="text-align:center;max-width:420px;padding:40px">
+				<h1 style="margin:0 0 12px;font:600 22px/1.3 system-ui;color:#14161A;letter-spacing:-.02em">${localize("livingDocs.home.noFolder.title", "Open a folder to start working.")}</h1>
+				<button data-msg="openFolder" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">${localize("livingDocs.home.noFolder.action", "Open a Folder")}</button>
 			</div>
 		</div></div>`;
 	}
@@ -274,111 +196,84 @@ export function renderHome(state: IScreenState): string {
 		return renderEmptyProjectFrontDoor(state, folderName);
 	}
 
-	// NEEDS YOU + the greeting summary are derived from the REAL per-document pending count that
-	// listDocuments() already carries (ILivingDocSummary.pendingCount = the live pending set for that
-	// doc). Never fabricated: if nothing pends the section is absent and the summary is "in sync".
-	const pendingDocs = docs.filter(d => d.pendingCount > 0).sort((a, b) => b.pendingCount - a.pendingCount);
-	const totalPending = pendingDocs.reduce((n, d) => n + d.pendingCount, 0);
-	// When work pends, the greeting names it; when clear, it hands off to the all-clear promotion below rather
-	// than repeating "in sync" here (the map-D14 banner in the WHILE YOU WERE AWAY section carries that line).
-	const summary = pendingDocs.length
-		? `${pendingDocs.length} document${pendingDocs.length === 1 ? '' : 's'} need${pendingDocs.length === 1 ? 's' : ''} your review across this project. <strong style="font-weight:600;color:#8a6d1a">${totalPending} change${totalPending === 1 ? '' : 's'} to approve</strong>.`
-		: `Here is where ${esc(folderName)} stands.`;
+	// The truthful needs-you count (H1.3): "N documents need you · everything else is in sync." when work
+	// pends, or the calm all-clear equivalent when nothing does. Real data only - the count is the live pending
+	// set, and the all-clear says "in sync" honestly (never a fabricated status).
+	const pendingDocCount = docs.filter(d => d.pendingCount > 0).length;
+	const summary = pendingDocCount === 1
+		? localize("livingDocs.home.summary.one", "1 document needs you · everything else is in sync.")
+		: pendingDocCount > 1
+			? localize("livingDocs.home.summary.many", "{0} documents need you · everything else is in sync.", pendingDocCount)
+			: localize("livingDocs.home.summary.clear", "Everything is in sync.");
 
-	// One NEEDS-YOU card per document with pending work: accent top-border, a 2.4s pulse dot, the doc
-	// name, the amber `N TO APPROVE` chip (attention tokens), and a primary Review that opens the doc.
-	const needsCard = (d: ILivingDocSummary) => {
-		const av = avatar(d.title);
-		const n = d.pendingCount;
-		return `<div style="flex:1;min-width:0;max-width:520px;background:#fff;border:1px solid #e0e5fb;border-radius:15px;padding:20px 22px;box-shadow:0 12px 30px -20px rgba(86,97,201,.45);position:relative">
-			<div style="position:absolute;top:0;left:22px;right:22px;height:3px;background:${ACCENT};border-radius:0 0 3px 3px"></div>
-			<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:${av.color};color:#fff;font:600 11px/28px system-ui;text-align:center">${av.text}</span><span style="font:600 16px/1.2 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.title)}</span><span style="margin-left:auto;flex:none;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:5px;padding:4px 7px">${n} TO APPROVE</span></div>
-			<div style="font:400 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;margin-bottom:16px;padding-left:38px">${d.sources.length ? `${d.sources.length} source${d.sources.length === 1 ? '' : 's'}` : 'Living document'}</div>
-			<div style="display:flex;gap:8px;margin-bottom:16px"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.66 0.16 45);margin-top:5px;flex:none;animation:lwdPulse 2.4s ease-in-out infinite"></span><span style="font:400 12.5px/1.5 system-ui;color:#52575f"><strong style="color:#1a1c20;font-weight:600">${n} change${n === 1 ? '' : 's'}</strong> from a source refresh ${n === 1 ? 'is' : 'are'} waiting for your review.</span></div>
-			<button data-msg="openDoc" data-arg="${esc(d.resource.toString())}" style="width:100%;font:600 13px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:9px;padding:11px;cursor:pointer">Review ${n} change${n === 1 ? '' : 's'}</button>
+	// NEEDS YOU cards (H2): at most the two most-pending documents, from the REAL per-doc detail the host
+	// computed (`homeNeedsYou`) - the plain-language reason + freshness stamp are real, never fabricated.
+	// Anatomy (H2.2): 3px accent top-border, radius 13, e1; an 8px attention pulse dot; name 14.5/600; a mono
+	// amber "N TO APPROVE" pill (radius 999); the one-line reason; an accent Review button (30px, radius 8)
+	// that opens the doc (plain open until the 45-a Review deep-link lands - 48-c upgrades it); and the mono
+	// freshness stamp beside it.
+	const needsCard = (c: IHomeNeedsYou) => {
+		const n = c.pendingCount;
+		const pill = n === 1
+			? localize("livingDocs.home.card.toApprove.one", "1 TO APPROVE")
+			: localize("livingDocs.home.card.toApprove.many", "{0} TO APPROVE", n);
+		const stamp = c.refreshedLabel
+			? `<span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;color:#A3A8B2">${esc(c.refreshedLabel)}</span>`
+			: '';
+		return `<div style="flex:1;min-width:0;background:#fff;border:1px solid #E6E8EC;border-top:3px solid #5B6DC4;border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(20,22,28,.05)">
+			<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="width:8px;height:8px;flex:none;border-radius:999px;background:#C99A2E;animation:lwdPulse 2.4s ease-in-out infinite"></span><span style="font:600 14.5px/1.2 system-ui;color:#1A1C20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span><span style="flex:1"></span><span style="flex:none;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;font-weight:600;color:#8A6D1A;background:#FDFAF2;border:1px solid #E4DCCB;border-radius:999px;padding:3px 8px">${pill}</span></div>
+			<div style="font:400 13px/1.55 system-ui;color:#52575F;margin-bottom:14px">${esc(c.reason)}</div>
+			<div style="display:flex;align-items:center;gap:10px"><button data-msg="openDoc" data-arg="${esc(c.resource)}" style="height:30px;padding:0 14px;display:inline-flex;align-items:center;border-radius:8px;background:#5B6DC4;color:#fff;font:600 12.5px/1 system-ui;border:none;cursor:pointer">${localize("livingDocs.home.card.review", "Review")}</button>${stamp}</div>
 		</div>`;
 	};
-	// The quiet attention line for a failed scheduled run (plan 32 iter 2): one calm amber row linking to the
-	// Agents screen. Only rendered when a run actually failed (real data) - no fake activity when all is well.
-	const fail = state.homeFailure;
-	const failureLine = fail
-		? `<button data-msg="goAgents" title="${esc(fail.error)}" style="display:flex;align-items:center;gap:9px;width:100%;text-align:left;margin:0 0 26px;padding:11px 14px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:10px;font:500 12.5px/1.4 system-ui;color:#9a6b16;cursor:pointer"><span style="width:7px;height:7px;flex:none;border-radius:50%;background:oklch(0.66 0.16 45)"></span><span style="flex:1">${esc(fail.agentName)} failed on ${esc(fail.day)}</span><span style="font:600 12px/1 system-ui;color:${ACCENT_DK}">View details &#8594;</span></button>`
+	const cards = state.homeNeedsYou ?? [];
+	const overflow = (state.homeNeedsYouTotal ?? 0) - cards.length;
+	// "+N more" overflow (H2.1): when more than two documents need the user, one quiet row links to the Review
+	// surface where the whole pending set lives.
+	const overflowRow = overflow > 0
+		? `<button data-msg="reviewProject" style="margin-top:12px;border:none;background:none;cursor:pointer;font:600 12px/1 system-ui;color:${ACCENT_DK};padding:2px 0">${localize("livingDocs.home.needsYou.more", "+{0} more", overflow)} &#8594;</button>`
 		: '';
-	const needsYou = pendingDocs.length
-		? `<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#5661c9;margin-bottom:14px;display:flex;align-items:center;gap:8px"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 2.4s ease-in-out infinite"></span>NEEDS YOU</div>
-			<div style="display:flex;gap:16px;margin-bottom:34px;flex-wrap:wrap">${pendingDocs.slice(0, 2).map(needsCard).join('')}</div>`
+	// H2.5: the whole section is absent when nothing pends (no empty shell).
+	const needsYou = cards.length
+		? `<div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;font-weight:600;letter-spacing:.12em;color:#A3A8B2;margin-bottom:10px">${localize("livingDocs.home.needsYou.label", "NEEDS YOU")}</div>
+			<div style="display:flex;gap:16px;margin-bottom:40px;flex-wrap:wrap">${cards.map(needsCard).join('')}</div>${overflowRow}`
 		: '';
 
-	// ALL PROJECTS grid (D22-A): the current folder prominently + recent folders as additional tiles.
-	// Counts for the current folder are REAL (from the live listDocuments() data + distinct sources).
-	// Counts for recent folders are DEFERRED (not yet loaded) - show name + avatar only, per the
-	// real-data guardrail (never fabricate counts for unloaded projects).
-	const distinctSources = new Set<string>();
-	for (const d of docs) { for (const s of d.sources) { distinctSources.add(s); } }
-	const docCount = docs.length;
-	const srcCount = distinctSources.size;
-	const countsLabel = srcCount > 0
-		? `${docCount} doc${docCount === 1 ? '' : 's'} &middot; ${srcCount} source${srcCount === 1 ? '' : 's'}`
-		: `${docCount} doc${docCount === 1 ? '' : 's'}`;
-
-	// Current-project tile (comp: 1px border, 14px radius, 17x18px padding, 24px avatar/7px-radius).
-	// The current project tile gets the same uniform border as the comp (no 2px accent outline) but
-	// a subtle accent-tint background so the active project reads as distinct from recent ones.
-	const currentAv = avatar(folderName);
-	const currentTile = `<button data-msg="openFirstDoc" style="text-align:left;background:#f7f9ff;border:1px solid #e0e5fb;border-radius:14px;padding:17px 18px;cursor:pointer;display:flex;flex-direction:column;gap:12px;width:100%">
-		<div style="display:flex;align-items:center;gap:9px">
-			<span style="width:24px;height:24px;flex:none;border-radius:7px;background:${currentAv.color};color:#fff;font:600 10px/24px system-ui;text-align:center">${currentAv.text}</span>
-			<span style="font:600 14px/1 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(folderName)}</span>
-			${healthIndicator(totalPending)}
-		</div>
-		<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${countsLabel}</div>
-	</button>`;
-
-	// Recent-folder tiles (D22-A): name + avatar only, "Open" affordance instead of counts.
-	// Filter out the current folder so it does not appear twice.
-	const recents = (state.recentFolders ?? []).filter(r => r.name !== folderName);
-	const recentTile = (r: IRecentProject) => {
-		const av = avatar(r.name);
-		return `<button data-msg="openRecentFolder" data-arg="${esc(r.folderUri)}" style="text-align:left;background:#fff;border:1px solid #e9eaee;border-radius:14px;padding:17px 18px;cursor:pointer;display:flex;flex-direction:column;gap:12px;width:100%">
-			<div style="display:flex;align-items:center;gap:9px">
-				<span style="width:24px;height:24px;flex:none;border-radius:7px;background:${av.color};color:#fff;font:600 10px/24px system-ui;text-align:center">${av.text}</span>
-				<span style="font:600 14px/1 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(r.name)}</span>
-				<span style="font:500 10px/1 system-ui;color:#a3a8b2;flex:none">Open &#8599;</span>
-			</div>
-			<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#c2c5cd">Open to see counts</div>
+	// ALL DOCUMENTS grid (H3): a 4-col grid (gap 12) of the open folder's real documents (decision 39 - the
+	// folder IS the project, no fixture cards). Each card: a 26px two-letter avatar (plan 20 palette), the
+	// name (13/600), the status chip (derived from the same `docRailDot` helper as the tree dots - H3.4), and
+	// a mono source count. Clicking opens the doc. A dashed "New document" (plus) tile closes the grid (H3.3).
+	const docCard = (d: ILivingDocSummary) => {
+		const av = avatar(d.title);
+		const srcCount = new Set(d.sources).size;
+		const sourceMeta = srcCount > 0
+			? (srcCount === 1 ? localize("livingDocs.home.card.source.one", "1 source") : localize("livingDocs.home.card.source.many", "{0} sources", srcCount))
+			: localize("livingDocs.home.card.noBinds", "no binds");
+		return `<button data-msg="openDoc" data-arg="${esc(d.resource.toString())}" class="doc-tile" style="text-align:left;background:#FBFCFD;border:1px solid #E9EAEE;border-radius:13px;padding:14px 16px;cursor:pointer">
+			<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:${av.color};color:#fff;display:flex;align-items:center;justify-content:center;font:600 10px/1 system-ui">${av.text}</span><span style="font:600 13px/1.2 system-ui;color:#1A1C20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.title)}</span></div>
+			<div style="display:flex;align-items:center;gap:6px">${docStatusChip(d)}<span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;color:#A3A8B2">${sourceMeta}</span></div>
 		</button>`;
 	};
+	const newDocTile = `<button data-msg="newDocument" data-sheet-open="newdoc" class="doc-newtile" style="border:1px dashed #C6CAD2;background:none;border-radius:13px;padding:14px 16px;display:flex;align-items:center;justify-content:center;gap:8px;color:#868B95;cursor:pointer;min-height:76px"><span style="font-size:16px">&#65291;</span><span style="font:500 13px/1 system-ui">${localize("livingDocs.home.newDocument", "New document")}</span></button>`;
+	const docsGrid = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">${docs.map(docCard).join('')}${newDocTile}</div>`;
 
-	const allTiles = [currentTile, ...recents.map(recentTile)];
-	// 3-column grid for >= 3 tiles; 2-column for fewer (comp uses 3-col).
-	const cols = allTiles.length >= 3 ? 3 : (allTiles.length === 2 ? 2 : 1);
-	const projectsGrid = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:14px">${allTiles.join('')}</div>`;
-
-	// New-document on-ramp (plan 28, iter 4): a "New document" primary + a name-or-template sheet. Blank
-	// (Enter/default) makes a titled `<name>.md` - or an Untitled name-on-save doc when the name is empty
-	// (decision 56); the template rows reach the iter-3 generate flow with that same typed name.
-	// The "From sources..." birth (F17): its picker offers the project's real data files (csv/json bind
-	// sources) and documents (md/txt knowledge). With none, the New-document sheet omits the row and the
-	// picker shows a calm empty line. Real data only - the options come from the service's folder scan.
+	// The birth sheets (New document + From sources) still back the grid's plus tile and the header's New action.
 	const birthSheets = renderBirthSheets(state);
-	// The whole-project chat composer (map-D21/D24) leads the front door; the WHILE YOU WERE AWAY feed +
-	// all-clear promotion (map-D14) sit between it and the NEEDS-YOU cards. Both render from real state only.
-	const composer = renderHomeComposer(state);
-	const awaySection = state.awayFeed ? renderAwaySection(state.awayFeed) : '';
-	// D26: a "Continue your walkthrough" banner when an onboarding is in progress (shared with the
-	// empty-project front door - see renderResumeBanner for why both Home paths carry it).
+	// D26 / plan 42 L1: a "Continue your walkthrough" banner (in-progress) or a dismissible "See a 90-second
+	// demo" card - the demoted walkthrough entry point. Reachable from Home, never a gate (the cold start still
+	// lands in the editor). Kept above the greeting so the calm Home stays the hero.
 	const resumeBanner = renderResumeBanner(state);
-	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:40px 36px 80px">
+	const name = state.userName;
+	const greeting = name
+		? localize("livingDocs.home.greeting.name", "{0}, {1}.", greetingTimeOfDay(new Date().getHours()), name)
+		: localize("livingDocs.home.greeting", "{0}.", greetingTimeOfDay(new Date().getHours()));
+	return scroll(`<div style="max-width:1080px;margin:0 auto;padding:64px 48px 80px">
 		${resumeBanner}
-		<div style="display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:6px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 26px/1.2 system-ui;color:#15171c;letter-spacing:-.01em">Good morning, Tom</h1><div style="flex:none;display:flex;gap:8px"><button data-msg="newDocument" data-sheet-open="newdoc" style="border:none;border-radius:8px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#65291; New document</button><button data-msg="openFolder" style="border:1px solid #e6e8ed;background:#fff;border-radius:8px;padding:7px 12px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer">Switch folder&hellip;</button></div></div>
-		<p style="margin:0 0 22px;font:400 14.5px/1.5 system-ui;color:#52575f">${summary}</p>
-		${composer}
-		${renderTidy(state)}
-		${failureLine}
-		${awaySection}
+		<div style="display:flex;align-items:baseline;gap:14px;margin-bottom:10px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 30px/1.12 system-ui;color:#14161A;letter-spacing:-.02em">${esc(greeting)}</h1><span style="flex:none;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;color:#A3A8B2">${greetingDate(new Date())}</span></div>
+		<p style="margin:0 0 36px;font:400 14px/1.5 system-ui;color:#868B95">${summary}</p>
 		${needsYou}
-		<div style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#a3a8b2;margin-bottom:14px">ALL PROJECTS</div>
-		${projectsGrid}
+		<div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;font-weight:600;letter-spacing:.12em;color:#A3A8B2;margin-bottom:10px">${localize("livingDocs.home.allDocuments", "ALL DOCUMENTS")}</div>
+		${docsGrid}
 		${birthSheets}
 	</div>`);
 }

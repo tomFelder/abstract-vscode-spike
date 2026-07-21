@@ -58,6 +58,26 @@ export interface ITidyReviewState {
 	readonly applied?: number;
 }
 
+/**
+ * One NEEDS-YOU card's real pending detail (H2, plan 48). Built from `getPendingForDoc` + the doc's most
+ * recent snapshot: the plain-language reason and the freshness stamp are both real (never fabricated). The
+ * reason cites the gutter address ("at line N") only when the pending change carries a real `sourceLine`;
+ * otherwise it names the real block ("in <block>") - no invented line number. `refreshedLabel` is the
+ * relative time of the doc's most recent recorded change, absent when the doc has no history yet.
+ */
+export interface IHomeNeedsYou {
+	/** Stringified doc URI, the `openDoc` arg (plain open until 45-a's Review deep-link lands). */
+	readonly resource: string;
+	/** The document's human title. */
+	readonly title: string;
+	/** The real pending-change count for this document (mirrors the Review rail). */
+	readonly pendingCount: number;
+	/** The plain-language, one-line reason for the top pending change, citing its real address when known. */
+	readonly reason: string;
+	/** The real "refreshed Nm ago" relative-time stamp of the doc's most recent change; absent when none. */
+	readonly refreshedLabel?: string;
+}
+
 /** The Home attention line for a failed scheduled run (plan 32 iter 2). Real data only - built from a run. */
 export interface IHomeFailure {
 	/** The agent's human name, e.g. "Weekly refresh". */
@@ -109,6 +129,17 @@ export interface IScreenState {
 	 */
 	readonly homeFailure?: IHomeFailure;
 	/**
+	 * Home: the real pending detail for the NEEDS-YOU cards (plan 48 H2), at most the two most-pending
+	 * documents. Absent/empty renders no NEEDS-YOU section (H2.5: no empty shell). Each row carries a real
+	 * reason + freshness stamp built from `getPendingForDoc` + the doc's history - never fabricated.
+	 */
+	readonly homeNeedsYou?: readonly IHomeNeedsYou[];
+	/**
+	 * Home: the total number of documents with pending work (H2.1 overflow). When it exceeds the two cards
+	 * shown, the "+N more" affordance links to the Review surface. Zero when nothing pends.
+	 */
+	readonly homeNeedsYouTotal?: number;
+	/**
 	 * Home: the WHILE YOU WERE AWAY feed (F15 / journey 1w) - agent runs since the last visit + the live
 	 * needs-you count + the all-clear state. Absent renders no feed section (the pre-fetch idle). Real data
 	 * only: the rows come from the persisted run log, and the all-clear tracks the true pending set.
@@ -132,6 +163,12 @@ export interface IScreenState {
 	readonly hasFolder?: boolean;
 	/** Home: the open folder's name, shown as the project. */
 	readonly folderName?: string;
+	/**
+	 * Home: the person to greet, from the existing user/profile source (the OS username basename of the
+	 * environment's userHome when no explicit profile name exists). Absent falls back to a name-less greeting
+	 * ("Good morning.") - never a fabricated placeholder name.
+	 */
+	readonly userName?: string;
 	/** Home: the documents discovered in the open folder (all Markdown, living flagged for the badge). */
 	readonly docs?: readonly ILivingDocSummary[];
 	/** Templates: the `*.template.md` files discovered in the open folder (plan 28), driving the card grid. */
@@ -395,6 +432,10 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 .sheet-input:focus{border-color:${ACCENT};box-shadow:0 0 0 3px rgba(80,110,235,.14)}
 .sheet-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:#fff;border:1px solid #ececf0;border-radius:10px;padding:11px 13px;cursor:pointer;margin-top:8px}
 .sheet-row:hover{background:#f7f8fb;border-color:#dfe1e7}
+/* Home ALL DOCUMENTS grid (plan 48 H3.2): a document tile lifts to accent-tint on hover; the dashed
+ * New-document tile shifts to the accent ink + accent border. */
+.doc-tile:hover{background:#F4F5FD;border-color:#E0E5FB}
+.doc-newtile:hover{color:#4650B8;border-color:#9AA2E0}
 </style>`;
 
 // Generic message bridge: any element with data-msg posts {type:<msg>, arg:<data-arg>} to the host.

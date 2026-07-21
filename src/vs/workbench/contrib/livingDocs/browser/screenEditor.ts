@@ -11,7 +11,7 @@ import { matchesSomeScheme, Schemas } from '../../../../base/common/network.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
-import { AgentPolicy, bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAgentRun, IAgentTrigger, ISkillRunSummary, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
+import { AgentPolicy, bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAgentRun, IAgentTrigger, IProposedChange, ISkillRunSummary, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
@@ -31,10 +31,11 @@ import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProvid
 import { HeaderPillKind, IAbstractHeaderContent, IAbstractHeaderService } from '../common/abstractHeader.js';
 import { projectHasLivingSurface } from '../common/livingUpgrade.js';
 import { IAnalyticsService } from '../common/analytics.js';
-import { buildAwayFeed, classifyProjectChat, IAwayFeed } from '../common/projectHomeFeed.js';
+import { buildAwayFeed, classifyProjectChat, IAwayFeed, relativeTime } from '../common/projectHomeFeed.js';
+import { IPathService } from '../../../services/path/common/pathService.js';
 import { DEMO_ITERATION_PROMPT, nextOnboardingStep, ONBOARDING_STEPS, OnboardingStep } from '../common/onboarding.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
-import { AgentFilter, IHomeFailure, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, ITidyReviewState, renderScreenHtml, ScreenId } from './screenRender.js';
+import { AgentFilter, IHomeFailure, IHomeNeedsYou, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, ITidyReviewState, renderScreenHtml, ScreenId } from './screenRender.js';
 
 // Persisted onboarding step + demo-document URI (profile scope) so the two-wow flow "remembers where you were"
 // across reopens and the folder-open reload at hand-off (doc 20 section D26). The step + demo URI are persisted
@@ -96,6 +97,11 @@ interface IScreenEditorState {
 	// Home: the latest failed scheduled run, for the quiet attention line (plan 32 iter 2). Undefined when
 	// nothing failed; rebuilt on open + on every change so a fresh failure surfaces without reopening Home.
 	homeFailure?: IHomeFailure;
+	// Home v2 (plan 48): the person to greet (from the OS username, see `_userName`), plus the real NEEDS-YOU
+	// detail for the two most-pending documents and the total pending-doc count for the "+N more" overflow.
+	userName?: string;
+	homeNeedsYou?: readonly IHomeNeedsYou[];
+	homeNeedsYouTotal?: number;
 	// Settings (plan 35 iter 4): the live model door + usage snapshot, the sign-in flow stage + any error, and
 	// whether the onboarding survey has been recorded this session. Fetched on open + refreshed while a sign-in
 	// is pending; real data only (the status comes straight from the proxy's /healthz).
@@ -174,6 +180,7 @@ export class ScreenEditor extends EditorPane {
 		@IConfigurationService private readonly _configuration: IConfigurationService,
 		@IAnalyticsService private readonly _analytics: IAnalyticsService,
 		@IAbstractHeaderService private readonly _header: IAbstractHeaderService,
+		@IPathService private readonly _pathService: IPathService,
 	) {
 		super(ScreenEditor.ID, group, telemetryService, themeService, _storageService);
 		this._storage = _storageService;
@@ -212,15 +219,17 @@ export class ScreenEditor extends EditorPane {
 			// Capture the since-last-visit cutoff ONCE per open (and advance the stored cursor to now), so the
 			// WHILE YOU WERE AWAY feed shows what happened since the previous visit and stays stable on refresh.
 			const sinceMs = this._captureLastVisit();
-			const [docs, recentFolders, templates, dataFiles, docFiles] = await Promise.all([
+			const [docs, recentFolders, templates, dataFiles, docFiles, userName] = await Promise.all([
 				this._livingDocs.listDocuments(),
 				this._fetchRecentFolders(),
 				this._livingDocs.listTemplates(),
 				this._livingDocs.getFolderDataFiles(),
 				this._livingDocs.getFolderDocFiles(),
+				this._userName(),
 			]);
 			const awayFeed = this._buildAwayFeed(sinceMs);
-			this._state = { ...this._state, docs, recentFolders, templates, dataFiles, docFiles, homeFailure: this._homeFailure(), awaySinceMs: sinceMs, awayFeed };
+			const needsYou = this._buildHomeNeedsYou(docs, Date.now());
+			this._state = { ...this._state, docs, recentFolders, templates, dataFiles, docFiles, homeFailure: this._homeFailure(), awaySinceMs: sinceMs, awayFeed, userName, homeNeedsYou: needsYou.cards, homeNeedsYouTotal: needsYou.total };
 			// Reset the all-clear tracking baseline for this Home open, then seed it from the current count.
 			this._homeNeedsYou = undefined;
 			this._homeNeedsYouSinceMs = undefined;
@@ -342,7 +351,9 @@ export class ScreenEditor extends EditorPane {
 		// stable across in-session refreshes; track the needs-you transition so the all-clear promotion + event
 		// react as proposals land and are cleared (map-D14).
 		const awayFeed = this._buildAwayFeed(this._state.awaySinceMs);
-		this._state = { ...this._state, docs, recentFolders, templates, dataFiles, docFiles, homeFailure: this._homeFailure(), awayFeed };
+		const needsYou = this._buildHomeNeedsYou(docs, Date.now());
+		// userName is resolved once on open (it does not change within a session) - carry it across refreshes.
+		this._state = { ...this._state, docs, recentFolders, templates, dataFiles, docFiles, homeFailure: this._homeFailure(), awayFeed, homeNeedsYou: needsYou.cards, homeNeedsYouTotal: needsYou.total };
 		this._trackAllClear(awayFeed.needsYouTotal);
 		this._render();
 	}
@@ -474,6 +485,61 @@ export class ScreenEditor extends EditorPane {
 		const when = run.finishedAt ?? run.startedAt;
 		const day = WEEKDAY_NAMES[new Date(Date.parse(when)).getDay()] ?? 'recently';
 		return { agentName: agent?.name ?? run.agentId, day, error: run.error };
+	}
+
+	// The person to greet on Home (H1.2). We have no explicit profile-name source, so we honestly derive it
+	// from the OS username: the basename of the resolved user home (e.g. /Users/tommy -> "Tommy") via the
+	// web-safe IPathService, which is the real account name, capitalised for the greeting. Absent/unusable ->
+	// undefined, so the greeting drops the name rather than showing a fabricated one.
+	private async _userName(): Promise<string | undefined> {
+		try {
+			const home = await this._pathService.userHome();
+			const segments = home.path.split('/').filter(Boolean);
+			const raw = segments[segments.length - 1] ?? '';
+			if (!raw || raw.length < 2) { return undefined; }
+			return raw.charAt(0).toUpperCase() + raw.slice(1);
+		} catch {
+			return undefined;
+		}
+	}
+
+	// Build the real NEEDS-YOU detail for the two most-pending documents (plan 48 H2). Everything is real: the
+	// reason is composed from the top pending change's `sourceLine`/`blockLabel` + `rationale` (no fabricated
+	// line number - the address is cited only when the change carries a real one), and the freshness stamp is
+	// the relative time of the doc's most recent recorded change (its latest snapshot), absent when it has no
+	// history. Returns the two cards + the total pending-doc count for the "+N more" overflow.
+	private _buildHomeNeedsYou(docs: readonly ILivingDocSummary[], nowMs: number): { readonly cards: readonly IHomeNeedsYou[]; readonly total: number } {
+		const pending = docs.filter(d => d.pendingCount > 0).sort((a, b) => b.pendingCount - a.pendingCount);
+		const cards = pending.slice(0, 2).map<IHomeNeedsYou>(d => {
+			const changes = this._livingDocs.getPendingForDoc(d.resource);
+			const top = changes[0];
+			const reason = this._needsYouReason(d, top);
+			const snapshots = this._livingDocs.getSnapshots(d.resource);
+			const latest = snapshots.length ? snapshots[snapshots.length - 1].at : undefined;
+			const latestMs = latest ? Date.parse(latest) : NaN;
+			const refreshedLabel = Number.isFinite(latestMs)
+				? localize("livingDocs.home.refreshed", "refreshed {0}", relativeTime(latestMs, nowMs))
+				: undefined;
+			return { resource: d.resource.toString(), title: d.title, pendingCount: d.pendingCount, reason, refreshedLabel };
+		});
+		return { cards, total: pending.length };
+	}
+
+	// The one-line, plain-language reason for a NEEDS-YOU card (H2.2). Cites the gutter address ("at line N")
+	// only when the top pending change carries a real `sourceLine`; otherwise names the real block it changed
+	// ("in <block>"). Never invents a line number (the 45-a address model is not merged yet). Falls back to a
+	// truthful count sentence when there is no per-change detail to draw on.
+	private _needsYouReason(doc: ILivingDocSummary, top: IProposedChange | undefined): string {
+		const n = doc.pendingCount;
+		if (!top) {
+			return n === 1
+				? localize("livingDocs.home.reason.count.one", "1 change is waiting for your review.")
+				: localize("livingDocs.home.reason.count.many", "{0} changes are waiting for your review.", n);
+		}
+		if (typeof top.sourceLine === 'number') {
+			return localize("livingDocs.home.reason.line", "{0} - waiting on your call at line {1}.", top.rationale, top.sourceLine);
+		}
+		return localize("livingDocs.home.reason.block", "{0} - waiting on your call in {1}.", top.rationale, top.blockLabel);
 	}
 
 	// Fetch the workbench recently-opened folder list for the ALL PROJECTS grid (D22-A). Maps each
