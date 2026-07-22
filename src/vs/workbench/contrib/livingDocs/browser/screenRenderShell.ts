@@ -66,7 +66,7 @@ export interface ITidyReviewState {
  * relative time of the doc's most recent recorded change, absent when the doc has no history yet.
  */
 export interface IHomeNeedsYou {
-	/** Stringified doc URI, the `openDoc` arg (plain open until 45-a's Review deep-link lands). */
+	/** Stringified doc URI, the `reviewNeedsYou`/`openDoc` arg. */
 	readonly resource: string;
 	/** The document's human title. */
 	readonly title: string;
@@ -76,6 +76,12 @@ export interface IHomeNeedsYou {
 	readonly reason: string;
 	/** The real "refreshed Nm ago" relative-time stamp of the doc's most recent change; absent when none. */
 	readonly refreshedLabel?: string;
+	/**
+	 * The durable block id of the top pending change (H2.3u): the Review button deep-links to the doc, opens
+	 * the Review tab, and scrolls to this block via the address model. Absent when the change carries no block
+	 * anchor (the deep link then opens the doc + Review tab without a scroll - graceful degrade, spec section 3.1).
+	 */
+	readonly blockId?: string;
 }
 
 /** The Home attention line for a failed scheduled run (plan 32 iter 2). Real data only - built from a run. */
@@ -454,14 +460,16 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 .tpl-filter input::placeholder{color:#A3A8B2}
 </style>`;
 
-// Generic message bridge: any element with data-msg posts {type:<msg>, arg:<data-arg>} to the host.
+// Generic message bridge: any element with data-msg posts {type:<msg>, arg:<data-arg>, block:<data-block>} to
+// the host. `block` is the durable block id a deep-link element (the Home NEEDS-YOU Review button, H2.3u)
+// carries; it is omitted when the element has no data-block, so every other action is unaffected.
 // Sheet plumbing (plan 28): a modal sheet gathers a name + optional note before posting one message, so a
 // generate/new-doc action carries the typed values. A sheet is opened client-side (no host round-trip, no
 // flash), and its submit buttons collect the sheet's fields; template-row submits carry their own data-arg.
 const SCRIPT = `const vscode = acquireVsCodeApi();
 for (const el of document.querySelectorAll('[data-msg]')) {
 	if (el.hasAttribute('data-sheet-open') || el.hasAttribute('data-sheet-submit')) { continue; }
-	el.addEventListener('click', () => vscode.postMessage({ type: el.getAttribute('data-msg'), arg: el.getAttribute('data-arg') || undefined }));
+	el.addEventListener('click', () => vscode.postMessage({ type: el.getAttribute('data-msg'), arg: el.getAttribute('data-arg') || undefined, block: el.getAttribute('data-block') || undefined }));
 }
 function lwdSheet(id) { return document.getElementById('sheet-' + id); }
 function lwdClose(id) { const s = lwdSheet(id); if (s) { s.style.display = 'none'; } }

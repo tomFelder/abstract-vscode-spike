@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import {
-	applyFocusRequest, applyReady, applyRender, applyRevealHeading, EditorWebviewEffect, IEditorRenderContent,
+	applyFocusRequest, applyReady, applyRender, applyRevealBlock, applyRevealHeading, EditorWebviewEffect, IEditorRenderContent,
 	initialEditorWebviewState, recordPmBody,
 } from '../../common/editorWebviewProtocol.js';
 
@@ -142,5 +142,23 @@ suite('livingDocs editorWebviewProtocol (plan 30, track 4)', () => {
 		const afterReady = applyRevealHeading(applyReady(held).state, 5);
 		const nowPosted = afterReady.effects.find(e => e.kind === 'postRevealHeading');
 		assert.ok(nowPosted && nowPosted.kind === 'postRevealHeading' && nowPosted.headingIndex === 5, 'a ready webview reveals immediately');
+	});
+
+	test('a Home reveal-block deep link is held before ready and flushed on ready, or posted immediately after ready (plan 48 H2.3u)', () => {
+		// Before ready: held (the blocks must be laid out before one can be scrolled to), then flushed.
+		const held = applyRender(initialEditorWebviewState(), content('<shell/>', 'body')).state; // initialized, not ready
+		const beforeReady = applyRevealBlock(held, 3);
+		assert.deepStrictEqual(kinds(beforeReady.effects), [], 'a reveal before ready posts nothing yet');
+		assert.strictEqual(beforeReady.state.pendingRevealBlockIndex, 3, 'the block target is held');
+		const flushed = applyReady(beforeReady.state);
+		const heldPosted = flushed.effects.find(e => e.kind === 'postRevealBlock');
+		assert.ok(heldPosted && heldPosted.kind === 'postRevealBlock' && heldPosted.blockIndex === 3, 'ready flushes the held block');
+		assert.strictEqual(flushed.state.pendingRevealBlockIndex, undefined, 'the block target is cleared once flushed');
+
+		// After ready: posted immediately. A -1 index (a deleted block, spec section 3.1) still flows through as-is; the
+		// webview no-ops the scroll, so the doc + Review tab are open without an error.
+		const afterReady = applyRevealBlock(applyReady(held).state, -1);
+		const nowPosted = afterReady.effects.find(e => e.kind === 'postRevealBlock');
+		assert.ok(nowPosted && nowPosted.kind === 'postRevealBlock' && nowPosted.blockIndex === -1, 'a ready webview reveals immediately; a deleted block passes -1');
 	});
 });

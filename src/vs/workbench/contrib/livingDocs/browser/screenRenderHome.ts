@@ -210,8 +210,8 @@ export function renderHome(state: IScreenState): string {
 	// computed (`homeNeedsYou`) - the plain-language reason + freshness stamp are real, never fabricated.
 	// Anatomy (H2.2): 3px accent top-border, radius 13, e1; an 8px attention pulse dot; name 14.5/600; a mono
 	// amber "N TO APPROVE" pill (radius 999); the one-line reason; an accent Review button (30px, radius 8)
-	// that opens the doc (plain open until the 45-a Review deep-link lands - 48-c upgrades it); and the mono
-	// freshness stamp beside it.
+	// that deep-links into the doc with the Review tab open and scrolls to the addressed block (H2.3u, via the
+	// address model - `data-block` carries the top change's durable block id); and the mono freshness stamp.
 	const needsCard = (c: IHomeNeedsYou) => {
 		const n = c.pendingCount;
 		const pill = n === 1
@@ -223,7 +223,7 @@ export function renderHome(state: IScreenState): string {
 		return `<div style="flex:1;min-width:0;background:#fff;border:1px solid #E6E8EC;border-top:3px solid #5B6DC4;border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(20,22,28,.05)">
 			<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="width:8px;height:8px;flex:none;border-radius:999px;background:#C99A2E;animation:lwdPulse 2.4s ease-in-out infinite"></span><span style="font:600 14.5px/1.2 system-ui;color:#1A1C20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span><span style="flex:1"></span><span style="flex:none;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;font-weight:600;color:#8A6D1A;background:#FDFAF2;border:1px solid #E4DCCB;border-radius:999px;padding:3px 8px">${pill}</span></div>
 			<div style="font:400 13px/1.55 system-ui;color:#52575F;margin-bottom:14px">${esc(c.reason)}</div>
-			<div style="display:flex;align-items:center;gap:10px"><button data-msg="openDoc" data-arg="${esc(c.resource)}" style="height:30px;padding:0 14px;display:inline-flex;align-items:center;border-radius:8px;background:#5B6DC4;color:#fff;font:600 12.5px/1 system-ui;border:none;cursor:pointer">${localize("livingDocs.home.card.review", "Review")}</button>${stamp}</div>
+			<div style="display:flex;align-items:center;gap:10px"><button data-msg="reviewNeedsYou" data-arg="${esc(c.resource)}" data-block="${esc(c.blockId ?? '')}" style="height:30px;padding:0 14px;display:inline-flex;align-items:center;border-radius:8px;background:#5B6DC4;color:#fff;font:600 12.5px/1 system-ui;border:none;cursor:pointer">${localize("livingDocs.home.card.review", "Review")}</button>${stamp}</div>
 		</div>`;
 	};
 	const cards = state.homeNeedsYou ?? [];

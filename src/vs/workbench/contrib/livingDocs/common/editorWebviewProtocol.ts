@@ -39,11 +39,13 @@ export interface IEditorWebviewState {
 	readonly pendingFocusChangeId: string | undefined;
 	/** An Outline reveal target (heading ordinal) held until the body is live, then scrolled to (issue #181). */
 	readonly pendingRevealHeadingIndex: number | undefined;
+	/** A Home deep-link reveal target (block ordinal) held until the body is live, then scrolled to (plan 48 H2.3u). */
+	readonly pendingRevealBlockIndex: number | undefined;
 }
 
 /** The fresh state for a newly-created webview (a new input, before its first render). */
 export function initialEditorWebviewState(): IEditorWebviewState {
-	return { initialized: false, ready: false, pmBody: undefined, pendingContent: undefined, pendingFocusChangeId: undefined, pendingRevealHeadingIndex: undefined };
+	return { initialized: false, ready: false, pmBody: undefined, pendingContent: undefined, pendingFocusChangeId: undefined, pendingRevealHeadingIndex: undefined, pendingRevealBlockIndex: undefined };
 }
 
 /**
@@ -61,7 +63,8 @@ export type EditorWebviewEffect =
 	| { readonly kind: 'postRender'; readonly html: string; readonly pmMd: string | null; readonly pmDeco: unknown; readonly pmReset: string | undefined }
 	| { readonly kind: 'holdPending' }
 	| { readonly kind: 'postFocus'; readonly id: string }
-	| { readonly kind: 'postRevealHeading'; readonly headingIndex: number };
+	| { readonly kind: 'postRevealHeading'; readonly headingIndex: number }
+	| { readonly kind: 'postRevealBlock'; readonly blockIndex: number };
 
 export interface IEditorWebviewStep {
 	readonly state: IEditorWebviewState;
@@ -138,8 +141,12 @@ export function applyReady(state: IEditorWebviewState): IEditorWebviewStep {
 	if (state.pendingRevealHeadingIndex !== undefined) {
 		effects.push({ kind: 'postRevealHeading', headingIndex: state.pendingRevealHeadingIndex });
 	}
+	// The body's blocks are now laid out; scroll to any Home deep-link reveal target held before ready (H2.3u).
+	if (state.pendingRevealBlockIndex !== undefined) {
+		effects.push({ kind: 'postRevealBlock', blockIndex: state.pendingRevealBlockIndex });
+	}
 	return {
-		state: { ...state, ready: true, pendingContent: undefined, pendingFocusChangeId: undefined, pendingRevealHeadingIndex: undefined },
+		state: { ...state, ready: true, pendingContent: undefined, pendingFocusChangeId: undefined, pendingRevealHeadingIndex: undefined, pendingRevealBlockIndex: undefined },
 		effects,
 	};
 }
@@ -167,4 +174,19 @@ export function applyRevealHeading(state: IEditorWebviewState, headingIndex: num
 		return { state, effects: [{ kind: 'postRevealHeading', headingIndex }] };
 	}
 	return { state: { ...state, pendingRevealHeadingIndex: headingIndex }, effects: [] };
+}
+
+/**
+ * Apply a Home NEEDS-YOU deep-link reveal request (plan 48 H2.3u): scroll the editor's ProseMirror surface to
+ * the block at `blockIndex` (its 0-based ordinal in document order, recomputed host-side from the change's
+ * durable block id via the address model). When the webview is already ready the reveal is posted
+ * immediately; otherwise it is HELD and flushed on ready, since the blocks must be laid out before one can be
+ * scrolled to. Navigate-only, mirroring `applyRevealHeading`; the webview treats a negative index as a no-op
+ * (a deleted block degraded to "open without scroll", spec section 3.1).
+ */
+export function applyRevealBlock(state: IEditorWebviewState, blockIndex: number): IEditorWebviewStep {
+	if (state.ready) {
+		return { state, effects: [{ kind: 'postRevealBlock', blockIndex }] };
+	}
+	return { state: { ...state, pendingRevealBlockIndex: blockIndex }, effects: [] };
 }

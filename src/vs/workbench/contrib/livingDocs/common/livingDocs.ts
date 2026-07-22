@@ -609,6 +609,14 @@ export interface ILivingDocsService {
 	readonly onDidRequestRevealHeading: Event<{ readonly docId: string; readonly headingIndex: number }>;
 
 	/**
+	 * Fires when a Home NEEDS-YOU card deep-links into its document (plan 48 H2.3u). `docId` is the document;
+	 * `blockIndex` is the addressed block's zero-based ordinal in document order (recomputed from the durable
+	 * block id via the address model), which the editor's ProseMirror surface reveals by scrolling to that
+	 * top-level block. A block that was deleted degrades to `-1` (the webview no-ops the scroll, spec section 3.1).
+	 */
+	readonly onDidRequestRevealBlock: Event<{ readonly docId: string; readonly blockIndex: number }>;
+
+	/**
 	 * Fires when "Add to chat" (docs 20 section 1d, the 1m entry) attaches a file to the active
 	 * document's chat: the argument is the file name to seed as an `@mention` in the chat composer.
 	 * The review rail listens and appends the mention to its draft; `focusPanel('chat')` reveals the tab.
@@ -668,6 +676,13 @@ export interface ILivingDocsService {
 	 * Present modal the header's Present action drives. No new present logic - it routes to the existing flow.
 	 */
 	requestPresent(resource: URI): Promise<void>;
+
+	/**
+	 * Deep-link a Home NEEDS-YOU card into its document (plan 48 H2.3u): open the document, open the Review
+	 * tab, and scroll to the block addressed by `blockId` (resolved to its current ordinal via the address
+	 * model). A missing/deleted block opens the doc + Review tab without a scroll (spec section 3.1). Navigate-only.
+	 */
+	reviewBlock(resource: URI, blockId?: string): Promise<void>;
 
 	// --- model access: provider picker + survey (plan 35 iter 4) ---
 	/**
@@ -850,6 +865,23 @@ export interface ILivingDocsService {
 	 * Returns the new resource, or undefined when no folder is open. (plan 28, iter 2)
 	 */
 	createTemplate(): Promise<URI | undefined>;
+
+	/**
+	 * Use a template (plan 48 T2.4): DUPLICATE it into the open folder as a new document with its binds emptied
+	 * to `{{slot}}` placeholders, then open it. A pure duplication (no model call, no review proposals): the
+	 * pattern's structure lands as a plain document recording `template: <name>` provenance and declaring no
+	 * sources, so it reports `needsSourceBinding` (the tree-row "bind sources" nudge) until a source is bound.
+	 * Returns the new resource, or undefined when no folder is open / the template is unreadable.
+	 */
+	useTemplate(templateUri: URI): Promise<URI | undefined>;
+
+	/**
+	 * Save the ACTIVE document as a template (plan 48 T2.5). Keeps the active document's body but empties its
+	 * binds to `{{slot}}` placeholders and writes it with `template: true` + `name:` frontmatter into the
+	 * workspace `.abstract/templates/<name>.template.md` store, so the new template appears in the grid (T2.6
+	 * discovery). A no-op (with a plain-words nudge) when no document is active. Returns the new resource.
+	 */
+	saveActiveDocAsTemplate(): Promise<URI | undefined>;
 
 	/**
 	 * Generate a draft document from a template (plan 28, iter 3). Writes `<docName>.md` as the template's

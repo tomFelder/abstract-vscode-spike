@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, countTemplateSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterSource, withFrontmatterTag, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, countTemplateSlots, documentDisplayTitle, emptyBindsToSlots, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterSource, withFrontmatterTag, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -253,6 +253,46 @@ suite('LivingDoc bind-link format', () => {
 			'## What is next',
 			'',
 		].join('\n'));
+	});
+
+	// --- plan 48 T2.4/T2.5: Use-a-template + Save-as-template pure builders (binds emptied to slots) ---
+
+	// emptyBindsToSlots turns every `[value](bind:key)` into a `{{slot:key}}` placeholder: the position where
+	// live data lands is kept but the source coupling is gone (the doc is NOT born bound). Underpins Use + Save.
+	test('emptyBindsToSlots rewrites every bind link to a {{slot:key}} placeholder, prose untouched', () => {
+		const body = 'Revenue is [pending](bind:metrics.mrr) MRR, up [x](bind:metrics.mrr.delta). Plain prose stays.';
+		assert.strictEqual(emptyBindsToSlots(body), 'Revenue is {{slot:metrics.mrr}} MRR, up {{slot:metrics.mrr.delta}}. Plain prose stays.');
+		assert.strictEqual(extractBindLinks(emptyBindsToSlots(body)).length, 0, 'no bind links remain');
+		assert.strictEqual(emptyBindsToSlots('No binds here.'), 'No binds here.', 'prose with no binds is unchanged');
+	});
+
+	// buildDocumentFromTemplate (T2.4 Use) duplicates the pattern into a NEW document with binds EMPTIED to
+	// slots: the H1 becomes the doc name, HTML comments are stripped, every bind becomes a slot, and the
+	// frontmatter records `template: <name>` provenance but declares NO sources - so the doc opens needing a
+	// source bound (not born bound, unlike buildTemplateSkeleton).
+	test('buildDocumentFromTemplate duplicates the pattern with binds emptied to slots and no sources declared', () => {
+		const doc = buildDocumentFromTemplate(WEEKLY_TEMPLATE_BODY, 'My week', 'Weekly report');
+		const parsed = parseLivingDoc(doc);
+		assert.strictEqual(parsed.title, 'My week', 'the H1 becomes the document name');
+		assert.strictEqual(parsed.fromTemplate, 'Weekly report', 'provenance records the originating template');
+		assert.deepStrictEqual(parsed.sources, [], 'no sources are declared - the doc is not born bound');
+		assert.strictEqual(extractBindLinks(parsed.body).length, 0, 'every bind is emptied to a slot');
+		assert.ok(countTemplateSlots(parsed.body) > 0, 'the emptied binds survive as {{slot}} placeholders');
+		assert.strictEqual(parsed.isLiving, false, 'with no bound source the duplicate is not yet living (needs binding)');
+	});
+
+	// buildTemplateFromDocument (T2.5 Save-as-template) keeps the active doc's body but empties its binds to
+	// slots and writes `template: true` + `name:` (+ the doc's own sources), so it round-trips as a template.
+	test('buildTemplateFromDocument empties the doc binds to slots and writes template frontmatter', () => {
+		const source = '---\nsources:\n  - metrics.csv\n---\n\n# Week 24\n\nRevenue is [48k](bind:metrics.mrr) MRR.\n';
+		const template = buildTemplateFromDocument(parseLivingDoc(source), 'Weekly report', 'A weekly summary.');
+		const parsed = parseLivingDoc(template);
+		assert.strictEqual(parsed.isTemplate, true, 'the file is a template (template: true)');
+		assert.strictEqual(parsed.templateName, 'Weekly report');
+		assert.strictEqual(parsed.templateDescription, 'A weekly summary.');
+		assert.deepStrictEqual(parsed.sources, ['metrics.csv'], 'the pattern declares the doc\'s own sources');
+		assert.strictEqual(extractBindLinks(parsed.body).length, 0, 'the doc\'s live figures are emptied to slots');
+		assert.ok(countTemplateSlots(parsed.body) > 0, 'the emptied binds are {{slot}} placeholders in the pattern');
 	});
 
 	// The composed instruction is what drives the EXISTING chat path (plan 28, iter 3): a deterministic brief

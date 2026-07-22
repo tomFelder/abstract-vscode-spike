@@ -14,7 +14,7 @@
 import { localize } from '../../../../nls.js';
 import { ITemplateSkeletonRow } from '../common/livingDocMarkdown.js';
 import { ITemplateCard } from '../common/livingDocs.js';
-import { esc, IScreenState, pickerSheet, pickRow, sheet } from './screenRenderShell.js';
+import { esc, IScreenState, pickerSheet, pickRow } from './screenRenderShell.js';
 
 /** One built-in starter (T3): a compact seed created through the existing review-safe path (a blank named doc). */
 interface IStarter {
@@ -84,22 +84,6 @@ export function renderTemplates(state: IScreenState): string {
 		empty: 'This project has no documents to learn from yet. Add a few finished documents to grow a template from them.',
 	});
 
-	// The D28-B generate sheet: one calm prompt (document name + an optional note), shared across cards - the
-	// card that opened it carries its template URI. Generate drafts the document through the review engine.
-	// (Use renders with today's `generateFromTemplate` behaviour until bundle 48-c upgrades it to the
-	// duplicate-with-empty-binds flow.)
-	const generateSheet = sheet('generate', {
-		title: 'New document from a template',
-		sub: 'Name it, then generate a first draft. The draft arrives as changes to review - nothing is written for you.',
-		nameLabel: 'Document Name',
-		namePlaceholder: 'e.g. Weekly report - week 24',
-		note: true,
-		body: `<div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
-			<button class="btn-ghost" data-sheet-close="generate">Cancel</button>
-			<button class="btn-primary" data-sheet-submit data-sheet-default data-msg="generateFromTemplate">Generate Draft</button>
-		</div>`,
-	});
-
 	// The STARTERS row (T3): four quieter built-in cards (rail bg, no thumbnail), visually subordinate to YOUR
 	// TEMPLATES. Each creates its named document through the existing review-safe path (`newStarter`).
 	const starterCard = (s: IStarter) => `<button data-msg="newStarter" data-arg="${esc(s.id)}" class="tpl-starter" style="text-align:left;background:#FBFCFD;border:1px solid #E9EAEE;border-radius:13px;padding:14px 16px;cursor:pointer">
@@ -134,15 +118,16 @@ export function renderTemplates(state: IScreenState): string {
 			<div style="padding:14px 18px">
 				<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font:600 14px/1.2 system-ui;color:#1A1C20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.name)}</span><span style="flex:1"></span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9.5px;font-weight:600;color:#5B6DC4;background:#F4F5FD;border:1px solid #E0E5FB;border-radius:5px;padding:2px 5px">LWD</span></div>
 				<div style="font:400 12.5px/1.5 system-ui;color:#868B95">${esc(desc)}</div>
-				<div style="display:flex;align-items:center;gap:6px;margin-top:10px"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;color:#A3A8B2">${slotLabel} &middot; ${usedLabel}</span><span style="flex:1"></span><button class="btn-primary" style="height:26px;padding:0 11px;font:600 12px/1 system-ui;border-radius:7px" data-msg="generateFromTemplate" data-sheet-open="generate" data-arg="${uri}" data-name="">${localize("livingDocs.templates.card.use", "Use")}</button></div>
+				<div style="display:flex;align-items:center;gap:6px;margin-top:10px"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;color:#A3A8B2">${slotLabel} &middot; ${usedLabel}</span><span style="flex:1"></span><button class="btn-primary" style="height:26px;padding:0 11px;font:600 12px/1 system-ui;border-radius:7px" data-msg="useTemplate" data-arg="${uri}">${localize("livingDocs.templates.card.use", "Use")}</button></div>
 			</div>
 		</div>`;
 	};
 
-	// The dashed Save-current-doc-as-template tile (T2, closes the grid). It writes the active doc to
-	// `.abstract/templates/` in bundle 48-c; here it renders with today's New-template door (the wizard when
-	// there are documents to learn from, else the blank editor) so the affordance is never a dead button.
-	const saveTile = `<button class="tpl-newtile" ${exampleDocs.length ? 'data-sheet-open="fromexamples"' : 'data-msg="newTemplate"'} style="border:1px dashed #C6CAD2;background:none;border-radius:13px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#868B95;cursor:pointer;min-height:220px">
+	// The dashed Save-current-doc-as-template tile (T2.5, closes the grid). It writes the ACTIVE document to
+	// `.abstract/templates/<name>.template.md` with its binds emptied to slots + `template: true` frontmatter;
+	// the service fires onDidChange so the new card appears in the grid (T2.6 discovery). With no document
+	// active the service answers with a plain-words nudge rather than a silent no-op (never a dead button).
+	const saveTile = `<button class="tpl-newtile" data-msg="saveAsTemplate" style="border:1px dashed #C6CAD2;background:none;border-radius:13px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#868B95;cursor:pointer;min-height:220px">
 			<span style="font-size:22px">&#65291;</span><span style="font:500 13px/1 system-ui">${localize("livingDocs.templates.saveAsTemplate", "Save current doc as template")}</span>
 		</button>`;
 
@@ -177,7 +162,5 @@ export function renderTemplates(state: IScreenState): string {
 		${grid}
 		${noMatch}
 		${startersRow}
-		${generateSheet}
-		${fromExamplesSheet}
 	</div>`);
 }
