@@ -29,7 +29,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
@@ -342,8 +342,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidChange = this._register(new Emitter<void>());
 	readonly onDidChange: Event<void> = this._onDidChange.event;
 
-	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
-	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
+	private readonly _onDidRequestPanel = this._register(new Emitter<ILivingDocsPanelRequest>());
+	readonly onDidRequestPanel: Event<ILivingDocsPanelRequest> = this._onDidRequestPanel.event;
+
+	// Sticky replay for panel requests: `focusPanel` records the latest request here so a request made
+	// before the review rail mounts is not lost with the synchronous event. The rail consumes-and-clears
+	// this on mount (`consumePendingPanel`); last request wins, and it replays at most once.
+	private _pendingPanel: ILivingDocsPanelRequest | undefined;
 
 	// Plan 42 slice L4: the calm collapse control on the review rail header asks to close the rail. The
 	// RailVisibilityContribution owns the manual-choice storage, so it listens here and both hides the part
@@ -898,10 +903,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return [...this._docs.values()].flatMap(s => s.lock.audit);
 	}
 
-	focusPanel(tab: LivingDocsPanelTab): void {
-		this._onDidRequestPanel.fire(tab);
+	focusPanel(tab: LivingDocsPanelTab, payload?: ILivingDocsPanelRequest['payload']): void {
+		const request: ILivingDocsPanelRequest = { tab, payload };
+		// Record the request for replay BEFORE firing/opening: if the rail is already mounted it consumes the
+		// synchronous event (below) and the pending state is redundant; if it is not yet mounted, opening the
+		// view mounts it and it consumes the pending state on subscribe. Either way it lands on the right tab.
+		this._pendingPanel = request;
+		this._onDidRequestPanel.fire(request);
 		// Reveal the right panel; take focus only for Chat so the user can type straight away.
 		this._views.openView(REVIEW_RAIL_VIEW_ID, tab === 'chat').catch(e => this._log.warn('[livingDocs] focusPanel failed', e));
+	}
+
+	consumePendingPanel(): ILivingDocsPanelRequest | undefined {
+		const pending = this._pendingPanel;
+		this._pendingPanel = undefined;
+		return pending;
 	}
 
 	collapseReviewRail(): void {

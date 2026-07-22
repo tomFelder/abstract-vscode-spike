@@ -29,6 +29,21 @@ export const CONTEXT_CONTAINER_ID = 'workbench.viewContainer.livingDocs.context'
 export type LivingDocsPanelTab = 'chat' | 'review' | 'history';
 
 /**
+ * A request to reveal the right panel on a given tab, optionally carrying a payload the target tab
+ * consumes once it is mounted (e.g. a Review deep link that scrolls to a specific block). The payload
+ * is deliberately generic so new deep links can ride the same replay mechanism without a new event.
+ *
+ * A request is both fired synchronously (for the already-mounted rail) AND recorded as the service's
+ * pending request, so a request made before the rail mounts survives the mount: the rail consumes and
+ * clears it on subscribe. See `focusPanel` / `consumePendingPanel`.
+ */
+export interface ILivingDocsPanelRequest {
+	readonly tab: LivingDocsPanelTab;
+	/** Optional deep-link payload the tab consumes on reveal (e.g. `{ blockId }` for a Review block). */
+	readonly payload?: { readonly blockId?: string };
+}
+
+/**
  * Which model door is serving the user's calls (plan 35 iter 4). `chatgpt` is the user's own ChatGPT
  * subscription via the OpenAI OAuth backend (not metered); `included` is the founder-funded OpenRouter
  * fallback (metered to a small daily budget); `none` is the built-in heuristic path when no backend is wired.
@@ -562,8 +577,12 @@ export interface ILivingDocsService {
 	/** Fires whenever any document, the pending set, the audit, or a status changes. */
 	readonly onDidChange: Event<void>;
 
-	/** Fires when something asks the right panel to focus a tab (e.g. "Ask AI" -> Chat). */
-	readonly onDidRequestPanel: Event<LivingDocsPanelTab>;
+	/**
+	 * Fires when something asks the right panel to focus a tab (e.g. "Ask AI" -> Chat). This is the
+	 * already-mounted path: if the rail is not yet mounted when the request is made the event is lost,
+	 * so `focusPanel` ALSO records the request as `consumePendingPanel`'s pending state for replay.
+	 */
+	readonly onDidRequestPanel: Event<ILivingDocsPanelRequest>;
 
 	/**
 	 * Fires as a chat reply streams (plan 27 iter 3): the argument is the document whose live turn grew a
@@ -613,8 +632,23 @@ export interface ILivingDocsService {
 	 */
 	readonly onDidRequestCollapseReviewRail: Event<void>;
 
-	/** Reveal the right panel and switch it to the given tab. */
-	focusPanel(tab: LivingDocsPanelTab): void;
+	/**
+	 * Reveal the right panel and switch it to the given tab, optionally carrying a deep-link payload.
+	 *
+	 * Fires `onDidRequestPanel` synchronously (the already-mounted rail switches immediately) AND records
+	 * the request as the pending panel, so a request made before the rail mounts is not lost: the rail
+	 * consumes it via `consumePendingPanel` on mount. Recording the latest request overwrites any prior
+	 * un-consumed one (last request wins).
+	 */
+	focusPanel(tab: LivingDocsPanelTab, payload?: ILivingDocsPanelRequest['payload']): void;
+
+	/**
+	 * Consume-and-clear the pending panel request recorded by `focusPanel`. The review rail calls this
+	 * once when it mounts/subscribes so a `focusPanel` fired before the rail existed (e.g. "View history"
+	 * on a not-yet-open document) still lands on the right tab. Returns `undefined` when nothing is
+	 * pending; the request is cleared on read so it is replayed at most once.
+	 */
+	consumePendingPanel(): ILivingDocsPanelRequest | undefined;
 
 	/**
 	 * Collapse the review rail from its own calm collapse control and record it as the user's manual

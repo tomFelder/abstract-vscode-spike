@@ -213,10 +213,17 @@ export class ReviewRailView extends ViewPane {
 		this._register(this._livingDocs.onDidChange(() => { void this._refreshSignedIn(); this._render(); }));
 		// Append streamed chat deltas to the live turn without a full re-render (plan 27 iter 3).
 		this._register(this._livingDocs.onDidStreamChat(resource => this._onStreamDelta(resource)));
-		this._register(this._livingDocs.onDidRequestPanel(tab => { this._activeTab = tab; this._render(); }));
+		this._register(this._livingDocs.onDidRequestPanel(request => { this._activeTab = request.tab; this._render(); }));
 		this._register(this._livingDocs.onDidRequestChatAttach(file => this._attachToChatDraft(file)));
 		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'review' || this._activeTab === 'chat') { this._render(); } }));
 		void this._refreshSignedIn();
+		// Replay a panel request made before this rail mounted: "View history" (and other deep links) on a
+		// not-yet-open document fires focusPanel BEFORE the rail exists, so its synchronous event is lost.
+		// The service keeps it pending; consume-and-clear it here so we still land on the requested tab.
+		const pending = this._livingDocs.consumePendingPanel();
+		if (pending) {
+			this._activeTab = pending.tab;
+		}
 		this._render();
 	}
 

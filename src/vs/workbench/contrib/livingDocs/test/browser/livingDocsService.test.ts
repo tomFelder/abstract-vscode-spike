@@ -3018,4 +3018,44 @@ suite('livingDocs Service', () => {
 			{ ok: false, reason: 'This PDF has no selectable text - it looks scanned or image-only.', isContext: false },
 		);
 	});
+
+	// --- panel-request replay (46-c defect P6.5): focusPanel must survive the rail mounting ---
+	// "View history" on a not-yet-open document fires focusPanel BEFORE the review rail exists, so the
+	// synchronous onDidRequestPanel event is lost. focusPanel also records the request as pending so the
+	// rail consumes-and-clears it on mount. These cover the whole contract in one snapshot each.
+
+	test('a focusPanel request made before the rail mounts survives as a pending request the mount consumes once', () => {
+		const service = createService();
+		// The rail is not yet subscribed (closed-doc path): the synchronous event fires into the void, but
+		// the request is recorded. The mounting rail reads it, and a second read (a later mount) sees nothing.
+		service.focusPanel('history', { blockId: 'b-42' });
+		assert.deepStrictEqual(
+			{ firstConsume: service.consumePendingPanel(), secondConsume: service.consumePendingPanel() },
+			{ firstConsume: { tab: 'history', payload: { blockId: 'b-42' } }, secondConsume: undefined },
+		);
+	});
+
+	test('a focusPanel request while the rail is mounted reaches it synchronously AND is not left sticky after consumption', () => {
+		const service = createService();
+		// Model the mounted rail: it is subscribed to the synchronous event.
+		const seen: string[] = [];
+		store.add(service.onDidRequestPanel(request => seen.push(request.tab)));
+		service.focusPanel('review');
+		// The mounted rail also consumes the pending request on its next mount; after that nothing is left.
+		const consumed = service.consumePendingPanel();
+		assert.deepStrictEqual(
+			{ syncEvent: seen, consumed, afterConsume: service.consumePendingPanel() },
+			{ syncEvent: ['review'], consumed: { tab: 'review', payload: undefined }, afterConsume: undefined },
+		);
+	});
+
+	test('the pending panel is last-request-wins: a newer focusPanel overwrites an un-consumed older one', () => {
+		const service = createService();
+		service.focusPanel('history');
+		service.focusPanel('chat');
+		assert.deepStrictEqual(
+			{ consumed: service.consumePendingPanel(), afterConsume: service.consumePendingPanel() },
+			{ consumed: { tab: 'chat', payload: undefined }, afterConsume: undefined },
+		);
+	});
 });
