@@ -368,11 +368,16 @@ export class TreeRailView extends ViewPane {
 			this._persistCollapsedFolders();
 		}));
 
-		// Selecting a document opens it (click or keyboard Enter, both funnel through onDidOpen).
+		// Selecting a document opens it (click or keyboard Enter, both funnel through onDidOpen). A SOURCES row
+		// opens the source as a product tab on the same strip (pin 7 / P7.4) - never a plain text editor - so a
+		// source is a first-class working surface alongside the document.
 		this._register(tree.onDidOpen(e => {
 			const el = e.element;
-			if (el?.type === 'leaf' && el.item.kind === 'doc' && el.item.resource) {
+			if (el?.type !== 'leaf' || !el.item.resource) { return; }
+			if (el.item.kind === 'doc') {
 				void this._editors.openEditor({ resource: el.item.resource, options: { pinned: true, preserveFocus: e.browserEvent?.type === 'keydown' ? false : true } });
+			} else if (el.item.kind === 'source') {
+				void this._livingDocs.openSourceTab(el.item.resource);
 			}
 		}));
 

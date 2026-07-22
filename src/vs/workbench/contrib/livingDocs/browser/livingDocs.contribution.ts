@@ -24,7 +24,7 @@ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js'
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { registerWorkbenchContribution2, WorkbenchPhase, IWorkbenchContribution } from '../../../common/contributions.js';
-import { EditorExtensions } from '../../../common/editor.js';
+import { EditorExtensions, IEditorFactoryRegistry } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
@@ -46,6 +46,8 @@ import { IAnalyticsService } from '../common/analytics.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
+import { LivingDocSourceEditor } from './livingDocSourceEditor.js';
+import { LivingDocSourceInput, LivingDocSourceInputSerializer } from './livingDocSourceInput.js';
 import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
 import { TreeRailView } from './treeRailView.js';
@@ -305,6 +307,17 @@ Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane
 	EditorPaneDescriptor.create(LivingDocEditor, LivingDocEditor.ID, localize('livingDocEditor', "Living Document")),
 	[new SyncDescriptor(LivingDocEditorInput)]
 );
+
+// The source-viewer pane (pin 7 / P7.4): a source opened from the tree SOURCES rows (or, plan 49, the
+// Knowledge table) renders here as a product tab on the same strip as the document.
+Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+	EditorPaneDescriptor.create(LivingDocSourceEditor, LivingDocSourceEditor.ID, localize('livingDocSourceEditor', "Source")),
+	[new SyncDescriptor(LivingDocSourceInput)]
+);
+
+// The source-viewer input has no editor-resolver (it opens by a typed input, not a resource), so it needs its
+// own serializer to restore across a window reload (pin 7 / P7.7).
+Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(LivingDocSourceInput.ID, LivingDocSourceInputSerializer);
 
 // The main-area Abstract screens (Templates / Knowledge / Agents) share one webview editor.
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(

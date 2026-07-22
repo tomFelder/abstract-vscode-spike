@@ -11,6 +11,7 @@ import { isWeb } from '../../../../base/common/platform.js';
 import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
@@ -29,6 +30,7 @@ import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { documentDisplayTitle, parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { applyFocusRequest, applyReady, applyRender, applyRevealHeading, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
+import { AbstractTabStrip, createTabStripStyle } from './abstractTabStrip.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { ILivingDocRenderInput, IPresentState, IPropertiesRenderState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
 import { renderPropertiesPanel } from './propertiesPanelRender.js';
@@ -40,6 +42,11 @@ export class LivingDocEditor extends EditorPane {
 	static readonly ID = 'workbench.editor.livingDoc';
 
 	private _container: HTMLElement | undefined;
+	// The product-tab strip (pin 7): Abstract's own DOM in the pane host, above the webview (never inside it,
+	// which would flicker on doc switch). The webview mounts into `_webviewHost` below the strip so the strip is
+	// a native, non-flickering row. Bound to this pane's group; disposed with the pane.
+	private _tabStrip: AbstractTabStrip | undefined;
+	private _webviewHost: HTMLElement | undefined;
 	private _webview: IWebviewElement | undefined;
 	// PM is the single editing surface for every document (plan 15 iter 5): a doc opens in ProseMirror.
 	private _mode: LivingDocViewMode = 'pm';
@@ -74,6 +81,7 @@ export class LivingDocEditor extends EditorPane {
 		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
 		@IAbstractHeaderService private readonly _header: IAbstractHeaderService,
+		@IContextMenuService private readonly _contextMenuService: IContextMenuService,
 	) {
 		super(LivingDocEditor.ID, group, telemetryService, themeService, _storageService);
 	}
@@ -82,6 +90,20 @@ export class LivingDocEditor extends EditorPane {
 		this._container = $('.living-doc-editor');
 		this._container.style.height = '100%';
 		this._container.style.width = '100%';
+		this._container.style.display = 'flex';
+		this._container.style.flexDirection = 'column';
+		// The product-tab strip sits in the pane HOST DOM, above the webview (pin 7 / P7.1) - a native row that
+		// never flickers on doc switch. The webview mounts into `_webviewHost` (flex:1) below it. The strip is
+		// bound to this pane's group and mirrors it live via its own listeners, so an "Open to the right", a
+		// close, or a programmatic open all repaint it.
+		parent.appendChild(createTabStripStyle());
+		this._tabStrip = this._register(new AbstractTabStrip(this.group, this._livingDocs, this._storageService, this._contextMenuService, this._editorService));
+		this._container.appendChild(this._tabStrip.element);
+		this._webviewHost = $('.living-doc-webview-host');
+		this._webviewHost.style.flex = '1';
+		this._webviewHost.style.minHeight = '0';
+		this._webviewHost.style.position = 'relative';
+		this._container.appendChild(this._webviewHost);
 		parent.appendChild(this._container);
 	}
 
@@ -151,7 +173,7 @@ export class LivingDocEditor extends EditorPane {
 	// setHtml. Owned by `_inputDisposables` so the previous webview is torn down on the next input and on
 	// editor disposal.
 	private _createWebview(): void {
-		if (!this._container) {
+		if (!this._webviewHost) {
 			return;
 		}
 		const webview = this._webviewService.createWebviewElement({
@@ -160,7 +182,7 @@ export class LivingDocEditor extends EditorPane {
 			title: 'Living Document',
 			extension: undefined,
 		});
-		webview.mountTo(this._container, this.window);
+		webview.mountTo(this._webviewHost, this.window);
 		this._inputDisposables.add(webview.onMessage(e => this._onMessage(e.message)));
 		this._inputDisposables.add(webview);
 		this._webview = webview;
