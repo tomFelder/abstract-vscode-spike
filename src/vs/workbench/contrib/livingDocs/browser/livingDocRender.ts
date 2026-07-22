@@ -597,7 +597,9 @@ let _tip = null;
 function tipEsc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function showTip(el, key){ const p = _prov[key]; if (!p) { return; } if (!_tip) { _tip = document.createElement('div'); _tip.className = 'lwd-tip'; document.body.appendChild(_tip); }
 	const loc = p.location ? (tipEsc(p.location) + ' &middot; ') : '';
-	const stale = p.fresh ? '' : '<div class="tip-stale">Source changed since last sync</div>';
+	// The ONE freshness vocabulary (#122 F12): the hover-peek leads with "Stale" so the tooltip agrees with the
+	// Knowledge table + drawer + tree meta, then names what drifted in plain words.
+	const stale = p.fresh ? '' : '<div class="tip-stale">Stale &middot; source changed since last sync</div>';
 	_tip.innerHTML = '<div class="tip-src">' + tipEsc(p.source) + '</div><div class="tip-meta">' + loc + tipEsc(p.synced) + '</div>' + stale;
 	const box = el.getBoundingClientRect();
 	// Measure then place above the figure (or below when it would clip the top of the viewport).

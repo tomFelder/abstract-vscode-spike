@@ -665,8 +665,8 @@ suite('livingDocs Service', () => {
 
 		const groups = buildContextGroups(service.getDoc(WEEKLY)!, service.getFreshness(WEEKLY));
 		assert.deepStrictEqual(groups, [
-			{ label: 'Linked sources', items: [{ name: 'metrics.csv', kind: 'file', detail: 'changed · feeds 1 block', changed: true }] },
-			{ label: 'Referenced files', items: [{ name: 'market-research.md', kind: 'reference', detail: 'changed since review', changed: true }] },
+			{ label: 'Linked sources', items: [{ name: 'metrics.csv', kind: 'file', detail: 'stale · feeds 1 block', changed: true }] },
+			{ label: 'Referenced files', items: [{ name: 'market-research.md', kind: 'reference', detail: 'stale', changed: true }] },
 		]);
 	});
 
