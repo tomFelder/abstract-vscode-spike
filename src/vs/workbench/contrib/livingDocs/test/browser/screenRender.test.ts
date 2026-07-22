@@ -10,6 +10,7 @@ import { ILivingDocSummary, ISourceInfo, ITemplateCard, ITemplateInfo } from '..
 import { countBindSlots, parseLivingDoc, templateSkeletonRows } from '../../common/livingDocMarkdown.js';
 import { IAgentDef, IAgentRun, ISkillRunSummary, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 import { IScreenState, renderScreenHtml, ScreenId } from '../../browser/screenRender.js';
+import { IActivityLedger } from '../../common/livingDocLedger.js';
 
 suite('livingDocs screenRender', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -613,6 +614,46 @@ suite('livingDocs screenRender', () => {
 		assert.ok(/data-policy="auto-apply"/.test(html) && /data-policy="ask-first"/.test(html) && /data-policy="never"/.test(html), 'the shared editor renders exactly the three DocAutonomy levels');
 		assert.ok(html.includes('runs on') && html.includes('claude-sonnet-4.5'), 'the footer shows the real workspace model id');
 		assert.ok(/data-agent-policy-edit/.test(html), 'Edit policy reveals the shared editor');
+	});
+
+	test('the activity ledger renders real rows in the three tiers, cites gutter addresses and deep-links WAITING (A3.1/A3.3)', () => {
+		const ledger: IActivityLedger = {
+			truncated: false,
+			entries: [
+				{ at: 0, kind: 'waiting', lead: 'A meaning change is waiting on your call in ', doc: { label: 'Weekly Summary · line 6', docId: 'file:///ws/weekly.md', blockId: 'b-6' }, tail: '', badge: 'WAITING', deepLink: true },
+				{ at: Date.parse('2026-07-06T09:40:00.000Z'), kind: 'applied', lead: 'Reporting agent refreshed 4 bound figures', tail: '', badge: 'auto-applied · reversible', deepLink: false },
+				{ at: Date.parse('2026-07-06T08:15:00.000Z'), kind: 'admin', lead: 'Meeting agent paused', tail: '', badge: 'by Tom', deepLink: false },
+			],
+		};
+		const html = renderScreenHtml('agents', { ...state, agents: [agent()], ledger, ledgerNow: Date.parse('2026-07-06T10:00:00.000Z') });
+		assert.deepStrictEqual({
+			label: html.includes('>ACTIVITY<'),
+			waitingDot: html.includes('background:#C99A2E'),
+			appliedDot: html.includes('background:#2C8159'),
+			adminDot: html.includes('background:#D5D8DE'),
+			waitingPill: /#8A6D1A;background:#FDFAF2;border:1px solid #E4DCCB[^>]*>WAITING/.test(html),
+			applied: /#2C8159">auto-applied &middot; reversible/.test(html),
+			admin: /#A3A8B2">by Tom/.test(html),
+			address: html.includes('Weekly Summary &middot; line 6'),
+			deepLink: /data-msg="ledgerReview" data-arg="file:\/\/\/ws\/weekly.md" data-block="b-6"/.test(html),
+			// The same-day applied row reads as a wall-clock HH:MM stamp (local time, so the exact hour is not
+			// asserted - the format is), and the WAITING row (at 0) reads as the live "now".
+			sameDayStamp: /width:52px;flex:none">\d{2}:\d{2}</.test(html),
+			nowStamp: html.includes('width:52px;flex:none">now<'),
+		}, {
+			label: true, waitingDot: true, appliedDot: true, adminDot: true, waitingPill: true,
+			applied: true, admin: true, address: true, deepLink: true, sameDayStamp: true, nowStamp: true,
+		});
+	});
+
+	test('the ledger renders a truthful empty state (no fabricated rows) and an honest truncation line (A3.2/A3.4)', () => {
+		const empty = renderScreenHtml('agents', { ...state, agents: [agent()], ledger: { entries: [], truncated: false }, ledgerNow: 0 });
+		const truncated = renderScreenHtml('agents', { ...state, agents: [agent()], ledger: { entries: [{ at: 1, kind: 'applied', lead: 'A change', tail: '', badge: 'auto-applied · reversible', deepLink: false }], truncated: true }, ledgerNow: 100000000 });
+		assert.deepStrictEqual({
+			emptyLine: empty.includes('No agent or review activity yet'),
+			emptyHasNoBadge: !empty.includes('WAITING') && !empty.includes('auto-applied'),
+			truncationLine: truncated.includes('Older activity lives in each document\'s History'),
+		}, { emptyLine: true, emptyHasNoBadge: true, truncationLine: true });
 	});
 
 	test('the detail drawer shows the read-only canvas strip and the inline policy select with the three levels', () => {

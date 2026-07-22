@@ -38,6 +38,7 @@ import { IPathService } from '../../../services/path/common/pathService.js';
 import { DEMO_ITERATION_PROMPT, nextOnboardingStep, ONBOARDING_STEPS, OnboardingStep } from '../common/onboarding.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { AgentFilter, IHomeFailure, IHomeNeedsYou, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, ITidyReviewState, renderScreenHtml, ScreenId } from './screenRender.js';
+import { buildActivityLedger } from '../common/livingDocLedger.js';
 
 // Persisted onboarding step + demo-document URI (profile scope) so the two-wow flow "remembers where you were"
 // across reopens and the folder-open reload at hand-off (doc 20 section D26). The step + demo URI are persisted
@@ -281,11 +282,14 @@ export class ScreenEditor extends EditorPane {
 		// the true registry) and the workspace model id (the card footer's "runs on") before the first render,
 		// so neither reads a placeholder. Both are real: an empty catalogue omits the model id (footer degrades).
 		if (this._screen === 'agents') {
-			const [sources, agentModelId] = await Promise.all([
+			// userName resolves the ledger's "by <user>" badge on approved/administrative rows (plan 49-c A3.1) to
+			// the real OS username, not a placeholder; it is stable for the session, so it is fetched once on open.
+			const [sources, agentModelId, userName] = await Promise.all([
 				this._livingDocs.listSources(),
 				this._livingDocs.getSelectedModelId(),
+				this._userName(),
 			]);
-			this._state = { ...this._state, sources, agentModelId };
+			this._state = { ...this._state, sources, agentModelId, userName };
 		}
 		// Settings (plan 35 iter 4): fetch the live model door + usage before the first render so the provider
 		// card shows the real state (which door serves you, today's included usage), no flash.
@@ -839,6 +843,13 @@ export class ScreenEditor extends EditorPane {
 			case 'reviewNeedsYou':
 				if (message.arg) { void this._livingDocs.reviewBlock(URI.parse(message.arg), message.block || undefined); }
 				break;
+			// Agents activity ledger WAITING deep link (plan 49-c A3.3): a WAITING row opens its document with the
+			// Review tab open and scrolls to the addressed block, exactly like the Home NEEDS-YOU card. Rides the
+			// same `reviewBlock` seam (46-c panel replay) so the closed-doc path still lands on the right block;
+			// `block` is the durable block id, and a deleted block degrades to no scroll (spec section 3.1).
+			case 'ledgerReview':
+				if (message.arg) { void this._livingDocs.reviewBlock(URI.parse(message.arg), message.block || undefined); }
+				break;
 			// Templates screen (plan 28, iter 2): Edit opens the `.template.md` in the normal editor - it is
 			// just Markdown, so it round-trips on disk with no new format.
 			case 'editTemplate':
@@ -1385,6 +1396,15 @@ export class ScreenEditor extends EditorPane {
 			agents: this._livingDocs.getAgents(),
 			// The open agent's run log, read live so a run that just completed shows without reopening the drawer.
 			openAgentRuns: this._state.openAgentId ? this._livingDocs.getAgentRunsForAgent(this._state.openAgentId) : undefined,
+			// Agents activity ledger (plan 49-c A3): built live from the real event streams so a run/approval that
+			// just happened shows without reopening the screen. Only on the Agents card grid (not the canvas); the
+			// fold is pure + read-only (`buildActivityLedger`), so it never touches orchestrator or lock state.
+			ledger: (this._screen === 'agents' && !this._state.openAgentId)
+				? buildActivityLedger(this._livingDocs.getActivityLedgerInputs(), this._state.userName ?? 'you')
+				: undefined,
+			// The ledger's render clock (A3.1): captured once here so the timestamp column is deterministic and
+			// `Date.now()` never runs inside the render module (the same discipline as `knNow`).
+			ledgerNow: (this._screen === 'agents' && !this._state.openAgentId) ? Date.now() : undefined,
 			hasFolder: !!folderName,
 			folderName,
 			onboarding: this._screen === 'onboarding' ? {

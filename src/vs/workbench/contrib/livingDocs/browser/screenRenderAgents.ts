@@ -10,6 +10,7 @@
 import { IAgentDef, IAgentRun, IAgentTrigger, ISkillRunSummary } from '../common/livingDocsModel.js';
 import { agentPolicyTable, agentPolicyToLevel } from '../common/agentPolicyGrammar.js';
 import { docPolicyToneHex, DocPolicyTone } from '../common/docPolicy.js';
+import { IActivityLedger, ILedgerEntry } from '../common/livingDocLedger.js';
 import { renderPolicyEditor } from './policyEditorRender.js';
 import { ACCENT, ACCENT_DK, esc, IScreenState } from './screenRenderShell.js';
 
@@ -147,9 +148,95 @@ function renderAgentCards(state: IScreenState): string {
 			<div style="font:400 14px/1.5 system-ui;color:#868B95;margin-bottom:32px">Agents only act on documents that opted in. Every action lands in the ledger below.</div>
 			${emptyLine}
 			<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:stretch">${cards}${newTile}</div>
+			${renderAgentLedger(state)}
 		</div>
 	</div>
 </div>`;
+}
+
+// The ledger's mono timestamp (A3.1, 52px column): a calendar-style stamp computed at render time from the
+// event epoch + the injected render clock (never Date.now here - the ScreenEditor supplies `ledgerNow`). Today
+// reads as "HH:MM", this week as the weekday ("Fri"), older as "D Mon"; a WAITING row (no recorded time, at 0)
+// reads as "now" - the live, unresolved call. Deterministic given `now`, so the snapshot tests are stable.
+const LEDGER_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const LEDGER_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function ledgerStamp(at: number, now: number): string {
+	if (at <= 0) { return 'now'; }
+	const then = new Date(at);
+	const today = new Date(now);
+	const sameDay = then.getFullYear() === today.getFullYear() && then.getMonth() === today.getMonth() && then.getDate() === today.getDate();
+	if (sameDay) {
+		const hh = String(then.getHours()).padStart(2, '0');
+		const mm = String(then.getMinutes()).padStart(2, '0');
+		return `${hh}:${mm}`;
+	}
+	const ageDays = Math.floor((now - at) / 86400000);
+	if (ageDays < 7) { return LEDGER_DAYS[then.getDay()]; }
+	return `${then.getDate()} ${LEDGER_MONTHS[then.getMonth()]}`;
+}
+
+// The status dot (A3.1, 7px): amber waiting / green applied / grey admin. Exactly the three tiers - no fourth.
+const LEDGER_DOT: Record<ILedgerEntry['kind'], string> = { waiting: '#C99A2E', applied: '#2C8159', admin: '#D5D8DE' };
+
+// The right-aligned mono badge (A3.1): an amber WAITING pill on cream with a border; a green "auto-applied ·
+// reversible"; a grey "by <user>" / administrative note. The badge text is the read model's; the styling is
+// the tier's. The middot in the badge copy is written as its HTML entity for the source-hygiene rule.
+function ledgerBadge(entry: ILedgerEntry): string {
+	const text = esc(entry.badge).replace(/ · /g, ' &middot; ');
+	if (entry.kind === 'waiting') {
+		return `<span style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#8A6D1A;background:#FDFAF2;border:1px solid #E4DCCB;border-radius:999px;padding:2px 8px">${text}</span>`;
+	}
+	if (entry.kind === 'applied') {
+		return `<span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#2C8159">${text}</span>`;
+	}
+	return `<span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2">${text}</span>`;
+}
+
+// One ledger row's plain-language sentence (A3.1, 13px): the lead text, then - when the event names a real
+// document - the doc link citing its gutter address ("Weekly Summary · line 6", A3.3). A WAITING row's link is
+// a deep link into that document's Review tab (posts `ledgerReview` with the durable block id, surviving the
+// closed-doc path); every other doc link opens the document. Plain text with no doc reads as a bare sentence.
+function ledgerSentence(entry: ILedgerEntry): string {
+	const lead = esc(entry.lead);
+	const tail = esc(entry.tail);
+	if (!entry.doc) {
+		return `<span style="flex:1;min-width:0;font:400 13px/1.4 system-ui;color:#26292F">${lead}${tail}</span>`;
+	}
+	const label = esc(entry.doc.label).replace(/ · /g, ' &middot; ');
+	const msg = entry.deepLink ? 'ledgerReview' : 'openDoc';
+	const blockAttr = entry.deepLink && entry.doc.blockId ? ` data-block="${esc(entry.doc.blockId)}"` : '';
+	const link = `<a data-msg="${msg}" data-arg="${esc(entry.doc.docId)}"${blockAttr} data-stop href="#" style="color:${ACCENT_DK};text-decoration:none;cursor:pointer">${label}</a>`;
+	return `<span style="flex:1;min-width:0;font:400 13px/1.4 system-ui;color:#26292F">${lead}${link}${tail}</span>`;
+}
+
+// The v2 activity ledger (A3): the ACTIVITY label + a bordered, radius-13 chronological list (newest first),
+// each row a mono timestamp (52px col) · 7px status dot · plain-language sentence · right mono badge. Rows come
+// straight from the read model (A3.2, real events only); the truncation line is honest (A3.4). A truthful empty
+// state renders when the project has no recorded activity yet - never a fabricated row.
+function renderAgentLedger(state: IScreenState): string {
+	const ledger: IActivityLedger | undefined = state.ledger;
+	const now = state.ledgerNow ?? 0;
+	const label = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;margin:34px 0 10px">ACTIVITY</div>`;
+	if (!ledger || ledger.entries.length === 0) {
+		// A3.2 truthful empty state: no rows fabricated - a plain line inside the same bordered frame.
+		return `${label}<div style="border:1px solid #E9EAEE;border-radius:13px;padding:22px 18px;font:400 13px/1.5 system-ui;color:#868B95">No agent or review activity yet. When an agent runs or you approve a change, it lands here.</div>`;
+	}
+	const rows = ledger.entries.map((entry, i) => {
+		const last = i === ledger.entries.length - 1 && !ledger.truncated;
+		const border = last ? '' : ';border-bottom:1px solid #EEF0F3';
+		return `<div style="display:flex;align-items:center;gap:12px;padding:12px 18px${border}">
+			<span style="font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2;width:52px;flex:none">${esc(ledgerStamp(entry.at, now))}</span>
+			<span style="width:7px;height:7px;border-radius:999px;background:${LEDGER_DOT[entry.kind]};flex:none"></span>
+			${ledgerSentence(entry)}
+			${ledgerBadge(entry)}
+		</div>`;
+	}).join('');
+	// A3.4 honest truncation line: shown only when the fold produced more than the cap - older activity lives
+	// in each document's History tab.
+	const more = ledger.truncated
+		? `<div style="padding:11px 18px;border-top:1px solid #EEF0F3;font:400 12px/1.4 system-ui;color:#A3A8B2">Showing the most recent ${ledger.entries.length}. Older activity lives in each document's History.</div>`
+		: '';
+	return `${label}<div style="border:1px solid #E9EAEE;border-radius:13px;overflow:hidden">${rows}${more}</div>`;
 }
 
 // The detail drawer (plan 32 iter 3, D32-B): the read-only canvas strip (the loop, spec 5) plus the inline
