@@ -6,7 +6,7 @@
 import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
-import { Limiter } from '../../../../base/common/async.js';
+import { IntervalTimer, Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableMap, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
@@ -183,6 +183,15 @@ function isModelPausedError(e: unknown): e is ModelPausedError {
 // How long a model-availability probe result is trusted before re-checking (so starting the proxy
 // mid-session is picked up without re-probing on every render).
 const MODEL_PROBE_TTL_MS = 30_000;
+
+// How often to re-probe /healthz while the broker is DOWN and at least one consumer (the rail) is mounted
+// (issue #236, plan 47 P14.5 - the D1 down->up recovery fix). The flicker fix serves the settled cache on the
+// UP path and only re-probes on a TTL, so a stable broker never churns; but a broker that RECOVERS mid-session
+// then never re-probed (its only caller, _refreshSignedIn, fires on onDidChange, which the settled cache
+// suppresses). This low-frequency background probe runs ONLY while down AND only while a consumer is watching -
+// guarded by disposables so no orphan timer survives an unmount - and _refreshProviderStatus fires onDidChange
+// only on the REAL down->up transition, so the control returns to green within ~2 intervals without any flicker.
+const BROKER_DOWN_REPROBE_MS = 12_000;
 
 // Bounded concurrency (plan 30, track 2, D30-A): how many source fetches and model calls may be in
 // flight at once within a refresh/agent run. Local file reads are cheap and stay unlimited (they hit the
@@ -444,6 +453,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _providerStatus: IModelProviderStatus | undefined;
 	private _providerStatusAt = 0;
 	private _providerStatusProbe: Promise<IModelProviderStatus> | undefined;
+	// Down->up recovery (issue #236, plan 47 P14.5 - the D1 fix). While the broker is down AND at least one
+	// consumer is watching, a low-frequency interval re-probes /healthz so a recovered broker returns the
+	// control to green without the flicker fix's TTL-only cache pinning `broker-down` forever. Ref-counted so
+	// the timer runs only while watched and stops on the last unwatch; owned by the store so disposal ends it.
+	private readonly _downReprobeTimer = this._register(new IntervalTimer());
+	private _downReprobeArmed = false;
+	private _providerStatusWatchers = 0;
+	// The down-recovery re-probe interval (issue #236, D1). A field, not the module const directly, so a unit
+	// test can shorten it via setBrokerDownReprobeMsForTest and exercise the recovery deterministically; the
+	// DI singleton constructor forbids a non-service leading parameter, so this is the injection seam instead.
+	private _brokerDownReprobeMs = BROKER_DOWN_REPROBE_MS;
 	// The model catalogue for the active backend (issue #179), fetched cheaply from the broker's /models and
 	// cached so the composer's picker does NOT hit the network on every rail render or healthz poll. Keyed by
 	// backend so a backend change (or a fresh fetch after one) reloads the right list; an in-flight fetch is
@@ -4135,10 +4155,51 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._providerStatus = status;
 			this._providerStatusAt = Date.now();
 			this._providerStatusProbe = undefined;
+			// Reconcile the down-recovery timer against the freshly-settled state (issue #236, D1): arm it when
+			// the status is down and watched, cancel it the moment it recovers. Done here, on every settle, so a
+			// down->up transition ends the interval and an up->down transition (re)arms it, all off one probe.
+			this._reconcileDownReprobe();
 			if (changed) { this._onDidChange.fire(); }
 			return status;
 		})();
 		return this._providerStatusProbe;
+	}
+
+	// Register interest in the live provider status (issue #236, D1 down->up recovery). A mounted consumer (the
+	// rail composer) calls this so the service knows a surface is watching; the returned disposable unwinds that
+	// interest on unmount. Ref-counted: the background down-reprobe interval runs ONLY while at least one consumer
+	// is watching AND the broker is down, and stops on the last unwatch, so no orphan timer survives an unmount.
+	watchProviderStatus(): IDisposable {
+		this._providerStatusWatchers++;
+		this._reconcileDownReprobe();
+		return toDisposable(() => {
+			if (this._providerStatusWatchers > 0) { this._providerStatusWatchers--; }
+			this._reconcileDownReprobe();
+		});
+	}
+
+	// Shorten the down-recovery re-probe interval for a unit test (issue #236, D1). Not on ILivingDocsService:
+	// this is a deterministic-timing seam only, since the DI singleton constructor cannot take a non-service
+	// leading parameter. Production never calls it, so the real BROKER_DOWN_REPROBE_MS default stands.
+	setBrokerDownReprobeMsForTest(ms: number): void {
+		this._brokerDownReprobeMs = ms;
+	}
+
+	// Arm or cancel the low-frequency down-recovery probe (issue #236, D1). The interval runs iff a consumer is
+	// watching AND the settled status is `broker-down`; otherwise it is cancelled. On tick it calls
+	// _refreshProviderStatus, which fires onDidChange only on the REAL down->up transition and, via the reconcile
+	// call it makes on settle, cancels this very timer once the broker recovers. Guarded by _downReprobeArmed so
+	// a repeat call while already armed does NOT reset the interval countdown - otherwise frequent reconciles
+	// (every settle) would perpetually restart the timer and it would never fire. Idempotent: safe to call often.
+	private _reconcileDownReprobe(): void {
+		const shouldRun = this._providerStatusWatchers > 0 && this._providerStatus?.readiness === 'broker-down';
+		if (shouldRun && !this._downReprobeArmed) {
+			this._downReprobeArmed = true;
+			this._downReprobeTimer.cancelAndSet(() => { void this._refreshProviderStatus(); }, this._brokerDownReprobeMs);
+		} else if (!shouldRun && this._downReprobeArmed) {
+			this._downReprobeArmed = false;
+			this._downReprobeTimer.cancel();
+		}
 	}
 
 	// The model catalogue for the active backend (issue #179). Fetched cheaply from the broker's /models and

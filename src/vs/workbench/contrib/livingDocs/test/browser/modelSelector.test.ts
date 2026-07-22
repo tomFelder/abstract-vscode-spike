@@ -81,6 +81,61 @@ suite('livingDocs model selector (plan 47 47-b, issue #236)', () => {
 		return { service, storage, healthCalls: () => healthCalls, changes: () => changes };
 	}
 
+	// A service whose /healthz is driven by a MUTABLE `brokerUp` flag the test toggles (not a positional
+	// sequence), so the down->up recovery is deterministic regardless of how the constructor's startup probe
+	// and the status probe interleave against a shared counter. `reprobeMs` is short so the down-recovery
+	// interval fires promptly. Returns the flag setter + a health-probe counter + a change counter.
+	function createFlagService(reprobeMs: number): { service: LivingDocsService; setBrokerUp: (up: boolean) => void; healthCalls: () => number; changes: () => number; lastReadiness: () => string | undefined } {
+		let healthCalls = 0;
+		let brokerUp = false;
+		const requestService = {
+			request: async (options: { url?: string }) => {
+				const url = options.url ?? '';
+				let payload: object = {};
+				if (url.includes('/healthz')) {
+					healthCalls++;
+					if (!brokerUp) { throw new Error('ECONNREFUSED'); }
+					payload = { ok: true, backend: 'openrouter', reason: 'ready', meters: true, signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0 };
+				} else if (url.includes('/models')) {
+					payload = MODELS_BODY;
+				}
+				return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))) };
+			},
+		} as unknown as IRequestService;
+		const fileService = { onDidFilesChange: Event.None, onDidChangeFileSystemProviderRegistrations: Event.None, onDidChangeFileSystemProviderCapabilities: Event.None } as unknown as IFileService;
+		const editorService = { openEditor: async () => undefined, onDidActiveEditorChange: Event.None, activeEditor: undefined } as unknown as IEditorService;
+		const viewsService = { openView: async () => null } as unknown as IViewsService;
+		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.modelProxyUrl' ? 'http://127.0.0.1:9' : true) } as unknown as IConfigurationService;
+		const notificationService = { info: () => undefined } as unknown as INotificationService;
+		const workspaceService = { getWorkspace: () => ({ folders: [] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
+		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
+		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
+		const clipboardService = { writeText: async () => undefined } as unknown as IClipboardService;
+		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
+		const storage = store.add(new InMemoryStorageService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), storage, commandService, clipboardService, { isVisible: () => false } as unknown as IWorkbenchLayoutService);
+		service.setBrokerDownReprobeMsForTest(reprobeMs);
+		store.add(service);
+		let changes = 0;
+		// Track the settled readiness the same way the rail consumer does: onDidChange (the real-transition signal)
+		// drives a read of the cached status. This gives the tests a synchronous view of the settled state without
+		// a test-only accessor on the service. The initial seed is captured by the first getModelProviderStatus.
+		let lastReadiness: string | undefined;
+		store.add(service.onDidChange(() => { changes++; void service.getModelProviderStatus().then(s => { lastReadiness = s.readiness; }); }));
+		return { service, setBrokerUp: (up: boolean) => { brokerUp = up; }, healthCalls: () => healthCalls, changes: () => changes, lastReadiness: () => lastReadiness };
+	}
+
+	// Poll until `predicate` holds or `budgetMs` elapses, yielding to the event loop so the interval's async
+	// probe can settle. Returns true if the predicate held in time; a timeout returns false (a failed test).
+	async function waitFor(predicate: () => boolean, budgetMs = 2000): Promise<boolean> {
+		const deadline = Date.now() + budgetMs;
+		while (Date.now() < deadline) {
+			if (predicate()) { return true; }
+			await new Promise(r => setTimeout(r, 5));
+		}
+		return predicate();
+	}
+
 	test('the readiness -> health-dot colour + plain-words mapping is honest per state (P14.5)', () => {
 		assert.deepStrictEqual({
 			readyDot: modelHealthDotColour('ready'),
@@ -158,5 +213,73 @@ suite('livingDocs model selector (plan 47 47-b, issue #236)', () => {
 		// setSelectedModelId ignores an unknown id, so a bad caller can never pin a dead selection.
 		await service.setSelectedModelId('model-also-gone');
 		assert.strictEqual(storage.get('livingDocs.v2.model', StorageScope.WORKSPACE), 'model-gone');
+	});
+
+	// --- D1: down->up recovery within a session (issue #236, VALIDATION ROUND 1 D1) ---
+	// The flicker fix serves `broker-down` from the settled cache without re-probing while idle, so a broker that
+	// recovers mid-session never returned the control to green. These pin the low-frequency background re-probe:
+	// it runs only while DOWN and watched, transitions up exactly once, does not probe on the UP path, and stops
+	// on disposal (no orphan timer). A short reprobe interval + a mutable broker flag make it deterministic.
+
+	test('down + watched -> the background probe fires on the interval and transitions up EXACTLY once (D1)', async () => {
+		const { service, setBrokerUp, healthCalls, changes, lastReadiness } = createFlagService(5);
+		// Seed the settled DOWN state (broker unreachable): getModelProviderStatus awaits the first probe.
+		const seeded = await service.getModelProviderStatus();
+		// Register a mounted consumer's interest: with the status down, this arms the re-probe interval.
+		const watch = service.watchProviderStatus();
+		const probesAtWatch = healthCalls();
+		const changesAtWatch = changes();
+		// The broker recovers. The idle interval must re-probe (no getModelProviderStatus caller drives it),
+		// pick up the recovery, settle to ready, and fire onDidChange exactly once for the real down->up flip.
+		setBrokerUp(true);
+		const recovered = await waitFor(() => lastReadiness() === 'ready');
+		// After recovery, the reconcile cancels the interval, so no further probes accrue: let time pass and
+		// confirm the probe count stabilises (the timer stopped) and the status held ready with one change.
+		await new Promise(r => setTimeout(r, 40));
+		const probesAfterSettle = healthCalls();
+		await new Promise(r => setTimeout(r, 40));
+		watch.dispose();
+		assert.deepStrictEqual({
+			seededDown: seeded.readiness === 'broker-down',
+			recovered,
+			reprobedWhileDown: healthCalls() > probesAtWatch,
+			finalReadiness: lastReadiness(),
+			changesForRecovery: changes() - changesAtWatch,
+			timerStoppedAfterRecovery: healthCalls() === probesAfterSettle,
+		}, {
+			seededDown: true,
+			recovered: true,
+			reprobedWhileDown: true,
+			finalReadiness: 'ready',
+			changesForRecovery: 1,
+			timerStoppedAfterRecovery: true,
+		});
+	});
+
+	test('up + watched -> NO interval probing (the flicker fix UP path is preserved) (D1)', async () => {
+		const { service, setBrokerUp, healthCalls } = createFlagService(5);
+		setBrokerUp(true);
+		const seeded = await service.getModelProviderStatus();
+		const watch = service.watchProviderStatus();
+		const probesAtWatch = healthCalls();
+		// The status is ready, so watching must NOT arm the interval: after several interval periods elapse,
+		// zero additional probes have fired. This is exactly the settled-cache behaviour that killed the flicker.
+		await new Promise(r => setTimeout(r, 60));
+		const added = healthCalls() - probesAtWatch;
+		watch.dispose();
+		assert.deepStrictEqual({ ready: seeded.readiness, intervalProbes: added }, { ready: 'ready', intervalProbes: 0 });
+	});
+
+	test('disposing the watcher stops the down-recovery interval (no orphan timer) (D1)', async () => {
+		const { service, healthCalls } = createFlagService(5);
+		// Down + watched arms the interval; it re-probes (broker stays down) so the count climbs.
+		await service.getModelProviderStatus();
+		const watch = service.watchProviderStatus();
+		await waitFor(() => healthCalls() > 1);
+		// Unwatch: the interval must stop. After disposal, let several periods pass; the probe count is frozen.
+		watch.dispose();
+		const frozenAt = healthCalls();
+		await new Promise(r => setTimeout(r, 60));
+		assert.deepStrictEqual({ stoppedAfterDispose: healthCalls() === frozenAt }, { stoppedAfterDispose: true });
 	});
 });

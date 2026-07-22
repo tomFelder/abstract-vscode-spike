@@ -244,6 +244,11 @@ export class ReviewRailView extends ViewPane {
 		this._root.style.height = '100%';
 		this._injectStyles(container);
 		this._register(this._livingDocs.onDidChange(() => { void this._refreshSignedIn(); this._render(); }));
+		// While this rail is mounted, register interest in the live provider status (issue #236, the D1 down->up
+		// recovery). If the broker is down, the service re-probes /healthz on a low frequency and fires onDidChange
+		// on the real recovery, which drives _refreshSignedIn above and returns the composer to green. Registered
+		// with the render lifecycle so the interest (and the service's background timer) unwinds when the rail unmounts.
+		this._register(this._livingDocs.watchProviderStatus());
 		// Append streamed chat deltas to the live turn without a full re-render (plan 27 iter 3).
 		this._register(this._livingDocs.onDidStreamChat(resource => this._onStreamDelta(resource)));
 		this._register(this._livingDocs.onDidRequestPanel(request => { this._activeTab = request.tab; this._render(); }));

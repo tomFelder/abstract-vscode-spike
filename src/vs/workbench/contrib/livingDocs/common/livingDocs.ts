@@ -5,6 +5,7 @@
 
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Event } from '../../../../base/common/event.js';
+import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
@@ -713,6 +714,14 @@ export interface ILivingDocsService {
 	isModelReachable(): Promise<boolean>;
 	/** The current model door + usage snapshot for the Settings provider step (reads the proxy's /healthz). */
 	getModelProviderStatus(): Promise<IModelProviderStatus>;
+	/**
+	 * Register a mounted consumer's interest in the live provider status (issue #236, the D1 down->up recovery).
+	 * While at least one consumer is watching AND the broker is down, the service re-probes /healthz on a low
+	 * frequency so a recovered broker returns the control to green mid-session - the settled-status flicker fix
+	 * otherwise serves `broker-down` from cache without ever re-probing while idle. Dispose to unwatch on unmount;
+	 * ref-counted, so the background probe runs only while watched and stops on the last unwatch (no orphan timer).
+	 */
+	watchProviderStatus(): IDisposable;
 	/**
 	 * The models the active backend can drive, for the composer's picker (issue #179). Cached per backend and
 	 * fetched cheaply from the broker's /models (on backend change or first read, never on every healthz poll).
