@@ -5,6 +5,7 @@
 
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
+import { addressLabel, IBlockGutterEntry } from '../common/livingDocAddress.js';
 import { isRelativeImageSrc } from '../common/livingDocAssets.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
@@ -170,8 +171,10 @@ html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-fami
 /* Inline word-diff for a meaning-change, matching the hi-fi (edit-in-place, not a stacked block). */
 .editblock{box-shadow:inset 2px 0 0 oklch(0.66 0.16 45);padding-left:14px}
 .editp{margin:0 0 12px;font:400 16px/1.78 system-ui;color:#2c2f36}
-.d-o{background:#fdecec;color:#b4332f;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.5);border-radius:2px;padding:0 2px}
-.d-n{background:#e7f6ec;color:#1f7a44;border-radius:2px;padding:0 2px}
+/* Word-diff colours per spec (plan 45 pin 11 / P11.2): a removal is #FBEEEE bg, #CF5A53 strike; an addition
+ * is #E9F6EE bg, #2C8159 text. */
+.d-o{background:#FBEEEE;color:#CF5A53;text-decoration:line-through;text-decoration-color:rgba(207,90,83,.5);border-radius:2px;padding:0 2px}
+.d-n{background:#E9F6EE;color:#2C8159;border-radius:2px;padding:0 2px}
 /* A generative insertion proposed by Chat: all-additions (green left accent + green-tinted body). */
 .insertblock{box-shadow:inset 2px 0 0 #1f7a44;padding-left:14px}
 .insertbody{background:#f1faf4;border:1px solid #d7ecdc;border-radius:8px;padding:6px 14px;margin:0 0 2px}
@@ -183,10 +186,12 @@ html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-fami
 .ctrl .src{font-family:'JetBrains Mono',ui-monospace,monospace;color:${ACCENT}}
 .ctrl .add{color:#1f7a44}.ctrl .rem{color:#b4332f}
 .ctrl .acts{margin-left:auto;display:flex;gap:7px}
-.ctrl .approve{border:none;border-radius:7px;padding:8px 14px;background:${ACCENT};color:#fff;font:600 12px/1 system-ui;cursor:pointer}
-.ctrl .approve:hover{background:oklch(0.5 0.13 255)}
-.ctrl .reject{border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer}
-.ctrl .reject:hover{background:#f4f5f7}
+/* Approve / Reject per spec (plan 45 pin 11 / P11.2): Approve is an accent #5B6DC4 fill, 28px tall, radius 8;
+ * Reject is a ghost button whose hover turns removed (#FBEEEE bg, #CF5A53 ink). */
+.ctrl .approve{height:28px;border:none;border-radius:8px;padding:0 14px;background:#5B6DC4;color:#fff;font:600 12px/1 system-ui;cursor:pointer}
+.ctrl .approve:hover{background:#4E5FB2}
+.ctrl .reject{height:28px;border:1px solid #E6E8EC;border-radius:8px;padding:0 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer}
+.ctrl .reject:hover{background:#FBEEEE;border-color:#f0d3d1;color:#CF5A53}
 table.kpi{flex:1;border:1px solid #eceef2;border-radius:10px;border-collapse:separate;border-spacing:0;overflow:hidden;font:400 13.5px/1 system-ui;margin-bottom:22px}
 table.kpi th{background:#f8f9fb;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;letter-spacing:.04em;text-align:right;padding:10px 14px}
 table.kpi th:first-child{text-align:left}
@@ -304,11 +309,16 @@ table.kpi td:first-child{text-align:left;font-weight:500}
  * <img> keeps its (unresolvable) relative src so its title carries "image not found: <path>" on hover. */
 .prose img.lwd-img-broken{min-width:120px;min-height:42px;outline:1px dashed #d7a3a0;outline-offset:-1px;background:#fdf2f2;border-radius:4px}
 /* Plain-Markdown ProseMirror editor (F2): the document IS the writing surface (reuses .prose type).
- * Layout (plan 21 iter 1 / C2): a flex row that centres a reading group of [30px provenance gutter][720px
- * reading column]. The gutter is a real reserved column (via the prose column's 30px left padding) so
- * provenance markers live to the LEFT of the prose and the prose NEVER shifts when markers toggle.
- * The .prose element is content-box with max-width:720px (the reading text) + padding-left:30px (the
- * reserved gutter lane), giving a total element width of 750px.
+ * Layout (plan 45 pin 9, revises plan 21 / C2 - decision 168): a flex row that centres a reading group of
+ * [70px numbered gutter][720px reading column]. The gutter is a real reserved column (via the prose column's
+ * 70px left padding) so the line numbers live to the LEFT of the prose and the prose NEVER shifts when the
+ * numbers or their provenance tone change. The .prose element is content-box with max-width:720px (the
+ * reading text) + padding-left:70px (the reserved gutter lane), giving a total element width of 790px.
+ * PROSE-NEVER-SHIFTS (P9.1): widening the lane 30px->70px added 40px to the element; the extra lane must NOT
+ * push the reading text. A translateX(-18px) on .prose pulls the whole reading group left by ~half the added
+ * width so the TEXT column's centre stays exactly where the 30px-lane baseline put it (measured: text left
+ * edge 207.75px, text right edge 896.25px at 1440x900). The gutter travels with it, so numbers stay glued to
+ * the text edge.
  * Edge-to-edge chrome (issue #175): the 32px/40px wrapper padding is scoped to .pmwrap so it insets ONLY
  * the prose column. The top bar and formatting toolbar are rendered as SIBLINGS of .pmwrap (see the html
  * assembly in renderLivingDocContent), so their #fbfbfc / white backgrounds and hairline borders run
@@ -317,7 +327,7 @@ table.kpi td:first-child{text-align:left;font-weight:500}
  * html,body rule above resets the webview harness's body padding (0 20px) - without that reset the harness
  * inset survives and pushes every bar ~20px off each rail. */
 .pmwrap{display:flex;justify-content:center;padding:32px 40px 90px}
-.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:30px;padding-right:0;box-sizing:content-box;position:relative}
+.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:70px;padding-right:0;box-sizing:content-box;position:relative;transform:translateX(-18px)}
 .pmwrap .ProseMirror{outline:none;min-height:60vh;white-space:pre-wrap;word-wrap:break-word;-webkit-font-smoothing:antialiased}
 .pmwrap .ProseMirror:focus{outline:none}
 .pmwrap .ProseMirror p.is-editor-empty:first-child::before{color:#bcc0c8;content:attr(data-placeholder);float:left;pointer-events:none;height:0}
@@ -335,19 +345,31 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .pm-list{width:300px;flex:none;border-right:1px solid #eef0f3;background:#fbfbfc;overflow-y:auto;padding:14px}
 .pm-detail{flex:1;min-width:0;overflow-y:auto;padding:22px}
 .pmwrap .ProseMirror span.bound{cursor:pointer}
-/* Provenance gutter (plan 21 iter 1 / C2): markers are ProseMirror node decorations that paint into the
- * real 30px gutter column reserved by .prose's 30px left padding (so the prose is never shifted). A
- * source-bound block gets a 9px accent dot vertically centred on its line; a recently-applied block
- * flashes attention. Hovering a marker opens the source-peek drawer (wired in the RUNTIME). */
-.pmwrap .ProseMirror .pm-gutter{position:relative}
-.pmwrap .ProseMirror .pm-gutter::before{content:"";position:absolute;left:-21px;top:.62em;width:9px;height:9px;border-radius:50%;background:oklch(0.55 0.13 255);cursor:pointer;transition:transform .15s ease}
-.pmwrap .ProseMirror .pm-gutter:hover::before{transform:scale(1.25)}
-.pmwrap .ProseMirror .pm-gutter-recent::before{background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(220,150,60,.14);animation:flash 1.6s ease}
-/* A multi-line edited paragraph hangs a 3px attention bar in the gutter spanning the diff-text rows
- * only (the .editp), so it does not overspill into the Approve/Reject control row below.
- * The bar is placed on .pm-edit-bar .editp rather than the outer .editblock to cap its extent. */
+/* Numbered gutter (plan 45 pin 9; revises plan 21 / C2, decision 168). Each top-level block gets a
+ * ProseMirror node decoration carrying its 1-based line number in data-lwd-num; the number paints into the
+ * 70px gutter lane reserved by .prose's 70px left padding (so the prose never shifts). Numbers are JetBrains
+ * Mono 11px, right-aligned, their right edge 22px from the text edge, idle colour gutter-idle #C6CAD2. Only
+ * the block's FIRST visual row carries a number: the ::before is absolutely positioned at top:.62em so a
+ * wrapped paragraph shows one number and a blank gutter on rows 2-3 (D1 wrap rule, P9.4). Provenance rides
+ * the number: a bound block's number turns accent #5B6DC4/600 with a 9px dot to its left; a pending-edit
+ * block's number turns attention #8A6D1A with a 3px #C99A2E bar spanning its rows. Idle numbers are inert;
+ * hovering a bound/pending number opens the source-peek drawer (wired in the RUNTIME). */
+.pmwrap .ProseMirror .pm-num{position:relative}
+.pmwrap .ProseMirror .pm-num::before{content:attr(data-lwd-num);position:absolute;top:.62em;right:calc(100% + 22px);width:34px;text-align:right;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#C6CAD2;white-space:nowrap;pointer-events:none;-webkit-font-smoothing:antialiased}
+/* A source-bound block: accent number (600) with a 9px accent dot to its left. The dot sits in the gutter
+ * lane just left of the number's left edge; the number becomes hover-live to open the source-peek drawer. */
+.pmwrap .ProseMirror .pm-num.bound::before{color:#5B6DC4;font-weight:600;pointer-events:auto;cursor:pointer}
+.pmwrap .ProseMirror .pm-num.bound::after{content:"";position:absolute;top:.62em;right:calc(100% + 60px);width:9px;height:9px;border-radius:50%;background:#5B6DC4}
+.pmwrap .ProseMirror .pm-num.bound.recent::after{background:oklch(0.66 0.16 45);box-shadow:0 0 0 4px rgba(220,150,60,.14);animation:flash 1.6s ease}
+/* A pending-edit block: attention number (#8A6D1A, 600) + a 3px #C99A2E bar spanning exactly its rows.
+ * The number is hover-live (opens the source-peek for its binds when it has any). */
+.pmwrap .ProseMirror .pm-num.pending::before{color:#8A6D1A;font-weight:600;pointer-events:auto;cursor:pointer}
+.pmwrap .ProseMirror .pm-num.pending::after{content:"";position:absolute;top:2px;bottom:2px;right:calc(100% + 15px);width:3px;border-radius:999px;background:#C99A2E}
+/* A multi-line edited paragraph hangs a 3px attention bar in the gutter spanning the diff-text rows only
+ * (the .editp), so it does not overspill into the Approve/Reject control row below. The original block node
+ * is hidden and replaced by the widget, so the bar rides the visible widget's .editp here. */
 .pmwrap .ProseMirror .pm-edit-bar .editp{position:relative}
-.pmwrap .ProseMirror .pm-edit-bar .editp::before{content:"";position:absolute;left:-22px;top:2px;bottom:2px;width:3px;border-radius:999px;background:oklch(0.66 0.16 45);cursor:pointer}
+.pmwrap .ProseMirror .pm-edit-bar .editp::before{content:"";position:absolute;left:-18px;top:2px;bottom:2px;width:3px;border-radius:999px;background:#C99A2E;cursor:pointer}
 /* A block with a pending meaning-change is hidden; the diff + accept/reject widget renders in its place. */
 .pmwrap .ProseMirror .pm-orig-hidden{display:none}
 /* The diff / insert widgets are host-rendered with the renderDoc markup (.editblock/.insertblock/.ctrl),
@@ -569,7 +591,10 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-next-doc]')) { return vscode.postMessage({ type: 'nextDoc' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
-	if (el = e.target.closest('.pm-gutter')) { const key = gutterKeyFor(el); if (key) { return vscode.postMessage({ type: 'reveal', cells: [key] }); } }
+	// A marked gutter number (bound or pending) opens the source-peek for the block's bind. The number is a
+	// ::before on the block node painted into the gutter lane, so only fire when the click lands in that lane
+	// (clientX left of the block's content edge); an idle number carries no bind and clicks through to text.
+	if ((el = e.target.closest('.pm-num.bound, .pm-num.pending')) && e.clientX < el.getBoundingClientRect().left) { const key = gutterKeyFor(el); if (key) { return vscode.postMessage({ type: 'reveal', cells: [key] }); } }
 	if (el = e.target.closest('[data-to-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
 	if (el = e.target.closest('[data-source-close]')) { return vscode.postMessage({ type: 'closeSource' }); }
 	if (el = e.target.closest('[data-sync]')) { return vscode.postMessage({ type: 'sync' }); }
@@ -610,17 +635,17 @@ root.addEventListener('paste', e => {
 	try { cleaned = normalizeWordPasteHtml(html); } catch (err) { cleaned = html; }
 	try { pmView.pasteHTML(cleaned); } catch (err) {}
 }, true);
-// Hovering a bound figure (or its provenance gutter dot) floats a quiet tooltip answering "where from, how
+// Hovering a bound figure (or its marked gutter number) floats a quiet tooltip answering "where from, how
 // fresh" (plan 29 iter 3): the source file/endpoint, the cell within it, the relative sync time, and an amber
 // "source changed" line when stale. Click still opens the source drawer (unchanged) - the tooltip is
 // pointer-events:none so it never intercepts that click. Delegated on root so it survives the innerHTML swaps.
-// A gutter dot carries no data-key itself; resolve the key from the bound figure inside its block, and only
-// fire when the pointer is over the dot's gutter column (clientX left of the block), so reading text stays quiet.
+// A gutter number carries no data-key itself; resolve the key from the bound figure inside its block, and only
+// fire when the pointer is over the number's gutter lane (clientX left of the block), so reading text stays quiet.
 function gutterKeyFor(node){ const bound = node.querySelector('span.bound[data-key]'); return bound ? bound.getAttribute('data-key') : null; }
 root.addEventListener('mouseover', e => {
 	const fig = e.target.closest && e.target.closest('span.bound[data-key]');
 	if (fig) { return showTip(fig, fig.getAttribute('data-key')); }
-	const g = e.target.closest && e.target.closest('.pm-gutter');
+	const g = e.target.closest && e.target.closest('.pm-num.bound, .pm-num.pending');
 	if (!g) { return; }
 	const box = g.getBoundingClientRect();
 	if (e.clientX > box.left) { return; }
@@ -628,7 +653,7 @@ root.addEventListener('mouseover', e => {
 	if (key) { showTip(g, key); }
 });
 root.addEventListener('mouseout', e => {
-	const from = e.target.closest && (e.target.closest('span.bound[data-key]') || e.target.closest('.pm-gutter'));
+	const from = e.target.closest && (e.target.closest('span.bound[data-key]') || e.target.closest('.pm-num.bound, .pm-num.pending'));
 	if (from) { hideTip(); }
 });
 root.addEventListener('focusout', e => {
@@ -714,6 +739,8 @@ export interface IPmDecoPayload {
 	readonly edits: readonly IPmDecoEdit[];
 	readonly inserts: readonly IPmDecoInsert[];
 	readonly gutters: readonly IPmGutterMarker[];
+	/** The ordered per-block numbered-rail entries (spec 43 section 3.1 / pin 9): one number per Markdown block. */
+	readonly numbers: readonly IBlockGutterEntry[];
 	/** Per-key provenance the RUNTIME reads to build the hover tooltip (plan 29, iter 3); [] for plain docs. */
 	readonly provenance: readonly IPmProvenance[];
 }
@@ -746,6 +773,9 @@ function pmEditWidgetHtml(e: IPmEditDecoration, bar: boolean): string {
 	// from <source>"; a plain doc (e.g. a chat rewrite) just shows "Suggested edit" - never a dangling
 	// "from" with an empty source after it.
 	const origin = e.source ? `Suggested edit from <span class="src">${esc(e.source)}</span>` : 'Suggested edit';
+	// The gutter address (spec 43 section 3.1 / pin 11): the widget's mono tag row cites "Line N" so the proposal,
+	// the gutter number and the rail card all speak one address vocabulary. Omitted when the block is gone.
+	const addr = typeof e.addressLine === 'number' ? `<span class="src pm-addr">${esc(addressLabel(e.addressLine))}</span> &middot; ` : '';
 	// A multi-line edited paragraph carries the `attention` provenance bar (C2): it hangs a 3px bar in the
 	// gutter column spanning the widget's rows. Single-line edits get no bar (nothing to span).
 	const barClass = bar ? ' pm-edit-bar' : '';
@@ -767,7 +797,7 @@ function pmEditWidgetHtml(e: IPmEditDecoration, bar: boolean): string {
 		+ `<p class="editp">${renderDiffSegments(e.segments)}</p>`
 		+ editor
 		+ `<div class="ctrl"><span class="cdot"></span>`
-		+ `<span class="lbl">${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span></span>`
+		+ `<span class="lbl">${addr}${origin} &middot; <span class="add">+${e.added} added</span> &middot; <span class="rem">${e.removed} removed</span></span>`
 		+ `<span class="acts normacts">${tweakBtn}<button class="approve" data-approve="${esc(e.id)}">Approve changes</button>`
 		+ `<button class="reject" data-reject="${esc(e.id)}">Reject</button></span>${tweakActs}</div></div>`;
 }
@@ -794,6 +824,7 @@ function renderPmDeco(doc: ILivingDoc, pending: readonly IProposedChange[], rece
 		edits: spec.edits.map(e => ({ id: e.id, anchorText: e.anchorText, html: pmEditWidgetHtml(e, barAnchors.has(e.anchorText)) })),
 		inserts: spec.inserts.map(ins => ({ id: ins.id, afterText: ins.afterText, html: pmInsertWidgetHtml(ins) })),
 		gutters: spec.gutters,
+		numbers: spec.numbers,
 		provenance,
 	};
 }

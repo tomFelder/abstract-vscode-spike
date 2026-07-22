@@ -75,6 +75,7 @@ suite('LivingDoc PM decoration mapping', () => {
 			kind: 'meaning',
 			rationale: '',
 			newText: 'Revenue dropped sharply this week.',
+			addressLine: 2,
 		});
 	});
 
@@ -180,13 +181,17 @@ suite('LivingDoc PM decoration mapping', () => {
 		assert.strictEqual(spec.inserts[0].afterText, null);
 	});
 
-	test('bound blocks become dot gutter markers carrying their bind keys and recent flag', () => {
+	test('bound blocks read as a bound numbered-rail entry carrying their bind keys and recent flag', () => {
 		const doc = parseLivingDoc(DOC_MD);
 		const bound = doc.blocks.find(b => b.binds.length > 0)!;
 
 		const spec = buildPmDecorationSpec(doc, [], new Set([bound.id]));
 
-		assert.deepStrictEqual(spec.gutters, [{ kind: 'dot', keys: ['metrics.margin'], recent: true }]);
+		// No dot markers survive in `gutters` (pin 9 replaced the dot with a bound number); the bound block's
+		// entry in the ordered `numbers` rail carries its keys, the bound tone and the recent flag.
+		assert.deepStrictEqual(spec.gutters, []);
+		const boundEntry = spec.numbers.find(n => n.id === bound.id)!;
+		assert.deepStrictEqual(boundEntry, { id: bound.id, line: 3, tone: 'bound', keys: ['metrics.margin'], recent: true });
 	});
 
 	test('a multi-line edited paragraph adds a bar gutter marker anchored on the block text', () => {
@@ -224,16 +229,18 @@ suite('LivingDoc PM decoration mapping', () => {
 		assert.deepStrictEqual(spec.gutters.filter(g => g.kind === 'bar'), []);
 	});
 
-	test('a bound block that is also being edited keeps its dot and does not double up', () => {
-		// The bound "Margins held ..." block is single-line, so an edit on it yields no bar; the
-		// source-bound dot must still be present exactly once.
+	test('a bound block that is also being edited reads as one pending numbered-rail entry and no bar', () => {
+		// The bound "Margins held ..." block is single-line, so an edit on it yields no bar; its single
+		// numbered-rail entry reads `pending` (pending outranks bound) and still carries its bind key.
 		const doc = parseLivingDoc(DOC_MD);
 		const bound = doc.blocks.find(b => b.binds.length > 0)!;
 		const pending = [change({ blockId: bound.id, oldText: bound.text, newText: 'Margins held [45%](bind:metrics.margin) steady.' })];
 
 		const spec = buildPmDecorationSpec(doc, pending, new Set());
 
-		assert.deepStrictEqual(spec.gutters, [{ kind: 'dot', keys: ['metrics.margin'], recent: false }]);
+		assert.deepStrictEqual(spec.gutters, []);
+		const boundEntry = spec.numbers.find(n => n.id === bound.id)!;
+		assert.deepStrictEqual(boundEntry, { id: bound.id, line: 3, tone: 'pending', keys: ['metrics.margin'], recent: false });
 	});
 
 	test('a multi-line source-bound block under a pending edit emits both a dot and a bar', () => {
@@ -264,10 +271,12 @@ suite('LivingDoc PM decoration mapping', () => {
 
 		// One edit decoration (the meaning-change).
 		assert.strictEqual(spec.edits.length, 1);
-		// The gutter must have exactly one dot (from binds) and one bar (from the multi-line edit).
-		const dots = spec.gutters.filter(g => g.kind === 'dot');
+		// A source-bound block under a pending edit reads as `pending` in the numbered rail (pending outranks
+		// bound so the attention tone shows) while still carrying its bind keys for the source-peek; the
+		// multi-line edit also produces exactly one `attention` bar in `gutters`.
+		const boundEntry = spec.numbers.find(n => n.id === bound.id)!;
+		assert.deepStrictEqual(boundEntry, { id: bound.id, line: 2, tone: 'pending', keys: ['brand.colour'], recent: true });
 		const bars = spec.gutters.filter(g => g.kind === 'bar');
-		assert.deepStrictEqual(dots, [{ kind: 'dot', keys: ['brand.colour'], recent: true }]);
 		assert.strictEqual(bars.length, 1);
 		assert.ok(!bars[0].anchorText.includes('\n'), 'bar anchorText must be whitespace-collapsed');
 	});

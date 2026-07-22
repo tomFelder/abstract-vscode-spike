@@ -4,9 +4,27 @@ Lane A of the Abstract Editor v2 wave (spec [43](../../../../plans/43-editor-v2-
 
 ## Status of this baseline
 
-**Live screenshots could not be captured this session - the machine was out of disk.** The Data volume sat at 411Gi/460Gi used with roughly 130-400Mi free depending on whether the compiled `out/` was present. `code-web` needs both the ~295M `out/` bundle served AND several GB of runtime headroom (service-worker cache, the Chromium profile under `/tmp`), which the disk could not supply. The launch server started and answered `200` on `http://localhost:8081/`, but `out/vs/workbench/workbench.web.main.js` returned `404` once `out/` had to be removed to free space, so the workbench never rendered.
+**Live capture completed on the 45-a resume run (22 Jul 2026, disk freed to ~31Gi).** The deferred visual + numeric baseline the earlier disk-blocked session could not take is now captured. Screenshots committed in this folder; the live P9.1/P9.8 numbers are recorded under "Live before-numbers" below. The CSS before-numbers table (further down) stands as the source-truth cross-check.
 
-The 39G that would have unblocked capture lives in stale sibling-agent worktrees under `.claude/worktrees/agent-*` (branches like `work-a2-merge`, `30-perf-tracks`, `32-orch-*` - not the active v2 lanes). Removing them is the sanctioned reclaim but was out of scope for this baseline task, so it was left for the orchestrator to authorise. **Escalation:** to capture the visual baseline, free disk first (prune the stale `agent-*` worktrees, ~39G) then re-run steps below.
+Earlier-session context (kept for the record): the first baseline attempt was blocked by disk exhaustion (411Gi/460Gi used, ~130-400Mi free); `code-web` needs both the served `out/` bundle AND several GB of runtime headroom. That is resolved for this run.
+
+### Live before-numbers (captured 22 Jul 2026, `scripts/lwd-capture.mjs measure`, driven via playwright-core headless Chromium)
+
+Measured on the running web build (`TMPDIR=/tmp ./scripts/code-web.sh ./living-docs-sample --port 8081`), 1440x900:
+
+| Metric | Value | How |
+|---|---|---|
+| `#pm-root` prose element x | **177.75px** | `getBoundingClientRect().x` on `Weekly Operating Summary` |
+| `#pm-root` prose element width | **718.5px** | `getBoundingClientRect().width` |
+| `#pm-root` prose element right | **896.25px** | `getBoundingClientRect().right` |
+| Prose TEXT left edge (x + 30px pad) | **207.75px** | element x + `paddingLeft:30px` (the reserved dot lane) |
+| `.pmwrap` width | 1074px | pane width available for the centred reading group |
+| Typing latency, Weekly Summary | median **0.8ms**, p95 **3.4ms** (n=20) | keydown->DOM-mutation sample |
+| Typing latency, plan-30 scale fixture (`report-0.md`) | median **0.7ms**, p95 **3.4ms** (n=20) | same, on `./living-docs-scale-sample` |
+
+**P9.1 anchor:** after PR-a widens the lane 30px->70px, the prose TEXT left edge must stay at **207.75px (+/-1px)** and the text right edge at **896.25px**. The 40px of extra lane must come from the layout, never by shifting the prose text.
+
+**P9.8 anchor:** post-change scale-fixture typing latency must not regress past the **median 0.7ms / p95 3.4ms** baseline (measured, not asserted).
 
 What IS delivered here and is fully authoritative:
 
