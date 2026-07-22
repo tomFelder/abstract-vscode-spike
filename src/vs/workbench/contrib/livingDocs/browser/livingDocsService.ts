@@ -29,12 +29,12 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
-import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
 import { AnalyticsService } from './analyticsService.js';
 import { buildDemoReportMarkdown, DEMO_CSV, DEMO_CSV_NAME, DEMO_DOC_NAME, founderFeedbackLogLine, IFeedbackReport, onboardingStepLabel, OnboardingStep } from '../common/onboarding.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
@@ -899,6 +899,59 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		templates.sort((a, b) => a.name.localeCompare(b.name));
 		return templates;
+	}
+
+	// The v2 Templates gallery model (plan 48 T2): every template PLUS its real usage count and its parsed
+	// skeleton-thumbnail rows. Additive over `listTemplates` - it walks the folder for templates the same way,
+	// and additionally scans the folder's documents ONCE to tally how many were born from each template (via
+	// the `template: <name>` provenance `parseLivingDoc` reads back as `fromTemplate`). The usage count is thus
+	// real lineage, never a hardcoded N: a template nothing was generated from honestly reports 0. The skeleton
+	// is derived from each template's own parsed doc (pure `templateSkeletonRows`), so the thumbnail literally
+	// shows where its bind slots land. An unreadable/malformed template is skipped, never faked.
+	async listTemplateGallery(): Promise<readonly ITemplateCard[]> {
+		// One document scan to tally lineage: count generated docs per originating template name. Case-folded
+		// so a `template: Weekly Report` provenance matches the "Weekly report" template card regardless of the
+		// author's casing; templates themselves are excluded (a `.template.md` never counts as its own usage).
+		const usage = new Map<string, number>();
+		const docsFound = new Map<string, URI>();
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectDocs(folder.uri, docsFound, 0);
+		}
+		for (const uri of docsFound.values()) {
+			try {
+				const doc = parseLivingDoc((await this._files.readFile(uri)).value.toString());
+				const from = (doc.fromTemplate ?? '').trim().toLowerCase();
+				if (from) { usage.set(from, (usage.get(from) ?? 0) + 1); }
+			} catch (e) {
+				this._log.trace('[livingDocs] template lineage scan skipped', e instanceof Error ? e.message : String(e));
+			}
+		}
+		const templatesFound = new Map<string, URI>();
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectTemplates(folder.uri, templatesFound, 0);
+		}
+		const cards: ITemplateCard[] = [];
+		for (const uri of templatesFound.values()) {
+			try {
+				const doc = parseLivingDoc((await this._files.readFile(uri)).value.toString());
+				if (!doc.isTemplate) { continue; }
+				const name = doc.templateName ?? doc.title;
+				cards.push({
+					uri,
+					name,
+					description: doc.templateDescription ?? '',
+					sources: doc.sources,
+					body: doc.body,
+					bindSlots: countBindSlots(doc.body),
+					usageCount: usage.get(name.trim().toLowerCase()) ?? 0,
+					skeleton: templateSkeletonRows(doc),
+				});
+			} catch (e) {
+				this._log.trace('[livingDocs] template gallery parse skipped', e instanceof Error ? e.message : String(e));
+			}
+		}
+		cards.sort((a, b) => a.name.localeCompare(b.name));
+		return cards;
 	}
 
 	// --- the source registry (plan 29, iter 1): the Knowledge screen's real source library ---

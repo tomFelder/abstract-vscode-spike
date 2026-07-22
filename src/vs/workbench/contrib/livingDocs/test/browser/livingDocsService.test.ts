@@ -1829,6 +1829,34 @@ suite('livingDocs Service', () => {
 		assert.deepStrictEqual(templates, [], 'no templates -> empty list (the screen shows the calm empty state)');
 	});
 
+	// Plan 48 T2: the gallery model carries the real bind-slot count, the parsed skeleton rows, and the honest
+	// usage count from `template: <name>` provenance lineage across the open folder's documents.
+	test('listTemplateGallery reports the real bind-slot count, a parsed skeleton, and honest usage lineage', async () => {
+		const service = createService([], { template: true });
+		// Seed two documents born from the Weekly report template (recorded as `template: <name>` provenance) so
+		// the usage count is REAL lineage, not a hardcoded N. A third doc from a different template must not count.
+		const files = lastFiles!;
+		files.set(URI.file('/ws/Week 24.md').toString(), '---\ntemplate: Weekly report\nsources:\n  - metrics.csv\n---\n\n# Week 24\n\nMRR is [pending](bind:metrics.mrr).\n');
+		files.set(URI.file('/ws/Week 25.md').toString(), '---\ntemplate: weekly report\n---\n\n# Week 25\n');
+		files.set(URI.file('/ws/From Other.md').toString(), '---\ntemplate: Some other template\n---\n\n# From Other\n');
+
+		const gallery = await service.listTemplateGallery();
+		assert.strictEqual(gallery.length, 1, 'the one template is in the gallery');
+		const card = gallery[0];
+		// The template body has two {{slot}} placeholders + one bind link -> 3 bind slots.
+		assert.strictEqual(card.bindSlots, 3, 'the bind-slot meta is the true {{slot}} + bind total');
+		// Case-insensitive lineage: "Weekly report" + "weekly report" both count; the other-template doc does not.
+		assert.strictEqual(card.usageCount, 2, 'the usage count is the real lineage across the folder (2), never fabricated');
+		assert.ok(card.skeleton.length > 0 && card.skeleton.some(r => r.kind === 'slots'), 'the skeleton is derived from the parsed doc, with a slots row where binds occur');
+	});
+
+	test('listTemplateGallery honestly reports used 0× for a template nothing was generated from', async () => {
+		const service = createService([], { template: true });
+		const gallery = await service.listTemplateGallery();
+		assert.strictEqual(gallery.length, 1);
+		assert.strictEqual(gallery[0].usageCount, 0, 'no generated documents -> an honest used 0×');
+	});
+
 	// Plan 29, iter 1: the source registry folds every document's declared sources by identity. Two documents
 	// binding the same CSV must produce ONE metrics.csv row whose fan-in lists both, each with its own keys.
 	test('listSources folds a shared CSV into one row with the two-doc dependency fan-in; api source carries kind api', async () => {

@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countTemplateSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, countTemplateSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -132,6 +132,35 @@ suite('LivingDoc bind-link format', () => {
 		// An unclosed comment (no terminating `-->`) matches nothing, so trailing slots stay counted - the same
 		// lenient behaviour buildTemplateSkeleton relies on.
 		assert.strictEqual(countTemplateSlots('<!-- oops {{slot:still counted}}'), 1);
+	});
+
+	// countBindSlots underpins the v2 card meta "N bind slots" (plan 48 T2.3): every place live data lands -
+	// the `{{slot}}` prompts AND the inline `bind:` links. A template with two slots and two binds is 4.
+	test('countBindSlots totals {{slot}} prompts and inline bind links (the data-bound positions)', () => {
+		const body = '# {{slot:title}}\n\nWeek {{slot:week}}\n\nMRR is [pending](bind:metrics.mrr), up [pending](bind:metrics.mrr.delta).';
+		assert.strictEqual(countBindSlots(body), 4);
+		assert.strictEqual(countBindSlots('Just prose, no binds.'), 0);
+		// Slots inside HTML comments are illustrative (aligns with countTemplateSlots + the skeleton, D28-C).
+		assert.strictEqual(countBindSlots('# {{slot:title}}\n<!-- {{slot:example}} -->\n[x](bind:metrics.mrr)'), 2);
+	});
+
+	// templateSkeletonRows drives the v2 card's 110px skeleton thumbnail (plan 48 T2.2): the rows are derived
+	// from the template's PARSED doc - a heading is a `title` bar, prose is a `prose` bar, and a bound block
+	// emits a `slots` row of accent-tint chips right after it, so the accent bars sit where live data lands.
+	test('templateSkeletonRows derives title/prose/slots rows from the parsed doc, slots where binds occur', () => {
+		const doc = parseLivingDoc('# Weekly Summary\n\nMRR is [pending](bind:metrics.mrr), up [pending](bind:metrics.mrr.delta).\n\nA plain commentary line.');
+		const rows = templateSkeletonRows(doc);
+		assert.deepStrictEqual(rows.map(r => r.kind), ['title', 'prose', 'slots', 'prose'], 'a title, the bound prose block + its two-chip slots row, then the plain prose line');
+		const slotsRow = rows.find(r => r.kind === 'slots');
+		assert.strictEqual(slotsRow?.slots?.length, 2, 'the bound block emits one accent chip per bind (2 here)');
+		// Deterministic: the same doc always yields the same skeleton widths (a stable visual identity).
+		assert.deepStrictEqual(templateSkeletonRows(doc), rows, 'the skeleton is a pure function of the doc');
+	});
+
+	// A near-empty template (no headings, no binds) still gets an honest skeleton, never a blank grey box.
+	test('templateSkeletonRows yields plain prose bars for a template with no headings and no binds', () => {
+		const rows = templateSkeletonRows(parseLivingDoc('Just one plain line of prose.'));
+		assert.ok(rows.length >= 2 && rows.every(r => r.kind === 'prose'), 'a couple of grey prose bars, no empty box');
 	});
 
 	// The Weekly report starter (plan 28): H1 slot, a slot-only subtitle line, a bound Highlights line, and

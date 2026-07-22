@@ -56,6 +56,77 @@ export function countTemplateSlots(body: string): number {
 	return (stripHtmlComments(body).match(SLOT_RE) ?? []).length;
 }
 
+// The template's "bind slots" (plan 48 T2.3): every place live data lands in the finished document -
+// the `{{slot}}` prompts the model fills AND the inline `bind:` links copied through verbatim. Both are
+// counted (a template can carry either or both) so the card's "N bind slots" meta is the honest total of
+// data-bound positions the skeleton thumbnail draws. Pure, so the card meta and the thumbnail agree.
+export function countBindSlots(body: string): number {
+	const clean = stripHtmlComments(body);
+	const slots = (clean.match(SLOT_RE) ?? []).length;
+	const binds = extractBindLinks(clean).length;
+	return slots + binds;
+}
+
+// One row in a template's skeleton thumbnail (plan 48 T2.2). The thumbnail is derived from the template's
+// PARSED doc - never a screenshot or canned art - so it literally shows where live data lands: a `title`
+// row is a heading (a stronger grey bar), a `prose` row is a body line (a lighter grey bar), and a `slots`
+// row marks the bind positions (accent-tint chips) that occur at that point in the document. `widthPct` and
+// each chip's `widthPx` are derived deterministically from the source so the same template always draws the
+// same skeleton (a stable visual identity), and `slots[]` carries one chip per bind slot on that line.
+export interface ITemplateSkeletonRow {
+	readonly kind: 'title' | 'prose' | 'slots';
+	/** For title/prose rows: the bar width as a percentage (10-96) of the thumbnail column. */
+	readonly widthPct?: number;
+	/** For slots rows: the accent-tint chip widths (px), one per bind slot on that line. */
+	readonly slots?: readonly number[];
+}
+
+// A small deterministic width from a string + salt, so a template's skeleton is stable across renders (the
+// same doc always looks the same) but varies line-to-line so it reads like real structure, not a fixed comb.
+function skeletonWidth(seed: string, salt: number, min: number, span: number): number {
+	let hash = salt;
+	for (let i = 0; i < seed.length; i++) { hash = (hash * 31 + seed.charCodeAt(i)) | 0; }
+	return min + (Math.abs(hash) % (span + 1));
+}
+
+// Derive the skeleton-thumbnail rows for a template from its PARSED doc (plan 48 T2.2). Walks the doc's
+// blocks in order: a heading emits a `title` bar; a paragraph/table emits a `prose` bar, and where the block
+// carries bind slots (inline `bind:` links or `{{slot}}` prompts) it also emits a `slots` row of accent-tint
+// chips right after that block - so the accent bars sit exactly where live data will land in the finished
+// document. Bounded to `maxRows` (the 110px thumbnail holds ~6 lines) so a long template still reads calmly;
+// an empty/prose-only template still draws a couple of grey bars rather than an empty box. Pure + tested.
+export function templateSkeletonRows(doc: ILivingDoc, maxRows = 6): ITemplateSkeletonRow[] {
+	const rows: ITemplateSkeletonRow[] = [];
+	const push = (row: ITemplateSkeletonRow) => { if (rows.length < maxRows) { rows.push(row); } };
+	let emittedTitle = false;
+	for (const block of doc.blocks) {
+		if (rows.length >= maxRows) { break; }
+		if (block.type === 'heading') {
+			// The first heading reads as the document title (a wider, stronger bar); deeper headings are
+			// shorter section titles. A block with no readable text is skipped rather than drawn as a stub.
+			const width = block.level === 1 && !emittedTitle ? skeletonWidth(block.id, 1, 46, 22) : skeletonWidth(block.id, 2, 30, 20);
+			emittedTitle = emittedTitle || block.level === 1;
+			push({ kind: 'title', widthPct: width });
+		} else {
+			push({ kind: 'prose', widthPct: skeletonWidth(block.id, 3, 74, 22) });
+		}
+		// Bind slots on this block: one accent-tint chip per inline bind link plus per `{{slot}}` prompt, so a
+		// block that binds two figures shows two accent chips exactly where those figures render.
+		const slotCount = block.binds.length + (stripHtmlComments(block.text).match(SLOT_RE) ?? []).length;
+		if (slotCount > 0) {
+			const chips: number[] = [];
+			for (let i = 0; i < Math.min(slotCount, 3); i++) { chips.push(skeletonWidth(block.id + i, 4, 32, 26)); }
+			push({ kind: 'slots', slots: chips });
+		}
+	}
+	// A template with no headings and no bound blocks (an unusual, near-empty template) still deserves an
+	// honest skeleton: two plain prose bars, so the thumbnail is never a blank grey box.
+	if (rows.length === 0) {
+		rows.push({ kind: 'prose', widthPct: 88 }, { kind: 'prose', widthPct: 72 });
+	}
+	return rows;
+}
+
 // Strip every `{{slot:hint}}` / `{{slot}}` run from a line (leaving the surrounding literal text intact).
 function stripSlots(text: string): string {
 	return text.replace(SLOT_RE, '');

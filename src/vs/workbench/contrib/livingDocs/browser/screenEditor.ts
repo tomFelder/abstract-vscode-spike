@@ -27,7 +27,7 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateInfo, ITidyPlanItem } from '../common/livingDocs.js';
+import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateCard, ITemplateInfo, ITidyPlanItem } from '../common/livingDocs.js';
 import { HeaderPillKind, IAbstractHeaderContent, IAbstractHeaderService } from '../common/abstractHeader.js';
 import { projectHasLivingSurface } from '../common/livingUpgrade.js';
 import { IAnalyticsService } from '../common/analytics.js';
@@ -47,6 +47,17 @@ const ONBOARDING_DEMO_KEY = 'livingDocs.onboardingDemoUri';
 // demoted walkthrough entry point stays hidden across sessions once the user has waved it away.
 const DEMO_CARD_DISMISSED_KEY = 'livingDocs.demoCardDismissed';
 
+// The Templates STARTERS manifest (plan 48 T3), keyed by the starter id the card posts. Each maps to the
+// document NAME the review-safe creation path (`createDocument`) is called with - the "Blank living doc"
+// starter passes no name (decision 56's Untitled-on-first-save escape hatch, a truly empty agent-ready page).
+// A static manifest: these are the doc names, kept as plain English stems so the created file is legible.
+const STARTER_NAMES: Readonly<Record<string, string | undefined>> = {
+	'blank': undefined,
+	'project-brief': 'Project brief',
+	'meeting-notes': 'Meeting notes',
+	'metrics-digest': 'Metrics digest',
+};
+
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
 	knScope: 'org' | 'project';
@@ -62,6 +73,9 @@ interface IScreenEditorState {
 	// Templates: the `*.template.md` files discovered in the open folder (plan 28); fetched async on open and
 	// re-fetched on onDidChange so a New Template (or one edited on disk) shows without reopening the screen.
 	templates?: readonly ITemplateInfo[];
+	// Templates (plan 48 T2): the v2 gallery model - each discovered template plus its real usage count and its
+	// parsed skeleton-thumbnail rows. Fetched alongside `templates` (which still seeds the birth sheets).
+	templateCards?: readonly ITemplateCard[];
 	// Knowledge (plan 29): the project's real source registry, fetched async on open + re-fetched on change
 	// (so an add/detach/source-edit re-projects); the selected source drives the detail drawer; the folder's
 	// data files feed the Add-source picker.
@@ -238,11 +252,12 @@ export class ScreenEditor extends EditorPane {
 		// Templates reflects the open folder's `*.template.md` files (plan 28) plus its documents (the
 		// from-examples wizard's example picker, F18): fetch before first render.
 		if (this._screen === 'templates') {
-			const [templates, docFiles] = await Promise.all([
+			const [templates, templateCards, docFiles] = await Promise.all([
 				this._livingDocs.listTemplates(),
+				this._livingDocs.listTemplateGallery(),
 				this._livingDocs.getFolderDocFiles(),
 			]);
-			this._state = { ...this._state, templates, docFiles };
+			this._state = { ...this._state, templates, templateCards, docFiles };
 		}
 		// Knowledge reflects the project's real source registry (plan 29): fetch the sources, the documents
 		// (Add-source target list) and the folder's data files (the picker) before the first render.
@@ -319,11 +334,12 @@ export class ScreenEditor extends EditorPane {
 	}
 
 	private async _refreshTemplates(): Promise<void> {
-		const [templates, docFiles] = await Promise.all([
+		const [templates, templateCards, docFiles] = await Promise.all([
 			this._livingDocs.listTemplates(),
+			this._livingDocs.listTemplateGallery(),
 			this._livingDocs.getFolderDocFiles(),
 		]);
-		this._state = { ...this._state, templates, docFiles };
+		this._state = { ...this._state, templates, templateCards, docFiles };
 		this._render();
 	}
 
@@ -782,6 +798,12 @@ export class ScreenEditor extends EditorPane {
 			// service fires onDidChange so the card grid refreshes.
 			case 'newTemplate':
 				void this._livingDocs.createTemplate();
+				break;
+			// Starters (plan 48 T3.2): a built-in seed creates its named document through the EXISTING
+			// review-safe creation path (a blank titled `.md`, opened for editing) - no fabricated prose is
+			// written for the user. The starter id maps to its document name (static manifest).
+			case 'newStarter':
+				if (message.arg) { void this._livingDocs.createDocument(STARTER_NAMES[message.arg]); }
 				break;
 			// Use Template (primary, plan 28 iter 3): the D28-B generate sheet posts the template URI + the
 			// document name + an optional note. Generation writes the skeleton and drives the review engine.

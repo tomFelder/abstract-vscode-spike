@@ -14,7 +14,7 @@
 // HTML entities to satisfy the source-hygiene rule.
 
 import { IAgentDef, IAgentRun, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary } from '../common/livingDocsModel.js';
-import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAnswer, ISourceInfo, ITemplateInfo } from '../common/livingDocs.js';
+import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAnswer, ISourceInfo, ITemplateCard, ITemplateInfo } from '../common/livingDocs.js';
 import { IAwayFeed } from '../common/projectHomeFeed.js';
 import { OnboardingStep } from '../common/onboarding.js';
 import { renderHome } from './screenRenderHome.js';
@@ -173,6 +173,13 @@ export interface IScreenState {
 	readonly docs?: readonly ILivingDocSummary[];
 	/** Templates: the `*.template.md` files discovered in the open folder (plan 28), driving the card grid. */
 	readonly templates?: readonly ITemplateInfo[];
+	/**
+	 * Templates (plan 48 T2): the v2 gallery model - each discovered template plus its real usage count and
+	 * its parsed skeleton-thumbnail rows. Additive over `templates` (which still seeds the birth sheets): the
+	 * v2 card grid renders from this so the "N bind slots · used N×" meta and the skeleton are real, never
+	 * fabricated. Absent/empty renders the calm empty state.
+	 */
+	readonly templateCards?: readonly ITemplateCard[];
 	/**
 	 * Home: recently-opened folders from the workbench history (D22-A). Each is shown as an
 	 * additional tile in ALL PROJECTS with name + avatar only - counts are deferred until a
@@ -436,6 +443,15 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
  * New-document tile shifts to the accent ink + accent border. */
 .doc-tile:hover{background:#F4F5FD;border-color:#E0E5FB}
 .doc-newtile:hover{color:#4650B8;border-color:#9AA2E0}
+/* Templates gallery (plan 48 T2): a template card lifts on hover (accent border + a lifted shadow); the
+ * dashed Save-as-template tile shifts to the accent ink; a starter card lifts to accent-tint. */
+.tpl-card:hover{border-color:#9AA2E0;box-shadow:0 8px 24px -12px rgba(20,22,28,.2)}
+.tpl-newtile:hover{color:#4650B8;border-color:#9AA2E0}
+.tpl-starter:hover{border-color:#E0E5FB;background:#F4F5FD}
+/* The 240px live filter field in the Templates title row (T1.1). */
+.tpl-filter{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:9px;border:1px solid #E9EAEE;background:#FBFCFD;width:240px}
+.tpl-filter input{flex:1;min-width:0;border:none;background:none;outline:none;font:400 12.5px/1 system-ui;color:#1A1C20}
+.tpl-filter input::placeholder{color:#A3A8B2}
 </style>`;
 
 // Generic message bridge: any element with data-msg posts {type:<msg>, arg:<data-arg>} to the host.
@@ -599,6 +615,23 @@ for (const el of document.querySelectorAll('[data-copy-link]')) {
 		const link = el.getAttribute('data-link') || '';
 		const done = () => { const prev = el.textContent; el.textContent = 'Copied'; setTimeout(() => { el.textContent = prev; }, 1400); };
 		if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(link).then(done, done); } else { done(); }
+	});
+}
+// Templates live filter (plan 48 T1.1): typing in the title-row field narrows YOUR TEMPLATES to the cards
+// whose searchable text (name + description, held in data-filter) contains the query. Purely client-side (no
+// host round-trip, no flash); an empty query shows every card. A "no matches" line is toggled when the query
+// hides them all, so the grid never reads as an empty (broken) surface.
+for (const el of document.querySelectorAll('[data-tpl-filter]')) {
+	el.addEventListener('input', () => {
+		const q = el.value.trim().toLowerCase();
+		let shown = 0;
+		for (const card of document.querySelectorAll('[data-filter]')) {
+			const match = !q || (card.getAttribute('data-filter') || '').indexOf(q) >= 0;
+			card.style.display = match ? '' : 'none';
+			if (match) { shown++; }
+		}
+		const none = document.querySelector('[data-tpl-nomatch]');
+		if (none) { none.style.display = shown === 0 ? 'block' : 'none'; }
 	});
 }`;
 

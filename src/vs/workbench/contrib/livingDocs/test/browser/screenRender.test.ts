@@ -6,7 +6,8 @@
 import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { ILivingDocSummary, ISourceInfo, ITemplateInfo } from '../../common/livingDocs.js';
+import { ILivingDocSummary, ISourceInfo, ITemplateCard, ITemplateInfo } from '../../common/livingDocs.js';
+import { countBindSlots, parseLivingDoc, templateSkeletonRows } from '../../common/livingDocMarkdown.js';
 import { IAgentDef, IAgentRun, ISkillRunSummary, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 import { IScreenState, renderScreenHtml, ScreenId } from '../../browser/screenRender.js';
 
@@ -244,73 +245,91 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!/WHILE YOU WERE AWAY/.test(html) && !/ASK THIS PROJECT/.test(html) && !/failed on/.test(html), 'the pre-v2 dashboard surfaces are gone from v2 Home');
 	});
 
-	// --- Templates (plan 28): the real template library, driven by listTemplates() ---
+	// --- Templates v2 (plan 48 T1-T3): the pattern gallery, driven by listTemplateGallery() ---
 
 	function template(name: string, description: string, sources: readonly string[], body: string): ITemplateInfo {
 		return { uri: URI.file(`/ws/templates/${name}.template.md`), name, description, sources, body };
 	}
 
-	test('templates screen lists real cards with true slot/source counts and Use/Edit/New wired', () => {
-		const templates = [
-			template('Weekly report', 'A weekly operating summary.', ['metrics.csv'], '# {{slot:title}}\n\nWeek {{slot:week}}\n\nMRR is [pending](bind:metrics.mrr).'),
-			template('Client update', 'A warm progress note.', [], '# {{slot:client}}\n\nProgress.'),
-		];
-		const html = renderScreenHtml('templates', { ...state, templates });
+	// An ITemplateCard for the v2 gallery: the ITemplateInfo plus the real bind-slot count, usage lineage and
+	// the parsed skeleton rows (derived here from the body so the fixture matches the real service projection).
+	function templateCard(name: string, description: string, sources: readonly string[], body: string, usageCount: number): ITemplateCard {
+		const info = template(name, description, sources, body);
+		return { ...info, bindSlots: countBindSlots(body), usageCount, skeleton: templateSkeletonRows(parseLivingDoc('---\ntemplate: true\n---\n\n' + body)) };
+	}
 
-		assert.ok(html.includes('Weekly report') && html.includes('Client update'), 'lists every discovered template by name');
-		assert.ok(html.includes('A weekly operating summary.'), 'shows the authored description');
-		// True counts: Weekly report has 2 slots + 1 source; Client update has 1 slot + 0 sources.
-		assert.ok(html.includes('2 slots &middot; 1 source'), 'Weekly report shows the true 2 slots / 1 source count');
-		assert.ok(html.includes('1 slot &middot; 0 sources'), 'Client update shows the true 1 slot / 0 sources count');
-		// Actions wired to the real template uri. Use Template opens the D28-B generate sheet and posts the
-		// generateFromTemplate message (plan 28, iter 3); Edit opens the file; New Template is present.
-		assert.strictEqual(html.split('data-msg="generateFromTemplate"').length - 1, 3, 'each card wires Use Template to generate, plus the sheet submit');
-		assert.strictEqual(html.split('data-sheet-open="generate"').length - 1, 2, 'each card opens the generate sheet');
-		assert.strictEqual(html.split('data-msg="editTemplate"').length - 1, 2, 'each card has an Edit action');
-		assert.ok(html.includes('data-arg="' + esc(templates[0].uri.toString()) + '"'), 'the action carries the real template uri');
-		assert.ok(/data-msg="newTemplate"/.test(html), 'New Template is wired');
-		// The generate sheet itself: a required document-name field and a Generate Draft submit (D28-B).
-		assert.ok(html.includes('id="sheet-generate"') && html.includes('Generate Draft'), 'the calm generate sheet is present with a Generate Draft action');
-		assert.ok(/data-field="name"/.test(html) && /data-field="note"/.test(html), 'the sheet has a name field and an optional note field');
+	test('templates v2: the title row carries a live filter field and the exact sub-line (T1.1 / T1.2)', () => {
+		const html = renderScreenHtml('templates', { ...state, templateCards: [templateCard('Weekly Summary', 'Operating recap · expects a metrics CSV', ['metrics.csv'], '# {{slot:title}}\n\nMRR is [pending](bind:metrics.mrr).', 3)] });
+		assert.ok(/data-tpl-filter/.test(html), 'the title row carries a live filter field');
+		assert.ok(html.includes('Filter templates'), 'the filter field names its purpose');
+		assert.ok(html.includes('Start a living document from a pattern. Sources bind after creation.'), 'the exact sub-line is present (T1.2)');
+		assert.ok(/YOUR TEMPLATES/.test(html) && /STARTERS/.test(html), 'the two section labels are present');
 	});
 
-	test('templates screen shows a calm empty state with Create your first template, no fake preview', () => {
-		const html = renderScreenHtml('templates', { ...state, templates: [] });
+	test('templates v2: cards render the real bind-slot + usage meta and a skeleton from the parsed doc (T2.2 / T2.3)', () => {
+		const cards = [
+			templateCard('Weekly Summary', 'Operating recap · expects a metrics CSV', ['metrics.csv'], '# {{slot:title}}\n\nMRR is [pending](bind:metrics.mrr), up [pending](bind:metrics.mrr.delta).', 12),
+			templateCard('Board Note', 'Monthly narrative for the board', [], '# {{slot:client}}\n\nProgress.', 0),
+		];
+		const html = renderScreenHtml('templates', { ...state, templateCards: cards });
+		assert.ok(html.includes('Weekly Summary') && html.includes('Board Note'), 'lists every template by name');
+		assert.ok(html.includes('Operating recap'), 'shows the authored description naming the expected source');
+		// Real meta: Weekly Summary has 3 bind slots (1 slot + 2 binds), used 12×; Board Note is honest "used 0×".
+		assert.ok(html.includes('3 bind slots &middot; used 12&times;'), 'the meta reads the true bind-slot count and real usage');
+		assert.ok(html.includes('used 0&times;'), 'a template nothing was generated from honestly reports used 0×');
+		assert.ok(html.includes('LWD'), 'each card carries the LWD chip');
+		// The skeleton thumbnail is rendered from the parsed doc: accent-tint (#E0E5FB) bars mark the bind slots.
+		assert.ok(html.includes('#E0E5FB'), 'the skeleton draws accent-tint bars where bind slots occur');
+		assert.ok(html.includes('#F6F7F9') && html.includes('#D5D8DE'), 'the skeleton canvas + grey title bars are drawn from the parsed doc');
+		// Use is wired to the generate sheet (48-c upgrades the flow); the dashed Save-as-template tile closes the grid.
+		assert.strictEqual(html.split('data-msg="generateFromTemplate"').length - 1, 3, 'each card wires Use to generate, plus the sheet submit');
+		assert.ok(html.includes('Save current doc as template'), 'the dashed Save-as-template tile closes the grid');
+		assert.ok(!/data-msg="editTemplate"/.test(html), 'the v2 card drops the Edit action (Use is the single primary)');
+	});
+
+	test('templates v2: the STARTERS row offers four built-ins, each creating through the review-safe path (T3)', () => {
+		const html = renderScreenHtml('templates', { ...state, templateCards: [templateCard('T', 'd', [], 'body {{slot:x}}', 0)] });
+		assert.ok(html.includes('Blank living doc') && html.includes('Project brief') && html.includes('Meeting notes') && html.includes('Metrics digest'), 'the four starters are present');
+		assert.strictEqual(html.split('data-msg="newStarter"').length - 1, 4, 'each starter creates through the newStarter path');
+		assert.ok(/data-msg="newStarter"[^>]*data-arg="blank"/.test(html) && /data-msg="newStarter"[^>]*data-arg="metrics-digest"/.test(html), 'each starter carries its manifest id');
+	});
+
+	test('templates v2: the empty state is calm, keeps the STARTERS row, and has no fake preview', () => {
+		const html = renderScreenHtml('templates', { ...state, templateCards: [] });
 		assert.ok(/No templates yet/i.test(html), 'shows the empty-state line');
 		assert.ok(/data-msg="newTemplate"/.test(html) && html.includes('Create your first template'), 'offers to create the first template');
-		// The old mockup content is gone (no fabricated draft / resolved-slots preview).
+		assert.ok(/STARTERS/.test(html) && html.includes('Blank living doc'), 'the four starters are still a way to begin');
+		// No fabricated draft / resolved-slots preview.
 		assert.ok(!html.includes('Weekly Operating Summary') && !html.includes('ALL SLOTS RESOLVED'), 'no fabricated draft preview');
 	});
 
 	// --- F18 from-examples template wizard (journey 1x): a picker over the real project documents ---
 	test('templates screen offers the from-examples wizard: a picker over the real documents, keeping the blank editor', () => {
-		const templates = [template('Weekly report', 'A weekly operating summary.', ['metrics.csv'], '# {{slot:title}}\n\nMRR.')];
-		const html = renderScreenHtml('templates', { ...state, templates, docFiles: ['Board Note.md', 'Team Notes.md', 'Weekly Summary.md', 'market-research.md'] });
-		assert.ok(/data-sheet-open="fromexamples"/.test(html), 'a New From Examples action opens the wizard');
+		const cards = [templateCard('Weekly report', 'A weekly operating summary.', ['metrics.csv'], '# {{slot:title}}\n\nMRR.', 0)];
+		const html = renderScreenHtml('templates', { ...state, templateCards: cards, docFiles: ['Board Note.md', 'Team Notes.md', 'Weekly Summary.md', 'market-research.md'] });
+		assert.ok(/data-sheet-open="fromexamples"/.test(html), 'a New From Examples action opens the wizard (the dashed Save-as-template tile)');
 		assert.ok(html.includes('id="sheet-fromexamples"'), 'the from-examples picker sheet is present');
 		assert.ok(html.includes('New template from examples'), 'the sheet names the wizard');
 		assert.ok(html.includes('data-pick="Board Note.md"') && html.includes('data-pick="market-research.md"'), 'every real document is a pick');
 		assert.ok(/data-msg="newTemplateFromExamples"/.test(html), 'the wizard submits to newTemplateFromExamples');
-		// The manual editor stays, labelled as editing/blank - not the wizard (spec 1x).
-		assert.ok(/data-msg="newTemplate"/.test(html) && html.includes('New Blank Template'), 'the manual blank editor is retained and labelled as such');
 	});
 
 	test('templates empty state leads with the from-examples wizard when there are documents to learn from', () => {
-		const html = renderScreenHtml('templates', { ...state, templates: [], docFiles: ['a.md', 'b.md', 'c.md'] });
+		const html = renderScreenHtml('templates', { ...state, templateCards: [], docFiles: ['a.md', 'b.md', 'c.md'] });
 		assert.ok(/data-sheet-open="fromexamples"/.test(html), 'the empty state offers New from examples');
 		assert.ok(html.includes('id="sheet-fromexamples"'), 'the wizard sheet is present in the empty state');
 		assert.ok(/data-msg="newTemplate"/.test(html) && html.includes('New blank template'), 'the blank editor is still offered');
 	});
 
 	test('templates empty state falls back to the blank editor when there are no documents to learn from', () => {
-		const html = renderScreenHtml('templates', { ...state, templates: [], docFiles: [] });
+		const html = renderScreenHtml('templates', { ...state, templateCards: [], docFiles: [] });
 		assert.ok(!/data-sheet-open="fromexamples"/.test(html), 'no wizard entry without documents to learn from');
 		assert.ok(html.includes('Create your first template'), 'still offers to author a template by hand');
 	});
 
 	test('templates screen carries no "Soon" labels', () => {
-		const withTemplates = renderScreenHtml('templates', { ...state, templates: [template('T', 'd', [], 'body {{slot:x}}')] });
-		const empty = renderScreenHtml('templates', { ...state, templates: [] });
+		const withTemplates = renderScreenHtml('templates', { ...state, templateCards: [templateCard('T', 'd', [], 'body {{slot:x}}', 0)] });
+		const empty = renderScreenHtml('templates', { ...state, templateCards: [] });
 		assert.ok(!/\bSoon\b/i.test(withTemplates) && !/\bSoon\b/i.test(empty), 'zero "Soon" labels on the Templates screen');
 	});
 
