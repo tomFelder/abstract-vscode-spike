@@ -134,6 +134,13 @@ export class LivingDocEditor extends EditorPane {
 				this._runProto(applyRevealHeading(this._proto, e.headingIndex));
 			}
 		}));
+		// Tree menu "Present" (pin 6): the context menu opened this document and asks it to open its Present
+		// flow - the same modal the header's Present action drives. Navigate-only, mirroring revealHeading.
+		this._inputDisposables.add(this._livingDocs.onDidRequestPresent(e => {
+			if (this._resource && e.docId === this._resource.toString()) {
+				this._openPresent();
+			}
+		}));
 		await this._livingDocs.loadDocument(input.resource);
 		this._render();
 		// The created/updated times come from the file stat (async); fetch after the first render and re-render

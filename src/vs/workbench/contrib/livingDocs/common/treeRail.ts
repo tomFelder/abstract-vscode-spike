@@ -42,6 +42,9 @@ export interface ITreeRailItem {
 	/** For an `unsupported` row we CAN convert (a `.docx`, issue #129): the row shows an "Import as document"
 	 * door instead of a dead reason. Unset (falsy) for a refused format (.doc, password-protected, ...). */
 	readonly importable?: boolean;
+	/** True when a template-born document still has no source bound (PN.1): the doc row shows the "bind
+	 * sources" nudge, inviting the user to connect its data. Clears once a source binds (the doc goes living). */
+	readonly needsSourceBinding?: boolean;
 }
 
 export interface ITreeRailFolder {
@@ -70,6 +73,9 @@ export interface ITreeRailDocInput {
 	readonly stale?: boolean;
 	/** True when a whole-project fan-out run failed to reach the model for this document -> red band. */
 	readonly fanoutFailed?: boolean;
+	/** True when a template-born document still has no source bound (PN.1): the doc row shows the "bind
+	 * sources" nudge until a source binds. Defaults to false when the caller omits it. */
+	readonly needsSourceBinding?: boolean;
 }
 
 // A non-Markdown file discovered in the workspace, classified for the Files tab: a `source` (a CSV / txt /
@@ -179,7 +185,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 			stale: d.stale ?? false,
 			fanoutFailed: d.fanoutFailed ?? false,
 		});
-		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot };
+		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot, needsSourceBinding: d.needsSourceBinding ?? false };
 		const segments = (d.folder ?? '').split('/').filter(s => s.length > 0);
 		if (!segments.length) { rootItems.push(item); continue; }
 		let level = roots;
@@ -349,7 +355,7 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 	// also appears in Reports keeps two collision-free ids. The on-disk hierarchy below is untouched.
 	const docItemByResource = new Map<string, ITreeRailItem>();
 	for (const d of docs) {
-		docItemByResource.set(d.resource.toString(), { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot: docRailDot({ pendingCount: d.pendingCount, unseenAgentEdits: d.unseenAgentEdits ?? 0, relinkCount: d.relinkCount ?? 0, stale: d.stale ?? false, fanoutFailed: d.fanoutFailed ?? false }) });
+		docItemByResource.set(d.resource.toString(), { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot: docRailDot({ pendingCount: d.pendingCount, unseenAgentEdits: d.unseenAgentEdits ?? 0, relinkCount: d.relinkCount ?? 0, stale: d.stale ?? false, fanoutFailed: d.fanoutFailed ?? false }), needsSourceBinding: d.needsSourceBinding ?? false });
 	}
 	const recentItems: ITreeRailItem[] = [];
 	const seenRecent = new Set<string>();

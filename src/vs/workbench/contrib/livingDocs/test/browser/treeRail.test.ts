@@ -92,6 +92,7 @@ suite('treeRail', () => {
 		const renderer = new TreeRailLeafRenderer({
 			renderLeafActions: () => disposables.add(new DisposableStore()),
 			setupHover: (): IDisposable => ({ dispose: () => { } }),
+			renderRenameInput: () => undefined,
 		});
 
 		// Real leaf nodes from the real builder: a living doc (chip), a living doc with pending approvals (pill wins),

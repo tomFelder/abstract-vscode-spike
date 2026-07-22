@@ -2868,6 +2868,100 @@ suite('livingDocs Service', () => {
 		assert.ok(!plan.some(p => p.fromLabel === 'metrics.csv'), 'the bound metrics.csv is NOT proposed (it lives where its lock points)');
 	});
 
+	// --- pin 6 file ops: Duplicate + Move to… (P6.4), through the additive service methods (#225) ---
+
+	test('duplicateFile copies the document AND its lock sidecar under a distinct name, and opens the copy', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // living doc -> a lock sidecar exists to be copied
+		const copy = await service.duplicateFile(WEEKLY);
+
+		const copyUri = URI.file('/ws/Weekly Summary copy.md');
+		assert.deepStrictEqual(
+			{
+				returned: copy?.toString(),
+				copyExists: lastFiles!.has(copyUri.toString()),
+				originalKept: lastFiles!.has(WEEKLY.toString()),
+				copySidecar: lastFiles!.has(URI.file('/ws/Weekly Summary copy.lock.json').toString()),
+				sameBody: lastFiles!.get(copyUri.toString()) === lastFiles!.get(WEEKLY.toString()),
+			},
+			{ returned: copyUri.toString(), copyExists: true, originalKept: true, copySidecar: true, sameBody: true },
+			'the copy + its sidecar land under a distinct name; the original is untouched; the copy is a verbatim clone'
+		);
+	});
+
+	test('duplicateFile picks the next free name when the first copy already exists', async () => {
+		const service = createService();
+		lastFiles!.set(URI.file('/ws/Weekly Summary copy.md').toString(), '# taken\n');
+		await service.duplicateFile(WEEKLY);
+		assert.ok(lastFiles!.has(URI.file('/ws/Weekly Summary copy 2.md').toString()), 'the second copy uses the " copy 2" suffix');
+	});
+
+	test('moveFile carries the document + sidecar into the target folder and re-points every dependent, with an Undo that restores both', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // Weekly binds metrics.csv; persists its lock
+
+		// Move the bound SOURCE into data/ so the re-pointing of the dependent (Weekly) is observable.
+		await service.moveFile(URI.file('/ws/metrics.csv'), URI.file('/ws/data'));
+
+		assert.ok(lastFiles!.has(URI.file('/ws/data/metrics.csv').toString()), 'the CSV moved into data/');
+		assert.strictEqual(lastFiles!.has(URI.file('/ws/metrics.csv').toString()), false, 'the original CSV is gone');
+		assert.match(lastFiles!.get(WEEKLY.toString())!, /data\/metrics\.csv/, 'the dependent frontmatter source is re-pointed');
+		assert.match(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!, /data\/metrics\.csv/, 'the dependent lock binding source is re-pointed');
+
+		const toast = lastNotifications.find(n => n.message === 'Moved "metrics.csv".');
+		assert.ok(toast?.actions?.primary?.[0], 'a sticky Undo toast is raised');
+		await toast!.actions!.primary![0].run();
+		assert.ok(lastFiles!.has(URI.file('/ws/metrics.csv').toString()), 'Undo brings the CSV back to the root');
+		assert.strictEqual(lastFiles!.has(URI.file('/ws/data/metrics.csv').toString()), false, 'no moved copy lingers after Undo');
+		assert.match(lastFiles!.get(WEEKLY.toString())!, /- metrics\.csv/, 'Undo restores the dependent frontmatter source');
+	});
+
+	test('moveFile refuses a clashing destination and never half-applies', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/data/Weekly Summary.md').toString(), 'PRE-EXISTING');
+
+		await service.moveFile(WEEKLY, URI.file('/ws/data'));
+
+		assert.deepStrictEqual(
+			{ stillThere: lastFiles!.has(WEEKLY.toString()), clashKept: lastFiles!.get(URI.file('/ws/data/Weekly Summary.md').toString()), moved: lastNotifications.some(n => /Moved/.test(n.message)) },
+			{ stillThere: true, clashKept: 'PRE-EXISTING', moved: false },
+			'nothing moved, the clashing file is untouched, and no success toast is raised'
+		);
+		assert.ok(lastNotifications.some(n => /a file with that name already exists in that folder/.test(n.message)), 'the clash is named');
+	});
+
+	test('renaming a titled document rewrites its own title frontmatter to follow the new name (silent-rename, P6.3), but a plain H1 doc gains no injected title', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY); // WEEKLY declares `title: Weekly Operating Summary`
+		await service.loadDocument(README); // README is a plain H1 doc with NO frontmatter title
+
+		await service.renameFile(WEEKLY, 'Board Summary');
+		await service.renameFile(README, 'Board Notes');
+
+		const weekly = lastFiles!.get(URI.file('/ws/Board Summary.md').toString())!;
+		const readme = lastFiles!.get(URI.file('/ws/Board Notes.md').toString())!;
+		assert.deepStrictEqual(
+			{ titledFollows: /title:\s*Board Summary/.test(weekly), plainStaysPlain: /^---/.test(readme.trimStart()) },
+			{ titledFollows: true, plainStaysPlain: false },
+			'the titled doc\'s frontmatter title follows the rename; the plain doc never gains an injected title block'
+		);
+	});
+
+	test('renaming a document born from a template clears its needsSourceBinding nudge only once a source binds (PN.1)', async () => {
+		const service = createService();
+		// A template-born doc with NO source bound reports the nudge; binding a source clears it.
+		const fromTemplate = URI.file('/ws/From Template.md');
+		lastFiles!.set(fromTemplate.toString(), ['---', 'title: From Template', 'template: Weekly report', '---', '', '# From Template', '', 'Body.', ''].join('\n'));
+		const before = (await service.listDocuments()).find(d => d.resource.toString() === fromTemplate.toString());
+		assert.strictEqual(before?.needsSourceBinding, true, 'a template-born doc with no source bound reports the nudge');
+
+		await service.loadDocument(fromTemplate); // the doc is open when the user binds a source in the app
+		await service.addSource(fromTemplate, 'metrics.csv');
+		const after = (await service.listDocuments()).find(d => d.resource.toString() === fromTemplate.toString());
+		assert.strictEqual(after?.needsSourceBinding, false, 'the nudge clears once a source binds (the doc is now living)');
+	});
+
 	// --- spreadsheets as CSV sources + PDF as read-only context (issue #131, doc 22 §4) ---
 
 	test('useXlsxAsSource extracts each sheet to data/<workbook>/<sheet>.csv, writes the manifest, and names limitations', async () => {

@@ -160,6 +160,13 @@ export interface ILivingDocSummary {
 	readonly stale: boolean;
 	/** True when a whole-project fan-out run failed to reach the model for this document -> red band. */
 	readonly fanoutFailed: boolean;
+	/**
+	 * True when a document born from a template still has no source bound (`fromTemplate && !isLiving`): the
+	 * "bind sources" nudge on its tree row (PN.1) invites the user to connect its data. Clears the moment a
+	 * source is bound (the document becomes living). Routed cross-lane from 48-c (#233) - Use duplicates a
+	 * template with binds emptied to slots, and the new doc's row carries this nudge until a source binds.
+	 */
+	readonly needsSourceBinding: boolean;
 }
 
 /**
@@ -590,6 +597,14 @@ export interface ILivingDocsService {
 	readonly onDidRequestChatAttach: Event<string>;
 
 	/**
+	 * Fires when a document is asked to open its Present flow (pin 6's "Present" menu item). The argument is
+	 * the document's id; the editor showing THAT document opens its Present modal (the same flow the header's
+	 * Present action drives). The caller opens the document first, so the request lands on a live editor.
+	 * Navigate-only, mirroring `onDidRequestRevealHeading` - it never mutates the document.
+	 */
+	readonly onDidRequestPresent: Event<{ readonly docId: string }>;
+
+	/**
 	 * Fires when the review rail's own calm collapse control (the header chevron) is activated. The
 	 * RailVisibilityContribution listens: it hides the auxiliary-bar part AND records the user's manual
 	 * `collapsed` choice so the quiet shell is restored and remembered across the next entry / restart.
@@ -612,6 +627,13 @@ export interface ILivingDocsService {
 
 	/** Ask the editor showing this document to scroll to the heading at `headingIndex` (Outline tab, #181). */
 	revealHeading(resource: URI, headingIndex: number): void;
+
+	/**
+	 * Open a document and trigger its Present flow (pin 6's "Present" menu item). Opens the document (so the
+	 * editor is live), then fires `onDidRequestPresent` for that document; the editor showing it opens the same
+	 * Present modal the header's Present action drives. No new present logic - it routes to the existing flow.
+	 */
+	requestPresent(resource: URI): Promise<void>;
 
 	// --- model access: provider picker + survey (plan 35 iter 4) ---
 	/**
@@ -903,6 +925,23 @@ export interface ILivingDocsService {
 
 	/** Attach a file to the active document's chat as an `@mention` (docs 20 section 1d, the 1m entry). */
 	attachToChat(resource: URI): void;
+
+	/**
+	 * Duplicate a document AND its `.lock.json` sidecar under a distinct, non-colliding name (pin 6 / P6.4).
+	 * The copy carries the same bound provenance (its sidecar is copied verbatim), so it opens as a living
+	 * document straight away. Opens the new copy. Returns the new document's resource, or undefined on failure.
+	 * The new document has no dependents, so nothing needs re-pointing (unlike `moveFile`).
+	 */
+	duplicateFile(resource: URI): Promise<URI | undefined>;
+
+	/**
+	 * Move a document AND its `.lock.json` sidecar together into another folder (pin 6 / P6.4), re-pointing
+	 * every dependent document's provenance references (frontmatter `sources:`/`context:` + lock source paths)
+	 * so bindings survive the move - the same atomic, re-pointing machinery `applyTidyMoves` uses, for one file
+	 * to a chosen destination folder. `targetFolder` is the destination directory; the file keeps its name. A
+	 * clashing target is refused with a named error (nothing half-applies). Shows an Undo toast on success.
+	 */
+	moveFile(resource: URI, targetFolder: URI): Promise<void>;
 
 	// --- the Tidy verb (doc 22 section 5): propose folder-convention moves through the review grammar ---
 
