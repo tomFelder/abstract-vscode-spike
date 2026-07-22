@@ -281,9 +281,12 @@ suite('livingDocs screenRender', () => {
 		// The skeleton thumbnail is rendered from the parsed doc: accent-tint (#E0E5FB) bars mark the bind slots.
 		assert.ok(html.includes('#E0E5FB'), 'the skeleton draws accent-tint bars where bind slots occur');
 		assert.ok(html.includes('#F6F7F9') && html.includes('#D5D8DE'), 'the skeleton canvas + grey title bars are drawn from the parsed doc');
-		// Use is wired to the generate sheet (48-c upgrades the flow); the dashed Save-as-template tile closes the grid.
-		assert.strictEqual(html.split('data-msg="generateFromTemplate"').length - 1, 3, 'each card wires Use to generate, plus the sheet submit');
-		assert.ok(html.includes('Save current doc as template'), 'the dashed Save-as-template tile closes the grid');
+		// Use duplicates the template into the folder with binds emptied to slots (plan 48 T2.4): each card wires
+		// Use to the direct useTemplate flow (no generate sheet), one per card.
+		assert.strictEqual(html.split('data-msg="useTemplate"').length - 1, 2, 'each card wires Use to the duplicate-into-folder flow');
+		assert.ok(!/data-msg="generateFromTemplate"/.test(html), 'the v2 Use no longer opens the generate sheet');
+		// The dashed tile saves the ACTIVE document as a template (T2.5), not the old New-template door.
+		assert.ok(html.includes('Save current doc as template') && /data-msg="saveAsTemplate"/.test(html), 'the dashed tile writes the active doc as a template');
 		assert.ok(!/data-msg="editTemplate"/.test(html), 'the v2 card drops the Edit action (Use is the single primary)');
 	});
 
@@ -303,15 +306,14 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('Weekly Operating Summary') && !html.includes('ALL SLOTS RESOLVED'), 'no fabricated draft preview');
 	});
 
-	// --- F18 from-examples template wizard (journey 1x): a picker over the real project documents ---
-	test('templates screen offers the from-examples wizard: a picker over the real documents, keeping the blank editor', () => {
+	// --- plan 48 T2.5: the populated grid's dashed tile saves the ACTIVE document as a template ---
+	// The from-examples wizard (F18) moved to the empty state (tested below); a populated grid leads with the
+	// Save-current-doc-as-template door, not the from-examples wizard.
+	test('templates populated grid: the dashed tile saves the active doc as a template, no from-examples wizard on the grid', () => {
 		const cards = [templateCard('Weekly report', 'A weekly operating summary.', ['metrics.csv'], '# {{slot:title}}\n\nMRR.', 0)];
 		const html = renderScreenHtml('templates', { ...state, templateCards: cards, docFiles: ['Board Note.md', 'Team Notes.md', 'Weekly Summary.md', 'market-research.md'] });
-		assert.ok(/data-sheet-open="fromexamples"/.test(html), 'a New From Examples action opens the wizard (the dashed Save-as-template tile)');
-		assert.ok(html.includes('id="sheet-fromexamples"'), 'the from-examples picker sheet is present');
-		assert.ok(html.includes('New template from examples'), 'the sheet names the wizard');
-		assert.ok(html.includes('data-pick="Board Note.md"') && html.includes('data-pick="market-research.md"'), 'every real document is a pick');
-		assert.ok(/data-msg="newTemplateFromExamples"/.test(html), 'the wizard submits to newTemplateFromExamples');
+		assert.ok(html.includes('Save current doc as template') && /data-msg="saveAsTemplate"/.test(html), 'the dashed tile writes the active doc as a template');
+		assert.ok(!/data-sheet-open="fromexamples"/.test(html) && !html.includes('id="sheet-fromexamples"'), 'the from-examples wizard is not mounted on the populated grid (it lives in the empty state)');
 	});
 
 	test('templates empty state leads with the from-examples wizard when there are documents to learn from', () => {

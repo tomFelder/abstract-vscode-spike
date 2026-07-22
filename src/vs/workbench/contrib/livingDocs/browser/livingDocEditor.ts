@@ -29,7 +29,7 @@ import { localize } from '../../../../nls.js';
 import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { documentDisplayTitle, parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
-import { applyFocusRequest, applyReady, applyRender, applyRevealHeading, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
+import { applyFocusRequest, applyReady, applyRender, applyRevealBlock, applyRevealHeading, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
 import { AbstractTabStrip, createTabStripStyle } from './abstractTabStrip.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { ILivingDocRenderInput, IPresentState, IPropertiesRenderState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
@@ -139,6 +139,12 @@ export class LivingDocEditor extends EditorPane {
 		this._inputDisposables.add(this._livingDocs.onDidRequestPresent(e => {
 			if (this._resource && e.docId === this._resource.toString()) {
 				this._openPresent();
+			}
+		}));
+		// Home-to-editor deep link (plan 48 H2.3u): a NEEDS-YOU card scrolls this surface to the addressed block.
+		this._inputDisposables.add(this._livingDocs.onDidRequestRevealBlock(e => {
+			if (this._resource && e.docId === this._resource.toString()) {
+				this._runProto(applyRevealBlock(this._proto, e.blockIndex));
 			}
 		}));
 		await this._livingDocs.loadDocument(input.resource);
@@ -603,6 +609,9 @@ export class LivingDocEditor extends EditorPane {
 					break;
 				case 'postRevealHeading':
 					void this._webview.postMessage({ type: 'revealHeading', headingIndex: effect.headingIndex });
+					break;
+				case 'postRevealBlock':
+					void this._webview.postMessage({ type: 'revealBlock', blockIndex: effect.blockIndex });
 					break;
 				case 'holdPending':
 					// The render is held in the reducer state; nothing to post until the RUNTIME signals ready.

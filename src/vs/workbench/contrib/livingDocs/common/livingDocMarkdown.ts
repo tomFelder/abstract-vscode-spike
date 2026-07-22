@@ -184,6 +184,60 @@ export function buildTemplateSkeleton(body: string, docName: string, templateNam
 	return `${fm.join('\n')}\n\n${blocks.join('\n\n')}\n`;
 }
 
+// Rewrite every inline `bind:` link to an EMPTY `{{slot:<key>}}` placeholder (plan 48 T2.4/T2.5). A bound
+// figure `[value](bind:metrics.mrr)` becomes `{{slot:metrics.mrr}}` - the position where live data will land
+// is kept (the skeleton thumbnail and "N bind slots" count still see it), but the coupling to a source is
+// gone, so the document is NOT born bound: the user must bind a source before a figure resolves. Used by the
+// Use-a-template and Save-as-template flows, which both want the pattern's shape with its binds left open.
+// Pure (string in, string out) so it is unit-testable and the same on the service + in a snapshot test.
+export function emptyBindsToSlots(body: string): string {
+	return body.replace(BIND_LINK_RE, (_whole, _value: string, key: string) => `{{slot:${key}}}`);
+}
+
+// Build a NEW DOCUMENT duplicated from a template (plan 48 T2.4). Unlike `buildTemplateSkeleton` (which
+// copies binds through VERBATIM so a generated doc is born bound), Use duplicates the pattern with its binds
+// EMPTIED to slots: the body is the template's body with HTML-comment scaffolding stripped and every `bind:`
+// link turned into a `{{slot:<key>}}` placeholder, and the frontmatter records the originating template's
+// name as provenance (`template: <name>`, read back as `fromTemplate`) but declares NO `sources:` - nothing
+// is bound yet. So the duplicate opens as plain Markdown that visibly needs a source bound (the tree-row
+// "bind sources" nudge, T2.4), rather than resolving figures against a source it never picked. Deterministic.
+export function buildDocumentFromTemplate(body: string, docName: string, templateName: string): string {
+	const title = docName.trim() || templateName.trim() || 'Untitled';
+	const emptied = emptyBindsToSlots(stripHtmlComments(body));
+	const blocks: string[] = [];
+	let usedH1 = false;
+	for (const chunk of emptied.split(/\r?\n[ \t]*\r?\n/)) {
+		const text = chunk.replace(/\s+$/, '');
+		if (!text.trim()) { continue; }
+		const heading = /^(#{1,6})\s+(.*)$/.exec(text.trim());
+		if (heading && heading[1].length === 1 && !usedH1) {
+			blocks.push(`# ${title}`);
+			usedH1 = true;
+			continue;
+		}
+		blocks.push(text);
+	}
+	if (!usedH1) { blocks.unshift(`# ${title}`); }
+	const fm = ['---', `template: ${templateName.trim() || title}`, '---'];
+	return `${fm.join('\n')}\n\n${blocks.join('\n\n')}\n`;
+}
+
+// Build a TEMPLATE from the active document (plan 48 T2.5, the Save-current-doc-as-template door). The active
+// document's body is kept but its binds are EMPTIED to slots (so the template carries the pattern, not the
+// current doc's live figures), and a `template: true` + `name:` (+ `description:`) frontmatter block is
+// written so the file is discovered as a template by `parseLivingDoc`. The document's OWN `sources:` are
+// carried through as the template's declared sources (they name what the pattern expects to bind), matching
+// the New-template seed. Deterministic (string in, string out), so it round-trips on disk and snapshot-tests.
+export function buildTemplateFromDocument(doc: Pick<ILivingDoc, 'body' | 'sources'>, templateName: string, description: string): string {
+	const name = templateName.trim() || 'Untitled Template';
+	const body = emptyBindsToSlots(doc.body).replace(/\s+$/, '') + '\n';
+	const fm = ['---', 'template: true', `name: ${name}`];
+	if (description.trim()) { fm.push(`description: ${description.trim()}`); }
+	if (doc.sources.length) { fm.push('sources:', ...doc.sources.map(s => `  - ${s}`)); }
+	fm.push('---');
+	return `${fm.join('\n')}\n\n${body}`;
+}
+
 // Compose the instruction the generate flow sends through the EXISTING chat path (plan 28, iter 3): the
 // template body is the brief (its instruction prose + slot hints), the document is already named, and the
 // user's optional note is appended. The model answers with insertion proposals that land in the review

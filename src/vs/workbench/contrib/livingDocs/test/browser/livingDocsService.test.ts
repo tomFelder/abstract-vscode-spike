@@ -26,7 +26,7 @@ import { IViewsService } from '../../../../services/views/common/viewsService.js
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AgentPolicy, IAgentDef, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
-import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, parseLivingDoc } from '../../common/livingDocMarkdown.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -210,6 +210,12 @@ suite('livingDocs Service', () => {
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
 
 	let lastFiles: Map<string, string> | undefined;
+	// A test hook to set the "active document" (last opened editor) without a private-field reach-in, so
+	// save-as-template (plan 48 T2.5) can pin the document it saves from.
+	let setActiveEditor: ((resource: URI) => void) | undefined;
+	// The last view id the service asked to open (focusPanel -> openView), so the reviewBlock deep-link test
+	// can assert the Review rail was revealed (plan 48 H2.3u).
+	let lastOpenedView: string | undefined;
 	// Notifications the service raised (file-op toasts + named errors), so a test can assert the message
 	// and drive the Undo action a toast carries (the file-ops tests; issue #125).
 	let lastNotifications: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }[] = [];
@@ -308,8 +314,12 @@ suite('livingDocs Service', () => {
 			},
 		} as unknown as IFileService;
 
-		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); return undefined; }, findEditors: () => [], closeEditors: async () => undefined, onDidActiveEditorChange: Event.None, activeEditor: undefined } as unknown as IEditorService;
-		const viewsService = { openView: async () => null } as unknown as IViewsService;
+		// `activeEditor` tracks the last opened editor that carries a resource, so the service reads the same
+		// "current document" a user would after opening one (used by save-as-template, plan 48 T2.5).
+		const editorService = { openEditor: async (input: IOpenedEditor) => { opened.push(input); if (input.resource) { (editorService as { activeEditor?: { resource?: URI } }).activeEditor = { resource: input.resource }; } return undefined; }, findEditors: () => [], closeEditors: async () => undefined, onDidActiveEditorChange: Event.None, activeEditor: undefined } as unknown as IEditorService;
+		setActiveEditor = (resource: URI) => { (editorService as unknown as { activeEditor?: { resource?: URI } }).activeEditor = { resource }; };
+		lastOpenedView = undefined;
+		const viewsService = { openView: async (id: string) => { lastOpenedView = id; return null; } } as unknown as IViewsService;
 		// Most settings the service reads are booleans that default to true (useModel); the fan-out context
 		// budget (plan 30, track 3) is a number a test can lower to force multi-batch packing over few docs.
 		// Most settings the service reads default to true (booleans like useModel); the fan-out budget is a number
@@ -1902,6 +1912,99 @@ suite('livingDocs Service', () => {
 		const gallery = await service.listTemplateGallery();
 		assert.strictEqual(gallery.length, 1);
 		assert.strictEqual(gallery[0].usageCount, 0, 'no generated documents -> an honest used 0×');
+	});
+
+	// --- plan 48 T2.4: Use a template = duplicate into the folder with binds emptied to slots ---
+	// Use is a pure duplication (no model call, no review proposals): the new doc carries the pattern with its
+	// binds emptied to {{slot}} placeholders, records `template: <name>` provenance, declares no sources, and
+	// is opened. So it reports `needsSourceBinding` (the tree-row nudge) until a source is bound.
+	test('useTemplate duplicates the template into the folder with binds emptied to slots, opens it, and it needs binding', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened, { template: true });
+
+		const uri = await service.useTemplate(TEMPLATE);
+		assert.ok(uri && uri.path.endsWith('.md') && !uri.path.endsWith('.template.md'), 'a new document (not a template) is created');
+		const raw = lastFiles!.get(uri!.toString()) ?? '';
+		const doc = parseLivingDoc(raw);
+		assert.strictEqual(doc.fromTemplate, 'Weekly report', 'the new doc records the originating template as provenance');
+		assert.deepStrictEqual(doc.sources, [], 'no sources are declared - the doc is not born bound');
+		assert.strictEqual(extractBindLinks(doc.body).length, 0, 'every bind is emptied to a slot');
+		assert.ok(/\{\{slot:/.test(raw), 'the emptied binds survive as {{slot}} placeholders');
+		assert.deepStrictEqual(opened[opened.length - 1]?.resource?.toString(), uri!.toString(), 'the new document is opened');
+		assert.strictEqual(service.getPendingForDoc(uri!).length, 0, 'Use is a pure duplication - no review proposals queued');
+
+		// The queryable "needs binding" state (T2.4): the duplicate reports needsSourceBinding until a source binds.
+		const summary = (await service.listDocuments()).find(d => d.resource.toString() === uri!.toString());
+		assert.strictEqual(summary?.needsSourceBinding, true, 'a template-born doc with no bound source needs binding (the tree nudge)');
+	});
+
+	// --- plan 48 T2.5: Save the active document as a template into `.abstract/templates/` ---
+	test('saveActiveDocAsTemplate writes the active doc to .abstract/templates with binds emptied to slots, and it appears in the grid', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+		// Pin the Weekly Summary as the active document (the doc save-as-template writes from).
+		setActiveEditor!(WEEKLY);
+
+		const templateUri = await service.saveActiveDocAsTemplate();
+		assert.ok(templateUri && templateUri.path.includes('/.abstract/templates/') && templateUri.path.endsWith('.template.md'), 'the template lands under .abstract/templates/');
+		const raw = lastFiles!.get(templateUri!.toString()) ?? '';
+		const parsed = parseLivingDoc(raw);
+		assert.strictEqual(parsed.isTemplate, true, 'the saved file is a template (template: true)');
+		assert.strictEqual(extractBindLinks(parsed.body).length, 0, 'the active doc\'s live figures are emptied to slots');
+		// It is discovered by the gallery (T2.6): the new card appears.
+		const gallery = await service.listTemplateGallery();
+		assert.ok(gallery.some(c => c.uri.toString() === templateUri!.toString()), 'the saved template appears in the gallery grid');
+	});
+
+	test('saveActiveDocAsTemplate is an honest no-op with no active document', async () => {
+		const service = createService([]);
+		const result = await service.saveActiveDocAsTemplate();
+		assert.strictEqual(result, undefined, 'no active document -> no template written');
+		assert.ok(lastNotifications.some(n => /document/i.test(n.message)), 'a plain-words nudge is shown, not a silent no-op');
+	});
+
+	// --- plan 48 T2.6: both discovery sources, deduped by name with .abstract/templates winning ---
+	test('templates from both templates/ and .abstract/templates/ are discovered with no same-name duplicates', async () => {
+		const service = createService([], { template: true }); // seeds templates/Weekly report.template.md
+		// A DIFFERENT-named template in .abstract/templates/ -> both appear (two distinct cards).
+		lastFiles!.set(URI.file('/ws/.abstract/templates/Board note.template.md').toString(), '---\ntemplate: true\nname: Board note\n---\n\n# {{slot:title}}\n');
+		let gallery = await service.listTemplateGallery();
+		assert.deepStrictEqual(gallery.map(c => c.name).sort(), ['Board note', 'Weekly report'], 'both sources are discovered');
+
+		// A SAME-named template in .abstract/templates/ -> ONE card, and the hidden-store copy wins the dedupe.
+		const abstractWeekly = URI.file('/ws/.abstract/templates/Weekly report.template.md');
+		lastFiles!.set(abstractWeekly.toString(), '---\ntemplate: true\nname: Weekly report\ndescription: The saved copy.\n---\n\n# {{slot:title}}\n');
+		gallery = await service.listTemplateGallery();
+		const weeklyCards = gallery.filter(c => c.name === 'Weekly report');
+		assert.strictEqual(weeklyCards.length, 1, 'a same-name template appears ONCE (no duplicate)');
+		assert.strictEqual(weeklyCards[0].uri.toString(), abstractWeekly.toString(), 'the .abstract/templates/ copy wins the dedupe');
+	});
+
+	// --- plan 48 H2.3u: the Home Review deep link opens the doc + Review tab and scrolls to the addressed block ---
+	// reviewBlock resolves the durable block id to its CURRENT ordinal via the address model, so a doc that
+	// changed still scrolls to the right block; a deleted block degrades to -1 (open, no scroll, spec section 3.1).
+	test('reviewBlock opens the doc, focuses the Review tab, and reveals the addressed block by its current ordinal', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+
+		const revealed: { docId: string; blockIndex: number }[] = [];
+		store.add(service.onDidRequestRevealBlock(e => revealed.push(e)));
+
+		// The Weekly Summary's blocks in document order: resolve a real block id to its ordinal.
+		await service.loadDocument(WEEKLY);
+		const doc = parseLivingDoc(WEEKLY_MD);
+		const targetBlock = doc.blocks[2]; // an interior block, so the ordinal is non-trivial
+
+		await service.reviewBlock(WEEKLY, targetBlock.id);
+		assert.deepStrictEqual(opened[opened.length - 1]?.resource?.toString(), WEEKLY.toString(), 'the document is opened');
+		assert.ok((lastOpenedView ?? '').toLowerCase().includes('review'), 'the Review rail is opened (focusPanel(review))');
+		assert.strictEqual(revealed.length, 1, 'one reveal is requested');
+		assert.strictEqual(revealed[0].blockIndex, 2, 'the durable block id resolves to its current 0-based ordinal');
+
+		// A deleted/unknown block degrades to -1 (open + Review tab, no scroll): never an error (spec section 3.1).
+		revealed.length = 0;
+		await service.reviewBlock(WEEKLY, 'no-such-block-id');
+		assert.strictEqual(revealed[0].blockIndex, -1, 'an unknown block resolves to -1 (graceful degrade, no scroll)');
 	});
 
 	// Plan 29, iter 1: the source registry folds every document's declared sources by identity. Two documents

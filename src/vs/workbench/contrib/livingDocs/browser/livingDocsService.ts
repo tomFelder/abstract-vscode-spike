@@ -34,7 +34,8 @@ import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js'
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
-import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
+import { resolveBlockLine } from '../common/livingDocAddress.js';
+import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
 import { coerceDocPolicy, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
@@ -375,6 +376,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Pin 6 "Present": the context menu opens the document then asks its editor to run the existing Present flow.
 	private readonly _onDidRequestPresent = this._register(new Emitter<{ docId: string }>());
 	readonly onDidRequestPresent: Event<{ docId: string }> = this._onDidRequestPresent.event;
+
+	private readonly _onDidRequestRevealBlock = this._register(new Emitter<{ docId: string; blockIndex: number }>());
+	readonly onDidRequestRevealBlock: Event<{ docId: string; blockIndex: number }> = this._onDidRequestRevealBlock.event;
 
 	// Plan 42 slice L2: the first-AI-use model-access gate. When a chat send hits an unconfigured backend the
 	// prompt is HELD here (never lost) and the rail renders the inline sign-in vs included-model choice; picking
@@ -949,6 +953,27 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidRequestPresent.fire({ docId: resource.toString() });
 	}
 
+	// Deep-link a Home NEEDS-YOU card into its document (plan 48 H2.3u): open the document, open the Review
+	// rail's Review tab, and scroll to the addressed block. The block is addressed by its DURABLE id (the
+	// address model, spec section 3.1): `blockId` is resolved to the block's CURRENT 0-based ordinal at reveal time
+	// via `resolveBlockLine`, so a doc that changed since the card was built still scrolls to the right block -
+	// and a block that was deleted (resolve returns undefined) degrades to opening the doc + Review tab with no
+	// scroll, never an error. Navigate-only: it never approves anything. The document is loaded first so the
+	// address model has its parsed blocks to resolve against. The block-scroll rides the 46-c panel replay seam:
+	// `focusPanel('review', { blockId })` records the deep-link payload so a Review rail that mounts AFTER this
+	// call (the closed-doc path) still consumes the block address on subscribe, surviving the mount race.
+	async reviewBlock(resource: URI, blockId?: string): Promise<void> {
+		await this._editors.openEditor({ resource, options: { pinned: true } });
+		this.focusPanel('review', { blockId });
+		await this.loadDocument(resource);
+		// Resolve the durable block id to its current ordinal; `undefined` (block gone) => index -1 => the
+		// webview no-ops the scroll (spec section 3.1 graceful degrade). `resolveBlockLine` returns a 1-based line, so
+		// subtract one for the 0-based block ordinal the webview reveals.
+		const doc = this._docs.get(resource.toString())?.doc;
+		const line = doc && blockId ? resolveBlockLine(doc, blockId) : undefined;
+		this._onDidRequestRevealBlock.fire({ docId: resource.toString(), blockIndex: line === undefined ? -1 : line - 1 });
+	}
+
 	// --- the "Documents" home ---
 
 	async listDocuments(): Promise<readonly ILivingDocSummary[]> {
@@ -991,26 +1016,39 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const found = new Map<string, URI>();
 		for (const folder of this._workspace.getWorkspace().folders) {
 			await this._collectTemplates(folder.uri, found, 0);
+			await this._collectAbstractTemplates(folder.uri, found);
 		}
-		const templates: ITemplateInfo[] = [];
+		// T2.6 same-name dedupe: fold discovered templates by their canonical (case-folded) display name, and
+		// let a `.abstract/templates/` copy WIN over a same-named `templates/` file (the hidden store is the
+		// Save-as-template destination, so it is the freshest authored copy). One card per distinct name.
+		const byName = new Map<string, ITemplateInfo>();
 		for (const uri of found.values()) {
 			try {
 				const raw = (await this._files.readFile(uri)).value.toString();
 				const doc = parseLivingDoc(raw);
 				if (!doc.isTemplate) { continue; } // a `.template.md` with no `template: true` is not a template
-				templates.push({
+				const info: ITemplateInfo = {
 					uri,
 					name: doc.templateName ?? doc.title,
 					description: doc.templateDescription ?? '',
 					sources: doc.sources,
 					body: doc.body,
-				});
+				};
+				const key = info.name.trim().toLowerCase();
+				if (!byName.has(key) || this._isAbstractTemplate(uri)) { byName.set(key, info); }
 			} catch (e) {
 				this._log.trace('[livingDocs] template parse skipped', e instanceof Error ? e.message : String(e));
 			}
 		}
+		const templates = [...byName.values()];
 		templates.sort((a, b) => a.name.localeCompare(b.name));
 		return templates;
+	}
+
+	// Whether a template URI lives under the workspace `.abstract/templates/` store (T2.6 dedupe: a hidden-store
+	// copy wins over a same-named `templates/` file, being the Save-as-template destination and freshest copy).
+	private _isAbstractTemplate(uri: URI): boolean {
+		return uri.path.includes('/.abstract/templates/');
 	}
 
 	// The v2 Templates gallery model (plan 48 T2): every template PLUS its real usage count and its parsed
@@ -1041,14 +1079,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const templatesFound = new Map<string, URI>();
 		for (const folder of this._workspace.getWorkspace().folders) {
 			await this._collectTemplates(folder.uri, templatesFound, 0);
+			await this._collectAbstractTemplates(folder.uri, templatesFound);
 		}
-		const cards: ITemplateCard[] = [];
+		// T2.6 same-name dedupe (as in `listTemplates`): one card per canonical name, a `.abstract/templates/`
+		// copy winning over a same-named `templates/` file. So a template saved into the hidden store and also
+		// present under `templates/` shows ONCE, never as two identical cards.
+		const byName = new Map<string, ITemplateCard>();
 		for (const uri of templatesFound.values()) {
 			try {
 				const doc = parseLivingDoc((await this._files.readFile(uri)).value.toString());
 				if (!doc.isTemplate) { continue; }
 				const name = doc.templateName ?? doc.title;
-				cards.push({
+				const card: ITemplateCard = {
 					uri,
 					name,
 					description: doc.templateDescription ?? '',
@@ -1057,11 +1099,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					bindSlots: countBindSlots(doc.body),
 					usageCount: usage.get(name.trim().toLowerCase()) ?? 0,
 					skeleton: templateSkeletonRows(doc),
-				});
+				};
+				const key = name.trim().toLowerCase();
+				if (!byName.has(key) || this._isAbstractTemplate(uri)) { byName.set(key, card); }
 			} catch (e) {
 				this._log.trace('[livingDocs] template gallery parse skipped', e instanceof Error ? e.message : String(e));
 			}
 		}
+		const cards = [...byName.values()];
 		cards.sort((a, b) => a.name.localeCompare(b.name));
 		return cards;
 	}
@@ -1183,7 +1228,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	// Recursively collect every `*.template.md` under a folder, mirroring `_collectDocs`' bounded, hidden-dir
-	// skipping walk (the folder is the project; templates may live anywhere, e.g. under `templates/`).
+	// skipping walk (the folder is the project; templates may live anywhere, e.g. under `templates/`). The
+	// dot-directory skip means `.abstract/templates/` (the Save-as-template destination, plan 48 T2.5) is NOT
+	// reached by this walk - `_collectAbstractTemplates` covers it additively so both sources are discovered.
 	private async _collectTemplates(dir: URI, found: Map<string, URI>, depth: number): Promise<void> {
 		if (depth > 4) { return; }
 		let children;
@@ -1201,6 +1248,106 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			} else if (this._isTemplateFile(child.resource)) {
 				found.set(child.resource.toString(), child.resource);
 			}
+		}
+	}
+
+	// Additively collect the templates under the workspace `.abstract/templates/` folder (plan 48 T2.6). The
+	// main `_collectTemplates` walk skips every dot-directory, so this hidden store - where Save-as-template
+	// (T2.5) writes - would otherwise be invisible. Read only that one folder (not a recursive dot-tree walk,
+	// which would re-introduce scanning `.abstract/knowledge/` and friends); a missing folder is a silent
+	// no-op (a project that never saved a template just has none). The discovered files land in the SAME
+	// `found` map as the folder walk; same-name dedupe is resolved at the list/gallery layer (T2.6 rule).
+	private async _collectAbstractTemplates(folder: URI, found: Map<string, URI>): Promise<void> {
+		const dir = joinPath(folder, '.abstract', 'templates');
+		let children;
+		try {
+			children = (await this._files.resolve(dir)).children ?? [];
+		} catch {
+			return; // No `.abstract/templates/` folder yet - nothing saved here.
+		}
+		for (const child of children) {
+			if (!child.isDirectory && this._isTemplateFile(child.resource)) {
+				found.set(child.resource.toString(), child.resource);
+			}
+		}
+	}
+
+	// Use a template (plan 48 T2.4): DUPLICATE the template into the open folder as a new document with its
+	// binds EMPTIED to slots, then open it. Unlike generate-from-template (which drives the model to draft
+	// prose against copied-through binds), Use is a pure duplication - no model call, no review proposals: the
+	// pattern's structure lands as a plain document that visibly needs a source bound. The new doc records the
+	// template's name as `fromTemplate` provenance and declares no sources, so `_summarize` reports
+	// `needsSourceBinding` (the tree-row "bind sources" nudge) until the user binds a source and it becomes
+	// living. Review-safe by construction: it writes a static file and opens it, never touching the review
+	// engine or a source it never picked. Returns the new document's URI. Additive (no existing method changed).
+	async useTemplate(templateUri: URI): Promise<URI | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) {
+			this._notify.info('Open a folder to create a document.');
+			return undefined;
+		}
+		let template: ILivingDoc;
+		try {
+			template = parseLivingDoc((await this._files.readFile(templateUri)).value.toString());
+		} catch (e) {
+			this._log.warn('[livingDocs] template unreadable for use', e);
+			this._notify.info('That template could not be read.');
+			return undefined;
+		}
+		const templateName = template.templateName || basename(templateUri).replace(/\.template\.md$/, '');
+		const requested = LivingDocsService._safeStem(templateName) || 'Untitled';
+		const content = buildDocumentFromTemplate(template.body, requested, templateName);
+		const target = await this._uniqueDocUri(folder.uri, requested);
+		try {
+			await this._files.writeFile(target, VSBuffer.fromString(content));
+			await this._editors.openEditor({ resource: target, options: { pinned: true } });
+			this._onDidChange.fire();
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] use template write failed', e);
+			return undefined;
+		}
+	}
+
+	// Save the ACTIVE document as a template (plan 48 T2.5, the dashed Save-current-doc-as-template tile). The
+	// active document's body is kept but its binds are EMPTIED to slots (the template carries the pattern, not
+	// the current doc's live figures) and a `template: true` + `name:` frontmatter is written, into the
+	// workspace `.abstract/templates/<name>.template.md` store (created on demand). Fires onDidChange so an open
+	// Templates screen shows the new card (discovered via T2.6). No active document, or a screen/non-doc active
+	// editor, is an honest no-op with a plain-words nudge. Returns the new template's URI. Additive.
+	async saveActiveDocAsTemplate(): Promise<URI | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		if (!folder) {
+			this._notify.info('Open a folder to save a template.');
+			return undefined;
+		}
+		const active = this._editors.activeEditor?.resource;
+		if (!active || !this._isDocFile(active)) {
+			this._notify.info('Open a document first, then save it as a template.');
+			return undefined;
+		}
+		let doc: ILivingDoc;
+		try {
+			doc = parseLivingDoc((await this._files.readFile(active)).value.toString());
+		} catch (e) {
+			this._log.warn('[livingDocs] active doc unreadable for save-as-template', e);
+			this._notify.info('That document could not be read.');
+			return undefined;
+		}
+		const templateName = documentDisplayTitle(doc, basename(active));
+		const content = buildTemplateFromDocument(doc, templateName, doc.subtitle ?? '');
+		const dir = joinPath(folder.uri, '.abstract', 'templates');
+		const stem = LivingDocsService._safeStem(templateName) || 'Untitled';
+		const target = await this._uniqueSiblingUri(dir, `${stem}.template.md`);
+		try {
+			await this._files.writeFile(target, VSBuffer.fromString(content));
+			this._onDidChange.fire();
+			this._notify.info(`Saved "${templateName}" as a template.`);
+			return target;
+		} catch (e) {
+			this._log.warn('[livingDocs] save-as-template write failed', e);
+			this._notify.info('That template could not be saved.');
+			return undefined;
 		}
 	}
 
@@ -2482,7 +2629,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const fanoutFailed = [...this._fanoutProgress.values()].some(p => p.failedDocIds.includes(id));
 			// PN.1 (routed from 48-c/#233): a document born from a template that has not bound a source yet
 			// (`fromTemplate && !isLiving`) still needs its data connected - its tree row carries the "bind
-			// sources" nudge. The moment a source binds, the doc becomes living and this clears.
+			// sources" nudge. The moment a source binds, the doc becomes living and this clears. It carries
+			// empty `{{slot}}` placeholders from the Use duplication until then (plan 48 T2.4).
 			const needsSourceBinding = !!(doc.fromTemplate ?? '').trim() && !doc.isLiving;
 			return {
 				resource: uri,

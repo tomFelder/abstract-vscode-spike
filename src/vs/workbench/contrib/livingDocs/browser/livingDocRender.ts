@@ -772,6 +772,13 @@ function focusChange(id){ setTimeout(function(){ try { const el = root.querySele
 // renders one <h1..h6> per heading block in document order, so \`index\` (the heading's ordinal from
 // buildOutline) selects the matching element. A short timeout lets a just-mounted body lay out first.
 function revealHeading(index){ setTimeout(function(){ try { const scope = (pmView && pmView.dom) || root; const heads = scope.querySelectorAll('h1, h2, h3, h4, h5, h6'); const head = heads[index]; if (head) { head.scrollIntoView({ block: 'start', behavior: 'smooth' }); head.classList.add('lwd-focus-flash'); setTimeout(function(){ head.classList.remove('lwd-focus-flash'); }, 1600); } } catch (e) {} }, 30); }
+// Scroll the surface to the Nth top-level block and flash it (Home NEEDS-YOU deep link, plan 48 H2.3u). One
+// address per Markdown block (the D1 wrap rule), and the doc renders one top-level PM node per block in
+// document order, so \`index\` (the block's 0-based ordinal, recomputed host-side from the durable block id via
+// the address model) selects the matching element. A negative/out-of-range index (a block that was deleted -
+// the address model returned undefined) is a no-op: the doc still opened with the Review tab, no scroll (the
+// spec-3.1 graceful degrade). A short timeout lets a just-mounted body lay out first.
+function revealBlock(index){ if (typeof index !== 'number' || index < 0) { return; } setTimeout(function(){ try { const scope = (pmView && pmView.dom) || root; const block = scope.children[index]; if (block) { block.scrollIntoView({ block: 'center', behavior: 'smooth' }); block.classList.add('lwd-focus-flash'); setTimeout(function(){ block.classList.remove('lwd-focus-flash'); }, 1600); } } catch (e) {} }, 30); }
 // ---- In-place table cell editing (issue #140) -------------------------------------------------
 // The shipped bundle renders a GFM table as a static \`table.lwd-table\` atom (contenteditable=false):
 // clicking a cell node-selects the whole table, and the next printable key REPLACES it (a one-keystroke
@@ -827,6 +834,7 @@ window.addEventListener('message', e => { const m = e.data;
 	if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); }
 	else if (m && m.type === 'focusChange') { focusChange(m.id); }
 	else if (m && m.type === 'revealHeading') { revealHeading(m.headingIndex); }
+	else if (m && m.type === 'revealBlock') { revealBlock(m.blockIndex); }
 	// The host wrote the pasted/dropped image beside the doc and returns its doc-relative path; insert it.
 	else if (m && m.type === 'imageSaved') { if (typeof m.relPath === 'string') { insertImage(m.relPath, m.alt); } }
 	// The host resolved a relative image to a data URI (or flagged it unreadable): cache + swap, or mark broken.

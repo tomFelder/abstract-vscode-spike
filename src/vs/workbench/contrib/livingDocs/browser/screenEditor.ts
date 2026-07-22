@@ -536,7 +536,7 @@ export class ScreenEditor extends EditorPane {
 			const refreshedLabel = Number.isFinite(latestMs)
 				? localize("livingDocs.home.refreshed", "refreshed {0}", relativeTime(latestMs, nowMs))
 				: undefined;
-			return { resource: d.resource.toString(), title: d.title, pendingCount: d.pendingCount, reason, refreshedLabel };
+			return { resource: d.resource.toString(), title: d.title, pendingCount: d.pendingCount, reason, refreshedLabel, blockId: top?.blockId };
 		});
 		return { cards, total: pending.length };
 	}
@@ -610,7 +610,7 @@ export class ScreenEditor extends EditorPane {
 		}
 	}
 
-	private _onMessage(message: { type?: string; arg?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string; value?: string; daily?: string; subs?: string; weekly?: string; picks?: string }): void {
+	private _onMessage(message: { type?: string; arg?: string; block?: string; name?: string; note?: string; target?: string; apiurl?: string; text?: string; value?: string; daily?: string; subs?: string; weekly?: string; picks?: string }): void {
 		switch (message?.type) {
 			case 'setKnOrg':
 				this._state = { ...this._state, knScope: 'org' };
@@ -789,6 +789,12 @@ export class ScreenEditor extends EditorPane {
 			case 'openDoc':
 				if (message.arg) { void this._editors.openEditor({ resource: URI.parse(message.arg), options: { pinned: true } }); }
 				break;
+			// Home NEEDS-YOU deep link (plan 48 H2.3u): open the doc with the Review tab open and scroll to the
+			// addressed block (via the address model). `block` is the durable block id; a missing/deleted block
+			// degrades to opening the doc + Review tab without a scroll (spec section 3.1).
+			case 'reviewNeedsYou':
+				if (message.arg) { void this._livingDocs.reviewBlock(URI.parse(message.arg), message.block || undefined); }
+				break;
 			// Templates screen (plan 28, iter 2): Edit opens the `.template.md` in the normal editor - it is
 			// just Markdown, so it round-trips on disk with no new format.
 			case 'editTemplate':
@@ -798,6 +804,18 @@ export class ScreenEditor extends EditorPane {
 			// service fires onDidChange so the card grid refreshes.
 			case 'newTemplate':
 				void this._livingDocs.createTemplate();
+				break;
+			// Use a template (plan 48 T2.4): DUPLICATE the template into the open folder with its binds emptied
+			// to slots and open it. A pure duplication (no model call, no review) - the new doc carries the
+			// "bind sources" nudge (needsSourceBinding) until a source is bound. Replaces the old generate sheet.
+			case 'useTemplate':
+				if (message.arg) { void this._livingDocs.useTemplate(URI.parse(message.arg)); }
+				break;
+			// Save the active document as a template (plan 48 T2.5): write it to `.abstract/templates/` with its
+			// binds emptied to slots + `template: true` frontmatter; the service fires onDidChange so the new
+			// card appears in the grid (T2.6 discovery).
+			case 'saveAsTemplate':
+				void this._livingDocs.saveActiveDocAsTemplate();
 				break;
 			// Starters (plan 48 T3.2): a built-in seed creates its named document through the EXISTING
 			// review-safe creation path (a blank titled `.md`, opened for editing) - no fabricated prose is
@@ -1368,7 +1386,7 @@ export class ScreenEditor extends EditorPane {
 				content = {
 					breadcrumb: localize("livingDocs.header.templates", "Templates"),
 					// allow-any-unicode-next-line
-					action: { label: localize("livingDocs.header.newTemplate", "＋ New Template"), run: () => void this._livingDocs.createTemplate() },
+					action: { label: localize("livingDocs.header.newTemplate", "＋ New template"), run: () => void this._livingDocs.createTemplate() },
 					showRailToggles: false,
 				};
 				break;
