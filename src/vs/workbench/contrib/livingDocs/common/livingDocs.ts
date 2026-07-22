@@ -671,6 +671,16 @@ export interface ILivingDocsService {
 	revealHeading(resource: URI, headingIndex: number): void;
 
 	/**
+	 * Navigate-only scroll to a block addressed by its durable `blockId` (the address model, spec section 3.1),
+	 * WITHOUT switching the rail's own tab. Clicking a "Line N" citation on a Review card or a chat meaning-change
+	 * card (pin 13.5) opens the block's document and asks its editor to scroll to that block. The id is resolved to
+	 * the block's current ordinal at reveal time, so a document that changed since the citation was rendered still
+	 * scrolls to the right block; a deleted block (resolve returns undefined) opens the document without a scroll and
+	 * never errors. Rides the same reveal-block webview seam as `reviewBlock`, but never approves and never re-tabs.
+	 */
+	revealBlockAddress(resource: URI, blockId: string): Promise<void>;
+
+	/**
 	 * Open a document and trigger its Present flow (pin 6's "Present" menu item). Opens the document (so the
 	 * editor is live), then fires `onDidRequestPresent` for that document; the editor showing it opens the same
 	 * Present modal the header's Present action drives. No new present logic - it routes to the existing flow.

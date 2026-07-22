@@ -2007,6 +2007,32 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(revealed[0].blockIndex, -1, 'an unknown block resolves to -1 (graceful degrade, no scroll)');
 	});
 
+	// Pin 13.5: a "Line N" citation click on a Review card or a chat meaning-change card scrolls the editor to the
+	// addressed block WITHOUT switching the rail's own tab. revealBlockAddress mirrors reviewBlock's ordinal
+	// resolution + graceful-degrade, but never opens a view (no focusPanel), so a chat citation keeps the user on Chat.
+	test('revealBlockAddress reveals the addressed block by ordinal and never switches the rail tab', async () => {
+		const opened: IOpenedEditor[] = [];
+		const service = createService(opened);
+
+		const revealed: { docId: string; blockIndex: number }[] = [];
+		store.add(service.onDidRequestRevealBlock(e => revealed.push(e)));
+
+		await service.loadDocument(WEEKLY);
+		const doc = parseLivingDoc(WEEKLY_MD);
+		const targetBlock = doc.blocks[2];
+
+		await service.revealBlockAddress(WEEKLY, targetBlock.id);
+		assert.deepStrictEqual(opened[opened.length - 1]?.resource?.toString(), WEEKLY.toString(), 'the document is opened');
+		assert.strictEqual(lastOpenedView, undefined, 'no rail tab is switched (navigate-only, unlike reviewBlock)');
+		assert.strictEqual(revealed.length, 1, 'one reveal is requested');
+		assert.strictEqual(revealed[0].blockIndex, 2, 'the durable block id resolves to its current 0-based ordinal');
+
+		// A deleted/unknown block degrades to -1 (open, no scroll): never an error (spec section 3.1).
+		revealed.length = 0;
+		await service.revealBlockAddress(WEEKLY, 'no-such-block-id');
+		assert.strictEqual(revealed[0].blockIndex, -1, 'an unknown block resolves to -1 (graceful degrade, no scroll)');
+	});
+
 	// Plan 29, iter 1: the source registry folds every document's declared sources by identity. Two documents
 	// binding the same CSV must produce ONE metrics.csv row whose fan-in lists both, each with its own keys.
 	test('listSources folds a shared CSV into one row with the two-doc dependency fan-in; api source carries kind api', async () => {
