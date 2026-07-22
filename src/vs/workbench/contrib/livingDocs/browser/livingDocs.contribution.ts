@@ -227,6 +227,13 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			// (plan 33 iter 2, L5) the project-name marker is plumbing, not a document.
 			'**/.abstract-name': true,
 		},
+		// (plan 46-b, P5.5 -- routed via orchestrator, plan 44 ownership) The Files-rail tree wants a 14px
+		// per-level child indent (spec pin 5, section 3.6). `WorkbenchObjectTree` unconditionally overrides any
+		// per-instance `indent` option with `workbench.tree.indent` (listService.ts, default 8), so the only
+		// path the widget honours is this settings-tier default. The calm shell hides every stock IDE tree
+		// (Explorer / Search / SCM containers are deregistered), so the Files rail is effectively the only
+		// visible tree the value reaches; it is a real, user-overridable setting, so this stays additive (0 core).
+		'workbench.tree.indent': 14,
 	}
 }]);
 
