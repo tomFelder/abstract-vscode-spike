@@ -85,8 +85,10 @@ export class LivingDocSourceEditor extends EditorPane {
 		clearNode(host);
 		const name = data?.name ?? basename(resource);
 		const head = append(host, $('.lwd-source-head'));
+		const glyph = append(head, $('span.lwd-source-glyph'));
 		// allow-any-unicode-next-line
-		append(head, $('span.lwd-source-glyph')).textContent = '⌸';
+		glyph.textContent = '⊞';
+		glyph.setAttribute('aria-hidden', 'true');
 		append(head, $('span.lwd-source-name')).textContent = name;
 		if (!data) {
 			append(host, $('.lwd-source-empty')).textContent = localize('livingDocs.source.unreadable', "This source could not be read. It may have been moved or renamed.");

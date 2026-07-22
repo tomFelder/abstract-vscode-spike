@@ -8,7 +8,7 @@ import { $, addDisposableListener, append } from '../../../../base/browser/dom.j
 import { mainWindow } from '../../../../base/browser/window.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { Codicon } from '../../../../base/common/codicons.js';
-import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
+import { KeyChord, KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { IKeybindings, KeybindingsRegistry } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -288,6 +288,28 @@ KeybindingsRegistry.registerKeybindingRule({
 	when: undefined,
 	primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Backslash,
 });
+
+// --- neutralise the residual split / group-creation chords (routed via orchestrator, plan 44 ownership) ---
+// The bare Cmd+\ (workbench.action.splitEditor) is claimed above by the tree-rail toggle. But the stock editor
+// still ships a second tier of split chords that survive the calm shell and open a group a keyboard user can
+// reach - and, because closeEmptyGroups only reaps a group when its LAST editor closes (an editor that split
+// path never opened), a split into an empty group PERSISTS. That directly contradicts P7.8's "no other split
+// path" intent (the ONE sanctioned split is openToTheRight). We shadow each surviving chord with `noop` at the
+// same weight-1000 tier the rail toggles use, so the chord is swallowed with no core patch.
+//
+// Chord audit (stock editorActions.ts / editorCommands.ts):
+//   Cmd+K Cmd+\        -> splitEditor{Orthogonal,Left,Right,Up,Down} (all five share this chord) -> NEW group. LIVE LEAK, neutralised.
+//   Cmd+K Cmd+Shift+\  -> splitEditorInGroup / toggleSplitEditorInGroup -> in-group side-by-side split. LIVE, neutralised.
+//   newGroup{Left,Right,Above,Below}                    -> f1-only, no keybinding -> command palette is neutralised -> already dead.
+//   {move,copy}EditorGroupToNewWindow, restoreEditors…  -> no keybinding -> already dead.
+// (copyEditorToNewWindow's Cmd+K O is an editor-into-window move, not a shell split-group, and is left as-is.)
+const NEUTRALISED_SPLIT_CHORDS: readonly IKeybindings[] = [
+	{ primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyCode.Backslash) },					// splitEditor Left/Right/Up/Down/Orthogonal -> new group
+	{ primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Backslash) },		// splitEditorInGroup / toggleSplitEditorInGroup
+];
+for (const chord of NEUTRALISED_SPLIT_CHORDS) {
+	KeybindingsRegistry.registerKeybindingRule({ id: 'noop', weight: 1000, when: undefined, ...chord });
+}
 
 // --- Cmd/Ctrl+P document switcher (issue #212) ---
 // The core patch stripped Cmd+P from workbench.action.quickOpen (Seam 4) and the calm-shell chord neutralisation

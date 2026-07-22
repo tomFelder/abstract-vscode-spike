@@ -131,12 +131,20 @@ export class AbstractTabStrip extends Disposable {
 		el.setAttribute('role', 'tab');
 		el.setAttribute('aria-selected', String(active));
 		el.title = tab.label;
+		// Keep the accessible name meaningful and glyph-free: a source tab reads "Source metrics.csv", a
+		// document tab reads its label. The decorative glyph/dot/close affordance below are aria-hidden so
+		// they never leak into the computed name (P7.4 - the squared-plus glyph must be visual-only).
+		el.setAttribute('aria-label', tab.kind === 'source'
+			? localize('livingDocs.tab.sourceName', "Source {0}", tab.label)
+			: tab.label);
 		// A source tab carries the mono grid glyph (P7.4); a document tab shows its status dot (P7.2, active only).
 		if (tab.kind === 'source') {
+			const glyph = append(el, $('span.lwd-tab-glyph'));
 			// allow-any-unicode-next-line
-			append(el, $('span.lwd-tab-glyph')).textContent = '⌸';
+			glyph.textContent = '⊞';
+			glyph.setAttribute('aria-hidden', 'true');
 		} else if (active && tab.dot !== 'none') {
-			append(el, $(`span.lwd-tab-dot.${tab.dot}`));
+			append(el, $(`span.lwd-tab-dot.${tab.dot}`)).setAttribute('aria-hidden', 'true');
 		}
 		append(el, $('span.lwd-tab-label')).textContent = tab.label;
 		// Quiet × on the active tab (P7.2). Idle tabs are text-only (P7.3), so the close affordance is the
@@ -146,6 +154,7 @@ export class AbstractTabStrip extends Disposable {
 			// allow-any-unicode-next-line
 			close.textContent = '×';
 			close.title = localize('livingDocs.tab.close', "Close");
+			close.setAttribute('aria-hidden', 'true');
 			this._renderDisposables.add(addDisposableListener(close, EventType.MOUSE_DOWN, e => {
 				EventHelper.stop(e, true);
 				this._close(tab.id);
