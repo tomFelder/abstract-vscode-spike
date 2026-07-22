@@ -17,18 +17,47 @@ import { ILivingDocSummary, ISourceInfo } from '../common/livingDocs.js';
 import { freshnessLabel, FRESHNESS_COLOURS, relativeSyncedShort, sourceFreshness, SourceFreshness } from '../common/sourceFreshness.js';
 import { ACCENT_DK, esc, IScreenState } from './screenRenderShell.js';
 
-// Kind glyph for a source row (source-hygiene: non-ASCII written as HTML entities). file = the squared-plus
-// table glyph (mock), api = the fisheye live-feed glyph, mcp/reference = the diamond reference glyph. A
-// value-feeding source draws its glyph in accent; a context-only source draws it quiet (mock brand row).
-const KIND_GLYPH: Record<string, string> = { file: '&#8862;', api: '&#9677;', mcp: '&#9671;' };
+// The SEMANTIC kind of a source (K2.2). This is the ONE classification: both the KIND word and the KIND-cell
+// glyph derive from it, so the two can never disagree (D1 fix - the glyph used to be keyed on the transport
+// `s.kind` file/api/mcp, which drifted from the semantic word). The axis is what the source IS, not how it
+// arrives: a table (CSV/data), a transcript (text influence file), a reference (context-only doc), or a live
+// feed (api/mcp endpoint).
+const enum KindCategory {
+	Table,
+	Transcript,
+	Reference,
+	Feed,
+}
 
-// The plain-English kind name for the KIND column (K2.2). "Table" for a CSV/data file, "Transcript" for a
-// markdown/text influence file, "Reference" for a context-only doc, "Live feed" for an api/mcp source.
-function kindWord(s: ISourceInfo, contextOnly: boolean): string {
-	if (s.kind === 'api' || s.kind === 'mcp') { return localize("livingDocs.knowledge.kind.feed", "Live feed"); }
-	if (contextOnly) { return localize("livingDocs.knowledge.kind.reference", "Reference"); }
-	if (/\.(csv|json|tsv|xlsx?)$/i.test(s.id)) { return localize("livingDocs.knowledge.kind.table", "Table"); }
-	return localize("livingDocs.knowledge.kind.transcript", "Transcript");
+// Classify a source semantically. "Live feed" for an api/mcp source, "Reference" for a context-only doc,
+// "Table" for a CSV/data file, "Transcript" for any other (markdown/text influence) file.
+function kindCategory(s: ISourceInfo, contextOnly: boolean): KindCategory {
+	if (s.kind === 'api' || s.kind === 'mcp') { return KindCategory.Feed; }
+	if (contextOnly) { return KindCategory.Reference; }
+	if (/\.(csv|json|tsv|xlsx?)$/i.test(s.id)) { return KindCategory.Table; }
+	return KindCategory.Transcript;
+}
+
+// The plain-English name for the KIND column, keyed off the semantic category (one truth with the glyph).
+function kindWord(cat: KindCategory): string {
+	switch (cat) {
+		case KindCategory.Feed: return localize("livingDocs.knowledge.kind.feed", "Live feed");
+		case KindCategory.Reference: return localize("livingDocs.knowledge.kind.reference", "Reference");
+		case KindCategory.Table: return localize("livingDocs.knowledge.kind.table", "Table");
+		case KindCategory.Transcript: return localize("livingDocs.knowledge.kind.transcript", "Transcript");
+	}
+}
+
+// The KIND-cell glyph, keyed off the SAME semantic category as the word (source-hygiene: non-ASCII written as
+// HTML entities). Table = the squared-plus table glyph, Transcript = the fisheye glyph, Reference/Feed = the
+// diamond reference glyph. A value-feeding source draws its glyph in accent; a context-only source quiet.
+function kindGlyph(cat: KindCategory): string {
+	switch (cat) {
+		case KindCategory.Table: return '&#8862;';
+		case KindCategory.Transcript: return '&#9677;';
+		case KindCategory.Reference: return '&#9671;';
+		case KindCategory.Feed: return '&#9671;';
+	}
 }
 
 // True when every document that uses this source uses it as context/influence (no value bindings) - the
@@ -71,6 +100,7 @@ export function renderKnowledge(state: IScreenState): string {
 	// is non-navigable (rendered as a plain div so the click never dead-ends). A stale row paints cream.
 	const row = (s: ISourceInfo, last: boolean) => {
 		const contextOnly = isContextOnly(s);
+		const cat = kindCategory(s, contextOnly);
 		const st = sourceFreshness({ fresh: s.fresh, contextOnly, markedExpected: s.markedExpected });
 		const fresh = freshnessLabel(st, s.syncedAt, now);
 		const glyphColour = contextOnly ? '#A3A8B2' : '#5B6DC4';
@@ -88,8 +118,8 @@ export function renderKnowledge(state: IScreenState): string {
 		const bindsCell = binds > 0
 			? `<span style="text-align:right;font:600 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650B8">${binds}</span>`
 			: `<span style="text-align:right;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2">&#8212;</span>`;
-		const cells = `<span style="display:flex;align-items:center;gap:9px;min-width:0"><span style="font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:${glyphColour}">${KIND_GLYPH[s.kind] ?? KIND_GLYPH.file}</span><span style="font:600 13.5px/1.3 system-ui;color:#1A1C20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.label)}</span></span>
-			<span style="font:400 12.5px/1 system-ui;color:#52575F">${kindWord(s, contextOnly)}</span>
+		const cells = `<span style="display:flex;align-items:center;gap:9px;min-width:0"><span style="font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:${glyphColour}">${kindGlyph(cat)}</span><span style="font:600 13.5px/1.3 system-ui;color:#1A1C20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.label)}</span></span>
+			<span style="font:400 12.5px/1 system-ui;color:#52575F">${kindWord(cat)}</span>
 			<span style="display:flex;align-items:center;gap:6px;font:400 12px/1 system-ui;color:${fresh.text}"><span style="width:7px;height:7px;flex:none;border-radius:999px;background:${fresh.dot}"></span>${esc(fresh.label)}</span>
 			<span style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;min-width:0">${chips}</span>
 			${bindsCell}`;

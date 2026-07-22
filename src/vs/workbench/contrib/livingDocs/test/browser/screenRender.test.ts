@@ -369,6 +369,35 @@ suite('livingDocs screenRender', () => {
 		assert.ok(/data-sheet-open="addsource"/.test(html), 'an Add source action is wired');
 	});
 
+	test('Knowledge KIND glyph and KIND word derive from ONE semantic classification, so they never diverge (D1)', () => {
+		// One source of every semantic kind: a data table, a text transcript, a context-only reference, a live
+		// feed. The glyph and the word live in the same row, so pairing each row's glyph to its word proves the
+		// two are keyed off the same axis (the old bug: a "Reference" .md rendered with the table glyph).
+		const sources = [
+			source('metrics.csv', 'file', true, [{ path: '/ws/W.md', title: 'W', keys: ['metrics.mrr'] }]),
+			source('market-research.md', 'file', true, [{ path: '/ws/W.md', title: 'W', keys: ['research.tam'] }]),
+			source('brand.md', 'file', true, [{ path: '/ws/W.md', title: 'W', keys: [], context: true }]),
+			source('https://api.example.com/repo', 'api', true, [{ path: '/ws/W.md', title: 'W', keys: ['repo.stars'] }]),
+		];
+		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources, knNow: Date.now() });
+		// For each semantic kind, the row's glyph and word must both appear paired within the same KIND cell.
+		// &#8862; ⊞ table · &#9677; ◍ transcript · &#9671; ◇ reference/feed.
+		const pairs: { glyph: string; word: string }[] = [
+			{ glyph: '&#8862;', word: 'Table' },       // metrics.csv
+			{ glyph: '&#9677;', word: 'Transcript' },  // market-research.md (bound, not context)
+			{ glyph: '&#9671;', word: 'Reference' },   // brand.md (context-only)
+			{ glyph: '&#9671;', word: 'Live feed' },   // api endpoint
+		];
+		for (const { glyph, word } of pairs) {
+			// The glyph opens the row, the word follows in the next cell: assert the glyph precedes its word with
+			// no intervening KIND word (so a Table glyph can never sit above a "Reference" word).
+			const re = new RegExp(glyph + '[\\s\\S]*?>' + word + '<');
+			assert.ok(re.test(html), `the ${word} row carries the ${glyph} glyph`);
+		}
+		// Guard the exact D1 symptom: the ⊞ table glyph must NEVER precede the "Reference" word.
+		assert.ok(!/&#8862;(?:(?!&#\d)[\s\S])*?>Reference</.test(html), 'a Reference source never renders the table glyph (D1)');
+	});
+
 	test('Knowledge summary line + BINDS/FEEDS + context-only vocabulary are truthful', () => {
 		const sources = [
 			source('metrics.csv', 'file', true, [{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: ['metrics.mrr', 'metrics.churn'] }]),
