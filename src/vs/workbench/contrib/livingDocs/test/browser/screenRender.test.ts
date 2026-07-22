@@ -8,7 +8,6 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDocSummary, ISourceInfo, ITemplateInfo } from '../../common/livingDocs.js';
 import { IAgentDef, IAgentRun, ISkillRunSummary, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
-import { buildAwayFeed } from '../../common/projectHomeFeed.js';
 import { IScreenState, renderScreenHtml, ScreenId } from '../../browser/screenRender.js';
 
 suite('livingDocs screenRender', () => {
@@ -106,27 +105,74 @@ suite('livingDocs screenRender', () => {
 		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount, folder: '', unseenAgentEdits: 0, relinkCount: 0, stale: false, fanoutFailed: false };
 	}
 
-	test('home with no folder open shows the empty state and an Open folder action (no demo projects)', () => {
+	test('home with no folder open shows one plain-words line + one button, zero product vocabulary (H1.5, #211 items 1-2)', () => {
 		const html = renderScreenHtml('home', { ...state, hasFolder: false });
-		assert.ok(html.includes('Open a folder to begin'), 'shows the empty-state prompt');
+		assert.ok(html.includes('Open a folder to start working.'), 'shows the plain-words invitation line');
 		assert.ok(/data-msg="openFolder"/.test(html), 'the empty state has an Open folder action');
+		// H1.5 / #211 items 1-2: the no-folder state must carry NO product vocabulary in its user-visible copy -
+		// a plain invitation to open a folder of files, not a pitch for "Living Documents", "sources" or "agents".
+		// Assert against the visible body only (the shared <style>/<script> the shell appends to every screen
+		// carry code comments naming those concepts, which the user never reads).
+		const visible = html.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<script[\s\S]*?<\/script>/g, '');
+		assert.ok(!/Living Documents/i.test(visible) && !/\bsources\b/i.test(visible) && !/\bagents\b/i.test(visible), 'no product vocabulary in the visible no-folder copy');
 		assert.ok(!html.includes('Acme Co') && !html.includes('Job Search 2026'), 'no hardcoded demo project cards');
 	});
 
-	test('home with a folder open reflects the real folder: its name as the project, and a NEEDS-YOU card per doc with pending work', () => {
-		// The home dashboard (plan 22) leads with the project name + a NEEDS-YOU section: one card per
-		// document that has pending changes, each opening that document to review. A doc with no pending
-		// work is truthfully absent from NEEDS-YOU (it is not "waiting for you").
+	test('home v2 dashboard: greeting + truthful summary, NEEDS-YOU cards from real host detail, and an ALL DOCUMENTS grid (H1-H3)', () => {
+		// The v2 Home (plan 48): a person-first greeting, a truthful needs-you count, at most two NEEDS-YOU
+		// cards built from the host-computed `homeNeedsYou` detail (real reason + freshness), and a per-document
+		// ALL DOCUMENTS grid of the open folder. The folder name is no longer printed in the body (the plan-44
+		// header breadcrumb owns it); the greeting is by person (decision 39 - the folder IS the project).
 		const docs = [summary('/ws/Weekly Update.md', 'Weekly Update', true, 3), summary('/ws/Team Notes.md', 'Team Notes', false, 0)];
-		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'realdocs-test', docs });
+		const html = renderScreenHtml('home', {
+			...state, hasFolder: true, folderName: 'realdocs-test', docs,
+			userName: 'Tom',
+			homeNeedsYou: [{ resource: URI.file('/ws/Weekly Update.md').toString(), title: 'Weekly Update', pendingCount: 3, reason: 'Revenue line changed - waiting on your call at line 6.', refreshedLabel: 'refreshed 2m ago' }],
+			homeNeedsYouTotal: 1,
+		});
 
-		assert.ok(html.includes('realdocs-test'), 'shows the open folder name as the project');
+		// H1: person-first greeting (real name) + truthful summary count.
+		assert.ok(/Good (morning|afternoon|evening), Tom\./.test(html), 'greets the person by name with a real time-of-day');
+		assert.ok(html.includes('1 document needs you'), 'the summary states the truthful needs-you count');
+		// H2: the NEEDS-YOU section + a card with the real reason, the amber pill, and a Review that opens the doc.
 		assert.ok(/NEEDS YOU/.test(html), 'shows the NEEDS-YOU section when a doc has pending work');
-		assert.ok(html.includes('Weekly Update'), 'the doc with pending changes is a NEEDS-YOU card');
-		assert.strictEqual(html.split('data-msg="openDoc"').length - 1, 1, 'only the doc with pending work carries a Review action');
-		assert.ok(!html.includes('Acme Co') && !html.includes('Fund III'), 'no hardcoded demo project cards');
-		assert.ok(/data-msg="openFolder"/.test(html) || /data-msg="openFirstDoc"/.test(html), 'the populated home is interactive');
+		assert.ok(html.includes('Weekly Update') && html.includes('waiting on your call at line 6'), 'the card carries the real reason');
+		assert.ok(html.includes('3 TO APPROVE') && html.includes('refreshed 2m ago'), 'the card shows the real pill + freshness stamp');
+		// H3: the ALL DOCUMENTS grid lists every real document; both docs are openable cards.
+		assert.ok(/ALL DOCUMENTS/.test(html), 'shows the ALL DOCUMENTS grid label');
+		assert.ok(html.includes('Team Notes'), 'the non-pending document still appears in the grid');
+		assert.ok(!html.includes('Acme Co') && !html.includes('Fund III') && !/ALL PROJECTS/.test(html), 'no fixture cards, no multi-project dashboard (decision 39)');
 		assert.ok(!html.includes('data-msg="newProject"') && !/>New project</.test(html), 'the no-op New project button is gone');
+	});
+
+	test('home v2: status chips agree with the tree rail dots (H3.4 - one truth), and the dashed New document tile closes the grid (H3.3)', () => {
+		// H3.4: the ALL DOCUMENTS chip is derived from the SAME docRailDot helper as the tree, so a pending doc
+		// reads "needs you", a calm living doc reads "in sync", and a plain markdown file reads "markdown".
+		const docs = [
+			summary('/ws/Pending.md', 'Pending', true, 2),          // yellow -> needs you
+			summary('/ws/Calm.md', 'Calm', true, 0),                // living, calm -> in sync
+			summary('/ws/Plain.md', 'Plain', false, 0),             // plain markdown -> markdown
+		];
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs, userName: 'Tom' });
+		assert.deepStrictEqual({
+			needsYou: html.includes('needs you'),
+			inSync: html.includes('in sync'),
+			markdown: html.includes('markdown'),
+			newDocTile: /class="doc-newtile"[^>]*data-sheet-open="newdoc"|data-sheet-open="newdoc"[^>]*class="doc-newtile"/.test(html) || (/class="doc-newtile"/.test(html) && /data-msg="newDocument"/.test(html)),
+		}, { needsYou: true, inSync: true, markdown: true, newDocTile: true });
+	});
+
+	test('home v2: the NEEDS-YOU section shows at most two cards and a "+N more" overflow to the Review surface (H2.1)', () => {
+		const html = renderScreenHtml('home', {
+			...state, hasFolder: true, folderName: 'ws', userName: 'Tom',
+			docs: [summary('/ws/A.md', 'A', true, 1), summary('/ws/B.md', 'B', true, 1), summary('/ws/C.md', 'C', true, 1)],
+			homeNeedsYou: [
+				{ resource: URI.file('/ws/A.md').toString(), title: 'A', pendingCount: 1, reason: '1 change is waiting for your review.' },
+				{ resource: URI.file('/ws/B.md').toString(), title: 'B', pendingCount: 1, reason: '1 change is waiting for your review.' },
+			],
+			homeNeedsYouTotal: 3,
+		});
+		assert.ok(html.includes('+1 more') && /data-msg="reviewProject"/.test(html), 'the overflow row links to the Review surface');
 	});
 
 	// The name-or-template on-ramp (plan 28, iter 4): Home carries a New document primary that opens a sheet
@@ -184,67 +230,18 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('Acme Co') && !html.includes('Fund III'), 'no hardcoded demo project cards');
 	});
 
-	// --- Home failed-run attention line (plan 32 iter 2): truthful, links to Agents ---
+	// --- Home v2: zero-pending calm state (H1.3 / H2.5) ---
+	// The v2 Home no longer carries the pre-v2 dashboard's WHILE YOU WERE AWAY feed, all-clear banner, Tidy
+	// surface, failed-run attention line or in-dashboard chat composer (those pre-v2 surfaces were removed by
+	// plan 48; the chat composer still leads the empty-project front door, tested below). The calm all-clear
+	// is now the summary line itself, and the NEEDS-YOU section is simply absent when nothing pends.
 
-	test('home surfaces one quiet attention line when a scheduled run failed, linking to Agents', () => {
-		const html = renderScreenHtml('home', {
-			...state, hasFolder: true, folderName: 'realdocs-test', docs: [summary('/ws/Weekly Update.md', 'Weekly Update', true, 0)],
-			homeFailure: { agentName: 'Weekly refresh', day: 'Monday', error: 'metrics.csv unreadable' },
-		});
-		assert.ok(html.includes('Weekly refresh failed on Monday'), 'shows the agent + day in the failure line');
-		assert.ok(/data-msg="goAgents"/.test(html), 'the failure line links to the Agents screen');
-		assert.ok(html.includes('View details'), 'offers a details affordance');
-	});
-
-	test('home shows NO failure line when nothing failed (truthful automation, no fake activity)', () => {
-		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'realdocs-test', docs: [summary('/ws/Weekly Update.md', 'Weekly Update', true, 0)] });
-		assert.ok(!/failed on/.test(html), 'no fabricated failure line when there is no failure');
-	});
-
-	// --- Home front door (F15 / journey 1w): WHILE YOU WERE AWAY feed, all-clear promotion, chat composer ---
-
-	const now = Date.parse('2026-07-13T12:00:00Z');
-
-	test('home carries the whole-project chat composer defaulting to whole-project scope (map-D21/D24)', () => {
-		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)] });
-		assert.ok(/data-ask-box/.test(html), 'renders the composer box');
-		assert.ok(/data-ask-input/.test(html) && /data-ask-send/.test(html), 'has an input + Ask control');
-		assert.ok(/ASK THIS PROJECT/.test(html) && /Whole project/.test(html), 'defaults to whole-project scope');
-	});
-
-	test('home renders the WHILE YOU WERE AWAY feed from real run rows, with needs-you counts', () => {
-		const awayFeed = buildAwayFeed({
-			runs: [{ agentId: 'refresh', startedAt: '2026-07-13T11:00:00Z', applied: 1, queued: 2, docsTouched: 3, via: 'cron' }],
-			agentNames: { refresh: 'Weekly refresh' },
-			needsYouTotal: 2,
-			sinceMs: Date.parse('2026-07-13T00:00:00Z'),
-			nowMs: now,
-		});
-		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 2)], awayFeed });
-		assert.ok(/WHILE YOU WERE AWAY/.test(html), 'shows the away section when a run happened in the window');
-		assert.ok(html.includes('Weekly refresh'), 'names the real agent that ran');
-		assert.ok(/2 NEEDS YOU/.test(html), 'carries the run\'s needs-you count');
-		assert.ok(!/Everything is in sync/.test(html), 'no all-clear promotion while work pends');
-	});
-
-	test('home promotes the all-clear (map-D14) when nothing pends, and never fabricates feed rows', () => {
-		const awayFeed = buildAwayFeed({ runs: [], agentNames: {}, needsYouTotal: 0, sinceMs: 1, nowMs: now });
-		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)], awayFeed });
-		assert.ok(html.includes('Everything is in sync'), 'shows the calm all-clear promotion');
-		assert.ok(!/WHILE YOU WERE AWAY/.test(html), 'no feed section when nothing ran (no fabricated rows)');
-	});
-
-	test('home renders a read-only project answer with citation chips (map-D24)', () => {
-		const html = renderScreenHtml('home', {
-			...state, hasFolder: true, folderName: 'ws', docs: [summary('/ws/A.md', 'A', true, 0)],
-			projectAnswer: { answer: 'Revenue is on plan, no surprises.', citations: ['Board Note', 'metrics.csv'], via: 'model' },
-		});
-		assert.ok(/READ-ONLY/.test(html), 'labels the answer as read-only');
-		assert.ok(html.includes('Revenue is on plan, no surprises.'), 'shows the answer prose');
-		assert.ok(html.includes('Board Note') && html.includes('metrics.csv'), 'shows the real citation chips');
-		// The chip row leads with "Consulted:" - exactly-true wording, since the fallback path lists every file
-		// read for the answer (not a model-attested "supporting sources" set).
-		assert.ok(html.includes('Consulted:'), 'the chip row is labelled Consulted so it never over-claims support');
+	test('home v2 all-clear: the summary reads "Everything is in sync." and the NEEDS-YOU section is absent (H1.3 / H2.5)', () => {
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', userName: 'Tom', docs: [summary('/ws/A.md', 'A', true, 0)] });
+		assert.ok(html.includes('Everything is in sync.'), 'the summary carries the calm all-clear when nothing pends');
+		assert.ok(!/NEEDS YOU/.test(html), 'no NEEDS-YOU section (no empty shell) when nothing pends');
+		// The pre-v2 dashboard surfaces are gone from the v2 Home body (they were never a v2 criterion).
+		assert.ok(!/WHILE YOU WERE AWAY/.test(html) && !/ASK THIS PROJECT/.test(html) && !/failed on/.test(html), 'the pre-v2 dashboard surfaces are gone from v2 Home');
 	});
 
 	// --- Templates (plan 28): the real template library, driven by listTemplates() ---
