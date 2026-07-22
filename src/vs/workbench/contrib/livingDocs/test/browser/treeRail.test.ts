@@ -7,7 +7,7 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, isAssetName, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -391,5 +391,77 @@ suite('treeRail', () => {
 			{ count: 1, title: 'Weekly Summary', hasSnippet: true },
 		);
 		assert.strictEqual(searchTreeRail(docs, '   ').length, 0, 'blank query returns nothing');
+	});
+
+	test('filterTreeRailNodes narrows to matching rows, keeps ancestor folders, and passes a blank query through', () => {
+		// Two docs in nested Reports folders + one loose source, so the filter must prune folders that hold no match.
+		const nodes = buildTreeRailNodes(
+			[
+				{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), pendingCount: 0, sources: [], folder: 'reports/2025' },
+				{ title: 'Board Note', resource: URI.file('/ws/reports/Board Note.md'), pendingCount: 0, sources: [], folder: 'reports' },
+			],
+			['metrics.csv'],
+		);
+		// Collect every leaf label reachable under a filtered tree, so one deepStrictEqual reads the whole shape.
+		const labels = (roots: readonly ITreeRailNode[]): string[] => {
+			const out: string[] = [];
+			const walk = (n: ITreeRailNode): void => n.type === 'leaf' ? void out.push(n.item.label) : n.children.forEach(walk);
+			roots.forEach(walk);
+			return out.sort();
+		};
+		assert.deepStrictEqual(
+			{
+				weekly: labels(filterTreeRailNodes(nodes, 'weekly')),
+				metrics: labels(filterTreeRailNodes(nodes, 'metrics')),
+				noMatch: filterTreeRailNodes(nodes, 'zzz').length,
+				blankUnchanged: labels(filterTreeRailNodes(nodes, '   ')),
+				original: labels(nodes),
+			},
+			{
+				weekly: ['Weekly Summary'],
+				metrics: ['metrics.csv'],
+				noMatch: 0,
+				blankUnchanged: ['Board Note', 'Weekly Summary', 'metrics.csv'],
+				original: ['Board Note', 'Weekly Summary', 'metrics.csv'],
+			},
+		);
+	});
+
+	test('filterTreeRailNodes keeps a document matched only by body text (P4.2 content reach)', () => {
+		// Two docs whose labels do NOT contain "primary colour" - the phrase only lives in Board Note's body. The
+		// view resolves the body-match set via `searchTreeRail`, then feeds the leaf resources to the filter, which
+		// must surface Board Note (kept via bodyMatchResources) while a term in no label or body prunes to nothing.
+		const boardResource = URI.file('/ws/reports/Board Note.md');
+		const nodes = buildTreeRailNodes([
+			{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), pendingCount: 0, sources: [], folder: 'reports/2025' },
+			{ title: 'Board Note', resource: boardResource, pendingCount: 0, sources: [], folder: 'reports' },
+		]);
+		const labels = (roots: readonly ITreeRailNode[]): string[] => {
+			const out: string[] = [];
+			const walk = (n: ITreeRailNode): void => n.type === 'leaf' ? void out.push(n.item.label) : n.children.forEach(walk);
+			roots.forEach(walk);
+			return out.sort();
+		};
+		// The body-match set the view derives from `searchTreeRail` for a given query - always recomputed per query,
+		// so the tree filter and the set agree. Only Board Note's body carries "primary colour"; nothing carries "zzz".
+		const bodySet = (query: string) => new Set(searchTreeRail(
+			[
+				{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), body: 'Revenue grew this week.' },
+				{ title: 'Board Note', resource: boardResource, body: 'The brand refresh keeps the primary colour unchanged.' },
+			],
+			query,
+		).map(hit => hit.resource.toString()));
+		assert.deepStrictEqual(
+			{
+				bodyPhrase: labels(filterTreeRailNodes(nodes, 'primary colour', bodySet('primary colour'))),
+				noBodySet: filterTreeRailNodes(nodes, 'primary colour').length,
+				unmatched: filterTreeRailNodes(nodes, 'zzz', bodySet('zzz')).length,
+			},
+			{
+				bodyPhrase: ['Board Note'],
+				noBodySet: 0,
+				unmatched: 0,
+			},
+		);
 	});
 });

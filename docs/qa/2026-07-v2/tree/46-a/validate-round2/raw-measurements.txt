@@ -1,0 +1,68 @@
+=== P4.1/P4.3 STRIP+CHIPS === {
+ "stripCls": "rail-tabs",
+ "stripH": 39,
+ "stripHcss": "38px",
+ "gap": "2px",
+ "pad": "0px 10px",
+ "borderBottom": "1px rgb(238, 240, 243)",
+ "tabTexts": [
+  "Files",
+  "Context",
+  "Outline"
+ ],
+ "tabs": [
+  {
+   "text": "Files",
+   "active": true,
+   "h": 26,
+   "radius": "8px",
+   "bg": "rgb(255, 255, 255)",
+   "shadow": "rgba(20, 22, 28, 0.05) 0px 1px 2px 0px",
+   "color": "rgb(26, 28, 32)",
+   "weight": "600",
+   "size": "12px",
+   "pad": "0px 10px"
+  },
+  {
+   "text": "Context",
+   "active": false,
+   "h": 26,
+   "radius": "8px",
+   "bg": "rgba(0, 0, 0, 0)",
+   "shadow": "none",
+   "color": "rgb(134, 139, 149)",
+   "weight": "500",
+   "size": "12px",
+   "pad": "0px 10px"
+  },
+  {
+   "text": "Outline",
+   "active": false,
+   "h": 26,
+   "radius": "8px",
+   "bg": "rgba(0, 0, 0, 0)",
+   "shadow": "none",
+   "color": "rgb(134, 139, 149)",
+   "weight": "500",
+   "size": "12px",
+   "pad": "0px 10px"
+  }
+ ]
+}
+=== P4.3 idle-hover === {"text":"Context","color":"rgb(82, 87, 95)"}
+=== P4.4 PLUS === {"text":"＋","aria":"New Document","w":24,"h":24,"radius":"7px","bg":"rgba(0, 0, 0, 0)","rightOfTabs":true}
+=== P4.4 plus-hover-bg === {"bg":"rgb(238, 240, 243)"}
+=== visible folder labels (pre-expand) === ["Reports","brief","Sources"]
+=== P4.5 SOURCES LABEL === {"text":"Sources","fontFamily":"\"JetBrains Mono\", ui-monospace, monospace","fontSize":"10px","fontWeight":"600","letterSpacing":"1.2px","color":"rgb(163, 168, 178)","textTransform":"uppercase","renderedUpper":false}
+=== P4.5 scroll-as-one === {"monacoListCount":1,"extraScrollables":0}=== filter inputs === [{"cls":"rail-filter-input","ph":"Filter documents…","type":"text"}]
+=== BASELINE (blank) === 12 ["Reports","brief","Appendix — Design Tokens","Executive Summary","Project Brief — Northwind Rebrand","Board Note","Market research","Team Notes","Weekly Operating Summary","Wrap Rule Fixture","Sources","metrics.csv"]
+=== P4.2 body "primary colour" === count=3 empty=false ["Reports","brief","Appendix — Design Tokens"]
+=== P4.2 body UPPER "PRIMARY COLOUR" === count=3 ["Reports","brief","Appendix — Design Tokens"]
+=== P4.2 nonsense === count=0 empty=true emptyText=
+=== label "Weekly" === count=2 ["Reports","Weekly Operating Summary"]
+=== cleared restores === count=12 ["Reports","brief","Appendix — Design Tokens","Executive Summary","Project Brief — Northwind Rebrand","Board Note","Market research","Team Notes","Weekly Operating Summary","Wrap Rule Fixture","Sources","metrics.csv"]
+=== label lower "board" === count=2 ["Reports","Board Note"]
+=== snippet affordance? === {"hasSnippetEl":false,"snippetText":null}
+=== focus discipline === before="Board" after="Board" PASS-unchanged=== frames === ["http://localhost:8082/","http://localhost:8082/static/sources/out/vs/workbench/servic","http://0otqvtikdbbsbv6dhhebbk2oc0btgf7h279jo03dedq8i07j6hig.","http://0otqvtikdbbsbv6dhhebbk2oc0btgf7h279jo03dedq8i07j6hig."]
+=== 45-a/gutter in editor frame === {"hasProseMirror":true,"gutterClasses":[],"hasDotGutter":false,"hasNumberedGutter":false,"proseLeftPad":"30px","sample":"NumbersMetricPreviousCurrentChangeMRR$41.2k$48.6k+"}
+=== 48-a Home card in frame === {"cls":"action-label codicon codicon-living-docs-home","text":""}

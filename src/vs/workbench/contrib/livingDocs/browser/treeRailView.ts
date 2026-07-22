@@ -31,16 +31,16 @@ import { IHistoryService } from '../../../services/history/common/history.js';
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
+import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 
-type TreeRailTab = 'files' | 'context' | 'outline' | 'search';
+// Three calm tabs (pin 4): Search is gone as a tab - it folds into Files as type-to-filter (P4.1/P4.2).
+type TreeRailTab = 'files' | 'context' | 'outline';
 
-const TABS: readonly { id: TreeRailTab; label: string; glyph: string }[] = [
-	{ id: 'files', label: 'Files', glyph: '\u{1F5C2}' },
-	{ id: 'context', label: 'Context', glyph: '\u25C9' },
-	{ id: 'outline', label: 'Outline', glyph: '\u2630' },
-	{ id: 'search', label: 'Search', glyph: '\u2315' },
+const TABS: readonly { id: TreeRailTab; label: string }[] = [
+	{ id: 'files', label: 'Files' },
+	{ id: 'context', label: 'Context' },
+	{ id: 'outline', label: 'Outline' },
 ];
 
 // The comp's single left tree-rail: one sidebar view with Files / Context / Outline / Search tabs and a
@@ -52,7 +52,10 @@ export class TreeRailView extends ViewPane {
 	private _stylesInjected = false;
 	private _renderToken = 0;
 	private _tab: TreeRailTab = 'files';
-	private _query = '';
+	// The Files-tab type-to-filter (P4.2): narrows the tree rows live. Kept across re-renders so an
+	// onDidChange/onDidActiveEditorChange re-render never drops what the user has typed. Only the rail's own
+	// filter input writes it - typing in the editor never reaches here (plan-42 quiet-shell focus discipline).
+	private _filter = '';
 	// Context-tab "Add context" composer state, kept across re-renders (onDidChange re-renders the rail).
 	private _ctxAdding = false;
 	// 'file' references a real folder file (frontmatter context, R6); the others are lock context items.
@@ -172,24 +175,43 @@ export class TreeRailView extends ViewPane {
 		this._renderDisposables.clear();
 		clearNode(root);
 
-		// Tab strip.
+		// Tab strip: three chips, a flexible spacer, then the quiet + (P4.1/P4.3/P4.4).
 		const tabs = append(root, $('div.rail-tabs'));
 		for (const t of TABS) {
 			const btn = append(tabs, $(`button.rail-tab${this._tab === t.id ? '.active' : ''}`)) as HTMLButtonElement;
-			append(btn, $('span.rail-tab-glyph')).textContent = t.glyph;
 			append(btn, document.createTextNode(t.label));
 			this._renderDisposables.add(addDisposableListener(btn, 'click', () => {
 				if (this._tab !== t.id) { this._tab = t.id; void this._render(); }
 			}));
 		}
+		append(tabs, $('div.rail-tabs-spacer'));
+		// The quiet + : name-first document birth (P4.4). Reuses plan 42's create command with a typed name,
+		// which is kept (createDocument writes `<name>.md`); an empty name keeps the Untitled escape hatch.
+		const plus = append(tabs, $('button.rail-new-doc')) as HTMLButtonElement;
+		// allow-any-unicode-next-line
+		plus.textContent = '＋'; // fullwidth plus, matching the mock's quiet new-document glyph
+		plus.title = localize('livingDocs.treeRail.newDocument', "New Document");
+		plus.setAttribute('aria-label', plus.title);
+		this._renderDisposables.add(addDisposableListener(plus, 'click', () => void this._createDocument()));
 
 		const panel = append(root, $('div.rail-panel'));
 		switch (this._tab) {
 			case 'files': this._renderFiles(panel, documents, extras); break;
 			case 'context': this._renderContext(panel); break;
 			case 'outline': this._renderOutline(panel); break;
-			case 'search': this._renderSearch(panel, documents); break;
 		}
+	}
+
+	// Name-first document birth from the tree rail's + (P4.4): prompt for a name, then create through the
+	// existing plan-42 service command (which keeps the typed name as the filename). A blank/cancelled name
+	// keeps decision 56's Untitled name-on-first-save escape hatch; the service opens the new document.
+	private async _createDocument(): Promise<void> {
+		const name = await this._quickInput.input({
+			prompt: localize('livingDocs.treeRail.newDocumentPrompt', "Name your new document"),
+			placeHolder: localize('livingDocs.treeRail.newDocumentPlaceholder', "Untitled"),
+		});
+		if (name === undefined) { return; } // cancelled - no document is born
+		await this._livingDocs.createDocument(name.trim());
 	}
 
 	// The Files tab (issue #171): a real collapsible file tree on the VS Code tree widget. The widget is
@@ -215,6 +237,11 @@ export class TreeRailView extends ViewPane {
 		this._seedAssetsCollapsed(nodes);
 		panel.classList.add('rail-panel-files');
 
+		// The type-to-filter field (P4.2, the folded-in Search): a quiet input that narrows the tree rows live.
+		// It captures keystrokes only when it holds focus, so typing in the editor never triggers it (plan-42
+		// quiet-shell focus discipline). Rendered above the tree so the filter reads as part of the Files pane.
+		this._renderFilter(panel);
+
 		// The bulk-import banner (doc 22 section 2, the 2b moment): when several Word documents are waiting,
 		// offer to import them all at once - "I found N Word documents - import them?". A banner above the tree.
 		const importable = this._collectImportable(nodes);
@@ -225,11 +252,56 @@ export class TreeRailView extends ViewPane {
 		const container = this._filesTreeContainer!;
 		append(panel, container);
 
+		// Narrow the rows to the active filter (P4.2): a blank filter shows the whole tree unchanged. The filter
+		// matches a row's label AND - restoring the old Search tab's reach - a document's body text: `searchTreeRail`
+		// (the single home of title-OR-body matching) resolves the docs whose body contains the query, and the tree
+		// keeps those doc rows even when their label does not match, so a body-only phrase still finds the document.
+		const bodyMatches = this._bodyMatchResources(documents);
+		const visible = filterTreeRailNodes(nodes, this._filter, bodyMatches);
+		if (!visible.length) {
+			// The filter matched nothing: keep the tree mounted but empty and say so, so the input stays live.
+			tree.setChildren(null, []);
+			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.treeRail.noMatches', "No documents match '{0}'.", this._filter.trim());
+			return;
+		}
 		// Per-leaf action listeners (import / use-as-source) are owned by the renderer's per-row template store,
 		// cleared when a row is recycled or disposed - so a rebuild never leaks the previous generation.
-		tree.setChildren(null, nodes.map(n => this._toTreeElement(n)));
+		tree.setChildren(null, visible.map(n => this._toTreeElement(n)));
 		this._layoutFilesTree();
 		this._highlightActiveDoc();
+	}
+
+	// The Files type-to-filter (P4.2): a quiet input that narrows the tree live. Focus discipline (plan-42
+	// quiet-shell): it only reacts to its own `input` events, so typing while the editor is focused never
+	// reaches it - the criterion "filter must not steal keyboard focus from the editor". Focus is restored to
+	// the input after a background re-render only when a filter is already active, so an idle rail never grabs
+	// focus from the editor.
+	private _renderFilter(panel: HTMLElement): void {
+		const wrap = append(panel, $('div.rail-filter'));
+		const input = append(wrap, $('input.rail-filter-input')) as HTMLInputElement;
+		input.type = 'text';
+		input.placeholder = localize('livingDocs.treeRail.filterPlaceholder', "Filter documents…");
+		input.setAttribute('aria-label', localize('livingDocs.treeRail.filterLabel', "Filter documents"));
+		input.value = this._filter;
+		this._renderDisposables.add(addDisposableListener(input, 'input', () => {
+			this._filter = input.value;
+			void this._render();
+		}));
+		if (this._filter) {
+			input.focus();
+			input.setSelectionRange(this._filter.length, this._filter.length);
+		}
+	}
+
+	// The set of documents whose *body text* matches the active filter (P4.2, the folded-in Search's content
+	// reach): reuse `searchTreeRail` - the single home of title-OR-body matching - over the loaded document
+	// bodies, and project its hits down to the `resource.toString()` keys the tree filter checks. A blank filter
+	// short-circuits to the empty set (no body work when nothing is typed); an unloaded document contributes an
+	// empty body, so it matches only by title, exactly as the old Search tab behaved.
+	private _bodyMatchResources(documents: readonly ILivingDocSummary[]): Set<string> {
+		if (!this._filter.trim()) { return new Set(); }
+		const docs = documents.map(d => ({ title: d.title, resource: d.resource, body: this._livingDocs.getDoc(d.resource)?.body ?? '' }));
+		return new Set(searchTreeRail(docs, this._filter).map(hit => hit.resource.toString()));
 	}
 
 	// The MRU document resources for the "Recent" group (issue #212): walk the editor history newest-first and
@@ -708,52 +780,27 @@ export class TreeRailView extends ViewPane {
 		}
 	}
 
-	private _renderSearch(panel: HTMLElement, documents: readonly ILivingDocSummary[]): void {
-		const input = append(panel, $('input.rail-search')) as HTMLInputElement;
-		input.type = 'text';
-		input.placeholder = 'Search documents\u2026';
-		input.value = this._query;
-		const results = append(panel, $('div.rail-results'));
-		const run = () => {
-			clearNode(results);
-			const docs = documents
-				.map(d => ({ title: d.title, resource: d.resource, body: this._livingDocs.getDoc(d.resource)?.body ?? '' }))
-				.filter(d => d.body || true);
-			const hits = searchTreeRail(docs, this._query);
-			if (!this._query.trim()) { return; }
-			append(results, $('div.rail-results-count')).textContent = `${hits.length} result${hits.length === 1 ? '' : 's'}`;
-			for (const hit of hits) {
-				const resource = hit.resource;
-				const row = append(results, $('div.rail-item'));
-				row.setAttribute('role', 'button');
-				row.tabIndex = 0;
-				append(row, $('span.rail-item-label')).textContent = hit.title;
-				append(row, $('div.rail-item-snippet')).textContent = hit.snippet;
-				const open = () => void this._editors.openEditor({ resource, options: { pinned: true } });
-				this._renderDisposables.add(addDisposableListener(row, 'click', open));
-			}
-		};
-		this._renderDisposables.add(addDisposableListener(input, 'input', () => { this._query = input.value; run(); }));
-		run();
-		// Restore focus so typing isn't interrupted by a re-render from onDidChange.
-		if (this._query) { input.focus(); input.setSelectionRange(this._query.length, this._query.length); }
-	}
-
 	private _injectStyles(container: HTMLElement): void {
 		if (this._stylesInjected) { return; }
 		this._stylesInjected = true;
 		const style = document.createElement('style');
 		style.textContent = `
-		.living-docs-rail .rail-tabs{flex:none;display:flex;align-items:stretch;border-bottom:1px solid var(--vscode-widget-border,#eef0f3);padding:0 2px}
-		.living-docs-rail .rail-tab{border:none;background:none;cursor:pointer;padding:8px 8px;display:flex;align-items:center;gap:5px;font:500 11.5px/1 system-ui;color:var(--vscode-descriptionForeground);border-bottom:2px solid transparent}
-		.living-docs-rail .rail-tab:hover{color:var(--vscode-foreground)}
-		.living-docs-rail .rail-tab.active{color:var(--vscode-foreground);border-bottom-color:oklch(0.55 0.13 255)}
-		.living-docs-rail .rail-tab-glyph{font-size:12px}
+		.living-docs-rail .rail-tabs{flex:none;height:38px;display:flex;align-items:center;gap:2px;padding:0 10px;border-bottom:1px solid #EEF0F3}
+		.living-docs-rail .rail-tabs-spacer{flex:1}
+		.living-docs-rail .rail-tab{border:none;background:none;cursor:pointer;height:26px;padding:0 10px;display:flex;align-items:center;border-radius:8px;font:500 12px/1 system-ui;color:#868B95}
+		.living-docs-rail .rail-tab:hover{color:#52575F}
+		.living-docs-rail .rail-tab.active{font-weight:600;color:#1A1C20;background:#fff;box-shadow:0 1px 2px rgba(20,22,28,.05)}
+		.living-docs-rail .rail-new-doc{flex:none;border:none;background:none;cursor:pointer;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:7px;font:400 15px/1 system-ui;color:#868B95}
+		.living-docs-rail .rail-new-doc:hover{background:#EEF0F3;color:#52575F}
+		.living-docs-rail .rail-filter{flex:none;padding:2px 4px 8px}
+		.living-docs-rail .rail-filter-input{width:100%;box-sizing:border-box;border:1px solid #E9EAEE;background:#FBFCFD;color:var(--vscode-input-foreground);border-radius:9px;padding:7px 10px;font:400 12.5px/1 system-ui;outline:none}
+		.living-docs-rail .rail-filter-input:focus{border-color:#9AA2E0}
+		.living-docs-rail .rail-filter-input::placeholder{color:#A3A8B2}
 		.living-docs-rail .rail-panel{flex:1;overflow-y:auto;padding:10px 8px}
 		.living-docs-rail .rail-panel.rail-panel-files{display:flex;flex-direction:column;overflow:hidden;padding:6px 4px}
 		.living-docs-rail .rail-files-tree{flex:1;min-height:0}
 		.living-docs-rail .rail-files-tree .rail-tree-folder{display:flex;align-items:center;height:100%;min-width:0}
-		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 11px/1 system-ui;color:var(--vscode-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:7px;height:100%;min-width:0;font:400 13px/1.3 system-ui;color:var(--vscode-foreground)}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:var(--vscode-descriptionForeground);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px}
 		.living-docs-rail .rail-files-tree .rail-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:9px;height:9px}
@@ -765,7 +812,7 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-red{background:oklch(0.55 0.2 25)}
 		.living-docs-rail .rail-files-tree .rail-tree-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
 		.living-docs-rail .rail-empty{font:400 12px/1.5 system-ui;color:var(--vscode-descriptionForeground);padding:8px 6px}
-		.living-docs-rail .rail-folder{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:var(--vscode-descriptionForeground);text-transform:uppercase;padding:10px 6px 6px}
+		.living-docs-rail .rail-folder{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;padding:10px 6px 6px}
 		.living-docs-rail .rail-item{display:flex;align-items:center;gap:7px;padding:6px 8px 6px 18px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}
 		.living-docs-rail .rail-item[role=button]{cursor:pointer}
 		.living-docs-rail .rail-item[role=button]:hover{background:var(--vscode-list-hoverBackground)}
@@ -793,8 +840,6 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-outline.lvl-1{font-weight:600}
 		.living-docs-rail .rail-outline.lvl-2{padding-left:18px;color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-outline.lvl-3{padding-left:30px;color:var(--vscode-descriptionForeground)}
-		.living-docs-rail .rail-search{width:100%;box-sizing:border-box;border:1px solid var(--vscode-input-border,#d8e0fb);background:var(--vscode-input-background,#fff);color:var(--vscode-input-foreground);border-radius:8px;padding:8px 10px;font:400 12.5px/1 system-ui;outline:none;margin-bottom:6px}
-		.living-docs-rail .rail-results-count{font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground);padding:4px 6px 8px}
 		.living-docs-rail .rail-addctx{display:block;width:100%;box-sizing:border-box;margin:12px 0 4px;border:1px dashed var(--vscode-input-border,#d3d8e0);background:none;color:oklch(0.55 0.13 255);border-radius:8px;padding:9px;font:500 12px/1 system-ui;cursor:pointer;text-align:left}
 		.living-docs-rail .rail-addctx:hover{background:var(--vscode-list-hoverBackground);border-style:solid}
 		.living-docs-rail .rail-addctx-form{margin:12px 0 4px;border:1px solid var(--vscode-input-border,#e0e6ff);background:var(--vscode-editorWidget-background,#fff);border-radius:9px;padding:9px}
