@@ -48,6 +48,9 @@ import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
 import { LivingDocSourceEditor } from './livingDocSourceEditor.js';
 import { LivingDocSourceInput, LivingDocSourceInputSerializer } from './livingDocSourceInput.js';
+import { parsePersistedTabStrip } from '../common/livingDocTabs.js';
+import { setTabRestoreInProgress, tabStripStorageKey } from './abstractTabStrip.js';
+import { URI } from '../../../../base/common/uri.js';
 import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
 import { TreeRailView } from './treeRailView.js';
@@ -600,6 +603,72 @@ const WELCOME_INPUT_TYPE_ID = 'workbench.editors.gettingStartedInput';
 // dismissible "See a 90-second demo" entry point on Home + first-run, reached through the palette / a Home card,
 // never as a cold-start destination. The routing DECISION is the pure decideStartupRoute() (unit-tested); this
 // contribution only gathers the facts and executes the chosen route.
+// Restore the product-tab set per group across a window reload (plan 45 pin 7 / P7.7, persistence key spec 43
+// section 3.5). VS Code's native editor restoration only reliably brings back the active editor for our webview
+// pane family, so the persisted `livingDocs.v2.tabs.<groupId>` set (written by the tab strip) is the source of
+// truth: on restore we re-open every persisted tab into its group, in order, and re-activate the persisted tab.
+// Documents open by resource (the `*.md` resolver picks the LivingDocEditor); non-`.md` resources open as a
+// source-viewer tab. A resource that no longer exists is skipped so a moved/renamed file never wedges restore.
+class LivingDocsTabRestoreContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.tabRestore';
+
+	constructor(
+		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+		@IEditorService private readonly _editorService: IEditorService,
+		@IStorageService private readonly _storageService: IStorageService,
+	) {
+		super();
+		// Gate strip persistence for the whole restore window BEFORE any pane mounts. Native editor restoration
+		// brings a group back with only its active editor first; an un-gated strip would then overwrite the full
+		// persisted set with that partial one. The gate protects the persisted keys so `_restore` can read the
+		// intact set after `whenReady` (groups do not exist yet at this BlockRestore-phase construction).
+		setTabRestoreInProgress(true);
+		void this._restore();
+	}
+
+	private async _restore(): Promise<void> {
+		try {
+			await this._editorGroups.whenReady;
+			for (const group of this._editorGroups.groups) {
+				// The persisted set is still intact because the gate blocked every strip write during restore.
+				const persisted = parsePersistedTabStrip(this._storageService.get(tabStripStorageKey(group.id), StorageScope.WORKSPACE));
+				if (persisted.ids.length === 0) { continue; }
+				for (const id of persisted.ids) {
+					const resource = this._safeParse(id);
+					if (!resource) { continue; }
+					// Skip a tab native restore already brought back (avoid duplicating the active editor).
+					if (group.editors.some(e => e.resource?.toString() === resource.toString())) { continue; }
+					if (resource.path.toLowerCase().endsWith('.md')) {
+						await this._editorService.openEditor({ resource, options: { pinned: true, inactive: true } }, group);
+					} else {
+						await this._editorService.openEditor(new LivingDocSourceInput(resource), { pinned: true, inactive: true }, group);
+					}
+				}
+				// Re-activate the persisted active tab (last so it wins over the restore order).
+				if (persisted.activeId) {
+					const active = this._safeParse(persisted.activeId);
+					const editor = active && group.editors.find(e => e.resource?.toString() === active.toString());
+					if (editor) { await this._editorService.openEditor(editor, group); }
+				}
+			}
+		} finally {
+			// Restore done: strips may persist again, and the current (full) set is written back immediately.
+			setTabRestoreInProgress(false);
+			for (const group of this._editorGroups.groups) {
+				const ids = group.editors.map(e => e.resource?.toString()).filter((s): s is string => !!s);
+				if (ids.length > 0) {
+					this._storageService.store(tabStripStorageKey(group.id), JSON.stringify({ ids, activeId: group.activeEditor?.resource?.toString() }), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+				}
+			}
+		}
+	}
+
+	private _safeParse(id: string): URI | undefined {
+		try { return URI.parse(id); } catch { return undefined; }
+	}
+}
+registerWorkbenchContribution2(LivingDocsTabRestoreContribution.ID, LivingDocsTabRestoreContribution, WorkbenchPhase.BlockRestore);
+
 class StudioStartupContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.studioStartup';
 

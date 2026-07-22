@@ -23,8 +23,17 @@ import { LivingDocSourceInput } from './livingDocSourceInput.js';
 
 // The per-workspace per-group persistence key for the open-tab set (spec 43 section 3.5). Keyed by the group
 // id so "Open to the right" (a second group) keeps its own tab row's persisted state.
-function tabStripStorageKey(groupId: number): string {
+export function tabStripStorageKey(groupId: number): string {
 	return `livingDocs.v2.tabs.${groupId}`;
+}
+
+// A window-lifetime gate: while the tab-restore contribution is re-opening the persisted set on reload, strips
+// MUST NOT persist. Native editor restoration brings a group back with only its active editor first, so an
+// un-gated strip would overwrite the full persisted set with that partial one before restore could read it.
+// The restore contribution snapshots the persisted keys, sets this true, re-opens every tab, then clears it.
+let tabRestoreInProgress = false;
+export function setTabRestoreInProgress(value: boolean): void {
+	tabRestoreInProgress = value;
 }
 
 /**
@@ -54,6 +63,10 @@ export class AbstractTabStrip extends Disposable {
 		// the group (an "Open to the right", a close, a middle-click, a programmatic open all flow through here).
 		this._register(this._group.onDidModelChange(() => this.render()));
 		this._register(this._group.onDidActiveEditorChange(() => this.render()));
+		// Re-render when the living-docs model changes so a tab's label (display title) and status dot refresh -
+		// notably after a reload, where restored document tabs first render with the file name before the doc
+		// metadata has loaded, then settle to the display title once it is available.
+		this._register(this._livingDocs.onDidChange(() => this.render()));
 		this.render();
 	}
 
@@ -170,6 +183,8 @@ export class AbstractTabStrip extends Disposable {
 
 	/** Persist the open-tab set (ids + active) for this group (P7.7, spec section 3.5). */
 	private _persist(model: ITabStripModel): void {
+		// Never clobber the persisted set while restore is re-opening it (see setTabRestoreInProgress).
+		if (tabRestoreInProgress) { return; }
 		const key = tabStripStorageKey(this._group.id);
 		if (model.tabs.length === 0) {
 			this._storageService.remove(key, StorageScope.WORKSPACE);
