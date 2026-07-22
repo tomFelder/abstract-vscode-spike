@@ -12,7 +12,7 @@ import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
-import { IStorageService } from '../../../../platform/storage/common/storage.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -27,10 +27,12 @@ import { HeaderPillKind, IAbstractHeaderService } from '../common/abstractHeader
 import { localize } from '../../../../nls.js';
 import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
-import { parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
+import { documentDisplayTitle, parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { applyFocusRequest, applyReady, applyRender, applyRevealHeading, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
-import { ILivingDocRenderInput, IPresentState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
+import { ILivingDocRenderInput, IPresentState, IPropertiesRenderState, LivingDocViewMode, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from './livingDocRender.js';
+import { renderPropertiesPanel } from './propertiesPanelRender.js';
+import { coerceDocPolicy } from '../common/docPolicy.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 
 export class LivingDocEditor extends EditorPane {
@@ -53,12 +55,18 @@ export class LivingDocEditor extends EditorPane {
 	// effects. Reset per input in setInput.
 	private _proto: IEditorWebviewState = initialEditorWebviewState();
 	private readonly _inputDisposables = this._register(new DisposableStore());
+	// The Properties panel's open state for the CURRENT document (plan 45 pin 12). Read from the storage service
+	// on setInput (per-doc key `livingDocs.v2.props.<docId>`), so opening the same doc later restores the panel.
+	private _propsOpen = false;
+	// The document's created/updated times (from the file stat), fetched async and cached so the pure render can
+	// read them synchronously. Refreshed on setInput and after a frontmatter write (which touches mtime).
+	private _docTimes: { readonly created?: number; readonly updated?: number } = {};
 
 	constructor(
 		group: IEditorGroup,
 		@ITelemetryService telemetryService: ITelemetryService,
 		@IThemeService themeService: IThemeService,
-		@IStorageService storageService: IStorageService,
+		@IStorageService private readonly _storageService: IStorageService,
 		@IWebviewService private readonly _webviewService: IWebviewService,
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 		@IEditorService private readonly _editorService: IEditorService,
@@ -67,7 +75,7 @@ export class LivingDocEditor extends EditorPane {
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
 		@IAbstractHeaderService private readonly _header: IAbstractHeaderService,
 	) {
-		super(LivingDocEditor.ID, group, telemetryService, themeService, storageService);
+		super(LivingDocEditor.ID, group, telemetryService, themeService, _storageService);
 	}
 
 	protected createEditor(parent: HTMLElement): void {
@@ -83,6 +91,10 @@ export class LivingDocEditor extends EditorPane {
 		this._present = { open: false, choice: 'html' };
 		this._sourcePeek = undefined;
 		this._resource = input.resource;
+		// Restore the Properties panel's open state for this document (plan 45 pin 12 / P12.6, persistence key
+		// spec 43 section 3.5). Per-doc so a panel opened on doc A does not force it open on doc B.
+		this._propsOpen = this._storageService.getBoolean(this._propsStorageKey(input.resource), StorageScope.WORKSPACE, false);
+		this._docTimes = {};
 		// Dispose the previous input's webview (registered to `_inputDisposables`) and build a fresh one.
 		this._inputDisposables.clear();
 		this._proto = initialEditorWebviewState();
@@ -101,6 +113,33 @@ export class LivingDocEditor extends EditorPane {
 			}
 		}));
 		await this._livingDocs.loadDocument(input.resource);
+		this._render();
+		// The created/updated times come from the file stat (async); fetch after the first render and re-render
+		// when they arrive so the panel shows truthful dates without blocking the editor's first paint.
+		void this._refreshDocTimes(input.resource);
+	}
+
+	// The per-doc storage key for the Properties panel's open state (spec 43 section 3.5, WORKSPACE scope).
+	private _propsStorageKey(resource: URI): string {
+		return `livingDocs.v2.props.${resource.toString()}`;
+	}
+
+	// Run a frontmatter write for the current document, then refresh its stat times (a disk write bumps the
+	// mtime, so the panel's UPDATED date must re-read). The write itself fires onDidChange, which re-renders.
+	private async _writeThenRefreshTimes(write: (resource: URI) => Promise<void>): Promise<void> {
+		const resource = this._resource;
+		if (!resource) { return; }
+		await write(resource);
+		await this._refreshDocTimes(resource);
+	}
+
+	// Fetch the document's created/updated times from the file stat and re-render if they changed. Guarded on
+	// the resource so a stale async result from a previous input is dropped.
+	private async _refreshDocTimes(resource: URI): Promise<void> {
+		const times = await this._livingDocs.getDocTimes(resource);
+		if (this._resource?.toString() !== resource.toString()) { return; }
+		if (times.created === this._docTimes.created && times.updated === this._docTimes.updated) { return; }
+		this._docTimes = times;
 		this._render();
 	}
 
@@ -140,7 +179,7 @@ export class LivingDocEditor extends EditorPane {
 		await apply();
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean }): void {
 		switch (message?.type) {
 			case 'lwdReady':
 				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
@@ -249,6 +288,40 @@ export class LivingDocEditor extends EditorPane {
 				break;
 			case 'askAi':
 				this._livingDocs.focusPanel('chat');
+				break;
+			case 'toggleProperties':
+				// Toggle the Properties panel and persist its open state per-doc (plan 45 pin 8/12).
+				if (this._resource) {
+					this._propsOpen = !this._propsOpen;
+					this._storageService.store(this._propsStorageKey(this._resource), this._propsOpen, StorageScope.WORKSPACE, StorageTarget.USER);
+					this._render();
+				}
+				break;
+			case 'setDocPolicy':
+				// AGENT POLICY edit (#122 F11): write the doc's frontmatter policy on disk. onDidChange re-renders.
+				if (this._resource && typeof message.policy === 'string') {
+					const policy = coerceDocPolicy(message.policy);
+					void this._writeThenRefreshTimes(resource => this._livingDocs.setDocPolicy(resource, policy));
+				}
+				break;
+			case 'setDocTitle':
+				if (this._resource && typeof message.title === 'string') {
+					const title = message.title;
+					void this._writeThenRefreshTimes(resource => this._livingDocs.setDocTitle(resource, title));
+				}
+				break;
+			case 'setDocStatus':
+				if (this._resource && typeof message.status === 'string') {
+					const status = message.status;
+					void this._writeThenRefreshTimes(resource => this._livingDocs.setDocStatus(resource, status));
+				}
+				break;
+			case 'setDocTag':
+				if (this._resource && typeof message.tag === 'string' && typeof message.add === 'boolean') {
+					const tag = message.tag;
+					const add = message.add;
+					void this._writeThenRefreshTimes(resource => this._livingDocs.setDocTag(resource, tag, add));
+				}
 				break;
 			case 'export':
 				if (this._resource) { void this._livingDocs.exportDocument(this._resource); }
@@ -424,6 +497,7 @@ export class LivingDocEditor extends EditorPane {
 			// brand crumb.
 			projectName: this._workspace.getWorkspace().folders[0]?.name,
 			fileName: basename(resource),
+			properties: this._buildProperties(resource),
 		};
 		this._publishHeader(input);
 		const content = renderLivingDocContent(input);
@@ -431,6 +505,27 @@ export class LivingDocEditor extends EditorPane {
 		// hold-until-ready) is decided by the pure reducer; this shell just carries out its effects. The
 		// setHtml effect needs the FULL shell HTML, built here on demand so the reducer stays DOM-free.
 		this._runProto(applyRender(this._proto, content), () => renderLivingDocHtml(input));
+	}
+
+	// Build the Properties panel's render state (plan 45 pin 12): the toolbar button and the inset panel appear
+	// only in PM mode on a real document. The panel's HTML is built here (host-side) from the service's truthful
+	// reads - the panel renderer stays a pure `(model) -> html`. Its own content is built even when the panel is
+	// closed so the toolbar Properties button reflects the open state without a second render.
+	private _buildProperties(resource: URI): IPropertiesRenderState | undefined {
+		const doc = this._livingDocs.getDoc(resource);
+		if (!doc || this._mode !== 'pm') { return undefined; }
+		const html = renderPropertiesPanel({
+			docId: resource.toString(),
+			title: doc.frontmatterTitle ?? '',
+			displayTitle: documentDisplayTitle(doc, basename(resource)),
+			status: doc.status ?? '',
+			tags: doc.tags ?? [],
+			created: this._docTimes.created,
+			updated: this._docTimes.updated,
+			boundSources: this._livingDocs.getBoundSources(resource),
+			policy: this._livingDocs.getDocPolicy(resource),
+		});
+		return { open: this._propsOpen, html };
 	}
 
 	// (plan 44-b PH.2/PH.3) Publish this document's content to the one global Abstract header (the repurposed

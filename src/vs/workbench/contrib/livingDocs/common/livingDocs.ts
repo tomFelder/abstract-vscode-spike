@@ -9,6 +9,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
 import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
+import { DocAutonomyLevel } from './docPolicy.js';
 import { ISourceGrid } from './sourceGrid.js';
 import { ITemplateSkeletonRow } from './livingDocMarkdown.js';
 import { IFeedbackReport, OnboardingStep } from './onboarding.js';
@@ -516,6 +517,17 @@ export interface IFanoutProgress {
 }
 
 /**
+ * One bound source in the Properties panel's BOUND SOURCES list (plan 45 pin 12): a source file plus the count
+ * of bind keys drawing from it and those keys (so a click opens the source drawer at them). Truthful from the
+ * lock's binding graph.
+ */
+export interface IBoundSourceSummary {
+	readonly source: string;
+	readonly count: number;
+	readonly keys: readonly string[];
+}
+
+/**
  * Holds every loaded Living Document and drives the core loop:
  *   source change -> agent proposes edits -> figures auto-apply, meaning-changes queue ->
  *   approve/reject -> audit trail.
@@ -684,6 +696,22 @@ export interface ILivingDocsService {
 	getRecentlyApplied(resource: URI): ReadonlySet<string>;
 	/** Pending changes that belong to one document (rendered inline in its editor). */
 	getPendingForDoc(resource: URI): readonly IProposedChange[];
+
+	// --- Properties panel (plan 45 pin 12) - frontmatter read/write + truthful lock reads ---
+	/** The document's created/updated times, read from the file's own stat (undefined when unknown). */
+	getDocTimes(resource: URI): Promise<{ readonly created?: number; readonly updated?: number }>;
+	/** The document's bound sources grouped from the lock, with truthful per-source bind counts + keys. */
+	getBoundSources(resource: URI): readonly IBoundSourceSummary[];
+	/** The document's autonomy policy, coerced from frontmatter onto the shared three-tier grammar (#122 F11). */
+	getDocPolicy(resource: URI): DocAutonomyLevel;
+	/** Write the document's autonomy policy to its frontmatter `policy:` on disk (#122 F11). */
+	setDocPolicy(resource: URI, policy: DocAutonomyLevel): Promise<void>;
+	/** Write the document's plain-language status to its frontmatter `status:` on disk (empty clears it). */
+	setDocStatus(resource: URI, status: string): Promise<void>;
+	/** Write the document's title to its frontmatter `title:` on disk (empty clears it). */
+	setDocTitle(resource: URI, title: string): Promise<void>;
+	/** Add or remove one tag on the document's frontmatter `tags:` list on disk. */
+	setDocTag(resource: URI, tag: string, add: boolean): Promise<void>;
 
 	// --- workspace-wide views (the review rail aggregates across documents) ---
 	getAllPending(): readonly IProposedChange[];

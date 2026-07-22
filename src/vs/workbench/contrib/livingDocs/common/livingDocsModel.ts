@@ -73,6 +73,15 @@ export interface ILivingDoc {
 	// The originating template's name, recorded on a GENERATED document as `template: <name>` provenance
 	// so the audit trail reads "Created from <name> template" (empty on hand-authored documents).
 	readonly fromTemplate?: string;
+	// The document's plain-language status (frontmatter `status:`), surfaced as the Properties STATUS chip
+	// (plan 45 pin 12). Empty on a doc that never authored one; edits write back to frontmatter on disk.
+	readonly status?: string;
+	// The document's tags (frontmatter `tags:` block list), shown as the Properties TAGS chips (plan 45 pin 12).
+	readonly tags?: string[];
+	// The per-document autonomy policy string (frontmatter `policy:`), read/coerced through `docPolicy.ts` into
+	// the shared three-tier grammar (plan 45 pin 12 / #122 F11). Empty on a doc that never opted in; the reader
+	// sees the safe default until they choose.
+	readonly policy?: string;
 }
 
 // figure  -> low risk, auto-applies

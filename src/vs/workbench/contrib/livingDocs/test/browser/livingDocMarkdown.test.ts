@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, countTemplateSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterSource, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, countTemplateSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterSource, withFrontmatterTag, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -775,6 +775,70 @@ suite('LivingDoc bind-link format', () => {
 			// The anchor item was already edited away; applyBlockEdit must NOT fall back to a whole-block
 			// replace (that is the exact sibling-destroying data loss this guards against).
 			assert.strictEqual(applyBlockEdit(FOUR_ITEM, '- An item that is not here', '- rewritten'), FOUR_ITEM);
+		});
+	});
+
+	// The Properties panel's frontmatter read/write path (plan 45 pin 12 / P12.3). The panel edits title,
+	// status, tags and policy; each must round-trip through the parser + writer and land on disk, and must
+	// never touch the prose body.
+	suite('Properties frontmatter (plan 45 pin 12)', () => {
+		test('parseLivingDoc reads status, tags and policy additively', () => {
+			const md = ['---', 'title: Q3 Report', 'status: In review', 'policy: ask-first', 'tags:', '  - draft', '  - finance', '---', '', 'Body text here.'].join('\n') + '\n';
+			const doc = parseLivingDoc(md);
+			assert.deepStrictEqual(
+				{ title: doc.title, status: doc.status, tags: doc.tags, policy: doc.policy, body: doc.body },
+				{ title: 'Q3 Report', status: 'In review', tags: ['draft', 'finance'], policy: 'ask-first', body: 'Body text here.\n' });
+		});
+
+		test('tags tolerate a compact inline comma list', () => {
+			const doc = parseLivingDoc(['---', 'tags: draft, finance', '---', '', 'Body.'].join('\n') + '\n');
+			assert.deepStrictEqual(doc.tags, ['draft', 'finance']);
+		});
+
+		test('withFrontmatterScalar sets, updates and clears a field, body verbatim', () => {
+			const base = ['---', 'title: Old Title', '---', '', 'The **body** stays exactly as written.'].join('\n') + '\n';
+			const set = withFrontmatterScalar(base, 'status', 'Approved');
+			const doc = parseLivingDoc(set);
+			assert.strictEqual(doc.status, 'Approved');
+			assert.strictEqual(doc.body, 'The **body** stays exactly as written.\n');
+			// Updating the same field replaces it in place, not appends.
+			const updated = withFrontmatterScalar(set, 'status', 'Published');
+			assert.strictEqual((updated.match(/status:/g) ?? []).length, 1);
+			assert.strictEqual(parseLivingDoc(updated).status, 'Published');
+			// Clearing removes the line; a no-op change returns the input identity.
+			assert.strictEqual(parseLivingDoc(withFrontmatterScalar(updated, 'status', '')).status, '');
+			assert.strictEqual(withFrontmatterScalar(set, 'status', 'Approved'), set);
+		});
+
+		test('withFrontmatterScalar prepends a frontmatter block to a plain doc, body untouched', () => {
+			const plain = '# Readme\n\nJust prose.\n';
+			const titled = withFrontmatterScalar(plain, 'title', 'My Doc');
+			const doc = parseLivingDoc(titled);
+			assert.strictEqual(doc.frontmatterTitle, 'My Doc');
+			assert.ok(doc.body.includes('Just prose.'), 'the original prose survives');
+		});
+
+		test('withFrontmatterTag adds and removes one tag idempotently', () => {
+			const base = ['---', 'title: T', '---', '', 'Body.'].join('\n') + '\n';
+			const one = withFrontmatterTag(base, 'urgent', true);
+			assert.deepStrictEqual(parseLivingDoc(one).tags, ['urgent']);
+			const two = withFrontmatterTag(one, 'q3', true);
+			assert.deepStrictEqual(parseLivingDoc(two).tags, ['urgent', 'q3']);
+			// Adding an existing tag / removing an absent one is a no-op (returns input identity).
+			assert.strictEqual(withFrontmatterTag(two, 'urgent', true), two);
+			assert.deepStrictEqual(parseLivingDoc(withFrontmatterTag(two, 'urgent', false)).tags, ['q3']);
+		});
+
+		test('serializeLivingDoc preserves status/tags/policy across a block re-serialise', () => {
+			const md = ['---', 'title: Q3', 'status: Draft', 'policy: never', 'tags:', '  - a', 'sources:', '  - metrics.csv', '---', '', 'Body.'].join('\n') + '\n';
+			const round = parseLivingDoc(serializeLivingDoc(parseLivingDoc(md)));
+			assert.deepStrictEqual(
+				{ status: round.status, tags: round.tags, policy: round.policy, sources: round.sources },
+				{ status: 'Draft', tags: ['a'], policy: 'never', sources: ['metrics.csv'] });
+		});
+
+		test('a plain Markdown doc still round-trips byte-clean (no injected frontmatter)', () => {
+			assert.strictEqual(serializeLivingDoc(parseLivingDoc(PLAIN_MD)), PLAIN_MD);
 		});
 	});
 });
