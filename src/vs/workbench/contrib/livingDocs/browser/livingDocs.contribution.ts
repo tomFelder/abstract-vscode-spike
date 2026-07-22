@@ -8,7 +8,7 @@ import { $, addDisposableListener, append } from '../../../../base/browser/dom.j
 import { mainWindow } from '../../../../base/browser/window.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { Codicon } from '../../../../base/common/codicons.js';
-import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
+import { KeyChord, KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { IKeybindings, KeybindingsRegistry } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -24,7 +24,7 @@ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js'
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { registerWorkbenchContribution2, WorkbenchPhase, IWorkbenchContribution } from '../../../common/contributions.js';
-import { EditorExtensions } from '../../../common/editor.js';
+import { EditorExtensions, IEditorFactoryRegistry } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
@@ -46,6 +46,11 @@ import { IAnalyticsService } from '../common/analytics.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
+import { LivingDocSourceEditor } from './livingDocSourceEditor.js';
+import { LivingDocSourceInput, LivingDocSourceInputSerializer } from './livingDocSourceInput.js';
+import { parsePersistedTabStrip } from '../common/livingDocTabs.js';
+import { setTabRestoreInProgress, tabStripStorageKey } from './abstractTabStrip.js';
+import { URI } from '../../../../base/common/uri.js';
 import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
 import { TreeRailView } from './treeRailView.js';
@@ -291,6 +296,28 @@ KeybindingsRegistry.registerKeybindingRule({
 	primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Backslash,
 });
 
+// --- neutralise the residual split / group-creation chords (routed via orchestrator, plan 44 ownership) ---
+// The bare Cmd+\ (workbench.action.splitEditor) is claimed above by the tree-rail toggle. But the stock editor
+// still ships a second tier of split chords that survive the calm shell and open a group a keyboard user can
+// reach - and, because closeEmptyGroups only reaps a group when its LAST editor closes (an editor that split
+// path never opened), a split into an empty group PERSISTS. That directly contradicts P7.8's "no other split
+// path" intent (the ONE sanctioned split is openToTheRight). We shadow each surviving chord with `noop` at the
+// same weight-1000 tier the rail toggles use, so the chord is swallowed with no core patch.
+//
+// Chord audit (stock editorActions.ts / editorCommands.ts):
+//   Cmd+K Cmd+\        -> splitEditor{Orthogonal,Left,Right,Up,Down} (all five share this chord) -> NEW group. LIVE LEAK, neutralised.
+//   Cmd+K Cmd+Shift+\  -> splitEditorInGroup / toggleSplitEditorInGroup -> in-group side-by-side split. LIVE, neutralised.
+//   newGroup{Left,Right,Above,Below}                    -> f1-only, no keybinding -> command palette is neutralised -> already dead.
+//   {move,copy}EditorGroupToNewWindow, restoreEditors…  -> no keybinding -> already dead.
+// (copyEditorToNewWindow's Cmd+K O is an editor-into-window move, not a shell split-group, and is left as-is.)
+const NEUTRALISED_SPLIT_CHORDS: readonly IKeybindings[] = [
+	{ primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyCode.Backslash) },					// splitEditor Left/Right/Up/Down/Orthogonal -> new group
+	{ primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Backslash) },		// splitEditorInGroup / toggleSplitEditorInGroup
+];
+for (const chord of NEUTRALISED_SPLIT_CHORDS) {
+	KeybindingsRegistry.registerKeybindingRule({ id: 'noop', weight: 1000, when: undefined, ...chord });
+}
+
 // --- Cmd/Ctrl+P document switcher (issue #212) ---
 // The core patch stripped Cmd+P from workbench.action.quickOpen (Seam 4) and the calm-shell chord neutralisation
 // above does not claim it, so Cmd/Ctrl+P is a FREE chord. We bind it to a livingDocs-owned command via the public
@@ -312,6 +339,17 @@ Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane
 	EditorPaneDescriptor.create(LivingDocEditor, LivingDocEditor.ID, localize('livingDocEditor', "Living Document")),
 	[new SyncDescriptor(LivingDocEditorInput)]
 );
+
+// The source-viewer pane (pin 7 / P7.4): a source opened from the tree SOURCES rows (or, plan 49, the
+// Knowledge table) renders here as a product tab on the same strip as the document.
+Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+	EditorPaneDescriptor.create(LivingDocSourceEditor, LivingDocSourceEditor.ID, localize('livingDocSourceEditor', "Source")),
+	[new SyncDescriptor(LivingDocSourceInput)]
+);
+
+// The source-viewer input has no editor-resolver (it opens by a typed input, not a resource), so it needs its
+// own serializer to restore across a window reload (pin 7 / P7.7).
+Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(LivingDocSourceInput.ID, LivingDocSourceInputSerializer);
 
 // The main-area Abstract screens (Templates / Knowledge / Agents) share one webview editor.
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
@@ -594,6 +632,72 @@ const WELCOME_INPUT_TYPE_ID = 'workbench.editors.gettingStartedInput';
 // dismissible "See a 90-second demo" entry point on Home + first-run, reached through the palette / a Home card,
 // never as a cold-start destination. The routing DECISION is the pure decideStartupRoute() (unit-tested); this
 // contribution only gathers the facts and executes the chosen route.
+// Restore the product-tab set per group across a window reload (plan 45 pin 7 / P7.7, persistence key spec 43
+// section 3.5). VS Code's native editor restoration only reliably brings back the active editor for our webview
+// pane family, so the persisted `livingDocs.v2.tabs.<groupId>` set (written by the tab strip) is the source of
+// truth: on restore we re-open every persisted tab into its group, in order, and re-activate the persisted tab.
+// Documents open by resource (the `*.md` resolver picks the LivingDocEditor); non-`.md` resources open as a
+// source-viewer tab. A resource that no longer exists is skipped so a moved/renamed file never wedges restore.
+class LivingDocsTabRestoreContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.tabRestore';
+
+	constructor(
+		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+		@IEditorService private readonly _editorService: IEditorService,
+		@IStorageService private readonly _storageService: IStorageService,
+	) {
+		super();
+		// Gate strip persistence for the whole restore window BEFORE any pane mounts. Native editor restoration
+		// brings a group back with only its active editor first; an un-gated strip would then overwrite the full
+		// persisted set with that partial one. The gate protects the persisted keys so `_restore` can read the
+		// intact set after `whenReady` (groups do not exist yet at this BlockRestore-phase construction).
+		setTabRestoreInProgress(true);
+		void this._restore();
+	}
+
+	private async _restore(): Promise<void> {
+		try {
+			await this._editorGroups.whenReady;
+			for (const group of this._editorGroups.groups) {
+				// The persisted set is still intact because the gate blocked every strip write during restore.
+				const persisted = parsePersistedTabStrip(this._storageService.get(tabStripStorageKey(group.id), StorageScope.WORKSPACE));
+				if (persisted.ids.length === 0) { continue; }
+				for (const id of persisted.ids) {
+					const resource = this._safeParse(id);
+					if (!resource) { continue; }
+					// Skip a tab native restore already brought back (avoid duplicating the active editor).
+					if (group.editors.some(e => e.resource?.toString() === resource.toString())) { continue; }
+					if (resource.path.toLowerCase().endsWith('.md')) {
+						await this._editorService.openEditor({ resource, options: { pinned: true, inactive: true } }, group);
+					} else {
+						await this._editorService.openEditor(new LivingDocSourceInput(resource), { pinned: true, inactive: true }, group);
+					}
+				}
+				// Re-activate the persisted active tab (last so it wins over the restore order).
+				if (persisted.activeId) {
+					const active = this._safeParse(persisted.activeId);
+					const editor = active && group.editors.find(e => e.resource?.toString() === active.toString());
+					if (editor) { await this._editorService.openEditor(editor, group); }
+				}
+			}
+		} finally {
+			// Restore done: strips may persist again, and the current (full) set is written back immediately.
+			setTabRestoreInProgress(false);
+			for (const group of this._editorGroups.groups) {
+				const ids = group.editors.map(e => e.resource?.toString()).filter((s): s is string => !!s);
+				if (ids.length > 0) {
+					this._storageService.store(tabStripStorageKey(group.id), JSON.stringify({ ids, activeId: group.activeEditor?.resource?.toString() }), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+				}
+			}
+		}
+	}
+
+	private _safeParse(id: string): URI | undefined {
+		try { return URI.parse(id); } catch { return undefined; }
+	}
+}
+registerWorkbenchContribution2(LivingDocsTabRestoreContribution.ID, LivingDocsTabRestoreContribution, WorkbenchPhase.BlockRestore);
+
 class StudioStartupContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.studioStartup';
 

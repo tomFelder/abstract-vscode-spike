@@ -361,6 +361,18 @@ export interface ISourcePayload {
 }
 
 /**
+ * The data behind a product-tab source viewer (plan 45 pin 7 / P7.4): a source FILE read by its own resource
+ * for the grid-glyph source tab, independent of any one document's bindings. `grid` is the parsed CSV rows (latest
+ * highlighted, the same grid the drawer shows) when the file is a CSV; `text` is the raw file text for a
+ * non-CSV source; `name` is the file name shown as the tab label and the viewer heading.
+ */
+export interface ISourceViewerData {
+	readonly name: string;
+	readonly grid?: ISourceGrid;
+	readonly text: string;
+}
+
+/**
  * The data behind the in-surface source-peek pane. The pane renders inside the one document surface
  * (never a second editor group) - this is the v2 replacement for the SIDE_GROUP source open.
  */
@@ -1152,6 +1164,28 @@ export interface ILivingDocsService {
 	 * replacement for the abrasive SIDE_GROUP source open; the pane renders inside the one document surface).
 	 */
 	getSourcePeek(resource: URI, cells: readonly string[]): ISourcePeek | undefined;
+	/**
+	 * Read a source file for the product-tab source viewer (spec 43 section 3.2, plan 45 pin 7 / P7.4). Unlike
+	 * `getSourcePeek` (which is doc-scoped and folds in bind provenance), this reads a source FILE by its own
+	 * resource so it can back a source-viewer editor tab opened from the tree SOURCES rows (or, plan 49, the
+	 * Knowledge table). Returns the parsed CSV grid when the file is a CSV, the raw text otherwise, and the file
+	 * name - or `undefined` when the file cannot be read (a moved/renamed source degrades to no tab, never an
+	 * error). Pure read; opens NO editor group.
+	 */
+	readSourceViewer(resource: URI): Promise<ISourceViewerData | undefined>;
+	/**
+	 * Open a source FILE as a product tab (spec 43 section 3.2, plan 45 pin 7 / P7.4). The source opens as a
+	 * lightweight source-viewer input on the SAME tab strip as the document in the active editor group (never a
+	 * second group) - the grid-glyph source tab. Used by the tree SOURCES rows and (plan 49) the Knowledge table.
+	 */
+	openSourceTab(resource: URI): Promise<void>;
+	/**
+	 * Open a document to the right (spec 43 section 3.2, pin 6's ONE sanctioned split). Creates a second editor
+	 * group beside the active one and opens the document there; the second group gets its own product-tab row
+	 * (pin 7 / P7.8). Closing the last tab in that group closes the group (no blank group). The context-menu item
+	 * that calls this ships in plan 46; this is the group-side support plan 45 owns.
+	 */
+	openToTheRight(resource: URI): Promise<void>;
 	/**
 	 * Record that the user peeked a source's provenance (plan 36: the provenance_peeked funnel event). `mode`
 	 * distinguishes a click-through on a provenance dot from opening the source pane via the toolbar. Analytics

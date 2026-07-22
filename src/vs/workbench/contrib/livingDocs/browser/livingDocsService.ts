@@ -29,7 +29,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
@@ -37,6 +37,7 @@ import { IAnalyticsService } from '../common/analytics.js';
 import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
 import { coerceDocPolicy, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
+import { LivingDocSourceInput } from './livingDocSourceInput.js';
 import { buildDemoReportMarkdown, DEMO_CSV, DEMO_CSV_NAME, DEMO_DOC_NAME, founderFeedbackLogLine, IFeedbackReport, onboardingStepLabel, OnboardingStep } from '../common/onboarding.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
@@ -5128,9 +5129,38 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	// Source-peek: the styled source data rendered as an IN-SURFACE pane inside the one document
-	// surface (the comp's "Sync across" source panel) - never a second editor group. The cells behind
-	// the clicked provenance dot are marked `selected`; the "Sync across" loop then re-derives figures.
+	// Read a source FILE for the product-tab source viewer (plan 45 pin 7 / P7.4). Independent of any document's
+	// bindings: it reads the file by its own resource, parses a CSV into the same grid the drawer shows, and
+	// returns the raw text for a non-CSV source. A read failure (moved/renamed source) returns undefined so the
+	// caller degrades to no tab rather than an error.
+	async readSourceViewer(resource: URI): Promise<ISourceViewerData | undefined> {
+		let text: string;
+		try {
+			text = (await this._files.readFile(resource)).value.toString();
+		} catch {
+			return undefined;
+		}
+		const name = basename(resource);
+		const grid = name.toLowerCase().endsWith('.csv') ? buildSourceGrid(text) : undefined;
+		return { name, grid, text };
+	}
+
+	// Open a source FILE as a product tab (plan 45 pin 7 / P7.4). The source-viewer input opens in the ACTIVE
+	// group so it lands on the same tab strip as the document (never a second group). `LivingDocSourceInput` is
+	// Singleton, so re-opening the same source activates its existing tab rather than duplicating it.
+	async openSourceTab(resource: URI): Promise<void> {
+		await this._editors.openEditor(new LivingDocSourceInput(resource), { pinned: true });
+	}
+
+	// Open a document to the right (plan 45 pin 7 / P7.8; pin 6's one sanctioned split). `SIDE_GROUP` creates a
+	// second editor group beside the active one; the LivingDocEditor pane there mounts its OWN product-tab row
+	// bound to that group. When the last tab in the new group closes, `workbench.editor.closeEmptyGroups` (the
+	// workbench default) closes the group, so no blank group is ever left behind. The context-menu item that
+	// calls this ships in plan 46; this is the group-side support plan 45 owns.
+	async openToTheRight(resource: URI): Promise<void> {
+		await this._editors.openEditor({ resource, options: { pinned: true } }, SIDE_GROUP);
+	}
+
 	getSourcePeek(resource: URI, cells: readonly string[]): ISourcePeek | undefined {
 		const state = this._docs.get(resource.toString());
 		if (!state || !state.doc.isLiving) { return undefined; }
