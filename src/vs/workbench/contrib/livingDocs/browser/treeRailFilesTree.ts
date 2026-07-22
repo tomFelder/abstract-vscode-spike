@@ -33,6 +33,12 @@ export interface ITreeRailLeafActions {
 	 * the per-row template store owns so a recycled row never leaks its hover (issue #212). The view backs this
 	 * with `hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), el, content)`. */
 	setupHover(el: HTMLElement, content: string): IDisposable;
+	/**
+	 * Inline rename (P6.3): when this leaf is the row being renamed, mount an edit-in-place input into `label`
+	 * (in place of its text) and return its disposable; return undefined otherwise so the row renders normally.
+	 * Enter commits, Esc cancels - the view owns the input + the commit path (the silent-rename service call).
+	 */
+	renderRenameInput(node: ITreeRailLeafNode, label: HTMLElement): IDisposable | undefined;
 }
 
 export class TreeRailDelegate implements IListVirtualDelegate<ITreeRailNode> {
@@ -139,7 +145,15 @@ export class TreeRailLeafRenderer implements ITreeRenderer<ITreeRailLeafNode, vo
 		} else {
 			template.glyph.textContent = sourceKindGlyph(item.label);
 		}
-		template.label.textContent = item.label;
+		// Inline rename (P6.3): when this row is the one being renamed, the view mounts an edit-in-place input
+		// into the label slot (Enter commits, Esc cancels) instead of the static text. Otherwise render the label.
+		template.label.replaceChildren();
+		const renameInput = this._actions.renderRenameInput(node.element, template.label);
+		if (renameInput) {
+			template.disposables.add(renameInput);
+		} else {
+			template.label.textContent = item.label;
+		}
 		if (isDoc) {
 			// The trailing marker (P5.3), precedence: pending wins. A document with pending approvals shows the amber
 			// count pill; a living document with none shows the LWD chip; a plain document shows neither.
@@ -165,6 +179,8 @@ export class TreeRailLeafRenderer implements ITreeRenderer<ITreeRailLeafNode, vo
 		template.disposables.clear();
 		template.actions.replaceChildren();
 		template.marker.replaceChildren();
+		// A recycled row must not carry a previous row's rename input; the next renderElement repopulates the label.
+		template.label.replaceChildren();
 	}
 
 	disposeTemplate(template: ILeafTemplate): void {

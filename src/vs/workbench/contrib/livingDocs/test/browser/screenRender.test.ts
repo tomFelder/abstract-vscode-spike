@@ -29,7 +29,7 @@ suite('livingDocs screenRender', () => {
 
 	// A project with a living surface (one living doc): even so, the screen body draws no top bar and no
 	// in-body sync pill - the header owns both now.
-	const livingState: IScreenState = { ...state, docs: [{ resource: URI.file('/ws/A.md'), title: 'A', isLiving: true, sourceKinds: ['file'], sources: ['a.csv'], lastSynced: '', pendingCount: 0, folder: '', unseenAgentEdits: 0, relinkCount: 0, stale: false, fanoutFailed: false }] };
+	const livingState: IScreenState = { ...state, docs: [{ resource: URI.file('/ws/A.md'), title: 'A', isLiving: true, sourceKinds: ['file'], sources: ['a.csv'], lastSynced: '', pendingCount: 0, folder: '', unseenAgentEdits: 0, relinkCount: 0, stale: false, fanoutFailed: false, needsSourceBinding: false }] };
 
 	for (const { id } of screens) {
 		test(`${id} draws no per-webview top bar (the global Abstract header carries it - PH.4)`, () => {
@@ -103,7 +103,7 @@ suite('livingDocs screenRender', () => {
 	// --- Home reflects the real open folder (the folder IS the project; decision #39) ---
 
 	function summary(path: string, title: string, isLiving: boolean, pendingCount = 0): ILivingDocSummary {
-		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount, folder: '', unseenAgentEdits: 0, relinkCount: 0, stale: false, fanoutFailed: false };
+		return { resource: URI.file(path), title, isLiving, sourceKinds: isLiving ? ['file'] : [], sources: isLiving ? ['metrics.csv'] : [], lastSynced: '', pendingCount, folder: '', unseenAgentEdits: 0, relinkCount: 0, stale: false, fanoutFailed: false, needsSourceBinding: false };
 	}
 
 	test('home with no folder open shows one plain-words line + one button, zero product vocabulary (H1.5, #211 items 1-2)', () => {

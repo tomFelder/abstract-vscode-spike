@@ -29,7 +29,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
@@ -342,8 +342,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidChange = this._register(new Emitter<void>());
 	readonly onDidChange: Event<void> = this._onDidChange.event;
 
-	private readonly _onDidRequestPanel = this._register(new Emitter<LivingDocsPanelTab>());
-	readonly onDidRequestPanel: Event<LivingDocsPanelTab> = this._onDidRequestPanel.event;
+	private readonly _onDidRequestPanel = this._register(new Emitter<ILivingDocsPanelRequest>());
+	readonly onDidRequestPanel: Event<ILivingDocsPanelRequest> = this._onDidRequestPanel.event;
+
+	// Sticky replay for panel requests: `focusPanel` records the latest request here so a request made
+	// before the review rail mounts is not lost with the synchronous event. The rail consumes-and-clears
+	// this on mount (`consumePendingPanel`); last request wins, and it replays at most once.
+	private _pendingPanel: ILivingDocsPanelRequest | undefined;
 
 	// Plan 42 slice L4: the calm collapse control on the review rail header asks to close the rail. The
 	// RailVisibilityContribution owns the manual-choice storage, so it listens here and both hides the part
@@ -366,6 +371,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	private readonly _onDidRequestRevealHeading = this._register(new Emitter<{ docId: string; headingIndex: number }>());
 	readonly onDidRequestRevealHeading: Event<{ docId: string; headingIndex: number }> = this._onDidRequestRevealHeading.event;
+
+	// Pin 6 "Present": the context menu opens the document then asks its editor to run the existing Present flow.
+	private readonly _onDidRequestPresent = this._register(new Emitter<{ docId: string }>());
+	readonly onDidRequestPresent: Event<{ docId: string }> = this._onDidRequestPresent.event;
 
 	// Plan 42 slice L2: the first-AI-use model-access gate. When a chat send hits an unconfigured backend the
 	// prompt is HELD here (never lost) and the rail renders the inline sign-in vs included-model choice; picking
@@ -894,10 +903,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return [...this._docs.values()].flatMap(s => s.lock.audit);
 	}
 
-	focusPanel(tab: LivingDocsPanelTab): void {
-		this._onDidRequestPanel.fire(tab);
+	focusPanel(tab: LivingDocsPanelTab, payload?: ILivingDocsPanelRequest['payload']): void {
+		const request: ILivingDocsPanelRequest = { tab, payload };
+		// Record the request for replay BEFORE firing/opening: if the rail is already mounted it consumes the
+		// synchronous event (below) and the pending state is redundant; if it is not yet mounted, opening the
+		// view mounts it and it consumes the pending state on subscribe. Either way it lands on the right tab.
+		this._pendingPanel = request;
+		this._onDidRequestPanel.fire(request);
 		// Reveal the right panel; take focus only for Chat so the user can type straight away.
 		this._views.openView(REVIEW_RAIL_VIEW_ID, tab === 'chat').catch(e => this._log.warn('[livingDocs] focusPanel failed', e));
+	}
+
+	consumePendingPanel(): ILivingDocsPanelRequest | undefined {
+		const pending = this._pendingPanel;
+		this._pendingPanel = undefined;
+		return pending;
 	}
 
 	collapseReviewRail(): void {
@@ -919,6 +939,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// The Outline tab (issue #181) asks the editor pane showing this document to scroll to a heading.
 		// Navigate-only, mirroring focusChange: the editor listens and posts the reveal to its webview.
 		this._onDidRequestRevealHeading.fire({ docId: resource.toString(), headingIndex });
+	}
+
+	async requestPresent(resource: URI): Promise<void> {
+		// Pin 6 "Present": open the document (so its editor pane is live), then ask THAT editor to run the
+		// existing Present flow. Mirrors revealHeading - a navigate-only request onto a live editor, no new
+		// present logic. The editor listens for its own docId and opens the same modal the header action drives.
+		await this._editors.openEditor({ resource, options: { pinned: true } });
+		this._onDidRequestPresent.fire({ docId: resource.toString() });
 	}
 
 	// --- the "Documents" home ---
@@ -1437,6 +1465,27 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		// A renamed SOURCE keeps its dependents bound: rewrite their frontmatter + lock provenance references.
 		await this._rewriteDependentReferences(oldName, nextName);
+		// Silent-rename semantics (plan 42 L5, P6.3): the title frontmatter FOLLOWS the file name. A document that
+		// declares a `title:` has it rewritten to the new stem so the displayed title tracks the rename (a plain
+		// H1-titled document is left untouched - we never inject a frontmatter title it did not have). Best-effort:
+		// a failure here never un-does the rename that already succeeded.
+		if (this._isDocFile(target)) {
+			try {
+				const raw = (await this._files.readFile(target)).value.toString();
+				const parsed = parseLivingDoc(raw);
+				// Only a document that ALREADY declares a `title:` has it rewritten - a plain H1-titled file never
+				// gains an injected frontmatter title from a rename (mirrors the serialization discipline).
+				if ((parsed.frontmatterTitle ?? '').trim()) {
+					const next = withFrontmatterScalar(raw, 'title', stem);
+					if (next !== raw) {
+						await this._files.writeFile(target, VSBuffer.fromString(next));
+						if (this._docs.has(target.toString())) { await this._loadState(target); }
+					}
+				}
+			} catch (e) {
+				this._log.trace('[livingDocs] rename title-follow skipped', e instanceof Error ? e.message : String(e));
+			}
+		}
 		this._onDidChange.fire();
 		// A rename is a deliberate, named human edit on the entry path (plan 42 L5): it succeeds silently, with
 		// no toast to dismiss. Renaming again inverts it; only the error paths above still speak up. Delete, which
@@ -1607,6 +1656,100 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	attachToChat(resource: URI): void {
 		this.focusPanel('chat');
 		this._onDidRequestChatAttach.fire(basename(resource));
+	}
+
+	// Duplicate a document + its `.lock.json` sidecar under a distinct, non-colliding name (pin 6 / P6.4). The
+	// sidecar is copied verbatim so the copy carries the same bound provenance and opens as a living document.
+	// The copy has no dependents, so nothing is re-pointed (unlike moveFile). The new file is opened.
+	async duplicateFile(resource: URI): Promise<URI | undefined> {
+		const dir = dirname(resource);
+		const oldName = basename(resource);
+		const dot = oldName.lastIndexOf('.');
+		const ext = dot >= 0 ? oldName.slice(dot) : '';
+		const stem = dot >= 0 ? oldName.slice(0, dot) : oldName;
+		// A non-colliding sibling name: "<stem> copy", then " copy 2", " copy 3", ... until one is free.
+		let target: URI | undefined;
+		for (let n = 1; n < 1000; n++) {
+			const suffix = n === 1 ? ' copy' : ` copy ${n}`;
+			const candidate = joinPath(dir, `${stem}${suffix}${ext}`);
+			if (!(await this._files.exists(candidate))) { target = candidate; break; }
+		}
+		if (!target) { this._notify.error(`Could not duplicate "${oldName}" - no free name was found.`); return undefined; }
+		let fileBuf: VSBuffer;
+		try {
+			fileBuf = (await this._files.readFile(resource)).value;
+		} catch (e) {
+			this._notify.error(`Duplicate failed: "${oldName}" could not be read. Nothing was changed.`);
+			return undefined;
+		}
+		try {
+			await this._files.writeFile(target, fileBuf);
+			const fromLock = lockUriFor(resource);
+			if (await this._files.exists(fromLock)) {
+				const lockBuf = (await this._files.readFile(fromLock)).value;
+				await this._files.writeFile(lockUriFor(target), lockBuf);
+			}
+		} catch (e) {
+			this._log.warn('[livingDocs] duplicate failed', e);
+			// Roll back the copied file so a half-written pair never lingers (symmetric to the move rollback).
+			try { await this._files.del(target, { useTrash: false }); } catch { /* best-effort */ }
+			this._notify.error(`Duplicate failed: ${e instanceof Error ? e.message : String(e)}. Nothing was changed.`);
+			return undefined;
+		}
+		this._onDidChange.fire();
+		await this._editors.openEditor({ resource: target, options: { pinned: true } });
+		return target;
+	}
+
+	// Move a document + its sidecar into another folder (pin 6 / P6.4), re-pointing every dependent's provenance
+	// so bindings survive - the SAME atomic, re-pointing machinery applyTidyMoves uses, for one file to a chosen
+	// destination folder. The file keeps its name; a clashing target is refused with a named error (nothing
+	// half-applies) and an Undo toast inverts a successful move.
+	async moveFile(resource: URI, targetFolder: URI): Promise<void> {
+		const folder = this._workspace.getWorkspace().folders[0];
+		const name = basename(resource);
+		const to = joinPath(targetFolder, name);
+		if (to.toString() === resource.toString()) { return; } // moving into its own folder is a no-op
+		if (await this._files.exists(to)) {
+			this._notify.error(`Cannot move "${name}" - a file with that name already exists in that folder.`);
+			return;
+		}
+		try {
+			await this._ensureFolder(targetFolder);
+			await this._moveFileWithSidecar(resource, to);
+		} catch (e) {
+			this._log.warn('[livingDocs] move failed', e);
+			this._notify.error(`Move failed: ${e instanceof Error ? e.message : String(e)}. Nothing was changed.`);
+			return;
+		}
+		// Re-point dependents: their reference resolves relative to the project root (a bound sibling source),
+		// so the new reference is the destination relative to the root - exactly as applyTidyMoves re-points.
+		const oldRef = folder ? (relativePath(folder.uri, resource) ?? name) : name;
+		const newRef = folder ? (relativePath(folder.uri, to) ?? name) : name;
+		await this._rewriteDependentReferences(oldRef, newRef);
+		// Also re-point dependents that referenced the file by its bare name (a root document binds a sibling by
+		// name); harmless when oldRef already equals the name.
+		if (oldRef !== name) { await this._rewriteDependentReferences(name, newRef); }
+		this._onDidChange.fire();
+		this._notify.notify({
+			severity: Severity.Info,
+			message: `Moved "${name}".`,
+			sticky: true,
+			actions: { primary: [toAction({ id: 'livingDocs.file.move.undo', label: 'Undo', run: () => this._undoMove(to, resource, newRef, oldRef, name) })] },
+		});
+	}
+
+	// Invert a move: carry the file + sidecar back and restore every dependent reference (mirrors the tidy undo).
+	private async _undoMove(from: URI, to: URI, newRef: string, oldRef: string, name: string): Promise<void> {
+		if (await this._files.exists(to)) { this._notify.error(`Cannot undo: "${basename(to)}" already exists again.`); return; }
+		try {
+			await this._moveFileWithSidecar(from, to);
+			await this._rewriteDependentReferences(newRef, oldRef);
+			if (oldRef !== name) { await this._rewriteDependentReferences(newRef, name); }
+		} catch (e) {
+			this._log.warn('[livingDocs] move undo failed', e);
+		}
+		this._onDidChange.fire();
 	}
 
 	// --- the Tidy verb (doc 22 section 5): fold the folder inventory into a proposed move plan ---------
@@ -2337,6 +2480,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const relinkCount = pendingForDoc.filter(c => c.relink).length;
 			const stale = this._docs.has(id) ? this.getFreshness(uri).dirty : false;
 			const fanoutFailed = [...this._fanoutProgress.values()].some(p => p.failedDocIds.includes(id));
+			// PN.1 (routed from 48-c/#233): a document born from a template that has not bound a source yet
+			// (`fromTemplate && !isLiving`) still needs its data connected - its tree row carries the "bind
+			// sources" nudge. The moment a source binds, the doc becomes living and this clears.
+			const needsSourceBinding = !!(doc.fromTemplate ?? '').trim() && !doc.isLiving;
 			return {
 				resource: uri,
 				// Never a bare "Untitled" for an odd/blank-heading file: fall back to the filename (F8).
@@ -2351,6 +2498,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				relinkCount,
 				stale,
 				fanoutFailed,
+				needsSourceBinding,
 			};
 		} catch (e) {
 			this._log.trace('[livingDocs] summarize skipped', e instanceof Error ? e.message : String(e));
