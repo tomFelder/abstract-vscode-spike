@@ -205,16 +205,25 @@ const FIRST_PROJECT_KEY = 'abstract.analytics.firstProjectOpened';
 // committed agent edits against a LOCAL anchor is exactly what surfaces "changed since YOU last looked".
 const DOC_LAST_VIEWED_KEY = 'livingDocs.docLastViewed';
 
-// The user's selected model per backend (issue #179). APPLICATION scope, not PROFILE: the model choice is a
-// property of the machine's broker + credential setup (the broker is spawned once per install, its backend
-// fixed at spawn, its ChatGPT/OpenRouter credential machine-local under ~/.abstract and ~/.config), NOT of the
-// user's editor profile - a second profile on the same machine talks to the SAME broker and the SAME
-// subscription, so the pick belongs to the machine, mirroring the onboarding/first-project keys above which are
-// all APPLICATION-scoped for the same reason. Keyed by backend so the included-tier pick and the ChatGPT pick
-// never overwrite each other; MACHINE target so it is not synced across machines (a different machine may have
-// a different broker/subscription). The value is a model id validated against /models on use.
-const SELECTED_MODEL_KEY_PREFIX = 'abstract.model.selected.';
-function selectedModelKey(backend: string): string { return `${SELECTED_MODEL_KEY_PREFIX}${backend}`; }
+// The user's selected model (issue #179; scope pinned by plan 43 section 3.5, criterion P14.4). WORKSPACE scope: the
+// Editor-v2 spec makes the model choice a property of the workspace ("persists per-workspace across reload"),
+// alongside the other `livingDocs.v2.*` keys (tree/rail collapse, tabs), so a folder remembers which model
+// drove its documents. One key (not per-backend): the stored id is always validated against the live /models
+// catalogue on read, so a pick from a since-swapped backend simply falls back to that backend's default rather
+// than dead-selecting - a single WORKSPACE key is safe. MACHINE target: not synced across machines (a different
+// machine may run a different broker/subscription). The value is a model id validated against /models on use.
+const SELECTED_MODEL_KEY = 'livingDocs.v2.model';
+
+// Structural equality for the settled provider-status cache (issue #236, plan 47 P14.5): the flicker fix fires
+// onDidChange only on a REAL change, so a stable broker never churns the composer. Compares the fields the UI
+// keys off; a NaN-free numeric compare is fine since these are plain numbers.
+function providerStatusEquals(a: IModelProviderStatus, b: IModelProviderStatus): boolean {
+	return a.provider === b.provider
+		&& a.readiness === b.readiness
+		&& a.signedIn === b.signedIn
+		&& a.dailyBudgetUsd === b.dailyBudgetUsd
+		&& a.dailyTotalUsd === b.dailyTotalUsd;
+}
 
 // Persisted flag (application scope) armed at the D26 hand-off ("bring a real folder"): the next approved
 // change on the user's OWN file is the T4 aha (doc 15 section 2.1). Persisted because the hand-off opens a
@@ -425,6 +434,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _modelAvailable = false;
 	private _modelProbedAt = 0;
 	private _modelProbe: Promise<boolean> | undefined;
+	// The last SETTLED provider status (issue #236, plan 47 P14.5 - the #211-4 flicker fix). getModelProviderStatus
+	// caches the last honest /healthz result and hands it back INSTANTLY on a repeated call, refreshing in the
+	// background on a TTL. This is what kills the "Model unavailable" flash on surface crossings (Editor -> Home ->
+	// Editor): the rail view is torn down and rebuilt on a crossing, so its instance-level readiness field starts
+	// undefined each mount; without a settled service cache the fresh disableCache probe races and the composer
+	// flashes broker-down before it resolves ready. With the cache, a remount reads the settled state with no probe
+	// on the critical path, so the health dot never blinks. A real state change still fires onDidChange to update.
+	private _providerStatus: IModelProviderStatus | undefined;
+	private _providerStatusAt = 0;
+	private _providerStatusProbe: Promise<IModelProviderStatus> | undefined;
 	// The model catalogue for the active backend (issue #179), fetched cheaply from the broker's /models and
 	// cached so the composer's picker does NOT hit the network on every rail render or healthz poll. Keyed by
 	// backend so a backend change (or a fresh fetch after one) reloads the right list; an in-flight fetch is
@@ -4064,32 +4083,62 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._hasModel();
 	}
 
+	// The active model door + usage, keyed off /healthz. Flicker-free (issue #236, plan 47 P14.5 - the #211-4
+	// fix): the last SETTLED status is cached and returned INSTANTLY, so a rail remount on a surface crossing
+	// never re-probes on the critical path and the composer's health dot never blinks broker-down before settling.
+	// A stale cache (older than the probe TTL) is refreshed in the background: the cached value is returned now,
+	// the network probe runs behind it, and a REAL change fires onDidChange to re-render. Only the very first call
+	// (no cache yet) awaits the probe - there is no prior state to show, so there is nothing to flash.
 	async getModelProviderStatus(): Promise<IModelProviderStatus> {
-		// The broker not answering at all is a DISTINCT state from a reachable-but-unconfigured backend (issue
-		// #170): only the former means "the broker is not up yet". The catch below is the broker-down case.
-		const brokerDown: IModelProviderStatus = { provider: 'none', readiness: 'broker-down', signedIn: false, dailyBudgetUsd: 0 };
-		try {
-			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/healthz`, callSite: 'livingDocs.providerStatus', disableCache: true }, CancellationToken.None);
-			const json = await asJson<{ ok?: boolean; backend?: string; reason?: string; meters?: boolean; signedIn?: boolean; dailyBudgetUsd?: number; dailyTotalUsd?: number }>(context);
-			if (!json) { return brokerDown; }
-			const signedIn = json.signedIn === true;
-			let provider: ModelProvider = 'none';
-			if (json.ok === true) { provider = json.backend === 'openai-oauth' ? 'chatgpt' : 'included'; }
-			// Map the broker's own `reason` to our readiness; fall back to deriving it from `ok` for older brokers.
-			const readiness: ModelReadiness = json.reason === 'budget-paused' ? 'budget-paused'
-				: json.reason === 'ready' ? 'ready'
-					: json.reason === 'unconfigured' ? 'unconfigured'
-						: json.ok === true ? 'ready' : 'unconfigured';
-			return {
-				provider,
-				readiness,
-				signedIn,
-				dailyBudgetUsd: typeof json.dailyBudgetUsd === 'number' ? json.dailyBudgetUsd : 0,
-				dailyTotalUsd: json.meters === true && typeof json.dailyTotalUsd === 'number' ? json.dailyTotalUsd : undefined,
-			};
-		} catch {
-			return brokerDown;
+		const now = Date.now();
+		if (this._providerStatus) {
+			// Refresh a stale cache behind the scenes; hand back the settled value immediately either way.
+			if ((now - this._providerStatusAt) >= MODEL_PROBE_TTL_MS) { void this._refreshProviderStatus(); }
+			return this._providerStatus;
 		}
+		// First call: no settled state to protect, so await the probe once and seed the cache.
+		return this._refreshProviderStatus();
+	}
+
+	// Probe /healthz and update the settled cache, firing onDidChange ONLY when the honest status actually changed
+	// (so a stable broker never churns the UI). An in-flight probe is shared. Never throws: a broker that does not
+	// answer settles to `broker-down`, a distinct state from a reachable-but-unconfigured backend (issue #170).
+	private _refreshProviderStatus(): Promise<IModelProviderStatus> {
+		if (this._providerStatusProbe) { return this._providerStatusProbe; }
+		this._providerStatusProbe = (async () => {
+			const brokerDown: IModelProviderStatus = { provider: 'none', readiness: 'broker-down', signedIn: false, dailyBudgetUsd: 0 };
+			let status = brokerDown;
+			try {
+				const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/healthz`, callSite: 'livingDocs.providerStatus', disableCache: true }, CancellationToken.None);
+				const json = await asJson<{ ok?: boolean; backend?: string; reason?: string; meters?: boolean; signedIn?: boolean; dailyBudgetUsd?: number; dailyTotalUsd?: number }>(context);
+				if (json) {
+					const signedIn = json.signedIn === true;
+					let provider: ModelProvider = 'none';
+					if (json.ok === true) { provider = json.backend === 'openai-oauth' ? 'chatgpt' : 'included'; }
+					// Map the broker's own `reason` to our readiness; fall back to deriving it from `ok` for older brokers.
+					const readiness: ModelReadiness = json.reason === 'budget-paused' ? 'budget-paused'
+						: json.reason === 'ready' ? 'ready'
+							: json.reason === 'unconfigured' ? 'unconfigured'
+								: json.ok === true ? 'ready' : 'unconfigured';
+					status = {
+						provider,
+						readiness,
+						signedIn,
+						dailyBudgetUsd: typeof json.dailyBudgetUsd === 'number' ? json.dailyBudgetUsd : 0,
+						dailyTotalUsd: json.meters === true && typeof json.dailyTotalUsd === 'number' ? json.dailyTotalUsd : undefined,
+					};
+				}
+			} catch {
+				// Broker unreachable: settle to broker-down (already the default).
+			}
+			const changed = !this._providerStatus || !providerStatusEquals(this._providerStatus, status);
+			this._providerStatus = status;
+			this._providerStatusAt = Date.now();
+			this._providerStatusProbe = undefined;
+			if (changed) { this._onDidChange.fire(); }
+			return status;
+		})();
+		return this._providerStatusProbe;
 	}
 
 	// The model catalogue for the active backend (issue #179). Fetched cheaply from the broker's /models and
@@ -4103,11 +4152,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			let catalogue: IModelCatalogue = { backend: '', models: [] };
 			try {
 				const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/models`, callSite: 'livingDocs.models', disableCache: true }, CancellationToken.None);
-				const json = await asJson<{ backend?: string; models?: { id?: string; label?: string; default?: boolean }[] }>(context);
+				const json = await asJson<{ backend?: string; models?: { id?: string; label?: string; default?: boolean; tier?: string }[] }>(context);
 				if (json && Array.isArray(json.models)) {
 					const models: IModelOption[] = json.models
 						.filter(m => m && typeof m.id === 'string' && m.id.length > 0)
-						.map(m => ({ id: m.id!, label: (typeof m.label === 'string' && m.label) ? m.label : m.id!, isDefault: m.default === true }));
+						// `tier` is additive (issue #236): an absent/unknown tier coerces to `included` so an older broker
+						// still groups sensibly in the picker's popover (plan 47 pin 14).
+						.map(m => ({ id: m.id!, label: (typeof m.label === 'string' && m.label) ? m.label : m.id!, isDefault: m.default === true, tier: m.tier === 'own-key' ? 'own-key' : 'included' }));
 					catalogue = { backend: typeof json.backend === 'string' ? json.backend : '', models };
 				}
 			} catch {
@@ -4130,28 +4181,33 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async getSelectedModelId(): Promise<string | undefined> {
 		const catalogue = await this.getModelCatalogue();
 		if (!catalogue.models.length) { return undefined; }
-		const stored = this._storage.get(selectedModelKey(catalogue.backend), StorageScope.APPLICATION);
+		const stored = this._storage.get(SELECTED_MODEL_KEY, StorageScope.WORKSPACE);
 		if (stored && catalogue.models.some(m => m.id === stored)) { return stored; }
 		const fallback = catalogue.models.find(m => m.isDefault) ?? catalogue.models[0];
 		return fallback.id;
 	}
 
-	// Persist the user's model choice for the active backend (issue #179), APPLICATION-scoped + MACHINE target
-	// (see SELECTED_MODEL_KEY_PREFIX for why). Fires onDidChange so the composer re-renders with the new pick.
-	// An unknown id (not in the catalogue) is ignored so a bad caller can never persist a dead selection.
+	// Persist the user's model choice (issue #179), WORKSPACE-scoped + MACHINE target (see SELECTED_MODEL_KEY
+	// for why - plan 43 section 3.5 / P14.4). Fires onDidChange so the composer re-renders with the new pick. An
+	// unknown id (not in the catalogue) is ignored so a bad caller can never persist a dead selection.
 	async setSelectedModelId(modelId: string): Promise<void> {
 		const catalogue = await this.getModelCatalogue();
 		if (!catalogue.models.some(m => m.id === modelId)) { return; }
-		this._storage.store(selectedModelKey(catalogue.backend), modelId, StorageScope.APPLICATION, StorageTarget.MACHINE);
+		this._storage.store(SELECTED_MODEL_KEY, modelId, StorageScope.WORKSPACE, StorageTarget.MACHINE);
 		this._onDidChange.fire();
 	}
 
-	// Drop the cached model catalogue so the next read re-fetches (issue #179). Called on any sign-in/out, which
-	// can change the active backend (included <-> ChatGPT) and thus the available models. Cheap: just clears the
-	// cache; the refetch happens lazily on the next getModelCatalogue().
+	// Drop the cached model catalogue AND the settled provider status so the next read re-fetches (issue #179).
+	// Called on any sign-in/out, which can change the active backend (included <-> ChatGPT) and thus both the
+	// available models and the door/readiness. Cheap: just clears the caches; the refetch happens lazily on the
+	// next getModelCatalogue() / getModelProviderStatus(). Expiring the status cache here is correct because a
+	// deliberate door change is a real transition, not the surface-crossing remount the flicker fix protects.
 	private _invalidateModelCatalogue(): void {
 		this._modelCatalogue = undefined;
 		this._modelCatalogueFetch = undefined;
+		this._providerStatus = undefined;
+		this._providerStatusAt = 0;
+		this._providerStatusProbe = undefined;
 	}
 
 	async startChatGptSignIn(): Promise<string | undefined> {
@@ -4735,10 +4791,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	/** Force the next model probe to re-hit /healthz, so a door just chosen is reflected immediately (not TTL-stale). */
+	/** Force the next model probe to re-hit /healthz, so a door just chosen is reflected immediately (not TTL-stale).
+	 * Expires the settled provider-status cache too (issue #236) so a deliberate door change - a real transition,
+	 * unlike the surface-crossing remount the flicker fix protects - is not masked by a still-fresh cached status. */
 	private _invalidateModelProbe(): void {
 		this._modelProbedAt = 0;
 		this._modelProbe = undefined;
+		this._providerStatus = undefined;
+		this._providerStatusAt = 0;
+		this._providerStatusProbe = undefined;
 	}
 
 	// Answer a read-only whole-project question for the Project Home composer (F15 / journey 1w, map-D24). This

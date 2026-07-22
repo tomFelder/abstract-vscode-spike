@@ -87,15 +87,25 @@ export interface IModelProviderStatus {
 }
 
 /**
+ * The tier a model belongs to for the composer picker's popover grouping (issue #236, plan 47 pin 14):
+ * `included` = the founder-funded fallback the user did not pay for; `own-key` = a model the user's own
+ * subscription drives. Read from the broker's /models `tier` field, which is additive - an absent tier
+ * (an older broker) coerces to `included` so the popover still groups sensibly.
+ */
+export type ModelTier = 'included' | 'own-key';
+
+/**
  * One model the active backend can drive, for the composer's model picker (issue #179). `id` is the upstream
  * model id the broker sends; `label` is the product-facing name shown in the dropdown (e.g. "Included model",
  * or the ChatGPT tiers "Sol"/"Terra"/"Luna"); `isDefault` marks the backend's fallback, the one a request
- * lands on when it carries no (or a stale) selection. Read from the broker's /models endpoint.
+ * lands on when it carries no (or a stale) selection; `tier` groups the popover (see ModelTier). Read from
+ * the broker's /models endpoint.
  */
 export interface IModelOption {
 	readonly id: string;
 	readonly label: string;
 	readonly isDefault: boolean;
+	readonly tier: ModelTier;
 }
 
 /**
