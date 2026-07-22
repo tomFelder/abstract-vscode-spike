@@ -550,26 +550,29 @@ function activeBackend() {
 }
 
 // --- model listing (issue #179) -----------------------------------------------------------------------
-// The models the ACTIVE backend can drive, shaped as { id, label, default } for the composer's picker. Every
-// backend exposes exactly one `default:true` entry - the model a request lands on when it sends no `model` or
-// a stale/unknown one (never a 500 on a persisted id). The openrouter backend serves ONE included model, so
-// its list is a single product-labelled entry; the openai-oauth backend returns the subscription's catalogue
-// (static today - the Codex OAuth token cannot enumerate models live - behind lwd-openai-oauth.listModels(),
-// which is the seam a future live query slots into). #120 note: the backend is fixed at spawn (LWD_BACKEND) and
-// does not switch after a mid-session ChatGPT sign-in; this reports for whatever backend is active NOW and, for
-// a backend that is not configured, still returns its catalogue so the picker renders consistently (the call
-// path itself degrades via /healthz + the renderer's heuristic fallback, not by an empty picker).
+// The models the ACTIVE backend can drive, shaped as { id, label, default, tier } for the composer's picker.
+// Every backend exposes exactly one `default:true` entry - the model a request lands on when it sends no
+// `model` or a stale/unknown one (never a 500 on a persisted id). `tier` (issue #236, plan 47 pin 14) groups
+// the picker's popover: `included` = the founder-funded fallback the user did not pay for; `own-key` = a model
+// the user's own subscription drives. The openrouter backend serves ONE included model, so its list is a single
+// `included` entry; the openai-oauth backend returns the subscription's `own-key` catalogue (static today - the
+// Codex OAuth token cannot enumerate models live - behind lwd-openai-oauth.listModels(), which is the seam a
+// future live query slots into). #120 note: the backend is fixed at spawn (LWD_BACKEND) and does not switch
+// after a mid-session ChatGPT sign-in; this reports for whatever backend is active NOW and, for a backend that
+// is not configured, still returns its catalogue so the picker renders consistently (the call path itself
+// degrades via /healthz + the renderer's heuristic fallback, not by an empty picker). `tier` is additive: an
+// older renderer that ignores it still reads id/label/default unchanged.
 async function modelsForBackend(backend) {
 	if (backend.name === 'openai-oauth') {
 		try {
 			const models = await openaiOAuth.listModels();
-			if (Array.isArray(models) && models.length) { return models; }
+			if (Array.isArray(models) && models.length) { return models.map(m => ({ ...m, tier: 'own-key' })); }
 		} catch { /* fall through to a safe single-entry default below */ }
 		// A listModels failure must never empty the picker: fall back to the one known default model.
-		return [{ id: openaiOAuth.OPENAI_MODEL, label: 'ChatGPT model', default: true }];
+		return [{ id: openaiOAuth.OPENAI_MODEL, label: 'ChatGPT model', default: true, tier: 'own-key' }];
 	}
 	// openrouter: a single founder-funded included model, product-labelled (never the raw upstream id).
-	return [{ id: OPENROUTER_MODEL, label: 'Included model', default: true }];
+	return [{ id: OPENROUTER_MODEL, label: 'Included model', default: true, tier: 'included' }];
 }
 
 // The default model id for a backend's list (the entry flagged default, else the first). Used to resolve an
@@ -1047,10 +1050,11 @@ const server = http.createServer((req, res) => {
 		});
 		return;
 	}
-	// GET /models (issue #179): the models the ACTIVE backend can drive, for the composer's picker. Shape:
-	// { backend, models: [{ id, label, default }] }. The renderer fetches this cheaply (on backend change or
-	// rail render, not on every healthz poll) and passes the chosen id on /v1/messages. Reports for whatever
-	// backend is active now; #120 (backend fixed at spawn, does not switch after sign-in) is out of scope here.
+	// GET /models (issue #179; tier added #236): the models the ACTIVE backend can drive, for the composer's
+	// picker. Shape: { backend, models: [{ id, label, default, tier }] } where tier is `included` | `own-key`
+	// (plan 47 pin 14's popover grouping). The renderer fetches this cheaply (on backend change or rail render,
+	// not on every healthz poll) and passes the chosen id on /v1/messages. Reports for whatever backend is
+	// active now; #120 (backend fixed at spawn, does not switch after sign-in) is out of scope here.
 	if (req.method === 'GET' && url.startsWith('/models')) {
 		setCors(res);
 		const backend = activeBackend();

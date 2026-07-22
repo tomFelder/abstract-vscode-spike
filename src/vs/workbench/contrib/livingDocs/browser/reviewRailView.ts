@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
+import { $, addDisposableListener, append, clearNode, getWindow } from '../../../../base/browser/dom.js';
 import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
 import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
@@ -26,7 +26,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
-import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelReadiness } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelReadiness, ModelTier } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
@@ -48,6 +48,35 @@ export const REVIEW_RAIL_HTML_SANITIZER = Object.freeze({
 
 function esc(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// The health dot colour for the composer model control + popover rows (issue #236, plan 47 P14.5). Honest,
+// never fabricated: `ready` = green (ok #2C8159); `budget-paused` = amber attention (#C99A2E, the included
+// tier's daily cap is spent but the model is otherwise fine); broker-down / unconfigured = removed-ink
+// (#B5514B, the model genuinely cannot answer); undefined (not yet probed) = a neutral grey placeholder,
+// a window the settled-status cache keeps to near-zero so the dot never blinks on a surface crossing.
+// Exported so the unit test pins the readiness -> colour mapping without a live broker.
+export function modelHealthDotColour(readiness: ModelReadiness | undefined): string {
+	switch (readiness) {
+		case 'ready': return '#2c8159';
+		case 'budget-paused': return '#c99a2e';
+		case 'broker-down':
+		case 'unconfigured': return '#b5514b';
+		default: return '#c6cad2';
+	}
+}
+
+// The plain-words state shown on the model control (and the empty popover) when there is no model label to
+// show (issue #236, P14.5): the broker state named honestly, never a fabricated "connected". Externalised so
+// every surface speaks the same words. Exported for the unit test.
+export function modelStateWords(readiness: ModelReadiness | undefined): string {
+	switch (readiness) {
+		case 'budget-paused': return localize('livingDocs.model.state.paused', "Daily limit reached");
+		case 'ready': return localize('livingDocs.model.state.ready', "Model ready");
+		case 'broker-down':
+		case 'unconfigured': return localize('livingDocs.model.state.unavailable', "Model unavailable");
+		default: return localize('livingDocs.model.state.checking', "Checking model…");
+	}
 }
 
 // How many Attach chips show before the "..." expander (#177). Four fits ~two lines in the 392px rail
@@ -168,6 +197,10 @@ export class ReviewRailView extends ViewPane {
 	// dropdown from these; empty models -> no picker. Undefined until the first fetch resolves.
 	private _models: readonly IModelOption[] | undefined;
 	private _selectedModelId: string | undefined;
+	// The open model-selector popover (issue #236, plan 47 P14.3), or empty when none is up. A MutableDisposable
+	// so opening a second popover, selecting a model, or re-rendering the composer tears the previous one down -
+	// the DOM node + its outside-click/Escape listeners live in the store this holds, so nothing leaks.
+	private readonly _modelPopover = this._register(new MutableDisposable<DisposableStore>());
 	// Plan 42 slice L2 (issue #198): the inline first-use ChatGPT sign-in state. Undefined = no sign-in in flight
 	// (the two-door choice shows); a string (possibly empty) = the round-trip is pending, so the choice renders
 	// the "open the sign-in page" affordance + spinner. Reset once the flow completes, errors, or is dismissed.
@@ -211,6 +244,11 @@ export class ReviewRailView extends ViewPane {
 		this._root.style.height = '100%';
 		this._injectStyles(container);
 		this._register(this._livingDocs.onDidChange(() => { void this._refreshSignedIn(); this._render(); }));
+		// While this rail is mounted, register interest in the live provider status (issue #236, the D1 down->up
+		// recovery). If the broker is down, the service re-probes /healthz on a low frequency and fires onDidChange
+		// on the real recovery, which drives _refreshSignedIn above and returns the composer to green. Registered
+		// with the render lifecycle so the interest (and the service's background timer) unwinds when the rail unmounts.
+		this._register(this._livingDocs.watchProviderStatus());
 		// Append streamed chat deltas to the live turn without a full re-render (plan 27 iter 3).
 		this._register(this._livingDocs.onDidStreamChat(resource => this._onStreamDelta(resource)));
 		this._register(this._livingDocs.onDidRequestPanel(request => { this._activeTab = request.tab; this._render(); }));
@@ -243,6 +281,9 @@ export class ReviewRailView extends ViewPane {
 	private _render(): void {
 		const root = this._root;
 		if (!root) { return; }
+		// Tear down any open model popover before we clear the DOM (issue #236): its node lives inside the composer
+		// box we are about to remove, and its window-level dismiss listeners must not outlive that node.
+		this._modelPopover.clear();
 		this._renderDisposables.clear();
 		clearNode(root);
 
@@ -1108,7 +1149,9 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		const bar = append(box, $('div'));
-		bar.style.cssText = 'display:flex;align-items:center;gap:6px;padding-top:8px';
+		// P14.1 action row order: plus-Skill, at-mention, spacer, model control, send. The spacer (flex:1) pushes the
+		// model control and send button to the right edge; gap 4px matches the mock's tight action-row rhythm.
+		bar.style.cssText = 'display:flex;align-items:center;gap:4px;padding-top:8px';
 
 		// + Skill: opens the same skill list that backs the Review disclosure; runs through the shared
 		// runSkillCheck path. Only available when a living document is active (same gate as the disclosure).
@@ -1128,7 +1171,8 @@ export class ReviewRailView extends ViewPane {
 		// the mentionable files; selecting one inserts the token the message parser accepts (`@filename`).
 		const mentionBtn = append(bar, $('button')) as HTMLButtonElement;
 		mentionBtn.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:5px 9px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer';
-		mentionBtn.textContent = '@ Mention';
+		mentionBtn.textContent = '@';
+		mentionBtn.title = localize('livingDocs.composer.mention', "Mention a source");
 		mentionBtn.disabled = !doc;
 		if (!doc) { mentionBtn.style.opacity = '0.45'; }
 		this._renderDisposables.add(addDisposableListener(mentionBtn, 'click', () => {
@@ -1140,9 +1184,15 @@ export class ReviewRailView extends ViewPane {
 			picker.update();
 		}));
 
-		// The model picker (issue #179): a compact dropdown of the active backend's models, rendered even when
-		// only one model exists so the surface is consistent across the included tier and a signed-in ChatGPT.
-		this._renderModelPicker(bar);
+		// P14.1 spacer: pushes the model control + send button to the right, leaving + Skill / @ on the left.
+		const spacer = append(bar, $('div'));
+		spacer.style.cssText = 'flex:1';
+
+		// P14.2-P14.5 the quiet model control: mono 11px muted, 6px health dot + model id + a caret, metadata look
+		// (no border/bg until hover). Click opens the grouped popover (P14.3). Rendered even with one model so
+		// the surface stays consistent across the included tier and a signed-in ChatGPT; the health dot always
+		// reflects the settled broker readiness (P14.5), so an honest state shows without flicker on crossings.
+		this._renderModelControl(bar, box);
 
 		const busy = !!doc && this._livingDocs.isChatBusy(doc);
 		const submit = () => {
@@ -1157,13 +1207,13 @@ export class ReviewRailView extends ViewPane {
 		if (busy) {
 			// While a reply streams the send button becomes a Stop square (plan 27 iter 3): it cancels the
 			// in-flight call; the prose so far is kept as a muted "stopped" turn (D27-B). Esc cancels too.
-			action.style.cssText = 'margin-left:auto;width:28px;height:28px;border:none;border-radius:8px;background:#b4332f;color:#fff;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center';
+			action.style.cssText = 'width:28px;height:28px;flex:none;border:none;border-radius:8px;background:#b4332f;color:#fff;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center';
 			action.textContent = '\u25a0';
 			action.title = 'Stop';
 			this._renderDisposables.add(addDisposableListener(action, 'click', () => this._livingDocs.cancelChat(doc!)));
 		} else {
-			// Comp: 28x28 accent send button
-			action.style.cssText = 'margin-left:auto;width:28px;height:28px;border:none;border-radius:8px;background:oklch(0.55 0.13 255);color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center';
+			// P14.1: 28x28 accent send square, radius 8.
+			action.style.cssText = 'width:28px;height:28px;flex:none;border:none;border-radius:8px;background:oklch(0.55 0.13 255);color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center';
 			action.textContent = '\u2191';
 			action.disabled = !doc;
 			this._renderDisposables.add(addDisposableListener(action, 'click', submit));
@@ -1181,43 +1231,117 @@ export class ReviewRailView extends ViewPane {
 		if (doc && !busy) { input.focus(); }
 	}
 
-	// The model picker (issue #179): a compact dropdown in the composer footer listing the active backend's
-	// models, sitting beside the +Skill / @Mention chips. Renders only once the catalogue has resolved (nothing
-	// flashes before we know the truth), and renders EVEN when only one model exists so the surface is consistent
-	// between the included tier (one "Included model") and a signed-in ChatGPT (its several tiers) - single-model
-	// case is styled inert (disabled) since there is nothing to choose. Changing the selection persists it per
-	// backend via the service; the broker validates the id and falls back to its default, so a pick never 500s a
-	// call. A native <select> keeps it keyboard-accessible and visually consistent with the rail's quiet chips.
-	private _renderModelPicker(bar: HTMLElement): void {
+	// The quiet model control (issue #236, plan 47 pin 14): mono 11px muted, a 6px health dot + the selected
+	// model's label + a small caret, reading as metadata (no border/bg until hover). It sits on the composer action
+	// row after the spacer (P14.1). Clicking it opens the grouped popover (P14.3). Rendered only once the
+	// catalogue has resolved so nothing flashes before the truth is known; an empty catalogue (broker unreachable)
+	// still renders the control with an honest "Model unavailable" state and the removed dot (P14.5), so the user
+	// always sees the real broker state - never a fabricated "connected". Health comes from the SETTLED readiness
+	// the service caches (P14.5, the #211-4 flicker fix), so the dot never blinks on Editor -> Home -> Editor.
+	private _renderModelControl(bar: HTMLElement, box: HTMLElement): void {
 		const models = this._models;
-		// Undefined = not yet fetched: render nothing to avoid a flash before the catalogue resolves. An empty
-		// list (broker unreachable) also renders nothing - the composer degrades to no picker, never an error.
-		if (!models || !models.length) { return; }
+		const readiness = this._readiness;
+		// Not yet probed AND no catalogue: render nothing to avoid a flash before the first truth resolves. Once
+		// either resolves we render the control - with a real model label when we have one, else the honest state.
+		if (readiness === undefined && (!models || !models.length)) { return; }
 
-		const single = models.length === 1;
-		const select = append(bar, $('select')) as HTMLSelectElement;
-		// Quiet chip styling to match the +Skill / @Mention buttons: slate text, hairline border, 8px radius.
-		select.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:4px 6px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer;max-width:120px';
-		select.title = single ? 'The model serving your calls' : 'Choose the model for your calls';
-		if (single) {
-			// One model: inert (disabled) - there is nothing to choose, but the picker still shows for consistency.
-			select.disabled = true;
-			select.style.cursor = 'default';
-			select.style.opacity = '0.7';
+		const control = append(bar, $('button')) as HTMLButtonElement;
+		// P14.2 metadata look: mono 11px muted (#868B95), 26px tall, radius 7, NO border/bg until hover.
+		control.style.cssText = 'display:flex;align-items:center;gap:5px;flex:none;height:26px;padding:0 8px;border:none;border-radius:7px;background:transparent;color:#868b95;font:400 11px/1 ui-monospace,\'JetBrains Mono\',monospace;cursor:pointer;max-width:150px';
+		const dot = append(control, $('span'));
+		dot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${modelHealthDotColour(readiness)}`;
+		const label = append(control, $('span'));
+		label.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+		const selected = models?.find(m => m.id === this._selectedModelId);
+		// The control names the model when we have one; otherwise it names the state in plain words (P14.5).
+		label.textContent = selected ? selected.label : modelStateWords(readiness);
+		const caret = append(control, $('span'));
+		caret.style.cssText = 'font-size:8px;flex:none;color:#a3a8b2';
+		caret.textContent = '\u25be';
+		control.title = selected
+			? localize('livingDocs.model.control.title', "Model: {0}", selected.label)
+			: localize('livingDocs.model.control.titleState', "The model that answers your calls");
+		// Hover reveals the control (P14.2): a quiet bg + darker text, matching the +Skill / @ chips' hover feel.
+		this._renderDisposables.add(addDisposableListener(control, 'mouseenter', () => { control.style.background = '#f6f7f9'; control.style.color = '#52575f'; }));
+		this._renderDisposables.add(addDisposableListener(control, 'mouseleave', () => { control.style.background = 'transparent'; control.style.color = '#868b95'; }));
+		this._renderDisposables.add(addDisposableListener(control, 'click', () => this._openModelPopover(control, box)));
+	}
+
+	// The model popover (P14.3): the broker's models grouped by tier (included vs own-key, plan 35), the current
+	// model checked, and a per-row health dot. Anchored above the control inside the composer box (like the
+	// @mention picker), so it rides the rail's own DOM and needs no external layer. Selecting a model persists it
+	// (P14.4) and switches the model used for the NEXT call, then closes. Registered on a local store torn down on
+	// close or on the next composer re-render, so no listener leaks. Broker-down / empty catalogue: the popover
+	// shows the honest state line rather than a fabricated list (P14.5), so the surface never lies.
+	private _openModelPopover(anchor: HTMLElement, box: HTMLElement): void {
+		// Toggle: a second click (or a re-open) closes any open popover first.
+		this._modelPopover.clear();
+		const store = new DisposableStore();
+		this._modelPopover.value = store;
+
+		const pop = append(box, $('div'));
+		// Anchored above the control, right-aligned to the composer box; card styling matches the mention picker.
+		pop.style.cssText = 'position:absolute;right:9px;bottom:calc(100% + 4px);z-index:20;min-width:200px;max-width:260px;padding:5px;background:#fff;border:1px solid #e6e8ec;border-radius:11px;box-shadow:0 12px 30px -14px rgba(20,22,28,.28)';
+		// Guard: swallow the mousedown that would otherwise bubble to the outside-dismiss listener below and
+		// close the popover before a row's click lands.
+		store.add(addDisposableListener(pop, 'mousedown', e => e.stopPropagation()));
+
+		const models = this._models ?? [];
+		const readiness = this._readiness;
+		if (!models.length) {
+			// Honest empty state (P14.5): the model genuinely cannot answer; no fabricated rows.
+			const state = append(pop, $('div'));
+			state.style.cssText = 'display:flex;align-items:center;gap:7px;padding:9px 10px;font:400 11.5px/1.4 system-ui;color:#868b95';
+			const sdot = append(state, $('span'));
+			sdot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${modelHealthDotColour(readiness)}`;
+			append(state, $('span')).textContent = modelStateWords(readiness);
+		} else {
+			// Group by tier: included first (the founder-funded fallback), then own-key (the user's subscription).
+			// Only groups with members render a header, so a single-tier catalogue shows one clean section.
+			const groups: { tier: ModelTier; heading: string }[] = [
+				{ tier: 'included', heading: localize('livingDocs.model.group.included', "Included") },
+				{ tier: 'own-key', heading: localize('livingDocs.model.group.ownKey', "Your subscription") },
+			];
+			for (const group of groups) {
+				const rows = models.filter(m => m.tier === group.tier);
+				if (!rows.length) { continue; }
+				const heading = append(pop, $('div'));
+				heading.style.cssText = 'padding:6px 9px 3px;font:600 9.5px/1 ui-monospace,\'JetBrains Mono\',monospace;letter-spacing:.12em;text-transform:uppercase;color:#b0b5be';
+				heading.textContent = group.heading;
+				for (const model of rows) {
+					const row = append(pop, $('button')) as HTMLButtonElement;
+					const isCurrent = model.id === this._selectedModelId;
+					row.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:30px;padding:0 9px;border:none;border-radius:7px;background:transparent;color:#3c4250;font:500 12px/1 system-ui;cursor:pointer;text-align:left';
+					// Per-row health dot (P14.3): all of the active backend's models share its live readiness, so the
+					// dot honestly mirrors the broker state per row rather than fabricating per-model health.
+					const rdot = append(row, $('span'));
+					rdot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${modelHealthDotColour(readiness)}`;
+					const name = append(row, $('span'));
+					name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+					name.textContent = model.label;
+					// The current model carries a check (P14.3); the tick space is reserved so rows align.
+					const check = append(row, $('span'));
+					check.style.cssText = `flex:none;font-size:12px;color:oklch(0.55 0.13 255);width:12px;text-align:center;visibility:${isCurrent ? 'visible' : 'hidden'}`;
+					check.textContent = '✓';
+					store.add(addDisposableListener(row, 'mouseenter', () => { row.style.background = '#f4f5fd'; }));
+					store.add(addDisposableListener(row, 'mouseleave', () => { row.style.background = 'transparent'; }));
+					store.add(addDisposableListener(row, 'click', () => {
+						this._modelPopover.clear();
+						if (model.id === this._selectedModelId) { return; }
+						this._selectedModelId = model.id;
+						void this._livingDocs.setSelectedModelId(model.id);
+					}));
+				}
+			}
 		}
-		for (const model of models) {
-			const opt = append(select, $('option')) as HTMLOptionElement;
-			opt.value = model.id;
-			opt.textContent = model.label;
-			if (model.id === this._selectedModelId) { opt.selected = true; }
-		}
-		if (!single) {
-			this._renderDisposables.add(addDisposableListener(select, 'change', () => {
-				const id = select.value;
-				this._selectedModelId = id;
-				void this._livingDocs.setSelectedModelId(id);
-			}));
-		}
+
+		// Dismiss on an outside pointer-down or Escape. The window is resolved from the control's own element so
+		// the listener lands on the right window in a multi-window / webview scenario; the pop's own mousedown
+		// (above) stops the bubble so an in-popover click never self-dismisses before it lands.
+		const win = getWindow(anchor);
+		store.add(addDisposableListener(win, 'mousedown', () => this._modelPopover.clear()));
+		store.add(addDisposableListener(win, 'keydown', (e: KeyboardEvent) => { if (e.key === 'Escape') { this._modelPopover.clear(); } }));
+		store.add({ dispose: () => pop.remove() });
 	}
 
 	// The working-set row in the composer: the documents a single instruction fans out across (plan 18).

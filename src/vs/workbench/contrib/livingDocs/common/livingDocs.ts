@@ -5,6 +5,7 @@
 
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Event } from '../../../../base/common/event.js';
+import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
@@ -87,15 +88,25 @@ export interface IModelProviderStatus {
 }
 
 /**
+ * The tier a model belongs to for the composer picker's popover grouping (issue #236, plan 47 pin 14):
+ * `included` = the founder-funded fallback the user did not pay for; `own-key` = a model the user's own
+ * subscription drives. Read from the broker's /models `tier` field, which is additive - an absent tier
+ * (an older broker) coerces to `included` so the popover still groups sensibly.
+ */
+export type ModelTier = 'included' | 'own-key';
+
+/**
  * One model the active backend can drive, for the composer's model picker (issue #179). `id` is the upstream
  * model id the broker sends; `label` is the product-facing name shown in the dropdown (e.g. "Included model",
  * or the ChatGPT tiers "Sol"/"Terra"/"Luna"); `isDefault` marks the backend's fallback, the one a request
- * lands on when it carries no (or a stale) selection. Read from the broker's /models endpoint.
+ * lands on when it carries no (or a stale) selection; `tier` groups the popover (see ModelTier). Read from
+ * the broker's /models endpoint.
  */
 export interface IModelOption {
 	readonly id: string;
 	readonly label: string;
 	readonly isDefault: boolean;
+	readonly tier: ModelTier;
 }
 
 /**
@@ -703,6 +714,14 @@ export interface ILivingDocsService {
 	isModelReachable(): Promise<boolean>;
 	/** The current model door + usage snapshot for the Settings provider step (reads the proxy's /healthz). */
 	getModelProviderStatus(): Promise<IModelProviderStatus>;
+	/**
+	 * Register a mounted consumer's interest in the live provider status (issue #236, the D1 down->up recovery).
+	 * While at least one consumer is watching AND the broker is down, the service re-probes /healthz on a low
+	 * frequency so a recovered broker returns the control to green mid-session - the settled-status flicker fix
+	 * otherwise serves `broker-down` from cache without ever re-probing while idle. Dispose to unwatch on unmount;
+	 * ref-counted, so the background probe runs only while watched and stops on the last unwatch (no orphan timer).
+	 */
+	watchProviderStatus(): IDisposable;
 	/**
 	 * The models the active backend can drive, for the composer's picker (issue #179). Cached per backend and
 	 * fetched cheaply from the broker's /models (on backend change or first read, never on every healthz poll).
