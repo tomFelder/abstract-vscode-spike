@@ -222,6 +222,10 @@ const DOC_LAST_VIEWED_KEY = 'livingDocs.docLastViewed';
 // than dead-selecting - a single WORKSPACE key is safe. MACHINE target: not synced across machines (a different
 // machine may run a different broker/subscription). The value is a model id validated against /models on use.
 const SELECTED_MODEL_KEY = 'livingDocs.v2.model';
+// Per-workspace set of source ids whose staleness the user marked "as expected" (K3.1, plan 49-a). Stored as
+// a JSON string array so a marked source is calmed to context-grey in the registry across reloads without
+// ever auto-fixing it. Workspace-scoped: the acknowledgement is about THIS project's sources.
+const SOURCE_EXPECTED_KEY = 'livingDocs.v2.sourceExpected';
 
 // Structural equality for the settled provider-status cache (issue #236, plan 47 P14.5): the flicker fix fires
 // onDidChange only on a REAL change, so a stable broker never churns the composer. Compares the fields the UI
@@ -1238,6 +1242,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				}
 			}
 		}
+		const expected = this._expectedSourceIds();
 		const sources: ISourceInfo[] = [];
 		for (const [id, row] of acc) {
 			const usedBy: ISourceUsage[] = [...row.usedBy.values()]
@@ -1246,10 +1251,70 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// A stale source reports its oldest stale sync time so it never reads as freshly-synced (F12);
 			// an all-fresh source reports the newest sync across its dependents.
 			const syncedAt = row.fresh ? row.syncedAt : (row.staleSyncedAt ?? row.syncedAt);
-			sources.push({ id, kind: row.kind, label: row.label, syncedAt, fresh: row.fresh, usedBy });
+			// The on-disk resource for a file source in the open folder (K2.6 row-click opens it as a tab).
+			const resource = this._sourceResource(id, row.kind);
+			sources.push({ id, kind: row.kind, label: row.label, syncedAt, fresh: row.fresh, resource, markedExpected: expected.has(id), usedBy });
 		}
 		sources.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
 		return sources;
+	}
+
+	// The set of source ids the user marked "as expected" (K3.1), read from per-workspace storage. Malformed
+	// storage degrades to an empty set (never a throw in the registry projection path).
+	private _expectedSourceIds(): ReadonlySet<string> {
+		const raw = this._storage.get(SOURCE_EXPECTED_KEY, StorageScope.WORKSPACE, '[]');
+		try {
+			const arr = JSON.parse(raw);
+			return new Set(Array.isArray(arr) ? arr.filter((s: unknown): s is string => typeof s === 'string') : []);
+		} catch {
+			return new Set();
+		}
+	}
+
+	// Resolve a file source id (e.g. "metrics.csv") to its on-disk resource in the first workspace folder, so a
+	// Knowledge row click can open it as a product tab (K2.6). An api/mcp source has no local file (undefined);
+	// a file id is joined against the folder root (the id is authored relative to the project).
+	private _sourceResource(id: string, kind: SourceKind): URI | undefined {
+		if (kind !== 'file') { return undefined; }
+		const folder = this._workspace.getWorkspace().folders[0]?.uri;
+		if (!folder) { return undefined; }
+		return joinPath(folder, id);
+	}
+
+	async resyncSource(sourceId: string): Promise<void> {
+		// Re-sync through the EXISTING sync machinery (warn-never-auto-fix): resolve the source's dependent
+		// documents and run the standard refresh pass over each, so drift is reconciled through the ordinary
+		// approval + audit path. Nothing bespoke - `refreshFromSources(doc)` is the same routine the doc
+		// toolbar's Refresh uses; it scopes to the doc and its shared-source siblings.
+		const dependents = await this._documentsForSource(sourceId);
+		for (const uri of dependents) {
+			await this.refreshFromSources(uri);
+		}
+		this._onDidChange.fire();
+	}
+
+	// The documents that bind or reference a given source id, for a source-scoped re-sync. A pure read over the
+	// same projection `listSources` folds from; empty when the source has no dependents (the re-sync is a no-op).
+	private async _documentsForSource(sourceId: string): Promise<readonly URI[]> {
+		const found = new Map<string, URI>();
+		for (const state of this._docs.values()) { found.set(state.uri.toString(), state.uri); }
+		for (const folder of this._workspace.getWorkspace().folders) {
+			await this._collectDocs(folder.uri, found, 0);
+		}
+		const out: URI[] = [];
+		for (const uri of found.values()) {
+			const projection = await this._sourceProjection(uri);
+			if (!projection) { continue; }
+			if (projection.doc.sources.includes(sourceId) || projection.doc.context.includes(sourceId)) { out.push(uri); }
+		}
+		return out;
+	}
+
+	async setSourceExpected(sourceId: string, expected: boolean): Promise<void> {
+		const set = new Set(this._expectedSourceIds());
+		if (expected) { set.add(sourceId); } else { set.delete(sourceId); }
+		this._storage.store(SOURCE_EXPECTED_KEY, JSON.stringify([...set]), StorageScope.WORKSPACE, StorageTarget.USER);
+		this._onDidChange.fire();
 	}
 
 	// Read one document's projection for the source registry: its parsed doc, its lock (from the loaded state

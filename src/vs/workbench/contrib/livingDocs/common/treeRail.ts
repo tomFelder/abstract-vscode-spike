@@ -35,6 +35,13 @@ export interface ITreeRailItem {
 	readonly dot: IRailDot;
 	/** For source rows, the binding kind (file | api | mcp) - drives the row glyph. */
 	readonly sourceKind?: SourceKind;
+	/**
+	 * For source rows, the ONE freshness vocabulary state (#122 F12): 'stale' when a dependent binding drifted
+	 * (amber "stale"), 'context-only' when nothing binds it (grey "context only"), else 'fresh' (a quiet
+	 * synced token). Absent = a bare discovered file with no freshness context. Agrees with the Knowledge
+	 * table + drawer + hover-peek so the SOURCES meta never reads "synced" for a source that has actually drifted.
+	 */
+	readonly freshness?: 'fresh' | 'stale' | 'context-only';
 	/** For an `unsupported` (not-yet-imported) row, the plain-words reason; unset otherwise (plan 37 F10). */
 	readonly note?: string;
 	/** For a workbook/PDF SOURCES row, the "Use as source" action it offers (issue #131). */
@@ -171,7 +178,7 @@ interface IMutableFolder {
  * F9). Files we cannot yet import (.doc/.docx and kin) land under "Not yet imported" with a plain-words
  * reason (F10). Empty groups are omitted so the rail only shows what the workspace actually has. Pure.
  */
-export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readonly string[] = []): ITreeRailFolder[] {
+export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): ITreeRailFolder[] {
 	const folders: ITreeRailFolder[] = [];
 
 	// --- Reports: the document tree, on-disk hierarchy preserved (F7) ---
@@ -217,7 +224,8 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 		if (seen.has(label)) { return; }
 		seen.add(label);
 		const sourceKind = sourceKindOf(label);
-		sources.push({ label, resource, kind: 'source', pending: false, pendingCount: 0, living: false, sourceKind, dot: sourceRailDot('source', sourceKind), ...(action ? { action } : {}) });
+		const freshness = sourceFreshness.get(label);
+		sources.push({ label, resource, kind: 'source', pending: false, pendingCount: 0, living: false, sourceKind, dot: sourceRailDot('source', sourceKind), ...(freshness ? { freshness } : {}), ...(action ? { action } : {}) });
 	};
 	for (const d of docs) {
 		for (const s of d.sources) {
@@ -300,8 +308,8 @@ export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[
  *  - assigns every node a stable id (path-based for folders) for selection + persisted collapse state.
  * Empty groups are omitted. Pure - the widget wiring lives in the view.
  */
-export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], recentResources: readonly URI[] = []): ITreeRailNode[] {
-	const folders = buildFileTree(docs, extras);
+export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], recentResources: readonly URI[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): ITreeRailNode[] {
+	const folders = buildFileTree(docs, extras, sourceFreshness);
 	// Sources a document actually binds to stay visible even when they are images (a bound chart PNG is data,
 	// not noise); only un-bound loose screenshots are bucketed into the collapsed Assets node (issue #171).
 	const boundLabels = new Set<string>();

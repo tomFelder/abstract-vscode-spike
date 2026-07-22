@@ -275,6 +275,17 @@ export interface ISourceInfo {
 	readonly syncedAt: string | undefined;
 	/** True when the current source value still matches every dependent lock's recorded hash (nothing stale). */
 	readonly fresh: boolean;
+	/**
+	 * The source's on-disk resource for a `file` source in the open folder (K2.6: a row click opens it as a
+	 * product tab via `openSourceTab`). Undefined for an `api`/`mcp` source or a file with no local counterpart
+	 * (there is nothing to open as a tab); the row is then non-navigable.
+	 */
+	readonly resource?: URI;
+	/**
+	 * True when the user marked this source's staleness "as expected" (K3.1): a per-workspace acknowledgement
+	 * that calms the row to context-grey honestly (the drift is known and accepted), without ever auto-fixing.
+	 */
+	readonly markedExpected?: boolean;
 	/** The documents that depend on this source, each with the bind keys it resolves. */
 	readonly usedBy: readonly ISourceUsage[];
 }
@@ -888,6 +899,21 @@ export interface ILivingDocsService {
 	 * no new persistence. Sorted by label; the honest empty state (no sources) returns an empty list.
 	 */
 	listSources(): Promise<readonly ISourceInfo[]>;
+
+	/**
+	 * Re-sync one source's dependent documents through the existing sync machinery (K3.1 "Re-sync"): resolves
+	 * the source's dependent bound documents and runs the standard `refreshFromSources` pass over them, so the
+	 * drift is reconciled through the ordinary approval + audit path (warn-never-auto-fix; nothing bespoke).
+	 * A no-op for a source that has no local counterpart / no dependents.
+	 */
+	resyncSource(sourceId: string): Promise<void>;
+
+	/**
+	 * Mark a source's staleness "as expected" (K3.1), or clear the mark. Persisted per-workspace via the
+	 * storage service: a marked source is calmed to context-grey in the registry (the drift is acknowledged)
+	 * without ever auto-fixing it. Fires `onDidChange` so the Knowledge surface re-projects.
+	 */
+	setSourceExpected(sourceId: string, expected: boolean): Promise<void>;
 
 	/**
 	 * Create a new blank template file (`untitled.template.md`) seeded with a commented example and open it.

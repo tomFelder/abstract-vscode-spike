@@ -337,17 +337,19 @@ suite('livingDocs screenRender', () => {
 
 	// --- Knowledge: the project's real source registry (plan 29, D29-A) ---
 
-	function source(id: string, kind: 'file' | 'api', fresh: boolean, usedBy: { path: string; title: string; keys: string[]; context?: boolean }[]): ISourceInfo {
+	function source(id: string, kind: 'file' | 'api', fresh: boolean, usedBy: { path: string; title: string; keys: string[]; context?: boolean }[], extra?: Partial<ISourceInfo>): ISourceInfo {
 		return {
 			id, kind,
 			label: kind === 'api' ? new URL(id).host : id,
 			syncedAt: new Date().toISOString(),
 			fresh,
+			resource: kind === 'file' ? URI.file('/ws/' + id) : undefined,
 			usedBy: usedBy.map(u => ({ doc: URI.file(u.path), title: u.title, keys: u.keys, context: !!u.context })),
+			...extra,
 		};
 	}
 
-	test('Knowledge Project tab renders the real SOURCES table with per-source freshness and the used-by count', () => {
+	test('Knowledge Project tab renders the v2 SOURCES table with the F12 freshness vocabulary + FEEDS/BINDS', () => {
 		const sources = [
 			source('metrics.csv', 'file', true, [
 				{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: ['metrics.mrr', 'metrics.signups'] },
@@ -355,35 +357,80 @@ suite('livingDocs screenRender', () => {
 			]),
 			source('https://api.example.com/repo', 'api', false, [{ path: '/ws/Eco.md', title: 'Ecosystem', keys: ['repo.stars'] }]),
 		];
-		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources });
+		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources, knNow: Date.parse('2026-01-01T00:00:00Z') });
 		assert.ok(html.includes('metrics.csv'), 'the file source label shows');
 		assert.ok(html.includes('api.example.com'), 'the api source shows its host label');
-		assert.ok(html.includes('2 docs'), 'the shared CSV shows a used-by count of 2');
-		assert.ok(html.includes('Fresh'), 'a fresh source shows the fresh state');
-		assert.ok(html.includes('Source changed'), 'a stale source shows the truthful changed state');
+		assert.ok(/>SOURCE<[\s\S]*>KIND<[\s\S]*>SYNC<[\s\S]*>FEEDS<[\s\S]*>BINDS</.test(html), 'the spec column headers render in order');
+		assert.ok(html.includes('Weekly Summary') && html.includes('Board Note'), 'FEEDS chips name the dependent docs');
+		assert.ok(/stale · /.test(html), 'a drifted source reads the F12 stale label, never "Source changed"');
+		assert.ok(!html.includes('Source changed') && !html.includes('>Fresh<'), 'the old ad-hoc freshness words are gone');
 		assert.ok(!/\bSoon\b/i.test(html), 'the Project tab carries no "Soon" label');
-		assert.ok(/data-msg="selectSource"[^>]*data-arg="metrics.csv"/.test(html), 'a source row selects into its detail drawer');
+		assert.ok(/data-msg="openSource"[^>]*data-arg="[^"]*metrics\.csv"/.test(html), 'a file-source row opens the source as a product tab (K2.6)');
 		assert.ok(/data-sheet-open="addsource"/.test(html), 'an Add source action is wired');
+	});
+
+	test('Knowledge KIND glyph and KIND word derive from ONE semantic classification, so they never diverge (D1)', () => {
+		// One source of every semantic kind: a data table, a text transcript, a context-only reference, a live
+		// feed. The glyph and the word live in the same row, so pairing each row's glyph to its word proves the
+		// two are keyed off the same axis (the old bug: a "Reference" .md rendered with the table glyph).
+		const sources = [
+			source('metrics.csv', 'file', true, [{ path: '/ws/W.md', title: 'W', keys: ['metrics.mrr'] }]),
+			source('market-research.md', 'file', true, [{ path: '/ws/W.md', title: 'W', keys: ['research.tam'] }]),
+			source('brand.md', 'file', true, [{ path: '/ws/W.md', title: 'W', keys: [], context: true }]),
+			source('https://api.example.com/repo', 'api', true, [{ path: '/ws/W.md', title: 'W', keys: ['repo.stars'] }]),
+		];
+		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources, knNow: Date.now() });
+		// For each semantic kind, the row's glyph and word must both appear paired within the same KIND cell.
+		// &#8862; ⊞ table · &#9677; ◍ transcript · &#9671; ◇ reference/feed.
+		const pairs: { glyph: string; word: string }[] = [
+			{ glyph: '&#8862;', word: 'Table' },       // metrics.csv
+			{ glyph: '&#9677;', word: 'Transcript' },  // market-research.md (bound, not context)
+			{ glyph: '&#9671;', word: 'Reference' },   // brand.md (context-only)
+			{ glyph: '&#9671;', word: 'Live feed' },   // api endpoint
+		];
+		for (const { glyph, word } of pairs) {
+			// The glyph opens the row, the word follows in the next cell: assert the glyph precedes its word with
+			// no intervening KIND word (so a Table glyph can never sit above a "Reference" word).
+			const re = new RegExp(glyph + '[\\s\\S]*?>' + word + '<');
+			assert.ok(re.test(html), `the ${word} row carries the ${glyph} glyph`);
+		}
+		// Guard the exact D1 symptom: the ⊞ table glyph must NEVER precede the "Reference" word.
+		assert.ok(!/&#8862;(?:(?!&#\d)[\s\S])*?>Reference</.test(html), 'a Reference source never renders the table glyph (D1)');
+	});
+
+	test('Knowledge summary line + BINDS/FEEDS + context-only vocabulary are truthful', () => {
+		const sources = [
+			source('metrics.csv', 'file', true, [{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: ['metrics.mrr', 'metrics.churn'] }]),
+			source('brand.md', 'file', true, [{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: [], context: true }]),
+		];
+		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources, knNow: Date.now() });
+		assert.ok(html.includes('2 sources in this folder · 2 bound figures depend on them.'), 'the summary counts real sources + binds');
+		assert.ok(html.includes('context only'), 'a source used only as context reads the F12 context-only label');
+	});
+
+	test('Knowledge health strip: one attention card for the stalest source, with Re-sync + mark-as-expected', () => {
+		const sources = [
+			source('metrics.csv', 'file', true, [{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: ['metrics.mrr'] }]),
+			source('pipeline.csv', 'file', false, [{ path: '/ws/Exec.md', title: 'Executive Summary', keys: ['pipeline.count'] }], { syncedAt: '2026-01-01T00:00:00Z' }),
+		];
+		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources, knNow: Date.parse('2026-01-10T00:00:00Z') });
+		assert.ok(html.includes('STALE SOURCE') && html.includes('HOW BINDING WORKS'), 'one attention card beside the static explainer');
+		assert.ok(/data-msg="resyncSource"[^>]*data-arg="pipeline.csv"/.test(html), 'Re-sync routes to the existing sync machinery');
+		assert.ok(/data-msg="markSourceExpected"[^>]*data-arg="pipeline.csv"/.test(html), 'mark-as-expected is wired');
+		assert.ok((html.match(/STALE SOURCE/g) || []).length === 1, 'at most ONE attention card renders (the stalest)');
+	});
+
+	test('Knowledge health strip: all-fresh shows no attention card, and a marked-expected source is calmed', () => {
+		const allFresh = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources: [source('metrics.csv', 'file', true, [{ path: '/ws/W.md', title: 'W', keys: ['metrics.mrr'] }])], knNow: Date.now() });
+		assert.ok(!allFresh.includes('STALE SOURCE') && allFresh.includes('HOW BINDING WORKS'), 'all-fresh renders the explainer alone');
+		const expected = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources: [source('pipeline.csv', 'file', false, [{ path: '/ws/E.md', title: 'E', keys: ['pipeline.count'] }], { markedExpected: true })], knNow: Date.now() });
+		assert.ok(!expected.includes('STALE SOURCE') && expected.includes('context only'), 'a marked-expected stale source is calmed to context-grey, no attention card');
 	});
 
 	test('Knowledge Project tab shows the honest empty state when no source is referenced', () => {
 		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources: [] });
 		assert.ok(html.includes('No sources yet'), 'the honest empty registry state');
 		assert.ok(!/\bSoon\b/i.test(html), 'the empty Project tab fabricates nothing (no "Soon")');
-	});
-
-	test('Knowledge source drawer lists the dependent documents with jump-to-doc and Detach', () => {
-		const sources = [source('metrics.csv', 'file', true, [
-			{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: ['metrics.mrr'] },
-			{ path: '/ws/Notes.md', title: 'Market notes', keys: [], context: true },
-		])];
-		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources, knSelectedSource: 'metrics.csv' });
-		assert.ok(html.includes('USED BY 2 DOCUMENTS'), 'the drawer names the two dependent documents');
-		assert.ok(html.includes('metrics.mrr'), 'a value dependency shows its bind key');
-		assert.ok(html.includes('Context reference'), 'a context dependency is labelled as influence, not a fake key');
-		assert.ok(/data-msg="openDoc"[^>]*data-arg="[^"]*Weekly\.md"/.test(html), 'jump-to-doc opens the dependent document');
-		assert.ok(/data-msg="detachSource"/.test(html), 'each dependency has a Detach action');
-		assert.ok(html.includes('&quot;context&quot;:true'), 'the detach arg records whether the use is a context reference');
 	});
 
 	test('Knowledge Organization tab is an honest "Soon", never fabricated org content', () => {

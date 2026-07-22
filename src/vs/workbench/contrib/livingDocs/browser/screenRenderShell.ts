@@ -101,6 +101,13 @@ export interface IScreenState {
 	readonly sources?: readonly ISourceInfo[];
 	/** Knowledge: the source id whose detail drawer is open (the dependency fan-in), or none. */
 	readonly knSelectedSource?: string;
+	/**
+	 * Knowledge: the render-time clock (ms), computed once by the ScreenEditor so the SYNC column's relative
+	 * times ("2m ago", "stale · 9d") are deterministic and `Date.now()` never runs inside the render module
+	 * (#122 F12; the pure `freshnessLabel` formatter takes this `now`). Absent falls back to a fixed epoch so
+	 * the render never throws - real callers always supply it.
+	 */
+	readonly knNow?: number;
 	/** Knowledge: the project's data files (csv/json) offered by the Add-source picker, and the docs to bind to. */
 	readonly dataFiles?: readonly string[];
 	/**
@@ -469,7 +476,34 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 const SCRIPT = `const vscode = acquireVsCodeApi();
 for (const el of document.querySelectorAll('[data-msg]')) {
 	if (el.hasAttribute('data-sheet-open') || el.hasAttribute('data-sheet-submit')) { continue; }
-	el.addEventListener('click', () => vscode.postMessage({ type: el.getAttribute('data-msg'), arg: el.getAttribute('data-arg') || undefined, block: el.getAttribute('data-block') || undefined }));
+	el.addEventListener('click', (e) => {
+		// A nested action (e.g. a Knowledge FEEDS chip inside a row-click button) marks data-stop so its click
+		// does not also trigger the containing row's message (K2.4 chip opens the doc, not the source tab).
+		if (el.hasAttribute('data-stop')) { e.stopPropagation(); }
+		vscode.postMessage({ type: el.getAttribute('data-msg'), arg: el.getAttribute('data-arg') || undefined, block: el.getAttribute('data-block') || undefined });
+	});
+}
+// Knowledge table (plan 49-a): a row lifts on hover to its data-rowhover colour (cream for a stale row, grey
+// otherwise) and restores to data-rowbg on leave - a hover the inline style cannot express.
+for (const el of document.querySelectorAll('.kn-row[data-rowhover]')) {
+	el.addEventListener('mouseenter', () => { el.style.background = el.getAttribute('data-rowhover'); });
+	el.addEventListener('mouseleave', () => { el.style.background = el.getAttribute('data-rowbg'); });
+}
+// Knowledge live filter (plan 49-a K1.1): typing narrows the SOURCES table to the rows whose source name or
+// dependent-doc titles (held in data-kn-name) contain the query. Purely client-side; empty query shows all. A
+// "no matches" line toggles when the query hides every row, so the table never reads as an empty surface.
+for (const el of document.querySelectorAll('[data-kn-filter]')) {
+	el.addEventListener('input', () => {
+		const q = el.value.trim().toLowerCase();
+		let shown = 0;
+		for (const r of document.querySelectorAll('[data-kn-row]')) {
+			const match = !q || (r.getAttribute('data-kn-name') || '').indexOf(q) >= 0;
+			r.style.display = match ? '' : 'none';
+			if (match) { shown++; }
+		}
+		const none = document.querySelector('[data-kn-nomatch]');
+		if (none) { none.style.display = shown === 0 ? 'block' : 'none'; }
+	});
 }
 function lwdSheet(id) { return document.getElementById('sheet-' + id); }
 function lwdClose(id) { const s = lwdSheet(id); if (s) { s.style.display = 'none'; } }

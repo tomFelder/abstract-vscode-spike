@@ -128,6 +128,7 @@ export class TreeRailLeafRenderer implements ITreeRenderer<ITreeRailLeafNode, vo
 		template.marker.className = 'rail-tree-marker';
 		template.meta.textContent = '';
 		template.meta.className = 'rail-tree-meta';
+		template.meta.style.color = ''; // clear any inline freshness colour (#122 F12) so a recycled row is clean
 		const item = node.element.item;
 		const isDoc = item.kind === 'doc';
 		template.row.classList.toggle('rail-tree-leaf-source', !isDoc);
@@ -165,9 +166,19 @@ export class TreeRailLeafRenderer implements ITreeRenderer<ITreeRailLeafNode, vo
 				chip.textContent = 'LWD';
 			}
 		} else if (item.kind === 'source') {
-			// The source's right meta (P5.6): a folder-resolved source is present on disk, so it reads "synced"
-			// (the mock's default). An api/mcp/unresolved source has no local file, so it carries no meta.
-			if (item.resource) {
+			// The source's right meta (P5.6) reads the ONE freshness vocabulary (#122 F12) so the rail agrees
+			// with the Knowledge table: a drifted source reads "stale" (amber), a context-only source "context
+			// only" (grey), a fresh folder-resolved source the quiet "synced". An api/mcp/unresolved source with
+			// no freshness context and no local file carries no meta.
+			if (item.freshness === 'stale') {
+				template.meta.textContent = localize("livingDocs.source.stale", "stale");
+				// Amber, matching the Knowledge table's stale text (#8A6D1A). Inline so the wave's shared studio.css
+				// (plan-44 owned) stays untouched; the reset to className='rail-tree-meta' clears it on recycle.
+				template.meta.style.color = '#8A6D1A';
+			} else if (item.freshness === 'context-only') {
+				template.meta.textContent = localize("livingDocs.source.contextOnly", "context only");
+				template.meta.style.color = '#868B95';
+			} else if (item.resource) {
 				template.meta.textContent = localize("livingDocs.source.synced", "synced");
 				template.meta.classList.add('rail-tree-meta-synced');
 			}

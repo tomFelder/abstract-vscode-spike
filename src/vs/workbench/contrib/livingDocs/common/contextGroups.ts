@@ -36,13 +36,13 @@ export function sourceKindOf(source: string): SourceKind {
 }
 
 // The binding namespace a bind key belongs to == its first dotted segment ("metrics.mrr" -> "metrics").
-function keyNamespace(key: string): string {
+export function keyNamespace(key: string): string {
 	const dot = key.indexOf('.');
 	return dot === -1 ? key : key.slice(0, dot);
 }
 
 // The binding namespace a source owns == its filename stem ("metrics.csv" -> "metrics").
-function sourceNamespace(source: string): string {
+export function sourceNamespace(source: string): string {
 	const base = source.slice(source.lastIndexOf('/') + 1);
 	const dot = base.indexOf('.');
 	return dot === -1 ? base : base.slice(0, dot);
@@ -64,13 +64,16 @@ export function buildContextGroups(doc: ILivingDoc, freshness: IFreshness, added
 			const ns = sourceNamespace(source);
 			const feeds = doc.blocks.filter(b => b.binds.some(bind => keyNamespace(bind.key) === ns)).length;
 			const changed = doc.blocks.some(b => b.binds.some(bind => keyNamespace(bind.key) === ns && staleBind.has(bind.key)));
+			// The ONE freshness vocabulary (#122 F12): a drifted source reads "stale" - the same word the
+			// Knowledge table, drawer, tree meta and hover-peek use - so the Context tab never says "changed"
+			// where every other surface says "stale". The feeds/polled detail stays for context.
 			let detail: string;
 			if (kind === 'api') {
-				detail = changed ? `live${DOT}changed since sync` : `live${DOT}polled`;
+				detail = changed ? `stale${DOT}live feed` : `live${DOT}polled`;
 			} else if (feeds > 0) {
-				detail = `${changed ? 'changed' : 'live'}${DOT}feeds ${feeds} block${feeds === 1 ? '' : 's'}`;
+				detail = `${changed ? 'stale' : 'live'}${DOT}feeds ${feeds} block${feeds === 1 ? '' : 's'}`;
 			} else {
-				detail = changed ? 'changed since sync' : 'live';
+				detail = changed ? 'stale' : 'live';
 			}
 			return { name: source, kind, detail, changed };
 		});
@@ -84,7 +87,7 @@ export function buildContextGroups(doc: ILivingDoc, freshness: IFreshness, added
 	if (referenced.length) {
 		const items = referenced.map<IContextItem>(file => {
 			const changed = staleCtx.has(file);
-			return { name: file, kind: 'reference', detail: changed ? 'changed since review' : 'current', changed };
+			return { name: file, kind: 'reference', detail: changed ? 'stale' : 'current', changed };
 		});
 		groups.push({ label: 'Referenced files', items });
 	}

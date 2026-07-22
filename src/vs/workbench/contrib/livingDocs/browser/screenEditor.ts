@@ -82,6 +82,9 @@ interface IScreenEditorState {
 	sources?: readonly ISourceInfo[];
 	knSelectedSource?: string;
 	dataFiles?: readonly string[];
+	// Knowledge (plan 49-a): the render-time clock (ms), captured once per fetch so the SYNC column's relative
+	// times are deterministic and `Date.now()` never runs inside the render module (#122 F12).
+	knNow?: number;
 	// Home + Templates: the project's document files (md/txt), for the "From sources..." knowledge picker (F17)
 	// and the from-examples template wizard's example picker (F18); fetched with dataFiles on open + on change.
 	docFiles?: readonly string[];
@@ -267,7 +270,7 @@ export class ScreenEditor extends EditorPane {
 				this._livingDocs.listDocuments(),
 				this._livingDocs.getFolderDataFiles(),
 			]);
-			this._state = { ...this._state, sources, docs, dataFiles };
+			this._state = { ...this._state, sources, docs, dataFiles, knNow: Date.now() };
 		}
 		// Settings (plan 35 iter 4): fetch the live model door + usage before the first render so the provider
 		// card shows the real state (which door serves you, today's included usage), no flash.
@@ -351,7 +354,7 @@ export class ScreenEditor extends EditorPane {
 			this._livingDocs.listDocuments(),
 			this._livingDocs.getFolderDataFiles(),
 		]);
-		this._state = { ...this._state, sources, docs, dataFiles };
+		this._state = { ...this._state, sources, docs, dataFiles, knNow: Date.now() };
 		this._render();
 	}
 
@@ -625,6 +628,23 @@ export class ScreenEditor extends EditorPane {
 			case 'selectSource':
 				this._state = { ...this._state, knSelectedSource: message.arg };
 				this._render();
+				break;
+			// Knowledge (plan 49-a K2.6): a row click opens the source as a product tab (openSourceTab, pin 7).
+			// A file source in the folder carries its resource; an api/mcp source has none (the row is a plain
+			// div and never posts this).
+			case 'openSource':
+				if (message.arg) { void this._livingDocs.openSourceTab(URI.parse(message.arg)); }
+				break;
+			// Knowledge (plan 49-a K3.1): "Re-sync" routes through the existing sync machinery + audit trail
+			// (warn-never-auto-fix); "mark as expected" / "Undo" persist per-workspace and calm/uncalm the row.
+			case 'resyncSource':
+				if (message.arg) { void this._livingDocs.resyncSource(message.arg); }
+				break;
+			case 'markSourceExpected':
+				if (message.arg) { void this._livingDocs.setSourceExpected(message.arg, true); }
+				break;
+			case 'unmarkSourceExpected':
+				if (message.arg) { void this._livingDocs.setSourceExpected(message.arg, false); }
 				break;
 			// Add a source to a target document: a folder data file (arg) or an API URL (apiurl), bound to the
 			// document chosen in the sheet (target). Loads the doc first so the frontmatter write path has its

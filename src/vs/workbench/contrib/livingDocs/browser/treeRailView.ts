@@ -28,7 +28,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHistoryService } from '../../../services/history/common/history.js';
-import { buildContextGroups } from '../common/contextGroups.js';
+import { buildContextGroups, keyNamespace, sourceNamespace } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
 import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
@@ -234,6 +234,7 @@ export class TreeRailView extends ViewPane {
 			})),
 			extras,
 			this._recentDocResources(documents),
+			this._sourceFreshnessByLabel(documents),
 		);
 		if (!nodes.length) {
 			append(panel, $('div.rail-empty')).textContent = 'No documents yet.';
@@ -314,6 +315,27 @@ export class TreeRailView extends ViewPane {
 	// The MRU document resources for the "Recent" group (issue #212): walk the editor history newest-first and
 	// keep the entries that are documents in the current folder set, de-duplicated. The pure tree module caps the
 	// list and hides the group when it holds fewer than two, so this only supplies the ordered candidate list.
+	// The ONE freshness vocabulary for the SOURCES meta (#122 F12): map each bound source LABEL to its state so
+	// the tree agrees with the Knowledge table. A value source is 'stale' when any document that binds it reports
+	// a stale binding key in that source's namespace (the engine's real hash-drift set, read synchronously via
+	// getFreshness); otherwise 'fresh'. Discovered extras (no owning document) are left absent - a bare file has
+	// no freshness. Pure read - no mutation, warn-never-auto-fix intact.
+	private _sourceFreshnessByLabel(documents: readonly ILivingDocSummary[]): Map<string, 'fresh' | 'stale' | 'context-only'> {
+		const out = new Map<string, 'fresh' | 'stale' | 'context-only'>();
+		for (const d of documents) {
+			if (!d.sources.length) { continue; }
+			const freshness = this._livingDocs.getFreshness(d.resource);
+			const staleNamespaces = new Set(freshness.staleBindings.map(keyNamespace));
+			for (const source of d.sources) {
+				const stale = staleNamespaces.has(sourceNamespace(source)) || freshness.staleContext.includes(source);
+				const state: 'fresh' | 'stale' = stale ? 'stale' : 'fresh';
+				// A source stale for ANY document is stale in the rail (worst-case wins, like the Knowledge table).
+				if (state === 'stale' || !out.has(source)) { out.set(source, state); }
+			}
+		}
+		return out;
+	}
+
 	private _recentDocResources(documents: readonly ILivingDocSummary[]): URI[] {
 		const docKeys = new Set(documents.map(d => d.resource.toString()));
 		const out: URI[] = [];
