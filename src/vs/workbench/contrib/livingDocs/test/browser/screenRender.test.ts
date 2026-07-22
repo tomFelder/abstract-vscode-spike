@@ -580,11 +580,39 @@ suite('livingDocs screenRender', () => {
 		return { agentId: 'weekly-refresh', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), applied: 0, queued: 0, via: 'cron', ...over };
 	}
 
-	test('the Agents list wires New agent to create and shows a PAUSED chip for a disabled agent', () => {
+	test('the Agents card grid states the trust contract and wires the New-agent tile to create (A1.2, A2.4)', () => {
 		const agents = [agent(), agent({ id: 'sweep', name: 'Freshness sweep', trigger: { kind: 'heartbeat', everyHours: 6 }, policy: 'draft-only', disabled: true })];
 		const html = renderScreenHtml('agents', { ...state, agents });
-		assert.ok(/data-msg="createAgent"/.test(html), 'New agent is wired to createAgent');
-		assert.ok(html.includes('PAUSED'), 'a disabled agent shows a PAUSED chip in the list');
+		assert.ok(html.includes('Agents only act on documents that opted in. Every action lands in the ledger below.'), 'the framing line states the trust contract verbatim (A1.2)');
+		assert.ok(/data-msg="createAgent"/.test(html) && html.includes('from a skill or from scratch'), 'the dashed New-agent tile opens the create flow (A2.4)');
+	});
+
+	test('an active card shows the mono status line + accent pause toggle; a paused card is 75% opacity + resume (A2.1)', () => {
+		const html = renderScreenHtml('agents', { ...state, agents: [agent()], sources: [source('metrics.csv', 'file', true, []), source('pipeline.csv', 'file', true, [])] });
+		// A2.1 status line: the ok-green active line names the real watched-source count (2 registry sources).
+		assert.ok(html.includes('active &middot; watching 2 sources') && html.includes('#2C8159'), 'an active card reads "active · watching N sources" in ok green from the real registry');
+		assert.ok(/data-msg="pauseAgent"[^>]*data-arg="weekly-refresh"/.test(html), 'the accent toggle pauses via setAgentDisabled');
+		const paused = renderScreenHtml('agents', { ...state, agents: [agent({ disabled: true })] });
+		assert.ok(paused.includes('opacity:.75') && paused.includes('&#9675; paused'), 'a paused card renders at 75% opacity with the "○ paused" status');
+		assert.ok(/data-msg="resumeAgent"[^>]*data-arg="weekly-refresh"/.test(paused), 'a paused card toggle resumes via setAgentDisabled');
+	});
+
+	test('the policy table uses exactly the three-tier grammar, honestly mapped from the stored dial (A2.2)', () => {
+		// auto-figures: figures auto-apply (ok), meaning ask first (attention), structure never (removed).
+		const autoFigures = renderScreenHtml('agents', { ...state, agents: [agent({ policy: 'auto-figures' })] });
+		assert.ok(/#2C8159[^<]*">auto-apply/.test(autoFigures) && /#8A6D1A[^<]*">ask first/.test(autoFigures) && /#B5514B[^<]*">never/.test(autoFigures), 'auto-figures maps to auto-apply / ask first / never with the exact tone hexes');
+		// ask-before-apply + draft-only: nothing auto-applies (no auto-apply row); both read the same (no 4th state).
+		const askFirst = renderScreenHtml('agents', { ...state, agents: [agent({ policy: 'ask-before-apply' })] });
+		assert.ok(!/">auto-apply</.test(askFirst), 'ask-before-apply never shows an auto-apply row (nothing lands unattended)');
+	});
+
+	test('Edit policy opens the SHARED policy editor (the same DOM as Properties) and the footer shows the real model id (A2.3)', () => {
+		const html = renderScreenHtml('agents', { ...state, agents: [agent()], agentModelId: 'claude-sonnet-4.5' });
+		// The shared component: the same data-policy-editor container + data-policy rows the Properties panel hosts.
+		assert.ok(/data-policy-editor="weekly-refresh"/.test(html), 'the card hosts the shared policy editor keyed by the agent id');
+		assert.ok(/data-policy="auto-apply"/.test(html) && /data-policy="ask-first"/.test(html) && /data-policy="never"/.test(html), 'the shared editor renders exactly the three DocAutonomy levels');
+		assert.ok(html.includes('runs on') && html.includes('claude-sonnet-4.5'), 'the footer shows the real workspace model id');
+		assert.ok(/data-agent-policy-edit/.test(html), 'Edit policy reveals the shared editor');
 	});
 
 	test('the detail drawer shows the read-only canvas strip and the inline policy select with the three levels', () => {
