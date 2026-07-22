@@ -528,8 +528,10 @@ export class ReviewRailView extends ViewPane {
 				const changeDoc = this._livingDocs.getDoc(URI.parse(change.docId));
 				const addressLine = changeDoc ? resolveBlockLine(changeDoc, change.blockId) : undefined;
 				if (typeof addressLine === 'number') {
-					const addr = append(nameWrap, $('span.ldr-card-addr'));
-					addr.textContent = addressLabel(addressLine);
+					// Pin 13.5: the "Line N" citation is a click target - it opens the change's document and scrolls
+					// the editor to that block (navigate-only, via the address model's reveal-block seam). Rendered as
+					// a button so it reads/behaves as the actionable address the gutter, Home cards and ledger share.
+					this._appendAddressLink(nameWrap, change.docId, change.blockId, addressLine);
 				}
 				const tag = append(top, $(framing.kindAttention ? 'span.ldr-tag.attn' : 'span.ldr-tag.ok'));
 				tag.textContent = framing.kindLabel;
@@ -586,6 +588,22 @@ export class ReviewRailView extends ViewPane {
 			groups.set(change.docId, list);
 		}
 		return groups;
+	}
+
+	// Pin 13.5: render a clickable "Line N" address citation that scrolls the editor to the addressed block.
+	// Shared by the Review cards and the chat meaning-change proposal cards so every rail surface speaks the same
+	// address vocabulary AND makes it actionable. The label is the address-model string (`addressLabel`); clicking
+	// opens the block's document and reveals the block via the reveal-block seam (navigate-only - never approves,
+	// never re-tabs the rail). The durable block id is resolved to its current ordinal at click time, so a doc that
+	// changed since render still lands on the right block and a deleted block degrades to opening the doc.
+	private _appendAddressLink(parent: HTMLElement, docId: string, blockId: string, line: number): void {
+		const addr = append(parent, $('button.ldr-card-addr')) as HTMLButtonElement;
+		addr.textContent = addressLabel(line);
+		addr.title = localize('livingDocs.address.reveal', "Go to {0} in the document", addressLabel(line));
+		this._renderDisposables.add(addDisposableListener(addr, 'click', (e: MouseEvent) => {
+			e.stopPropagation();
+			void this._livingDocs.revealBlockAddress(URI.parse(docId), blockId);
+		}));
 	}
 
 	// Navigate-only rail-to-editor jump (plan 19, E-A): open the change's document and ask its editor to
@@ -974,6 +992,17 @@ export class ReviewRailView extends ViewPane {
 			const where = append(head, $('span'));
 			where.style.cssText = 'color:#868b95;font-weight:400';
 			where.textContent = isInsert ? `after ${change.blockLabel}` : change.blockLabel;
+			// Pin 13.5: a chat meaning-change card cites the same clickable "Line N" gutter address the Review card
+			// and the inline widget cite (via the address model), so the transcript speaks one address vocabulary and
+			// the citation scrolls the editor to the block. An insert has no existing block to address; an edit whose
+			// block resolves gets the link (omitted when the doc is not loaded or the block is gone - same rule as Review).
+			if (!isInsert) {
+				const changeDoc = this._livingDocs.getDoc(URI.parse(change.docId));
+				const addressLine = changeDoc ? resolveBlockLine(changeDoc, change.blockId) : undefined;
+				if (typeof addressLine === 'number') {
+					this._appendAddressLink(head, change.docId, change.blockId, addressLine);
+				}
+			}
 			const preview = append(card, $('div'));
 			preview.style.cssText = 'padding:2px 12px 9px;font:400 12.5px/1.5 system-ui;color:#52575f;white-space:pre-wrap;max-height:96px;overflow:hidden;cursor:pointer';
 			preview.title = 'Open in the document';
@@ -1237,20 +1266,47 @@ export class ReviewRailView extends ViewPane {
 		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
 	}
 
-	// The + Skill picker in the composer: reuses the same skill list as the Review disclosure
-	// (_appendChecks / skillsHtml, which reads from getSkillReport). Selecting a skill runs it
-	// via runSkillCheck - the identical path as the data-skill-run buttons in the disclosure.
-	// No new run logic is introduced; this is purely a second entry-point to the same method.
+	// The + Skill picker in the composer: the SINGLE home for every capability the removed Skills tab carried
+	// (pin 13.2, plan 20 Part F). It reads the same live grader report (getSkillReport) the old disclosure did and
+	// surfaces, per skill: its status (annotated in the row label so PASS / FLAG / NO MODEL / READY reads at a
+	// glance), a Run / Re-run action (the data-skill-run path), and - on a flagged, fixable skill - an Apply fix
+	// action (the data-skill-fix path). Both actions route through the exact service methods the disclosure buttons
+	// called (runSkillCheck / applySkillFix); no new run logic is introduced, so nothing from the Skills inventory
+	// is dropped in the fold. The decorative "RUN ON EXPORT" toggle and "Add skill from library" affordance carried
+	// no behaviour (no data-* hook, no handler), so they are cosmetic-only and are not resurrected here.
 	private _openSkillMenu(anchor: HTMLElement, doc: URI): void {
 		const report = this._livingDocs.getSkillReport(doc);
 		if (!report.length) { return; }
-		const actions: IAction[] = report.map(s =>
-			toAction({
-				id: `livingDocs.skill.run.${s.id}`,
-				label: s.name,
-				run: () => { this._livingDocs.runSkillCheck(doc, s.id); },
-			})
-		);
+		const statusLabel: Record<ISkillCheck['status'], string> = {
+			pass: localize('livingDocs.skill.status.pass', "Pass"),
+			flag: localize('livingDocs.skill.status.flag', "Flag"),
+			'needs-model': localize('livingDocs.skill.status.needsModel', "No model"),
+			ready: localize('livingDocs.skill.status.ready', "Ready"),
+		};
+		const actions: IAction[] = [];
+		for (const s of report) {
+			// A skill's primary action mirrors its disclosure button: Re-run once it has passed, Run otherwise.
+			const runVerb = s.status === 'pass'
+				? localize('livingDocs.skill.rerun', "Re-run {0}", s.name)
+				: localize('livingDocs.skill.run', "Run {0}", s.name);
+			if (s.canRun) {
+				actions.push(toAction({
+					id: `livingDocs.skill.run.${s.id}`,
+					label: localize('livingDocs.skill.runRow', "{0} · {1}", runVerb, statusLabel[s.status]),
+					run: () => { this._livingDocs.runSkillCheck(doc, s.id); },
+				}));
+			}
+			// Apply fix rides the same data-skill-fix path the disclosure surfaced: a flagged skill with a
+			// deterministic one-tap edit (e.g. Formatting heading-case). Kept out of the fold would silently drop
+			// a real capability, so it is offered here alongside the run action.
+			if (s.fixable && s.status === 'flag') {
+				actions.push(toAction({
+					id: `livingDocs.skill.fix.${s.id}`,
+					label: localize('livingDocs.skill.applyFix', "Apply fix for {0}", s.name),
+					run: () => { void this._livingDocs.applySkillFix(doc, s.id); },
+				}));
+			}
+		}
 		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
 	}
 
@@ -1260,12 +1316,12 @@ export class ReviewRailView extends ViewPane {
 		const style = document.createElement('style');
 		style.textContent = `
 		.living-docs-panel{display:flex;flex-direction:column;height:100%;font:13px system-ui;background:#fbfbfc}
-		.living-docs-panel .ldp-tabs{display:flex;gap:2px;flex:none;padding:0 4px;border-bottom:1px solid #eef0f3}
-		.living-docs-panel .ldp-tab{position:relative;border:none;background:transparent;padding:11px 11px 10px;font:500 12.5px/1 system-ui;color:#868b95;cursor:pointer;display:flex;align-items:center;gap:6px}
-		.living-docs-panel .ldp-tab:hover{color:#1a1c20}
-		.living-docs-panel .ldp-tab.active{color:#1a1c20;font-weight:600}
-		.living-docs-panel .ldp-tab.active::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:2px;background:oklch(0.55 0.13 255)}
-		.living-docs-panel .ldp-tab-count{font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#fff;background:oklch(0.66 0.16 45);border-radius:999px;padding:3px 5px}
+		/* Pin 13 tab strip: 44px, white-chip active tab (28px + e1) matching the tree rail; idle 12.5/500 muted. */
+		.living-docs-panel .ldp-tabs{display:flex;align-items:center;gap:2px;flex:none;height:44px;padding:0 8px;border-bottom:1px solid #eef0f3}
+		.living-docs-panel .ldp-tab{border:none;background:transparent;height:28px;padding:0 11px;font:500 12.5px/1 system-ui;color:#868b95;cursor:pointer;display:flex;align-items:center;gap:6px;border-radius:8px}
+		.living-docs-panel .ldp-tab:hover{color:#52575f}
+		.living-docs-panel .ldp-tab.active{color:#1a1c20;font-weight:600;background:#fff;box-shadow:0 1px 2px rgba(20,22,28,.05)}
+		.living-docs-panel .ldp-tab-count{min-width:16px;box-sizing:border-box;text-align:center;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#fff;background:#C99A2E;border-radius:999px;padding:3px 5px}
 		.living-docs-panel .ldp-collapse{margin-left:auto;align-self:center;border:none;background:transparent;border-radius:6px;padding:5px;color:#868b95;cursor:pointer;display:flex;align-items:center}
 		.living-docs-panel .ldp-collapse:hover{color:#1a1c20;background:#f0f1f4}
 		.living-docs-panel .ldp-collapse:focus-visible{outline:2px solid oklch(0.55 0.13 255);outline-offset:1px}
@@ -1290,7 +1346,9 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldr-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
 		.living-docs-panel .ldr-card-name-wrap{display:inline-flex;align-items:baseline;gap:8px;min-width:0}
 		.living-docs-panel .ldr-card-name{font:600 12.5px/1 system-ui;color:#1a1c20}
-		.living-docs-panel .ldr-card-addr{font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;color:oklch(0.55 0.13 255);flex:none}
+		.living-docs-panel .ldr-card-addr{border:none;background:transparent;padding:0;font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;color:oklch(0.55 0.13 255);flex:none;cursor:pointer}
+		.living-docs-panel .ldr-card-addr:hover{text-decoration:underline}
+		.living-docs-panel .ldr-card-addr:focus-visible{outline:2px solid oklch(0.55 0.13 255);outline-offset:1px;border-radius:3px}
 		.living-docs-panel .ldr-tag{font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;border-radius:999px;padding:4px 7px}
 		.living-docs-panel .ldr-tag.attn{color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4}
 		.living-docs-panel .ldr-tag.ok{color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc}

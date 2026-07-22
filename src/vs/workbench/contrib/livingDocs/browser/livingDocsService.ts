@@ -974,6 +974,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidRequestRevealBlock.fire({ docId: resource.toString(), blockIndex: line === undefined ? -1 : line - 1 });
 	}
 
+	// Navigate-only scroll to an addressed block from a rail "Line N" citation (pin 13.5). Mirrors `reviewBlock`
+	// but does NOT switch the rail's own tab (a chat meaning-change card citation keeps the user on Chat), so it
+	// never touches `focusPanel`. Loads the document so the address model has its parsed blocks, resolves the
+	// durable id to its current ordinal, and rides the same reveal-block webview seam; a deleted block (resolve
+	// undefined => index -1) opens the doc without a scroll and never errors.
+	async revealBlockAddress(resource: URI, blockId: string): Promise<void> {
+		await this._editors.openEditor({ resource, options: { pinned: true } });
+		await this.loadDocument(resource);
+		const doc = this._docs.get(resource.toString())?.doc;
+		const line = doc ? resolveBlockLine(doc, blockId) : undefined;
+		this._onDidRequestRevealBlock.fire({ docId: resource.toString(), blockIndex: line === undefined ? -1 : line - 1 });
+	}
+
 	// --- the "Documents" home ---
 
 	async listDocuments(): Promise<readonly ILivingDocSummary[]> {
