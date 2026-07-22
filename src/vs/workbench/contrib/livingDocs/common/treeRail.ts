@@ -25,6 +25,11 @@ export interface ITreeRailItem {
 	readonly kind: 'doc' | 'source' | 'unsupported';
 	/** A document with pending meaning-changes shows the amber dot (mirrors the Review count). */
 	readonly pending: boolean;
+	/** The count of pending meaning-changes; drives the doc row's amber count pill (P5.3). 0 = no pill. */
+	readonly pendingCount: number;
+	/** True for a living document (a source is bound): the doc row carries the LWD chip (P5.3). A living doc
+	 * with pending changes shows the pending pill instead - pending wins, never both (P5.3). */
+	readonly living: boolean;
 	/** The leading status indicator (issue #212): a coloured dot for a document, a grey dash for a
 	 * source/unsupported row, with the plain-words reason + count in its hover tooltip. */
 	readonly dot: IRailDot;
@@ -51,6 +56,8 @@ export interface ITreeRailDocInput {
 	readonly resource: URI;
 	readonly pendingCount: number;
 	readonly sources: readonly string[];
+	/** True when the document has earned "living" status (a source is bound); drives the LWD chip (P5.3). */
+	readonly isLiving?: boolean;
 	/** The document's directory relative to the workspace root ('' = root), '/'-joined (plan 37 F7). */
 	readonly folder?: string;
 	// --- Files-rail status-dot inputs (issue #212), mirroring the ILivingDocSummary fields; the tree computes
@@ -127,6 +134,24 @@ const IMPORT_REASONS: Record<string, string> = {
 	key: 'Keynote decks are not imported yet',
 };
 
+// The three mono kind glyphs a SOURCES row shows (P5.6, per the mock): a table/data workbook, a
+// transcript/note, or any other reference. Kept as named constants so the glyphs live on one line.
+// allow-any-unicode-next-line
+const SOURCE_GLYPHS = { table: '⊞', transcript: '◍', reference: '◇' } as const;
+
+/**
+ * The mono kind glyph a SOURCES row shows (P5.6, per the mock): a table/data workbook, a transcript/note,
+ * or any other reference. Pure - the DOM view renders the returned glyph; the classification reads only the
+ * source's file extension so it is unit-testable without a service or the wall clock.
+ */
+export function sourceKindGlyph(label: string): string {
+	const dot = label.lastIndexOf('.');
+	const ext = dot >= 0 ? label.slice(dot + 1).toLowerCase() : '';
+	if (ext === 'csv' || ext === 'tsv' || ext === 'xls' || ext === 'xlsx' || ext === 'json' || ext === 'yaml' || ext === 'yml') { return SOURCE_GLYPHS.table; }
+	if (ext === 'md' || ext === 'txt') { return SOURCE_GLYPHS.transcript; }
+	return SOURCE_GLYPHS.reference;
+}
+
 interface IMutableFolder {
 	readonly name: string;
 	readonly items: ITreeRailItem[];
@@ -154,7 +179,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 			stale: d.stale ?? false,
 			fanoutFailed: d.fanoutFailed ?? false,
 		});
-		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, dot };
+		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot };
 		const segments = (d.folder ?? '').split('/').filter(s => s.length > 0);
 		if (!segments.length) { rootItems.push(item); continue; }
 		let level = roots;
@@ -186,7 +211,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 		if (seen.has(label)) { return; }
 		seen.add(label);
 		const sourceKind = sourceKindOf(label);
-		sources.push({ label, resource, kind: 'source', pending: false, sourceKind, dot: sourceRailDot('source', sourceKind), ...(action ? { action } : {}) });
+		sources.push({ label, resource, kind: 'source', pending: false, pendingCount: 0, living: false, sourceKind, dot: sourceRailDot('source', sourceKind), ...(action ? { action } : {}) });
 	};
 	for (const d of docs) {
 		for (const s of d.sources) {
@@ -203,7 +228,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 		if (c.kind === 'source') { addSource(name, undefined, c.action); continue; }
 		if (seenUnsupported.has(name)) { continue; }
 		seenUnsupported.add(name);
-		unsupported.push({ label: name, kind: 'unsupported', pending: false, note: c.reason, importable: c.importable, dot: sourceRailDot('unsupported', undefined, c.reason) });
+		unsupported.push({ label: name, kind: 'unsupported', pending: false, pendingCount: 0, living: false, note: c.reason, importable: c.importable, dot: sourceRailDot('unsupported', undefined, c.reason) });
 	}
 	sources.sort((a, b) => a.label.localeCompare(b.label));
 	unsupported.sort((a, b) => a.label.localeCompare(b.label));
@@ -324,7 +349,7 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 	// also appears in Reports keeps two collision-free ids. The on-disk hierarchy below is untouched.
 	const docItemByResource = new Map<string, ITreeRailItem>();
 	for (const d of docs) {
-		docItemByResource.set(d.resource.toString(), { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, dot: docRailDot({ pendingCount: d.pendingCount, unseenAgentEdits: d.unseenAgentEdits ?? 0, relinkCount: d.relinkCount ?? 0, stale: d.stale ?? false, fanoutFailed: d.fanoutFailed ?? false }) });
+		docItemByResource.set(d.resource.toString(), { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot: docRailDot({ pendingCount: d.pendingCount, unseenAgentEdits: d.unseenAgentEdits ?? 0, relinkCount: d.relinkCount ?? 0, stale: d.stale ?? false, fanoutFailed: d.fanoutFailed ?? false }) });
 	}
 	const recentItems: ITreeRailItem[] = [];
 	const seenRecent = new Set<string>();

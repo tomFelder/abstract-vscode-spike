@@ -220,7 +220,7 @@ export class TreeRailView extends ViewPane {
 	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
 		const nodes = buildTreeRailNodes(
 			documents.map(d => ({
-				title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder,
+				title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder, isLiving: d.isLiving,
 				// The Files-rail status dot inputs (issue #212): passed straight through from the summary so the pure
 				// tree module computes each doc's leading dot via the shared precedence ladder.
 				unseenAgentEdits: d.unseenAgentEdits, relinkCount: d.relinkCount, stale: d.stale, fanoutFailed: d.fanoutFailed,
@@ -345,6 +345,8 @@ export class TreeRailView extends ViewPane {
 				accessibilityProvider: new TreeRailAccessibilityProvider(),
 				identityProvider: { getId: (e: ITreeRailNode) => e.id },
 				expandOnlyOnTwistieClick: false,
+				// Children indent 14px per level (P5.5), matching the mock's 14px child inset.
+				indent: 14,
 				overrideStyles: { listBackground: 'sideBar.background' },
 				// Fast navigation (issue #212): type-to-filter (type-ahead) + the Ctrl/Cmd+F find widget. The label
 				// provider gives the tree each row's searchable text (a folder's name, a leaf's item label); the
@@ -799,18 +801,40 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-panel{flex:1;overflow-y:auto;padding:10px 8px}
 		.living-docs-rail .rail-panel.rail-panel-files{display:flex;flex-direction:column;overflow:hidden;padding:6px 4px}
 		.living-docs-rail .rail-files-tree{flex:1;min-height:0}
-		.living-docs-rail .rail-files-tree .rail-tree-folder{display:flex;align-items:center;height:100%;min-width:0}
-		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:7px;height:100%;min-width:0;font:400 13px/1.3 system-ui;color:var(--vscode-foreground)}
-		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:var(--vscode-descriptionForeground);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px}
-		.living-docs-rail .rail-files-tree .rail-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:9px;height:9px}
-		.living-docs-rail .rail-files-tree .rail-status-dot{width:7px;height:7px;border-radius:50%}
-		.living-docs-rail .rail-files-tree .rail-status-dash{width:8px;height:2px;border-radius:1px;background:var(--vscode-descriptionForeground);opacity:.45}
-		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-grey{background:var(--vscode-descriptionForeground);opacity:.45}
-		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-green{background:oklch(0.6 0.14 150)}
-		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-yellow{background:oklch(0.7 0.15 85)}
-		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-red{background:oklch(0.55 0.2 25)}
-		.living-docs-rail .rail-files-tree .rail-tree-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
+		/* Row shells (pin 5): folder rows 28px, doc/source rows 30px radius 8. Hover + selection paint the whole tree-widget row so the full 264px width lights up. */
+		.living-docs-rail .rail-files-tree .monaco-list-row{border-radius:8px}
+		.living-docs-rail .rail-files-tree .monaco-list-row:hover{background:#F1F2F6}
+		/* Row inset (mock: padding 0 8px). The right pad applies to every row; the left pad applies only to leaf rows, whose content starts at the indent (folders keep the twistie flush left). */
+		.living-docs-rail .rail-files-tree .monaco-tl-contents{padding-right:8px}
+		.living-docs-rail .rail-files-tree .rail-tree-leaf{padding-left:8px}
+		.living-docs-rail .rail-files-tree .rail-tree-folder{display:flex;align-items:center;height:100%;min-width:0;gap:6px}
+		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 12.5px/1 system-ui;color:#52575F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-rail .rail-files-tree .rail-tree-folder-count{margin-left:auto;flex:none;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2}
+		/* The chevron (P5.1): the widget's own twistie, restyled to a 9px glyph #A3A8B2 with a 150ms rotation. The widget toggles .collapsed (points right); expanded points down. */
+		.living-docs-rail .rail-files-tree .monaco-tl-twistie{width:14px;transform:none}
+		.living-docs-rail .rail-files-tree .monaco-tl-twistie::before{font-size:9px;color:#A3A8B2;transition:transform 150ms ease}
+		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:8px;height:100%;min-width:0;font:400 13px/1.3 system-ui;color:#26292F}
+		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:#26292F;font-family:system-ui;font-size:12.5px}
+		.living-docs-rail .rail-files-tree .rail-tree-glyph{flex:none;display:none;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#5B6DC4;width:11px;text-align:center}
+		.living-docs-rail .rail-files-tree .rail-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:7px;height:7px}
+		.living-docs-rail .rail-files-tree .rail-status-dot{width:7px;height:7px;border-radius:999px}
+		.living-docs-rail .rail-files-tree .rail-status-dash{width:8px;height:2px;border-radius:1px;background:#D5D8DE}
+		/* Dot colours (P5.2): synced (ok) green, attention (pending) amber, plain #D5D8DE. The PR-212 red precedence ladder still wins in railStatus.ts, so a red-band doc keeps its treatment on top. */
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-grey{background:#D5D8DE}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-green{background:#2C8159}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-yellow{background:#C99A2E}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-red{background:#B5514B}
+		/* The trailing markers (P5.3): the LWD chip and the amber pending pill (never both, pending wins). */
+		.living-docs-rail .rail-files-tree .rail-tree-marker{margin-left:auto;flex:none;display:inline-flex;align-items:center}
+		.living-docs-rail .rail-files-tree .rail-tree-lwd{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5B6DC4;background:#fff;border:1px solid #E0E5FB;border-radius:5px;padding:2px 5px}
+		.living-docs-rail .rail-files-tree .rail-tree-pending{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#8A6D1A;background:#FDFAF2;border:1px solid #E4DCCB;border-radius:999px;padding:2px 6px}
+		/* The source row's right meta (P5.6): synced (green) / relative time. */
+		.living-docs-rail .rail-files-tree .rail-tree-meta{margin-left:auto;flex:none;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2}
+		.living-docs-rail .rail-files-tree .rail-tree-meta-synced{color:#5D8A66}
+		/* Selected row (P5.4): accent-tint bg + accent border, accent-ink text. */
+		.living-docs-rail .rail-files-tree .monaco-list-row.selected,.living-docs-rail .rail-files-tree .monaco-list.focused .monaco-list-row.selected.focused{background:#F4F5FD;box-shadow:inset 0 0 0 1px #E0E5FB}
+		.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-item-label,.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-tree-leaf{color:#2A2F60}
+		.living-docs-rail .rail-files-tree .rail-tree-actions{flex:none;display:flex;align-items:center;gap:6px}
 		.living-docs-rail .rail-empty{font:400 12px/1.5 system-ui;color:var(--vscode-descriptionForeground);padding:8px 6px}
 		.living-docs-rail .rail-folder{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;padding:10px 6px 6px}
 		.living-docs-rail .rail-item{display:flex;align-items:center;gap:7px;padding:6px 8px 6px 18px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}

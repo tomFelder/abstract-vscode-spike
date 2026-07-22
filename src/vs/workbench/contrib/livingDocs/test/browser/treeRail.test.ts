@@ -7,7 +7,7 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, sourceKindGlyph } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -77,6 +77,39 @@ suite('treeRail', () => {
 			{ name: 'Sources', items: [{ label: 'metrics.csv', kind: 'source', shape: 'dash', color: 'grey' }] },
 			{ name: 'Not yet imported', items: [{ label: 'legacy.doc', kind: 'unsupported', shape: 'dash', color: 'grey' }] },
 		]);
+	});
+
+	test('buildFileTree carries the doc row\'s living flag + pending count so the row shows the LWD chip or the pending pill, never both (P5.3)', () => {
+		const LIVE = URI.file('/ws/Live.md');
+		const PEND = URI.file('/ws/Pending.md');
+		const PLAIN = URI.file('/ws/Plain.md');
+		const folders = buildFileTree([
+			// A living doc with no pending changes: LWD chip (living true, pendingCount 0).
+			{ title: 'Live', resource: LIVE, pendingCount: 0, sources: ['metrics.csv'], isLiving: true },
+			// A living doc that ALSO has pending approvals: the pill wins - the row must not show both markers.
+			{ title: 'Pending', resource: PEND, pendingCount: 2, sources: ['metrics.csv'], isLiving: true },
+			// A plain markdown doc: neither marker.
+			{ title: 'Plain', resource: PLAIN, pendingCount: 0, sources: [], isLiving: false },
+		]);
+		const reports = folders.find(f => f.name === 'Reports')!;
+		const projection = reports.items.map(i => {
+			const showsPill = i.pendingCount > 0;
+			const showsChip = !showsPill && i.living;
+			return { label: i.label, living: i.living, pendingCount: i.pendingCount, showsChip, showsPill };
+		});
+		assert.deepStrictEqual(projection, [
+			{ label: 'Live', living: true, pendingCount: 0, showsChip: true, showsPill: false },
+			{ label: 'Pending', living: true, pendingCount: 2, showsChip: false, showsPill: true },
+			{ label: 'Plain', living: false, pendingCount: 0, showsChip: false, showsPill: false },
+		]);
+	});
+
+	test('sourceKindGlyph maps a source to its mono kind glyph: data/table, transcript/note, reference (P5.6)', () => {
+		assert.deepStrictEqual(
+			['metrics.csv', 'data.xlsx', 'config.json', 'board-transcript.md', 'notes.txt', 'ref.pdf', 'diagram.svg'].map(sourceKindGlyph),
+			// allow-any-unicode-next-line
+			['⊞', '⊞', '⊞', '◍', '◍', '◇', '◇'],
+		);
 	});
 
 	test('buildTreeRailNodes adds a capped, MRU-ordered Recent group above Reports with distinct collision-free ids, hidden below two (livingDocs #212)', () => {
