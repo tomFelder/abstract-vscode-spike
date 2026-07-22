@@ -345,7 +345,10 @@ export class TreeRailView extends ViewPane {
 				accessibilityProvider: new TreeRailAccessibilityProvider(),
 				identityProvider: { getId: (e: ITreeRailNode) => e.id },
 				expandOnlyOnTwistieClick: false,
-				// Children indent 14px per level (P5.5), matching the mock's 14px child inset.
+				// Children indent 14px per level (P5.5), matching the mock's 14px child inset. NOTE: WorkbenchObjectTree
+				// discards this per-instance option and uses `workbench.tree.indent` (listService.ts), so the value that
+				// actually reaches the widget is the config default we set to 14 in livingDocs.contribution.ts (routed via
+				// orchestrator, plan 44 ownership). This option is kept as documentation of the intended per-level inset.
 				indent: 14,
 				overrideStyles: { listBackground: 'sideBar.background' },
 				// Fast navigation (issue #212): type-to-filter (type-ahead) + the Ctrl/Cmd+F find widget. The label
@@ -802,8 +805,9 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-panel.rail-panel-files{display:flex;flex-direction:column;overflow:hidden;padding:6px 4px}
 		.living-docs-rail .rail-files-tree{flex:1;min-height:0}
 		/* Row shells (pin 5): folder rows 28px, doc/source rows 30px radius 8. Hover + selection paint the whole tree-widget row so the full 264px width lights up. */
-		.living-docs-rail .rail-files-tree .monaco-list-row{border-radius:8px}
-		.living-docs-rail .rail-files-tree .monaco-list-row:hover{background:#F1F2F6}
+		/* The workbench controls-tier clamp (styleOverrides roundedCorners.css) sets the list-row radius to var(--vscode-cornerRadius-small) = 4px at the !important tier, so a bare 8px declaration is overruled. This rule is more specific (the .rail-files-tree scope) AND !important, so equal-importance specificity resolves in the rail's favour and the 8px radius reaches the screen. */
+		.living-docs-rail .rail-files-tree .monaco-list-row{border-radius:8px !important}
+		/* Hover #F1F2F6 (P5.5): the widget paints hover through its own generated rule (the .monaco-list.list_id_N :hover:not(.selected):not(.focused) variant) reading --vscode-list-hoverBackground, more specific than a plain row-level rule here - so, as with selection, we pin the VARIABLE (below) rather than fight the widget rule. */
 		/* Row inset (mock: padding 0 8px). The right pad applies to every row; the left pad applies only to leaf rows, whose content starts at the indent (folders keep the twistie flush left). */
 		.living-docs-rail .rail-files-tree .monaco-tl-contents{padding-right:8px}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf{padding-left:8px}
@@ -831,8 +835,9 @@ export class TreeRailView extends ViewPane {
 		/* The source row's right meta (P5.6): synced (green) / relative time. */
 		.living-docs-rail .rail-files-tree .rail-tree-meta{margin-left:auto;flex:none;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2}
 		.living-docs-rail .rail-files-tree .rail-tree-meta-synced{color:#5D8A66}
-		/* Selected row (P5.4): accent-tint bg + accent border, accent-ink text. */
-		.living-docs-rail .rail-files-tree .monaco-list-row.selected,.living-docs-rail .rail-files-tree .monaco-list.focused .monaco-list-row.selected.focused{background:#F4F5FD;box-shadow:inset 0 0 0 1px #E0E5FB}
+		/* Selected row (P5.4): accent-tint bg + accent border, accent-ink text. The live list paints selection through its own per-instance rules (the focused .monaco-list.list_id_N:focus .monaco-list-row.selected and the inactive .monaco-list .monaco-list-row.selected), which read the --vscode-list-*Selection* CSS variables (defaultStyles maps them via asCssVariable). A row-level background here loses to those generated rules, so we override the VARIABLES scoped to the rail instead - the widget's own rules then render the spec colour. The spec says "Selected row = accent-tint #F4F5FD bg" with no focus distinction, so BOTH the focused (active) and blurred (inactive) selection backgrounds are pinned to #F4F5FD, and both selection foregrounds to the accent ink #2A2F60. The focus outlines are neutralised so the widget's blue focus ring never fights the #E0E5FB spec border (the inset box-shadow below). */
+		.living-docs-rail .rail-files-tree{--vscode-list-activeSelectionBackground:#F4F5FD;--vscode-list-inactiveSelectionBackground:#F4F5FD;--vscode-list-activeSelectionForeground:#2A2F60;--vscode-list-inactiveSelectionForeground:#2A2F60;--vscode-list-hoverBackground:#F1F2F6;--vscode-list-focusOutline:transparent;--vscode-list-focusAndSelectionOutline:transparent;--vscode-list-inactiveFocusOutline:transparent}
+		.living-docs-rail .rail-files-tree .monaco-list-row.selected{box-shadow:inset 0 0 0 1px #E0E5FB}
 		.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-item-label,.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-tree-leaf{color:#2A2F60}
 		.living-docs-rail .rail-files-tree .rail-tree-actions{flex:none;display:flex;align-items:center;gap:6px}
 		.living-docs-rail .rail-empty{font:400 12px/1.5 system-ui;color:var(--vscode-descriptionForeground);padding:8px 6px}

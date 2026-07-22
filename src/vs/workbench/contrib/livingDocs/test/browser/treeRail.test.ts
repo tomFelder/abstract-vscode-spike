@@ -4,10 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { ITreeNode } from '../../../../../base/browser/ui/tree/tree.js';
+import { DisposableStore, IDisposable } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, sourceKindGlyph } from '../../common/treeRail.js';
+import { TreeRailLeafRenderer } from '../../browser/treeRailFilesTree.js';
+import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, sourceKindGlyph } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -79,29 +82,54 @@ suite('treeRail', () => {
 		]);
 	});
 
-	test('buildFileTree carries the doc row\'s living flag + pending count so the row shows the LWD chip or the pending pill, never both (P5.3)', () => {
-		const LIVE = URI.file('/ws/Live.md');
-		const PEND = URI.file('/ws/Pending.md');
-		const PLAIN = URI.file('/ws/Plain.md');
-		const folders = buildFileTree([
-			// A living doc with no pending changes: LWD chip (living true, pendingCount 0).
-			{ title: 'Live', resource: LIVE, pendingCount: 0, sources: ['metrics.csv'], isLiving: true },
-			// A living doc that ALSO has pending approvals: the pill wins - the row must not show both markers.
-			{ title: 'Pending', resource: PEND, pendingCount: 2, sources: ['metrics.csv'], isLiving: true },
-			// A plain markdown doc: neither marker.
-			{ title: 'Plain', resource: PLAIN, pendingCount: 0, sources: [], isLiving: false },
-		]);
-		const reports = folders.find(f => f.name === 'Reports')!;
-		const projection = reports.items.map(i => {
-			const showsPill = i.pendingCount > 0;
-			const showsChip = !showsPill && i.living;
-			return { label: i.label, living: i.living, pendingCount: i.pendingCount, showsChip, showsPill };
+	test('TreeRailLeafRenderer emits the LWD chip or the pending pill from the REAL render path, never both (P5.3)', () => {
+		// The criterion is about what the row RENDERS, so this drives the real `TreeRailLeafRenderer.renderElement`
+		// (not an in-test re-derivation of showsChip/showsPill) over leaf nodes built by the real data pipeline, and
+		// reads the emitted DOM. Precedence (pending wins) then holds by the renderer itself, not by restating it here.
+		const disposables = new DisposableStore();
+		const store = disposables.add(new DisposableStore());
+		// A no-op actions host: the renderer only needs a hover disposable + a per-row action store back from these.
+		const renderer = new TreeRailLeafRenderer({
+			renderLeafActions: () => disposables.add(new DisposableStore()),
+			setupHover: (): IDisposable => ({ dispose: () => { } }),
 		});
-		assert.deepStrictEqual(projection, [
-			{ label: 'Live', living: true, pendingCount: 0, showsChip: true, showsPill: false },
-			{ label: 'Pending', living: true, pendingCount: 2, showsChip: false, showsPill: true },
-			{ label: 'Plain', living: false, pendingCount: 0, showsChip: false, showsPill: false },
+
+		// Real leaf nodes from the real builder: a living doc (chip), a living doc with pending approvals (pill wins),
+		// a plain doc (neither), plus a bound source (a non-doc leaf never carries a doc marker).
+		const nodes = buildTreeRailNodes([
+			{ title: 'Live', resource: URI.file('/ws/Live.md'), pendingCount: 0, sources: ['metrics.csv'], isLiving: true },
+			{ title: 'Pending', resource: URI.file('/ws/Pending.md'), pendingCount: 2, sources: ['metrics.csv'], isLiving: true },
+			{ title: 'Plain', resource: URI.file('/ws/Plain.md'), pendingCount: 0, sources: [], isLiving: false },
 		]);
+		const leaves = new Map<string, ITreeRailLeafNode>();
+		const collect = (n: ITreeRailNode): void => n.type === 'leaf' ? void leaves.set(n.item.label, n) : n.children.forEach(collect);
+		nodes.forEach(collect);
+
+		// Render each leaf through the real template + renderElement, then read the emitted markers off the DOM.
+		const render = (label: string): { hasChip: boolean; hasPill: boolean; pillText: string | null } => {
+			const container = document.createElement('div');
+			const template = renderer.renderTemplate(container);
+			store.add({ dispose: () => renderer.disposeTemplate(template) });
+			const leaf = leaves.get(label)!;
+			const node: ITreeNode<ITreeRailLeafNode, void> = {
+				element: leaf, children: [], depth: 1, visibleChildrenCount: 0, visibleChildIndex: 0,
+				collapsible: false, collapsed: false, visible: true, filterData: undefined,
+			};
+			renderer.renderElement(node, 0, template);
+			const pill = container.querySelector('.rail-tree-pending');
+			return { hasChip: !!container.querySelector('.rail-tree-lwd'), hasPill: !!pill, pillText: pill?.textContent ?? null };
+		};
+
+		assert.deepStrictEqual(
+			{ live: render('Live'), pending: render('Pending'), plain: render('Plain'), source: render('metrics.csv') },
+			{
+				live: { hasChip: true, hasPill: false, pillText: null },      // living, no pending -> chip only
+				pending: { hasChip: false, hasPill: true, pillText: '2' },    // pending wins -> pill only, count 2, no chip
+				plain: { hasChip: false, hasPill: false, pillText: null },    // plain doc -> neither marker
+				source: { hasChip: false, hasPill: false, pillText: null },   // a source leaf never carries a doc marker
+			},
+		);
+		disposables.dispose();
 	});
 
 	test('sourceKindGlyph maps a source to its mono kind glyph: data/table, transcript/note, reference (P5.6)', () => {
