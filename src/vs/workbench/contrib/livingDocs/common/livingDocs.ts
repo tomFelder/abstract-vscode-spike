@@ -10,6 +10,7 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
 import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ISourceGrid } from './sourceGrid.js';
+import { ITemplateSkeletonRow } from './livingDocMarkdown.js';
 import { IFeedbackReport, OnboardingStep } from './onboarding.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
@@ -261,6 +262,24 @@ export interface ITemplateInfo {
 	readonly sources: readonly string[];
 	/** The template's Markdown body after the frontmatter (headings, bind links, `{{slot}}` hints). */
 	readonly body: string;
+}
+
+/**
+ * A template as the v2 gallery card renders it (plan 48 T2): its `ITemplateInfo` plus the two facts the card
+ * needs that are computed from the real folder - the honest usage count (how many documents in the open
+ * folder were born from this template, via `template: <name>` provenance) and the parsed skeleton-thumbnail
+ * rows (grey prose bars + accent-tint bind-slot chips, derived from the template's own doc so the thumbnail
+ * literally shows where live data lands). `bindSlots` is the total data-bound positions ({{slot}} + inline
+ * binds). All three are real: `usageCount` counts lineage, never a hardcoded N; a template used by nothing
+ * honestly reports 0.
+ */
+export interface ITemplateCard extends ITemplateInfo {
+	/** Bind slots: the `{{slot}}` prompts plus inline `bind:` links - the data-bound positions in the doc. */
+	readonly bindSlots: number;
+	/** How many documents in the open folder were generated from this template (lineage; honest 0 when none). */
+	readonly usageCount: number;
+	/** The skeleton-thumbnail rows derived from the template's parsed doc (grey prose + accent-tint slots). */
+	readonly skeleton: readonly ITemplateSkeletonRow[];
 }
 
 /**
@@ -713,6 +732,14 @@ export interface ILivingDocsService {
 
 	/** Discover and parse every `*.template.md` in the workspace (for the Templates screen; plan 28). */
 	listTemplates(): Promise<readonly ITemplateInfo[]>;
+
+	/**
+	 * The v2 Templates gallery model (plan 48 T2): every template plus its real usage count (documents in
+	 * the open folder born from it, via `template: <name>` provenance) and its parsed skeleton-thumbnail rows.
+	 * Additive over `listTemplates` (which stays the birth-sheet source): one folder walk both discovers the
+	 * templates and tallies lineage, so the card meta ("N bind slots · used N×") is honest, never fabricated.
+	 */
+	listTemplateGallery(): Promise<readonly ITemplateCard[]>;
 
 	/**
 	 * The project's real source registry (plan 29, D29-A): every source referenced by a document in the
