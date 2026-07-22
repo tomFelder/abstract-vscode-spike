@@ -345,6 +345,14 @@ interface IFrontmatter {
 	// The originating template's `name:`, recorded on a generated document's frontmatter as provenance
 	// (`template: Weekly report`) so the audit trail can read "Created from Weekly report template".
 	fromTemplate: string;
+	// Plain-language document status (`status:`), the Properties STATUS chip (plan 45 pin 12). Inert everywhere
+	// else, so the one parser keeps serving documents that never author a status.
+	status: string;
+	// Document tags (`tags:` block list), the Properties TAGS chips (plan 45 pin 12).
+	tags: string[];
+	// The per-document autonomy policy (`policy:`), read through `docPolicy.ts` into the three-tier grammar
+	// (plan 45 pin 12 / #122 F11). A plain string here; `coerceDocPolicy` normalises it at the read site.
+	policy: string;
 }
 
 // Parse the YAML-ish frontmatter: `title`/`subtitle`/`name`/`description` scalars, the `template:` flag,
@@ -353,7 +361,7 @@ interface IFrontmatter {
 // template it came from as a `template: <name>` STRING, which reads as `fromTemplate` provenance - not a
 // template file itself).
 function parseFrontmatter(text: string): { fm: IFrontmatter; body: string } {
-	const fm: IFrontmatter = { title: '', subtitle: '', sources: [], context: [], template: false, name: '', description: '', fromTemplate: '' };
+	const fm: IFrontmatter = { title: '', subtitle: '', sources: [], context: [], template: false, name: '', description: '', fromTemplate: '', status: '', tags: [], policy: '' };
 	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
 	if (!match) {
 		return { fm, body: text };
@@ -376,6 +384,14 @@ function parseFrontmatter(text: string): { fm: IFrontmatter; body: string } {
 		else if (key === 'subtitle') { fm.subtitle = value; }
 		else if (key === 'name') { fm.name = value; }
 		else if (key === 'description') { fm.description = value; }
+		else if (key === 'status') { fm.status = value; }
+		else if (key === 'policy') { fm.policy = value; }
+		else if (key === 'tags') {
+			// `tags:` is a block list (`- item` lines) but tolerates an inline comma list on the same line
+			// (`tags: draft, q3`) so a hand-authored doc that used the compact form still reads.
+			listInto = fm.tags;
+			if (value) { for (const t of value.split(',').map(v => v.trim()).filter(Boolean)) { fm.tags.push(t); } }
+		}
 		else if (key === 'template') {
 			// `template: true` marks a template file; `template: <name>` on a generated document is provenance.
 			if (value === 'true') { fm.template = true; }
@@ -445,6 +461,9 @@ export function parseLivingDoc(text: string): ILivingDoc {
 		templateName: fm.name || title,
 		templateDescription: fm.description,
 		fromTemplate: fm.fromTemplate,
+		status: fm.status,
+		tags: fm.tags,
+		policy: fm.policy,
 	};
 }
 
@@ -476,7 +495,7 @@ function serializeBlock(block: ILivingDocBlock): string {
 // Add or remove a single `value` in a frontmatter block list (`sources:` or `context:`), returning the new
 // raw text with the body left verbatim. Creates a frontmatter block if the doc has none; drops the key when
 // its last item is removed. Idempotent (adding an existing / removing an absent value is a no-op).
-export function withFrontmatterList(text: string, key: 'sources' | 'context', value: string, add: boolean): string {
+export function withFrontmatterList(text: string, key: 'sources' | 'context' | 'tags', value: string, add: boolean): string {
 	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
 	if (!match) {
 		// A plain doc gains its first entry: prepend a minimal frontmatter block (no-op on remove).
@@ -526,6 +545,60 @@ export function withFrontmatterList(text: string, key: 'sources' | 'context', va
 // Convenience wrapper for the document's value sources (`sources:` frontmatter list).
 export function withFrontmatterSource(text: string, source: string, add: boolean): string {
 	return withFrontmatterList(text, 'sources', source, add);
+}
+
+// Set (or clear) a scalar frontmatter field (`title:` / `subtitle:` / `status:` / `policy:`), returning the new
+// raw text with the body left verbatim. Used by the Properties panel to write title / status / policy edits back
+// to the file on disk (plan 45 pin 12 / P12.3). Creates a frontmatter block if the doc has none; an empty value
+// removes the key (a cleared status leaves no dangling `status:` line). The body is never touched, so a plain
+// Markdown doc that gains its first field keeps its prose byte-identical. Idempotent (a no-op change returns the
+// input unchanged so the caller can skip a redundant disk write).
+export function withFrontmatterScalar(text: string, key: 'title' | 'subtitle' | 'status' | 'policy', value: string): string {
+	const clean = value.trim();
+	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+	if (!match) {
+		// A plain doc gains its first scalar: prepend a minimal frontmatter block (no-op when clearing).
+		return clean ? `---\n${key}: ${clean}\n---\n\n${text}` : text;
+	}
+
+	// Walk the frontmatter lines, dropping the existing `<key>:` scalar line (and any stray list items that
+	// followed it, in case the key was previously a list) and keeping everything else in place.
+	const kept: string[] = [];
+	let found = false;
+	let existing = '';
+	let skippingList = false;
+	for (const line of match[1].split(/\r?\n/)) {
+		const item = /^\s+-\s+(.*)$/.exec(line);
+		if (skippingList && item) { continue; }
+		skippingList = false;
+		const colon = line.indexOf(':');
+		const lineKey = colon >= 0 ? line.slice(0, colon).trim() : '';
+		if (lineKey === key) {
+			found = true;
+			existing = line.slice(colon + 1).trim().replace(/^["']|["']$/g, '');
+			skippingList = true;
+			continue;
+		}
+		kept.push(line);
+	}
+
+	if (found && existing === clean) { return text; }
+	if (!found && !clean) { return text; }
+
+	// Re-insert the scalar where it was (or append it); a cleared value simply drops the line.
+	const rest = text.slice(match[0].length);
+	const fmLines = clean ? [`${key}: ${clean}`, ...kept] : kept;
+	if (fmLines.length === 0) {
+		// The frontmatter is now empty: drop the whole `---` block, leaving the body alone.
+		return rest.replace(/^\r?\n+/, '');
+	}
+	return `---\n${fmLines.join('\n')}\n---\n${rest}`;
+}
+
+// Convenience wrapper for a document's tags (`tags:` frontmatter block list), so the Properties panel adds or
+// removes one tag chip at a time through the same list machinery as sources/context (plan 45 pin 12 / P12.3).
+export function withFrontmatterTag(text: string, tag: string, add: boolean): string {
+	return withFrontmatterList(text, 'tags', tag.trim(), add);
 }
 
 // Replace a document's body while keeping its frontmatter block verbatim. Used when a living document is
@@ -640,6 +713,15 @@ export function serializeLivingDoc(doc: ILivingDoc): string {
 	const fmLines: string[] = [];
 	if (fmTitle) { fmLines.push(`title: ${fmTitle}`); }
 	if (doc.subtitle) { fmLines.push(`subtitle: ${doc.subtitle}`); }
+	// Preserve the Properties-panel fields (plan 45 pin 12) across a block-driven re-serialise (a refresh /
+	// figure sync): emit them only when authored, so a plain doc still round-trips byte-clean and these fields
+	// are never lost when the body is rebuilt from blocks.
+	if (doc.status) { fmLines.push(`status: ${doc.status}`); }
+	if (doc.policy) { fmLines.push(`policy: ${doc.policy}`); }
+	if (doc.tags?.length) {
+		fmLines.push('tags:');
+		for (const t of doc.tags) { fmLines.push(`  - ${t}`); }
+	}
 	if (doc.sources.length) {
 		fmLines.push('sources:');
 		for (const s of doc.sources) { fmLines.push(`  - ${s}`); }

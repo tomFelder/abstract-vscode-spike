@@ -408,6 +408,53 @@ suite('livingDocs Service', () => {
 		assert.ok(blockText(service, WEEKLY, 'h-highlights').includes('[$41.2k](bind:metrics.mrr)'), 'on-disk cache unchanged on load');
 	});
 
+	// --- Properties panel (plan 45 pin 12): frontmatter read/write on disk + truthful lock reads ---
+
+	test('setDocStatus/setDocTitle/setDocTag write frontmatter to the .md on disk; setDocPolicy round-trips', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+
+		await service.setDocTitle(WEEKLY, 'Weekly Ops');
+		await service.setDocStatus(WEEKLY, 'In review');
+		await service.setDocTag(WEEKLY, 'finance', true);
+		await service.setDocPolicy(WEEKLY, 'never');
+
+		// The edits landed on disk (what a same-session reload re-reads) AND the body is verbatim.
+		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
+		assert.deepStrictEqual(
+			{
+				title: onDisk.includes('title: Weekly Ops'),
+				status: onDisk.includes('status: In review'),
+				tag: onDisk.includes('- finance'),
+				policy: onDisk.includes('policy: never'),
+				body: onDisk.includes('## Highlights'),
+			},
+			{ title: true, status: true, tag: true, policy: true, body: true });
+		// The service's live reads reflect the writes (the panel re-renders from these).
+		assert.strictEqual(service.getDocPolicy(WEEKLY), 'never');
+		assert.strictEqual(service.getDoc(WEEKLY)!.status, 'In review');
+
+		// Removing the tag drops it again.
+		await service.setDocTag(WEEKLY, 'finance', false);
+		assert.ok(!(lastFiles!.get(WEEKLY.toString()) ?? '').includes('- finance'), 'the tag is removed on disk');
+	});
+
+	test('getBoundSources groups the lock bindings by source file with truthful counts + keys', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		const bound = service.getBoundSources(WEEKLY);
+		// WEEKLY binds three keys, all from metrics.csv, so one grouped row with count 3.
+		assert.deepStrictEqual(
+			bound.map(b => ({ source: b.source, count: b.count, keys: [...b.keys].sort() })),
+			[{ source: 'metrics.csv', count: 3, keys: ['metrics.mrr', 'metrics.mrr.delta', 'metrics.signups'] }]);
+	});
+
+	test('getDocPolicy degrades an unauthored policy to the safe default (ask-first)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getDocPolicy(WEEKLY), 'ask-first');
+	});
+
 	// --- Image assets (issue #141): paste/drop writes beside the doc; relative srcs resolve to data URIs ---
 
 	test('saveImageAsset writes under assets/<doc-basename>/ beside the doc, sanitising and de-duplicating', async () => {

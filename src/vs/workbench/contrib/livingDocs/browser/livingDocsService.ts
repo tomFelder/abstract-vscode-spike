@@ -29,12 +29,13 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
-import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList } from '../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
+import { coerceDocPolicy, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { buildDemoReportMarkdown, DEMO_CSV, DEMO_CSV_NAME, DEMO_DOC_NAME, founderFeedbackLogLine, IFeedbackReport, onboardingStepLabel, OnboardingStep } from '../common/onboarding.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
@@ -666,6 +667,88 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
 		return this._pending.filter(c => c.docId === id);
+	}
+
+	// --- Properties panel (plan 45 pin 12) - additive frontmatter read/write + truthful lock reads ---
+
+	// The document's created/updated times, read truthfully from the file's own stat (birth + modified). The
+	// lock has no timestamp of its own, so the file system is the honest source; the panel renders them mono
+	// (P12.3). Returns undefined times when the file cannot be stat'd (e.g. an unsaved in-memory doc), so the
+	// panel shows a plain dash rather than a fabricated date.
+	async getDocTimes(resource: URI): Promise<{ readonly created?: number; readonly updated?: number }> {
+		try {
+			const stat = await this._files.stat(resource);
+			// `ctime` is the creation time where the provider supplies it (0 when it does not); `mtime` is the
+			// last modification. Treat a 0 as "unknown" so the panel never claims the epoch as a real date.
+			return { created: stat.ctime || undefined, updated: stat.mtime || undefined };
+		} catch {
+			return {};
+		}
+	}
+
+	// The document's bound sources, grouped from the lock's binding graph: one entry per distinct source file
+	// with the count of bind keys that draw from it and those keys (so a click can open the source drawer at
+	// them). Truthful bind counts (P12.3); empty when the doc has no lock / no bindings.
+	getBoundSources(resource: URI): readonly IBoundSourceSummary[] {
+		const lock = this._docs.get(resource.toString())?.lock;
+		if (!lock) { return []; }
+		const bySource = new Map<string, string[]>();
+		for (const key of Object.keys(lock.bindings)) {
+			// A binding's `source` reads like "metrics.csv#mrr"; the file (before the `#`) is the group.
+			const file = lock.bindings[key].source.split('#')[0] || lock.bindings[key].source;
+			const keys = bySource.get(file) ?? [];
+			keys.push(key);
+			bySource.set(file, keys);
+		}
+		return [...bySource.entries()]
+			.map(([source, keys]) => ({ source, count: keys.length, keys }))
+			.sort((a, b) => a.source.localeCompare(b.source));
+	}
+
+	// The document's autonomy policy, coerced from its frontmatter `policy:` onto the shared three-tier grammar
+	// (plan 45 pin 12 / #122 F11). An unauthored / unknown value degrades to the safe default (`ask-first`).
+	getDocPolicy(resource: URI): DocAutonomyLevel {
+		return coerceDocPolicy(this._docs.get(resource.toString())?.doc.policy);
+	}
+
+	// Write the document's autonomy policy back to its frontmatter `policy:` on disk (plan 45 pin 12 / P12.4).
+	// A no-op change is skipped. Persisted through saveRawText so the doc reparses and the panel re-renders.
+	async setDocPolicy(resource: URI, policy: DocAutonomyLevel): Promise<void> {
+		await this._writeFrontmatterScalar(resource, 'policy', policy);
+	}
+
+	// Write the document's plain-language status back to its frontmatter `status:` on disk (P12.3). An empty
+	// value clears the key.
+	async setDocStatus(resource: URI, status: string): Promise<void> {
+		await this._writeFrontmatterScalar(resource, 'status', status);
+	}
+
+	// Write the document's title back to its frontmatter `title:` on disk (P12.3). An empty value clears the
+	// key (the derived title then falls back to the first H1 / filename).
+	async setDocTitle(resource: URI, title: string): Promise<void> {
+		await this._writeFrontmatterScalar(resource, 'title', title);
+	}
+
+	// Add or remove one tag on the document's frontmatter `tags:` list on disk (P12.3). Idempotent.
+	async setDocTag(resource: URI, tag: string, add: boolean): Promise<void> {
+		const clean = tag.trim();
+		if (!clean) { return; }
+		const raw = this.getRawText(resource);
+		if (!raw) { return; }
+		const next = withFrontmatterTag(raw, clean, add);
+		if (next === raw) { return; }
+		await this.saveRawText(resource, next);
+	}
+
+	// Shared writer for the scalar frontmatter fields the Properties panel edits (title / status / policy):
+	// rewrite only the frontmatter, persist through saveRawText (reparse + re-resolve + fire change), skip a
+	// no-op. The body is left verbatim, so a title/status/policy edit never touches the prose.
+	private async _writeFrontmatterScalar(resource: URI, key: 'title' | 'status' | 'policy', value: string): Promise<void> {
+		const raw = this.getRawText(resource);
+		if (!raw) { return; }
+		const next = withFrontmatterScalar(raw, key, value);
+		if (next === raw) { return; }
+		await this.saveRawText(resource, next);
 	}
 
 	// Run the document's Skills as deterministic graders over its current state (spec 5). Financial =

@@ -13,6 +13,7 @@ import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../c
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
 import { deleteCol, deleteRow, gfmEscapeCell, gfmIsAlignRow, gfmParseAlign, gfmSplitCells, insertCol, insertRow, parseGfmTable, serializeGfmTable, setCell } from '../common/livingDocTableEdit.js';
 import { isWordHtml, normalizeWordPasteHtml } from '../common/livingDocWordPaste.js';
+import { POLICY_EDITOR_STYLE } from './policyEditorRender.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
 // The vendored ProseMirror IIFE (decision 43) is shipped base64-encoded to keep the source ASCII +
@@ -123,6 +124,20 @@ export interface ILivingDocRenderInput {
 	 * Supplied by the editor pane from the document resource.
 	 */
 	readonly fileName?: string;
+	/**
+	 * The Properties panel state (plan 45 pin 12): the panel's rendered content and whether it is open. Present
+	 * only in PM mode on a document; absent otherwise (raw mode / no doc), so the toolbar Properties button and
+	 * the inset panel appear only where the panel is meaningful. Open state persists per-doc (the editor reads
+	 * `livingDocs.v2.props.<docId>` from the storage service and hands it here).
+	 */
+	readonly properties?: IPropertiesRenderState;
+}
+
+/** The Properties panel's render state: whether it is open plus the panel's own HTML (built by the editor). */
+export interface IPropertiesRenderState {
+	readonly open: boolean;
+	/** The panel's inner HTML (from `renderPropertiesPanel`); rendered into the inset host when open. */
+	readonly html: string;
 }
 
 /** The source-peek data plus the editor-held sync state (the divider circle's synced confirmation). */
@@ -215,7 +230,16 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .etoolbar .tb-b.bold{font:700 13px/1 system-ui}
 .etoolbar .tb-b.ital{font:400 13px/1 system-ui;font-style:italic}
 .etoolbar .tb-b.ic{font:400 14px/1 system-ui}
-.etoolbar .tb-saved{margin-left:auto;display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8}
+/* The toolbar right-side group (plan 45 pin 8): Ask AI, Properties and the Saved chip, pushed right as one unit. */
+.etoolbar .tb-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.etoolbar .tb-ai{display:flex;align-items:center;gap:5px;height:30px;padding:0 11px;border:none;border-radius:8px;background:transparent;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer}
+.etoolbar .tb-ai:hover{background:#f4f5f7}
+/* Properties button (P8.2): list glyph + label, 30px, radius 8; active bg #F4F5FD (accent-tint). */
+.etoolbar .tb-props{display:flex;align-items:center;gap:6px;height:30px;padding:0 11px;border:none;border-radius:8px;background:transparent;color:#52575f;font:500 12.5px/1 system-ui;cursor:pointer}
+.etoolbar .tb-props:hover{background:#f4f5f7}
+.etoolbar .tb-props.on{background:#F4F5FD;color:#4650B8}
+.etoolbar .tb-props-glyph{font:400 13px/1 system-ui}
+.etoolbar .tb-saved{display:flex;align-items:center;gap:7px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8}
 .etoolbar .tb-saved .sdot{width:6px;height:6px;border-radius:50%;background:oklch(0.6 0.13 150)}
 /* Web dev-harness save chip (issue #121 / decision 162): an amber, plain-words notice that writes are
  * in-memory only and lost on reload, so the web build never masquerades as a durable "Saved" state. */
@@ -419,7 +443,56 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .lwd-cell-editor{position:fixed;z-index:70;box-sizing:border-box;border:2px solid ${ACCENT};border-radius:4px;padding:1px 6px;margin:0;font:400 13px/1.4 system-ui;color:#1a1c20;background:#fff;box-shadow:0 4px 14px rgba(20,30,60,.16);outline:none}
 .lwd-table-tools{position:fixed;z-index:71;display:flex;gap:4px;padding:4px;background:#fff;border:1px solid #e6e8ed;border-radius:8px;box-shadow:0 6px 18px rgba(20,30,60,.16)}
 .lwd-table-tools button{border:1px solid #e0e2e8;background:#fff;color:#52575f;border-radius:6px;padding:5px 9px;font:500 11.5px/1 system-ui;cursor:pointer}
-.lwd-table-tools button:hover{background:#f4f5f7}`;
+.lwd-table-tools button:hover{background:#f4f5f7}
+/* Properties panel (plan 45 pin 12): a 284px inset panel at the editor card's right edge (bg #FBFCFD, hairline
+ * left border #EEF0F3). It is fixed to the webview's right edge below the sticky formatting toolbar (top:46px)
+ * so it insets INTO the card rather than floating over it; the reading column re-centres because .props-open
+ * reserves 284px of right padding on .pmwrap (measured re-centre, P12.6). */
+.propspanel{position:fixed;top:46px;right:0;bottom:0;width:284px;z-index:6;display:flex;flex-direction:column;background:#FBFCFD;border-left:1px solid #EEF0F3}
+.pp-head{flex:none;height:44px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid #EEF0F3}
+.pp-title{font:600 12.5px/1 system-ui;color:#3a3f49}
+.pp-x{margin-left:auto;border:none;background:none;color:#a3a8b2;font-size:13px;cursor:pointer;padding:4px 6px;border-radius:6px}
+.pp-x:hover{background:#f0f1f4;color:#52575f}
+.pp-body{flex:1;min-height:0;overflow-y:auto;padding:14px}
+.pp-field{margin-bottom:16px}
+/* Field labels (P12.2): mono 9.5px UPPER .12em faint #A3A8B2. */
+.pp-lab{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#A3A8B2;margin-bottom:6px}
+.pp-input{width:100%;box-sizing:border-box;border:1px solid #EDEFF3;border-radius:8px;padding:7px 9px;font:500 13px/1.3 system-ui;color:#2a2a31;background:#fff}
+.pp-input:focus{outline:none;border-color:${ACCENT}}
+.pp-input::placeholder{color:#bcc0c8;font-weight:400}
+.pp-dates{display:flex;gap:18px}
+.pp-date{font:400 11.5px/1.3 'JetBrains Mono',ui-monospace,monospace;color:#52575f}
+/* STATUS chip: an 'ok' pill treatment with an inline editable label. */
+.pp-status{display:flex;align-items:center;gap:7px;border:1px solid #E0EBE3;border-radius:999px;padding:5px 11px;background:#F1F8F3}
+.pp-status-dot{flex:none;width:7px;height:7px;border-radius:50%;background:#D5D8DE}
+.pp-status.set .pp-status-dot{background:#2C8159}
+.pp-status-in{flex:1;min-width:0;border:none;background:transparent;font:600 12px/1.2 system-ui;color:#2C8159}
+.pp-status-in::placeholder{color:#9aa0aa;font-weight:400}
+.pp-status-in:focus{outline:none}
+/* TAGS: accent-tint chips + a dashed add button. */
+.pp-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pp-tag{display:inline-flex;align-items:center;gap:5px;background:#F4F5FD;border:1px solid #E0E5FB;border-radius:6px;padding:3px 8px;font:500 12px/1.2 system-ui;color:#4650B8}
+.pp-tag-x{border:none;background:none;color:#9aa0d0;font-size:9px;cursor:pointer;padding:0;line-height:1}
+.pp-tag-x:hover{color:#4650B8}
+.pp-tag-add{width:24px;height:24px;border:1px dashed #C6CAD2;border-radius:6px;background:transparent;color:#a3a8b2;font-size:13px;cursor:pointer;line-height:1}
+.pp-tag-add:hover{border-color:${ACCENT};color:${ACCENT}}
+.pp-tag-in{border:1px solid #E0E5FB;border-radius:6px;padding:3px 8px;font:500 12px/1.2 system-ui;color:#2a2a31;min-width:90px}
+.pp-tag-in:focus{outline:none;border-color:${ACCENT}}
+/* BOUND SOURCES: 32px rows on white with the truthful bind count; click opens the drawer. */
+.pp-srcs{display:flex;flex-direction:column;gap:4px}
+.pp-src{display:flex;align-items:center;gap:8px;height:32px;width:100%;text-align:left;border:1px solid #EDEFF3;border-radius:8px;background:#fff;padding:0 10px;cursor:pointer;font:inherit}
+.pp-src:hover{background:#F6F7F9}
+.pp-src-glyph{flex:none;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:${ACCENT}}
+.pp-src-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12.5px/1.2 system-ui;color:#3a3f49}
+.pp-src-count{flex:none;font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:${ACCENT}}
+.pp-empty{font:400 11.5px/1.4 system-ui;color:#a3a8b2}
+.pp-foot{flex:none;border-top:1px solid #EEF0F3;padding:10px 14px}
+.pp-raw{border:none;background:none;padding:0;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;cursor:pointer}
+.pp-raw:hover{color:${ACCENT}}
+/* Re-centre: when the panel is open the reading column gets 284px of right padding so it re-centres in the
+ * remaining width rather than sitting under the panel (P12.6). */
+.props-open .pmwrap{padding-right:324px}
+${POLICY_EDITOR_STYLE}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -596,6 +669,21 @@ root.addEventListener('click', e => {
 	// (clientX left of the block's content edge); an idle number carries no bind and clicks through to text.
 	if ((el = e.target.closest('.pm-num.bound, .pm-num.pending')) && e.clientX < el.getBoundingClientRect().left) { const key = gutterKeyFor(el); if (key) { return vscode.postMessage({ type: 'reveal', cells: [key] }); } }
 	if (el = e.target.closest('[data-to-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
+	// Properties panel (plan 45 pin 8/12). Toolbar buttons + panel controls are delegated here; the host owns
+	// the toggle state, the frontmatter writes and the policy persistence.
+	if (el = e.target.closest('[data-ask-ai]')) { return vscode.postMessage({ type: 'askAi' }); }
+	if (el = e.target.closest('[data-props-toggle]')) { return vscode.postMessage({ type: 'toggleProperties' }); }
+	if (el = e.target.closest('[data-props-close]')) { return vscode.postMessage({ type: 'toggleProperties' }); }
+	if (el = e.target.closest('[data-props-raw]')) { return vscode.postMessage({ type: 'setMode', mode: 'raw' }); }
+	// A BOUND SOURCES row opens the source drawer at that source's bind keys (the existing reveal path).
+	if (el = e.target.closest('[data-prop-source]')) { const keys = el.getAttribute('data-prop-source'); return vscode.postMessage({ type: 'reveal', cells: keys ? keys.split(',') : [] }); }
+	// A tag chip's remove button removes it (writes frontmatter on disk).
+	if (el = e.target.closest('[data-prop-tag-remove]')) { return vscode.postMessage({ type: 'setDocTag', tag: el.getAttribute('data-prop-tag-remove'), add: false }); }
+	// The dashed add button reveals the inline add input and focuses it (no message; the input's Enter commits).
+	if (el = e.target.closest('[data-prop-tag-add]')) { const inp = root.querySelector('[data-prop-tag-input]'); if (inp) { inp.style.display = ''; inp.focus(); } return; }
+	// A policy option selects that level (writes the doc's frontmatter policy on disk; #122 F11). The
+	// container's data-policy-editor names which control fired (the doc id here).
+	if (el = e.target.closest('[data-policy]')) { return vscode.postMessage({ type: 'setDocPolicy', policy: el.getAttribute('data-policy') }); }
 	if (el = e.target.closest('[data-source-close]')) { return vscode.postMessage({ type: 'closeSource' }); }
 	if (el = e.target.closest('[data-sync]')) { return vscode.postMessage({ type: 'sync' }); }
 	if (el = e.target.closest('[data-present-choice]')) { return vscode.postMessage({ type: 'presentChoice', choice: el.getAttribute('data-present-choice') }); }
@@ -611,6 +699,22 @@ root.addEventListener('click', e => {
 root.addEventListener('keydown', e => {
 	const b = e.target.closest('[data-block]');
 	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
+	// Properties inputs commit on Enter (title/status blur to fire their focusout write; the tag input posts and
+	// clears). Escape on the tag input cancels the add.
+	const ti = e.target.closest('[data-prop-tag-input]');
+	if (ti) {
+		if (e.key === 'Enter') { e.preventDefault(); const v = ti.value.trim(); ti.value = ''; ti.style.display = 'none'; if (v) { vscode.postMessage({ type: 'setDocTag', tag: v, add: true }); } return; }
+		if (e.key === 'Escape') { ti.value = ''; ti.style.display = 'none'; ti.blur(); return; }
+	}
+	if (e.target.closest('[data-prop-title],[data-prop-status]') && e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+});
+// Properties title/status commit on focus loss: post only when the value actually changed from the rendered
+// value, so a focus-through never triggers a redundant disk write.
+root.addEventListener('focusout', e => {
+	const t = e.target.closest('[data-prop-title]');
+	if (t && t.value !== (t.getAttribute('value') || '')) { return vscode.postMessage({ type: 'setDocTitle', title: t.value }); }
+	const s = e.target.closest('[data-prop-status]');
+	if (s && s.value !== (s.getAttribute('value') || '')) { return vscode.postMessage({ type: 'setDocStatus', status: s.value }); }
 });
 // HTML-paste interception (issue #137 the T1-A finding, extended by #138/#139). Capture phase so we run
 // BEFORE ProseMirror's own clipboard handler: when the clipboard carries a 'text/html' payload pasted INTO
@@ -920,6 +1024,13 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `<button class="tb-b ic" data-pmcmd="bullet_list" title="Bulleted list">&#8803;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="ordered_list" title="Numbered list">&#8862;</button>`
 		+ `<button class="tb-b ic" data-pmcmd="blockquote" title="Quote">&#10077;</button>`
+		// The right side (plan 45 pin 8 / P8.1): exactly Ask AI, Properties and the Saved chip (with vN),
+		// pushed right as one group (tb-right's margin-left:auto), nothing else. Ask AI opens the Chat rail;
+		// Properties toggles the inset panel (P8.2); the Saved chip stays the honest save/version status.
+		+ `<span class="tb-right">`
+		// allow-any-unicode-next-line
+		+ `<button class="tb-ai" data-ask-ai title="Ask AI">&#10022; Ask AI</button>`
+		+ `<button class="tb-props${input.properties?.open ? ' on' : ''}" data-props-toggle title="Properties"><span class="tb-props-glyph">&#9776;</span>Properties</button>`
 		// Honest save/version chip (plan 26 iter 4): `Saved` after persist (the RUNTIME flips it to
 		// `Saving...` during the 300ms debounce window), plus `&middot; vN` when the document has saved
 		// versions - N is the real snapshot count from the lock, never the fabricated v14. In the web dev
@@ -928,6 +1039,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ (input.ephemeral
 			? `<span class="tb-saved tb-ephemeral" title="Dev harness: this web build keeps your changes in memory only, so they are lost when you reload or close the tab. The desktop app saves to disk.">&#9888; <span class="tb-saved-text">Changes live only in this tab</span></span>`
 			: `<span class="tb-saved"><span class="sdot"></span><span class="tb-saved-text">Saved${(input.snapshotCount ?? 0) > 0 ? ` &middot; v${input.snapshotCount}` : ''}</span></span>`)
+		+ `</span>`
 		+ `</div>`
 		: '';
 
@@ -976,7 +1088,13 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	const reviewBar = (!!doc && isPm)
 		? docReviewBar(pending.length, input.totalPendingCount ?? pending.length, input.nextChangedDocTitle)
 		: '';
-	return { html: `${rawTop}${docToolbar}${reviewBar}${body}${hint}${modal}`, pmMd, pmDeco };
+	// The Properties panel (plan 45 pin 12): the inset panel is a sibling fixed to the card's right edge, and
+	// `props-open` on the content wrapper re-centres the reading column (P12.6). Present only in PM mode where
+	// the editor supplied panel state; absent otherwise so raw mode / screens stay unchanged.
+	const props = input.properties;
+	const propsPanel = props?.open ? props.html : '';
+	const wrapClass = props?.open ? ' class="props-open"' : '';
+	return { html: `<div${wrapClass}>${rawTop}${docToolbar}${reviewBar}${body}${hint}${propsPanel}${modal}</div>`, pmMd, pmDeco };
 }
 
 // The full webview document: the calm chrome + the dynamic content in a persistent #lwd-root, the vendored
