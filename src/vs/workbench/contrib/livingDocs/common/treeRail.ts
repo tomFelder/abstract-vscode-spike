@@ -348,15 +348,24 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
  * Narrow the Files tree to the rows whose label matches `query` (case-insensitive substring), keeping every
  * ancestor folder of a match so the match stays reachable in place - the type-to-filter that folds the old
  * Search tab into Files (P4.2). A blank query returns the tree unchanged. A folder whose own name matches is
- * kept whole (all its rows), so filtering by a folder name reveals that folder's contents. Pure - the DOM
- * view feeds it the built node tree and re-renders with the pruned result; no widget state is touched here.
+ * kept whole (all its rows), so filtering by a folder name reveals that folder's contents.
+ *
+ * `bodyMatchResources` restores the old Search tab's body-content reach (P4.2): its keys are the
+ * `resource.toString()` of documents whose *body text* matched the query (computed by the view via
+ * `searchTreeRail`, so the title-OR-body matching lives in exactly one place). A document leaf is kept when
+ * its label matches OR its resource is in that set, so a doc findable only by a body phrase still surfaces in
+ * the tree (as a plain row - the tree has no inline snippet affordance). Pure - the DOM view feeds it the
+ * built node tree and re-renders with the pruned result; no widget state is touched here.
  */
-export function filterTreeRailNodes(nodes: readonly ITreeRailNode[], query: string): ITreeRailNode[] {
+export function filterTreeRailNodes(nodes: readonly ITreeRailNode[], query: string, bodyMatchResources: ReadonlySet<string> = new Set()): ITreeRailNode[] {
 	const q = query.trim().toLowerCase();
 	if (!q) { return [...nodes]; }
 	const prune = (node: ITreeRailNode): ITreeRailNode | undefined => {
 		if (node.type === 'leaf') {
-			return node.item.label.toLowerCase().includes(q) ? node : undefined;
+			if (node.item.label.toLowerCase().includes(q)) { return node; }
+			// A document whose body text matched (per `searchTreeRail`) is kept even though its label does not,
+			// so a phrase that only appears in the body still finds the doc - the old Search tab's reach.
+			return node.item.resource && bodyMatchResources.has(node.item.resource.toString()) ? node : undefined;
 		}
 		// A folder whose own name matches is kept whole so its rows stay visible; otherwise keep only the
 		// branches that still hold a match, dropping folders that prune down to nothing.

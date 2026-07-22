@@ -426,4 +426,42 @@ suite('treeRail', () => {
 			},
 		);
 	});
+
+	test('filterTreeRailNodes keeps a document matched only by body text (P4.2 content reach)', () => {
+		// Two docs whose labels do NOT contain "primary colour" - the phrase only lives in Board Note's body. The
+		// view resolves the body-match set via `searchTreeRail`, then feeds the leaf resources to the filter, which
+		// must surface Board Note (kept via bodyMatchResources) while a term in no label or body prunes to nothing.
+		const boardResource = URI.file('/ws/reports/Board Note.md');
+		const nodes = buildTreeRailNodes([
+			{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), pendingCount: 0, sources: [], folder: 'reports/2025' },
+			{ title: 'Board Note', resource: boardResource, pendingCount: 0, sources: [], folder: 'reports' },
+		]);
+		const labels = (roots: readonly ITreeRailNode[]): string[] => {
+			const out: string[] = [];
+			const walk = (n: ITreeRailNode): void => n.type === 'leaf' ? void out.push(n.item.label) : n.children.forEach(walk);
+			roots.forEach(walk);
+			return out.sort();
+		};
+		// The body-match set the view derives from `searchTreeRail` for a given query - always recomputed per query,
+		// so the tree filter and the set agree. Only Board Note's body carries "primary colour"; nothing carries "zzz".
+		const bodySet = (query: string) => new Set(searchTreeRail(
+			[
+				{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), body: 'Revenue grew this week.' },
+				{ title: 'Board Note', resource: boardResource, body: 'The brand refresh keeps the primary colour unchanged.' },
+			],
+			query,
+		).map(hit => hit.resource.toString()));
+		assert.deepStrictEqual(
+			{
+				bodyPhrase: labels(filterTreeRailNodes(nodes, 'primary colour', bodySet('primary colour'))),
+				noBodySet: filterTreeRailNodes(nodes, 'primary colour').length,
+				unmatched: filterTreeRailNodes(nodes, 'zzz', bodySet('zzz')).length,
+			},
+			{
+				bodyPhrase: ['Board Note'],
+				noBodySet: 0,
+				unmatched: 0,
+			},
+		);
+	});
 });

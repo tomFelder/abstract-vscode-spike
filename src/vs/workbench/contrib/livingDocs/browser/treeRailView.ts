@@ -31,7 +31,7 @@ import { IHistoryService } from '../../../services/history/common/history.js';
 import { buildContextGroups } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, TreeRailAction } from '../common/treeRail.js';
+import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 
 // Three calm tabs (pin 4): Search is gone as a tab - it folds into Files as type-to-filter (P4.1/P4.2).
@@ -252,8 +252,12 @@ export class TreeRailView extends ViewPane {
 		const container = this._filesTreeContainer!;
 		append(panel, container);
 
-		// Narrow the rows to the active filter (P4.2): a blank filter shows the whole tree unchanged.
-		const visible = filterTreeRailNodes(nodes, this._filter);
+		// Narrow the rows to the active filter (P4.2): a blank filter shows the whole tree unchanged. The filter
+		// matches a row's label AND - restoring the old Search tab's reach - a document's body text: `searchTreeRail`
+		// (the single home of title-OR-body matching) resolves the docs whose body contains the query, and the tree
+		// keeps those doc rows even when their label does not match, so a body-only phrase still finds the document.
+		const bodyMatches = this._bodyMatchResources(documents);
+		const visible = filterTreeRailNodes(nodes, this._filter, bodyMatches);
 		if (!visible.length) {
 			// The filter matched nothing: keep the tree mounted but empty and say so, so the input stays live.
 			tree.setChildren(null, []);
@@ -287,6 +291,17 @@ export class TreeRailView extends ViewPane {
 			input.focus();
 			input.setSelectionRange(this._filter.length, this._filter.length);
 		}
+	}
+
+	// The set of documents whose *body text* matches the active filter (P4.2, the folded-in Search's content
+	// reach): reuse `searchTreeRail` - the single home of title-OR-body matching - over the loaded document
+	// bodies, and project its hits down to the `resource.toString()` keys the tree filter checks. A blank filter
+	// short-circuits to the empty set (no body work when nothing is typed); an unloaded document contributes an
+	// empty body, so it matches only by title, exactly as the old Search tab behaved.
+	private _bodyMatchResources(documents: readonly ILivingDocSummary[]): Set<string> {
+		if (!this._filter.trim()) { return new Set(); }
+		const docs = documents.map(d => ({ title: d.title, resource: d.resource, body: this._livingDocs.getDoc(d.resource)?.body ?? '' }));
+		return new Set(searchTreeRail(docs, this._filter).map(hit => hit.resource.toString()));
 	}
 
 	// The MRU document resources for the "Recent" group (issue #212): walk the editor history newest-first and
@@ -785,7 +800,7 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-panel.rail-panel-files{display:flex;flex-direction:column;overflow:hidden;padding:6px 4px}
 		.living-docs-rail .rail-files-tree{flex:1;min-height:0}
 		.living-docs-rail .rail-files-tree .rail-tree-folder{display:flex;align-items:center;height:100%;min-width:0}
-		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 11px/1 system-ui;color:var(--vscode-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:7px;height:100%;min-width:0;font:400 13px/1.3 system-ui;color:var(--vscode-foreground)}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:var(--vscode-descriptionForeground);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px}
 		.living-docs-rail .rail-files-tree .rail-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:9px;height:9px}
