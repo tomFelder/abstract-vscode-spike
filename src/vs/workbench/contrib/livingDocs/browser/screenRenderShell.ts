@@ -22,6 +22,7 @@ import { renderTemplates } from './screenRenderTemplates.js';
 import { renderKnowledge } from './screenRenderKnowledge.js';
 import { renderAgents } from './screenRenderAgents.js';
 import { renderSettings, renderOnboarding, renderProjectRun, renderReviewProject } from './screenRenderMisc.js';
+import { POLICY_EDITOR_STYLE } from './policyEditorRender.js';
 
 export type ScreenId = 'home' | 'templates' | 'knowledge' | 'agents' | 'project-run' | 'review-project' | 'settings' | 'onboarding';
 
@@ -115,8 +116,15 @@ export interface IScreenState {
 	 * "From sources..." birth picker (F17) and the example set for the from-examples template wizard (F18).
 	 */
 	readonly docFiles?: readonly string[];
-	/** Agents: the live registry (drives the table + canvas). */
+	/** Agents: the live registry (drives the cards + canvas). */
 	readonly agents: readonly IAgentDef[];
+	/**
+	 * Agents (plan 49-b A2.3): the workspace model id the agents run on, from the broker catalogue (pin 14).
+	 * The "runs on" footer of every card shows it - one workspace model drives every agent (the registry has
+	 * no per-agent model), so this is a single resolved id. Absent when the broker is unreachable (an empty
+	 * catalogue): the footer then omits the model id rather than fabricating one.
+	 */
+	readonly agentModelId?: string;
 	/** Agents: the agent whose workflow canvas is open (vs the list). */
 	readonly openAgentId?: string;
 	/** Agents: the active table filter chip. */
@@ -465,6 +473,9 @@ body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;bac
 .tpl-filter{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:9px;border:1px solid #E9EAEE;background:#FBFCFD;width:240px}
 .tpl-filter input{flex:1;min-width:0;border:none;background:none;outline:none;font:400 12.5px/1 system-ui;color:#1A1C20}
 .tpl-filter input::placeholder{color:#A3A8B2}
+/* The shared plain-language policy editor (spec 3.4): the Agents card's Edit policy opens the SAME component
+ * the doc Properties panel uses, so its one stylesheet is inlined here too (plan 49-b A2.3, principle P2). */
+${POLICY_EDITOR_STYLE}
 </style>`;
 
 // Generic message bridge: any element with data-msg posts {type:<msg>, arg:<data-arg>, block:<data-block>} to
@@ -593,6 +604,28 @@ for (const el of document.querySelectorAll('[data-tweak-save]')) {
 // post their message on change with the element's live value; the host writes it and re-renders.
 for (const el of document.querySelectorAll('[data-change-msg]')) {
 	el.addEventListener('change', () => vscode.postMessage({ type: el.getAttribute('data-change-msg'), arg: el.getAttribute('data-arg') || undefined, value: el.value }));
+}
+// Agent card policy (plan 49-b A2.3): the "Edit policy" link toggles the SHARED policy editor open beneath
+// the footer (the same component the doc Properties panel hosts). No host round-trip to open - purely client
+// side so the card does not flash. The card id sits on the wrapper via data-agent-policy.
+for (const el of document.querySelectorAll('[data-agent-policy-edit]')) {
+	el.addEventListener('click', (e) => {
+		e.preventDefault(); e.stopPropagation();
+		const card = el.closest('[data-agent-card]'); if (!card) { return; }
+		const box = card.querySelector('[data-agent-policy-box]'); if (!box) { return; }
+		box.style.display = box.style.display === 'none' ? 'block' : 'none';
+	});
+}
+// Agent card policy (plan 49-b A2.3): a click on a [data-policy] row inside the SHARED editor reads the chosen
+// three-tier level AND its container's data-policy-editor (the agent id), then posts one setAgentPolicyLevel
+// message. The host maps the level back onto the legacy dial through the store (semantics unchanged). This is
+// the SAME delegation contract the doc editor uses for the Properties panel, so the DOM component is identical.
+for (const el of document.querySelectorAll('[data-agent-card] [data-policy]')) {
+	el.addEventListener('click', (e) => {
+		e.stopPropagation();
+		const group = el.closest('[data-policy-editor]');
+		vscode.postMessage({ type: 'setAgentPolicyLevel', arg: group ? group.getAttribute('data-policy-editor') : undefined, value: el.getAttribute('data-policy') });
+	});
 }
 // The trigger editor's Save button gathers its sibling picker fields (kind + cron day/time or heartbeat hours)
 // and posts one setAgentTrigger message with a composed value string the host parses.

@@ -12,6 +12,8 @@ import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
 import { AgentPolicy, bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAgentRun, IAgentTrigger, IProposedChange, ISkillRunSummary, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
+import { coerceDocPolicy } from '../common/docPolicy.js';
+import { coerceAgentPolicyFromLevel } from '../common/agentPolicyGrammar.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
@@ -28,7 +30,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateCard, ITemplateInfo, ITidyPlanItem } from '../common/livingDocs.js';
-import { HeaderPillKind, IAbstractHeaderContent, IAbstractHeaderService } from '../common/abstractHeader.js';
+import { HeaderPillKind, IAbstractHeaderContent, IAbstractHeaderService, IHeaderPill } from '../common/abstractHeader.js';
 import { projectHasLivingSurface } from '../common/livingUpgrade.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { buildAwayFeed, classifyProjectChat, IAwayFeed, relativeTime } from '../common/projectHomeFeed.js';
@@ -68,6 +70,9 @@ interface IScreenEditorState {
 	// the run strip persists across re-renders until the drawer is closed/re-opened. The run log itself is read
 	// live from the service each render (like the agent registry), so it is not carried here.
 	skillRun?: ISkillRunSummary;
+	// Agents (plan 49-b A2.3): the workspace model id the agents run on (broker catalogue, pin 14), fetched
+	// async on open. The card footer's "runs on" shows it; absent (empty catalogue) degrades to no model id.
+	agentModelId?: string;
 	// Home: the documents discovered in the open folder (fetched async; the folder name is read live at render).
 	docs?: readonly ILivingDocSummary[];
 	// Templates: the `*.template.md` files discovered in the open folder (plan 28); fetched async on open and
@@ -271,6 +276,16 @@ export class ScreenEditor extends EditorPane {
 				this._livingDocs.getFolderDataFiles(),
 			]);
 			this._state = { ...this._state, sources, docs, dataFiles, knNow: Date.now() };
+		}
+		// Agents (plan 49-b): fetch the project's real source registry (so a card's "watching N sources" counts
+		// the true registry) and the workspace model id (the card footer's "runs on") before the first render,
+		// so neither reads a placeholder. Both are real: an empty catalogue omits the model id (footer degrades).
+		if (this._screen === 'agents') {
+			const [sources, agentModelId] = await Promise.all([
+				this._livingDocs.listSources(),
+				this._livingDocs.getSelectedModelId(),
+			]);
+			this._state = { ...this._state, sources, agentModelId };
 		}
 		// Settings (plan 35 iter 4): fetch the live model door + usage before the first render so the provider
 		// card shows the real state (which door serves you, today's included usage), no flash.
@@ -691,6 +706,15 @@ export class ScreenEditor extends EditorPane {
 				break;
 			case 'setAgentPolicy':
 				if (message.arg && message.value) { void this._livingDocs.setAgentPolicy(message.arg, message.value as AgentPolicy); }
+				break;
+			// Agent card Edit policy (plan 49-b A2.3): the SHARED three-tier policy editor posts a display level
+			// (auto-apply / ask-first / never); map it back onto the closest legacy dial the router reads and
+			// persist through the existing store seam (semantics unchanged). onDidChange re-renders the card.
+			case 'setAgentPolicyLevel':
+				if (message.arg && typeof message.value === 'string') {
+					const level = coerceDocPolicy(message.value);
+					void this._livingDocs.setAgentPolicy(message.arg, coerceAgentPolicyFromLevel(level));
+				}
 				break;
 			case 'setAgentTrigger':
 				if (message.arg && message.value) { void this._setAgentTrigger(message.arg, message.value); }
@@ -1420,13 +1444,20 @@ export class ScreenEditor extends EditorPane {
 				};
 				break;
 			case 'agents': {
-				// Agent-health pill: the count of active (enabled) agents, truthful from the live registry.
-				const active = this._livingDocs.getAgents().filter(a => !a.disabled).length;
+				// Agent-health pill (A1.1): real agent health from the live registry - "N agent(s) active" when
+				// any is enabled, the honest "all paused" when there are agents but every one is disabled, and no
+				// pill at all when the registry is empty (nothing to report).
+				const agents = this._livingDocs.getAgents();
+				const active = agents.filter(a => !a.disabled).length;
+				let agentPill: IHeaderPill | undefined;
+				if (active > 0) {
+					agentPill = { kind: HeaderPillKind.AgentHealth, label: active === 1 ? localize("livingDocs.header.oneAgentActive", "1 agent active") : localize("livingDocs.header.nAgentsActive", "{0} agents active", active) };
+				} else if (agents.length > 0) {
+					agentPill = { kind: HeaderPillKind.AgentHealth, label: localize("livingDocs.header.allPaused", "all paused") };
+				}
 				content = {
 					breadcrumb: localize("livingDocs.header.agents", "Agents"),
-					pill: active > 0
-						? { kind: HeaderPillKind.AgentHealth, label: active === 1 ? localize("livingDocs.header.oneAgentActive", "1 agent active") : localize("livingDocs.header.nAgentsActive", "{0} agents active", active) }
-						: undefined,
+					pill: agentPill,
 					showRailToggles: false,
 				};
 				break;
