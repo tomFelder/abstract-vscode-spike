@@ -115,7 +115,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 			request: async () => ({ res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString('{}')) }),
 		} as unknown as IRequestService;
 
-		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const editorService = { openEditor: async () => undefined, onDidActiveEditorChange: Event.None } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
@@ -249,7 +249,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 				return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))) };
 			},
 		} as unknown as IRequestService;
-		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const editorService = { openEditor: async () => undefined, onDidActiveEditorChange: Event.None } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
@@ -335,7 +335,7 @@ suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
 				return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))) };
 			},
 		} as unknown as IRequestService;
-		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const editorService = { openEditor: async () => undefined, onDidActiveEditorChange: Event.None } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		const configurationService = { getValue: () => true } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;

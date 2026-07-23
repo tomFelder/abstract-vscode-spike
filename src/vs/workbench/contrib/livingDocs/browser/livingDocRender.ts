@@ -178,8 +178,9 @@ html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-fami
 .pcell{min-width:0}
 /* A source-bound figure inline in the prose: the comp's faint-blue highlight + underline, so the reader
  * sees exactly which words are live (the PM bound_figure atom node renders as span.bound). Clicking one
- * peeks its source. */
-.bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px;cursor:pointer}
+ * peeks its source. Styled per spec 43 pin 10 (regression-hold): text #4650B8/500, a 2px dotted #9AA2E0
+ * underline, over the faint accent highlight. */
+.bound{background:rgba(80,110,235,.08);color:#4650B8;font-weight:500;border-bottom:2px dotted #9AA2E0;border-radius:2px;padding:0 2px;cursor:pointer}
 .bound:hover{background:rgba(80,110,235,.16)}
 /* The applied-flash keyframe is reused by the PM provenance gutter's recently-changed marker. */
 @keyframes flash{0%{background:rgba(31,122,68,.34)}100%{background:rgba(31,122,68,.09)}}
