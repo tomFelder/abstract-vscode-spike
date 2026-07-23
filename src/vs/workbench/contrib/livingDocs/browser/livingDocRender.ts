@@ -178,8 +178,9 @@ html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-fami
 .pcell{min-width:0}
 /* A source-bound figure inline in the prose: the comp's faint-blue highlight + underline, so the reader
  * sees exactly which words are live (the PM bound_figure atom node renders as span.bound). Clicking one
- * peeks its source. */
-.bound{background:rgba(80,110,235,.08);border-bottom:1.5px solid oklch(0.6 0.1 255);border-radius:2px;padding:0 2px;cursor:pointer}
+ * peeks its source. Styled per spec 43 pin 10 (regression-hold): text #4650B8/500, a 2px dotted #9AA2E0
+ * underline, over the faint accent highlight. */
+.bound{background:rgba(80,110,235,.08);color:#4650B8;font-weight:500;border-bottom:2px dotted #9AA2E0;border-radius:2px;padding:0 2px;cursor:pointer}
 .bound:hover{background:rgba(80,110,235,.16)}
 /* The applied-flash keyframe is reused by the PM provenance gutter's recently-changed marker. */
 @keyframes flash{0%{background:rgba(31,122,68,.34)}100%{background:rgba(31,122,68,.09)}}
@@ -289,7 +290,9 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .srcdrawer table{width:100%;border-collapse:collapse;font:400 12px/1.5 'JetBrains Mono',ui-monospace,monospace}
 .srcdrawer th{text-align:left;padding:7px 9px;font-weight:600;color:#a3a8b2;border-bottom:1px solid #e9eaee}
 .srcdrawer td{padding:6px 9px;border-bottom:1px solid #f4f5f7;color:#2c2f36}
-.srcdrawer tr.sel td{background:#fef6e9;box-shadow:inset 2px 0 0 oklch(0.66 0.16 45);font-weight:600}
+/* The referenced/latest row (pin 10): accent-tint, matching the canonical selected-row treatment used
+ * across the surface (Files rail, source-editor grid) - never amber. Amber is reserved for CHANGED state. */
+.srcdrawer tr.sel td{background:#F4F5FD;box-shadow:inset 2px 0 0 #4650B8;font-weight:600}
 .srcdrawer .sp-sec{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.06em;color:#a3a8b2;text-transform:uppercase;margin:2px 0 7px}
 .srcdrawer .sp-sec:not(:first-child){margin-top:16px}
 .srcdrawer table.sp-grid{font-size:11.5px}
@@ -302,7 +305,10 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .srcdrawer .sp-field{background:#fef0d6;box-shadow:inset 0 -1px 0 oklch(0.66 0.16 45);border-radius:2px;padding:0 2px;font-weight:600;color:#8a5a12}
 .srcdrawer .sp-ref{display:flex;align-items:center;gap:7px;font:400 12.5px/1.6 system-ui;color:#52575f}
 .srcdrawer .sp-drift{margin:0 0 8px;font:500 11px/1.5 system-ui;color:#9a6b16}
-.srcdrawer tr.changed td{background:#fffaf1}
+/* CHANGED state (drift) keeps its own truthful cream. When a row is BOTH referenced and changed, the
+ * changed background wins (two backgrounds would clash) while the accent inset rail from .sel is kept, so
+ * the row reads as "referenced AND drifted" - cream field + accent rail + the then->now amber cell. */
+.srcdrawer tr.changed td,.srcdrawer tr.sel.changed td{background:#fffaf1}
 .srcdrawer .sp-then{color:#a3a8b2;text-decoration:line-through}
 .srcdrawer .sp-arrow{color:#a3a8b2;padding:0 2px}
 .srcdrawer .sp-now{color:#8a5a12;font-weight:600}
@@ -435,6 +441,16 @@ textarea.raw:focus{outline:none;border-color:${ACCENT}}
 .lwd-tip .tip-meta{color:#b7bcc6;margin-top:1px}
 .lwd-tip .tip-stale{display:flex;align-items:center;gap:6px;margin-top:5px;color:#f0b968;font-weight:500}
 .lwd-tip .tip-stale::before{content:"";width:6px;height:6px;border-radius:50%;background:oklch(0.66 0.16 45);flex:none}
+/* Then-vs-now peek (#122 F13): the value at bind time struck through, an arrow, and the source's live value in
+ * warm amber - the same then/now grammar the source drawer uses, so hover and drawer read identically. */
+.lwd-tip .tip-then{margin-top:6px;padding-top:6px;border-top:1px solid #33373f;font:400 11.5px/1.5 'JetBrains Mono',ui-monospace,monospace}
+.lwd-tip .tn-lab{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#8a8f99}
+.lwd-tip .tn-then{color:#b7bcc6;text-decoration:line-through}
+.lwd-tip .tn-arrow{color:#8a8f99;padding:0 1px}
+.lwd-tip .tn-now{color:#f0b968;font-weight:600}
+/* An api/mcp value whose live reading was unavailable: name the fallback plainly, never dressed as current. */
+.lwd-tip .tip-fallback{margin-top:6px;padding-top:6px;border-top:1px solid #33373f;color:#b7bcc6;font-size:11.5px;line-height:1.5}
+.lwd-tip .tn-kind{display:inline-block;margin-right:5px;font:600 9px/1.4 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#8a8f99}
 /* Table cell editing (issue #140): the GFM table_block renders as a static, contenteditable=false atom.
  * An in-place edit affordance sits OVER it - a fixed-position input over the clicked cell, plus a small
  * floating row/column toolbar - so a cell can be edited and rows/cols added without the node-select
@@ -600,7 +616,18 @@ function showTip(el, key){ const p = _prov[key]; if (!p) { return; } if (!_tip) 
 	// The ONE freshness vocabulary (#122 F12): the hover-peek leads with "Stale" so the tooltip agrees with the
 	// Knowledge table + drawer + tree meta, then names what drifted in plain words.
 	const stale = p.fresh ? '' : '<div class="tip-stale">Stale &middot; source changed since last sync</div>';
-	_tip.innerHTML = '<div class="tip-src">' + tipEsc(p.source) + '</div><div class="tip-meta">' + loc + tipEsc(p.synced) + '</div>' + stale;
+	// The then-vs-now peek (#122 F13): when a stale source has a readable live value that drifted, show
+		// "then -> now" so the reader sees the value at bind time versus what the source says now - the same
+		// vocabulary the source drawer uses. For an api/mcp binding whose live value could NOT be fetched, name
+		// the fallback plainly (never dress the last-synced value up as the current reading). A fresh binding
+		// shows neither line: it still equals its applied value, so there is nothing to compare.
+		let thenNow = '';
+		if (p.now !== undefined) {
+			thenNow = '<div class="tip-then"><span class="tn-lab">then</span> <span class="tn-then">' + tipEsc(p.then) + '</span> <span class="tn-arrow">&rarr;</span> <span class="tn-lab">now</span> <span class="tn-now">' + tipEsc(p.now) + '</span></div>';
+		} else if (p.fallback) {
+			thenNow = '<div class="tip-fallback"><span class="tn-kind">' + tipEsc((p.kind || '').toUpperCase()) + ' fallback</span> ' + tipEsc(p.fallback) + '</div>';
+		}
+		_tip.innerHTML = '<div class="tip-src">' + tipEsc(p.source) + '</div><div class="tip-meta">' + loc + tipEsc(p.synced) + '</div>' + stale + thenNow;
 	const box = el.getBoundingClientRect();
 	// Measure then place above the figure (or below when it would clip the top of the viewport).
 	_tip.classList.add('show');

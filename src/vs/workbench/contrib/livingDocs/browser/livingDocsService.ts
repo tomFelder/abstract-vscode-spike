@@ -715,6 +715,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (state) { for (const key of Object.keys(state.lock.bindings)) { out.set(key, state.lock.bindings[key].resolved); } }
 		return out;
 	}
+	getCurrentValues(resource: URI): ReadonlyMap<string, string> | undefined {
+		// The last freshness recompute's live re-resolved value per bind key (the "now" of the F13 then-vs-now
+		// peek). Distinct from `getResolved`, which returns the lock's APPLIED value (the "then"). Undefined
+		// until the first recompute; a stale api/mcp key ABSENT here (the proxy could not fetch it) drives the
+		// peek's fallback naming rather than a fabricated current reading.
+		return this._docs.get(resource.toString())?.current;
+	}
 	getLock(resource: URI): ILivingDocLock | undefined { return this._docs.get(resource.toString())?.lock; }
 	getFreshness(resource: URI): IFreshness {
 		const state = this._docs.get(resource.toString());

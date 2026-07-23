@@ -796,6 +796,12 @@ export interface ILivingDocsService {
 	getRawText(resource: URI): string;
 	/** The resolved value of each bind key for a document (mirrors the lock's resolved values). */
 	getResolved(resource: URI): ReadonlyMap<string, string>;
+	/**
+	 * The last freshness recompute's live re-resolved value per bind key (the "now" of the F13 then-vs-now
+	 * peek), distinct from `getResolved` (the applied "then"). Undefined until the first recompute; a stale
+	 * api/mcp key absent from the map (the live fetch was unavailable) drives the peek's fallback naming.
+	 */
+	getCurrentValues(resource: URI): ReadonlyMap<string, string> | undefined;
 	/** The document's lock (dependency graph + provenance ledger), if loaded. */
 	getLock(resource: URI): ILivingDocLock | undefined;
 	/** The cheap always-on staleness signal: which bindings/context changed since last sync/review. */
