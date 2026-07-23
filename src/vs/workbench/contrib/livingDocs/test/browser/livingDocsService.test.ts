@@ -244,6 +244,11 @@ suite('livingDocs Service', () => {
 	// Injected by createService so a test can drive the same watcher seam the real file service provides, with
 	// no global stub or private-field reach-in (the repo test learning).
 	let simulateExternalEdit: ((resource: URI, content: string) => void) | undefined;
+	// External-edit floor (issue #133): change the file on disk WITHOUT delivering a watcher event yet - the real,
+	// legitimate state where a save races an outside edit before the (async) watcher fires. It is exactly what the
+	// pre-write guard exists to catch, so a test can exercise that guard deterministically without the watcher
+	// notice racing ahead and deduping it.
+	let writeExternalNoWatcher: ((resource: URI, content: string) => void) | undefined;
 
 	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
@@ -335,6 +340,7 @@ suite('livingDocs Service', () => {
 			files.set(resource.toString(), content);
 			for (const e of watchers.get(resource.toString()) ?? []) { e.fire(undefined); }
 		};
+		writeExternalNoWatcher = (resource: URI, content: string) => { files.set(resource.toString(), content); };
 
 		// `activeEditor` tracks the last opened editor that carries a resource, so the service reads the same
 		// "current document" a user would after opening one (used by save-as-template, plan 48 T2.5).
@@ -585,7 +591,8 @@ suite('livingDocs Service', () => {
 		await service.refreshFromSources(WEEKLY);
 
 		const onDisk = lastFiles!.get(WEEKLY.toString());
-		const notice = lastNotifications.find(n => /changed on disk since you opened it/.test(n.message));
+		// A reload/keep notice is up (from the persist guard, or the watcher for the same conflict - deduped to one).
+		const notice = lastNotifications.find(n => /changed on disk since you opened it|changed outside Abstract/.test(n.message));
 		assert.deepStrictEqual({ preserved: onDisk === external, prompted: !!notice }, { preserved: true, prompted: true });
 	});
 
@@ -620,6 +627,68 @@ suite('livingDocs Service', () => {
 		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
 		const conflict = lastNotifications.find(n => /changed outside Abstract|changed on disk since you opened it/.test(n.message));
 		assert.deepStrictEqual({ persisted: onDisk.includes('[$48.6k](bind:metrics.mrr)'), falsePositive: !!conflict }, { persisted: true, falsePositive: false });
+	});
+
+	test('a live-typed silent save over an externally-changed file does NOT write without a choice', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		// The file changes on disk outside Abstract while it is open (watcher not yet delivered - a save races it).
+		const external = WEEKLY_MD.replace('Growth remained steady', 'Edited in Word');
+		writeExternalNoWatcher!(WEEKLY, external);
+		lastNotifications = [];
+
+		// Live ProseMirror typing persists through saveRawText({ silent: true }) - the primary live-editing write path.
+		const typed = WEEKLY_MD.replace('Growth remained steady', 'I am still typing here');
+		await service.saveRawText(WEEKLY, typed, { silent: true });
+
+		const onDisk = lastFiles!.get(WEEKLY.toString());
+		const notice = lastNotifications.find(n => /changed on disk since you opened it/.test(n.message));
+		// The external edit is preserved on disk (not clobbered), the notice is shown, and the typed text is kept in
+		// the editor (in memory) so it is not lost while the user decides.
+		assert.deepStrictEqual(
+			{ diskPreserved: onDisk === external, prompted: !!notice, typedKept: service.getRawText(WEEKLY) === typed },
+			{ diskPreserved: true, prompted: true, typedKept: true });
+	});
+
+	test('after "Keep my version" the first raw-text save writes + audits once, and a NEW external edit re-triggers', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		simulateExternalEdit!(WEEKLY, WEEKLY_MD.replace('Growth remained steady', 'Edited elsewhere'));
+		await new Promise(r => setTimeout(r, 0));
+		// The reviewer keeps the version open in Abstract, then keeps typing (the live-editing path lands the save).
+		lastNotifications.flatMap(n => n.actions?.primary ?? []).find(a => a.label === 'Keep my version')!.run();
+		const typed = WEEKLY_MD.replace('Growth remained steady', 'My kept version');
+		await service.saveRawText(WEEKLY, typed, { silent: true });
+
+		const afterKeep = {
+			wroteOurVersion: (lastFiles!.get(WEEKLY.toString()) ?? '') === typed,
+			auditCount: service.getLock(WEEKLY)!.audit.filter(e => e.action === 'external-overwrite-kept').length,
+		};
+
+		// A genuinely NEW external edit AFTER the kept write re-arms detection (the Keep decision was one-shot).
+		lastNotifications = [];
+		simulateExternalEdit!(WEEKLY, typed.replace('My kept version', 'A second outside edit'));
+		await new Promise(r => setTimeout(r, 0));
+		const reTriggered = lastNotifications.some(n => /changed outside Abstract/.test(n.message));
+
+		assert.deepStrictEqual({ ...afterKeep, reTriggered }, { wroteOurVersion: true, auditCount: 1, reTriggered: true });
+	});
+
+	test('the discard warning fires when live-typed prose is pending and the file changed on disk', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		// The user has typed but the silent save was blocked by an external change, so there is unsaved in-editor work.
+		const external = WEEKLY_MD.replace('Growth remained steady', 'Edited outside');
+		writeExternalNoWatcher!(WEEKLY, external);
+		lastNotifications = [];
+
+		const typed = WEEKLY_MD.replace('Growth remained steady', 'Unsaved live typing');
+		await service.saveRawText(WEEKLY, typed, { silent: true });
+
+		const notice = lastNotifications.find(n => /changed on disk since you opened it/.test(n.message));
+		assert.deepStrictEqual(
+			{ shown: !!notice, warnsDiscard: /Reloading will discard the changes you have here that are not yet saved\./.test(notice?.message ?? '') },
+			{ shown: true, warnsDiscard: true });
 	});
 
 	test('first open bootstraps a lock sidecar from the sources (resolved value, hash, syncedAt, kind)', async () => {
