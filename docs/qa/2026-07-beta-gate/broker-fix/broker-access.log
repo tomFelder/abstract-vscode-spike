@@ -1,0 +1,7 @@
+[lwd-proxy] listening on localhost (dual-stack ::):8090 (backend openrouter, model openai/gpt-4.1-mini)
+[lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$1/user
+[lwd-proxy] GET /healthz from ::ffff:127.0.0.1
+[lwd-proxy] GET /healthz from ::1
+[lwd-proxy] GET /healthz from ::1
+[lwd-proxy] POST /v1/messages from ::1
+[lwd-proxy] /v1/messages backend=openrouter requested="openai/gpt-4.1-mini" resolved=openai/gpt-4.1-mini

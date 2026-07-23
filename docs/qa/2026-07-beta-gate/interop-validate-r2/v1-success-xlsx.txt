@@ -1,0 +1,12 @@
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: POST, GET, OPTIONS
+Access-Control-Allow-Headers: content-type, anthropic-version, anthropic-beta
+Access-Control-Max-Age: 600
+content-type: application/json
+Date: Thu, 23 Jul 2026 05:29:03 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+{"sheets":[{"name":"FY26","fileName":"FY26.csv","csv":"Item,Amount,Change,Date\nRevenue,1234.56,12%,2026-01-15\nAdjustment,-500,-4%,2026-02-01\nNet,734.56,8%,2026-03-31\n","rows":4,"cols":4,"warnings":[]},{"name":"Regions","fileName":"Regions.csv","csv":"Region,Total\nAPAC,1200\nEMEA,900\n","rows":3,"cols":2,"warnings":[]}]}

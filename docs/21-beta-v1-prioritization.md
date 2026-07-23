@@ -94,10 +94,10 @@ rationale and the ordering only.
 7. **D26 onboarding + survey + feedback verb** (#127). (plan 38)
 8. **T1 editor audit** (#128) - the disqualifier check; loop prompt at
    [plans/39-t1-editor-audit-loop.md](plans/39-t1-editor-audit-loop.md); its verdict gates #129/#130.
-   **Status (12 Jul 2026): audit complete — verdict FIX-FIRST, not disqualified.** All 8 areas graded
-   with evidence in [plans/39-verify/t1-findings.md](plans/39-verify/t1-findings.md); six gating
-   findings filed as #137-#142 (Word-list paste, pasted tables, tracked-changes residue, table
-   editing, image paste, undo-across-approve). Verdict + fix order on #128.
+   **Status (23 Jul 2026): re-grade after the fix phase — verdict PROCEED; #128 closed.** All six
+   gating findings (#137-#142) fixed, merged, and live re-verified against main; evidence in
+   `qa/2026-07-beta-gate/t1-regrade/`. The gate over #129/#130 is lifted. Original FIX-FIRST audit
+   record (12 Jul, all 8 areas): [plans/39-verify/t1-findings.md](plans/39-verify/t1-findings.md).
 9. **The data-flow one-pager** (#135) - "what leaves my machine?" in plain words; the
    decision-163 moratorium's one exemption.
 
