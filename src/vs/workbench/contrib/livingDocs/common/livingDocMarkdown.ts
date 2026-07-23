@@ -119,10 +119,13 @@ export function templateSkeletonRows(doc: ILivingDoc, maxRows = 6): ITemplateSke
 			push({ kind: 'slots', slots: chips });
 		}
 	}
-	// A template with no headings and no bound blocks (an unusual, near-empty template) still deserves an
-	// honest skeleton: two plain prose bars, so the thumbnail is never a blank grey box.
-	if (rows.length === 0) {
-		rows.push({ kind: 'prose', widthPct: 88 }, { kind: 'prose', widthPct: 72 });
+	// A near-empty template (no headings, no bound blocks - e.g. a single plain line, or nothing at all)
+	// still deserves an honest skeleton: a couple of plain prose bars, so the thumbnail reads as a document
+	// and never a blank grey box or one lonely bar. Any real rows we did emit are kept; we only top up plain
+	// prose bars until there are at least two.
+	const fallbackWidths = [88, 72];
+	while (rows.length < 2) {
+		rows.push({ kind: 'prose', widthPct: fallbackWidths[rows.length] });
 	}
 	return rows;
 }
