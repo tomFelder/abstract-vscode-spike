@@ -6,7 +6,7 @@
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { addressLabel, IBlockGutterEntry } from '../common/livingDocAddress.js';
-import { isRelativeImageSrc } from '../common/livingDocAssets.js';
+import { isRelativeImageSrc, rewriteMarkdownImageSrcs } from '../common/livingDocAssets.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
@@ -1299,9 +1299,21 @@ pre{background:#f7f7f9;border:1px solid #ececf0;border-radius:8px;padding:14px 1
 blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid #e1e2e8;color:#6a6a73}
 footer{margin-top:48px;padding-top:14px;border-top:1px solid #eee;font:400 11px/1.5 system-ui,sans-serif;color:#a3a8b2}`;
 
-/** Build a standalone, shareable HTML page from a document's current (resolved) state. */
-export function renderExportHtml(doc: ILivingDoc, resolved: ReadonlyMap<string, string> = EMPTY_RESOLVED): string {
-	const body = renderGenericMarkdown(renderExportMarkdown(doc, resolved));
+// Empty image map default: an export with no relative images (or a caller that has not resolved them) still
+// renders, and every relative `![](assets/...)` simply keeps its (unresolvable) path. Passing a resolved map
+// (src -> `data:` URI) is what makes the exported HTML/PDF self-contained (issue #131/#245 D1).
+const EMPTY_IMAGES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * Build a standalone, shareable HTML page from a document's current (resolved) state. When `images` maps a
+ * relative image `src` to a `data:` URI, that image is inlined into the page so the export is self-contained
+ * (no project-folder dependency): the data URI is folded into the Markdown BEFORE it is rendered, so the
+ * sanitising Markdown renderer - which would otherwise strip a relative `src` - keeps the allowed `data:` src
+ * (issue #131/#245 D1). Relative images with no resolved data URI keep their path (named, never silently gone).
+ */
+export function renderExportHtml(doc: ILivingDoc, resolved: ReadonlyMap<string, string> = EMPTY_RESOLVED, images: ReadonlyMap<string, string> = EMPTY_IMAGES): string {
+	const markdown = rewriteMarkdownImageSrcs(renderExportMarkdown(doc, resolved), images);
+	const body = renderGenericMarkdown(markdown);
 	const footer = `<footer>Exported from Abstract &middot; Living Document</footer>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(doc.title)}</title><style>${EXPORT_STYLE}</style></head><body><main class="page">${body}${footer}</main></body></html>`;
 }

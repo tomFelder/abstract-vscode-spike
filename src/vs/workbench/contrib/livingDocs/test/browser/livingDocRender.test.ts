@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { ILivingDocRenderInput, IPresentState, PresentChoice, renderLivingDocContent, renderLivingDocHtml } from '../../browser/livingDocRender.js';
+import { ILivingDocRenderInput, IPresentState, PresentChoice, renderExportHtml, renderLivingDocContent, renderLivingDocHtml } from '../../browser/livingDocRender.js';
 import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange } from '../../common/livingDocsModel.js';
 
@@ -397,5 +397,29 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 			noPmSurfaceInRaw: raw.pmMd === null,
 			wayBack: raw.html.includes('data-apply-raw'),
 		}, { isRawTextarea: true, noPmSurfaceInRaw: true, wayBack: true });
+	});
+});
+
+// The self-contained HTML/PDF export must carry its images inline as data URIs, not a relative `src` the
+// sanitising Markdown renderer strips (which printed broken-image glyphs before issue #131/#245 D1).
+suite('livingDocs export HTML (self-contained images - #131/#245 D1)', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	// A living doc whose body references an imported image at a space-containing path (the docx importer's
+	// real output, e.g. from a document named "Weekly Report.docx").
+	const exportDoc: ILivingDoc = {
+		title: 'Weekly Report', subtitle: 'Week 24',
+		sources: [], context: [], isLiving: true, body: '',
+		blocks: [{ id: 'b1', type: 'paragraph', text: '![chart](assets/Weekly Report/image-1.png)', binds: [] }],
+	};
+	const DATA_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg==';
+
+	test('with a resolved image map the export HTML inlines the data URI (no bare relative src, no broken glyph)', () => {
+		const html = renderExportHtml(exportDoc, new Map(), new Map([['assets/Weekly Report/image-1.png', DATA_URI]]));
+		assert.deepStrictEqual({
+			hasDataUri: html.includes(DATA_URI),
+			hasImg: /<img[^>]*src="data:image\/png;base64,/.test(html),
+			noBareRelativeSrc: !html.includes('assets/Weekly Report/image-1.png'),
+		}, { hasDataUri: true, hasImg: true, noBareRelativeSrc: true });
 	});
 });

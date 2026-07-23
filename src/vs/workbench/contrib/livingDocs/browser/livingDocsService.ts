@@ -32,7 +32,7 @@ import { mainWindow } from '../../../../base/browser/window.js';
 import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
-import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
+import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
@@ -329,37 +329,6 @@ const NEW_TEMPLATE_TEMPLATE = [
  * emits as an `<img src>` and what the docx writer looks up in the image map. Mirrors `matchImageAt` in
  * `scripts/lwd-docx.js`, so both export paths key images identically.
  */
-function matchMarkdownImageAt(text: string, i: number): { readonly src: string; readonly end: number } | undefined {
-	if (text[i] !== '!' || text[i + 1] !== '[') { return undefined; }
-	let j = i + 2;
-	while (j < text.length && text[j] !== ']') { j++; }
-	if (text[j] !== ']' || text[j + 1] !== '(') { return undefined; }
-	j += 2;
-	let src = '';
-	if (text[j] === '<') {
-		j++;
-		while (j < text.length && text[j] !== '>') { src += text[j]; j++; }
-		if (text[j] !== '>') { return undefined; }
-		j++;
-	} else {
-		let depth = 0;
-		while (j < text.length) {
-			const c = text[j];
-			if (c === ')' && depth === 0) { break; }
-			if (/\s/.test(c)) { break; } // whitespace begins an optional title (or is malformed) - the dest ends here
-			if (c === '(') { depth++; }
-			if (c === ')') { depth--; }
-			src += c;
-			j++;
-		}
-	}
-	// Skip an optional title and any trailing whitespace up to the closing paren.
-	while (j < text.length && text[j] !== ')') { j++; }
-	if (text[j] !== ')') { return undefined; }
-	return { src, end: j + 1 };
-}
-
-
 export class LivingDocsService extends Disposable implements ILivingDocsService {
 	declare readonly _serviceBrand: undefined;
 
@@ -2488,8 +2457,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		try {
 			sheets = await this._extractWorkbookInto(workbook);
 		} catch (e) {
+			// Never silent (issue #131/#245 C2): a failed extraction used to log to the console only, leaving the
+			// user with no feedback. Surface it plainly, and distinguish a down broker from a request that failed
+			// while the broker was up (the measured CORS case) so the copy names the true cause.
 			const reason = e instanceof Error ? e.message : String(e);
 			this._log.warn('[livingDocs] workbook extraction failed', reason);
+			if (await this._brokerReachable()) {
+				this._notify.error(`Could not read ${basename(workbook)} - the extraction request failed (${reason}). The workbook was left unchanged.`);
+			} else {
+				this._notify.error(`Could not read ${basename(workbook)} - the local model proxy is not running. Start it and try again. The workbook was left unchanged.`);
+			}
 			return { ok: false, sheets: [], reason };
 		}
 		if (!sheets.length) {
@@ -2584,7 +2561,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}, CancellationToken.None);
 			result = await asJson(context);
 		} catch (e) {
-			return { ok: false, pages: 0, reason: e instanceof Error ? e.message : String(e) };
+			// Never silent (issue #131/#245 C2): name the failure and distinguish a down broker from a request that
+			// failed with the broker up (the measured CORS case), so the copy points at the true cause.
+			const reason = e instanceof Error ? e.message : String(e);
+			if (await this._brokerReachable()) {
+				this._notify.error(`Could not read ${basename(pdf)} - the extraction request failed (${reason}).`);
+			} else {
+				this._notify.error(`Could not read ${basename(pdf)} - the local model proxy is not running. Start it and try again.`);
+			}
+			return { ok: false, pages: 0, reason };
 		}
 		if (!result || result.error) {
 			const reason = result?.error?.message ?? 'The PDF could not be read.';
@@ -2668,7 +2653,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}, CancellationToken.None);
 			response = await asJson(context);
 		} catch (e) {
-			this._log.warn('[livingDocs] docx import: proxy unreachable', e);
+			// Honest diagnosis (issue #131/#245 C2): the POST failing does NOT mean the proxy is down - it was
+			// misdiagnosed that way when the broker was up and the request died on CORS. Only claim the proxy is
+			// down when a quick /healthz also fails to answer; otherwise name it plainly as an import-request
+			// failure and carry the underlying reason so the real cause is visible, never hidden.
+			const detail = e instanceof Error ? e.message : String(e);
+			this._log.warn('[livingDocs] docx import: request failed', e);
+			if (await this._brokerReachable()) {
+				this._notify.info(`"${name}" could not be imported - the import request failed (${detail}).`);
+				return { ok: false, reason: `The import request failed (${detail})` };
+			}
 			this._notify.info('The importer is not running. Start the local model proxy and try again.');
 			return { ok: false, reason: 'The importer is not running' };
 		}
@@ -3589,7 +3583,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._auditGateOverride(state, 'export', gate.flag ?? 'grader flagged');
 			await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] override audit write failed', e));
 		}
-		const html = renderExportHtml(state.doc, this.getResolved(resource));
+		// Inline every relative image as a data URI so the shared Web page is self-contained - no project-folder
+		// dependency, and no broken-image glyphs (issue #131/#245 D1). Reuses the same collector the PDF path uses.
+		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
+		const { images } = await this._collectExportImages(resource, markdown);
+		const html = renderExportHtml(state.doc, this.getResolved(resource), new Map(Object.entries(images)));
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.html`);
 		try {
@@ -3739,13 +3737,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const gate = await this._gateExport(state, force);
 		if (gate.blocked) { this._notify.info(`Export blocked - ${gate.flag}`); return undefined; }
 		// The existing self-contained HTML export IS the PDF's page; images are inlined as data URIs so the
-		// offscreen print has no project-folder dependency (doc 22 section 3: reuse the HTML export, no new renderer).
-		let html = renderExportHtml(state.doc, this.getResolved(resource));
+		// offscreen print has no project-folder dependency (doc 22 section 3: reuse the HTML export, no new
+		// renderer). The data URIs are folded into the Markdown BEFORE render (issue #131/#245 D1) rather than
+		// string-replacing a `src` the sanitising renderer has already stripped - the old approach found no match
+		// and printed broken-image glyphs.
 		const markdown = renderExportMarkdown(state.doc, this.getResolved(resource));
 		const { images } = await this._collectExportImages(resource, markdown);
-		for (const [src, dataUri] of Object.entries(images)) {
-			html = html.split(`src="${src}"`).join(`src="${dataUri}"`);
-		}
+		const html = renderExportHtml(state.doc, this.getResolved(resource), new Map(Object.entries(images)));
 		const stem = basename(resource).replace(/\.md$/, '');
 		const target = joinPath(dirname(resource), `${stem}.export.pdf`);
 		try {
@@ -4551,6 +4549,20 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _modelName(): string {
 		const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
 		return (typeof preferred === 'string' && preferred.length > 0) ? preferred : DEFAULT_MODEL;
+	}
+
+	// Quick liveness check for the interop routes' honest error copy (issue #131/#245 C2). A GET /healthz that
+	// ANSWERS (any status) proves the broker is up, so a failing import/extract POST is a request failure - not
+	// "the proxy is down". Only a probe that throws (never connects) means the broker really is unreachable. This
+	// keeps the diagnosis truthful: the measured misdiagnosis was blaming a down proxy when the broker was up and
+	// the POST died on CORS. Best-effort and never throws; a slow/absent broker resolves to false.
+	private async _brokerReachable(): Promise<boolean> {
+		try {
+			await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/healthz`, callSite: 'livingDocs.interopHealthz', disableCache: true }, CancellationToken.None);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	// The model id to send on a /v1/messages call (issue #179): the user's selected model for the active backend
