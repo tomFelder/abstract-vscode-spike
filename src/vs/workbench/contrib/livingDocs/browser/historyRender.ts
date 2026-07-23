@@ -99,11 +99,11 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 		}
 		// A change row (audit entry): the verb + block, the via + relative time. Not restorable on its own.
 		const e = ev.entry;
-		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'approved' ? (e.via === 'restore' ? 'Restored' : 'Approved') : 'Auto-applied';
+		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'external-overwrite-kept' ? 'Kept your version' : e.action === 'approved' ? (e.via === 'restore' ? 'Restored' : 'Approved') : 'Auto-applied';
 		// The feedback verb (doc 18 section 2.5): "this was wrong" on any APPLIED change (approved or
 		// auto-applied, not a rejection or a restore). Carries only the block id + doc title as the change ref -
 		// the reviewRailView turns the click into a flag + optional comment, logged for the founder + counted.
-		const wrongBtn = (e.action !== 'rejected' && e.via !== 'restore')
+		const wrongBtn = (e.action !== 'rejected' && e.action !== 'external-overwrite-kept' && e.via !== 'restore')
 			? `<button data-wrong="${esc(JSON.stringify({ ref: e.blockId, title: e.docTitle }))}" title="${esc(localize('livingDocs.history.flagWrong.title', "Flag this applied change as wrong"))}" style="margin-left:auto;border:1px solid #eeced0;border-radius:6px;padding:3px 8px;background:#fff;color:#b4332f;font:500 10px/1 system-ui;cursor:pointer">${esc(localize('livingDocs.history.flagWrong.label', "This Was Wrong"))}</button>`
 			: '';
 		return (last: boolean) => timelineRow(dot('#e0e3ea'), verb, '', `${esc(e.docTitle)} / ${esc(e.blockId)}`, `${esc(e.via)} &middot; ${relTime(e.time, now)}`, last, wrongBtn);

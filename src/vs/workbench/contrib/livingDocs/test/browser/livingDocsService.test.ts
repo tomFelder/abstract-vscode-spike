@@ -239,9 +239,17 @@ suite('livingDocs Service', () => {
 	let lastPrintPdfHtml: string | undefined;
 	let pdfCommandBytes: VSBuffer | undefined;
 	let lastDocxBody: string | undefined;
+	// External-edit floor (issue #133): write a file DIRECTLY to the backing map (bypassing the service's own
+	// writeFile) and fire the correlated watcher for it, exactly as an edit made outside Abstract would arrive.
+	// Injected by createService so a test can drive the same watcher seam the real file service provides, with
+	// no global stub or private-field reach-in (the repo test learning).
+	let simulateExternalEdit: ((resource: URI, content: string) => void) | undefined;
 
 	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
+		// Correlated watchers registered per resource (issue #133), so `simulateExternalEdit` can fire the same
+		// change event the real file service delivers for an edit made outside Abstract.
+		const watchers = new Map<string, Emitter<unknown>[]>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
 		files.set(URI.file('/ws/market-research.md').toString(), MARKET_MD);
@@ -312,7 +320,21 @@ suite('livingDocs Service', () => {
 				for (const dir of dirs) { children.push({ resource: URI.parse(dir), isDirectory: true }); }
 				return { children };
 			},
+			// A correlated watcher per resource (issue #133): the service watches a document's own `.md` + lock; a
+			// change fires this emitter. The service's own writes go via `writeFile` (which does NOT fire it), so
+			// only `simulateExternalEdit` below models an edit made outside Abstract.
+			createWatcher: (resource: URI) => {
+				const emitter = new Emitter<unknown>();
+				const list = watchers.get(resource.toString()) ?? [];
+				list.push(emitter);
+				watchers.set(resource.toString(), list);
+				return { onDidChange: emitter.event, dispose: () => { emitter.dispose(); const l = watchers.get(resource.toString()); if (l) { l.splice(l.indexOf(emitter), 1); } } };
+			},
 		} as unknown as IFileService;
+		simulateExternalEdit = (resource: URI, content: string) => {
+			files.set(resource.toString(), content);
+			for (const e of watchers.get(resource.toString()) ?? []) { e.fire(undefined); }
+		};
 
 		// `activeEditor` tracks the last opened editor that carries a resource, so the service reads the same
 		// "current document" a user would after opening one (used by save-as-template, plan 48 T2.5).
@@ -533,6 +555,71 @@ suite('livingDocs Service', () => {
 		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
 		assert.ok(onDisk.includes('[$48.6k](bind:metrics.mrr)'), `persisted resolved value: ${onDisk}`);
 		assert.ok(service.getAudit().some(e => e.action === 'auto-applied'), 'figure auto-apply audited');
+	});
+
+	// --- external-edit floor (issue #133, doc 21 §6): detect an outside edit, offer reload/keep, never clobber ---
+
+	test('an external edit to an open document surfaces the reload/keep notice', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		lastNotifications = [];
+
+		// Someone edits the same file in Word/Obsidian/another machine while it is open in Abstract.
+		simulateExternalEdit!(WEEKLY, WEEKLY_MD.replace('Growth remained steady', 'Growth accelerated'));
+		await new Promise(r => setTimeout(r, 0)); // the watcher handler re-reads + hashes asynchronously
+
+		const notice = lastNotifications.find(n => /changed outside Abstract/.test(n.message));
+		const labels = notice?.actions?.primary?.map(a => a.label) ?? [];
+		assert.deepStrictEqual({ shown: !!notice, labels }, { shown: true, labels: ['Reload from disk', 'Keep my version'] });
+	});
+
+	test('a persist over an externally-changed file does NOT clobber it without a choice', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		// The file changes on disk outside Abstract after it was opened.
+		const external = WEEKLY_MD.replace('Growth remained steady', 'Edited in Obsidian');
+		simulateExternalEdit!(WEEKLY, external);
+		lastNotifications = [];
+
+		// A refresh would normally reconcile + persist; with an undecided external change it must abandon the write.
+		await service.refreshFromSources(WEEKLY);
+
+		const onDisk = lastFiles!.get(WEEKLY.toString());
+		const notice = lastNotifications.find(n => /changed on disk since you opened it/.test(n.message));
+		assert.deepStrictEqual({ preserved: onDisk === external, prompted: !!notice }, { preserved: true, prompted: true });
+	});
+
+	test('after "Keep my version" the next persist lands and appends an external-overwrite-kept audit entry', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		simulateExternalEdit!(WEEKLY, WEEKLY_MD.replace('Growth remained steady', 'Edited elsewhere'));
+		await new Promise(r => setTimeout(r, 0));
+		// The reviewer chooses to keep the version open in Abstract.
+		const keep = lastNotifications.flatMap(n => n.actions?.primary ?? []).find(a => a.label === 'Keep my version');
+		keep!.run();
+
+		await service.refreshFromSources(WEEKLY);
+
+		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
+		const audit = service.getLock(WEEKLY)!.audit;
+		assert.deepStrictEqual({
+			wroteOurVersion: onDisk.includes('[$48.6k](bind:metrics.mrr)') && !onDisk.includes('Edited elsewhere'),
+			audited: audit.some(e => e.action === 'external-overwrite-kept'),
+		}, { wroteOurVersion: true, audited: true });
+	});
+
+	test('our own writes do not false-positive as an external edit', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		lastNotifications = [];
+
+		// A normal refresh reconciles figures and persists - a self-write, which must flow exactly as before.
+		await service.refreshFromSources(WEEKLY);
+		await new Promise(r => setTimeout(r, 0));
+
+		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
+		const conflict = lastNotifications.find(n => /changed outside Abstract|changed on disk since you opened it/.test(n.message));
+		assert.deepStrictEqual({ persisted: onDisk.includes('[$48.6k](bind:metrics.mrr)'), falsePositive: !!conflict }, { persisted: true, falsePositive: false });
 	});
 
 	test('first open bootstraps a lock sidecar from the sources (resolved value, hash, syncedAt, kind)', async () => {
