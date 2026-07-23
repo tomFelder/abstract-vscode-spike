@@ -20,7 +20,7 @@ import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.
 import { IHostService } from '../../../services/host/browser/host.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
-import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { INotificationHandle, INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { toAction } from '../../../../base/common/actions.js';
 import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -102,6 +102,32 @@ interface IDocState {
 	current?: Map<string, string>;
 	status: string;
 	folderFiles: readonly string[]; // real md/csv/json siblings in the doc's folder (for @mention + pickers)
+	// External-edit floor (issue #133, doc 21 section 6): the `.md` content and the exact `.lock.json` text as they
+	// stood on disk at our last settled read/write. A watcher event or pre-persist check whose fresh disk `.md`
+	// and lock match these is our own write echoing back (suppressed); a mismatch is a genuine external edit.
+	// Undefined until the first capture, which also gates the pre-persist guard off (so nothing blocks before
+	// we have a baseline). Captured after load and after every persist - the settled points.
+	diskHash?: string;
+	diskLockText?: string;
+	// Set once the user has answered a conflict notice with "Keep my version": the next persist proceeds
+	// knowingly (and records an audit entry), then clears. Absent = no outstanding external-change decision.
+	keepMine?: boolean;
+	// True while a reload/keep notice is on screen for this document and still unanswered. Dedupes the notice so
+	// repeated keystrokes (each a blocked silent save) do not stack a fresh warning for the same conflict; cleared
+	// when the user answers (Reload or Keep) or the document reloads.
+	noticeUp?: boolean;
+	// True when the editor holds live-typed prose (`state.rawText`) that a blocked silent save could not write to
+	// disk - i.e. there is in-editor work not yet on disk. Drives the "Reloading will discard..." warning honestly
+	// for typing, alongside the agent-proposal queue (`_pending`). Cleared once a save actually lands on disk.
+	unsavedRaw?: boolean;
+	// The live handle for the reload/keep notice while it is on screen (issue #133 F4). Kept so a later false->true
+	// transition of the "has unsaved work" state can close the deduped notice and re-raise it WITH the discard line
+	// (the OS watcher fires first, before any typing, so the first-raised notice has no discard line). Cleared and
+	// closed when the user answers, the document reloads, or the service disposes - so no notification handle leaks.
+	noticeHandle?: INotificationHandle;
+	// True while the currently-shown notice carries the "Reloading will discard..." line. Guards the F4 refresh so we
+	// only close + re-raise on the false->true transition (once), never re-raising a notice that already warns.
+	noticeHasDiscard?: boolean;
 }
 
 const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
@@ -406,6 +432,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// extracted CSVs, not a document source itself, so it needs its own watcher that re-extracts on change.
 	// A DisposableMap so re-registering a workbook disposes the old watcher and disposal tears them all down.
 	private readonly _workbookWatchers = this._register(new DisposableMap<string>());
+	// External-edit floor (issue #133, doc 21 section 6): a correlated watcher on each OPEN document's own `.md` and
+	// its `.lock.json`, so an edit made outside Abstract (Word, Obsidian, another machine, a sync client) is
+	// detected instead of silently clobbered on the next write. Keyed by the document URI in a DisposableMap so
+	// a reload disposes the previous watcher and service disposal tears them all down. Distinct from `_watchers`
+	// (which watches a document's SOURCES/context) - this watches the document file itself.
+	private readonly _docWatchers = this._register(new DisposableMap<string>());
 	// Extraction provenance for CSVs Abstract wrote from a workbook (issue #131), keyed by the CSV's
 	// workspace-relative source path (e.g. "data/Budget/FY26.csv"). Populated on extraction and rebuilt from
 	// the on-disk manifests on folder load, so the provenance drawer can show the figure → CSV → workbook hop
@@ -517,6 +549,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._register(toDisposable(() => {
 			for (const w of this._watchers.values()) { w.dispose(); }
 			this._watchers.clear();
+			// Close any open reload/keep notices so their notification handles do not leak past service disposal.
+			for (const state of this._docs.values()) { this._dismissExternalNotice(state); }
 		}));
 		// Probe the model proxy once at startup so the Skills rail reflects model availability without
 		// waiting for the first model call. Failures are swallowed (the no-model fallback stays intact).
@@ -1787,6 +1821,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._watchers.get(from.toString())?.dispose();
 			this._watchers.delete(from.toString());
 			this._watchSources(moved);
+			// Re-arm the external-edit watcher on the new resource (issue #133); the old key's watcher is disposed.
+			this._docWatchers.deleteAndDispose(from.toString());
+			this._watchDoc(moved);
 		}
 		await this._reopenEditorAt(from, to);
 	}
@@ -1912,8 +1949,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Drop all in-memory state for a deleted document: its watcher, loaded state, and chat history.
 	private _forgetDoc(resource: URI): void {
 		const id = resource.toString();
+		const state = this._docs.get(id);
+		if (state) { this._dismissExternalNotice(state); }
 		this._watchers.get(id)?.dispose();
 		this._watchers.delete(id);
+		this._docWatchers.deleteAndDispose(id);
 		this._docs.delete(id);
 		this._chats.delete(id);
 	}
@@ -2851,6 +2891,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// without a manual refresh, then watch them for later changes.
 			await this._recomputeFreshness(state);
 			this._watchSources(state);
+			// External-edit floor (issue #133): capture the `.md` + lock baseline now and watch the document's own
+			// `.md` + `.lock.json`, so an edit made outside Abstract is detected, not clobbered.
+			await this._captureDiskState(state);
+			this._watchDoc(state);
 		}
 		this._onDidChange.fire();
 	}
@@ -3021,6 +3065,125 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		this._watchers.set(id, store);
+	}
+
+	// --- external-edit floor (issue #133, doc 21 section 6): detect + honestly handle a file changed outside Abstract ---
+
+	// Snapshot the `.md` content and the on-disk `.lock.json` text as our baseline, so a later watcher event or
+	// pre-persist check can tell our own write apart from a genuine external edit. Called at the settled points -
+	// after a load and after a persist - where the in-memory state and disk agree; the `.md` baseline is what we
+	// hold (`state.rawText`), the lock baseline is read straight off disk (it is written through several paths).
+	private async _captureDiskState(state: IDocState): Promise<void> {
+		state.diskHash = hashString(state.rawText);
+		try {
+			state.diskLockText = (await this._files.readFile(lockUriFor(state.uri))).value.toString();
+		} catch {
+			state.diskLockText = undefined; // no sidecar yet (rebuildable, doc 08); a later real one still differs
+		}
+	}
+
+	// Watch an OPEN document's own `.md` and its `.lock.json` for changes made outside Abstract. Correlated
+	// watcher, keyed in `_docWatchers` so a reload disposes the previous one and disposal tears them all down.
+	// Best-effort (no-op where the platform has no watcher, e.g. unit tests - mirrors the `_watchSources` and
+	// `_watchWorkbook` guard). Self-writes are filtered downstream by the content comparison in `_onExternalChange`.
+	private _watchDoc(state: IDocState): void {
+		if (typeof this._files.createWatcher !== 'function') { return; }
+		const store = new DisposableStore();
+		const uri = state.uri;
+		for (const target of [uri, lockUriFor(uri)]) {
+			try {
+				const watcher = store.add(this._files.createWatcher(target, { recursive: false, excludes: [] }));
+				store.add(watcher.onDidChange(() => void this._onExternalChange(uri)));
+			} catch (e) {
+				this._log.trace('[livingDocs] doc watch failed', e instanceof Error ? e.message : String(e));
+			}
+		}
+		this._docWatchers.set(uri.toString(), store);
+	}
+
+	// A watcher fired for the document's `.md` or `.lock.json`. Re-read both from disk and compare them against
+	// our baseline: the `.md` we hold (`state.rawText`) and the lock text we last saw settled (`diskLockText`). A
+	// disk read that matches the baseline is our own write echoing back through the async watcher (or an identical
+	// re-save) - suppress it. Otherwise the file was changed outside Abstract; surface the plain-words reload/keep
+	// notice (once - a `keepMine` decision already in flight is not re-prompted).
+	private async _onExternalChange(uri: URI): Promise<void> {
+		const state = this._docs.get(uri.toString());
+		if (!state || state.keepMine) { return; }
+		let onDiskMd: string;
+		try { onDiskMd = (await this._files.readFile(uri)).value.toString(); } catch { return; /* deleted/unreadable: handled by the delete path, not here */ }
+		let onDiskLock: string | undefined;
+		try { onDiskLock = (await this._files.readFile(lockUriFor(uri))).value.toString(); } catch { onDiskLock = undefined; }
+		const mdChanged = hashString(onDiskMd) !== hashString(state.rawText);
+		const lockChanged = onDiskLock !== undefined && onDiskLock !== state.diskLockText;
+		if (!mdChanged && !lockChanged) { return; }
+		this._promptExternalChange(state, { source: 'watcher' });
+	}
+
+	// The one plain-words notice for an external change - shown by the watcher (already changed) and by a
+	// pre-persist guard (about to clobber). Non-modal, sticky, Australian English, no jargon. "Reload from
+	// disk" re-reads the `.md` + lock and rebuilds editor state through the existing load path; "Keep my
+	// version" leaves the in-editor state and lets the next persist proceed knowingly (recording an audit
+	// entry). If the editor is holding work not yet on disk, the notice says so before offering the reload.
+	private _promptExternalChange(state: IDocState, opts: { readonly source: 'watcher' | 'persist' }): void {
+		// "Unsaved work" is truthful for BOTH surfaces of in-editor work not yet on disk: queued agent proposals
+		// (`_pending`) AND live-typed prose held by a blocked silent save (`unsavedRaw`, issue #133 F4).
+		const hasUnsaved = state.unsavedRaw === true || this._pending.some(c => c.docId === state.uri.toString());
+		// Dedupe (issue #133): one notice per outstanding conflict. A run of keystrokes each blocks a silent save and
+		// would otherwise stack a fresh warning; the flag holds until the user answers (Reload/Keep) or the doc reloads.
+		// F4 refresh: the OS watcher fires FIRST (before any typing), so the first notice has no discard line. When a
+		// later blocked save sets `unsavedRaw`, close the deduped notice and re-raise it WITH the discard line - once,
+		// on the false->true transition only, so a run of keystrokes still never stacks a second notice.
+		if (state.noticeUp) {
+			if (!hasUnsaved || state.noticeHasDiscard) { return; }
+			state.noticeHandle?.close();
+			state.noticeHandle = undefined;
+			state.noticeUp = false;
+		}
+		state.noticeUp = true;
+		state.noticeHasDiscard = hasUnsaved;
+		const name = basename(state.uri);
+		const preamble = opts.source === 'persist'
+			? `"${name}" changed on disk since you opened it.`
+			: `"${name}" was changed outside Abstract.`;
+		const unsavedLine = hasUnsaved ? ' Reloading will discard the changes you have here that are not yet saved.' : '';
+		state.noticeHandle = this._notify.notify({
+			severity: Severity.Warning,
+			message: `${preamble} Reload to take the version on disk, or keep the version you have open.${unsavedLine}`,
+			sticky: true,
+			actions: {
+				primary: [
+					toAction({ id: 'livingDocs.externalEdit.reload', label: 'Reload from disk', run: () => void this._reloadFromDisk(state.uri) }),
+					toAction({ id: 'livingDocs.externalEdit.keep', label: 'Keep my version', run: () => this._keepMyVersion(state.uri) }),
+				],
+			},
+		});
+	}
+
+	// Close the reload/keep notice for a document and clear its dedupe/discard state, so no notification handle
+	// leaks when the conflict is resolved (Keep/Reload) or the document is forgotten/the service disposes.
+	private _dismissExternalNotice(state: IDocState): void {
+		state.noticeHandle?.close();
+		state.noticeHandle = undefined;
+		state.noticeUp = false;
+		state.noticeHasDiscard = undefined;
+	}
+
+	// "Reload from disk": re-read the `.md` and lock and rebuild the loaded state through the ordinary load
+	// path (which also re-captures the disk hashes and re-arms the watchers), then fire so the editor re-renders.
+	private async _reloadFromDisk(uri: URI): Promise<void> {
+		// Close the reload/keep notice (it is being answered) before the reload swaps in a fresh state object,
+		// so the notification handle is disposed rather than orphaned on the old state.
+		const state = this._docs.get(uri.toString());
+		if (state) { this._dismissExternalNotice(state); }
+		await this.loadDocument(uri);
+	}
+
+	// "Keep my version": leave the in-editor state untouched and mark the document so the next persist proceeds
+	// knowingly over the external change (recording an audit entry). The flag clears once that persist lands. The
+	// notice is answered, so clear the dedupe flag - a genuinely NEW external edit later re-arms detection.
+	private _keepMyVersion(uri: URI): void {
+		const state = this._docs.get(uri.toString());
+		if (state) { state.keepMine = true; this._dismissExternalNotice(state); }
 	}
 
 	private _bindingEntry(r: IResolution): IBindingEntry {
@@ -3421,7 +3584,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async saveRawText(resource: URI, text: string, options?: { readonly silent?: boolean }): Promise<void> {
 		const id = resource.toString();
 		const doc = parseLivingDoc(text);
-		const lock = this._docs.get(id)?.lock ?? (await this._lockStore.read(resource)) ?? emptyLock();
+		const prev = this._docs.get(id);
+		const lock = prev?.lock ?? (await this._lockStore.read(resource)) ?? emptyLock();
 		const state: IDocState = {
 			uri: resource,
 			doc,
@@ -3431,17 +3595,58 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			staleBindings: new Set<string>(),
 			staleContext: new Set<string>(),
 			status: doc.isLiving ? 'All sources synced' : 'Markdown',
-			folderFiles: this._docs.get(id)?.folderFiles ?? [],
+			folderFiles: prev?.folderFiles ?? [],
+			// External-edit floor (issue #133): carry the disk baselines and any in-flight "Keep my version" decision
+			// across the state rebuild. Without this, a live-typed silent save would drop `keepMine` (so the knowing
+			// overwrite is never audited) and lose the baseline (so the pre-write guard below has nothing to compare).
+			diskHash: prev?.diskHash,
+			diskLockText: prev?.diskLockText,
+			keepMine: prev?.keepMine,
+			noticeUp: prev?.noticeUp,
+			// Carry the live notice handle + its discard-line state across the rebuild, so a blocked save that sets
+			// `unsavedRaw` can find the watcher-raised notice and refresh it with the discard line (issue #133 F4).
+			noticeHandle: prev?.noticeHandle,
+			noticeHasDiscard: prev?.noticeHasDiscard,
 		};
+		// External-edit floor (issue #133): the primary live-editing write path runs through the SAME guard as
+		// `_persist`. If the `.md` on disk changed outside Abstract since we last settled, and the user has not
+		// chosen to keep their version, do NOT clobber it. The typed text is not lost - it stays in `state.rawText`
+		// (marked unsavedRaw) so the editor keeps it, and the next save after a "Keep" writes it (with the audit
+		// entry). The notice is deduped so a run of keystrokes does not stack a second warning for the same conflict.
+		if (!(await this._diskUnchanged(state)) && !state.keepMine) {
+			state.unsavedRaw = true;
+			this._docs.set(id, state);
+			this._promptExternalChange(state, { source: 'persist' });
+			return;
+		}
+		const overrodeExternal = state.keepMine === true;
+		// After an explicit "Keep my version", record the knowing overwrite on the lock before it is written, so the
+		// decision is auditable from EITHER save path. Exactly one entry per Keep: the flag is cleared on this write.
+		if (overrodeExternal) {
+			state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'external-overwrite-kept', '', `kept the version open in Abstract over an edit made to "${basename(resource)}" outside it`, 'heuristic'));
+		}
 		try {
 			await this._files.writeFile(resource, VSBuffer.fromString(text));
 		} catch (e) {
 			this._log.warn('[livingDocs] raw save failed', e);
 		}
+		// Persist the Keep audit to the on-disk `.lock.json` ATOMICALLY with the `.md` write (issue #133 F3). Without
+		// this the entry lives only in memory: `_bootstrapLock` below early-returns for an already-bootstrapped doc,
+		// so `_lockStore.write` never runs, and the entry only reaches disk on a later unrelated `_persist` - a quit or
+		// reload in that window loses it, so History renders nothing. Mirror `_persist`'s error handling (catch + warn).
+		if (overrodeExternal) {
+			await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] keep-audit lock write failed', e));
+		}
+		state.keepMine = undefined;
+		state.unsavedRaw = false;
 		this._docs.set(id, state);
 		await this._bootstrapLock(state);
 		await this._recomputeFreshness(state);
 		this._watchSources(state);
+		// This raw save is our own write, so re-capture the `.md` + lock baseline (the watcher will see these and
+		// treat its own echo as self, not external) and re-arm the document watcher.
+		await this._captureDiskState(state);
+		this._watchDoc(state);
 		// Silent saves (live ProseMirror typing) persist to disk + refresh state but do NOT fire the
 		// change event, so the editor does not re-render the webview and remount the editor mid-keystroke.
 		if (!options?.silent) {
@@ -3537,6 +3742,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			state.lock.snapshots.shift();
 		}
 		await this._lockStore.write(state.uri, state.lock);
+		// External-edit floor (issue #133): a snapshot write is our own lock write, so refresh the lock baseline
+		// (if this doc is loaded + watched) - otherwise the watcher would read our own write back as external.
+		if (state.diskLockText !== undefined || this._docWatchers.has(state.uri.toString())) {
+			try { state.diskLockText = (await this._files.readFile(lockUriFor(state.uri))).value.toString(); } catch { /* leave the baseline as-is */ }
+		}
 		this._onDidChange.fire();
 	}
 
@@ -5917,12 +6127,45 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Persist the document (.md) and its lock together - the pair is one logical unit.
 	private async _persist(state: IDocState): Promise<void> {
 		try {
+			// External-edit floor (issue #133): before writing, confirm the file on disk is still the one we last
+			// read/wrote. If it changed outside Abstract and the user has not already chosen to keep their version,
+			// do NOT clobber it - surface the same reload/keep notice and abandon this write (the caller's in-memory
+			// state is untouched, so a later Reload or Keep still works). A normal persist (no external change, or an
+			// explicit Keep) is unaffected, so the proven approve → persist → cold-reopen contract still holds.
+			if (!(await this._diskUnchanged(state)) && !state.keepMine) {
+				this._promptExternalChange(state, { source: 'persist' });
+				return;
+			}
+			const overrodeExternal = state.keepMine === true;
 			const serialized = serializeLivingDoc(state.doc);
 			state.rawText = serialized;
+			// After an explicit "Keep my version", record the knowing overwrite on the lock's audit trail before it
+			// is written, so the decision is auditable (the external edit we chose to overwrite is named in newText).
+			if (overrodeExternal) {
+				state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'external-overwrite-kept', '', `kept the version open in Abstract over an edit made to "${basename(state.uri)}" outside it`, 'heuristic'));
+			}
 			await this._files.writeFile(state.uri, VSBuffer.fromString(serialized));
 			await this._lockStore.write(state.uri, state.lock);
+			state.keepMine = undefined;
+			await this._captureDiskState(state);
 		} catch (e) {
 			this._log.warn('[livingDocs] persist failed', e);
 		}
+	}
+
+	// True when the document's `.md` on disk still matches the BASELINE we last settled (`state.diskHash`) - i.e. no
+	// external edit clobbered it since. Comparing against the baseline (not `state.rawText`) is what makes this
+	// correct on BOTH write paths: `_persist` sets `rawText` to the new body only AFTER this check, while the
+	// live-editing `saveRawText` sets `rawText` to the typed text BEFORE it - so only the baseline is a stable
+	// "what should be on disk if nobody edited it outside" reference. The persist guard protects the `.md` (the
+	// data-loss surface, issue #133 item 3); the lock is rebuildable (doc 08) and is written through several of our
+	// own paths during a single refresh, so comparing it here would false-positive on our own in-flight writes - the
+	// watcher handles a lock-alone external change instead (item 4). Before the first capture, or where the harness
+	// file service cannot read back, the write is safe so normal persists never block (issue #133 do-not-break).
+	private async _diskUnchanged(state: IDocState): Promise<boolean> {
+		if (state.diskHash === undefined) { return true; }
+		let onDiskMd: string;
+		try { onDiskMd = (await this._files.readFile(state.uri)).value.toString(); } catch { return true; }
+		return hashString(onDiskMd) === state.diskHash;
 	}
 }

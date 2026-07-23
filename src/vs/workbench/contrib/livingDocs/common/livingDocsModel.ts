@@ -679,7 +679,10 @@ export interface IAuditEntry {
 	readonly time: string;
 	readonly docTitle: string;
 	readonly blockId: string;
-	readonly action: 'auto-applied' | 'approved' | 'rejected';
+	// 'external-overwrite-kept' records that the file changed on disk outside Abstract while the document was
+	// open and the reviewer chose "Keep my version", so the next persist knowingly overwrote the external edit
+	// (issue #133, the external-edit floor). The decision is on the record like any other applied change.
+	readonly action: 'auto-applied' | 'approved' | 'rejected' | 'external-overwrite-kept';
 	readonly oldText: string;
 	readonly newText: string;
 	// 'restore' records a snapshot restore: the body was replaced with an earlier saved version through

@@ -157,6 +157,9 @@ function auditEntry(docId: string, docTitle: string, blockIds: readonly string[]
 	if (e.via === 'restore') {
 		return { at, kind: 'applied', lead: 'Restored an earlier version of ', doc: ref, tail: '', badge: `by ${user}`, deepLink: false };
 	}
+	if (e.action === 'external-overwrite-kept') {
+		return { at, kind: 'admin', lead: 'Kept your open version over an outside edit to ', doc: ref, tail: '', badge: `by ${user}`, deepLink: false };
+	}
 	if (e.action === 'auto-applied') {
 		return { at, kind: 'applied', lead: 'Auto-applied a change in ', doc: ref, tail: '', badge: 'auto-applied · reversible', deepLink: false };
 	}
