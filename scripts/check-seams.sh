@@ -48,6 +48,8 @@ TITLEBAR_PART="src/vs/workbench/browser/parts/titlebar/titlebarPart.ts"
 BUILTIN_SCANNER="src/vs/workbench/services/extensionManagement/browser/builtinExtensionsScannerService.ts"
 CMD_PALETTE="src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts"
 QUICK_OPEN="src/vs/workbench/browser/actions/quickAccessActions.ts"
+WORKBENCH_HTML="src/vs/code/electron-browser/workbench/workbench.html"
+WORKBENCH_DEV_HTML="src/vs/code/electron-browser/workbench/workbench-dev.html"
 
 echo "check-seams: verifying the merge-tax ledger's shell seams..."
 
@@ -204,6 +206,21 @@ fi
 if ! grep_has "$STUDIO_CSS" "abstract-header"; then
 	fail "header-overlay-css" "the .abstract-header rules are gone from $STUDIO_CSS (the stock title bar shows through / the Abstract header is unstyled)"
 fi
+
+# --- Seam 11: the loopback broker origins in the workbench CSP (file-reality wave #245, ledger row FR-1 -
+# the ONE core seam of the wave). The desktop workbench renderer polls the local model broker over plain
+# http on 8090 (DEFAULT_PROXY_URL = http://localhost:8090); the stock connect-src is `'self' https: ws:`
+# which blocks the fetch before a socket opens, so the packaged app reports "Model unavailable" and every
+# broker-backed feature (model calls, docx import/export) is dead. Both workbench html files must carry the
+# two exact loopback origins in connect-src. If a rebase drops either line the packaged app silently loses
+# the broker again - assert both files, both origins, loudly. ---
+for html in "$WORKBENCH_HTML" "$WORKBENCH_DEV_HTML"; do
+	for origin in "http://localhost:8090" "http://127.0.0.1:8090"; do
+		if ! grep_has "$html" "$origin"; then
+			fail "csp-broker-origin" "the loopback broker origin '${origin}' is missing from connect-src in $html (the packaged workbench renderer cannot reach its own model broker; re-pin per ledger FR-1)"
+		fi
+	done
+done
 
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
