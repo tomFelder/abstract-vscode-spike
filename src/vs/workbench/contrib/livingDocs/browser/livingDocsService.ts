@@ -35,6 +35,7 @@ import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common
 import { dedupeAssetName, imageMimeForName, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
+import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
 import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
 import { coerceDocPolicy, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
@@ -948,6 +949,36 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	getAudit(): readonly IAuditEntry[] {
 		// The audit is folded into each document's lock; aggregate across the loaded documents.
 		return [...this._docs.values()].flatMap(s => s.lock.audit);
+	}
+
+	// The Agents activity ledger's read model inputs (plan 49-c A3): the SAME real event streams the History
+	// tab and the editor's trust chips already read - each loaded document's lock audit (carried WITH its doc
+	// identity + current block order, which the flat `getAudit()` view drops) plus the agent run log with each
+	// run's agent name resolved - and the live pending meaning changes (the WAITING rows). This is a pure read:
+	// it never mutates the orchestrator or any lock (do-not-break, plan 49 section 5). The pure `buildActivityLedger`
+	// fold in `common/livingDocLedger.ts` maps and orders these into the flat chronological list the screen renders.
+	getActivityLedgerInputs(): ILedgerInputs {
+		const audits: ILedgerAuditInput[] = [...this._docs.values()].map(s => ({
+			docId: s.uri.toString(),
+			docTitle: s.doc.title,
+			entries: s.lock.audit,
+			blockIds: s.doc.blocks.map(b => b.id),
+		}));
+		const runs: ILedgerRunInput[] = this._orchestrator.getRuns().map(run => ({
+			agentName: this._orchestrator.getAgent(run.agentId)?.name ?? run.agentId,
+			run,
+		}));
+		// Only `meaning` changes surface as WAITING rows: a `figure` change auto-applies and lands as an
+		// applied audit row, so listing it as WAITING too would double-count the same event. The block line is
+		// the change's current display ordinal, resolved against its document's live block order.
+		const waiting: ILedgerWaitingInput[] = this._pending
+			.filter(c => c.kind === 'meaning' && !c.draft)
+			.map(change => {
+				const state = this._docs.get(change.docId);
+				const line = state ? resolveBlockLine(state.doc, change.blockId) : undefined;
+				return { change, blockLine: line };
+			});
+		return { runs, audits, waiting };
 	}
 
 	focusPanel(tab: LivingDocsPanelTab, payload?: ILivingDocsPanelRequest['payload']): void {

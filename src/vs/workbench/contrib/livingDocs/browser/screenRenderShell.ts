@@ -16,6 +16,7 @@
 import { IAgentDef, IAgentRun, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ISkillRunSummary } from '../common/livingDocsModel.js';
 import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAnswer, ISourceInfo, ITemplateCard, ITemplateInfo } from '../common/livingDocs.js';
 import { IAwayFeed } from '../common/projectHomeFeed.js';
+import { IActivityLedger } from '../common/livingDocLedger.js';
 import { OnboardingStep } from '../common/onboarding.js';
 import { renderHome } from './screenRenderHome.js';
 import { renderTemplates } from './screenRenderTemplates.js';
@@ -143,6 +144,21 @@ export interface IScreenState {
 	 * has happened. Real data only - the per-document flag/pass/skip is the grader's true verdict.
 	 */
 	readonly skillRun?: ISkillRunSummary;
+	/**
+	 * Agents (plan 49-c A3): the activity ledger - the flat, newest-first chronological read model folded from
+	 * the SAME real event streams the History tab reads (orchestrator runs + per-document lock audits) plus the
+	 * live pending set (the WAITING rows). Built by the pure `buildActivityLedger`; bounded to LEDGER_CAP with a
+	 * truncation flag. Absent renders the truthful empty state (never a fabricated row). The read model never
+	 * mutates orchestrator or lock state (do-not-break, plan 49 section 5).
+	 */
+	readonly ledger?: IActivityLedger;
+	/**
+	 * Agents (plan 49-c A3.1): the render-time clock (ms), captured once by the ScreenEditor so the ledger's
+	 * mono timestamp column ("09:41" today / "Fri" this week / "3 Jul" older) is deterministic and `Date.now()`
+	 * never runs inside the render module (the same discipline as `knNow`). Absent falls back to a fixed epoch so
+	 * the render never throws - real callers always supply it.
+	 */
+	readonly ledgerNow?: number;
 	/**
 	 * Home: the latest agent run that failed, for the quiet attention line above the project grid (plan 32
 	 * iter 2). Absent when nothing failed - truthful automation, no fake activity. Carries the agent's human

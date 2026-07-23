@@ -10,6 +10,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
 import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
+import { ILedgerInputs } from './livingDocLedger.js';
 import { DocAutonomyLevel } from './docPolicy.js';
 import { ISourceGrid } from './sourceGrid.js';
 import { ITemplateSkeletonRow } from './livingDocMarkdown.js';
@@ -839,6 +840,14 @@ export interface ILivingDocsService {
 	// --- workspace-wide views (the review rail aggregates across documents) ---
 	getAllPending(): readonly IProposedChange[];
 	getAudit(): readonly IAuditEntry[];
+	/**
+	 * The Agents activity ledger's read-model inputs (plan 49-c A3): the real event streams the History tab and
+	 * the editor's trust chips already read - each loaded document's lock audit (carried with its doc identity +
+	 * current block order) and the agent run log (with each run's agent name) - plus the live pending meaning
+	 * changes (the WAITING rows). A pure read: it never mutates the orchestrator or any lock. The pure
+	 * `buildActivityLedger` fold turns these into the flat chronological ledger the Agents screen renders.
+	 */
+	getActivityLedgerInputs(): ILedgerInputs;
 
 	/** Discover and summarize every Living Document in the workspace (for the "Documents" home). */
 	listDocuments(): Promise<readonly ILivingDocSummary[]>;
