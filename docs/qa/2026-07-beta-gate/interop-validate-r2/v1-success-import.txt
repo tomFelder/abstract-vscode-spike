@@ -1,0 +1,12 @@
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: POST, GET, OPTIONS
+Access-Control-Allow-Headers: content-type, anthropic-version, anthropic-beta
+Access-Control-Max-Age: 600
+content-type: application/json
+Date: Thu, 23 Jul 2026 05:28:53 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+{"ok":true,"html":"<h1>Quarterly Update</h1><h2>Summary</h2><p>This quarter showed <strong>strong growth</strong> and <em>steady margins</em>. See the <a href=\"https://example.com/dashboard\">full dashboard</a> for details.</p><p>Final figure is 1200 for APAC.</p><h2>Highlights</h2><ul><li>Revenue up<ul><li>APAC region led</li><li>EMEA followed</li></ul></li><li>Costs controlled</li></ul><h2>Regional table</h2><table><tr><td><p><strong>Region</strong></p></td><td><p><strong>Revenue</strong></p></td><td><p><strong>Growth</strong></p></td><td><p><strong>Notes</strong></p></td></tr><tr><td><p>APAC</p></td><td><p>1200</p></td><td><p>12%</p></td><td><p>strong</p></td></tr><tr><td><p>EMEA</p></td><td><p>900</p></td><td><p>5%</p></td><td><p>steady</p></td></tr><tr><td><p>AMER</p></td><td><p>1500</p></td><td><p>8%</p></td><td><p>stable</p></td></tr></table><h2>Chart</h2><p><img src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEUlEQVR42mP8z8BQz0AEYBxVSFQFAF6MBf0e1nWtAAAAAElFTkSuQmCC\" /></p>","detections":{"comments":false,"trackedChanges":true,"footnotes":false,"textboxes":false,"headersFooters":false}}

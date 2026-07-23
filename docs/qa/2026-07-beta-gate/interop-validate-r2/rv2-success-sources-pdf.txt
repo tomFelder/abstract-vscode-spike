@@ -1,0 +1,12 @@
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: POST, GET, OPTIONS
+Access-Control-Allow-Headers: content-type, anthropic-version, anthropic-beta
+Access-Control-Max-Age: 600
+content-type: application/json
+Date: Thu, 23 Jul 2026 09:32:32 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+{"readable":true,"text":"Market Notes for Q1 2026. The APAC regi","pages":1,"reason":""}
