@@ -104,3 +104,95 @@ export function isRelativeImageSrc(src: string): boolean {
 	if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s)) { return false; }
 	return true;
 }
+
+/** One matched Markdown image at a position: the destination `src`, plus the index just past the image. */
+export interface IMarkdownImageMatch {
+	readonly src: string;
+	readonly end: number;
+}
+
+/**
+ * Match a Markdown image `![alt](dest)` starting at index `i` (which must point at the `!`), returning the raw
+ * destination and the index just past the closing paren, or `undefined` if there is no image there.
+ *
+ * The destination is parsed exactly as the product's own docx importer emits it (issue #131/#245 D2). That
+ * importer writes RAW, unencoded relative paths that can contain spaces - e.g. `![](assets/Weekly Report/image-1.png)`
+ * from a document named "Weekly Report.docx" (the stem keeps its spaces). A naive parser that ends the destination
+ * at the first space truncates such a path and the image is dropped from every export. So:
+ * - an `<...>`-wrapped destination keeps everything up to the closing `>` (CommonMark's explicit form for
+ *   space-containing paths);
+ * - a bare destination runs to the closing `)`, keeping interior spaces, and only treats a trailing, whitespace-
+ *   preceded quoted string (`"title"` / `'title'`) as the optional title - never a space inside the path itself.
+ * Balanced parens inside a bare destination (`foo(bar).png`) are still handled.
+ */
+export function matchMarkdownImageAt(text: string, i: number): IMarkdownImageMatch | undefined {
+	if (text[i] !== '!' || text[i + 1] !== '[') { return undefined; }
+	let j = i + 2;
+	while (j < text.length && text[j] !== ']') { j++; }
+	if (text[j] !== ']' || text[j + 1] !== '(') { return undefined; }
+	j += 2;
+	let src = '';
+	if (text[j] === '<') {
+		j++;
+		while (j < text.length && text[j] !== '>') { src += text[j]; j++; }
+		if (text[j] !== '>') { return undefined; }
+		j++;
+	} else {
+		// Bare destination: consume everything up to the matching closing paren, spaces included, but stop at a
+		// whitespace that begins an optional quoted title so `(path "title")` still parses. Balanced interior
+		// parens are tracked so `foo(bar).png` survives.
+		let depth = 0;
+		while (j < text.length) {
+			const c = text[j];
+			if (c === ')' && depth === 0) { break; }
+			if (/\s/.test(c) && isTitleStart(text, j)) { break; } // whitespace before a quoted title ends the dest
+			if (c === '(') { depth++; }
+			if (c === ')') { depth--; }
+			src += c;
+			j++;
+		}
+		src = src.replace(/\s+$/, ''); // a bare dest keeps interior spaces but not a trailing run before `)`
+	}
+	// Skip an optional title and any trailing whitespace up to the closing paren.
+	while (j < text.length && text[j] !== ')') { j++; }
+	if (text[j] !== ')') { return undefined; }
+	return { src, end: j + 1 };
+}
+
+/** True when the whitespace at `i` is followed (after more whitespace) by a `"`/`'` opening an optional title. */
+function isTitleStart(text: string, i: number): boolean {
+	let k = i;
+	while (k < text.length && /\s/.test(text[k])) { k++; }
+	return text[k] === '"' || text[k] === '\'';
+}
+
+/**
+ * Rewrite every relative image destination in Markdown to its resolved replacement (typically a `data:` URI),
+ * using the same robust destination parse the exporter's image collector uses (issue #131/#245 D1). The rewritten
+ * reference is always emitted `<...>`-wrapped so a `data:` URI - or any path with spaces - survives a downstream
+ * Markdown renderer. Destinations absent from `replacements` are left untouched (the renderer names them in text).
+ */
+export function rewriteMarkdownImageSrcs(markdown: string, replacements: ReadonlyMap<string, string>): string {
+	if (replacements.size === 0) { return markdown; }
+	let out = '';
+	let i = 0;
+	while (i < markdown.length) {
+		if (markdown[i] === '!' && markdown[i + 1] === '[') {
+			const match = matchMarkdownImageAt(markdown, i);
+			if (match) {
+				const replacement = replacements.get(match.src);
+				if (replacement !== undefined) {
+					const alt = markdown.slice(i + 2, markdown.indexOf(']', i + 2));
+					out += `![${alt}](<${replacement}>)`;
+				} else {
+					out += markdown.slice(i, match.end);
+				}
+				i = match.end;
+				continue;
+			}
+		}
+		out += markdown[i];
+		i++;
+	}
+	return out;
+}

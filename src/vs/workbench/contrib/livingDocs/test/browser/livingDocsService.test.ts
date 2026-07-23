@@ -240,7 +240,7 @@ suite('livingDocs Service', () => {
 	let pdfCommandBytes: VSBuffer | undefined;
 	let lastDocxBody: string | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		lastFiles = files;
 		files.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV);
@@ -339,6 +339,15 @@ suite('livingDocs Service', () => {
 		const requestService = {
 			request: async (options: { url?: string; data?: string }) => {
 				const url = options.url ?? '';
+				// Issue #131/#245 C2: simulate the measured CORS failure - the broker is UP (so /healthz answers)
+				// but the interop POST dies at the transport (net::ERR_FAILED). The service must diagnose this as
+				// a failed request, not "the proxy is down".
+				if (opts.failInterop && (url.includes('/import/docx') || url.includes('/sources/xlsx') || url.includes('/sources/pdf'))) {
+					throw new Error('net::ERR_FAILED');
+				}
+				if (opts.failInterop && url.includes('/healthz')) {
+					return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify({ ok: true }))) };
+				}
 				// Issue #130: the docx export route returns .docx BYTES, not JSON. The real bytes are proven by
 				// the pure-node writer test (scripts/test/lwd-docx.test.js); here we return a PK-headed buffer and
 				// capture the posted body so the SERVICE wiring (gate -> resolved Markdown -> POST -> write) is proven.
@@ -3112,6 +3121,18 @@ suite('livingDocs Service', () => {
 				csv: 'Month,MRR\n2026-01-05,1234.56\n2026-02-05,2000\n',
 				manifestWorkbook: 'Budget.xlsx',
 			},
+		);
+	});
+
+	test('a failed xlsx extraction with the broker UP surfaces an honest request-failure notice, not "proxy not running" (#131/#245 C2)', async () => {
+		// The broker answers /healthz (it is up) but the extraction POST fails at the transport (the measured CORS
+		// case). The user must see a plain-words request failure - never silence, and never a false "proxy down".
+		const service = createService([], { workbook: true, failInterop: true });
+		const result = await service.useXlsxAsSource(WORKBOOK);
+		const notice = lastNotifications.map(n => n.message).join('\n');
+		assert.deepStrictEqual(
+			{ ok: result.ok, notified: lastNotifications.length > 0, saysRequestFailed: /extraction request failed/.test(notice), notFalselyDown: !/not running/.test(notice) },
+			{ ok: false, notified: true, saysRequestFailed: true, notFalselyDown: true },
 		);
 	});
 

@@ -150,6 +150,7 @@
     "node-addon-api": "^6.0.0",
     "node-pty": "^1.2.0-beta.13",
     "open": "^10.1.2",
+    "pdf-parse": "^2.4.5",
     "playwright-core": "1.61.0-alpha-2026-06-04",
     "ssh2": "^1.16.0",
     "tas-client": "0.3.1",
@@ -158,6 +159,7 @@
     "vscode-regexpp": "^3.1.0",
     "vscode-textmate": "^9.3.2",
     "ws": "^8.19.0",
+    "xlsx": "^0.18.5",
     "yauzl": "^3.3.1",
     "yazl": "^2.4.3",
     "zod": "^3.25.76"
@@ -250,7 +252,6 @@
     "os-browserify": "^0.3.0",
     "p-all": "^1.0.0",
     "path-browserify": "^1.0.1",
-    "pdf-parse": "^2.4.5",
     "pump": "^1.0.1",
     "rcedit": "^1.1.0",
     "rimraf": "^2.2.8",
@@ -264,7 +265,6 @@
     "typescript": "^6.0.0-dev.20260416",
     "typescript-eslint": "^8.45.0",
     "util": "^0.12.4",
-    "xlsx": "^0.18.5",
     "xml2js": "^0.5.0",
     "yaserver": "^0.4.0"
   },

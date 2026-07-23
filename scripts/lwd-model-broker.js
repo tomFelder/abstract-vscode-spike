@@ -876,6 +876,7 @@ async function detectDocxFidelity(buffer) {
 }
 
 async function importDocx(req, res) {
+	setCors(res);
 	const body = await readBody(req, MAX_IMPORT_BODY_BYTES);
 	let parsed;
 	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
@@ -977,6 +978,7 @@ function optionalLib(name) {
 // warnings }] }. Each sheet is a clean comma-delimited, number/date-normalised CSV the renderer writes to
 // data/<workbook>/<sheet>.csv. A merged-header/pivot sheet carries a NAMED warning, never a silent misread.
 async function extractXlsx(req, res) {
+	setCors(res);
 	const engine = sourceExtractEngine();
 	const xlsx = optionalLib('xlsx');
 	if (!engine || !xlsx) {
@@ -1004,6 +1006,7 @@ async function extractXlsx(req, res) {
 // extracted text (read-only CONTEXT, never value bindings); a scanned/image-only or password-protected PDF
 // returns readable:false with a plain-words reason, never empty context masquerading as a read.
 async function extractPdfRoute(req, res) {
+	setCors(res);
 	const engine = sourceExtractEngine();
 	const pdfParse = optionalLib('pdf-parse');
 	if (!engine || !pdfParse || !pdfParse.PDFParse) {

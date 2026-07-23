@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { dedupeAssetName, extForMime, imageMimeForName, isRelativeImageSrc, sanitizeImageAssetName } from '../../common/livingDocAssets.js';
+import { dedupeAssetName, extForMime, imageMimeForName, isRelativeImageSrc, matchMarkdownImageAt, rewriteMarkdownImageSrcs, sanitizeImageAssetName } from '../../common/livingDocAssets.js';
 
 suite('LivingDoc image assets', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -97,5 +97,33 @@ suite('LivingDoc image assets', () => {
 		const fn = (0, eval)(`(${src})`);
 		assert.strictEqual(fn('assets/x.png'), true);
 		assert.strictEqual(fn('data:image/png;base64,AAA'), false);
+	});
+
+	// --- matchMarkdownImageAt: the destination parse the exporter feeds off (issue #131/#245 D2) ---
+
+	test('a space-containing import path is matched whole, not truncated at the first space', () => {
+		// The docx importer emits `![](assets/<stem>/image-N.ext)` with the doc's stem verbatim, so a document
+		// named "Weekly Report.docx" yields a path with a raw space. The naive first-space stop dropped it.
+		const md = '![](assets/Weekly Report/image-1.png)';
+		assert.deepStrictEqual(matchMarkdownImageAt(md, 0), { src: 'assets/Weekly Report/image-1.png', end: md.length });
+	});
+
+	test('bare, angle-wrapped, quoted-title and balanced-paren destinations all parse', () => {
+		const cases: [string, string | undefined][] = [
+			['![a](assets/Probe/logo.png)', 'assets/Probe/logo.png'],
+			['![a](<assets/My Doc/pic.png>)', 'assets/My Doc/pic.png'],
+			['![a](assets/My Doc/pic.png "a title")', 'assets/My Doc/pic.png'],
+			['![a](assets/some(paren)/x.png)', 'assets/some(paren)/x.png'],
+			['not an image', undefined],
+		];
+		assert.deepStrictEqual(cases.map(([md]) => matchMarkdownImageAt(md, 0)?.src), cases.map(([, src]) => src));
+	});
+
+	// --- rewriteMarkdownImageSrcs: inline resolved images for a self-contained export (issue #131/#245 D1) ---
+
+	test('relative image srcs are rewritten to their resolved data URIs, angle-wrapped; unresolved paths are left', () => {
+		const md = 'Intro\n\n![chart](assets/Weekly Report/image-1.png)\n\n![missing](assets/Weekly Report/gone.png)';
+		const out = rewriteMarkdownImageSrcs(md, new Map([['assets/Weekly Report/image-1.png', 'data:image/png;base64,AAAB']]));
+		assert.strictEqual(out, 'Intro\n\n![chart](<data:image/png;base64,AAAB>)\n\n![missing](assets/Weekly Report/gone.png)');
 	});
 });
