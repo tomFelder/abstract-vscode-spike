@@ -42,8 +42,20 @@ const { SpendMeter } = require('./lwd-spend-meter.js');
 const openaiOAuth = require('./lwd-openai-oauth.js');
 const { renderDocx } = require('./lwd-docx.js');
 
-const HOST = '127.0.0.1';
+// Bind dual-stack (issue #121): the packaged desktop app's default proxy URL is http://localhost:8090, and on
+// macOS Node/Electron resolves `localhost` to ::1 (IPv6) first. A prior IPv4-only bind ('127.0.0.1') meant the
+// app targeted ::1 and never connected - the broker saw zero requests and the UI showed "Model unavailable"
+// even with a healthy broker (this also silently broke the in-app docx import/export routes, which share the
+// base URL). Binding '::' accepts BOTH ::1 and IPv4-mapped 127.0.0.1 connections on a dual-stack host, so
+// `localhost` connects no matter which family it resolves to. On a host with IPv6 disabled `listen('::')`
+// throws (EAFNOSUPPORT/EADDRNOTAVAIL); we fall back to '127.0.0.1' and log which mode is active (see the
+// listen call below). Override the preferred bind with LWD_PROXY_HOST if ever needed.
+const PREFERRED_HOST = process.env.LWD_PROXY_HOST || '::';
+const FALLBACK_HOST = '127.0.0.1';
 const PORT = Number(process.env.LWD_PROXY_PORT || 8090);
+// The host actually bound, resolved at listen time (dual-stack '::' or the IPv4 fallback). Truthful log lines
+// and self-reports read this rather than a fixed constant. Defaults to the preferred host until listen resolves.
+let boundHost = PREFERRED_HOST;
 
 // Backend selection. `openrouter` is the founder-funded fallback tier (the only backend implemented in
 // plan 35 iter 1); `openai-oauth` is reserved for the subscription path (plan 35 iter 2) and reports
@@ -1014,8 +1026,17 @@ async function extractPdfRoute(req, res) {
 	}
 }
 
+// Opt-in access log (issue #121): only /v1/messages logs a line by default, so a connectivity problem (the
+// app resolving `localhost` to an address the broker was not bound on) was invisible - a /healthz probe that
+// never arrived left no trace, making "zero requests" ambiguous between "app never called" and "call never
+// logged". Set LWD_PROXY_ACCESS_LOG=1 to log every incoming request (method + path + remote address) so the
+// diagnostic is truthful. Kept off by default so the 30s health poll does not spam the app log in normal use.
+const ACCESS_LOG = process.env.LWD_PROXY_ACCESS_LOG === '1';
 const server = http.createServer((req, res) => {
 	const url = req.url || '';
+	if (ACCESS_LOG) {
+		console.log(`[lwd-proxy] ${req.method} ${url} from ${req.socket.remoteAddress}`);
+	}
 	if (req.method === 'OPTIONS') {
 		setCors(res);
 		res.writeHead(204);
@@ -1180,9 +1201,38 @@ function killMcpServers() {
 process.on('SIGINT', () => { killMcpServers(); openaiOAuth.stopPending(); process.exit(0); });
 process.on('SIGTERM', () => { killMcpServers(); openaiOAuth.stopPending(); process.exit(0); });
 
-server.listen(PORT, HOST, () => {
+// A label for the bound host in log lines: '::' (dual-stack) reaches the app via `localhost`, so show that
+// rather than a bare '::' that reads like a malformed URL. The IPv4 fallback shows its real address.
+function hostLabel(host) {
+	return host === '::' ? 'localhost (dual-stack ::)' : host;
+}
+
+// Start listening dual-stack ('::' accepts both ::1 and IPv4-mapped 127.0.0.1); on a host with IPv6 disabled
+// the bind throws EAFNOSUPPORT/EADDRNOTAVAIL, so fall back to IPv4-only '127.0.0.1' and carry on. The `once`
+// error handler is removed before the retry so it never leaks, and any later listen error still surfaces.
+function startListening() {
+	const onListenError = (err) => {
+		const code = err && err.code;
+		if ((code === 'EAFNOSUPPORT' || code === 'EADDRNOTAVAIL') && boundHost !== FALLBACK_HOST) {
+			console.log(`[lwd-proxy] dual-stack bind on '${PREFERRED_HOST}' failed (${code}) - falling back to IPv4 ${FALLBACK_HOST}`);
+			boundHost = FALLBACK_HOST;
+			server.listen(PORT, FALLBACK_HOST, onListening);
+			return;
+		}
+		console.error(`[lwd-proxy] failed to bind ${hostLabel(boundHost)}:${PORT}:`, err && err.message ? err.message : err);
+		process.exit(1);
+	};
+	const onListening = () => {
+		server.removeListener('error', onListenError);
+		reportListening();
+	};
+	server.on('error', onListenError);
+	server.listen(PORT, boundHost, onListening);
+}
+
+function reportListening() {
 	const backend = activeBackend();
-	console.log(`[lwd-proxy] listening on http://${HOST}:${PORT} (backend ${backend.name}, model ${OPENROUTER_MODEL})`);
+	console.log(`[lwd-proxy] listening on ${hostLabel(boundHost)}:${PORT} (backend ${backend.name}, model ${OPENROUTER_MODEL})`);
 	if (backend.name === 'openrouter') {
 		console.log(`[lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$${DAILY_BUDGET_USD}/user`);
 		if (!backend.isConfigured()) { console.log('[lwd-proxy] no OpenRouter key configured - the app runs on its built-in heuristic fallback'); }
@@ -1190,4 +1240,6 @@ server.listen(PORT, HOST, () => {
 		console.log(`[lwd-proxy] "Sign in with ChatGPT" backend; model ${openaiOAuth.OPENAI_MODEL}; token store ${openaiOAuth.STORE_PATH} (0600)`);
 		if (!backend.isConfigured()) { console.log('[lwd-proxy] not signed in - open Abstract Settings and choose "Sign in with ChatGPT", or run on the included model'); }
 	}
-});
+}
+
+startListening();
