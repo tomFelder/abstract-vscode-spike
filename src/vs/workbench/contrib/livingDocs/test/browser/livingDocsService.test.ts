@@ -218,7 +218,7 @@ suite('livingDocs Service', () => {
 	let lastOpenedView: string | undefined;
 	// Notifications the service raised (file-op toasts + named errors), so a test can assert the message
 	// and drive the Undo action a toast carries (the file-ops tests; issue #125).
-	let lastNotifications: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }[] = [];
+	let lastNotifications: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] }; closed?: boolean }[] = [];
 	// The convention folders the Tidy apply asked to create on demand (doc 22 section 5), so a test can assert
 	// `data/`/`archive/` were made before the move landed.
 	let createdFolders: string[] = [];
@@ -360,7 +360,7 @@ suite('livingDocs Service', () => {
 		const notificationService = {
 			info: (message: unknown) => { lastNotifications.push({ message: String(message) }); },
 			error: (message: unknown) => { lastNotifications.push({ message: String(message) }); },
-			notify: (n: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }) => { lastNotifications.push(n); return { close: () => undefined }; },
+			notify: (n: { message: string; actions?: { primary?: { label: string; run: () => unknown }[] } }) => { const handle = { ...n, closed: false }; lastNotifications.push(handle); return { close: () => { handle.closed = true; } }; },
 		} as unknown as INotificationService;
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
@@ -650,7 +650,7 @@ suite('livingDocs Service', () => {
 			{ diskPreserved: true, prompted: true, typedKept: true });
 	});
 
-	test('after "Keep my version" the first raw-text save writes + audits once, and a NEW external edit re-triggers', async () => {
+	test('after "Keep my version" the first raw-text save writes + audits once TO DISK, and a NEW external edit re-triggers', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);
 		simulateExternalEdit!(WEEKLY, WEEKLY_MD.replace('Growth remained steady', 'Edited elsewhere'));
@@ -660,9 +660,13 @@ suite('livingDocs Service', () => {
 		const typed = WEEKLY_MD.replace('Growth remained steady', 'My kept version');
 		await service.saveRawText(WEEKLY, typed, { silent: true });
 
+		// Read the ON-DISK lock sidecar (F3: the entry must land on disk ATOMICALLY with the .md save, so a quit or
+		// reload immediately after the Keep still shows it in History). getLock reads memory, which masked the bug.
+		const onDiskLockText = lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString());
+		const onDiskAudit = onDiskLockText ? (JSON.parse(onDiskLockText).audit as { action: string }[]) : [];
 		const afterKeep = {
 			wroteOurVersion: (lastFiles!.get(WEEKLY.toString()) ?? '') === typed,
-			auditCount: service.getLock(WEEKLY)!.audit.filter(e => e.action === 'external-overwrite-kept').length,
+			diskAuditCount: onDiskAudit.filter(e => e.action === 'external-overwrite-kept').length,
 		};
 
 		// A genuinely NEW external edit AFTER the kept write re-arms detection (the Keep decision was one-shot).
@@ -671,7 +675,7 @@ suite('livingDocs Service', () => {
 		await new Promise(r => setTimeout(r, 0));
 		const reTriggered = lastNotifications.some(n => /changed outside Abstract/.test(n.message));
 
-		assert.deepStrictEqual({ ...afterKeep, reTriggered }, { wroteOurVersion: true, auditCount: 1, reTriggered: true });
+		assert.deepStrictEqual({ ...afterKeep, reTriggered }, { wroteOurVersion: true, diskAuditCount: 1, reTriggered: true });
 	});
 
 	test('the discard warning fires when live-typed prose is pending and the file changed on disk', async () => {
@@ -689,6 +693,30 @@ suite('livingDocs Service', () => {
 		assert.deepStrictEqual(
 			{ shown: !!notice, warnsDiscard: /Reloading will discard the changes you have here that are not yet saved\./.test(notice?.message ?? '') },
 			{ shown: true, warnsDiscard: true });
+	});
+
+	test('watcher fires FIRST, then a blocked typed save refreshes the notice to carry the discard warning (F4 live order)', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		lastNotifications = [];
+		// Live order (issue #133 F4): the OS watcher wins the race and raises the notice BEFORE any typing, so its
+		// first message has NO discard line (there is no unsaved work yet).
+		const external = WEEKLY_MD.replace('Growth remained steady', 'Edited outside first');
+		simulateExternalEdit!(WEEKLY, external);
+		await new Promise(r => setTimeout(r, 0));
+		const firstNotice = lastNotifications.find(n => /changed outside Abstract/.test(n.message));
+		const firstWarnsDiscard = /Reloading will discard/.test(firstNotice?.message ?? '');
+
+		// THEN the user types; the silent save is blocked (external change undecided), setting unsavedRaw. The already-up
+		// notice must be closed + re-raised WITH the discard line - dedup still holds, so exactly one notice stays live.
+		const typed = WEEKLY_MD.replace('Growth remained steady', 'Now I am typing');
+		await service.saveRawText(WEEKLY, typed, { silent: true });
+
+		const liveNotices = lastNotifications.filter(n => !n.closed && /changed (outside Abstract|on disk since you opened it)/.test(n.message));
+		const liveWarnsDiscard = liveNotices.some(n => /Reloading will discard the changes you have here that are not yet saved\./.test(n.message));
+		assert.deepStrictEqual(
+			{ firstWarnsDiscard, liveCount: liveNotices.length, liveWarnsDiscard },
+			{ firstWarnsDiscard: false, liveCount: 1, liveWarnsDiscard: true });
 	});
 
 	test('first open bootstraps a lock sidecar from the sources (resolved value, hash, syncedAt, kind)', async () => {

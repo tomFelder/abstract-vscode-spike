@@ -20,7 +20,7 @@ import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.
 import { IHostService } from '../../../services/host/browser/host.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
-import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { INotificationHandle, INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { toAction } from '../../../../base/common/actions.js';
 import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -120,6 +120,14 @@ interface IDocState {
 	// disk - i.e. there is in-editor work not yet on disk. Drives the "Reloading will discard..." warning honestly
 	// for typing, alongside the agent-proposal queue (`_pending`). Cleared once a save actually lands on disk.
 	unsavedRaw?: boolean;
+	// The live handle for the reload/keep notice while it is on screen (issue #133 F4). Kept so a later false->true
+	// transition of the "has unsaved work" state can close the deduped notice and re-raise it WITH the discard line
+	// (the OS watcher fires first, before any typing, so the first-raised notice has no discard line). Cleared and
+	// closed when the user answers, the document reloads, or the service disposes - so no notification handle leaks.
+	noticeHandle?: INotificationHandle;
+	// True while the currently-shown notice carries the "Reloading will discard..." line. Guards the F4 refresh so we
+	// only close + re-raise on the false->true transition (once), never re-raising a notice that already warns.
+	noticeHasDiscard?: boolean;
 }
 
 const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
@@ -541,6 +549,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._register(toDisposable(() => {
 			for (const w of this._watchers.values()) { w.dispose(); }
 			this._watchers.clear();
+			// Close any open reload/keep notices so their notification handles do not leak past service disposal.
+			for (const state of this._docs.values()) { this._dismissExternalNotice(state); }
 		}));
 		// Probe the model proxy once at startup so the Skills rail reflects model availability without
 		// waiting for the first model call. Failures are swallowed (the no-model fallback stays intact).
@@ -1939,6 +1949,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Drop all in-memory state for a deleted document: its watcher, loaded state, and chat history.
 	private _forgetDoc(resource: URI): void {
 		const id = resource.toString();
+		const state = this._docs.get(id);
+		if (state) { this._dismissExternalNotice(state); }
 		this._watchers.get(id)?.dispose();
 		this._watchers.delete(id);
 		this._docWatchers.deleteAndDispose(id);
@@ -3113,19 +3125,28 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// version" leaves the in-editor state and lets the next persist proceed knowingly (recording an audit
 	// entry). If the editor is holding work not yet on disk, the notice says so before offering the reload.
 	private _promptExternalChange(state: IDocState, opts: { readonly source: 'watcher' | 'persist' }): void {
-		// Dedupe (issue #133): one notice per outstanding conflict. A run of keystrokes each blocks a silent save and
-		// would otherwise stack a fresh warning; the flag holds until the user answers (Reload/Keep) or the doc reloads.
-		if (state.noticeUp) { return; }
-		state.noticeUp = true;
-		const name = basename(state.uri);
 		// "Unsaved work" is truthful for BOTH surfaces of in-editor work not yet on disk: queued agent proposals
 		// (`_pending`) AND live-typed prose held by a blocked silent save (`unsavedRaw`, issue #133 F4).
 		const hasUnsaved = state.unsavedRaw === true || this._pending.some(c => c.docId === state.uri.toString());
+		// Dedupe (issue #133): one notice per outstanding conflict. A run of keystrokes each blocks a silent save and
+		// would otherwise stack a fresh warning; the flag holds until the user answers (Reload/Keep) or the doc reloads.
+		// F4 refresh: the OS watcher fires FIRST (before any typing), so the first notice has no discard line. When a
+		// later blocked save sets `unsavedRaw`, close the deduped notice and re-raise it WITH the discard line - once,
+		// on the false->true transition only, so a run of keystrokes still never stacks a second notice.
+		if (state.noticeUp) {
+			if (!hasUnsaved || state.noticeHasDiscard) { return; }
+			state.noticeHandle?.close();
+			state.noticeHandle = undefined;
+			state.noticeUp = false;
+		}
+		state.noticeUp = true;
+		state.noticeHasDiscard = hasUnsaved;
+		const name = basename(state.uri);
 		const preamble = opts.source === 'persist'
 			? `"${name}" changed on disk since you opened it.`
 			: `"${name}" was changed outside Abstract.`;
 		const unsavedLine = hasUnsaved ? ' Reloading will discard the changes you have here that are not yet saved.' : '';
-		this._notify.notify({
+		state.noticeHandle = this._notify.notify({
 			severity: Severity.Warning,
 			message: `${preamble} Reload to take the version on disk, or keep the version you have open.${unsavedLine}`,
 			sticky: true,
@@ -3138,9 +3159,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		});
 	}
 
+	// Close the reload/keep notice for a document and clear its dedupe/discard state, so no notification handle
+	// leaks when the conflict is resolved (Keep/Reload) or the document is forgotten/the service disposes.
+	private _dismissExternalNotice(state: IDocState): void {
+		state.noticeHandle?.close();
+		state.noticeHandle = undefined;
+		state.noticeUp = false;
+		state.noticeHasDiscard = undefined;
+	}
+
 	// "Reload from disk": re-read the `.md` and lock and rebuild the loaded state through the ordinary load
 	// path (which also re-captures the disk hashes and re-arms the watchers), then fire so the editor re-renders.
 	private async _reloadFromDisk(uri: URI): Promise<void> {
+		// Close the reload/keep notice (it is being answered) before the reload swaps in a fresh state object,
+		// so the notification handle is disposed rather than orphaned on the old state.
+		const state = this._docs.get(uri.toString());
+		if (state) { this._dismissExternalNotice(state); }
 		await this.loadDocument(uri);
 	}
 
@@ -3149,7 +3183,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// notice is answered, so clear the dedupe flag - a genuinely NEW external edit later re-arms detection.
 	private _keepMyVersion(uri: URI): void {
 		const state = this._docs.get(uri.toString());
-		if (state) { state.keepMine = true; state.noticeUp = false; }
+		if (state) { state.keepMine = true; this._dismissExternalNotice(state); }
 	}
 
 	private _bindingEntry(r: IResolution): IBindingEntry {
@@ -3569,6 +3603,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			diskLockText: prev?.diskLockText,
 			keepMine: prev?.keepMine,
 			noticeUp: prev?.noticeUp,
+			// Carry the live notice handle + its discard-line state across the rebuild, so a blocked save that sets
+			// `unsavedRaw` can find the watcher-raised notice and refresh it with the discard line (issue #133 F4).
+			noticeHandle: prev?.noticeHandle,
+			noticeHasDiscard: prev?.noticeHasDiscard,
 		};
 		// External-edit floor (issue #133): the primary live-editing write path runs through the SAME guard as
 		// `_persist`. If the `.md` on disk changed outside Abstract since we last settled, and the user has not
@@ -3591,6 +3629,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			await this._files.writeFile(resource, VSBuffer.fromString(text));
 		} catch (e) {
 			this._log.warn('[livingDocs] raw save failed', e);
+		}
+		// Persist the Keep audit to the on-disk `.lock.json` ATOMICALLY with the `.md` write (issue #133 F3). Without
+		// this the entry lives only in memory: `_bootstrapLock` below early-returns for an already-bootstrapped doc,
+		// so `_lockStore.write` never runs, and the entry only reaches disk on a later unrelated `_persist` - a quit or
+		// reload in that window loses it, so History renders nothing. Mirror `_persist`'s error handling (catch + warn).
+		if (overrodeExternal) {
+			await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] keep-audit lock write failed', e));
 		}
 		state.keepMine = undefined;
 		state.unsavedRaw = false;
