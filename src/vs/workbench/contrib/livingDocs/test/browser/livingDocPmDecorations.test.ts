@@ -339,19 +339,19 @@ suite('LivingDoc PM decoration mapping', () => {
 			return { ...emptyLock(), bindings };
 		}
 
-		test('a fresh file binding projects source, cell, relative sync and fresh:true', () => {
+		test('a fresh file binding projects source, cell, relative sync, then + kind and fresh:true (no now/fallback)', () => {
 			const lock = lockWith({
 				'metrics.mrr': { resolved: '$48.6k', source: 'metrics.csv#mrr', sourceHash: 'a1', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
 			});
-			const prov = buildFigureProvenance(lock, new Set(), NOW);
-			assert.deepStrictEqual(prov, [{ key: 'metrics.mrr', source: 'metrics.csv', location: 'mrr', synced: 'Synced 2 h ago', fresh: true }]);
+			const prov = buildFigureProvenance(lock, new Set(), undefined, NOW);
+			assert.deepStrictEqual(prov, [{ key: 'metrics.mrr', source: 'metrics.csv', location: 'mrr', synced: 'Synced 2 h ago', fresh: true, then: '$48.6k', kind: 'file' }]);
 		});
 
 		test('a binding in the stale set reports fresh:false so the tooltip shows the amber line', () => {
 			const lock = lockWith({
 				'metrics.mrr': { resolved: '$48.6k', source: 'metrics.csv#mrr', sourceHash: 'a1', syncedAt: '2026-07-06T11:30:00Z', appliedBy: 'agent', kind: 'figure' },
 			});
-			const prov = buildFigureProvenance(lock, new Set(['metrics.mrr']), NOW);
+			const prov = buildFigureProvenance(lock, new Set(['metrics.mrr']), undefined, NOW);
 			assert.strictEqual(prov[0].fresh, false);
 			assert.strictEqual(prov[0].synced, 'Synced 30 min ago');
 		});
@@ -360,8 +360,51 @@ suite('LivingDoc PM decoration mapping', () => {
 			const lock = lockWith({
 				'pipeline@mcp:demo.query/total': { resolved: '128,000', source: 'demo.query', sourceHash: 'b2', syncedAt: '', appliedBy: 'agent', kind: 'figure' },
 			});
-			const prov = buildFigureProvenance(lock, new Set(), NOW);
-			assert.deepStrictEqual(prov, [{ key: 'pipeline@mcp:demo.query/total', source: 'demo.query', location: '', synced: 'Not yet synced', fresh: true }]);
+			const prov = buildFigureProvenance(lock, new Set(), undefined, NOW);
+			assert.deepStrictEqual(prov, [{ key: 'pipeline@mcp:demo.query/total', source: 'demo.query', location: '', synced: 'Not yet synced', fresh: true, then: '128,000', kind: 'mcp' }]);
+		});
+
+		// #122 F13 - the "then vs now" hover peek.
+		test('a stale file binding with a drifted live value surfaces then + now (the value at bind time vs current)', () => {
+			const lock = lockWith({
+				'metrics.mrr': { resolved: '$48.6k', source: 'metrics.csv#mrr', sourceHash: 'a1', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+			});
+			const prov = buildFigureProvenance(lock, new Set(['metrics.mrr']), new Map([['metrics.mrr', '$52.1k']]), NOW);
+			assert.deepStrictEqual(prov, [{ key: 'metrics.mrr', source: 'metrics.csv', location: 'mrr', synced: 'Synced 2 h ago', fresh: false, then: '$48.6k', kind: 'file', now: '$52.1k' }]);
+		});
+
+		test('a stale live value that equals the applied value adds no now (nothing actually drifted)', () => {
+			const lock = lockWith({
+				'metrics.mrr': { resolved: '$48.6k', source: 'metrics.csv#mrr', sourceHash: 'a1', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+			});
+			const prov = buildFigureProvenance(lock, new Set(['metrics.mrr']), new Map([['metrics.mrr', '$48.6k']]), NOW);
+			assert.strictEqual(prov[0].now, undefined);
+			assert.strictEqual(prov[0].fallback, undefined);
+		});
+
+		test('a stale api/mcp binding with no readable live value names its fallback plainly (never dressed as current)', () => {
+			const lock = lockWith({
+				'crm.pipeline': { resolved: '128,000', source: 'https://crm.example.com/data#pipeline', sourceHash: 'b2', syncedAt: '2026-07-06T09:00:00Z', appliedBy: 'agent', kind: 'figure' },
+				'pipeline@mcp:demo.query/total': { resolved: '512', source: 'demo.query', sourceHash: 'c3', syncedAt: '2026-07-06T09:00:00Z', appliedBy: 'agent', kind: 'figure' },
+			});
+			// Both are stale; neither is present in the live-value map (the proxy fetch was unavailable).
+			const prov = buildFigureProvenance(lock, new Set(['crm.pipeline', 'pipeline@mcp:demo.query/total']), new Map(), NOW);
+			const api = prov.find(p => p.key === 'crm.pipeline')!;
+			const mcp = prov.find(p => p.key === 'pipeline@mcp:demo.query/total')!;
+			assert.strictEqual(api.kind, 'api');
+			assert.strictEqual(api.now, undefined);
+			assert.strictEqual(api.fallback, 'Live value unavailable - showing the last synced value');
+			assert.strictEqual(mcp.kind, 'mcp');
+			assert.strictEqual(mcp.fallback, 'Live value unavailable - showing the last synced value');
+		});
+
+		test('a stale file binding with no readable live value gets no fallback (a file is not an api/mcp fetch)', () => {
+			const lock = lockWith({
+				'metrics.mrr': { resolved: '$48.6k', source: 'metrics.csv#mrr', sourceHash: 'a1', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+			});
+			const prov = buildFigureProvenance(lock, new Set(['metrics.mrr']), new Map(), NOW);
+			assert.strictEqual(prov[0].fallback, undefined);
+			assert.strictEqual(prov[0].now, undefined);
 		});
 
 		test('relativeSyncedLabel is truthful across buckets and never fabricates on a missing time', () => {

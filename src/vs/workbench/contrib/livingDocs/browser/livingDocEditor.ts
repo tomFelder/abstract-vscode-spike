@@ -500,7 +500,7 @@ export class LivingDocEditor extends EditorPane {
 		// is not living / has no lock, so the tooltip stays silent on a plain Markdown doc.
 		const lock = this._livingDocs.getLock(resource);
 		const provenance = lock
-			? buildFigureProvenance(lock, new Set(this._livingDocs.getFreshness(resource).staleBindings))
+			? buildFigureProvenance(lock, new Set(this._livingDocs.getFreshness(resource).staleBindings), this._livingDocs.getCurrentValues(resource))
 			: [];
 		const input: ILivingDocRenderInput = {
 			doc: this._livingDocs.getDoc(resource),

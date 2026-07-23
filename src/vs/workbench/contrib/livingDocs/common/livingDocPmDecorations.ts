@@ -5,12 +5,22 @@
 
 import { buildBlockGutterEntries, IBlockGutterEntry, resolveBlockLine } from './livingDocAddress.js';
 import { scopeBlockEdit } from './livingDocMarkdown.js';
-import { ChangeKind, ILivingDoc, ILivingDocLock, IProposedChange } from './livingDocsModel.js';
+import { ChangeKind, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 
-// The provenance a bound figure answers on hover (plan 29, iter 3): where the value came from, where in
-// that source, when it last synced, and whether the source has changed since. Built purely from the lock's
-// binding entries + the document's stale-binding set, so the tooltip never fabricates a state - an entry
-// the lock has never synced shows the honest "Not yet synced", and `fresh` is the real hash-compare result.
+// The kind of source a bound value draws from, for the hover peek's fallback naming (#122 F13): a `file`
+// binding always has a "now" value (the file is on disk); an `api`/`mcp` binding depends on a live fetch,
+// so when that fetch is unavailable the peek names the fallback state plainly rather than pretending the
+// last-synced value is current.
+export type ProvenanceKind = SourceKind;
+
+// The provenance a bound figure answers on hover (plan 29, iter 3; extended for #122 F13, the "then vs now"
+// peek): where the value came from, where in that source, when it last synced, whether the source has changed
+// since, the value AT bind time (`then`), the source's CURRENT value (`now`, only when it has drifted), the
+// source kind, and - for an api/mcp source whose live value could not be fetched - a plain `fallback` label.
+// Built purely from the lock's binding entries + the document's stale-binding set + the last freshness
+// recompute's live values, so the tooltip never fabricates a state: an entry the lock has never synced shows
+// the honest "Not yet synced", `fresh` is the real hash-compare result, and an api/mcp value with no live
+// reading names its fallback instead of masquerading as current.
 export interface IPmProvenance {
 	readonly key: string;
 	// The source's file name or endpoint (the part before the `#` in the lock's `source`), e.g. "metrics.csv".
@@ -21,6 +31,17 @@ export interface IPmProvenance {
 	readonly synced: string;
 	// True when the current source value still matches the lock's recorded hash (nothing stale for this key).
 	readonly fresh: boolean;
+	// The value applied to the document at last sync (the "then" side of the peek); the lock's `resolved`.
+	readonly then: string;
+	// The source's live value now, present ONLY when it has drifted from `then` (a stale binding with a
+	// readable live value). Absent when fresh, or when the live value could not be read (see `fallback`).
+	readonly now?: string;
+	// The source kind, so the peek can label an api/mcp binding's fallback state (`file` always reads locally).
+	readonly kind: ProvenanceKind;
+	// Set ONLY for a stale api/mcp binding whose live value could not be fetched (the proxy was unavailable):
+	// a plain fallback label the peek shows in place of a "now" value, so a fallback is never dressed up as
+	// the current source reading. Absent for file bindings and for any binding with a real live value.
+	readonly fallback?: string;
 }
 
 // A truthful relative "last synced" label from a lock timestamp (plan 29, iter 3). Undefined/unparseable =
@@ -40,20 +61,51 @@ export function relativeSyncedLabel(iso: string | undefined, now: number = Date.
 	return `Synced ${d} day${d === 1 ? '' : 's'} ago`;
 }
 
+// The source kind for a bind key, mirroring the service's own derivation (an `@mcp:` marker on the KEY wins;
+// otherwise an http(s) source URL is an api, and everything else is a local file). Kept here so the pure
+// provenance builder can name an api/mcp fallback without importing the browser service.
+function provenanceKind(key: string, source: string): ProvenanceKind {
+	if (key.indexOf('@mcp:') >= 0) { return 'mcp'; }
+	return /^https?:\/\//.test(source) ? 'api' : 'file';
+}
+
 /**
  * Project the lock's binding ledger into the per-key provenance the figure/gutter hover tooltip reads
- * (plan 29, iter 3). `staleKeys` is the document's freshness `staleBindings` set - a key in it flips
- * `fresh` to false so the tooltip's amber "source changed since" line shows. Pure so it is unit-tested
- * directly and reused by the render payload builder; `now` is injectable for deterministic time tests.
+ * (plan 29, iter 3; #122 F13 "then vs now"). `staleKeys` is the document's freshness `staleBindings` set - a
+ * key in it flips `fresh` to false so the tooltip's amber "source changed since" line shows. `currentValues`
+ * is the last freshness recompute's live re-resolved value per key (the "now"); a stale key present there
+ * with a value that differs from the applied value populates `now`, while a stale api/mcp key ABSENT from it
+ * (the live fetch was unavailable) is named as a fallback instead of masquerading as current. Pure so it is
+ * unit-tested directly and reused by the render payload builder; `now` (the clock) is injectable for tests.
  */
-export function buildFigureProvenance(lock: ILivingDocLock, staleKeys: ReadonlySet<string>, now: number = Date.now()): IPmProvenance[] {
+export function buildFigureProvenance(lock: ILivingDocLock, staleKeys: ReadonlySet<string>, currentValues?: ReadonlyMap<string, string>, now: number = Date.now()): IPmProvenance[] {
 	const out: IPmProvenance[] = [];
 	for (const key of Object.keys(lock.bindings)) {
 		const entry = lock.bindings[key];
 		const hashIdx = entry.source.indexOf('#');
 		const source = hashIdx >= 0 ? entry.source.slice(0, hashIdx) : entry.source;
 		const location = hashIdx >= 0 ? entry.source.slice(hashIdx + 1) : '';
-		out.push({ key, source, location, synced: relativeSyncedLabel(entry.syncedAt, now), fresh: !staleKeys.has(key) });
+		const kind = provenanceKind(key, entry.source);
+		const stale = staleKeys.has(key);
+		// The live "now" value: only meaningful for a stale key (a fresh key by definition still equals `then`).
+		const live = stale ? currentValues?.get(key) : undefined;
+		const drifted = live !== undefined && live !== entry.resolved ? live : undefined;
+		// A stale api/mcp value with no live reading fell back: the proxy could not fetch it, so name the
+		// fallback plainly rather than presenting the last-synced value as the current source reading.
+		const fallback = stale && drifted === undefined && kind !== 'file'
+			? 'Live value unavailable - showing the last synced value'
+			: undefined;
+		out.push({
+			key,
+			source,
+			location,
+			synced: relativeSyncedLabel(entry.syncedAt, now),
+			fresh: !stale,
+			then: entry.resolved,
+			kind,
+			...(drifted !== undefined ? { now: drifted } : {}),
+			...(fallback !== undefined ? { fallback } : {}),
+		});
 	}
 	return out;
 }
