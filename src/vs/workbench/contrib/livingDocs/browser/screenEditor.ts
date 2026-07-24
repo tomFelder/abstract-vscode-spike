@@ -1503,6 +1503,18 @@ export class ScreenEditor extends EditorPane {
 		void this._webview?.postMessage({ type: 'openSheet', sheet });
 	}
 
+	// Public door for other Abstract surfaces (WP-H / #261): open one of this screen's own sheets. Used to
+	// UNIFY the new-document doors - the tree-rail's "+" opens Project Home and then asks Home to open its rich
+	// New-document sheet (Blank + templates + "From sources..."), so there is one shared new-doc dialog behind
+	// every door rather than a poor name-only quick input. Ensures the webview is mounted (a screen reopened
+	// after a document editor was active can be torn down) before posting, so the request is never dropped.
+	openSheet(sheet: string): void {
+		if (!this._webview) {
+			this._mountWebview();
+		}
+		this._openScreenSheet(sheet);
+	}
+
 	// Recompute the cross-document review screen state (C5, plan 24) from the LIVE service each render: the
 	// pending set is `getAllPending()` (the SAME model the C6 rail consumes - this is a second presentation,
 	// not a re-derivation), grouped by document in the renderer for the rail + cards. Only the current-doc

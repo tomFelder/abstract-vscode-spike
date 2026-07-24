@@ -33,6 +33,8 @@ import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
 import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
+import { ScreenEditor } from './screenEditor.js';
+import { ScreenEditorInput } from './screenEditorInput.js';
 
 // Three calm tabs (pin 4): Search is gone as a tab - it folds into Files as type-to-filter (P4.1/P4.2).
 type TreeRailTab = 'files' | 'context' | 'outline';
@@ -190,14 +192,15 @@ export class TreeRailView extends ViewPane {
 			}));
 		}
 		append(tabs, $('div.rail-tabs-spacer'));
-		// The quiet + : name-first document birth (P4.4). Reuses plan 42's create command with a typed name,
-		// which is kept (createDocument writes `<name>.md`); an empty name keeps the Untitled escape hatch.
+		// The quiet + : the new-document door (P4.4). WP-H (#261) unifies every new-doc door onto ONE rich dialog:
+		// this + now opens Project Home's New-document sheet (Blank + templates + "From sources...") - the same
+		// dialog the Home tile opens - instead of a poor name-only quick input that could only make blank docs.
 		const plus = append(tabs, $('button.rail-new-doc')) as HTMLButtonElement;
 		// allow-any-unicode-next-line
 		plus.textContent = '＋'; // fullwidth plus, matching the mock's quiet new-document glyph
 		plus.title = localize('livingDocs.treeRail.newDocument', "New Document");
 		plus.setAttribute('aria-label', plus.title);
-		this._renderDisposables.add(addDisposableListener(plus, 'click', () => void this._createDocument()));
+		this._renderDisposables.add(addDisposableListener(plus, 'click', () => void this._newDocument()));
 
 		const panel = append(root, $('div.rail-panel'));
 		switch (this._tab) {
@@ -207,16 +210,21 @@ export class TreeRailView extends ViewPane {
 		}
 	}
 
-	// Name-first document birth from the tree rail's + (P4.4): prompt for a name, then create through the
-	// existing plan-42 service command (which keeps the typed name as the filename). A blank/cancelled name
-	// keeps decision 56's Untitled name-on-first-save escape hatch; the service opens the new document.
-	private async _createDocument(): Promise<void> {
-		const name = await this._quickInput.input({
-			prompt: localize('livingDocs.treeRail.newDocumentPrompt', "Name your new document"),
-			placeHolder: localize('livingDocs.treeRail.newDocumentPlaceholder', "Untitled"),
-		});
-		if (name === undefined) { return; } // cancelled - no document is born
-		await this._livingDocs.createDocument(name.trim());
+	// The new-document door from the tree rail's + (P4.4, unified by WP-H / #261): open Project Home and ask it
+	// to open its rich New-document sheet - the SAME dialog the Home tile opens (Blank + real templates + "From
+	// sources..."), so the obvious "+" no longer hides the template/from-sources on-ramp behind a name-only quick
+	// input. Home already backs blank, template-generate and from-sources creation through the review-safe paths.
+	private async _newDocument(): Promise<void> {
+		const input = this.instantiationService.createInstance(ScreenEditorInput, 'home');
+		const pane = await this._editors.openEditor(input, { pinned: true });
+		// The screen input is a Singleton: the service may return an already-open Home pane rather than adopt the
+		// instance we created, leaving us the owner - dispose ours unless the resolved pane is backed by it.
+		if (pane?.input !== input) {
+			input.dispose();
+		}
+		if (pane instanceof ScreenEditor) {
+			pane.openSheet('newdoc');
+		}
 	}
 
 	// The Files tab (issue #171): a real collapsible file tree on the VS Code tree widget. The widget is
