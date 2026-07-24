@@ -182,6 +182,9 @@ html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-fami
  * underline, over the faint accent highlight. */
 .bound{background:rgba(80,110,235,.08);color:#4650B8;font-weight:500;border-bottom:2px dotted #9AA2E0;border-radius:2px;padding:0 2px;cursor:pointer}
 .bound:hover{background:rgba(80,110,235,.16)}
+/* The keyboard route to the provenance drawer (#254): a tabbed-to bound figure shows a clear focus ring so a
+ * keyboard user can see which figure Enter/Space will trace. */
+.bound:focus-visible{outline:2px solid #5B6DC4;outline-offset:1px;background:rgba(80,110,235,.16)}
 /* The applied-flash keyframe is reused by the PM provenance gutter's recently-changed marker. */
 @keyframes flash{0%{background:rgba(31,122,68,.34)}100%{background:rgba(31,122,68,.09)}}
 /* Inline word-diff for a meaning-change, matching the hi-fi (edit-in-place, not a stacked block). */
@@ -585,7 +588,14 @@ function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance
 // suffix when a snapshot exists (plan 26 iter 4).
 function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
 function pmOnChange(){ if (_pmEchoSuppressed) { return; } setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
-function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } }
+function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } enrichBoundFigures(); }
+// Make every bound figure a real, reachable provenance door (#254). The bundle renders it as a plain
+// span.bound atom with no affordance beyond colour; here we give each one a keyboard tab-stop, a button role,
+// and an accessible name/title built from the live provenance so a screen-reader user (and a hover) both learn
+// "trace <value> to <source>". Idempotent: re-run after every decoration pass (a source edit can flip the
+// freshness text), skipping spans already enriched with the current label. The Enter/Space activation is
+// handled by a delegated keydown on root (see below) so it survives the innerHTML swaps.
+function enrichBoundFigures(){ if (!pmView){ return; } const figs = pmView.dom.querySelectorAll('span.bound[data-key]'); for (let i = 0; i < figs.length; i++){ const fig = figs[i]; const key = fig.getAttribute('data-key'); const p = _prov[key]; const src = p && p.source ? p.source : null; const label = src ? ('Bound figure ' + (fig.textContent || '') + ' - trace to ' + src) : ('Bound figure ' + (fig.textContent || '') + ' - trace to source'); if (fig.getAttribute('aria-label') === label && fig.getAttribute('tabindex') === '0'){ continue; } fig.setAttribute('tabindex', '0'); fig.setAttribute('role', 'button'); fig.setAttribute('aria-label', label); fig.setAttribute('title', label); } }
 // History-preserving body swap for a model-driven pmReset (approve/reject/refresh), replacing the old
 // LWDPM.setDoc path which built a FRESH EditorState with a fresh (empty) history() plugin and so wiped the
 // whole session's undo stack (issue #142). Here the new body is parsed to a doc node (via docJSON, so the
@@ -726,6 +736,11 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-apply-raw]')) { const ta = root.querySelector('textarea.raw'); return vscode.postMessage({ type: 'applyRaw', text: ta ? ta.value : '' }); }
 });
 root.addEventListener('keydown', e => {
+	// The keyboard route to the wedge (#254): a focused bound figure activates its provenance drawer on
+	// Enter/Space, the same reveal a click posts. enrichBoundFigures() made the span a tab-stop + role=button,
+	// so this completes the "figure is a real, keyboard-reachable door" contract.
+	const fig = e.target.closest && e.target.closest('span.bound[data-key]');
+	if (fig && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) { e.preventDefault(); return vscode.postMessage({ type: 'reveal', cells: [fig.getAttribute('data-key')] }); }
 	const b = e.target.closest('[data-block]');
 	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
 	// Properties inputs commit on Enter (title/status blur to fire their focusout write; the tag input posts and
@@ -848,7 +863,16 @@ function onTableToolMousedown(e){ const btn = e.target.closest && e.target.close
 function applyTableOp(op){ const ed = tblEditor; if (!ed){ return; } const tIdx = ed.tIdx; const loc = tableNodeByIndex(tIdx); if (!loc){ return; } let t = setCell(parseGfmTable(loc.node.attrs.markdown || ''), ed.r, ed.c, ed.input.value); let fr = ed.r, fc = ed.c; if (op === 'row+'){ const at = ed.r + 1; t = insertRow(t, at); fr = at < 0 ? 0 : at; fc = ed.c; } else if (op === 'col+'){ const at = ed.c + 1; t = insertCol(t, at); fc = at; } else if (op === 'row-'){ if (ed.r < 0 || t.rows.length === 0){ return; } t = deleteRow(t, ed.r); if (!t.rows.length){ fr = -1; fc = ed.c; } else { fr = Math.min(ed.r, t.rows.length - 1); } } else if (op === 'col-'){ if (t.header.length <= 1){ return; } t = deleteCol(t, ed.c); fc = Math.min(ed.c, t.header.length - 1); } else { return; } teardownCellInput(); dispatchTableMd(loc.pos, serializeGfmTable(t)); openCellAt(tIdx, { r: fr, c: fc }); }
 // Capture-phase mousedown on a cell: stop PM's node-select (the wipe trap can't even arm), commit any
 // open editor first (may rebuild this table's DOM), then open the target cell resolved by table index.
-function onTableCellMousedown(e){ const cell = e.target.closest && e.target.closest('td, th'); if (!cell){ return; } const tableEl = cell.closest && cell.closest('table.lwd-table'); if (!tableEl || !pmView || !pmView.dom.contains(tableEl)){ return; } e.preventDefault(); e.stopPropagation(); const tIdx = tablesInView().indexOf(tableEl); const coords = cellCoords(tableEl, cell); if (tblEditor){ commitCell(); teardownCellInput(); } openCellAt(tIdx, coords); }
+// The wedge exception (#254): a bound figure inside a cell is the product's provenance door - a single click
+// on it opens the source drawer (the advertised "click a figure to trace it back to the source" gesture), NOT
+// the table cell editor. Cell editing stays reachable by a deliberate second gesture: double-click the figure
+// (or single-click the cell's non-figure area) still opens the editor. Detected here because this capture-phase
+// mousedown runs BEFORE the bubble-phase root click handler could ever see the figure, so the reveal must fire
+// from here (posting reveal directly) rather than being left to the click delegate.
+function onTableCellMousedown(e){ const cell = e.target.closest && e.target.closest('td, th'); if (!cell){ return; } const tableEl = cell.closest && cell.closest('table.lwd-table'); if (!tableEl || !pmView || !pmView.dom.contains(tableEl)){ return; }
+	const fig = e.target.closest && e.target.closest('span.bound[data-key]');
+	if (fig && e.detail < 2){ e.preventDefault(); e.stopPropagation(); if (tblEditor){ commitCell(); teardownCellInput(); } return vscode.postMessage({ type: 'reveal', cells: [fig.getAttribute('data-key')] }); }
+	e.preventDefault(); e.stopPropagation(); const tIdx = tablesInView().indexOf(tableEl); const coords = cellCoords(tableEl, cell); if (tblEditor){ commitCell(); teardownCellInput(); } openCellAt(tIdx, coords); }
 // Capture-phase keydown guard: while a table atom is node-selected, a single printable key would replace
 // it. Block that (the data-loss trap). Delete/Backspace still delete the table (a visible, undoable act);
 // Ctrl/Meta chords (copy/cut) pass through. Skipped while a cell editor is open (its own input owns keys).
@@ -1110,7 +1134,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	}
 
 	const hint = (isPm && isLiving)
-		? `<div class="hint">Bound figures are highlighted in blue &mdash; click one (or a gutter dot) to trace it back to the source. `
+		? `<div class="hint">Bound figures are highlighted in blue - click one (or a gutter dot) to trace it back to the source. `
 		+ `Figures apply automatically; meaning-changes wait in the Review rail (right side bar). `
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';

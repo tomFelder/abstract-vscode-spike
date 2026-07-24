@@ -36,6 +36,7 @@ import { ILivingDocRenderInput, IPresentState, IPropertiesRenderState, LivingDoc
 import { renderPropertiesPanel } from './propertiesPanelRender.js';
 import { coerceDocPolicy } from '../common/docPolicy.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
+import { advanceOnboardingOnPeek } from './onboardingWalkthrough.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -368,15 +369,18 @@ export class LivingDocEditor extends EditorPane {
 				if (this._resource) { void this._livingDocs.shareDocument(this._resource); }
 				break;
 			case 'reveal':
-				// Clicking a provenance dot opens the in-surface source pane focused on those cells.
+				// Clicking (or keyboard-activating) a bound figure or provenance dot opens the in-surface source
+				// pane focused on those cells - the wedge's provenance door (#254).
 				this._sourcePeek = { cells: Array.isArray(message.cells) ? message.cells : [], synced: false, syncedCount: 0 };
 				this._livingDocs.notePeek('click-through');
+				this._notePeekForOnboarding();
 				this._render();
 				break;
 			case 'openSource':
 				// The "Source" toolbar button opens the in-surface source pane (no cell focus).
 				this._sourcePeek = { cells: [], synced: false, syncedCount: 0 };
 				this._livingDocs.notePeek('toolbar');
+				this._notePeekForOnboarding();
 				this._render();
 				break;
 			case 'closeSource':
@@ -426,6 +430,16 @@ export class LivingDocEditor extends EditorPane {
 		}
 		this._present = { ...this._present, open: false };
 		this._render();
+	}
+
+	// D26 wow one (#255): a real provenance peek on the demo document advances the persisted onboarding step
+	// (provenance-peek -> first-diff) so the re-entered onboarding card shows wow one complete only because it
+	// actually happened. The matching `provenance-peek` funnel event is recorded separately at this same peek
+	// (LivingDocsService.notePeek), so the card and events.log agree. A no-op outside a walkthrough or off the
+	// demo document (see advanceOnboardingOnPeek). The onboarding card is displaced by the demo document during
+	// the walkthrough, so it re-reads the persisted step when it is next re-entered from Home - no event needed.
+	private _notePeekForOnboarding(): void {
+		advanceOnboardingOnPeek(this._storageService, this._resource?.toString());
 	}
 
 	// "Fix first" (plan 32 iter 4): jump to the block the gate flagged. The Financial gate flags on the

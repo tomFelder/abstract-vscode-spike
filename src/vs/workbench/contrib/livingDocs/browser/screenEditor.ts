@@ -36,6 +36,7 @@ import { IAnalyticsService } from '../common/analytics.js';
 import { buildAwayFeed, classifyProjectChat, IAwayFeed, relativeTime } from '../common/projectHomeFeed.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { DEMO_ITERATION_PROMPT, nextOnboardingStep, ONBOARDING_STEPS, OnboardingStep } from '../common/onboarding.js';
+import { ONBOARDING_DEMO_KEY, ONBOARDING_STEP_KEY, readOnboardingStep } from './onboardingWalkthrough.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { AgentFilter, IHomeFailure, IHomeNeedsYou, IProjectRunScreenState, IRecentProject, IReviewProjectScreenState, ITidyReviewState, renderScreenHtml, ScreenId } from './screenRender.js';
 import { buildActivityLedger } from '../common/livingDocLedger.js';
@@ -43,9 +44,8 @@ import { buildActivityLedger } from '../common/livingDocLedger.js';
 // Persisted onboarding step + demo-document URI (profile scope) so the two-wow flow "remembers where you were"
 // across reopens and the folder-open reload at hand-off (doc 20 section D26). The step + demo URI are persisted
 // (not just held in memory) because the walkthrough opens the demo document in the same editor group - which
-// displaces the onboarding screen - so the guide is re-entered from Home and must restore its place.
-const ONBOARDING_STEP_KEY = 'livingDocs.onboardingStep';
-const ONBOARDING_DEMO_KEY = 'livingDocs.onboardingDemoUri';
+// displaces the onboarding screen - so the guide is re-entered from Home and must restore its place. The keys +
+// the peek-advance rule are shared with the document editor (issues #254/#255) via onboardingWalkthrough.ts.
 // Plan 42 slice L1: set once the user dismisses the "See a 90-second demo" card on Home. Profile-scoped so the
 // demoted walkthrough entry point stays hidden across sessions once the user has waved it away.
 const DEMO_CARD_DISMISSED_KEY = 'livingDocs.demoCardDismissed';
@@ -303,8 +303,7 @@ export class ScreenEditor extends EditorPane {
 		// would race ahead of consent and be dropped by the gate.
 		if (this._screen === 'onboarding') {
 			const status = await this._livingDocs.getModelProviderStatus();
-			const saved = this._storageService.get(ONBOARDING_STEP_KEY, StorageScope.PROFILE) as OnboardingStep | undefined;
-			const step: OnboardingStep = saved && (ONBOARDING_STEPS as readonly string[]).includes(saved) ? saved : 'open';
+			const step = readOnboardingStep(this._storageService);
 			const demoStr = this._storageService.get(ONBOARDING_DEMO_KEY, StorageScope.PROFILE);
 			this._state = { ...this._state, onboardingStep: step, onboardingHasModel: status.provider !== 'none', onboardingDemoUri: demoStr ? URI.parse(demoStr) : undefined };
 		}
@@ -1025,11 +1024,12 @@ export class ScreenEditor extends EditorPane {
 		this._storageService.store(ONBOARDING_DEMO_KEY, uri.toString(), StorageScope.PROFILE, StorageTarget.MACHINE);
 		this._state = { ...this._state, onboardingDemoUri: uri };
 		this._livingDocs.recordOnboardingStep('demo-report');
-		this._setOnboardingStep('demo-report');
-		// Prompt the one iteration through the real chat path so the model's reply lands as a single reviewable
-		// inline diff (wow two); reveal Review and open the demo document where both wows live.
-		this._livingDocs.recordOnboardingStep('first-diff');
-		this._setOnboardingStep('first-diff');
+		// Wow one is a REAL peek, not a claim (#255): stop the card at `provenance-peek` and let the natural
+		// figure peek in the editor complete it. The peek fires the `provenance-peek` funnel event (notePeek) AND
+		// advances this persisted step (advanceOnboardingOnPeek in the document editor), so the card and events.log
+		// agree. We still open the demo, reveal Review, and prompt the one iteration now so the wow-two diff is
+		// already waiting - but we no longer skip past wow one by recording `first-diff` here.
+		this._setOnboardingStep('provenance-peek');
 		this._livingDocs.focusPanel('review');
 		await this._editors.openEditor({ resource: uri, options: { pinned: true } });
 		await this._livingDocs.sendChatMessage(uri, DEMO_ITERATION_PROMPT);
