@@ -1547,6 +1547,36 @@ suite('livingDocs Service', () => {
 		);
 	});
 
+	// Regression (issues #248 + #253, the stale-document-identity family). Block ids are POSITIONAL
+	// (`parseLivingDoc` stamps paragraphs `b-0`, `b-1`, ...), so the same id (`b-3` here, the second body
+	// paragraph) exists in BOTH the Weekly and the Board Note. The Weekly is loaded first (it is the tab open
+	// at launch); the user then switches to the Board Note and approves a change to ITS `b-3`. The old audit
+	// builder resolved `docTitle` by searching every open doc for the first one holding that block id and
+	// taking its title - which returned the Weekly (loaded first), stamping the wrong document onto a Board
+	// Note approval (#248). Approve now audits under the OWNING document's title regardless of load order, so
+	// the identity is pinned after a tab switch; the same fix removes the stale-identity root cause of #253.
+	test('an approve after a tab switch audits under the OWNING document, not the doc that was open first (#248/#253)', async () => {
+		const service = createService([], {
+			boardNote: true,
+			model: modelMessage({ reply: 'Sharpened.', edits: [{ heading: 'Note to the board', oldText: 'Momentum is steady this week.', newText: 'Momentum accelerated this week.', rationale: 'r' }] }),
+		});
+		// Load the Weekly first (the launch tab), THEN switch to the Board Note and chat there. Both docs carry
+		// a positional `b-3` paragraph, so a docTitle guessed from block id alone would collide across them.
+		await service.loadDocument(WEEKLY);
+		await service.loadDocument(BOARD);
+		await service.sendChatMessage(BOARD, 'Sharpen the note to the board');
+		const change = service.getPendingForDoc(BOARD)[0];
+
+		await service.approve(change.id);
+
+		const entry = service.getLock(BOARD)!.audit.find(e => e.action === 'approved')!;
+		assert.deepStrictEqual(
+			{ docTitle: entry.docTitle, blockId: entry.blockId, weeklyAudited: service.getLock(WEEKLY)!.audit.length },
+			{ docTitle: 'Board Note', blockId: 'b-3', weeklyAudited: 0 },
+			'the approval audits under the Board Note (its own state), not the Weekly that was open first',
+		);
+	});
+
 	// --- working set (plan 18 iter 2): the documents a chat instruction edits across (D-A/D-B) ---
 
 	test('addFolderToWorkingSet puts every folder document into the chat working set as titled chips', async () => {
