@@ -752,11 +752,46 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('Use the included model') && /data-msg="useIncludedModel"/.test(html), 'the secondary door uses the included model');
 	});
 
-	test('a signed-in ChatGPT tier shows the signed-in state + a Sign out control', () => {
+	test('a signed-in ChatGPT tier ACTUALLY serving shows the plain signed-in state + a Sign out control (issue #259)', () => {
 		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'chatgpt', readiness: 'ready', signedIn: true, dailyBudgetUsd: 1 }, signInStage: 'signed-in' });
 		assert.ok(html.includes('Signed in to ChatGPT'), 'the signed-in state is shown');
 		assert.ok(/data-msg="signOutChatGpt"/.test(html), 'a Sign out control is wired');
 		assert.ok(html.includes('Your ChatGPT subscription'), 'the "serving you now" line names the subscription door');
+		// When the subscription is genuinely the door, the badge is the plain green affirmation - and there is
+		// NO contradictory fallback wording, since ChatGPT really is answering.
+		assert.ok(!/currently served by/.test(html) && !/data-signin-why/.test(html), 'no fallback caveat when ChatGPT actually serves');
+	});
+
+	// The core #259 fix: signed in to ChatGPT but the broker fell back to the included model (the #120
+	// subscription-call failure). The screen must state ONE serving door (the included model) and the
+	// sign-in badge must say so explicitly instead of a second green "everything's fine" affirmation.
+	test('signed in to ChatGPT but served by the included model states one door and names the fallback honestly (issue #259)', () => {
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', readiness: 'ready', signedIn: true, dailyBudgetUsd: 1, dailyTotalUsd: 0.2 }, signInStage: 'signed-in' });
+		// Exactly one serving door is stated, and it is the door that actually answered (the included model).
+		assert.ok(html.includes('The included model'), 'the serving door is the included model (the backend that answered)');
+		assert.ok(!html.includes('Your ChatGPT subscription'), 'the ChatGPT subscription is NOT claimed as the serving door');
+		// The sign-in badge tells the truth: signed in, but calls are currently served by the included model.
+		assert.ok(html.includes('Signed in to ChatGPT, but calls are currently served by the included model'), 'the badge names the signed-in-but-falling-back truth');
+		// An in-place honest explanation referencing the known issue is offered, without lying that ChatGPT serves.
+		assert.ok(/data-signin-why/.test(html) && html.includes('See why'), 'an explain-in-place affordance is offered');
+		assert.ok(html.includes('complete model calls through your ChatGPT plan') && html.includes('You stay signed in'), 'the explanation is honest about the ChatGPT path and reassures sign-in is kept');
+		// Sign out is still reachable in the fallback state.
+		assert.ok(/data-msg="signOutChatGpt"/.test(html), 'Sign out is still available while falling back');
+	});
+
+	// Plain included tier, NOT signed in: no ChatGPT claim of any kind, one honest door.
+	test('the plain included tier (not signed in) makes no ChatGPT claim and states one serving door (issue #259)', () => {
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'included', readiness: 'ready', signedIn: false, dailyBudgetUsd: 1, dailyTotalUsd: 0.6 } });
+		assert.ok(html.includes('The included model'), 'the included model is the stated serving door');
+		assert.ok(!html.includes('Signed in to ChatGPT'), 'no false "signed in" claim when the user is not signed in');
+		assert.ok(/data-msg="signInChatGpt"/.test(html), 'the sign-in door is offered, not asserted as active');
+	});
+
+	// Broker down: no invented serving door, and no ChatGPT affirmation even if a stale sign-in existed.
+	test('a broker-down state degrades honestly - no invented serving door (issue #259)', () => {
+		const html = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'broker-down', signedIn: false, dailyBudgetUsd: 0 } });
+		assert.ok(html.includes('Connecting to the model service'), 'the broker-down state names the connecting state, not a fake door');
+		assert.ok(!html.includes('The included model') && !html.includes('Your ChatGPT subscription'), 'no serving door is invented while the broker is down');
 	});
 
 	test('the included tier shows today\'s usage in plain words with a D19 usage ring', () => {
