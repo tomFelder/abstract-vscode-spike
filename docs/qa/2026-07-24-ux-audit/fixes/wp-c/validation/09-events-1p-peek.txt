@@ -1,0 +1,10 @@
+{"ts":"2026-07-24T10:42:36.867Z","event":"project_opened","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","doc_count":8,"has_bindings":true,"is_first":true}
+{"ts":"2026-07-24T10:44:23.088Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}
+{"ts":"2026-07-24T10:44:23.089Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}
+{"ts":"2026-07-24T10:50:09.618Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}
+{"ts":"2026-07-24T10:52:25.943Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}
+{"ts":"2026-07-24T10:52:25.944Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}
+{"ts":"2026-07-24T10:52:33.742Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}
+{"ts":"2026-07-24T10:52:33.743Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}
+{"ts":"2026-07-24T10:53:58.577Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}
+{"ts":"2026-07-24T10:53:58.577Z","event":"provenance_peeked","distinct_id":"e11c9160-c3bf-4f87-bf83-e3f4216d17e3","mode":"click-through"}

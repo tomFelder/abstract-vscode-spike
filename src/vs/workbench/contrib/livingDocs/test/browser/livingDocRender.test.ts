@@ -193,6 +193,25 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		});
 	});
 
+	test('the wedge runtime wires a bound figure to the source drawer (#254): click reveals, cell-edit is a second gesture, and there is a keyboard + a11y route', () => {
+		const h = renderLivingDocHtml({
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'pm', rawText: '', present: { open: false, choice: 'html' }, syncDiff: [],
+		});
+		assert.deepStrictEqual({
+			// A single click on a bound figure inside a table cell posts reveal (opens the drawer), not the cell editor.
+			figureClickReveals: h.includes(`e.target.closest('span.bound[data-key]')`) && h.includes(`type: 'reveal', cells: [fig.getAttribute('data-key')]`),
+			// The cell editor stays reachable by a deliberate second gesture (double-click: e.detail >= 2).
+			cellEditIsSecondGesture: h.includes(`fig && e.detail < 2`),
+			// A focused figure activates the same reveal on Enter / Space (the keyboard route).
+			keyboardRoute: h.includes(`e.key === 'Enter' || e.key === ' '`),
+			// Figures are enriched into real tab-stop buttons with an accessible name (role/tabindex/aria-label/title).
+			a11yEnriched: h.includes(`function enrichBoundFigures`) && h.includes(`fig.setAttribute('role', 'button')`) && h.includes(`fig.setAttribute('tabindex', '0')`),
+		}, {
+			figureClickReveals: true, cellEditIsSecondGesture: true, keyboardRoute: true, a11yEnriched: true,
+		});
+	});
+
 	test('source-peek drawer, once synced, swaps the Sync button for a "N synced" chip', () => {
 		const h = renderLivingDocHtml({
 			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),

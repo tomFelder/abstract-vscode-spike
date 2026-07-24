@@ -1,0 +1,5 @@
+{"ts":"2026-07-24T10:35:59.410Z","event":"onboarding_step","distinct_id":"e6847f86-730a-4516-beab-5219890561e8","step":"open"}
+{"ts":"2026-07-24T10:35:59.458Z","event":"onboarding_step","distinct_id":"e6847f86-730a-4516-beab-5219890561e8","step":"demo report generated"}
+{"ts":"2026-07-24T10:36:51.272Z","event":"provenance_peeked","distinct_id":"e6847f86-730a-4516-beab-5219890561e8","mode":"click-through"}
+{"ts":"2026-07-24T10:36:51.273Z","event":"onboarding_step","distinct_id":"e6847f86-730a-4516-beab-5219890561e8","step":"provenance peek hovered"}
+{"ts":"2026-07-24T10:36:51.276Z","event":"provenance_peeked","distinct_id":"e6847f86-730a-4516-beab-5219890561e8","mode":"click-through"}

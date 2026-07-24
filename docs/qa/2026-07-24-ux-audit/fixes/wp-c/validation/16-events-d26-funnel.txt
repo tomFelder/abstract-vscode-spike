@@ -1,0 +1,10 @@
+# D26 onboarding funnel for validator instance (distinct_id=83dad2ca-15f5-4a87-9639-71ca768a8508)
+# Walk: See It Work clicked 11:02:03; 32s idle wait (no self-advance); real peek on demo $48.6k at 11:04:08
+#
+{"ts":"2026-07-24T11:01:19.030Z","event":"app_opened","distinct_id":"83dad2ca-15f5-4a87-9639-71ca768a8508","version":"1.127.0","first_open":true}
+{"ts":"2026-07-24T11:01:19.091Z","event":"project_opened","distinct_id":"83dad2ca-15f5-4a87-9639-71ca768a8508","doc_count":8,"has_bindings":true,"is_first":true}
+{"ts":"2026-07-24T11:02:04.117Z","event":"onboarding_step","distinct_id":"83dad2ca-15f5-4a87-9639-71ca768a8508","step":"open"}
+{"ts":"2026-07-24T11:02:04.158Z","event":"onboarding_step","distinct_id":"83dad2ca-15f5-4a87-9639-71ca768a8508","step":"demo report generated"}
+{"ts":"2026-07-24T11:04:08.636Z","event":"provenance_peeked","distinct_id":"83dad2ca-15f5-4a87-9639-71ca768a8508","mode":"click-through"}
+{"ts":"2026-07-24T11:04:08.636Z","event":"onboarding_step","distinct_id":"83dad2ca-15f5-4a87-9639-71ca768a8508","step":"provenance peek hovered"}
+{"ts":"2026-07-24T11:04:08.638Z","event":"provenance_peeked","distinct_id":"83dad2ca-15f5-4a87-9639-71ca768a8508","mode":"click-through"}
