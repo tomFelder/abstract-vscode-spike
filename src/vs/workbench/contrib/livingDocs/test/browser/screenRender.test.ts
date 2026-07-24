@@ -164,6 +164,15 @@ suite('livingDocs screenRender', () => {
 		}, { needsYou: true, inSync: true, markdown: true, newDocTile: true });
 	});
 
+	test('CD-1: the populated dashboard carries the "Ask this project" composer so the fan-out is launchable (1j/1w)', () => {
+		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', userName: 'Tom', docs: [summary('/ws/A.md', 'A', true, 0)] });
+		assert.deepStrictEqual({
+			composer: /data-ask-box/.test(html),
+			sends: /data-ask-send/.test(html),
+			label: html.includes('ASK THIS PROJECT'),
+		}, { composer: true, sends: true, label: true });
+	});
+
 	test('home v2: the NEEDS-YOU section shows at most two cards and a "+N more" overflow to the Review surface (H2.1)', () => {
 		const html = renderScreenHtml('home', {
 			...state, hasFolder: true, folderName: 'ws', userName: 'Tom',
@@ -234,16 +243,18 @@ suite('livingDocs screenRender', () => {
 
 	// --- Home v2: zero-pending calm state (H1.3 / H2.5) ---
 	// The v2 Home no longer carries the pre-v2 dashboard's WHILE YOU WERE AWAY feed, all-clear banner, Tidy
-	// surface, failed-run attention line or in-dashboard chat composer (those pre-v2 surfaces were removed by
-	// plan 48; the chat composer still leads the empty-project front door, tested below). The calm all-clear
-	// is now the summary line itself, and the NEEDS-YOU section is simply absent when nothing pends.
+	// surface or failed-run attention line (those were removed by plan 48). The "Ask this project" composer,
+	// however, now leads BOTH Home paths (CD-1 fix): dropping it from populated Home stranded the project-wide
+	// fan-out (1j) on any real project. The calm all-clear is the summary line itself, and the NEEDS-YOU section
+	// is simply absent when nothing pends.
 
 	test('home v2 all-clear: the summary reads "Everything is in sync." and the NEEDS-YOU section is absent (H1.3 / H2.5)', () => {
 		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', userName: 'Tom', docs: [summary('/ws/A.md', 'A', true, 0)] });
 		assert.ok(html.includes('Everything is in sync.'), 'the summary carries the calm all-clear when nothing pends');
 		assert.ok(!/NEEDS YOU/.test(html), 'no NEEDS-YOU section (no empty shell) when nothing pends');
-		// The pre-v2 dashboard surfaces are gone from the v2 Home body (they were never a v2 criterion).
-		assert.ok(!/WHILE YOU WERE AWAY/.test(html) && !/ASK THIS PROJECT/.test(html) && !/failed on/.test(html), 'the pre-v2 dashboard surfaces are gone from v2 Home');
+		// The pre-v2 dashboard surfaces are gone from the v2 Home body (they were never a v2 criterion); the
+		// "Ask this project" composer, by contrast, is intentionally present again (CD-1 fix, tested above).
+		assert.ok(!/WHILE YOU WERE AWAY/.test(html) && !/failed on/.test(html), 'the pre-v2 dashboard surfaces are gone from v2 Home');
 	});
 
 	// --- Templates v2 (plan 48 T1-T3): the pattern gallery, driven by listTemplateGallery() ---
@@ -586,6 +597,21 @@ suite('livingDocs screenRender', () => {
 		const html = renderScreenHtml('agents', { ...state, agents });
 		assert.ok(html.includes('Agents only act on documents that opted in. Every action lands in the ledger below.'), 'the framing line states the trust contract verbatim (A1.2)');
 		assert.ok(/data-msg="createAgent"/.test(html) && html.includes('from a skill or from scratch'), 'the dashed New-agent tile opens the create flow (A2.4)');
+	});
+
+	test('CD-1: the roster card opens a pre-existing agent by mouse + keyboard and offers a one-click Run now (A2.5)', () => {
+		const html = renderScreenHtml('agents', { ...state, agents: [agent()] });
+		assert.deepStrictEqual({
+			// The whole card is a keyboard-focusable open door pointing at the real agent id (mouse + keyboard).
+			cardOpensAgent: /data-agent-card[^>]*data-msg="openAgent"[^>]*data-arg="weekly-refresh"/.test(html),
+			cardFocusable: /data-agent-card[^>]*role="button"[^>]*tabindex="0"/.test(html) && /data-agent-card[^>]*data-keyactivate/.test(html),
+			// An explicit Open button (also emits openAgent) keeps the door discoverable, not just a bare card click.
+			openButton: /data-msg="openAgent"[^>]*data-arg="weekly-refresh"[^>]*data-stop/.test(html),
+			// A one-click Run now on the card fires the existing runWf machinery for that same pre-existing agent.
+			runNow: /data-msg="runWf"[^>]*data-arg="weekly-refresh"[^>]*data-stop/.test(html),
+			// The project-wide fan-out has a real emitter on the Agents screen (runProject had none before CD-1).
+			runProject: /data-msg="runProject"/.test(html),
+		}, { cardOpensAgent: true, cardFocusable: true, openButton: true, runNow: true, runProject: true });
 	});
 
 	test('an active card shows the mono status line + accent pause toggle; a paused card is 75% opacity + resume (A2.1)', () => {

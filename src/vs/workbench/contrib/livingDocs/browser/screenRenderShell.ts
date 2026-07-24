@@ -510,6 +510,14 @@ for (const el of document.querySelectorAll('[data-msg]')) {
 		vscode.postMessage({ type: el.getAttribute('data-msg'), arg: el.getAttribute('data-arg') || undefined, block: el.getAttribute('data-block') || undefined });
 	});
 }
+// Keyboard activation for non-native clickable surfaces (e.g. the Agents roster card, which is a div-with-role
+// so its inner action buttons keep their own hit targets): Enter or Space on a focused [data-keyactivate]
+// element fires the same click the mouse would, so every data-msg door is reachable without a pointer.
+for (const el of document.querySelectorAll('[data-keyactivate]')) {
+	el.addEventListener('keydown', (e) => {
+		if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); el.click(); }
+	});
+}
 // Knowledge table (plan 49-a): a row lifts on hover to its data-rowhover colour (cream for a stale row, grey
 // otherwise) and restores to data-rowbg on leave - a hover the inline style cannot express.
 for (const el of document.querySelectorAll('.kn-row[data-rowhover]')) {
