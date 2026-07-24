@@ -7,6 +7,7 @@
 // editor), the run log and the cross-project skill-run strip. Only `renderAgents` is public. Split out of
 // screenRender.ts so the Knowledge + Agents lane owns its own file; shared helpers come from the shell.
 
+import { localize } from '../../../../nls.js';
 import { IAgentDef, IAgentRun, IAgentTrigger, ISkillRunSummary } from '../common/livingDocsModel.js';
 import { agentPolicyTable, agentPolicyToLevel } from '../common/agentPolicyGrammar.js';
 import { docPolicyToneHex, DocPolicyTone } from '../common/docPolicy.js';
@@ -114,11 +115,25 @@ function renderAgentCard(a: IAgentDef, state: IScreenState): string {
 	const modelId = state.agentModelId
 		? `<span style="font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575F">${esc(state.agentModelId)}</span>`
 		: `<span style="font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2">model unavailable</span>`;
-	const footer = `<div style="margin-top:12px;padding-top:10px;border-top:1px solid #EEF0F3;display:flex;align-items:center;gap:8px"><span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2">runs on</span>${modelId}<span style="flex:1"></span><a href="#" data-agent-policy-edit style="font:500 12px/1 system-ui;color:${ACCENT_DK};text-decoration:none;cursor:pointer">Edit policy</a></div>`;
+	const footer = `<div style="margin-top:12px;padding-top:10px;border-top:1px solid #EEF0F3;display:flex;align-items:center;gap:8px"><span style="font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2">runs on</span>${modelId}<span style="flex:1"></span><a href="#" data-agent-policy-edit style="font:500 12px/1 system-ui;color:${ACCENT_DK};text-decoration:none;cursor:pointer">${localize('livingDocs.agents.card.editPolicy', "Edit Policy")}</a></div>`;
 	// The shared policy editor, hidden until Edit policy reveals it (A2.3): the SAME renderPolicyEditor DOM the
 	// doc Properties panel hosts, keyed by the agent id, its current selection the honest per-agent level.
 	const policyEditor = `<div data-agent-policy-box style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #EEF0F3">${renderPolicyEditor({ selected: agentPolicyToLevel(a.policy), name: a.id })}</div>`;
-	return `<div data-agent-card style="flex:1 1 320px;min-width:300px;max-width:520px;background:#fff;border:1px solid #E6E8EC;border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(20,22,28,.05)${paused ? ';opacity:.75' : ''}">
+	// A2.5 doors (CD-1 fix): the card is the primary door - the whole card opens the agent's detail canvas
+	// (Run now, run log, schedule editor, flow graph) by mouse (data-msg openAgent) and by keyboard (role=button
+	// + tabindex + data-keyactivate fires the same click on Enter/Space). An explicit Open + Run-now action row
+	// keeps the doors discoverable and gives the roster a one-click run; both carry data-stop so they post their
+	// own message instead of the card's open. Every inner control (toggle, Edit policy, policy rows) already
+	// stops propagation, so the card-open never fires on top of them.
+	const openLabel = localize('livingDocs.agents.card.open', "Open");
+	const runLabel = localize('livingDocs.agents.card.runNow', "Run Now");
+	const actions = `<div style="margin-top:12px;display:flex;align-items:center;gap:8px">
+		<button data-msg="openAgent" data-arg="${esc(a.id)}" data-stop style="border:1px solid #D4D7DD;border-radius:8px;padding:8px 14px;background:#fff;color:#52575F;font:600 12px/1 system-ui;cursor:pointer">${openLabel}</button>
+		<span style="flex:1"></span>
+		<button data-msg="runWf" data-arg="${esc(a.id)}" data-stop style="border:none;border-radius:8px;padding:8px 14px;background:oklch(0.55 0.14 150);color:#fff;font:600 12px/1 system-ui;cursor:pointer">&#9654; ${runLabel}</button>
+	</div>`;
+	const openHint = localize('livingDocs.agents.card.openHint', "Open {0}", a.name);
+	return `<div data-agent-card data-msg="openAgent" data-arg="${esc(a.id)}" data-keyactivate role="button" tabindex="0" aria-label="${esc(openHint)}" style="flex:1 1 320px;min-width:300px;max-width:520px;background:#fff;border:1px solid #E6E8EC;border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(20,22,28,.05);cursor:pointer${paused ? ';opacity:.75' : ''}">
 		<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
 			<span style="flex:none;width:34px;height:34px;border-radius:10px;background:${tileBg};border:1px solid ${tileBorder};display:flex;align-items:center;justify-content:center;color:${tileFg};font-size:15px">${glyph}</span>
 			<span style="min-width:0"><span style="display:block;font:600 14.5px/1.25 system-ui;color:#1A1C20">${esc(a.name)}</span>${statusLine}</span>
@@ -126,7 +141,7 @@ function renderAgentCard(a: IAgentDef, state: IScreenState): string {
 		</div>
 		<div style="font:400 12.5px/1.55 system-ui;color:#52575F;margin-bottom:12px">${esc(agentPurpose(a))}</div>
 		<div style="display:flex;flex-direction:column;gap:5px;font:400 12px/1.4 system-ui;color:#52575F">${rows}</div>
-		${footer}${policyEditor}
+		${footer}${actions}${policyEditor}
 	</div>`;
 }
 
@@ -141,10 +156,15 @@ function renderAgentCards(state: IScreenState): string {
 	const emptyLine = agents.length
 		? ''
 		: `<div style="font:400 13px/1.6 system-ui;color:#868B95;max-width:520px;margin-bottom:20px">No agents yet. Create one to keep your documents current when their sources change.</div>`;
+	// The project fan-out door (CD-1 fix): "Run across the project" opens the whole-project run surface - the
+	// same entry the project-run idle screen's "Go to Agents" button promises, now honoured. runProject had no
+	// emitter before this; the header carries it so the wedge fan-out is reachable from the Agents screen.
+	const runProjectLabel = localize('livingDocs.agents.runProject', "Run Across the Project");
+	const runProjectBtn = `<button data-msg="runProject" style="flex:none;display:inline-flex;align-items:center;gap:8px;border:none;border-radius:9px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer">&#10022; ${runProjectLabel}</button>`;
 	return `<div class="screen">
 	<div class="scr-body">
 		<div style="max-width:1180px;margin:0 auto;padding:56px 48px 80px">
-			<div style="font:600 30px/1.12 system-ui;letter-spacing:-0.02em;color:#14161A;margin-bottom:6px">Agents</div>
+			<div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:6px"><div style="flex:1;min-width:0"><div style="font:600 30px/1.12 system-ui;letter-spacing:-0.02em;color:#14161A">Agents</div></div>${runProjectBtn}</div>
 			<div style="font:400 14px/1.5 system-ui;color:#868B95;margin-bottom:32px">Agents only act on documents that opted in. Every action lands in the ledger below.</div>
 			${emptyLine}
 			<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:stretch">${cards}${newTile}</div>

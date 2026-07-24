@@ -271,6 +271,7 @@ export function renderHome(state: IScreenState): string {
 		${resumeBanner}
 		<div style="display:flex;align-items:baseline;gap:14px;margin-bottom:10px"><h1 style="margin:0;flex:none;white-space:nowrap;font:600 30px/1.12 system-ui;color:#14161A;letter-spacing:-.02em">${esc(greeting)}</h1><span style="flex:none;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;color:#A3A8B2">${greetingDate(new Date())}</span></div>
 		<p style="margin:0 0 36px;font:400 14px/1.5 system-ui;color:#868B95">${summary}</p>
+		${renderHomeComposer(state)}
 		${needsYou}
 		<div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;font-weight:600;letter-spacing:.12em;color:#A3A8B2;margin-bottom:10px">${localize("livingDocs.home.allDocuments", "ALL DOCUMENTS")}</div>
 		${docsGrid}

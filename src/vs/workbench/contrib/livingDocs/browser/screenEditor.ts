@@ -737,9 +737,10 @@ export class ScreenEditor extends EditorPane {
 			case 'goTemplates':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'templates'), { pinned: true });
 				break;
-			// Agents entry point (D23-B): "Run across the project" opens the project-run screen live.
-			// The whole-project chat fan-out that populates the swarm is kicked in 23.3 (TODO below);
-			// opening the screen from Agents works live now, landing on the truthful idle state.
+			// Agents entry point (D23-B, CD-1 fix): the Agents screen's "Run across the project" header button
+			// emits this to open the project-run screen live. The instruction-carrying fan-out that fills the
+			// swarm is launched from the Home "Ask this project" composer (askProject -> _openProjectRun with the
+			// typed change request); this bare entry lands on the truthful idle state, from which Chat kicks a run.
 			case 'runProject':
 				void this._openProjectRun();
 				break;
