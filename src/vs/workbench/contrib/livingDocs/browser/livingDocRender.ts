@@ -782,6 +782,11 @@ root.addEventListener('paste', e => {
 	let cleaned;
 	try { cleaned = normalizeWordPasteHtml(html); } catch (err) { cleaned = html; }
 	try { pmView.pasteHTML(cleaned); } catch (err) {}
+	// Ask the host to weigh the kept/dropped honesty notice (#256). The host owns the notification service and the
+	// docx-import converter the notice reuses, so it computes wordPasteNotice(html) and shows a quiet toast only
+	// when something was genuinely dropped (tracked-change marks, comments) - a lossless paste raises nothing.
+	// Only Word/Office payloads carry droppable structure; a plain-HTML table paste needs no notice, so skip it.
+	if (isWordHtml(html)) { try { vscode.postMessage({ type: 'wordPaste', html: html }); } catch (err) {} }
 }, true);
 // Hovering a bound figure (or its marked gutter number) floats a quiet tooltip answering "where from, how
 // fresh" (plan 29 iter 3): the source file/endpoint, the cell within it, the relative sync time, and an amber
@@ -845,7 +850,7 @@ function teardownCellInput(){ if (tblToolbar){ if (tblToolbar.parentNode){ tblTo
 // if the cell is gone (its column/row was removed by the re-render), close the editor cleanly.
 function revalidateCellEditor(){ if (!tblEditor){ return; } const tableEl = tablesInView()[tblEditor.tIdx]; const cell = cellAt(tableEl, { r: tblEditor.r, c: tblEditor.c }); if (!cell){ teardownCellInput(); return; } placeOver(tblEditor.input, cell); if (tblToolbar && tableEl){ const b = tableEl.getBoundingClientRect(); tblToolbar.style.left = b.left + 'px'; tblToolbar.style.top = Math.max(6, b.top - tblToolbar.offsetHeight - 6) + 'px'; } }
 // Dispatch a single node-attr transaction: history-friendly (one undo step) and docChanged -> pmEdit save.
-function dispatchTableMd(pos, md){ if (!pmView){ return; } pmView.dispatch(pmView.state.tr.setNodeMarkup(pos, null, { markdown: md })); }
+function dispatchTableMd(pos, md){ if (!pmView){ return; } pmView.dispatch(pmView.state.tr.setNodeMarkup(pos, null, { markdown: md })); enrichBoundFigures(); }
 // Write the open editor's current value into the model and dispatch it (no-op when unchanged). Returns
 // the { pos, node } AFTER dispatch so callers can chain a follow-up (Tab / structural op) off fresh state.
 function commitCell(){ if (!tblEditor){ return null; } const ed = tblEditor; const loc = tableNodeByIndex(ed.tIdx); if (!loc){ return null; } const cur = cellRawText(loc.node, ed.r, ed.c); if (ed.input.value !== cur){ dispatchTableMd(loc.pos, serializeGfmTable(setCell(parseGfmTable(loc.node.attrs.markdown || ''), ed.r, ed.c, ed.input.value))); return tableNodeByIndex(ed.tIdx); } return loc; }
