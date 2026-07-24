@@ -30,9 +30,7 @@ import { IEditorResolverService, RegisteredEditorPriority } from '../../../servi
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
-import { Schemas } from '../../../../base/common/network.js';
 import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
 import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, treeRailHiddenOnEntry } from '../common/railVisibility.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
@@ -705,8 +703,7 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		@IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
 		@IEditorService private readonly _editorService: IEditorService,
 		@IWorkspaceContextService private readonly _workspace: IWorkspaceContextService,
-		@IHistoryService private readonly _history: IHistoryService,
-		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 	) {
 		super();
 		// First-run only: the Getting Started / Welcome editor can be opened a tick late by the
@@ -718,36 +715,41 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 			this._closeWelcomeEditors();
 			once.dispose();
 		}));
-		// Editor-first cold start: only when nothing was restored (a restored editor / deep-link wins natively).
+		// Cold-start landing: only when nothing was restored (a restored editor / deep-link wins natively).
 		if (this._editorService.editors.length === 0) {
-			void this._openStartupDocument();
+			void this._openStartupSurface();
 		}
 		// The two rails (tree-rail + review rail) are EDITOR companions, revealed + sized when the document editor
-		// is the active surface (RailVisibilityContribution below). Cold start now lands ON the editor surface, so
-		// the rails come up for the open document -- and because the walkthrough demo no longer runs on entry, the
-		// review rail reflects only the open document's real pending work, not left-over demo proposals.
+		// is the active surface (RailVisibilityContribution below). A folder now lands on Project Home (a full-width
+		// screen with neither rail); the rails come up once the user opens a document from it. Because the
+		// walkthrough demo no longer runs on entry, the review rail reflects only real pending work, never
+		// left-over demo proposals.
 	}
 
-	// Execute the L1 cold-start routing decision: gather the facts (folder open?, most-recently-opened file, the
-	// folder's Markdown documents) and open the document decideStartupRoute() picks -- or a new untitled Markdown
-	// doc when there is nothing to open. Re-check `editors.length === 0` before each open so a restored editor or a
-	// deep-link that arrived while we were gathering facts still wins.
-	private async _openStartupDocument(): Promise<void> {
+	// Execute the cold-start routing decision (map-D2, WP-H): a folder open (a project) lands on Project Home;
+	// no folder lands on a blank untitled Markdown doc. Re-check `editors.length === 0` before the open so a
+	// restored editor or a deep-link that arrived while we were deciding still wins.
+	private async _openStartupSurface(): Promise<void> {
 		const state = this._workspace.getWorkbenchState();
 		const hasFolder = state === WorkbenchState.FOLDER || state === WorkbenchState.WORKSPACE;
-		const folderDocuments = hasFolder ? (await this._livingDocs.listDocuments()).map(d => d.resource) : [];
-		const lastActiveFile = this._history.getLastActiveFile(Schemas.file);
-		const route = decideStartupRoute({ hasFolder, lastActiveFile, folderDocuments });
+		const route = decideStartupRoute({ hasFolder });
 		if (this._editorService.editors.length !== 0) {
 			return;
 		}
-		if (route.kind === StartupRouteKind.OpenDocument) {
-			await this._editorService.openEditor({ resource: route.resource, options: { pinned: true } });
+		if (route.kind === StartupRouteKind.OpenHome) {
+			// Project Home: the project's front door (what ran, what's stale, recent files; the empty-project
+			// front door when the folder has no documents yet). The editor is one click deeper, via a file.
+			const input = this._instantiationService.createInstance(ScreenEditorInput, 'home');
+			const pane = await this._editorService.openEditor(input, { pinned: true });
+			// Singleton input: if the service adopted a different instance (or none), dispose ours to avoid a leak.
+			if (pane?.input !== input) {
+				input.dispose();
+			}
 			return;
 		}
-		// A new, blank untitled Markdown document so the cursor lands in editable text (zero-ceremony plain
-		// Markdown -- no living-doc artefacts until an agent touches it). The "Open a folder" affordance stays
-		// one click away on the Home nav item; the no-folder case is a blank page, never a wizard.
+		// No folder: a new, blank untitled Markdown document so the cursor lands in editable text (zero-ceremony
+		// plain Markdown -- no living-doc artefacts until an agent touches it). The "Open a folder" affordance
+		// stays one click away on the Home nav item; never a wizard.
 		await this._editorService.openEditor({ resource: undefined, languageId: 'markdown', options: { pinned: true } });
 	}
 
