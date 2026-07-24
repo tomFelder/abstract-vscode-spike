@@ -1278,6 +1278,45 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(blockText(service, WEEKLY, 'h-commentary'), newText, 'approving the chat-proposed edit rewrites the block');
 	});
 
+	// #253: the editor action bar's "Approve all in this doc" must apply EVERY pending change for the open
+	// document, addressing them through the proposals' OWN docId (pendingDocIdFor + approveAll) - the path the
+	// editor pane now takes. The audit caught it silently no-opping: routing the apply through a re-derived
+	// `this._resource` filtered to an empty set. This pins the fixed path end to end, after a tab switch (a
+	// second document loaded in between) mirrors the exact audit repro, so a regression can never re-hide it.
+	test('#253: the editor-bar "Approve all in this doc" applies every pending change via the proposals own docId, after a tab switch', async () => {
+		const commentary = 'Growth accelerated this week.';
+		const watch = 'Activation rate is climbing on the new onboarding flow.';
+		const service = createService([], {
+			boardNote: true,
+			model: chatReply('Sharpened two lines for your approval.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: commentary, rationale: 'The +18% MRR delta crosses the accelerating threshold.' },
+				{ heading: 'What to watch', oldText: 'Activation rate on the new onboarding flow.', newText: watch, rationale: 'Activation is the leading watch item this week.' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.sendChatMessage(WEEKLY, 'Sharpen the commentary and the watch item');
+		// A tab switch: another document is loaded (and becomes the last-loaded state), exactly as the audit
+		// repro opened Board Note after the Appendix. The pending changes still belong to WEEKLY.
+		await service.loadDocument(BOARD);
+
+		// The editor action bar's approveAllDoc handler: resolve the pending set + its own docId, then apply.
+		const pendingBefore = service.getPendingForDoc(WEEKLY);
+		const docId = service.pendingDocIdFor(WEEKLY);
+		assert.ok(docId, 'the open document reports the docId its pending changes are keyed under');
+		await service.approveAll(docId!);
+
+		assert.deepStrictEqual(
+			{
+				queuedBefore: pendingBefore.length,
+				docId,
+				commentary: blockText(service, WEEKLY, 'h-commentary'),
+				watch: blockText(service, WEEKLY, 'h-what-to-watch'),
+				pendingAfter: service.getPendingForDoc(WEEKLY).length,
+			},
+			{ queuedBefore: 2, docId: WEEKLY.toString(), commentary, watch, pendingAfter: 0 },
+		);
+	});
+
 	// --- Tweak: amend-before-approve (plan 31 iter 3, D31-B) ---
 
 	test('amendChange then approve applies the human-edited text and audits it via tweaked', async () => {

@@ -12,7 +12,7 @@ import { Disposable, DisposableMap, DisposableStore, IDisposable, toDisposable }
 import { Schemas } from '../../../../base/common/network.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { basename, dirname, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
+import { basename, dirname, isEqual, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -734,7 +734,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
-		return this._pending.filter(c => c.docId === id);
+		// Match on the canonical string first (the common, cheap case). A proposal can be keyed under a URI-form
+		// variant of the same file - a raw `.toString()` compare misses those, but `isEqual` treats them as one
+		// document (path-casing on a case-insensitive filesystem, scheme/authority/fragment normalisation). This
+		// makes the doc-scoped lookup robust to the identity drift the #253 audit caught (a bulk approve that
+		// silently found nothing), rather than relying on both sides having produced byte-identical strings.
+		return this._pending.filter(c => c.docId === id || isEqual(URI.parse(c.docId), resource));
+	}
+
+	/**
+	 * The canonical `docId` string that this document's pending changes are actually keyed under, or
+	 * `undefined` when the document has no pending changes. Bulk-approve callers (the editor action bar,
+	 * #253) MUST route `approveAll` through THIS id - the proposals' own docId - rather than a URI they
+	 * re-derive, so a URI-form drift between the open editor's resource and the queued proposals can never
+	 * make the apply filter to an empty set (the silent no-op the audit caught).
+	 */
+	pendingDocIdFor(resource: URI): string | undefined {
+		return this.getPendingForDoc(resource)[0]?.docId;
 	}
 
 	// --- Properties panel (plan 45 pin 12) - additive frontmatter read/write + truthful lock reads ---

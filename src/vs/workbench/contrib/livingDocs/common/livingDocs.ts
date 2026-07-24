@@ -826,6 +826,12 @@ export interface ILivingDocsService {
 	getRecentlyApplied(resource: URI): ReadonlySet<string>;
 	/** Pending changes that belong to one document (rendered inline in its editor). */
 	getPendingForDoc(resource: URI): readonly IProposedChange[];
+	/**
+	 * The canonical `docId` this document's pending changes are keyed under (or `undefined` when it has
+	 * none). Bulk-approve callers route `approveAll` through this - the proposals' own id - so a URI-form
+	 * drift between the open editor's resource and the queued proposals can never silently no-op (#253).
+	 */
+	pendingDocIdFor(resource: URI): string | undefined;
 
 	// --- Properties panel (plan 45 pin 12) - frontmatter read/write + truthful lock reads ---
 	/** The document's created/updated times, read from the file's own stat (undefined when unknown). */
