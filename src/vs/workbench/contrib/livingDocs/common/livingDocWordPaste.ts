@@ -39,6 +39,30 @@ export function isWordHtml(html: string): boolean {
 }
 
 /**
+ * The paste-slice open-boundary decision (#256). ProseMirror parses a pasted fragment into a Slice whose start
+ * boundary is OPEN (`openStart` > 0) so an inline paste flows into the caret's current textblock - correct for a
+ * few words dropped mid-sentence. But when the FIRST pasted node is a STRUCTURAL block (heading / list / table /
+ * blockquote / code block) and the caret sits inside a NON-EMPTY paragraph, that open boundary merges the block's
+ * text into the paragraph and the block loses its identity - a pasted Word H1 glues onto the prior line. This is
+ * the pure predicate the webview's `transformPasted` guard consults to decide whether to CLOSE the slice's start
+ * (set `openStart` to 0) so the leading block lands as its own block. Returns true only when ALL hold: the paste
+ * is not plain text, the slice start is actually open, the slice's first child is one of the structural block
+ * types, and the caret's own textblock already holds content (an empty paragraph has nothing to glue onto, so its
+ * heading-lands-as-a-block behaviour is left untouched). DOM-free and self-contained for webview injection.
+ */
+export function pasteStartShouldClose(firstChildType: string, sliceOpenStart: number, isPlainText: boolean, caretParentIsTextblock: boolean, caretParentContentSize: number): boolean {
+	if (isPlainText || sliceOpenStart <= 0) {
+		return false;
+	}
+	// The block node types that must keep their own boundary when they lead a paste onto a non-empty line.
+	const structural = /^(?:heading|table_block|bullet_list|ordered_list|blockquote|code_block)$/;
+	if (typeof firstChildType !== 'string' || !structural.test(firstChildType)) {
+		return false;
+	}
+	return caretParentIsTextblock === true && caretParentContentSize > 0;
+}
+
+/**
  * Normalise a clipboard `text/html` string for pasting into ProseMirror: rebuild Word list paragraphs into
  * real nested <ul>/<ol>/<li>, drop Word's empty <o:p> spacer runs (the nbsp crumb-paragraphs), resolve
  * tracked-changes residue as paste-as-accepted (deleted runs removed, inserted runs kept as plain text), and

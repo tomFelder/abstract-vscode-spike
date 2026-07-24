@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { decodeBase64 } from '../../../../../base/common/buffer.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { isWordHtml, normalizeWordPasteHtml, wordPasteNotice } from '../../common/livingDocWordPaste.js';
+import { isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose, wordPasteNotice } from '../../common/livingDocWordPaste.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from '../../browser/prosemirrorBundle.js';
 
 // Pull the GFM Markdown out of a `<table data-md="...">` element the normaliser emits, resolving the HTML
@@ -565,6 +565,42 @@ suite('LivingDoc Word paste', () => {
 		);
 	});
 
+	// --- Paste-slice open-boundary decision (issue #256, fix round 1) ------------------------------------
+	// The tag rewrite above turns a Word heading paragraph into a real <hN>, but on a LIVE paste ProseMirror
+	// still parses the fragment into a Slice with an OPEN start (openStart > 0) and, when the caret sits in a
+	// NON-EMPTY paragraph, merges that first heading's text into the paragraph - the "pasted H1 glues onto the
+	// previous line" audit symptom. pasteStartShouldClose is the pure predicate the webview's transformPasted
+	// guard consults to decide whether to close the slice's start (openStart -> 0) so the leading structural
+	// block lands as its own block. This covers the decision table directly (no DOM / no live view needed).
+
+	test('pasteStartShouldClose closes the start only for a structural first block landing on a non-empty line', () => {
+		// A non-empty caret paragraph (size 20) with an open-start slice (openStart 1), not a plain-text paste.
+		const onNonEmpty = (type: string) => pasteStartShouldClose(type, 1, false, true, 20);
+		assert.deepStrictEqual(
+			{
+				// Structural first blocks glue and MUST be split off.
+				heading: onNonEmpty('heading'),
+				bullet_list: onNonEmpty('bullet_list'),
+				ordered_list: onNonEmpty('ordered_list'),
+				table_block: onNonEmpty('table_block'),
+				blockquote: onNonEmpty('blockquote'),
+				code_block: onNonEmpty('code_block'),
+				// A leading plain paragraph keeps the ordinary inline-merge behaviour (not structural).
+				paragraph: onNonEmpty('paragraph'),
+				// Non-regression guards: plain-text paste, an already-closed slice, an empty caret paragraph,
+				// and a caret that is not a textblock all leave the slice untouched.
+				plainText: pasteStartShouldClose('heading', 1, true, true, 20),
+				alreadyClosed: pasteStartShouldClose('heading', 0, false, true, 20),
+				emptyParagraph: pasteStartShouldClose('heading', 1, false, true, 0),
+				notATextblock: pasteStartShouldClose('heading', 1, false, false, 20),
+			},
+			{
+				heading: true, bullet_list: true, ordered_list: true, table_block: true, blockquote: true, code_block: true,
+				paragraph: false, plainText: false, alreadyClosed: false, emptyParagraph: false, notATextblock: false,
+			}
+		);
+	});
+
 	// Self-containment guard (common brief): the helpers are injected into the webview RUNTIME verbatim via
 	// String(fn), so their serialized source must carry no imports, no require, and no transpiler helper
 	// references - otherwise they would throw when eval'd in the webview where those symbols do not exist.
@@ -572,7 +608,7 @@ suite('LivingDoc Word paste', () => {
 	// assert it is present and free of ES2020+ syntax (optional chaining / nullish coalescing) that would be
 	// emitted verbatim into the injected String(fn).
 	test('injected helpers are self-contained (no import/require/helper references in String(fn))', () => {
-		for (const fn of [isWordHtml, normalizeWordPasteHtml]) {
+		for (const fn of [isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose]) {
 			const src = String(fn);
 			assert.ok(!/\bimport\b/.test(src), `${fn.name}: no import`);
 			assert.ok(!/\brequire\b/.test(src), `${fn.name}: no require`);
