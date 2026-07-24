@@ -66,15 +66,32 @@ export function renderSettings(state: IScreenState): string {
 	const stage: ChatGptSignInStage = state.signInStage ?? (status.signedIn ? 'signed-in' : 'signed-out');
 
 	// The live "what is serving you now" line - real data only, keyed off the truthful readiness (issue #170)
-	// so the broker-not-up state is distinct from a reachable-but-unconfigured backend.
+	// so the broker-not-up state is distinct from a reachable-but-unconfigured backend. This is the SINGLE
+	// stated serving door: exactly one, derived from the backend that actually answered the last call
+	// (broker /healthz `backend`), never the sign-in status (issue #259). A user must be able to read one
+	// answer to "which door is answering me right now".
 	const doorLabel = status.provider === 'chatgpt'
-		? 'Your ChatGPT subscription'
+		? localize('livingDocs.settings.door.chatgpt', "Your ChatGPT subscription")
 		: status.provider === 'included'
-			? (status.readiness === 'budget-paused' ? 'The included model (daily limit reached)' : 'The included model')
+			? (status.readiness === 'budget-paused'
+				? localize('livingDocs.settings.door.includedPaused', "The included model (daily limit reached)")
+				: localize('livingDocs.settings.door.included', "The included model"))
 			: status.readiness === 'broker-down'
-				? 'Connecting to the model service&hellip;'
-				: 'The built-in fallback (no model connected)';
+				? localize('livingDocs.settings.door.connecting', "Connecting to the model service…")
+				: localize('livingDocs.settings.door.none', "The built-in fallback (no model connected)");
 	const dot = status.provider === 'none' ? '#cdd1d8' : 'oklch(0.6 0.13 150)';
+
+	// The honesty seam for issue #259: a user can be signed in to ChatGPT while their calls are actually
+	// served by the included model (the #120 subscription-call failure falls back to OpenRouter). The
+	// serving door above already tells the truth; here we make sure the sign-in badge does NOT read as a
+	// second, contradictory "you are being served by ChatGPT" affirmation. `servedByChatGpt` is the only
+	// state where the plain green "Signed in to ChatGPT" is honest; whenever we are signed in but a
+	// different door answered, we say so explicitly and offer an in-place explanation.
+	const servedByChatGpt = status.provider === 'chatgpt';
+	const signedInButFallenBack = status.signedIn && !servedByChatGpt;
+	const fallbackDoorName = status.provider === 'included'
+		? localize('livingDocs.settings.fallback.included', "the included model")
+		: localize('livingDocs.settings.fallback.none', "the built-in fallback");
 
 	// The included-tier usage line + ring (only meaningful for the metered fallback).
 	let usageBlock = '';
@@ -89,15 +106,29 @@ export function renderSettings(state: IScreenState): string {
 		</div>`;
 	}
 
-	// The "Sign in with ChatGPT" primary button, reflecting the flow stage.
-	const signInBtn = stage === 'signed-in'
-		? `<div style="display:flex;align-items:center;gap:12px">
-				<span style="font:600 13px/1 system-ui;color:oklch(0.5 0.13 150);display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Signed in to ChatGPT</span>
-				<button data-msg="signOutChatGpt" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Sign out</button>
+	// The "Sign in with ChatGPT" primary button, reflecting the flow stage. When signed in, the badge tells
+	// the truth about whether the subscription is actually serving (issue #259): a plain green affirmation
+	// ONLY when ChatGPT answered the last call; otherwise the honest signed-in-but-falling-back badge below.
+	const signedInBadge = signedInButFallenBack
+		? `<div style="display:flex;flex-direction:column;gap:8px">
+				<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+					<span style="font:600 13px/1.3 system-ui;color:#9a6b16;display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#e0a63a;flex:none"></span>${esc(localize('livingDocs.settings.signedInFallback', "Signed in to ChatGPT, but calls are currently served by {0}", fallbackDoorName))}</span>
+					<button data-msg="signOutChatGpt" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${esc(localize('livingDocs.settings.signOut', "Sign Out"))}</button>
+				</div>
+				<details data-signin-why style="margin-top:2px">
+					<summary style="list-style:none;cursor:pointer;font:600 12px/1 system-ui;color:${ACCENT};display:inline-flex;align-items:center;gap:6px">${esc(localize('livingDocs.settings.seeWhy', "See why"))}<span style="font-size:11px">&#9662;</span></summary>
+					<p style="margin:9px 0 0;font:400 12.5px/1.6 system-ui;color:#696e78;background:#fbf7ee;border:1px solid #f0e5cf;border-radius:9px;padding:11px 13px">${esc(localize('livingDocs.settings.fallbackWhy', "Your ChatGPT sign-in worked, but Abstract can't yet complete model calls through your ChatGPT plan, so it's falling back to the included model for now. Your work still gets done; we're fixing the ChatGPT path. You stay signed in."))}</p>
+				</details>
 			</div>`
+		: `<div style="display:flex;align-items:center;gap:12px">
+				<span style="font:600 13px/1 system-ui;color:oklch(0.5 0.13 150);display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>${esc(localize('livingDocs.settings.signedIn', "Signed in to ChatGPT"))}</span>
+				<button data-msg="signOutChatGpt" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${esc(localize('livingDocs.settings.signOut', "Sign Out"))}</button>
+			</div>`;
+	const signInBtn = stage === 'signed-in'
+		? signedInBadge
 		: stage === 'pending'
 			? pendingSignInBlock(state.signInAuthorizeUrl)
-			: `<button data-msg="signInChatGpt" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">Sign in with ChatGPT</button>`;
+			: `<button data-msg="signInChatGpt" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">${esc(localize('livingDocs.settings.signInChatGpt', "Sign in with ChatGPT"))}</button>`;
 
 	const signInError = stage === 'error' && state.signInError
 		? `<p style="margin:12px 0 0;font:400 12.5px/1.5 system-ui;color:#b4332f">${esc(state.signInError)}</p>`
