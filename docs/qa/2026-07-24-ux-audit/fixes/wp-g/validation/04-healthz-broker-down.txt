@@ -1,0 +1,2 @@
+broker-down (8090 unreachable)
+curl: connection refused (broker down)
