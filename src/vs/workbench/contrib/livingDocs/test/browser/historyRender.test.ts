@@ -110,12 +110,29 @@ suite('livingDocs History tab (historyHtml)', () => {
 	});
 
 	// The feedback verb (doc 18 section 2.5): "This Was Wrong" on APPLIED changes only. The button carries the
-	// change ref (block id + doc title) so the reviewRailView can flag + comment; it never appears on a
-	// rejection or a restore (those are not applied agent changes to disavow).
-	test('an approved change carries a "This Was Wrong" feedback affordance with the change ref', () => {
-		const h = historyHtml([], [audit({ blockId: 'commentary', action: 'approved' })], 'Weekly Summary', undefined, NOW);
+	// change ref (the audit row's own ISO time - a stable, unique key so the flag lands on THIS row after
+	// relaunch, issue #258) so the reviewRailView can flag + comment; it never appears on a rejection or a
+	// restore (those are not applied agent changes to disavow).
+	test('an approved change carries a "This Was Wrong" feedback affordance keyed by the row time', () => {
+		const h = historyHtml([], [audit({ blockId: 'commentary', action: 'approved', time: '2026-07-06T11:30:00.000Z' })], 'Weekly Summary', undefined, NOW);
 		assert.ok(h.includes('This Was Wrong'), 'applied change has the feedback verb');
-		assert.ok(/data-wrong="[^"]*commentary[^"]*"/.test(h), 'the feedback button carries the change ref');
+		assert.ok(/data-wrong="[^"]*2026-07-06T11:30:00.000Z[^"]*"/.test(h), 'the feedback button is keyed by the row time');
+	});
+
+	// Once flagged (persisted on the row as `wrong`, issue #258) the row reads flagged instead of offering an
+	// infinitely re-flaggable button - so a reopened History never lets the same row be re-flagged forever.
+	test('a flagged applied change reads "Flagged Wrong" and drops the re-flag button', () => {
+		const h = historyHtml([], [audit({ action: 'approved', wrong: { at: '2026-07-06T12:00:00.000Z', comment: 'stale figure' } })], 'Weekly Summary', undefined, NOW);
+		assert.ok(h.includes('Flagged Wrong'), 'the flagged row shows a static flagged badge');
+		assert.ok(!h.includes('This Was Wrong'), 'the re-flag button is gone once flagged');
+		assert.ok(h.includes('stale figure'), 'the persisted flag comment shows in the row');
+	});
+
+	// The rejection reason (1f frame-3) rides on the audit row and shows in History so the trail reads why.
+	test('a rejection with a reason shows the reason in the History row', () => {
+		const h = historyHtml([], [audit({ action: 'rejected', reason: 'the wording changed the meaning' })], 'Weekly Summary', undefined, NOW);
+		assert.ok(h.includes('Rejected'), 'the rejection row is shown');
+		assert.ok(h.includes('the wording changed the meaning'), 'the reject reason is shown on the row');
 	});
 
 	test('an auto-applied figure change also carries the feedback affordance', () => {

@@ -306,7 +306,7 @@ export class LivingDocEditor extends EditorPane {
 				if (typeof message.id === 'string') { void this._livingDocs.approve(message.id); }
 				break;
 			case 'reject':
-				if (typeof message.id === 'string') { this._livingDocs.reject(message.id); }
+				if (typeof message.id === 'string') { void this._livingDocs.reject(message.id); }
 				break;
 			case 'amendApprove':
 				// Tweak (plan 31 iter 3): the reviewer hand-edited the proposed text, then Save & Approve. Amend

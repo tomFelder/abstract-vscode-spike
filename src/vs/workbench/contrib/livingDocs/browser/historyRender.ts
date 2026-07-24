@@ -101,12 +101,24 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 		const e = ev.entry;
 		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'external-overwrite-kept' ? 'Kept your version' : e.action === 'approved' ? (e.via === 'restore' ? 'Restored' : 'Approved') : 'Auto-applied';
 		// The feedback verb (doc 18 section 2.5): "this was wrong" on any APPLIED change (approved or
-		// auto-applied, not a rejection or a restore). Carries only the block id + doc title as the change ref -
-		// the reviewRailView turns the click into a flag + optional comment, logged for the founder + counted.
-		const wrongBtn = (e.action !== 'rejected' && e.action !== 'external-overwrite-kept' && e.via !== 'restore')
-			? `<button data-wrong="${esc(JSON.stringify({ ref: e.blockId, title: e.docTitle }))}" title="${esc(localize('livingDocs.history.flagWrong.title', "Flag this applied change as wrong"))}" style="margin-left:auto;border:1px solid #eeced0;border-radius:6px;padding:3px 8px;background:#fff;color:#b4332f;font:500 10px/1 system-ui;cursor:pointer">${esc(localize('livingDocs.history.flagWrong.label', "This Was Wrong"))}</button>`
+		// auto-applied, not a rejection or a restore). Once flagged (persisted on the row as `wrong`, issue #258)
+		// the row reads as flagged instead of offering an infinitely re-flaggable button. The change ref is the
+		// row's own ISO time - a stable, unique key so the flag lands on THIS row after relaunch. The reviewRail
+		// turns an unflagged click into a persisted flag + optional comment, logged for the founder + counted.
+		const isApplied = e.action !== 'rejected' && e.action !== 'external-overwrite-kept' && e.via !== 'restore';
+		const flaggedBadge = `<span title="${esc(localize('livingDocs.history.flagged.title', "You flagged this applied change as wrong"))}" style="margin-left:auto;border:1px solid #eeced0;border-radius:6px;padding:3px 8px;background:#fdf1f0;color:#b4332f;font:600 10px/1 system-ui">${esc(localize('livingDocs.history.flagged.label', "Flagged Wrong"))}</span>`;
+		const wrongBtn = isApplied
+			? (e.wrong
+				? flaggedBadge
+				: `<button data-wrong="${esc(JSON.stringify({ ref: e.time, title: e.docTitle }))}" title="${esc(localize('livingDocs.history.flagWrong.title', "Flag this applied change as wrong"))}" style="margin-left:auto;border:1px solid #eeced0;border-radius:6px;padding:3px 8px;background:#fff;color:#b4332f;font:500 10px/1 system-ui;cursor:pointer">${esc(localize('livingDocs.history.flagWrong.label', "This Was Wrong"))}</button>`)
 			: '';
-		return (last: boolean) => timelineRow(dot('#e0e3ea'), verb, '', `${esc(e.docTitle)} / ${esc(e.blockId)}`, `${esc(e.via)} &middot; ${relTime(e.time, now)}`, last, wrongBtn);
+		// Surface the persisted note beneath the row: a rejection's optional reason (1f frame-3) or a flag's
+		// comment, so the trail reads why - not just what. Both are plain reviewer words kept local on the lock.
+		const note = e.action === 'rejected' ? e.reason : e.wrong?.comment;
+		const body = note
+			? `${esc(e.docTitle)} / ${esc(e.blockId)}<div style="margin-top:4px;font:400 11.5px/1.4 system-ui;color:#8a6d6b">&ldquo;${esc(note)}&rdquo;</div>`
+			: `${esc(e.docTitle)} / ${esc(e.blockId)}`;
+		return (last: boolean) => timelineRow(dot('#e0e3ea'), verb, '', body, `${esc(e.via)} &middot; ${relTime(e.time, now)}`, last, wrongBtn);
 	});
 
 	// A real origin row for a template-generated document (plan 28, iter 3): the oldest row, at the base of

@@ -24,7 +24,7 @@ import { ICommandService } from '../../../../../platform/commands/common/command
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
-import { AgentPolicy, IAgentDef, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
+import { AgentPolicy, IAgentDef, IAuditEntry, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
 import { extractBindLinks, parseLivingDoc } from '../../common/livingDocMarkdown.js';
 
@@ -812,6 +812,49 @@ suite('livingDocs Service', () => {
 		assert.ok(lockOnDisk.audit.some((e: { action: string; blockId: string }) => e.action === 'approved' && e.blockId === blockId), 'the approval is persisted to the lock audit, so a cold reopen rehydrates it');
 	});
 
+	// --- issue #258: negative verbs persist. reject(), its optional reason, and the "This Was Wrong" flag must
+	// write through to the on-disk lock like approve does, so they survive a relaunch and a flagged row cannot
+	// be re-flagged forever. Verified by reading the persisted lock bytes back (what a cold reopen rehydrates). ---
+	test('#258: reject persists the rejected row + its reason, and This-Was-Wrong persists the flag (survives relaunch)', async () => {
+		const service = createService();
+		// An already-approved row on disk (as a prior session's approve would leave it), plus a claim bound to the
+		// context so the change below queues a deterministic heuristic candidate the user rejects with a reason.
+		const approvedTime = '2026-07-11T08:00:00.000Z';
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'commentary-tone': { anchor: 'Growth remained steady this week.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [
+				{ time: approvedTime, docTitle: 'Weekly Summary', blockId: 'h-commentary', action: 'approved', oldText: 'a', newText: 'b', via: 'model' },
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+		await service.reviewImpact(WEEKLY);
+		const rejected = service.getPendingForDoc(WEEKLY)[0];
+		await service.reject(rejected.id, 'this changes the meaning');
+
+		// Flag the approved row wrong (keyed by its ISO time). A second flag on the same row is a no-op (no
+		// infinite re-flag).
+		await service.reportChangeWrong({ changeRef: approvedTime, comment: 'the figure is stale', docTitle: 'Weekly Summary' });
+		await service.reportChangeWrong({ changeRef: approvedTime, comment: 'again', docTitle: 'Weekly Summary' });
+
+		// Read the persisted lock bytes back - the trail a cold reopen would rehydrate (the relaunch-survival proof;
+		// getLock reads memory, which masked the original bug where reject never reached disk).
+		const onDisk = JSON.parse(lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString())!) as { audit: IAuditEntry[] };
+		const rejectRow = onDisk.audit.find(e => e.action === 'rejected');
+		const flaggedRow = onDisk.audit.find(e => e.time === approvedTime);
+		assert.deepStrictEqual({
+			rejectPersisted: rejectRow?.action,
+			rejectReason: rejectRow?.reason,
+			flagPersisted: flaggedRow?.wrong?.comment,
+		}, {
+			rejectPersisted: 'rejected',
+			rejectReason: 'this changes the meaning',
+			flagPersisted: 'the figure is stale',
+		});
+	});
+
 	test('changing a value source flips the binding dirty bit (hash mismatch), with no model calls', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);
@@ -1353,7 +1396,7 @@ suite('livingDocs Service', () => {
 		const change = service.getPendingForDoc(WEEKLY)[0];
 
 		service.amendChange(change.id, 'Growth accelerated sharply this week.');
-		service.reject(change.id);
+		await service.reject(change.id);
 
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'the change is cleared from the rail');
 		assert.strictEqual(blockText(service, WEEKLY, 'h-commentary'), 'Growth remained steady this week.', 'the prose is untouched by a rejected tweak');
