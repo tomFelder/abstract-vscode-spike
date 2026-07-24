@@ -1,0 +1,13 @@
+Live on-disk audit evidence - WP-B doc-identity fix (#248/#253)
+Captured from the running desktop app, workspace /tmp/wpb-ws.
+Launch doc was 'Appendix - Design Tokens'; user switched to Board Note / Weekly before the ripple.
+A metrics.csv source edit rippled bound figures into Board Note AND Weekly; each lock records under its OWN document title.
+Note Weekly's b-3 entry: b-N block ids are positional and collide across docs; it is correctly stamped 'Weekly Operating Summary', not the first-loaded Appendix (the #248 bug).
+
+=== Board Note.lock.json === (1 audit entries)
+  docTitle='Board Note' blockId=b-1 action=auto-applied via=heuristic newText='| Metric | Previous | Current | Change |\n| --- | -'
+
+=== Weekly Summary.lock.json === (2 audit entries)
+  docTitle='Weekly Operating Summary' blockId=b-1 action=auto-applied via=heuristic newText='Revenue grew [+28%](bind:metrics.mrr.delta) week-o'
+  docTitle='Weekly Operating Summary' blockId=b-3 action=auto-applied via=heuristic newText='| Metric | Previous | Current | Change |\n| --- | -'
+

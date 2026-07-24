@@ -12,7 +12,7 @@ import { Disposable, DisposableMap, DisposableStore, IDisposable, toDisposable }
 import { Schemas } from '../../../../base/common/network.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { basename, dirname, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
+import { basename, dirname, isEqual, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -734,7 +734,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
-		return this._pending.filter(c => c.docId === id);
+		// Match on the canonical string first (the common, cheap case). A proposal can be keyed under a URI-form
+		// variant of the same file - a raw `.toString()` compare misses those, but `isEqual` treats them as one
+		// document (path-casing on a case-insensitive filesystem, scheme/authority/fragment normalisation). This
+		// makes the doc-scoped lookup robust to the identity drift the #253 audit caught (a bulk approve that
+		// silently found nothing), rather than relying on both sides having produced byte-identical strings.
+		return this._pending.filter(c => c.docId === id || isEqual(URI.parse(c.docId), resource));
+	}
+
+	/**
+	 * The canonical `docId` string that this document's pending changes are actually keyed under, or
+	 * `undefined` when the document has no pending changes. Bulk-approve callers (the editor action bar,
+	 * #253) MUST route `approveAll` through THIS id - the proposals' own docId - rather than a URI they
+	 * re-derive, so a URI-form drift between the open editor's resource and the queued proposals can never
+	 * make the apply filter to an empty set (the silent no-op the audit caught).
+	 */
+	pendingDocIdFor(resource: URI): string | undefined {
+		return this.getPendingForDoc(resource)[0]?.docId;
 	}
 
 	// --- Properties panel (plan 45 pin 12) - additive frontmatter read/write + truthful lock reads ---
@@ -895,7 +911,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				if (block.type !== 'heading' || (block.level ?? 0) < 2 || LivingDocsService._isTitleCase(block.text)) { continue; }
 				const next = LivingDocsService._toTitleCase(block.text);
 				if (next === block.text) { continue; }
-				state.lock.audit.push(this._entry(block.id, 'approved', block.text, next, 'heuristic'));
+				state.lock.audit.push(this._entry(state, block.id, 'approved', block.text, next, 'heuristic'));
 				block.text = next;
 				state.recent.add(block.id);
 				fixed++;
@@ -3451,7 +3467,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _applyFigure(state: IDocState, change: { blockId: string; oldText: string; newText: string }): void {
 		const block = state.doc.blocks.find(b => b.id === change.blockId);
 		if (!block) { return; }
-		state.lock.audit.push(this._entry(block.id, 'auto-applied', change.oldText, change.newText, 'heuristic'));
+		state.lock.audit.push(this._entry(state, block.id, 'auto-applied', change.oldText, change.newText, 'heuristic'));
 		block.text = change.newText;
 		block.binds = extractBindLinks(change.newText);
 		state.recent.add(block.id);
@@ -3623,7 +3639,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// After an explicit "Keep my version", record the knowing overwrite on the lock before it is written, so the
 		// decision is auditable from EITHER save path. Exactly one entry per Keep: the flag is cleared on this write.
 		if (overrodeExternal) {
-			state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'external-overwrite-kept', '', `kept the version open in Abstract over an edit made to "${basename(resource)}" outside it`, 'heuristic'));
+			state.lock.audit.push(this._entry(state, state.doc.blocks[0]?.id ?? '', 'external-overwrite-kept', '', `kept the version open in Abstract over an edit made to "${basename(resource)}" outside it`, 'heuristic'));
 		}
 		try {
 			await this._files.writeFile(resource, VSBuffer.fromString(text));
@@ -3677,7 +3693,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Record on the audit that the user exported/published PAST a failed gate (plan 32 iter 4): the override is
 	// never silent - it lands as an `override`-via audit entry so the trail shows a human chose to proceed.
 	private _auditGateOverride(state: IDocState, action: 'export' | 'publish', flag: string): void {
-		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `${action} overridden past gate - ${flag}`, 'override'));
+		state.lock.audit.push(this._entry(state, state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `${action} overridden past gate - ${flag}`, 'override'));
 	}
 
 	// On-publish snapshot: pin the document to the current source versions (hashes) so a published doc
@@ -3700,7 +3716,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		const at = new Date().toISOString();
 		state.lock.pins = [...versions].map(([source, version]) => ({ source, version }));
-		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `published ${at}`, 'heuristic'));
+		state.lock.audit.push(this._entry(state, state.doc.blocks[0]?.id ?? '', 'auto-applied', '', `published ${at}`, 'heuristic'));
 		await this._lockStore.write(state.uri, state.lock);
 		// Publishing is a milestone: snapshot the published body so it is a restorable version, carrying the
 		// real pin count so the History SNAPSHOT row can name the pinned source versions (plan 32 iter 4).
@@ -3775,7 +3791,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// entries the restore steps back over (a coarse count, never any content), so a spike is visible.
 		const depth = Math.max(0, state.lock.audit.length - snapshot.auditIndex);
 		this._analytics.capture('undo_after_approve', { depth });
-		state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'approved', oldBody, snapshot.body, 'restore'));
+		state.lock.audit.push(this._entry(state, state.doc.blocks[0]?.id ?? '', 'approved', oldBody, snapshot.body, 'restore'));
 		await this._persist(state);
 		await this._recomputeFreshness(state);
 		this._notify.info(`Restored "${state.doc.title}" to "${snapshot.label}".`);
@@ -4329,7 +4345,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (proposal.kind === 'figure') {
 				// Confidence-gated routing (guardrail 4): figure-class ripples may auto-stage.
 				if (block) { block.text = proposal.newText; block.binds = extractBindLinks(proposal.newText); state.recent.add(block.id); }
-				state.lock.audit.push(this._entry(block.id, 'auto-applied', change.oldText, change.newText, proposal.via));
+				state.lock.audit.push(this._entry(state, block.id, 'auto-applied', change.oldText, change.newText, proposal.via));
 			} else {
 				// Meaning/influence changes wait for approval in the review rail (no eager rewrites).
 				this._pending.push(change);
@@ -5788,7 +5804,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._pending = this._pending.filter(c => c.id !== changeId);
 		// A tweaked change records `via: 'tweaked'` so the trail shows the human amended the agent's words
 		// (plan 31 iter 3, D31-B); otherwise the change's own provenance (model/heuristic) stands.
-		state.lock.audit.push(this._entry(change.blockId, 'approved', change.oldText, change.newText, change.tweaked ? 'tweaked' : (change.via ?? 'model')));
+		state.lock.audit.push(this._entry(state, change.blockId, 'approved', change.oldText, change.newText, change.tweaked ? 'tweaked' : (change.via ?? 'model')));
 		// Audit-mirror: one approve resolved this proposal (tweaked = the human amended it first). `bulk` is
 		// false here; the bulk paths (approveAll) pass true to their own resolved emit is not needed because
 		// each underlying approve fires - so bulk resolution is captured as the individual approves it fans to.
@@ -5832,7 +5848,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._pending = this._pending.filter(c => c.id !== changeId);
 		const state = this._docs.get(change.docId);
 		if (state) {
-			state.lock.audit.push(this._entry(change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model'));
+			state.lock.audit.push(this._entry(state, change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model'));
 			this._captureProposalResolved('reject', this._inBulkReject);
 			state.status = `Change rejected - ${change.docTitle} left unchanged`;
 			// Rejecting still counts as reviewing the changed context, so the flag clears.
@@ -6119,9 +6135,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._analytics.capture('proposal_resolved', { resolution, bulk });
 	}
 
-	private _entry(blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: IAuditEntry['via']): IAuditEntry {
-		const docTitle = [...this._docs.values()].find(s => s.doc.blocks.some(b => b.id === blockId))?.doc.title ?? '';
-		return { time: new Date().toISOString(), docTitle, blockId, action, oldText, newText, via };
+	// Build an audit entry stamped with the OWNING document's title. The entry is always pushed onto
+	// `state.lock.audit`, so the doc it belongs to is the `state` passed here - never guessed from `blockId`.
+	// The prior implementation searched every open doc for the first one whose blocks held `blockId` and took
+	// its title; when two docs shared a block id (e.g. `b-3`), that `.find()` returned the wrong doc and
+	// stamped the wrong `docTitle` into the trail (issue #248). Keying off the caller's own state fixes the
+	// identity: the same stale-identity family that made "Approve all in this doc" a no-op (#253).
+	private _entry(state: IDocState, blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: IAuditEntry['via']): IAuditEntry {
+		return { time: new Date().toISOString(), docTitle: state.doc.title, blockId, action, oldText, newText, via };
 	}
 
 	// Persist the document (.md) and its lock together - the pair is one logical unit.
@@ -6142,7 +6163,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// After an explicit "Keep my version", record the knowing overwrite on the lock's audit trail before it
 			// is written, so the decision is auditable (the external edit we chose to overwrite is named in newText).
 			if (overrodeExternal) {
-				state.lock.audit.push(this._entry(state.doc.blocks[0]?.id ?? '', 'external-overwrite-kept', '', `kept the version open in Abstract over an edit made to "${basename(state.uri)}" outside it`, 'heuristic'));
+				state.lock.audit.push(this._entry(state, state.doc.blocks[0]?.id ?? '', 'external-overwrite-kept', '', `kept the version open in Abstract over an edit made to "${basename(state.uri)}" outside it`, 'heuristic'));
 			}
 			await this._files.writeFile(state.uri, VSBuffer.fromString(serialized));
 			await this._lockStore.write(state.uri, state.lock);

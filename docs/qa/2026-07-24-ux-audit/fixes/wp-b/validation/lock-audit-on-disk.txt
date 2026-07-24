@@ -1,0 +1,24 @@
+WP-B adversarial validation - on-disk lock proof (live desktop, workspace /tmp/wpb-val-ws)
+Launch tab was "Appendix — Design Tokens" (brief/Appendix.md); then switched to Board Note, then Weekly.
+
+=== Board Note.lock.json === (5 audit entries)
+  docTitle='Board Note'               blockId=b-3  action=approved  via=model
+  docTitle='Board Note'               blockId=b-5  action=approved  via=model
+  docTitle='Board Note'               blockId=b-3  action=approved  via=model
+  docTitle='Board Note'               blockId=b-5  action=approved  via=model
+  docTitle='Board Note'               blockId=b-3  action=approved  via=model
+
+=== Weekly Summary.lock.json === (2 audit entries)
+  docTitle='Weekly Operating Summary' blockId=b-5  action=approved  via=model
+  docTitle='Weekly Operating Summary' blockId=b-7  action=approved  via=model
+
+#248 verdict: every entry stamps its OWNING doc title. Board Note b-3 entries are stamped "Board Note"
+  NOT "Appendix — Design Tokens" (the first-loaded launch tab) - the exact collision the old .find() builder got wrong.
+  Weekly stamps "Weekly Operating Summary", not Board Note or Appendix. Persisted across an app relaunch.
+
+#253 verdict: editor-bar "Approve all in this doc" is STILL a silent no-op (audit unchanged, changes stay pending,
+  no proposal_resolved events) on BOTH Board Note and Weekly. The SAME pending set applied instantly via the
+  Review-rail "Approve all" (audit 2->4) and per-card "Approve changes" (audit 4->5), proving the click plumbing
+  is sound and the editor-bar no-op is genuine. Root cause unchanged by this PR: livingDocEditor.ts:305-307 still
+  filters getPendingForDoc(this._resource)/approveAll(this._resource) by a stale this._resource; the _entry docTitle
+  fix does not touch that path. bulkApproveConfirm([]) returns needed:false so no dialog fires either.

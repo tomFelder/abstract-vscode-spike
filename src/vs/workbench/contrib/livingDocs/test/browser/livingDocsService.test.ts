@@ -1278,6 +1278,45 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(blockText(service, WEEKLY, 'h-commentary'), newText, 'approving the chat-proposed edit rewrites the block');
 	});
 
+	// #253: the editor action bar's "Approve all in this doc" must apply EVERY pending change for the open
+	// document, addressing them through the proposals' OWN docId (pendingDocIdFor + approveAll) - the path the
+	// editor pane now takes. The audit caught it silently no-opping: routing the apply through a re-derived
+	// `this._resource` filtered to an empty set. This pins the fixed path end to end, after a tab switch (a
+	// second document loaded in between) mirrors the exact audit repro, so a regression can never re-hide it.
+	test('#253: the editor-bar "Approve all in this doc" applies every pending change via the proposals own docId, after a tab switch', async () => {
+		const commentary = 'Growth accelerated this week.';
+		const watch = 'Activation rate is climbing on the new onboarding flow.';
+		const service = createService([], {
+			boardNote: true,
+			model: chatReply('Sharpened two lines for your approval.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: commentary, rationale: 'The +18% MRR delta crosses the accelerating threshold.' },
+				{ heading: 'What to watch', oldText: 'Activation rate on the new onboarding flow.', newText: watch, rationale: 'Activation is the leading watch item this week.' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.sendChatMessage(WEEKLY, 'Sharpen the commentary and the watch item');
+		// A tab switch: another document is loaded (and becomes the last-loaded state), exactly as the audit
+		// repro opened Board Note after the Appendix. The pending changes still belong to WEEKLY.
+		await service.loadDocument(BOARD);
+
+		// The editor action bar's approveAllDoc handler: resolve the pending set + its own docId, then apply.
+		const pendingBefore = service.getPendingForDoc(WEEKLY);
+		const docId = service.pendingDocIdFor(WEEKLY);
+		assert.ok(docId, 'the open document reports the docId its pending changes are keyed under');
+		await service.approveAll(docId!);
+
+		assert.deepStrictEqual(
+			{
+				queuedBefore: pendingBefore.length,
+				docId,
+				commentary: blockText(service, WEEKLY, 'h-commentary'),
+				watch: blockText(service, WEEKLY, 'h-what-to-watch'),
+				pendingAfter: service.getPendingForDoc(WEEKLY).length,
+			},
+			{ queuedBefore: 2, docId: WEEKLY.toString(), commentary, watch, pendingAfter: 0 },
+		);
+	});
+
 	// --- Tweak: amend-before-approve (plan 31 iter 3, D31-B) ---
 
 	test('amendChange then approve applies the human-edited text and audits it via tweaked', async () => {
@@ -1544,6 +1583,36 @@ suite('livingDocs Service', () => {
 			service.getDoc(WEEKLY)!.blocks.some(b => b.text === 'A shared closing note.')
 			&& service.getDoc(BOARD)!.blocks.some(b => b.text === 'A shared closing note.'),
 			'the change landed in both documents',
+		);
+	});
+
+	// Regression (issues #248 + #253, the stale-document-identity family). Block ids are POSITIONAL
+	// (`parseLivingDoc` stamps paragraphs `b-0`, `b-1`, ...), so the same id (`b-3` here, the second body
+	// paragraph) exists in BOTH the Weekly and the Board Note. The Weekly is loaded first (it is the tab open
+	// at launch); the user then switches to the Board Note and approves a change to ITS `b-3`. The old audit
+	// builder resolved `docTitle` by searching every open doc for the first one holding that block id and
+	// taking its title - which returned the Weekly (loaded first), stamping the wrong document onto a Board
+	// Note approval (#248). Approve now audits under the OWNING document's title regardless of load order, so
+	// the identity is pinned after a tab switch; the same fix removes the stale-identity root cause of #253.
+	test('an approve after a tab switch audits under the OWNING document, not the doc that was open first (#248/#253)', async () => {
+		const service = createService([], {
+			boardNote: true,
+			model: modelMessage({ reply: 'Sharpened.', edits: [{ heading: 'Note to the board', oldText: 'Momentum is steady this week.', newText: 'Momentum accelerated this week.', rationale: 'r' }] }),
+		});
+		// Load the Weekly first (the launch tab), THEN switch to the Board Note and chat there. Both docs carry
+		// a positional `b-3` paragraph, so a docTitle guessed from block id alone would collide across them.
+		await service.loadDocument(WEEKLY);
+		await service.loadDocument(BOARD);
+		await service.sendChatMessage(BOARD, 'Sharpen the note to the board');
+		const change = service.getPendingForDoc(BOARD)[0];
+
+		await service.approve(change.id);
+
+		const entry = service.getLock(BOARD)!.audit.find(e => e.action === 'approved')!;
+		assert.deepStrictEqual(
+			{ docTitle: entry.docTitle, blockId: entry.blockId, weeklyAudited: service.getLock(WEEKLY)!.audit.length },
+			{ docTitle: 'Board Note', blockId: 'b-3', weeklyAudited: 0 },
+			'the approval audits under the Board Note (its own state), not the Weekly that was open first',
 		);
 	});
 

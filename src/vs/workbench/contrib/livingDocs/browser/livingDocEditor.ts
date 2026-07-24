@@ -206,6 +206,22 @@ export class LivingDocEditor extends EditorPane {
 	// meaning change. Figures-only bulk approves stay one-click. The confirm mentions the pre-approve snapshot
 	// (plan 26's autosnapshot on bulk approve is real) so the reviewer knows it is restorable. Runs `apply`
 	// only after the user confirms (or when no confirm was needed).
+	// The resource whose pending changes the doc-scoped bulk actions operate on (#253). Prefer this pane's
+	// own `_resource`, but fall back to the group's active-editor resource when `_resource` has no pending
+	// changes of its own - the chat rail queues proposals against the group's active-editor resource, so on
+	// the rare occasion those two identities drift the active editor is the authoritative one and must not be
+	// stranded. Returns undefined only when neither identity is available.
+	private _resourceForPending(): URI | undefined {
+		if (this._resource && this._livingDocs.getPendingForDoc(this._resource).length > 0) {
+			return this._resource;
+		}
+		const active = this.group.activeEditor?.resource;
+		if (active && this._livingDocs.getPendingForDoc(active).length > 0) {
+			return active;
+		}
+		return this._resource;
+	}
+
 	private async _confirmBulkApprove(changes: readonly { readonly kind: 'figure' | 'meaning' }[], apply: () => Promise<void>): Promise<void> {
 		const confirm = bulkApproveConfirm(changes, true);
 		if (confirm.needed) {
@@ -301,13 +317,26 @@ export class LivingDocEditor extends EditorPane {
 					void this._livingDocs.approve(id);
 				}
 				break;
-			case 'approveAllDoc':
+			case 'approveAllDoc': {
 				// Editor action bar: accept every pending change in THIS document at once (plan 19 iter 4).
-				if (this._resource) {
-					const docId = this._resource.toString();
-					void this._confirmBulkApprove(this._livingDocs.getPendingForDoc(this._resource), () => this._livingDocs.approveAll(docId));
+				// Route the confirm gate AND the apply through the proposals' OWN docId (#253), mirroring the
+				// working review-rail "Approve all" - never a re-derived `this._resource.toString()`. `_resource`
+				// can drift from the docId the proposals were queued under (the chat rail queues them against the
+				// GROUP's active-editor resource, which is not guaranteed to be the same URI instance this pane
+				// last set), which used to make `approveAll` filter to an empty set and silently no-op - no
+				// dialog, no apply. Resolving to the proposals' own docId makes the confirm-list and the apply-set
+				// provably the same set. `_resourceForPending` falls back to the group's active-editor resource so
+				// a drifted `_resource` cannot strand the pending changes the user is looking at.
+				const resource = this._resourceForPending();
+				if (resource) {
+					const pending = this._livingDocs.getPendingForDoc(resource);
+					const docId = this._livingDocs.pendingDocIdFor(resource);
+					if (docId) {
+						void this._confirmBulkApprove(pending, () => this._livingDocs.approveAll(docId));
+					}
 				}
 				break;
+			}
 			case 'approveAllEverywhere':
 				// Editor action bar: accept every pending change across ALL documents (plan 19 iter 5).
 				void this._confirmBulkApprove(this._livingDocs.getAllPending(), () => this._livingDocs.approveAllPending());

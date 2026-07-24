@@ -1,0 +1,87 @@
+WP-B round-2 adversarial validation - live desktop walk (respawn, fresh run)
+HEAD df40e8d781a8d2dbbfdf3d16f660a44e38ca7dee (PR #266), branch wp-b-doc-identity
+Workspace: fresh copy of living-docs-sample -> /tmp/wpb-r2-ws (predecessor's copy discarded; started clean)
+distinct_id: fea33dc7-8440-4b12-9655-357f9e29ff4f  (events.log filtered on this id + 2026-07-24T23:xx timestamps)
+
+VERDICT: PASS - all 5 boxes verified live at this HEAD. The round-1 editor-bar no-op is fixed.
+
+=====================================================================
+BOX 1 - exact audit repro: Appendix (launch tab) -> switch to Board Note ->
+2 model proposals via chat -> editor-bar "Approve all in this doc"
+=====================================================================
+- Launched with "Appendix - Design Tokens" as the open tab (00-launched.png), then
+  switched to Board Note (a real tab switch, both tabs open).
+- 2 model proposals generated via the chat rail: editor bar reads "2 changes here",
+  both "MEANING CHANGE - needs your call", rail "2 changes waiting on you"
+  (01-boardnote-2proposals.png).
+- Clicked "Approve all in this doc". The decision-132 NATIVE confirm sheet FIRED
+  (round-1 failure was NO dialog at all). Inspected on my window via System Events:
+    SHEET buttons: [Cancel] [Approve all]
+    SHEET text: "Approve 2 changes including 2 meaning changes? A version snapshot is
+                 taken first, so you can restore."
+- Clicked "Approve all" on the sheet. Result:
+    * events.log: 2x proposal_resolved {resolution:approve, bulk:true} @ 23:12:09  (the audit's missing signal)
+    * Board Note.md on disk rewritten (cat):
+        "Momentum is accelerating; we are ahead of plan this week with stronger than expected growth."
+        "We request the approval to add one additional recruiter to support the next hiring cohort..."
+    * audit rows (Board Note.lock.json): docTitle=Board Note b-3 approved via=model;
+                                          docTitle=Board Note b-5 approved via=model
+    * reviewbar / yellow editor bar cleared, inline diffs gone (02-boardnote-approved-cleared.png)
+
+=====================================================================
+BOX 2 - probes
+=====================================================================
+(a) SECOND DOC (Weekly) after MORE tab switches, and switch tabs between generating
+    and clicking approve-all:
+    Board Note -> Appendix tab -> Weekly (open) -> generate 2 proposals ->
+    Weekly -> Board Note -> Appendix -> Weekly (churn) -> "Approve all in this doc".
+    * confirm sheet FIRED: "Approve 2 changes including 2 meaning changes? ..."
+    * 2x proposal_resolved {bulk:true} @ 23:14:55
+    * Weekly Summary.md on disk:
+        Commentary: "Growth accelerated this week, showing a stronger upward momentum..."
+        What to watch: "Activation rate climbing on the new onboarding flow remains a key focus..."
+    * audit rows: docTitle=Weekly Operating Summary b-5 approved; b-7 approved
+      (NOT Board Note, NOT Appendix - the owning doc, across the tab churn)
+    (03-weekly-2proposals.png, 04-weekly-approved-cleared.png)
+
+(b) CANCEL the confirm (nothing applies):
+    Fresh 2 proposals on Board Note -> "Approve all in this doc" -> sheet fired ->
+    clicked Cancel.
+    * disk IDENTICAL to pre-cancel baseline (diff: nothing applied)
+    * 0 proposal_resolved events for my distinct_id
+    * UI still shows "2 changes here" / "2 changes waiting on you" (still pending)
+    (05-cancel-still-pending.png)
+
+(c) APPROVE-ALL TWICE / zero pending is sane, no crash:
+    Same 2 proposals then approved (2x proposal_resolved). Once pending==0 the
+    "Approve all in this doc" bar/button is correctly ABSENT from the DOM, so a second
+    invocation has nothing to trigger. Confirmed no error sheet on my window (sheets=0),
+    app responsive (title "wpb-r2-ws - Abstract"), doc renders the applied prose.
+    Code corroboration: approveAllDoc guards on _resourceForPending()+pendingDocIdFor();
+    with no pending, pendingDocIdFor returns undefined -> the `if (docId)` guard no-ops.
+    (10-second-approve-zero-pending.png)
+
+=====================================================================
+BOXES 3-5 spot-checks at this HEAD
+=====================================================================
+- docTitle on disk after a tab switch: every audit row above carries the OWNING doc's
+  docTitle (Board Note / Weekly Operating Summary), never the Appendix opened first,
+  incl. colliding positional ids b-3/b-5/b-7.
+- PER-CARD approve: single proposal -> inline "Approve changes" -> applied on disk
+  ("The team successfully shipped a major feature this week..."), 1x proposal_resolved
+  {bulk:false}, audit docTitle=Board Note b-3.
+- RAIL approve: single proposal -> Review rail "Approve all" -> applied on disk
+  (engineer request added to Asks), 1x proposal_resolved, audit docTitle=Board Note b-5.
+- UNIT SUITE: transpiled out/ already fresh (contains pendingDocIdFor + new test); no
+  broker on :8090. `scripts/test.sh --grep 'livingDocs Service'` -> 175 passing, incl.
+  '#253: the editor-bar "Approve all in this doc" applies every pending change via the
+  proposals own docId, after a tab switch' and the #248 docTitle-after-tab-switch test.
+
+=====================================================================
+Final Board Note.md (chained approvals via editor-bar + per-card + rail):
+=====================================================================
+## Note to the board
+Momentum is accelerating; we are ahead of plan this week with stronger than expected growth. Additionally, customer retention remains strong, supporting sustainable growth. The team successfully shipped a major feature this week, enhancing our product offering.
+
+## Asks
+We request the approval to add one additional recruiter to support the next hiring cohort, ensuring we meet our talent acquisition goals. We also seek approval for an increased marketing budget to fuel demand generation efforts. Additionally, we are requesting approval to hire one additional engineer to accelerate product development.
