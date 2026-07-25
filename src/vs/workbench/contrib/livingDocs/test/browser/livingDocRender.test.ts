@@ -51,6 +51,20 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		assert.ok(!h.includes('opportunity-os'), 'no old-brand fabricated shareable URL');
 	});
 
+	// #269 CR-3: the Word-paste handler must NOT post `wordPaste` (which the host weighs for a dropped-content
+	// toast) when the insertion itself threw - nothing landed, so a toast would be a lie. The injected script
+	// returns from the pasteHTML catch BEFORE the wordPaste post, so on failure the post is never reached.
+	test('#269 CR-3: a failed pasteHTML returns before posting wordPaste (no toast for content never inserted)', () => {
+		const h = html({ open: false, choice: 'html' });
+		const catchReturn = h.indexOf('pasteHTML(cleaned); } catch (err) { return; }');
+		const wordPastePost = h.indexOf('type: \'wordPaste\'');
+		assert.deepStrictEqual(
+			{ catchReturns: catchReturn !== -1, postExists: wordPastePost !== -1, returnBeforePost: catchReturn !== -1 && wordPastePost !== -1 && catchReturn < wordPastePost },
+			{ catchReturns: true, postExists: true, returnBeforePost: true },
+			'the pasteHTML catch returns before the wordPaste post so a swallowed insertion never raises a drop toast',
+		);
+	});
+
 	// --- Before-export gate surface (plan 32 iter 4): no silent block, no silent override ---
 
 	test('a failed before-export gate is SHOWN with its one-line reason plus Export anyway + Fix first', () => {
