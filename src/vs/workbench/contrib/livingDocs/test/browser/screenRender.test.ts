@@ -625,7 +625,10 @@ suite('livingDocs screenRender', () => {
 			runNow: /data-msg="runWf"[^>]*data-arg="weekly-refresh"[^>]*data-stop/.test(html),
 			// The project-wide fan-out has a real emitter on the Agents screen (runProject had none before CD-1).
 			runProject: /data-msg="runProject"/.test(html),
-		}, { cardOpensAgent: true, cardFocusable: true, openButton: true, runNow: true, runProject: true });
+			// #265 CR-2: the injected keyboard-activation handler ignores key events bubbled from a nested control,
+			// so Enter on Run now / Open fires that button, not the card. The guard ships in every screen's SCRIPT.
+			keyactivateGuard: html.includes('if (e.target !== el) { return; }'),
+		}, { cardOpensAgent: true, cardFocusable: true, openButton: true, runNow: true, runProject: true, keyactivateGuard: true });
 	});
 
 	test('an active card shows the mono status line + accent pause toggle; a paused card is 75% opacity + resume (A2.1)', () => {
