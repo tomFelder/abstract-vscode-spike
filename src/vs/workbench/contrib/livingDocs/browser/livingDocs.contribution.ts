@@ -35,7 +35,7 @@ import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
-import { shouldShadowPaletteCommand } from '../common/shellCuration.js';
+import { PaletteShadowBookkeeping, shouldShadowPaletteCommand } from '../common/shellCuration.js';
 import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, treeRailHiddenOnEntry } from '../common/railVisibility.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -486,11 +486,13 @@ class CurateShellMenusContribution extends Disposable implements IWorkbenchContr
 	}
 
 	// The palette shadow items we appended (for implicit-only commands), so re-applies never double-append and dispose
-	// removes them all. `_paletteShadowed` tracks the command ids we already appended for; `_appendedPaletteItems` holds
-	// the item objects so the in-place mutation pass skips them (they are already gated). Separate from `_shadowed`
-	// (which tracks the in-place `when` mutations on the gear/Accounts/explicit-palette items).
+	// removes them all. `_paletteBookkeeping` tracks, persistently across re-applies, both the command ids we appended
+	// a shadow for AND the ids whose real explicit item we hid in place - so the implicit loop never re-appends a
+	// duplicate for an already-shadowed explicit command (a convergence bug when that tracking was a per-call local).
+	// `_appendedPaletteItems` holds the item objects so the in-place mutation pass skips them (they are already gated).
+	// Separate from `_shadowed` (the in-place `when` mutations on the gear/Accounts/explicit-palette items).
 	private readonly _paletteShadows = this._register(new DisposableStore());
-	private readonly _paletteShadowed = new Set<string>();
+	private readonly _paletteBookkeeping = new PaletteShadowBookkeeping();
 	private readonly _appendedPaletteItems = new Set<IMenuItem>();
 
 	private _applyShadows(): void {
@@ -525,22 +527,24 @@ class CurateShellMenusContribution extends Disposable implements IWorkbenchContr
 		const secondPass = new Set(MenuRegistry.getMenuItems(MenuId.CommandPalette));
 		const realExplicitItems = new Set(firstPass.filter(item => secondPass.has(item)));
 
-		// (1) Real explicit items: hide by mutating their `when` in place (gated), like the gear. Record the ids so (2)
-		// does not also append for them (which would leave the real item showing next to our gated duplicate).
-		const explicitShadowedIds = new Set<string>();
+		// (1) Real explicit items: hide by mutating their `when` in place (gated), like the gear. Record the ids on the
+		// persistent bookkeeping so (2) does not also append for them (which would leave the real item showing next to
+		// our gated duplicate). Recording here (not a per-call local) is load-bearing: `_shadowItems` is idempotent and
+		// skips an already-shadowed item BEFORE this callback runs, so on a re-apply the id must already be remembered.
 		this._shadowItems(MenuId.CommandPalette, item => {
 			if (!realExplicitItems.has(item) || !isIMenuItem(item) || !this._shouldShadowPaletteItem(item)) {
 				return false;
 			}
-			explicitShadowedIds.add(item.command.id);
+			this._paletteBookkeeping.markExplicitShadowed(item.command.id);
 			return true;
 		}, PALETTE_ADVANCED_KEY);
 
 		// (2) Implicit-only commands (no real explicit item, so the mutation above could not touch a stable object):
 		// append a gated explicit shadow item, which both suppresses the un-gated implicit entry and stays hidden until
-		// lifted. `_paletteShadowed` + `explicitShadowedIds` keep this convergent across the onDidChangeMenu re-applies.
+		// lifted. The persistent bookkeeping keeps this convergent across the onDidChangeMenu re-applies: it skips both
+		// ids we already appended for AND ids whose real explicit item we already shadowed in place.
 		for (const [id, command] of MenuRegistry.getCommands()) {
-			if (this._paletteShadowed.has(id) || explicitShadowedIds.has(id)) {
+			if (!this._paletteBookkeeping.shouldAppendImplicit(id)) {
 				continue;
 			}
 			const category = command.category;
@@ -548,7 +552,7 @@ class CurateShellMenusContribution extends Disposable implements IWorkbenchContr
 			if (!shouldShadowPaletteCommand(categoryValue, id)) {
 				continue;
 			}
-			this._paletteShadowed.add(id);
+			this._paletteBookkeeping.markAppended(id);
 			const appended: IMenuItem = {
 				command,
 				when: ContextKeyExpr.and(command.precondition, PALETTE_ADVANCED_KEY),

@@ -49,3 +49,43 @@ export function shouldShadowPaletteCommand(category: string | undefined, id: str
 	}
 	return !keepIds.has(id);
 }
+
+/**
+ * Persistent bookkeeping for the two ways a stock palette command is demoted, tracked across the repeated
+ * `_curatePalette()` re-applies that `MenuRegistry.onDidChangeMenu` triggers (many stock/palette entries register
+ * after this contribution, so curation runs many times, not once). Two id sets that MUST both survive re-applies:
+ *
+ * - {@link markExplicitShadowed}: a command whose REAL explicit palette item was hidden in place (its `when` mutated).
+ * - {@link markAppended}: a command with no real explicit item, for which we APPENDED our own gated shadow item.
+ *
+ * The convergence bug this guards against: the in-place mutation pass is idempotent and skips an already-shadowed
+ * item BEFORE it can re-record that item's id. If the explicit-shadowed ids were only a per-call local, then on every
+ * re-apply after the first, an already-shadowed explicit command would be missing from that call's set, and the
+ * implicit loop would append a brand-new duplicate gated item for it - so once "All Commands" lifts the gate the
+ * command shows TWICE. Persisting both sets here keeps {@link shouldAppendImplicit} convergent across re-applies.
+ */
+export class PaletteShadowBookkeeping {
+	/** Ids of stock commands whose real explicit palette item we hid in place. Persists across re-applies. */
+	private readonly _explicitShadowedIds = new Set<string>();
+	/** Ids of stock commands for which we appended our own gated implicit-shadow item. Persists across re-applies. */
+	private readonly _appendedIds = new Set<string>();
+
+	/** Record that the real explicit item for `id` was shadowed in place, so the implicit loop never re-appends for it. */
+	markExplicitShadowed(id: string): void {
+		this._explicitShadowedIds.add(id);
+	}
+
+	/** Record that we appended a gated implicit-shadow item for `id`, so a later re-apply never double-appends. */
+	markAppended(id: string): void {
+		this._appendedIds.add(id);
+	}
+
+	/**
+	 * True when the implicit-command loop should append a fresh gated shadow item for `id`: only when we have neither
+	 * already appended one for it nor shadowed its real explicit item in place. False keeps the palette convergent
+	 * (no duplicate) across re-applies.
+	 */
+	shouldAppendImplicit(id: string): boolean {
+		return !this._appendedIds.has(id) && !this._explicitShadowedIds.has(id);
+	}
+}
