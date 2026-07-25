@@ -37,7 +37,7 @@ import { IAnalyticsService } from '../common/analytics.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
 import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
-import { coerceDocPolicy, DocAutonomyLevel } from '../common/docPolicy.js';
+import { coerceDocPolicy, docPolicyNeverRefusal, docPolicyNeverSkipReason, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
 import { buildDemoReportMarkdown, DEMO_CSV, DEMO_CSV_NAME, DEMO_DOC_NAME, founderFeedbackLogLine, IFeedbackReport, onboardingStepLabel, OnboardingStep } from '../common/onboarding.js';
@@ -793,6 +793,27 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// (plan 45 pin 12 / #122 F11). An unauthored / unknown value degrades to the safe default (`ask-first`).
 	getDocPolicy(resource: URI): DocAutonomyLevel {
 		return coerceDocPolicy(this._docs.get(resource.toString())?.doc.policy);
+	}
+
+	// The enforced autonomy level for a loaded document state (issue #257). Read from the doc's parsed frontmatter
+	// `policy:` - the SAME source of truth the Properties dial writes and every load/save reparses - so an external
+	// edit to `policy:` in the file is honoured the moment the state re-reads it (there is no parallel policy store
+	// to go stale). This is the ONE gate the propose/apply pipeline consults, so honesty is a contract enforced at
+	// the service layer, not a per-surface effort (audit root-cause 4). Used by the CHAT/PROPOSAL path, where only
+	// `never` (leave the doc alone) needs enforcement - a meaning edit always queues for review anyway.
+	private _policyForState(state: IDocState): DocAutonomyLevel {
+		return coerceDocPolicy(state.doc.policy);
+	}
+
+	// The enforced autonomy level for the FIGURE-SYNC path (auto-apply figures on refresh / agent run). Distinct
+	// from `_policyForState` in ONE way: an UNAUTHORED document (no `policy:` on disk) keeps the golden-path default
+	// of auto-applying its figures (doc 20 section 1g "the default is auto-apply figures only"), rather than coercing to
+	// the dial's `ask-first` middle. Only an EXPLICIT dial changes the figure behaviour: explicit `ask-first`
+	// queues each figure for review, `never` leaves the doc alone. So enabling enforcement never silently gates
+	// figures on the thousands of existing docs that never touched the dial - it honours what the human actually set.
+	private _figurePolicyForState(state: IDocState): DocAutonomyLevel {
+		const raw = (state.doc.policy ?? '').trim();
+		return raw ? coerceDocPolicy(raw) : 'auto-apply';
 	}
 
 	// Write the document's autonomy policy back to its frontmatter `policy:` on disk (plan 45 pin 12 / P12.4).
@@ -3473,12 +3494,49 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.recent.add(block.id);
 	}
 
-	// Re-sync the lock from the current sources and auto-apply every figure (the manual "Refresh from
-	// sources" path; figures are deterministic and low-risk). Caller persists. `pass` shares source reads
-	// across the documents of one refresh (plan 30, track 1).
+	// Re-sync the lock from the current sources and apply every figure (the manual "Refresh from sources" path;
+	// figures are deterministic and low-risk). Caller persists. `pass` shares source reads across the documents
+	// of one refresh (plan 30, track 1).
+	//
+	// The document's autonomy dial (issue #257) gates the AUTO-APPLY here just as it gates an agent run: `never`
+	// leaves the prose untouched (the lock still resolves so freshness is honest, but no figure lands and none
+	// queues - the doc is protected); `ask-first` re-resolves the lock but ROUTES each figure change into Review
+	// as a pending proposal instead of silently applying it (the human asked to see figure syncs first); only
+	// `auto-apply` lets figures land on their own. So a figure sync obeys the same one dial the chat pipeline does.
 	private async _syncLock(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		await this._resolveIntoLock(state, pass);
-		for (const change of this._figureReconciles(state)) { this._applyFigure(state, change); }
+		const docPolicy = this._figurePolicyForState(state);
+		if (docPolicy === 'never') { return; }
+		for (const change of this._figureReconciles(state)) {
+			if (docPolicy === 'ask-first') { this._queueFigureForReview(state, change); }
+			else { this._applyFigure(state, change); }
+		}
+	}
+
+	// Queue one deterministic figure reconciliation into Review instead of applying it (issue #257, `ask-first`).
+	// Mirrors the agent-run queue shape in `_runFiguresByPolicy` so a figure sync a human dialled "Ask me first"
+	// lands as a real pending change on the same rail, awaiting one approval - the prose is left byte-identical
+	// until the human approves. De-dupes any earlier pending figure for the same block so a re-refresh does not
+	// stack duplicates.
+	private _queueFigureForReview(state: IDocState, change: { blockId: string; oldText: string; newText: string }): void {
+		const block = state.doc.blocks.find(b => b.id === change.blockId);
+		this._pending = this._pending.filter(c => !(c.docId === state.uri.toString() && c.blockId === change.blockId));
+		const figureChange: IProposedChange = {
+			id: generateUuid(),
+			docId: state.uri.toString(),
+			docTitle: state.doc.title,
+			blockId: change.blockId,
+			blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
+			oldText: change.oldText,
+			newText: change.newText,
+			kind: 'figure',
+			confidence: 1,
+			rationale: 'Source value changed; figure update prepared.',
+			sourceCells: block ? block.binds.map(b => b.key) : [],
+			via: 'heuristic',
+		};
+		this._pending.push(figureChange);
+		this._captureProposalCreated(figureChange, 'agent');
 	}
 
 	// The verify gate (spec 5, maker != checker): run the document's Skills as graders before apply.
@@ -3552,7 +3610,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// gate runs between rewrite and apply: a failed grader blocks the whole run (nothing applied or
 	// queued) and surfaces the flag (spec 5). auto-figures applies silently (audited); ask-before-apply
 	// queues a pending change; draft-only queues a draft and never lands.
-	private async _runFiguresByPolicy(state: IDocState, policy: AgentPolicy, pass?: IRefreshPass): Promise<{ applied: number; queued: number; blocked?: string }> {
+	//
+	// The DOCUMENT'S own autonomy dial (issue #257) is the human's per-doc override and takes precedence over
+	// the agent's policy: `never` leaves the document entirely alone (nothing applied or queued - the run reports
+	// it skipped); `ask-first` forces every figure into Review even when the agent would auto-apply (the human
+	// asked to see changes first); `auto-apply` lets the agent's own policy decide (auto-figures still applies).
+	private async _runFiguresByPolicy(state: IDocState, policy: AgentPolicy, pass?: IRefreshPass): Promise<{ applied: number; queued: number; blocked?: string; skipped?: boolean }> {
+		const docPolicy = this._figurePolicyForState(state);
+		// "Never change this doc": the run leaves it untouched (D9 - the human dialled autonomy off). No resolve,
+		// no apply, no queue; the caller reports it as an honest skip in the run log rather than a silent no-change.
+		if (docPolicy === 'never') { return { applied: 0, queued: 0, skipped: true }; }
 		await this._resolveIntoLock(state, pass);
 		const changes = this._figureReconciles(state);
 		if (changes.length) {
@@ -3566,7 +3633,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		let applied = 0;
 		let queued = 0;
 		for (const change of changes) {
-			if (policy === 'auto-figures') {
+			// The document dial wins over the agent policy: `ask-first` forces a queue even under `auto-figures`.
+			if (policy === 'auto-figures' && docPolicy !== 'ask-first') {
 				this._applyFigure(state, change);
 				applied++;
 				continue;
@@ -4261,7 +4329,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// to drain, instead of a blanket clear dropping it. Copied so a later propagate cannot mutate it.
 			const dirtyBefore = this._orchestrator.getDirty(uri);
 			const snapshot = dirtyBefore ? { value: [...dirtyBefore.value], influence: [...dirtyBefore.influence] } : undefined;
-			let result: { applied: number; queued: number; blocked?: string };
+			let result: { applied: number; queued: number; blocked?: string; skipped?: boolean };
 			try {
 				result = await this._runFiguresByPolicy(state, agent.policy, pass);
 			} catch (e) {
@@ -4272,6 +4340,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				if (isModelPausedError(e)) { blocked = e.message; skipped = docs.length - i; this._notify.info(e.message); break; }
 				throw e;
 			}
+			// A "Never change this doc" document (issue #257) was left ALONE by the run: it is not "touched" (no
+			// apply/queue happened) and needs no lock write - the run reported it skipped-by-policy and moves on.
+			if (result.skipped) { continue; }
 			applied += result.applied;
 			queued += result.queued;
 			touched++;
@@ -5144,7 +5215,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// typed prompt is preserved). Picking a door replays this exact prompt. The onboarding demo path (a signed
 		// substituted `displayText`) is exempt - the walkthrough drives the model deliberately and its own no-model
 		// guidance already covers it - so only a genuine user send (no displayText) opens the first-use choice.
-		if (!shown && needsModelChoice(await this.getModelProviderStatus())) {
+		//
+		// A WHOLE-PROJECT FAN-OUT is exempt too (V1, WP-E): the run screen has no chat-rail to render the inline
+		// choice, so holding the prompt here would strand the run reading a silent "8/8 done, 0 changes" all-clear.
+		// A fan-out send (the anchor already carries a working set) instead falls through to _deliverChatReply,
+		// whose no-model branch surfaces the honest F14 named outage on the run screen (every doc named, Retry
+		// failed offered) - the pre-flight no-model case reuses the SAME outage surface the mid-run death does.
+		const isFanout = this.getWorkingSet(resource).length > 0;
+		if (!shown && !isFanout && needsModelChoice(await this.getModelProviderStatus())) {
 			this._modelAccessGate.holdPrompt(resource, trimmed);
 			// Reveal the chat rail so the inline choice is seen at the moment it appears (the send may have come
 			// from a skill/AI door, not only the visible composer). holdPrompt already fired onDidChange to render it.
@@ -5389,9 +5467,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				// and (on the run screen) let the swarm read as a silent all-clear. The single-doc path keeps the
 				// existing plain-words guidance turn (there are no fan-out documents to list).
 				if (workingSet.length) {
-					const failedDocs: IFanoutFailedDoc[] = workingSet.map(w => ({ id: w.resource.toString(), title: w.title }));
+					// A "Never change this doc" document in the set is left alone REGARDLESS of the model being down
+					// (issue #257): it is skipped by the human's own dial, not "failed for the model" - so it lands on
+					// the honest `policy` tile, and only the remaining documents are named as failed. This keeps the
+					// pre-flight no-model fan-out (V1) from either hiding the outage OR mislabelling a protected doc.
+					const skippedByPolicyDocIds: string[] = [];
+					const failedDocs: IFanoutFailedDoc[] = [];
+					for (const w of workingSet) {
+						const wsState = this._docs.get(w.resource.toString());
+						if (wsState && this._policyForState(wsState) === 'never') { skippedByPolicyDocIds.push(w.resource.toString()); continue; }
+						failedDocs.push({ id: w.resource.toString(), title: w.title });
+					}
 					const outcome = summarizeFanoutRun({ proposedCount: 0, failedDocs });
-					this._fanoutProgress.set(id, { batchIndex: 0, batchCount: 0, oversizeDocIds: [], failedDocIds: failedDocs.map(d => d.id) });
+					this._fanoutProgress.set(id, { batchIndex: 0, batchCount: 0, oversizeDocIds: [], failedDocIds: failedDocs.map(d => d.id), skippedByPolicyDocIds });
 					this._onDidChange.fire();
 					history.push({ role: 'assistant', via: 'fallback', content: outcome.content, failedDocs: outcome.failedDocs });
 					return;
@@ -5462,21 +5550,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// the final message - so the rail shows the steps appearing rather than all at once at stream end.
 		const addStep = (step: IChatStep) => { steps.push(step); onStep(step); };
 		if (sourceFiles.length) { addStep({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
-		for (const edit of json.edits) {
-			const queued = this._queueChatEdit(state, edit);
-			if (queued) { addStep({ label: `Proposed edit: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+		// Policy gate (issue #257): a document dialled "Never change this doc" gets NO proposal - the queue methods
+		// refuse it - but the refusal must be SPOKEN, not silent. The model can still answer a read-only question
+		// about the doc; only when it WANTED to edit (returned any edit/insert) do we surface the named refusal so
+		// the user sees their dial was honoured, naming the doc and its policy. A `never` doc is still read normally.
+		const refused = this._policyForState(state) === 'never' && (json.edits.length > 0 || json.inserts.length > 0);
+		if (!refused) {
+			for (const edit of json.edits) {
+				const queued = this._queueChatEdit(state, edit);
+				if (queued) { addStep({ label: `Proposed edit: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+			}
+			for (const insert of json.inserts) {
+				const queued = this._queueChatInsert(state, insert);
+				if (queued) { addStep({ label: `Proposed new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+			}
 		}
-		for (const insert of json.inserts) {
-			const queued = this._queueChatInsert(state, insert);
-			if (queued) { addStep({ label: `Proposed new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
-		}
-		// What the bubble shows: the model's reply when it gave one; nothing when proposals carry the meaning
-		// (their cards speak); otherwise a neutral honest line. `parseChatResponse` already routed a non-JSON
-		// plain-text answer into `reply`, so a truthy `reply` is always real prose -- we NEVER surface the raw
-		// JSON envelope (a parsed-but-empty reply used to leak `{"reply":"",...}` into the chat).
-		const content = json.reply || (proposedIds.length ? '' : 'I do not have anything to add on that.');
+		// What the bubble shows: a NAMED refusal when the doc's policy blocked an edit the model wanted; else the
+		// model's reply when it gave one; nothing when proposals carry the meaning (their cards speak); otherwise a
+		// neutral honest line. `parseChatResponse` already routed a non-JSON plain-text answer into `reply`, so a
+		// truthy `reply` is always real prose -- we NEVER surface the raw JSON envelope.
+		const content = refused
+			? docPolicyNeverRefusal(state.doc.title)
+			: (json.reply || (proposedIds.length ? '' : 'I do not have anything to add on that.'));
 		return {
-			role: 'assistant', via: 'model', content,
+			role: 'assistant', via: refused ? 'fallback' : 'model', content,
 			steps: steps.length ? steps : undefined,
 			proposedIds: proposedIds.length ? proposedIds : undefined,
 		};
@@ -5517,8 +5614,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const headings = s.doc.blocks.filter(b => b.type === 'heading').map(b => b.text);
 			return `### Document: "${s.doc.title}"\n${this._serializeDocForChat(s)}\nHeadings: ${headings.join(' | ') || '(none)'}`;
 		};
-		const stateByTitle = new Map(states.map(s => [s.doc.title.trim().toLowerCase(), s]));
-		const fanoutDocs: IFanoutDoc[] = states.map(s => ({ id: s.uri.toString(), title: s.doc.title, body: sectionFor(s) }));
+		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - it is never sent to
+		// the model and never queued. Partition it off BEFORE planning so it neither consumes budget nor risks an
+		// edit; its id feeds the run screen's honest `policy` tile and a run-log skip step names why it was skipped.
+		const skippedByPolicy = states.filter(s => this._policyForState(s) === 'never');
+		const editableStates = states.filter(s => this._policyForState(s) !== 'never');
+		const skippedByPolicyDocIds = skippedByPolicy.map(s => s.uri.toString());
+		const stateByTitle = new Map(editableStates.map(s => [s.doc.title.trim().toLowerCase(), s]));
+		const fanoutDocs: IFanoutDoc[] = editableStates.map(s => ({ id: s.uri.toString(), title: s.doc.title, body: sectionFor(s) }));
 		const budget = this._fanoutContextBudget();
 		// Everything that is NOT a document body but still consumed by every call, so a batch's usable space is
 		// budget - overhead. The `Working set (N documents):` scaffold + the `Shared sources ...` framing are
@@ -5542,10 +5645,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// "no changes". Each doc is in exactly one batch, so a failed batch attributes failure to exactly its docs.
 		const failedDocs: IFanoutFailedDoc[] = [];
 		const publishProgress = (batchIndex: number) => {
-			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id) });
+			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id), skippedByPolicyDocIds });
 			this._onDidChange.fire();
 		};
 		publishProgress(0);
+		// Announce every "Never change this doc" document up front (issue #257): the run left it untouched by the
+		// human's own dial, so the run log says so rather than the swarm reading a silent all-clear over it.
+		for (const s of skippedByPolicy) {
+			addStep({ label: `${s.doc.title}: ${docPolicyNeverSkipReason()}`, status: 'skipped' });
+		}
 		// Announce every oversize document up front (plan-23 honesty rule): a document larger than the whole
 		// budget is NEVER sent - its tile/step says so rather than the run silently dropping it.
 		for (const doc of plan.oversize) {
@@ -5611,8 +5719,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		// Mark the fan-out as no longer on a live batch (batchIndex 0) while keeping the batchCount + oversize +
-		// failed sets, so the settled run screen still reads "N too large" / "N failed" without a spurious "batch K".
-		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id) });
+		// failed + policy-skipped sets, so the settled run screen still reads "N too large" / "N failed" / "N left
+		// alone" without a spurious "batch K".
+		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id), skippedByPolicyDocIds });
 
 		// Aggregate the run honestly (F14, issue #123): a pause shows the cap message; any failed documents show a
 		// named error listing them (with the proposals that DID land, on a partial success) + "Retry failed"; a
@@ -5651,6 +5760,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the
 	// block label when queued, else undefined.
 	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): { id: string; label: string } | undefined {
+		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - no proposal is
+		// ever created for it, in chat or fan-out. The caller names the refusal; here we simply make no change.
+		if (this._policyForState(state) === 'never') { return undefined; }
 		const newText = String(edit.newText ?? '').trim();
 		const oldText = String(edit.oldText ?? '').trim();
 		if (!newText || !oldText) { return undefined; }
@@ -5715,6 +5827,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// named heading (best fuzzy match; empty/unknown -> end of document). No oldText - the inline diff
 	// renders it all-additions, and approve splices a new block into the document.
 	private _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): { id: string; label: string } | undefined {
+		// Policy gate (issue #257): a "Never change this doc" document accepts no generated inserts either.
+		if (this._policyForState(state) === 'never') { return undefined; }
 		const newText = String(insert.newText ?? '').trim();
 		if (!newText) { return undefined; }
 		const afterHeading = String(insert.afterHeading ?? '').trim();

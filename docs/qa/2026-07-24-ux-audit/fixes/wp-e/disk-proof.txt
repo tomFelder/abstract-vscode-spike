@@ -1,0 +1,18 @@
+WP-E live verification - disk proof (issue #257)
+Workspace: /tmp/wp-e-ws-15760  |  HEAD sha: 2eebe6b03796b0881563125496450e56f0eea475
+
+=== Board Note.md - dialled 'never' via the Properties dial (frontmatter on disk) ===
+---
+policy: never
+title: Board Note
+  ...body untouched by the fan-out (verbatim):
+  ## Note to the board
+  
+
+=== Weekly Summary.md - dialled 'ask-first' via the dial (frontmatter on disk) ===
+---
+policy: ask-first
+
+Live run screen (02-fanout-run-never-skipped.png): Board Note tile reads
+  'left alone (policy: never)'; bottom bar '2 changes ... 5 unchanged 1 left alone'.
+Live chat (03-chat-never-refusal.png): named refusal, no proposal created.

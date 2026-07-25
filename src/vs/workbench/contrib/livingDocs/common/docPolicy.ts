@@ -92,3 +92,23 @@ export function docPolicyToneHex(tone: DocPolicyTone): string {
 		case 'removed': return '#B5514B';
 	}
 }
+
+/**
+ * The truthful, plain-words refusal a `never` document produces when an agent would otherwise change it
+ * (issue #257). Names the document AND the policy that protects it, so the refusal reads as an honoured
+ * choice - "you dialled Never for this doc" - not a silent nothing. Used by the chat/fan-out proposal path
+ * to speak the refusal, so the copy lives in ONE place beside the policy grammar it enforces (P2). This is
+ * the enforcement contract wearing words: the human dialled autonomy off, and the agent says so.
+ */
+export function docPolicyNeverRefusal(docTitle: string): string {
+	return `I left "${docTitle}" unchanged - its autonomy is dialled to "Never change this doc", so I make no edits to it. Change the doc's policy in its Properties if you want me to propose edits.`;
+}
+
+/**
+ * The truthful skip-reason a `never` document carries in an agent / fan-out run log (issue #257). A run over a
+ * project that includes a `never` document must SKIP that document with this reason, never silently rewrite it
+ * nor read as a false "no change". Kept beside the refusal copy so the run log and the chat speak with one voice.
+ */
+export function docPolicyNeverSkipReason(): string {
+	return 'Dialled to "Never change this doc"';
+}

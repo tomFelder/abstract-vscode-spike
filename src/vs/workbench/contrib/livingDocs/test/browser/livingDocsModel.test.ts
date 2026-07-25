@@ -74,6 +74,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			skippedDocs: 0,
 			oversizeDocs: 0,
 			failedDocs: 0,
+			policyDocs: 0,
 		});
 	});
 
@@ -90,6 +91,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			skippedDocs: 0,
 			oversizeDocs: 0,
 			failedDocs: 0,
+			policyDocs: 0,
 		});
 	});
 
@@ -109,6 +111,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			skippedDocs: 2,
 			oversizeDocs: 0,
 			failedDocs: 0,
+			policyDocs: 0,
 		});
 	});
 
@@ -125,6 +128,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			skippedDocs: 0,
 			oversizeDocs: 0,
 			failedDocs: 0,
+			policyDocs: 0,
 		});
 	});
 
@@ -144,6 +148,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			skippedDocs: 0,
 			oversizeDocs: 1,
 			failedDocs: 0,
+			policyDocs: 0,
 		});
 	});
 
@@ -163,6 +168,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			skippedDocs: 0,
 			oversizeDocs: 0,
 			failedDocs: 1,
+			policyDocs: 0,
 		});
 	});
 
@@ -179,6 +185,7 @@ suite('LivingDoc model - summariseProjectRun', () => {
 			skippedDocs: 0,
 			oversizeDocs: 0,
 			failedDocs: 3,
+			policyDocs: 0,
 		});
 	});
 
@@ -190,6 +197,35 @@ suite('LivingDoc model - summariseProjectRun', () => {
 		assert.strictEqual(summary.oversizeDocs, 1);
 		assert.strictEqual(summary.failedDocs, 0);
 		assert.strictEqual(summary.unchangedDocs, 2);
+	});
+
+	test('a "Never change this doc" document is flagged policy, its own bucket, never no-change (issue #257)', () => {
+		// doc `b` is dialled never: the run left it alone by the human's own choice, so its tile must read `policy`
+		// (left alone), NOT the silent `no-change` all-clear that would hide the dial being honoured.
+		const pending = [change('a', '1')];
+		assert.deepStrictEqual(summariseProjectRun(docs, pending, false, [], [], ['b']), {
+			tiles: [
+				{ docId: 'a', docTitle: 'Access Control', status: 'changed', changeCount: 1 },
+				{ docId: 'b', docTitle: 'Acceptable Use', status: 'policy', changeCount: 0 },
+				{ docId: 'c', docTitle: 'Cryptography', status: 'no-change', changeCount: 0 },
+			],
+			totalChanges: 1,
+			changedDocs: 1,
+			unchangedDocs: 1,
+			skippedDocs: 0,
+			oversizeDocs: 0,
+			failedDocs: 0,
+			policyDocs: 1,
+		});
+	});
+
+	test('policy takes priority over failed for a never-doc even when the model was down (issue #257)', () => {
+		// A never-doc was never sent regardless of the model state, so "left alone by policy" is the true reason -
+		// it must not be mislabelled `failed` (a model outage it never met).
+		const summary = summariseProjectRun(docs, [], false, [], ['b'], ['b']);
+		assert.strictEqual(summary.tiles[1].status, 'policy', 'policy wins over failed');
+		assert.strictEqual(summary.policyDocs, 1);
+		assert.strictEqual(summary.failedDocs, 0);
 	});
 });
 

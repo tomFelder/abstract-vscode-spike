@@ -923,10 +923,14 @@ export class ReviewRailView extends ViewPane {
 		card.style.cssText = 'border:1px solid #eceef2;border-radius:10px;overflow:hidden;background:#fff';
 		steps.forEach((step, i) => {
 			const stepRow = append(card, $('div'));
+			// A `skipped` step (a "Never change this doc" document the run left alone - issue #257) reads in a muted
+			// grey with a "left alone" glyph, distinct from a queued proposal (amber arrow) or a done read (green tick).
+			const skipped = step.status === 'skipped';
 			const queued = step.status === 'queued';
-			stepRow.style.cssText = `display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 ui-monospace,monospace;color:${queued ? '#9a6b16' : '#5d8a66'}${i < steps.length - 1 ? ';border-bottom:1px solid #f4f5f7' : ''}`;
+			const colour = skipped ? '#8a8f98' : queued ? '#9a6b16' : '#5d8a66';
+			stepRow.style.cssText = `display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 ui-monospace,monospace;color:${colour}${i < steps.length - 1 ? ';border-bottom:1px solid #f4f5f7' : ''}`;
 			const glyph = append(stepRow, $('span'));
-			glyph.textContent = queued ? '\u2192' : '\u2713';
+			glyph.textContent = skipped ? '\u2298' : queued ? '\u2192' : '\u2713';
 			const label = append(stepRow, $('span'));
 			label.textContent = step.label;
 		});

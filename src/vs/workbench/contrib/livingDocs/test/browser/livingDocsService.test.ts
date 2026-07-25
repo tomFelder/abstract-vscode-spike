@@ -1911,6 +1911,200 @@ suite('livingDocs Service', () => {
 		assert.deepStrictEqual([...docIds], [WEEKLY.toString()], 'with no set, only the active doc is edited');
 	});
 
+	// --- per-doc autonomy policy is ENFORCED (issue #257): the dial gates the propose/apply pipeline, not just
+	// its own render. All three positions are pinned live end-to-end, in chat, figure sync, and fan-out. ---
+
+	// Author WEEKLY_MD with an explicit `policy:` line (the dial writes exactly this scalar to frontmatter).
+	function weeklyWithPolicy(policy: string): string {
+		return WEEKLY_MD.replace('subtitle: Week 23', `subtitle: Week 23\npolicy: ${policy}`);
+	}
+
+	test('#257 "never": a chat edit request creates NO proposal and the reply names the doc + policy (no silent nothing)', async () => {
+		const service = createService([], {
+			model: chatReply('Here is a sharper commentary line.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+			]),
+		});
+		lastFiles!.set(WEEKLY.toString(), weeklyWithPolicy('never'));
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getDocPolicy(WEEKLY), 'never', 'precondition: the doc is dialled never');
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.deepStrictEqual(
+			{
+				pending: service.getPendingForDoc(WEEKLY).length,
+				namesDoc: /Weekly Operating Summary/.test(turn.content),
+				namesPolicy: /Never change this doc/.test(turn.content),
+				via: turn.via,
+			},
+			{ pending: 0, namesDoc: true, namesPolicy: true, via: 'fallback' },
+			'never refuses in chat with a named reason and queues nothing',
+		);
+	});
+
+	test('#257 "never": a read-only question is still answered (the doc is read, only EDITS are refused)', async () => {
+		const service = createService([], { model: chatReply('MRR is $48.6k, up 18% this week.') });
+		lastFiles!.set(WEEKLY.toString(), weeklyWithPolicy('never'));
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'What is MRR this week?');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.deepStrictEqual(
+			{ answered: /MRR is \$48\.6k/.test(turn.content), refused: /Never change this doc/.test(turn.content), pending: service.getAllPending().length },
+			{ answered: true, refused: false, pending: 0 },
+			'a never doc still answers questions; the refusal only fires when the model wanted to edit',
+		);
+	});
+
+	test('#257 "ask-first" forces a FIGURE SYNC into Review even though it would otherwise auto-apply', async () => {
+		const service = createService();
+		lastFiles!.set(WEEKLY.toString(), weeklyWithPolicy('ask-first'));
+		await service.loadDocument(WEEKLY);
+
+		await service.refreshFromSources(WEEKLY);
+
+		// The prose is left byte-identical (no auto-apply), and each figure change waits as a pending review row.
+		const highlights = blockText(service, WEEKLY, 'h-highlights');
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.deepStrictEqual(
+			{
+				proseUntouched: highlights.includes('[$41.2k](bind:metrics.mrr)'),
+				queued: pending.length > 0,
+				kind: pending[0]?.kind,
+				autoApplied: service.getAudit().some(e => e.action === 'auto-applied'),
+			},
+			{ proseUntouched: true, queued: true, kind: 'figure', autoApplied: false },
+			'ask-first queues the figure sync for review instead of auto-applying it',
+		);
+	});
+
+	test('#257 "auto-apply": a figure sync still lands on its own (the golden path is not regressed)', async () => {
+		const service = createService();
+		lastFiles!.set(WEEKLY.toString(), weeklyWithPolicy('auto-apply'));
+		await service.loadDocument(WEEKLY);
+
+		await service.refreshFromSources(WEEKLY);
+
+		const highlights = blockText(service, WEEKLY, 'h-highlights');
+		assert.deepStrictEqual(
+			{ applied: highlights.includes('[$48.6k](bind:metrics.mrr)'), queued: service.getPendingForDoc(WEEKLY).length, audited: service.getAudit().some(e => e.action === 'auto-applied') },
+			{ applied: true, queued: 0, audited: true },
+			'auto-apply lands figures automatically, nothing queued',
+		);
+	});
+
+	test('#257 an UNAUTHORED doc (no dial) keeps the auto-apply-figures default (doc 20 1g) - enforcement never silently gates existing docs', async () => {
+		const service = createService(); // WEEKLY_MD carries no policy: line
+		await service.loadDocument(WEEKLY);
+
+		await service.refreshFromSources(WEEKLY);
+
+		const highlights = blockText(service, WEEKLY, 'h-highlights');
+		assert.deepStrictEqual(
+			{ applied: highlights.includes('[$48.6k](bind:metrics.mrr)'), queued: service.getPendingForDoc(WEEKLY).length },
+			{ applied: true, queued: 0 },
+			'the default figure behaviour is auto-apply, unchanged by the enforcement',
+		);
+	});
+
+	test('#257 fan-out: a "never" document in the project is SKIPPED with a truthful skip reason, others still change', async () => {
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			model: multiReply('Applied across the project.', [
+				{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth accelerated.', rationale: 'r' }] },
+				// The model even RETURNS an edit for the Board Note - it must be refused because the doc is dialled never.
+				{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum accelerated.', rationale: 'r' }] },
+			]),
+		});
+		lastFiles!.set(BOARD.toString(), BOARD_MD.replace('title: Board Note', 'title: Board Note\npolicy: never'));
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD]);
+
+		await service.sendChatMessage(WEEKLY, 'tighten every note across the project');
+
+		const pendingDocIds = new Set(service.getAllPending().map(c => c.docId));
+		const progress = service.getFanoutProgress(WEEKLY);
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.deepStrictEqual(
+			{
+				weeklyChanged: pendingDocIds.has(WEEKLY.toString()),
+				boardRewritten: pendingDocIds.has(BOARD.toString()),
+				boardOnDiskUntouched: (lastFiles!.get(BOARD.toString()) ?? '').includes('Momentum is steady this week.'),
+				skippedByPolicy: [...(progress?.skippedByPolicyDocIds ?? [])],
+				skipStep: (turn.steps ?? []).some(s => s.status === 'skipped' && /Board Note/.test(s.label) && /Never change this doc/.test(s.label)),
+			},
+			{
+				weeklyChanged: true,
+				boardRewritten: false,
+				boardOnDiskUntouched: true,
+				skippedByPolicy: [BOARD.toString()],
+				skipStep: true,
+			},
+			'the never doc is skipped with a truthful run-log reason and never rewritten; the editable doc still changes',
+		);
+	});
+
+	test('#257 external frontmatter edit is HONOURED: flipping policy to never on disk stops the next chat proposal, no dial touched', async () => {
+		const service = createService([], {
+			model: chatReply('Sharpened it.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated.', rationale: 'r' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+		// First send with the default policy: a proposal queues as normal.
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 1, 'precondition: a normal doc queues a chat proposal');
+		await service.reject(service.getPendingForDoc(WEEKLY)[0].id);
+
+		// Someone edits the file's frontmatter OUTSIDE Abstract, dialling policy to never (no setDocPolicy call).
+		simulateExternalEdit!(WEEKLY, weeklyWithPolicy('never'));
+		await new Promise(r => setTimeout(r, 0)); // the watcher re-reads + reparses the frontmatter
+		// Reload from disk so the freshly-parsed policy is the enforced one (an external-edit reload path).
+		await service.loadDocument(WEEKLY);
+		assert.strictEqual(service.getDocPolicy(WEEKLY), 'never', 'the external policy edit is read, not cached stale');
+
+		await service.sendChatMessage(WEEKLY, 'Tighten it again');
+
+		assert.deepStrictEqual(
+			{ pending: service.getPendingForDoc(WEEKLY).length, refused: /Never change this doc/.test(service.getChatMessages(WEEKLY).at(-1)!.content) },
+			{ pending: 0, refused: true },
+			'enforcement follows the external policy edit without touching the dial',
+		);
+	});
+
+	test('#257 V1: a pre-flight NO-MODEL whole-project fan-out surfaces the named outage on the run screen, never a false all-clear', async () => {
+		// The broker is unreachable BEFORE the run starts (no model configured). The whole-project fan-out must NOT
+		// silently hold the prompt on the first-use chat choice (which would strand the run reading "0 changes, all
+		// unchanged"); it surfaces the SAME F14 named outage the mid-run death does - every doc named failed.
+		const service = createService([], { boardNote: true, proxyUrl: DEAD_PROXY }); // no opts.model -> /healthz unhealthy
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+
+		await service.sendChatMessage(WEEKLY, 'apply the security review decisions across the project');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		const progress = service.getFanoutProgress(WEEKLY);
+		assert.deepStrictEqual(
+			{
+				namesOutage: /The model was not available/.test(turn.content),
+				noAllClear: !/no changes|nothing to change|did not find anything|unchanged/i.test(turn.content),
+				failedDocs: [...(progress?.failedDocIds ?? [])].sort(),
+				pending: service.getAllPending().length,
+			},
+			{
+				namesOutage: true,
+				noAllClear: true,
+				failedDocs: [BOARD.toString(), README.toString(), WEEKLY.toString()].sort(),
+				pending: 0,
+			},
+			'the pre-flight no-model fan-out names the outage and every failed doc, never a silent all-clear',
+		);
+	});
+
 	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {
 		const newText = '1. First lever\n2. Second lever\n3. Third lever';
 		const service = createService([], {
