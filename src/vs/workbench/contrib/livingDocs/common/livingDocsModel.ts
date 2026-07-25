@@ -411,7 +411,10 @@ export function nextPendingDocId(pending: readonly IProposedChange[], currentDoc
 // `failed` (F14, issue #123): a document the model could not be reached/errored for during the run. It WAS
 // sent (or would have been) but the model call failed, so its tile reads a named "model unreachable" state -
 // NEVER a silent "no change" (which would falsely claim it ran and found nothing: the F14 trust breach).
-export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working' | 'skipped' | 'oversize' | 'failed';
+// `policy` (issue #257): a document dialled "Never change this doc" that the run left untouched by the human's
+// own choice. Its tile reads a truthful "left alone (policy: never)" state, NEVER a silent "no change" - the
+// dial was honoured and the run says so.
+export type ProjectRunDocStatus = 'changed' | 'no-change' | 'working' | 'skipped' | 'oversize' | 'failed' | 'policy';
 
 export interface IProjectRunDocTile {
 	readonly docId: string;
@@ -435,6 +438,7 @@ export interface IProjectRunSummary {
 	readonly skippedDocs: number;       // documents the stopped run never settled (plan 27 iter 4)
 	readonly oversizeDocs: number;      // documents too large for the fan-out budget (plan 30, track 3)
 	readonly failedDocs: number;        // documents the model could not be reached for (F14, issue #123)
+	readonly policyDocs: number;        // documents left alone by "Never change this doc" (issue #257)
 }
 
 // `stopped` (plan 27 iter 4): the run was cancelled mid-flight, so a document with no pending change is
@@ -452,27 +456,34 @@ export function summariseProjectRun(
 	stopped = false,
 	oversizeDocIds: readonly string[] = [],
 	failedDocIds: readonly string[] = [],
+	skippedByPolicyDocIds: readonly string[] = [],
 ): IProjectRunSummary {
 	const counts = new Map<string, number>();
 	for (const c of pending) { counts.set(c.docId, (counts.get(c.docId) ?? 0) + 1); }
 	const oversize = new Set(oversizeDocIds);
 	const failed = new Set(failedDocIds);
+	const policy = new Set(skippedByPolicyDocIds);
 	const tiles: IProjectRunDocTile[] = docs.map(d => {
 		const changeCount = counts.get(d.docId) ?? 0;
-		// An oversize document is honestly flagged even if it also shows no change: it never ran, so its
+		// A "Never change this doc" document is flagged `policy` above everything else (issue #257): the human
+		// dialled it off, so it was never sent and can carry no change - its tile must say so, not read `no
+		// change`. An oversize document is honestly flagged even if it also shows no change: it never ran, so its
 		// tile must not read `no change` (which claims it ran and found nothing) nor `skipped` (a stop). A
 		// failed document (model unreachable) is likewise flagged over a false `no change` - the F14 fix.
-		const status: ProjectRunDocStatus = oversize.has(d.docId)
-			? 'oversize'
-			: failed.has(d.docId)
-				? 'failed'
-				: changeCount > 0 ? 'changed' : (stopped ? 'skipped' : 'no-change');
+		const status: ProjectRunDocStatus = policy.has(d.docId)
+			? 'policy'
+			: oversize.has(d.docId)
+				? 'oversize'
+				: failed.has(d.docId)
+					? 'failed'
+					: changeCount > 0 ? 'changed' : (stopped ? 'skipped' : 'no-change');
 		return { docId: d.docId, docTitle: d.docTitle, status, changeCount };
 	});
 	const changedDocs = tiles.filter(t => t.status === 'changed').length;
 	const skippedDocs = tiles.filter(t => t.status === 'skipped').length;
 	const oversizeDocs = tiles.filter(t => t.status === 'oversize').length;
 	const failedDocs = tiles.filter(t => t.status === 'failed').length;
+	const policyDocs = tiles.filter(t => t.status === 'policy').length;
 	// Count only changes attributable to a document in this project's tile set, so totalChanges
 	// always equals the sum of the tile counts. A pending change whose docId is not in `docs`
 	// (a stale snapshot / a doc removed mid-run) has no tile and must not inflate the bottom-bar total.
@@ -481,10 +492,11 @@ export function summariseProjectRun(
 		tiles,
 		totalChanges,
 		changedDocs,
-		unchangedDocs: tiles.length - changedDocs - skippedDocs - oversizeDocs - failedDocs,
+		unchangedDocs: tiles.length - changedDocs - skippedDocs - oversizeDocs - failedDocs - policyDocs,
 		skippedDocs,
 		oversizeDocs,
 		failedDocs,
+		policyDocs,
 	};
 }
 

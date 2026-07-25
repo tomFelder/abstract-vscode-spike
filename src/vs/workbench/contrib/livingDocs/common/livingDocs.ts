@@ -503,7 +503,9 @@ export interface IPdfContextResult {
  */
 export interface IChatStep {
 	readonly label: string;
-	readonly status: 'done' | 'queued';
+	/** `done` = completed read/step, `queued` = a proposal awaiting review, `skipped` = left untouched on purpose
+	 * (e.g. a "Never change this doc" document a fan-out honoured by NOT editing it - issue #257). */
+	readonly status: 'done' | 'queued' | 'skipped';
 }
 
 /**
@@ -571,6 +573,13 @@ export interface IFanoutProgress {
 	 * silent "no change" all-clear. Empty when every document the run reached was processed.
 	 */
 	readonly failedDocIds: readonly string[];
+	/**
+	 * The docIds (resource strings) of documents SKIPPED because their autonomy is dialled "Never change this doc"
+	 * (issue #257). The run left them untouched by the human's own choice - the run screen reads these so a skipped
+	 * document's tile shows a truthful "left alone by policy" state, never a silent "no change" that would hide that
+	 * the dial was honoured. Empty when no document in the run carries the `never` policy.
+	 */
+	readonly skippedByPolicyDocIds: readonly string[];
 }
 
 /**

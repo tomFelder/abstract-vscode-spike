@@ -430,11 +430,15 @@ export function renderProjectRun(state: IScreenState): string {
 	// Documents the model could not be reached for (F14, issue #123) are their own honest bucket - NEVER folded
 	// into "unchanged", so a model outage can never read as a silent all-clear on the run's bottom bar.
 	const failedDocs = summary?.failedDocs ?? 0;
+	// Documents left alone by "Never change this doc" (issue #257) are their own honest bucket - NEVER folded into
+	// "unchanged", so the run bar shows the dial was honoured rather than reading a false all-clear over them.
+	const policyDocs = summary?.policyDocs ?? 0;
 	const numeral = (n: number) => `<strong style="font:500 20px/1 system-ui;color:#14161a">${n}</strong>`;
 	const tailParts = [`&middot; ${workingCount} working`, `&middot; ${unchangedDocs} unchanged`];
 	if (skippedDocs) { tailParts.push(`&middot; ${skippedDocs} skipped`); }
 	if (oversizeDocs) { tailParts.push(`&middot; ${oversizeDocs} too large`); }
 	if (failedDocs) { tailParts.push(`&middot; <span style="color:#9a6b16">${failedDocs} failed</span>`); }
+	if (policyDocs) { tailParts.push(`&middot; <span style="color:#8a8f98">${policyDocs} left alone</span>`); }
 	const tail = tailParts.join(' ');
 	// The lead line stays honest under a model outage: when documents failed and nothing was proposed, it names
 	// the model as unreachable (F14) instead of the false "0 changes proposed in 0 documents" all-clear.
@@ -573,6 +577,15 @@ function swarmTile(_docId: string, title: string, status: ProjectRunDocStatus, c
 		return `<div style="background:#fdf2f1;border:1px solid #ecc9c6;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
 			<div style="display:flex;align-items:center;gap:6px"><span style="color:#b4332f;font-size:11px">&#9888;</span><span style="${nameStyle};color:#8a2f2b">${name}</span></div>
 			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#b4332f">model unreachable</span>
+		</div>`;
+	}
+	// A policy tile (issue #257): the document is dialled "Never change this doc", so the run left it alone by the
+	// human's own choice. A muted grey border + a "no-entry" glyph + the honest "left alone (policy: never)" label
+	// tells the user WHY it produced nothing - the dial was honoured, never a silent "no change" that would hide it.
+	if (status === 'policy') {
+		return `<div style="background:#f7f8fa;border:1px solid #dfe2e8;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:#8a8f98;font-size:11px">&#8856;</span><span style="${nameStyle};color:#71767f">${name}</span></div>
+			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#8a8f98">left alone (policy: never)</span>
 		</div>`;
 	}
 	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">

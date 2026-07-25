@@ -1571,9 +1571,12 @@ export class ScreenEditor extends EditorPane {
 		// unreachable" state, never a silent "no change", and they are excluded from the live working overlay
 		// (they failed, they are not still spinning).
 		const failedIds = fanout?.failedDocIds ?? [];
-		const failedOrOversize = new Set([...oversizeIds, ...failedIds]);
-		const summary = summariseProjectRun(docs, pending, stopped || paused, oversizeIds, failedIds);
-		const working = inFlight ? docs.map(d => d.docId).filter(id => !failedOrOversize.has(id)) : [];
+		// Documents left alone by "Never change this doc" (issue #257): their tile reads the honest `policy` state
+		// and they are excluded from the live working overlay - the run never sent them, so they are not spinning.
+		const policyIds = fanout?.skippedByPolicyDocIds ?? [];
+		const notWorking = new Set([...oversizeIds, ...failedIds, ...policyIds]);
+		const summary = summariseProjectRun(docs, pending, stopped || paused, oversizeIds, failedIds, policyIds);
+		const working = inFlight ? docs.map(d => d.docId).filter(id => !notWorking.has(id)) : [];
 		// Decisions column (23.4): group the LIVE pending changes by their source grounding. Restrict to
 		// changes for documents in this run's tile set so a stale change from another surface never leaks
 		// into the run's decisions (mirrors summariseProjectRun's tile-set restriction).
