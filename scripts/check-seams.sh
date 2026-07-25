@@ -222,6 +222,40 @@ for html in "$WORKBENCH_HTML" "$WORKBENCH_DEV_HTML"; do
 	done
 done
 
+# --- Seam 12: the curated Manage (gear) + Accounts menus (issue #260, WP-I, additive contribution) ---
+# CurateShellMenusContribution shadows the stock GlobalActivity gear + AccountsContext Accounts entries out of
+# the calm shell by id, and re-lists the demoted stock power tools under an Advanced submenu. The gear side hides
+# "everything not in a fork group", so a renamed stock gear entry is hidden by default (fail-safe, no re-pin
+# needed). The Accounts side + the Advanced re-list target ids by exact string, so a rebase that renames one
+# would silently either leak the stock Accounts entry or drop the Advanced re-list. Assert (a) the ids are still
+# referenced in our contribution, and (b) still exist upstream OUTSIDE our contribution, so a rename fails here
+# loudly instead of regressing the shell. Fails soft (the affected entry re-leaks / drops, not the whole shell).
+WP_I_IDS=(
+	# Accounts stock entries we shadow (leak 4).
+	"_manageAccountPreferencesForExtension"
+	"workbench.action.chat.manageLanguageModelAuthentication"
+	# Stock power tools re-listed under Advanced (must keep working as the explicit stock route).
+	"workbench.action.openSettings"
+	"workbench.action.showCommands"
+	"workbench.action.openGlobalKeybindings"
+)
+for id in "${WP_I_IDS[@]}"; do
+	if ! grep_has "$LDC" "'${id}'"; then
+		fail "shell-menu-curation" "command id '${id}' is missing from CurateShellMenusContribution in $LDC (a shadowed Accounts entry may re-leak, or the Advanced re-list may drop; re-pin per WP-I / issue #260)"
+	fi
+	if ! grep -Erq --include=*.ts -- "'${id}'" src/vs --exclude-dir=livingDocs; then
+		fail "shell-menu-curation-upstream" "command id '${id}' no longer appears upstream - the WP-I gear/Accounts curation may target a renamed/removed command"
+	fi
+done
+# The curation contribution + its re-apply-on-change wiring must still be present (some stock gear entries are
+# registered late, so the one-shot pass alone would miss them).
+if ! grep_has "$LDC" "class CurateShellMenusContribution"; then
+	fail "shell-menu-curation-contrib" "CurateShellMenusContribution is gone from $LDC (the gear + Accounts menus re-leak the stock IDE)"
+fi
+if ! grep_has "$LDC" "MenuRegistry\.onDidChangeMenu"; then
+	fail "shell-menu-curation-reapply" "the onDidChangeMenu re-apply is gone from $LDC (late-registered stock gear entries would leak)"
+fi
+
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
 	echo "check-seams: OK - all shell seams intact."

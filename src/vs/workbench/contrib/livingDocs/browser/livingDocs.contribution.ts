@@ -13,7 +13,8 @@ import { IKeybindings, KeybindingsRegistry } from '../../../../platform/keybindi
 import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize, localize2 } from '../../../../nls.js';
-import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { Action2, IMenuItem, ISubmenuItem, isIMenuItem, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { ContextKeyExpr, ContextKeyExpression } from '../../../../platform/contextkey/common/contextkey.js';
 import { IConfigurationRegistry, Extensions as ConfigurationExtensions } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
@@ -331,6 +332,124 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	secondary: [KeyMod.CtrlCmd | KeyCode.KeyO],
 	handler: accessor => void accessor.get(IInstantiationService).invokeFunction(openDocQuickSwitch),
 });
+
+// --- calm shell: curate the bottom-left Manage (gear) + Accounts menus (issue #260, WP-I, leaks 1-4) ---
+// The global-activity gear ("Manage", MenuId.GlobalActivity) and the Accounts icon (MenuId.AccountsContext) are
+// the last stock IDE surfaces one mouse-click off the golden path. The gear leaks the raw VS Code Manage menu
+// (Command Palette / Profiles / Settings / Extensions / Keyboard Shortcuts / Snippets / Tasks / Themes) - and its
+// "Settings" entry is the worst collision, because it is exactly where a writer looks for the analytics / model
+// toggles that actually live in Model Access. The Accounts menu leaks "Manage Extension Account Preferences..." /
+// "Manage Language Model Access...". These menus are re-read from MenuRegistry each time they open (menuService.ts
+// evaluates each item's `when` live at open), and every stock entry above is registered via
+// MenuRegistry.appendMenuItem in core with a stable command / submenu id. So we curate additively, staying at the
+// same de-IDE tier as HideIdeContainersContribution (which deregisters IDE view containers): a fork-owned
+// contribution that (a) shadows each stock entry's `when` with a never-true expression so the calm shell filters
+// it out, and (b) registers the Abstract entries the gear SHOULD carry.
+//
+// Zero core patch: MenuRegistry.getMenuItems + MenuRegistry.appendMenuItem are the public registry API, called from
+// our own module - no upstream file is edited. The shadow is fully reversible (the contribution restores each
+// original `when` on dispose). It leans on internal command / submenu ids, so - exactly like the container
+// deregister above - it re-pins on rebase (check-seams guards these ids). "Reachable, not the wall" for stock
+// power tools is honoured by the Advanced submenu, which re-lists Settings / Command Palette / Keyboard Shortcuts
+// as an explicit opt-in (they also keep working for our own debugging), so nothing stock is destroyed, only demoted.
+const ABSTRACT_ADVANCED_SUBMENU = new MenuId('AbstractAdvancedShellMenu');
+// The fork groups the curated Abstract entries live in. `_shadow` shadows every GlobalActivity item that is NOT in
+// one of these groups, so this stays correct even if upstream adds a new stock gear entry on rebase (it is hidden
+// by default rather than leaking) - the inverse of an id allow-list, which would silently miss new leaks.
+const ABSTRACT_GEAR_GROUPS: ReadonlySet<string> = new Set(['1_abstract', '9_advanced']);
+// The stock Accounts (AccountsContext) command ids to shadow (leak 4). The per-account submenus + the dynamic
+// "Manage ... Authentication Providers" entries are generated in core (globalCompositeBar.ts) from the live auth
+// providers, NOT from MenuRegistry, so with no third-party auth provider signed in the menu is empty once these
+// static IDE entries are shadowed. Targeted by id (not "hide all") because we do not own the AccountsContext menu
+// the way we own the curated gear, and a future Abstract account entry should be able to live here untouched.
+const SHADOWED_ACCOUNTS_COMMANDS: ReadonlySet<string> = new Set([
+	'_manageAccountPreferencesForExtension',						// Manage Extension Account Preferences...
+	'workbench.action.chat.manageLanguageModelAuthentication',		// Manage Language Model Access...
+]);
+
+class CurateShellMenusContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.curateShellMenus';
+
+	// The reversible `when` shadows currently applied, keyed by the item object, so re-applying on a menu change
+	// never double-shadows and dispose restores every original `when`.
+	private readonly _shadows = this._register(new DisposableStore());
+	private readonly _shadowed = new Map<IMenuItem | ISubmenuItem, ContextKeyExpression | undefined>();
+
+	constructor() {
+		super();
+		// Register the Abstract-relevant gear entries. These are the doors a writer should meet at the gear: the
+		// Settings-equivalent (Model Access, where the analytics / model toggles actually live), the onboarding
+		// demo, and an explicit Advanced submenu that keeps the stock power tools reachable (not the first wall).
+		// Registered before the shadow so a mid-startup open never shows a bare menu.
+		this._register(MenuRegistry.appendMenuItem(MenuId.GlobalActivity, {
+			command: { id: 'livingDocs.open.settings', title: localize2('livingDocs.gear.modelAccess', "Model Access") },
+			group: '1_abstract',
+			order: 1,
+		}));
+		this._register(MenuRegistry.appendMenuItem(MenuId.GlobalActivity, {
+			command: { id: 'livingDocs.open.onboarding', title: localize2('livingDocs.gear.onboarding', "Onboarding") },
+			group: '1_abstract',
+			order: 2,
+		}));
+		this._register(MenuRegistry.appendMenuItem(MenuId.GlobalActivity, {
+			title: localize('livingDocs.gear.advanced', "Advanced (VS Code)"),
+			submenu: ABSTRACT_ADVANCED_SUBMENU,
+			group: '9_advanced',
+			order: 1,
+		}));
+		// The stock power tools, demoted into the Advanced submenu so they stay reachable (for the writer who needs
+		// them, and for our own debugging) without being the wall a writer first meets. They re-use the stock
+		// commands, so behaviour is unchanged - only the placement is demoted.
+		this._register(MenuRegistry.appendMenuItem(ABSTRACT_ADVANCED_SUBMENU, {
+			command: { id: 'workbench.action.openSettings', title: localize2('livingDocs.gear.stockSettings', "VS Code Settings") },
+			order: 1,
+		}));
+		this._register(MenuRegistry.appendMenuItem(ABSTRACT_ADVANCED_SUBMENU, {
+			command: { id: 'workbench.action.showCommands', title: localize2('livingDocs.gear.stockPalette', "Command Palette...") },
+			order: 2,
+		}));
+		this._register(MenuRegistry.appendMenuItem(ABSTRACT_ADVANCED_SUBMENU, {
+			command: { id: 'workbench.action.openGlobalKeybindings', title: localize2('livingDocs.gear.stockKeybindings', "Keyboard Shortcuts") },
+			order: 3,
+		}));
+
+		// Apply now and re-apply whenever either menu changes: some stock gear entries (Extensions, Tasks, Profiles)
+		// are registered from workbench-contribution constructors that run after this one, so a one-shot pass would
+		// miss them. onDidChangeMenu fires when any item is (de)registered; we re-run the idempotent shadow then.
+		this._applyShadows();
+		this._register(MenuRegistry.onDidChangeMenu(e => {
+			if (e.has(MenuId.GlobalActivity) || e.has(MenuId.AccountsContext)) {
+				this._applyShadows();
+			}
+		}));
+	}
+
+	private _applyShadows(): void {
+		// The gear: hide everything that is not one of our curated entries. AccountsContext: hide the known stock
+		// IDE entries by id (see SHADOWED_ACCOUNTS_COMMANDS).
+		this._shadowItems(MenuId.GlobalActivity, item => !(item.group !== undefined && ABSTRACT_GEAR_GROUPS.has(item.group)));
+		this._shadowItems(MenuId.AccountsContext, item => isIMenuItem(item) && SHADOWED_ACCOUNTS_COMMANDS.has(item.command.id));
+	}
+
+	/**
+	 * Replace the `when` of every item matching `shouldShadow` with a never-true expression, so the menu (which
+	 * reads `when` live on every open) filters it out. Idempotent: an item already shadowed is skipped. Reversible:
+	 * each item's original `when` is captured and restored on dispose (or if it no longer matches after a change).
+	 */
+	private _shadowItems(menuId: MenuId, shouldShadow: (item: IMenuItem | ISubmenuItem) => boolean): void {
+		const neverTrue = ContextKeyExpr.false();
+		for (const item of MenuRegistry.getMenuItems(menuId)) {
+			if (this._shadowed.has(item) || !shouldShadow(item)) {
+				continue;
+			}
+			const original = item.when;
+			item.when = neverTrue;
+			this._shadowed.set(item, original);
+			this._shadows.add({ dispose: () => { item.when = original; } });
+		}
+	}
+}
+registerWorkbenchContribution2(CurateShellMenusContribution.ID, CurateShellMenusContribution, WorkbenchPhase.BlockRestore);
 
 // --- editor pane ---
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
@@ -726,9 +845,11 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		// left-over demo proposals.
 	}
 
-	// Execute the cold-start routing decision (map-D2, WP-H): a folder open (a project) lands on Project Home;
-	// no folder lands on a blank untitled Markdown doc. Re-check `editors.length === 0` before the open so a
-	// restored editor or a deep-link that arrived while we were deciding still wins.
+	// Execute the cold-start routing decision (map-D2, WP-H, WP-I): the cold start always lands on Project Home.
+	// With a folder it is the project's front door; with no folder (a new window / Cmd+Shift+N) it is Home's
+	// "Open a folder" front door - never the bare untitled editor the audit flagged (issue #260 leak 5). Re-check
+	// `editors.length === 0` before the open so a restored editor or a deep-link that arrived while we were
+	// deciding still wins.
 	private async _openStartupSurface(): Promise<void> {
 		const state = this._workspace.getWorkbenchState();
 		const hasFolder = state === WorkbenchState.FOLDER || state === WorkbenchState.WORKSPACE;
@@ -737,20 +858,16 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 			return;
 		}
 		if (route.kind === StartupRouteKind.OpenHome) {
-			// Project Home: the project's front door (what ran, what's stale, recent files; the empty-project
-			// front door when the folder has no documents yet). The editor is one click deeper, via a file.
+			// Project Home: with a folder, the project's front door (what ran, what's stale, recent files; the
+			// empty-project front door when the folder has no documents yet); with no folder, Home's "Open a folder
+			// to start working." front door. The editor is one click deeper, via a file / opening a folder.
 			const input = this._instantiationService.createInstance(ScreenEditorInput, 'home');
 			const pane = await this._editorService.openEditor(input, { pinned: true });
 			// Singleton input: if the service adopted a different instance (or none), dispose ours to avoid a leak.
 			if (pane?.input !== input) {
 				input.dispose();
 			}
-			return;
 		}
-		// No folder: a new, blank untitled Markdown document so the cursor lands in editable text (zero-ceremony
-		// plain Markdown -- no living-doc artefacts until an agent touches it). The "Open a folder" affordance
-		// stays one click away on the Home nav item; never a wizard.
-		await this._editorService.openEditor({ resource: undefined, languageId: 'markdown', options: { pinned: true } });
 	}
 
 	private _closeWelcomeEditors(): void {

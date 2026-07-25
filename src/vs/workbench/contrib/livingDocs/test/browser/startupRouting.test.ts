@@ -7,21 +7,19 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { StartupRoute, decideStartupRoute, StartupRouteKind } from '../../common/startupRouting.js';
 
-suite('LivingDoc cold-start routing (map-D2, WP-H)', () => {
+suite('LivingDoc cold-start routing (map-D2, WP-H, WP-I)', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	const snap = (route: StartupRoute) => route.kind === StartupRouteKind.NewUntitledDocument
-		? { kind: route.kind, hasFolder: route.hasFolder }
-		: { kind: route.kind };
+	const snap = (route: StartupRoute) => ({ kind: route.kind, hasFolder: route.hasFolder });
 
 	test('a folder open (a project) lands on Project Home - the empty-project front door / populated dashboard is decided by Home from the live docs', () => {
 		const route = decideStartupRoute({ hasFolder: true });
-		assert.deepStrictEqual(snap(route), { kind: StartupRouteKind.OpenHome });
+		assert.deepStrictEqual(snap(route), { kind: StartupRouteKind.OpenHome, hasFolder: true });
 	});
 
-	test('no folder open lands on a blank untitled Markdown doc, never a walkthrough', () => {
+	test('no folder open (a new window / Cmd+Shift+N) lands on Project Home\'s "Open a folder" front door, never the bare untitled editor (issue #260 leak 5)', () => {
 		const route = decideStartupRoute({ hasFolder: false });
-		assert.deepStrictEqual(snap(route), { kind: StartupRouteKind.NewUntitledDocument, hasFolder: false });
+		assert.deepStrictEqual(snap(route), { kind: StartupRouteKind.OpenHome, hasFolder: false });
 	});
 });
