@@ -565,6 +565,32 @@ suite('LivingDoc Word paste', () => {
 		);
 	});
 
+	// The loss detector must MATCH what stripTrackedChanges() actually drops (#269 CR-4): (a) a style-only Word
+	// deletion (an mso strike-through span the normaliser removes) raises the tracked-change line - previously it
+	// was invisible to the detector; (b) ordinary prose that merely contains the words "commentReference" or
+	// "supportAnnotations" is NOT flagged as a dropped comment - only the STRUCTURAL markers (msoComment span,
+	// <w:commentReference> element, `[if !supportAnnotations]` conditional block) count.
+	test('loss detector mirrors the normaliser: style-only deletions flagged, bare comment words are not', () => {
+		const styleStrikeDeletion = `<p class=MsoNormal>The fee was <span style='mso-spl:yes;text-decoration:line-through'>waived</span> charged.<o:p></o:p></p>`;
+		const proseWithCommentWords = `<p class=MsoNormal>Our commentReference guidelines and supportAnnotations rollout are on track.<o:p></o:p></p>`;
+		const structuralComment = `<p class=MsoNormal>Revenue<w:commentReference w:id="1"/> was up.<o:p></o:p></p>`;
+		const conditionalComment = `<p class=MsoNormal>Total<!--[if !supportAnnotations]--><span>[a1]</span><!--[endif]--> rose.<o:p></o:p></p>`;
+		assert.deepStrictEqual(
+			{
+				styleStrikeDeletion: wordPasteNotice(styleStrikeDeletion),
+				proseWithCommentWords: wordPasteNotice(proseWithCommentWords),
+				structuralComment: wordPasteNotice(structuralComment),
+				conditionalComment: wordPasteNotice(conditionalComment),
+			},
+			{
+				styleStrikeDeletion: 'Paragraphs, The final text of tracked changes kept · Tracked-change marks (the final text was kept) not imported',
+				proseWithCommentWords: null,
+				structuralComment: 'Paragraphs kept · Comments not imported',
+				conditionalComment: 'Paragraphs kept · Comments not imported',
+			}
+		);
+	});
+
 	// --- Paste-slice open-boundary decision (issue #256, fix round 1) ------------------------------------
 	// The tag rewrite above turns a Word heading paragraph into a real <hN>, but on a LIVE paste ProseMirror
 	// still parses the fragment into a Slice with an OPEN start (openStart > 0) and, when the caret sits in a
