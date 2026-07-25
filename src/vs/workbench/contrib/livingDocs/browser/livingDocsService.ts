@@ -805,6 +805,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return coerceDocPolicy(state.doc.policy);
 	}
 
+	// The enforced autonomy level for a document that may NOT be independently loaded (WP-E sev-3). The
+	// pre-flight no-model fan-out only loads the run's anchor, yet must still honour the `never` dial of every
+	// OTHER working-set document. Frontmatter is the source of truth, so read from the loaded state when present
+	// and fall back to parsing the file's frontmatter from disk otherwise - never a parallel policy store. An
+	// unreadable / non-living file degrades to the safe default (coerceDocPolicy of undefined = `ask-first`), so
+	// it is never mislabelled as protected.
+	private async _enforcedPolicyForUri(uri: URI): Promise<DocAutonomyLevel> {
+		const loaded = this._docs.get(uri.toString());
+		if (loaded) { return this._policyForState(loaded); }
+		try {
+			const rawText = (await this._files.readFile(uri)).value.toString();
+			return coerceDocPolicy(parseLivingDoc(rawText).policy);
+		} catch (e) {
+			this._log.trace('[livingDocs] policy read from disk failed', e instanceof Error ? e.message : String(e));
+			return coerceDocPolicy(undefined);
+		}
+	}
+
 	// The enforced autonomy level for the FIGURE-SYNC path (auto-apply figures on refresh / agent run). Distinct
 	// from `_policyForState` in ONE way: an UNAUTHORED document (no `policy:` on disk) keeps the golden-path default
 	// of auto-applying its figures (doc 20 section 1g "the default is auto-apply figures only"), rather than coercing to
@@ -5474,8 +5492,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					const skippedByPolicyDocIds: string[] = [];
 					const failedDocs: IFanoutFailedDoc[] = [];
 					for (const w of workingSet) {
-						const wsState = this._docs.get(w.resource.toString());
-						if (wsState && this._policyForState(wsState) === 'never') { skippedByPolicyDocIds.push(w.resource.toString()); continue; }
+						// Read policy from disk for docs the run never independently loaded (WP-E sev-3): a project
+						// fan-out only loads the anchor, so a `never` doc further in the set would otherwise miss its
+						// loaded state and be mislabelled "model unreachable" instead of "left alone (policy: never)".
+						if (await this._enforcedPolicyForUri(w.resource) === 'never') { skippedByPolicyDocIds.push(w.resource.toString()); continue; }
 						failedDocs.push({ id: w.resource.toString(), title: w.title });
 					}
 					const outcome = summarizeFanoutRun({ proposedCount: 0, failedDocs });

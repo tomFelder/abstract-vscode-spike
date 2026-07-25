@@ -2105,6 +2105,34 @@ suite('livingDocs Service', () => {
 		);
 	});
 
+	test('WP-E sev-3: a pre-flight no-model fan-out reads policy from disk, so an UNLOADED never-doc tiles "left alone", not "unreachable"', async () => {
+		// The whole-project door (_kickProjectRun) loads ONLY the anchor, so BOARD is in the working set but never
+		// independently loaded. With the model down pre-flight, its `never` dial must still be honoured by reading the
+		// frontmatter from disk - otherwise it is mislabelled a model failure (folded into the outage) rather than
+		// the honest "left alone (policy: never)" tile. The anchor (WEEKLY) and the ordinary README still fail honestly.
+		const service = createService([], { boardNote: true, proxyUrl: DEAD_PROXY }); // no opts.model -> /healthz unhealthy
+		lastFiles!.set(BOARD.toString(), BOARD_MD.replace('title: Board Note', 'title: Board Note\npolicy: never'));
+		await service.loadDocument(WEEKLY); // ONLY the anchor is loaded; BOARD/README stay unloaded (disk-only)
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+
+		await service.sendChatMessage(WEEKLY, 'apply the security review decisions across the project');
+
+		const progress = service.getFanoutProgress(WEEKLY);
+		assert.deepStrictEqual(
+			{
+				loadedBoard: service.getDoc(BOARD) !== undefined,
+				skippedByPolicy: [...(progress?.skippedByPolicyDocIds ?? [])],
+				failedDocs: [...(progress?.failedDocIds ?? [])].sort(),
+			},
+			{
+				loadedBoard: false, // proves BOARD was never independently loaded - policy came from disk
+				skippedByPolicy: [BOARD.toString()],
+				failedDocs: [README.toString(), WEEKLY.toString()].sort(),
+			},
+			'the unloaded never-doc is read from disk and tiled left-alone; only the non-protected docs are named failed',
+		);
+	});
+
 	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {
 		const newText = '1. First lever\n2. Second lever\n3. Third lever';
 		const service = createService([], {
