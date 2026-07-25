@@ -284,6 +284,13 @@ suite('LivingDoc Word paste', () => {
 	test('isWordHtml sniffs Word/Office markers and ignores plain HTML', () => {
 		assert.strictEqual(isWordHtml(`<p class=MsoListParagraph style='mso-list:l0 level1'>x</p>`), true);
 		assert.strictEqual(isWordHtml(`<html xmlns:o="urn:schemas-microsoft-com:office:office"><p>x</p></html>`), true);
+		// A fragment carrying ONLY a styled Word heading (no MsoNormal / list / table / office namespace) must
+		// still sniff as Word so the normalise gate opens and rewriteWordHeadings runs on it (#256 / CR-6). This
+		// row fails on the old classifier, which matched only mso-list|MsoListParagraph|MsoNormal|urn:...office.
+		assert.strictEqual(isWordHtml(`<p class=MsoHeading1 style='mso-outline-level:1'>Heading Only</p>`), true);
+		assert.strictEqual(isWordHtml(`<p class=MsoTitle>Title Only</p>`), true);
+		assert.strictEqual(isWordHtml(`<p class=MsoSubtitle>Subtitle Only</p>`), true);
+		assert.strictEqual(isWordHtml(`<p style='mso-outline-level:2'>Outlined Only</p>`), true);
 		assert.strictEqual(isWordHtml('<p>plain paragraph</p>'), false);
 		assert.strictEqual(isWordHtml('<ul><li>a real list</li></ul>'), false);
 		assert.strictEqual(isWordHtml(''), false);
@@ -502,6 +509,18 @@ suite('LivingDoc Word paste', () => {
 			'<h1>Title Line</h1><h2>Subtitle Line</h2><h3>Section Three</h3><h4>Deep Four</h4>'
 			+ '<h5>Section Five</h5><h6>Deep Six</h6>'
 			+ '<p class=MsoNormal>Body stays a paragraph.</p>'
+		);
+	});
+
+	test('a heading-ONLY Word fragment passes the isWordHtml gate and round-trips to a real <h1> (#256 / CR-6)', () => {
+		// The paste listener only runs the normalise pipeline when isWordHtml(html) is true (or the fragment holds
+		// a <table>). A clipboard slice carrying ONLY a styled Word heading - no MsoNormal / list / table / office
+		// namespace - must therefore satisfy the classifier, otherwise rewriteWordHeadings never runs and the
+		// heading pastes as a plain merged paragraph (the original #256 bug for that payload shape).
+		const html = `<p class=MsoHeading1 style='mso-outline-level:1'><b>Pasted Heading One</b><o:p></o:p></p>`;
+		assert.deepStrictEqual(
+			{ gateOpens: isWordHtml(html), rewritten: squash(normalizeWordPasteHtml(html)) },
+			{ gateOpens: true, rewritten: '<h1><b>Pasted Heading One</b></h1>' }
 		);
 	});
 

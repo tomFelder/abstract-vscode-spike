@@ -29,13 +29,16 @@ import { convertDocxHtml, formatImportSummary, IDocxDetections, noDetections } f
 /**
  * True when an HTML string looks like a Microsoft Word / Office clipboard payload. Cheap marker sniff
  * (no parse) used by the paste listener to decide whether to intercept; a non-Word paste returns false and
- * falls through to ProseMirror untouched. Self-contained for webview injection.
+ * falls through to ProseMirror untouched. The marker set covers list/body/office namespaces AND the styled
+ * heading paragraphs (`MsoHeadingN` / `MsoTitle` / `MsoSubtitle` / `mso-outline-level`), so a fragment that
+ * carries ONLY a Word heading still opens the normalise gate and `rewriteWordHeadings` runs on it (#256).
+ * Self-contained for webview injection.
  */
 export function isWordHtml(html: string): boolean {
 	if (typeof html !== 'string' || html.length === 0) {
 		return false;
 	}
-	return /mso-list|MsoListParagraph|MsoNormal|urn:schemas-microsoft-com:office/i.test(html);
+	return /mso-list|MsoListParagraph|MsoNormal|MsoHeading[1-9]|MsoTitle|MsoSubtitle|mso-outline-level|urn:schemas-microsoft-com:office/i.test(html);
 }
 
 /**
