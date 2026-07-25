@@ -1,0 +1,69 @@
+[
+  {
+    "time": "2026-07-25T00:26:14.505Z",
+    "docTitle": "Weekly Operating Summary",
+    "action": "approved",
+    "via": "model",
+    "reason": null,
+    "wrong": {
+      "at": "2026-07-25T00:33:42.340Z",
+      "comment": "the wording overstated the result"
+    }
+  },
+  {
+    "time": "2026-07-25T00:26:31.309Z",
+    "docTitle": "Weekly Operating Summary",
+    "action": "rejected",
+    "via": "model",
+    "reason": null,
+    "wrong": null
+  },
+  {
+    "time": "2026-07-25T00:28:59.722Z",
+    "docTitle": "Weekly Operating Summary",
+    "action": "rejected",
+    "via": "model",
+    "reason": "too pessimistic, does not match the numbers",
+    "wrong": null
+  },
+  {
+    "time": "2026-07-25T00:30:23.887Z",
+    "docTitle": "Weekly Operating Summary",
+    "action": "rejected",
+    "via": "model",
+    "reason": null,
+    "wrong": null
+  },
+  {
+    "time": "2026-07-25T00:31:39.991Z",
+    "docTitle": "Weekly Operating Summary",
+    "action": "rejected",
+    "via": "model",
+    "reason": "changes the emphasis too much",
+    "wrong": null
+  },
+  {
+    "time": "2026-07-25T00:38:59.601Z",
+    "docTitle": "Weekly Operating Summary",
+    "action": "rejected",
+    "via": "model",
+    "reason": null,
+    "wrong": null
+  },
+  {
+    "time": "2026-07-25T00:38:59.621Z",
+    "docTitle": "Weekly Operating Summary",
+    "action": "rejected",
+    "via": "model",
+    "reason": null,
+    "wrong": null
+  },
+  {
+    "time": "2026-07-25T00:39:49.234Z",
+    "docTitle": "Weekly Operating Summary",
+    "action": "approved",
+    "via": "model",
+    "reason": null,
+    "wrong": null
+  }
+]
