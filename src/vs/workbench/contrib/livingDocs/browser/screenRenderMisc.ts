@@ -392,13 +392,18 @@ export function renderProjectRun(state: IScreenState): string {
 		<span style="flex:none;font:600 12.5px/1 system-ui;color:#fff;background:${ACCENT};border-radius:8px;padding:8px 14px">Whole Project</span>
 	</div>`;
 
-	// Truthful idle body (guardrail): no fabricated numbers, shown only when no run has started.
+	// Truthful idle body (guardrail): no fabricated numbers, shown only when no run has started. The primary
+	// "Run Across the Project" button is the ONE explicit action that launches the fan-out (#265 CR-1): opening
+	// this surface never auto-starts a run, so the user deliberately kicks it here (or from the Chat composer).
 	const idleBody = `<div style="flex:1;overflow:auto;background:#f8f9fb;display:flex;align-items:center;justify-content:center;padding:40px">
 		<div style="text-align:center;max-width:460px">
 			<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:12px;background:#f4f5fd;border:1px solid #e0e5fb;display:flex;align-items:center;justify-content:center;font-size:20px;color:${ACCENT}">&#10022;</div>
-			<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">No project run in progress</h2>
-			<p style="margin:0 0 22px;font:400 14px/1.6 system-ui;color:#696e78">Start one from Agents or ask across the whole project in Chat. The sub-agent swarm and the decisions the agent understands will appear here as the run proceeds.</p>
-			<button data-msg="goAgents" style="border:none;border-radius:10px;padding:11px 20px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer">Go to Agents</button>
+			<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">Ready to run across the project</h2>
+			<p style="margin:0 0 22px;font:400 14px/1.6 system-ui;color:#696e78">Nothing has started yet. Launch a whole-project run below, or ask across the whole project in Chat. The sub-agent swarm and the decisions the agent understands will appear here as the run proceeds.</p>
+			<div style="display:flex;gap:10px;align-items:center;justify-content:center">
+				<button data-msg="launchProjectRun" style="border:none;border-radius:10px;padding:11px 20px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer">Run Across the Project</button>
+				<button data-msg="goAgents" style="border:1px solid #d7dae2;border-radius:10px;padding:11px 20px;background:#fff;color:#3a3f49;font:600 13px/1 system-ui;cursor:pointer">Go to Agents</button>
+			</div>
 		</div>
 	</div>`;
 
