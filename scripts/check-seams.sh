@@ -256,6 +256,26 @@ if ! grep_has "$LDC" "MenuRegistry\.onDidChangeMenu"; then
 	fail "shell-menu-curation-reapply" "the onDidChangeMenu re-apply is gone from $LDC (late-registered stock gear entries would leak)"
 fi
 
+# --- Seam 12b: the curated command-palette DEFAULT VIEW + the two settings chords (issue #260, WP-I, V-1/V-2) ---
+# The same contribution shadows the stock command-palette wall (MenuId.CommandPalette) behind the palette-advanced
+# key, keeping the default view Abstract-led, and re-owns Cmd+, / Cmd+K Cmd+S. Assert the palette curation wiring +
+# the explicit "All Commands" lift route + the two chord re-owns are present, so a regression fails here loudly.
+if ! grep_has "$LDC" "MenuId\.CommandPalette"; then
+	fail "palette-default-curation" "the CommandPalette default-view shadow is gone from $LDC (the stock developer wall re-leaks as the palette's first screen; re-pin per WP-I V-2 / issue #260)"
+fi
+if ! grep_has "$LDC" "'livingDocs\.palette\.allCommands'"; then
+	fail "palette-advanced-route" "the explicit 'All Commands' stock route is gone from $LDC (the demoted palette wall becomes unreachable; re-pin per WP-I V-2)"
+fi
+# Cmd+, must be re-owned onto Model Access (livingDocs.open.settings) and Cmd+K Cmd+S neutralised - both at the
+# weight-1000 chord tier - so the universal settings chords no longer bypass the curated gear door (V-1). The Cmd+,
+# rebind carries a KeyCode.Comma primary; the Cmd+K Cmd+S neutralisation carries the exact chord constant.
+if ! grep_has "$LDC" "KeyMod\.CtrlCmd \| KeyCode\.Comma"; then
+	fail "settings-chord-comma" "Cmd+, is no longer re-owned onto Model Access in $LDC (the stock Settings editor re-collides as the universal settings chord; re-pin per WP-I V-1 / issue #260)"
+fi
+if ! grep_has "$LDC" "KeyChord\(KeyMod\.CtrlCmd \| KeyCode\.KeyK, KeyMod\.CtrlCmd \| KeyCode\.KeyS\)"; then
+	fail "settings-chord-keybindings" "Cmd+K Cmd+S is no longer neutralised in $LDC (the stock Keyboard Shortcuts editor re-opens on the bare chord; re-pin per WP-I V-1)"
+fi
+
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
 	echo "check-seams: OK - all shell seams intact."

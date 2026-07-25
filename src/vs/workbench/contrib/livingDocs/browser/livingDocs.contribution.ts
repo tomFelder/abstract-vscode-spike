@@ -14,7 +14,9 @@ import { Disposable, DisposableStore, MutableDisposable } from '../../../../base
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, IMenuItem, ISubmenuItem, isIMenuItem, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { ContextKeyExpr, ContextKeyExpression } from '../../../../platform/contextkey/common/contextkey.js';
+import { ContextKeyExpr, ContextKeyExpression, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IConfigurationRegistry, Extensions as ConfigurationExtensions } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
@@ -33,6 +35,7 @@ import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
+import { shouldShadowPaletteCommand } from '../common/shellCuration.js';
 import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, treeRailHiddenOnEntry } from '../common/railVisibility.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -333,6 +336,28 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	handler: accessor => void accessor.get(IInstantiationService).invokeFunction(openDocQuickSwitch),
 });
 
+// --- calm shell: the two settings chords (issue #260, WP-I, V-1) ---
+// The universal settings chord Cmd+, opens the full stock Settings editor directly (the audit's named "worst
+// collision") and Cmd+K Cmd+S opens the stock Keyboard Shortcuts editor - both bypass the curated gear door. We
+// re-own them at the same weight-1000 tier the other chord neutralisations use (higher than every core/extension
+// binding, so this wins chord resolution), with no core patch to the keybinding tables:
+//   Cmd+,        -> Model Access (livingDocs.open.settings) - a writer pressing the universal settings chord lands
+//                   on the honest settings door (where the analytics / model toggles actually live), not the IDE wall.
+//   Cmd+K Cmd+S  -> noop (dead in the calm shell). The stock Keyboard Shortcuts editor is not destroyed: it stays
+//                   reachable via the gear's Advanced submenu ("Keyboard Shortcuts"), just no longer a bare chord.
+KeybindingsRegistry.registerKeybindingRule({
+	id: 'livingDocs.open.settings',
+	weight: 1000,
+	when: undefined,
+	primary: KeyMod.CtrlCmd | KeyCode.Comma,
+});
+KeybindingsRegistry.registerKeybindingRule({
+	id: 'noop',
+	weight: 1000,
+	when: undefined,
+	primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyCode.KeyS),
+});
+
 // --- calm shell: curate the bottom-left Manage (gear) + Accounts menus (issue #260, WP-I, leaks 1-4) ---
 // The global-activity gear ("Manage", MenuId.GlobalActivity) and the Accounts icon (MenuId.AccountsContext) are
 // the last stock IDE surfaces one mouse-click off the golden path. The gear leaks the raw VS Code Manage menu
@@ -367,6 +392,28 @@ const SHADOWED_ACCOUNTS_COMMANDS: ReadonlySet<string> = new Set([
 	'workbench.action.chat.manageLanguageModelAuthentication',		// Manage Language Model Access...
 ]);
 
+// --- calm shell: curate the command-palette DEFAULT VIEW (issue #260, WP-I, V-2) ---
+// The palette DOORS were already curated (F1 + Cmd+Shift+P dead at the core seam, only the demoted gear entry
+// remains), but the palette's DEFAULT VIEW is not: the first screen a writer meets when the palette opens leads
+// with the Abstract commands, then the full stock developer wall - "Add Function Breakpoint", "Authentication:
+// Remove Dynamic Authentication Providers", the whole "Developer:" family. The floor: the first screen a writer
+// meets is Abstract-led; the stock wall is reachable via an explicit route, not the default.
+//
+// Mechanism (same public-registry technique as the gear, 0 core patch): palette entries come from
+// MenuId.CommandPalette (commandsQuickAccess.ts calls menuService.getMenuActions(MenuId.CommandPalette), which
+// evaluates each item's `when` LIVE on every open). So the same `when`-shadow the gear uses hides an entry from
+// the palette. Crucially this is VISIBILITY-ONLY: a command's keybinding lives in the separate KeybindingsRegistry,
+// untouched by the palette menu-item `when`, so shadowing a command out of the palette does NOT unbind it.
+//
+// Curated by exclusion-with-allowlist (the inverse of an id list, so a new stock command upstream adds is hidden
+// by default rather than leaking): an item stays iff its category is "Abstract" (all fork commands) OR its id is in
+// PALETTE_KEEP_COMMANDS (a small set of genuinely useful, writer-relevant editor commands). Everything else is
+// shadowed behind the "advanced palette" context key: the shadow `when` is `and(originalWhen, advancedKey)`, so it
+// preserves the item's original precondition AND is hidden until Advanced mode lifts it. The explicit stock route
+// is the "Advanced: All Commands" command (also demoted into the gear's Advanced submenu): it flips the key on,
+// reopens the palette showing the full wall, and resets the key on the next palette close - a one-shot, honest lift.
+const PALETTE_ADVANCED_KEY = new RawContextKey<boolean>('abstractPaletteAdvanced', false);
+
 class CurateShellMenusContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.curateShellMenus';
 
@@ -375,7 +422,9 @@ class CurateShellMenusContribution extends Disposable implements IWorkbenchContr
 	private readonly _shadows = this._register(new DisposableStore());
 	private readonly _shadowed = new Map<IMenuItem | ISubmenuItem, ContextKeyExpression | undefined>();
 
-	constructor() {
+	constructor(
+		@IContextKeyService private readonly _contextKeyService: IContextKeyService,
+	) {
 		super();
 		// Register the Abstract-relevant gear entries. These are the doors a writer should meet at the gear: the
 		// Settings-equivalent (Model Access, where the analytics / model toggles actually live), the onboarding
@@ -412,44 +461,165 @@ class CurateShellMenusContribution extends Disposable implements IWorkbenchContr
 			command: { id: 'workbench.action.openGlobalKeybindings', title: localize2('livingDocs.gear.stockKeybindings', "Keyboard Shortcuts") },
 			order: 3,
 		}));
+		// The explicit stock route for the demoted palette wall (V-2): "All Commands" lifts the palette shadow and
+		// reopens the full palette. Also a demoted gear entry so it is reachable by mouse, not just by chord.
+		this._register(MenuRegistry.appendMenuItem(ABSTRACT_ADVANCED_SUBMENU, {
+			command: { id: 'livingDocs.palette.allCommands', title: localize2('livingDocs.gear.allCommands', "All Commands...") },
+			order: 4,
+		}));
 
-		// Apply now and re-apply whenever either menu changes: some stock gear entries (Extensions, Tasks, Profiles)
-		// are registered from workbench-contribution constructors that run after this one, so a one-shot pass would
-		// miss them. onDidChangeMenu fires when any item is (de)registered; we re-run the idempotent shadow then.
+		// The palette-advanced context key gates the palette shadow: false in the calm shell (stock wall hidden),
+		// lifted true one-shot by "All Commands". Bound (defaulting to false) so the shadow `when` (advancedKey)
+		// resolves live; the setter lives in the "All Commands" command, which re-binds the same key.
+		PALETTE_ADVANCED_KEY.bindTo(this._contextKeyService);
+
+		// Apply now and re-apply whenever a curated menu changes: many stock entries (gear Extensions/Tasks/Profiles,
+		// and the bulk of the palette wall) are registered from workbench-contribution constructors / extension
+		// activations that run after this one, so a one-shot pass would miss them. onDidChangeMenu fires when any item
+		// is (de)registered; we re-run the idempotent shadow then.
 		this._applyShadows();
 		this._register(MenuRegistry.onDidChangeMenu(e => {
-			if (e.has(MenuId.GlobalActivity) || e.has(MenuId.AccountsContext)) {
+			if (e.has(MenuId.GlobalActivity) || e.has(MenuId.AccountsContext) || e.has(MenuId.CommandPalette)) {
 				this._applyShadows();
 			}
 		}));
 	}
 
+	// The palette shadow items we appended (for implicit-only commands), so re-applies never double-append and dispose
+	// removes them all. `_paletteShadowed` tracks the command ids we already appended for; `_appendedPaletteItems` holds
+	// the item objects so the in-place mutation pass skips them (they are already gated). Separate from `_shadowed`
+	// (which tracks the in-place `when` mutations on the gear/Accounts/explicit-palette items).
+	private readonly _paletteShadows = this._register(new DisposableStore());
+	private readonly _paletteShadowed = new Set<string>();
+	private readonly _appendedPaletteItems = new Set<IMenuItem>();
+
 	private _applyShadows(): void {
 		// The gear: hide everything that is not one of our curated entries. AccountsContext: hide the known stock
-		// IDE entries by id (see SHADOWED_ACCOUNTS_COMMANDS).
+		// IDE entries by id. Both use a never-true shadow (permanently demoted into the Advanced submenu instead).
 		this._shadowItems(MenuId.GlobalActivity, item => !(item.group !== undefined && ABSTRACT_GEAR_GROUPS.has(item.group)));
 		this._shadowItems(MenuId.AccountsContext, item => isIMenuItem(item) && SHADOWED_ACCOUNTS_COMMANDS.has(item.command.id));
+		this._curatePalette();
 	}
 
 	/**
-	 * Replace the `when` of every item matching `shouldShadow` with a never-true expression, so the menu (which
-	 * reads `when` live on every open) filters it out. Idempotent: an item already shadowed is skipped. Reversible:
-	 * each item's original `when` is captured and restored on dispose (or if it no longer matches after a change).
+	 * Curate the command-palette DEFAULT VIEW (V-2). The palette is special: getMenuItems(CommandPalette) returns TWO
+	 * kinds of item. (1) EXPLICIT items in the menu list (from registerAction2 f1); these are stable objects, so we hide
+	 * them by mutating their `when` in place (like the gear). (2) IMPLICIT `{ command }` items, synthesised fresh on
+	 * every call for each registered command that has NO explicit item (see MenuRegistry._appendImplicitItems); these
+	 * carry no `when` and are throwaway, so mutation cannot hide them - instead we APPEND our own explicit gated item
+	 * for that command, which both suppresses the implicit duplicate (the id is now in the explicit set) and is itself
+	 * filtered until the palette-advanced key lifts it. Either way the shadow is `and(precondition, advancedKey)`, so it
+	 * preserves enablement and is hidden until "All Commands" lifts it. Visibility-only: the command's keybinding
+	 * (KeybindingsRegistry) is untouched, so a shadowed-but-bound command still fires from its chord.
+	 *
+	 * Curated by exclusion-with-allowlist, so a command upstream adds is hidden by default rather than leaking: a
+	 * command is demoted unless its category is "Abstract" (our commands) or its id is in the small writer keep-list.
 	 */
-	private _shadowItems(menuId: MenuId, shouldShadow: (item: IMenuItem | ISubmenuItem) => boolean): void {
-		const neverTrue = ContextKeyExpr.false();
+	private _curatePalette(): void {
+		// getMenuItems(CommandPalette) merges TWO kinds of item: the REAL explicit items (stable objects held in the menu
+		// LinkedList, from registerAction2 f1) and throwaway IMPLICIT `{ command }` items, synthesised FRESH on every call
+		// for each registered command that has no explicit item (MenuRegistry._appendImplicitItems). We must treat them
+		// differently: mutating a real item's `when` sticks; mutating a throwaway one is lost. We tell them apart by
+		// reference stability - a real item is the SAME object across two getMenuItems calls; an implicit one is not.
+		const firstPass = MenuRegistry.getMenuItems(MenuId.CommandPalette);
+		const secondPass = new Set(MenuRegistry.getMenuItems(MenuId.CommandPalette));
+		const realExplicitItems = new Set(firstPass.filter(item => secondPass.has(item)));
+
+		// (1) Real explicit items: hide by mutating their `when` in place (gated), like the gear. Record the ids so (2)
+		// does not also append for them (which would leave the real item showing next to our gated duplicate).
+		const explicitShadowedIds = new Set<string>();
+		this._shadowItems(MenuId.CommandPalette, item => {
+			if (!realExplicitItems.has(item) || !isIMenuItem(item) || !this._shouldShadowPaletteItem(item)) {
+				return false;
+			}
+			explicitShadowedIds.add(item.command.id);
+			return true;
+		}, PALETTE_ADVANCED_KEY);
+
+		// (2) Implicit-only commands (no real explicit item, so the mutation above could not touch a stable object):
+		// append a gated explicit shadow item, which both suppresses the un-gated implicit entry and stays hidden until
+		// lifted. `_paletteShadowed` + `explicitShadowedIds` keep this convergent across the onDidChangeMenu re-applies.
+		for (const [id, command] of MenuRegistry.getCommands()) {
+			if (this._paletteShadowed.has(id) || explicitShadowedIds.has(id)) {
+				continue;
+			}
+			const category = command.category;
+			const categoryValue = typeof category === 'string' ? category : category?.value ?? category?.original;
+			if (!shouldShadowPaletteCommand(categoryValue, id)) {
+				continue;
+			}
+			this._paletteShadowed.add(id);
+			const appended: IMenuItem = {
+				command,
+				when: ContextKeyExpr.and(command.precondition, PALETTE_ADVANCED_KEY),
+			};
+			this._appendedPaletteItems.add(appended);
+			this._paletteShadows.add(MenuRegistry.appendMenuItem(MenuId.CommandPalette, appended));
+		}
+	}
+
+	/** True when a palette item is stock (not Abstract-categorised) and not in the small writer-relevant keep-list. */
+	private _shouldShadowPaletteItem(item: IMenuItem): boolean {
+		const category = item.command.category;
+		const categoryValue = typeof category === 'string' ? category : category?.value ?? category?.original;
+		return shouldShadowPaletteCommand(categoryValue, item.command.id);
+	}
+
+	/**
+	 * Replace the `when` of every item matching `shouldShadow` so the menu (which reads `when` live on every open)
+	 * filters it out. With no `gate`, the shadow is never-true (a permanent demotion). With a `gate` context key, the
+	 * shadow is `and(originalWhen, gate)` - hidden until the gate is lifted, preserving the item's precondition.
+	 * Idempotent: an already-shadowed item is skipped. Reversible: each item's original `when` is captured and restored
+	 * on dispose (or if it no longer matches after a change).
+	 */
+	private _shadowItems(menuId: MenuId, shouldShadow: (item: IMenuItem | ISubmenuItem) => boolean, gate?: RawContextKey<boolean>): void {
 		for (const item of MenuRegistry.getMenuItems(menuId)) {
-			if (this._shadowed.has(item) || !shouldShadow(item)) {
+			// Skip items we appended ourselves (already gated) so the mutation pass never re-wraps our own shadows.
+			if (this._shadowed.has(item) || (isIMenuItem(item) && this._appendedPaletteItems.has(item)) || !shouldShadow(item)) {
 				continue;
 			}
 			const original = item.when;
-			item.when = neverTrue;
+			item.when = gate ? ContextKeyExpr.and(original, gate) : ContextKeyExpr.false();
 			this._shadowed.set(item, original);
 			this._shadows.add({ dispose: () => { item.when = original; } });
 		}
 	}
 }
 registerWorkbenchContribution2(CurateShellMenusContribution.ID, CurateShellMenusContribution, WorkbenchPhase.BlockRestore);
+
+// The explicit stock route for the demoted palette wall (V-2). Lifts the palette-advanced context key, reopens the
+// palette showing the full command set, and resets the key on the next palette close - a one-shot, honest lift, so
+// the calm default reasserts itself the next time the palette opens. Not f1: it lives in the gear Advanced submenu
+// (and stays discoverable there), and is itself an Abstract-categorised command so it survives the palette shadow.
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.palette.allCommands',
+			title: localize2('livingDocs.palette.allCommands', "All Commands..."),
+			category: localize2('livingDocs.category', "Abstract"),
+			f1: true,
+		});
+	}
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const contextKeyService = accessor.get(IContextKeyService);
+		const quickInputService = accessor.get(IQuickInputService);
+		const commandService = accessor.get(ICommandService);
+		const advanced = PALETTE_ADVANCED_KEY.bindTo(contextKeyService);
+		advanced.set(true);
+		// Reset the lift one-shot: on the FIRST palette open AFTER this point (the full palette we are about to
+		// reopen), arm a reset for that palette's close, so the calm default reasserts itself next time. Sequencing
+		// via onShow (not a bare onHide) sidesteps the race where running this command from an already-open palette
+		// fires onHide as it closes the current picker before showCommands reopens it.
+		const onShowOnce = quickInputService.onShow(() => {
+			onShowOnce.dispose();
+			const onHideOnce = quickInputService.onHide(() => {
+				onHideOnce.dispose();
+				advanced.reset();
+			});
+		});
+		await commandService.executeCommand('workbench.action.showCommands');
+	}
+});
 
 // --- editor pane ---
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
