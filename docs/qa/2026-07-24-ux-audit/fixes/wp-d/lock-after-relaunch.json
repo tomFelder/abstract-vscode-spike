@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "bindings": {
+    "metrics.mrr.delta": {
+      "resolved": "+18%",
+      "source": "metrics.csv#mrr",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.mrr": {
+      "resolved": "$48.6k",
+      "source": "metrics.csv#mrr",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.signups": {
+      "resolved": "427",
+      "source": "metrics.csv#signups",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.churn": {
+      "resolved": "2.4%",
+      "source": "metrics.csv#churn",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.mrr.prev": {
+      "resolved": "$41.2k",
+      "source": "metrics.csv#mrr",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.signups.prev": {
+      "resolved": "312",
+      "source": "metrics.csv#signups",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.signups.delta": {
+      "resolved": "+37%",
+      "source": "metrics.csv#signups",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.churn.prev": {
+      "resolved": "3.1%",
+      "source": "metrics.csv#churn",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.churn.delta": {
+      "resolved": "-0.7pt",
+      "source": "metrics.csv#churn",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.active.prev": {
+      "resolved": "188",
+      "source": "metrics.csv#active",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.active": {
+      "resolved": "205",
+      "source": "metrics.csv#active",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    },
+    "metrics.active.delta": {
+      "resolved": "+9%",
+      "source": "metrics.csv#active",
+      "sourceHash": "8833a9c",
+      "syncedAt": "2026-07-24T23:55:00.398Z",
+      "appliedBy": "agent",
+      "kind": "figure"
+    }
+  },
+  "context": {
+    "market-research.md": {
+      "reviewedHash": "5c660c0f",
+      "reviewedAt": "2026-07-24T23:55:00.398Z",
+      "scope": "document"
+    }
+  },
+  "claims": {},
+  "pins": [],
+  "audit": [
+    {
+      "time": "2026-07-24T23:56:43.044Z",
+      "docTitle": "Weekly Operating Summary",
+      "blockId": "b-5",
+      "action": "approved",
+      "oldText": "Growth remained steady this week, continuing the gradual climb seen since early Q2.",
+      "newText": "MRR growth accelerated with a notable signup surge, reflecting strong market traction since early Q2.",
+      "via": "model",
+      "wrong": {
+        "at": "2026-07-24T23:57:29.423Z",
+        "comment": "the wording overstated the result"
+      }
+    },
+    {
+      "time": "2026-07-24T23:58:45.982Z",
+      "docTitle": "Weekly Operating Summary",
+      "blockId": "b-5",
+      "action": "rejected",
+      "oldText": "MRR growth accelerated with a notable signup surge, reflecting strong market traction since early Q2.",
+      "newText": "Despite accelerated MRR growth and a surge in signups, risks remain around sustaining this momentum. The recent spike may be temporary, and external competitive pressures or shifts in market demand could impact future growth trajectories.",
+      "via": "model",
+      "reason": "too pessimistic, does not match the numbers"
+    }
+  ],
+  "contextItems": [],
+  "snapshots": []
+}
