@@ -692,4 +692,13 @@ export interface IAuditEntry {
 	// 'override' records that the user exported/published a document PAST a failed before-export gate (plan 32
 	// iter 4): the gate is never a silent block and never a silent override - the override is on the record.
 	readonly via: 'model' | 'heuristic' | 'api' | 'restore' | 'tweaked' | 'override';
+	// The reviewer's optional plain-words reason for a rejection (1f frame-3: "the optional reason becomes
+	// context for the next derivation"). Recorded on the audit row so it survives relaunch and shows in
+	// History; only meaningful on a 'rejected' action, absent otherwise.
+	reason?: string;
+	// A "this was wrong" flag against an APPLIED change (doc 18 section 2.5). Written here so the flag survives
+	// relaunch and the History row renders flagged (not an infinitely re-flaggable button). The analytics event
+	// and founder log are fired separately by reportChangeWrong; only the flag state lives on the row. `at` is
+	// the ISO time the flag was raised; `comment` keeps the reviewer's optional note for the on-disk record.
+	wrong?: { at: string; comment?: string };
 }

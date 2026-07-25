@@ -4720,14 +4720,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// the doc: a consent-gated `this_was_wrong_reported` analytics event that carries ONLY a hashed reference id
 	// (never the document's prose or the comment), and a founder-visible LOCAL log line that keeps the plain-words
 	// comment so every report can be read. Best-effort - a report never blocks or throws.
-	reportChangeWrong(report: IFeedbackReport): void {
+	async reportChangeWrong(report: IFeedbackReport): Promise<void> {
+		const nowIso = new Date().toISOString();
 		// The analytics ref is an opaque hash of the doc title + change reference: it lets the funnel count
 		// reports per change without the title or prose ever leaving the machine (the `hashed` prop contract).
 		const refId = AnalyticsService.hashPath(`${report.docTitle}::${report.changeRef}`);
 		this._analytics.capture('this_was_wrong_reported', { ref_id: refId });
 		// Founder log (doc 18 section 2.5 + doc 15 section 2.4: every report is read). Local only, so it may keep
 		// the comment. `info` so it surfaces in the product log without the noise gate a trace would carry.
-		this._log.info(founderFeedbackLogLine(report, new Date().toISOString()));
+		this._log.info(founderFeedbackLogLine(report, nowIso));
+		// Write the flag through to the lock (issue #258): the two sinks above are fire-and-forget by design,
+		// but the flag itself must persist so the History row reads flagged after relaunch instead of showing an
+		// unflagged, infinitely re-flaggable button. `changeRef` is the audit entry's own ISO time (a unique row
+		// key); find that row in an open doc, stamp `wrong`, and persist. Best-effort - a report never throws.
+		for (const state of this._docs.values()) {
+			const entry = state.lock.audit.find(e => e.time === report.changeRef);
+			if (!entry) { continue; }
+			if (entry.wrong) { return; }
+			entry.wrong = report.comment.trim() ? { at: nowIso, comment: report.comment.trim() } : { at: nowIso };
+			try {
+				await this._persist(state);
+			} catch (e) {
+				this._log.warn('[livingDocs] this-was-wrong persist failed', e instanceof Error ? e.message : String(e));
+			}
+			this._onDidChange.fire();
+			return;
+		}
 	}
 
 	// The "See it work" path (doc 20 section D26 step 2): with no folder to open and no setup, write the bundled
@@ -5842,20 +5860,26 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 	}
 
-	reject(changeId: string): void {
+	// Discard one pending change. `reason` is the reviewer's optional plain-words note (1f frame-3): it lands
+	// on the audit row so the trail carries the rejection AND why. This mirrors approve()'s persistence
+	// contract - the rejected row, the reviewed-context clear, and the reason all write through to the lock
+	// via _persist so they survive relaunch (issue #258: reject() previously mutated in memory only, so
+	// negative judgments and reviewed-context silently evaporated on the next open).
+	async reject(changeId: string, reason?: string): Promise<void> {
 		const change = this._pending.find(c => c.id === changeId);
 		if (!change) { return; }
 		this._pending = this._pending.filter(c => c.id !== changeId);
 		const state = this._docs.get(change.docId);
 		if (state) {
-			state.lock.audit.push(this._entry(state, change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model'));
+			state.lock.audit.push(this._entry(state, change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model', reason));
 			this._captureProposalResolved('reject', this._inBulkReject);
 			state.status = `Change rejected - ${change.docTitle} left unchanged`;
 			// Rejecting still counts as reviewing the changed context, so the flag clears.
-			void this._markContextReviewed(state, change.contextReviewed)
-				.then(() => this._recomputeFreshness(state))
-				.then(() => this._onDidChange.fire())
-				.catch(e => this._log.warn('[livingDocs] reject follow-up failed', e));
+			await this._markContextReviewed(state, change.contextReviewed);
+			// Persist so the rejected row, the reason, and the cleared reviewed-context reach disk like an
+			// approve does (issue #258). Without this the on-disk audit trail was silently approve-only.
+			await this._persist(state);
+			await this._recomputeFreshness(state);
 		}
 		this._onDidChange.fire();
 	}
@@ -5877,7 +5901,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._inBulkReject = true;
 		try {
 			for (const id of ids) {
-				this.reject(id);
+				await this.reject(id);
 			}
 		} finally {
 			this._inBulkReject = false;
@@ -5889,7 +5913,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async rejectAllPending(): Promise<void> {
 		const ids = this._pending.map(c => c.id);
 		for (const id of ids) {
-			this.reject(id);
+			await this.reject(id);
 		}
 	}
 
@@ -6141,8 +6165,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// its title; when two docs shared a block id (e.g. `b-3`), that `.find()` returned the wrong doc and
 	// stamped the wrong `docTitle` into the trail (issue #248). Keying off the caller's own state fixes the
 	// identity: the same stale-identity family that made "Approve all in this doc" a no-op (#253).
-	private _entry(state: IDocState, blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: IAuditEntry['via']): IAuditEntry {
-		return { time: new Date().toISOString(), docTitle: state.doc.title, blockId, action, oldText, newText, via };
+	private _entry(state: IDocState, blockId: string, action: IAuditEntry['action'], oldText: string, newText: string, via: IAuditEntry['via'], reason?: string): IAuditEntry {
+		const entry: IAuditEntry = { time: new Date().toISOString(), docTitle: state.doc.title, blockId, action, oldText, newText, via };
+		// Only stamp a reason when the reviewer actually gave one, so approved/auto-applied rows stay clean.
+		const trimmed = reason?.trim();
+		if (trimmed) { entry.reason = trimmed; }
+		return entry;
 	}
 
 	// Persist the document (.md) and its lock together - the pair is one logical unit.

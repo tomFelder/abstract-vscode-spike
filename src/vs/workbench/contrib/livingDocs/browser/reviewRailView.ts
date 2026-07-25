@@ -609,7 +609,7 @@ export class ReviewRailView extends ViewPane {
 				this._renderDisposables.add(addDisposableListener(approve, 'click', () => this._livingDocs.approve(change.id)));
 				const reject = append(actions, $('button.ldr-reject')) as HTMLButtonElement;
 				reject.textContent = 'Reject';
-				this._renderDisposables.add(addDisposableListener(reject, 'click', () => this._livingDocs.reject(change.id)));
+				this._renderDisposables.add(addDisposableListener(reject, 'click', () => void this._rejectWithReason(change.id)));
 			}
 		}
 
@@ -722,7 +722,7 @@ export class ReviewRailView extends ViewPane {
 					});
 					// Escape returns undefined (cancel the whole report); an empty string is a flag with no comment.
 					if (comment === undefined) { return; }
-					this._livingDocs.reportChangeWrong({ changeRef: parsed.ref, comment, docTitle: parsed.title ?? '' });
+					await this._livingDocs.reportChangeWrong({ changeRef: parsed.ref, comment, docTitle: parsed.title ?? '' });
 					this._dialogService.info(localize('livingDocs.feedback.confirmation', "Thanks - we log every \"this was wrong\" report and read them all."));
 					return;
 				}
@@ -1059,8 +1059,22 @@ export class ReviewRailView extends ViewPane {
 			const reject = append(actions, $('button')) as HTMLButtonElement;
 			reject.style.cssText = 'border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer';
 			reject.textContent = 'Reject';
-			this._renderDisposables.add(addDisposableListener(reject, 'click', () => this._livingDocs.reject(change.id)));
+			this._renderDisposables.add(addDisposableListener(reject, 'click', () => void this._rejectWithReason(change.id)));
 		}
+	}
+
+	// Reject one proposal, first offering an optional plain-words reason (1f frame-3: "the optional reason
+	// becomes context for the next derivation"). Escape or an empty note still rejects - the reason is never
+	// mandatory. The reason rides through reject() onto the audit row, which persists and shows it in History.
+	private async _rejectWithReason(changeId: string): Promise<void> {
+		const reason = await this._quickInput.input({
+			prompt: localize('livingDocs.reject.reasonPrompt', "Why reject this change? (optional - Enter to reject, Escape to cancel)"),
+			placeHolder: localize('livingDocs.reject.reasonPlaceholder', "e.g. the figure is stale, or this changes the meaning"),
+			value: '',
+		});
+		// Escape returns undefined (the reviewer backed out - do not reject); an empty string rejects with no reason.
+		if (reason === undefined) { return; }
+		await this._livingDocs.reject(changeId, reason);
 	}
 
 	private _renderChatComposer(content: HTMLElement, doc: URI | undefined): void {

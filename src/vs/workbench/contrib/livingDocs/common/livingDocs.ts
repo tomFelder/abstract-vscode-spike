@@ -778,10 +778,12 @@ export interface ILivingDocsService {
 	endOnboardingWalkthrough(): void;
 	/**
 	 * The feedback verb (doc 18 section 2.5): flag an applied change as "this was wrong". Captures the
-	 * `this_was_wrong_reported` event (a hashed ref id only -- no prose) through the analytics service AND writes
-	 * a founder-visible local log line (which keeps the plain-words comment). Never blocks; best-effort.
+	 * `this_was_wrong_reported` event (a hashed ref id only -- no prose) through the analytics service, writes
+	 * a founder-visible local log line (which keeps the plain-words comment), AND persists the flag onto the
+	 * matching audit row (keyed by `changeRef` = the row's ISO time) so it survives relaunch and the row cannot
+	 * be re-flagged forever (issue #258). Never blocks; best-effort.
 	 */
-	reportChangeWrong(report: IFeedbackReport): void;
+	reportChangeWrong(report: IFeedbackReport): Promise<void>;
 	/**
 	 * The "See it work" path (doc 20 section D26 step 2): write the bundled demo CSV + demo Living Document
 	 * into the open folder, open it, and sync its figures from the CSV so the provenance peek (wow one) and
@@ -1331,7 +1333,8 @@ export interface ILivingDocsService {
 	approveAll(docId: string): Promise<void>;
 	/** Accept every pending change across every document at once (the chat-level "Accept all"). */
 	approveAllPending(): Promise<void>;
-	reject(changeId: string): void;
+	/** Discard one pending change. `reason` is the reviewer's optional plain-words note, recorded on the audit row. */
+	reject(changeId: string, reason?: string): Promise<void>;
 	/** Discard every pending change for one document at once (the per-document "Reject all"). */
 	rejectAll(docId: string): Promise<void>;
 	/** Discard every pending change across every document at once (the chat-level "Reject all"). */

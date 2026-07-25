@@ -1,0 +1,35 @@
+[
+  {
+    "action": "approved",
+    "reason": null,
+    "wrong": {
+      "at": "2026-07-25T00:33:42.340Z",
+      "comment": "the wording overstated the result"
+    },
+    "docTitle": "Weekly Operating Summary"
+  },
+  {
+    "action": "rejected",
+    "reason": null,
+    "wrong": null,
+    "docTitle": "Weekly Operating Summary"
+  },
+  {
+    "action": "rejected",
+    "reason": "too pessimistic, does not match the numbers",
+    "wrong": null,
+    "docTitle": "Weekly Operating Summary"
+  },
+  {
+    "action": "rejected",
+    "reason": null,
+    "wrong": null,
+    "docTitle": "Weekly Operating Summary"
+  },
+  {
+    "action": "rejected",
+    "reason": "changes the emphasis too much",
+    "wrong": null,
+    "docTitle": "Weekly Operating Summary"
+  }
+]
