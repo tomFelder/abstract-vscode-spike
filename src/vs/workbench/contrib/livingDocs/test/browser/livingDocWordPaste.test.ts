@@ -493,11 +493,14 @@ suite('LivingDoc Word paste', () => {
 			`<p class=MsoSubtitle>Subtitle Line<o:p></o:p></p>`,
 			`<p class="MsoHeading3 foo">Section Three<o:p></o:p></p>`,
 			`<p class=MsoNormal style='mso-outline-level:4'>Deep Four<o:p></o:p></p>`,
+			`<p class=MsoHeading5>Section Five<o:p></o:p></p>`,
+			`<p class=MsoNormal style='mso-outline-level:6'>Deep Six<o:p></o:p></p>`,
 			`<p class=MsoNormal>Body stays a paragraph.<o:p></o:p></p>`,
 		].join('\n');
 		assert.strictEqual(
 			squash(normalizeWordPasteHtml(html)),
 			'<h1>Title Line</h1><h2>Subtitle Line</h2><h3>Section Three</h3><h4>Deep Four</h4>'
+			+ '<h5>Section Five</h5><h6>Deep Six</h6>'
 			+ '<p class=MsoNormal>Body stays a paragraph.</p>'
 		);
 	});
