@@ -1,0 +1,90 @@
+===== payload: msoTitle (caret at END of '...for the bound report.') =====
+Inline `code` renders, and so do fenced blocks:
+
+```ts
+const greeting = "hello";
+console.log(greeting);
+```
+
+> A blockquote, for good measure.
+
+See the [Weekly Summary](./Weekly%20Summary.living.md) for the bound report.
+
+# Quarterly Title Zed
+
+Body paragraph after the title with some words.
+===== payload: msoHeading1 (caret at END of '...for the bound report.') =====
+Inline `code` renders, and so do fenced blocks:
+
+```ts
+const greeting = "hello";
+console.log(greeting);
+```
+
+> A blockquote, for good measure.
+
+See the [Weekly Summary](./Weekly%20Summary.living.md) for the bound report.
+
+# Pasted Heading One
+
+Follow-on body text under the heading.
+===== payload: msoHeading2 (caret at END of '...for the bound report.') =====
+Inline `code` renders, and so do fenced blocks:
+
+```ts
+const greeting = "hello";
+console.log(greeting);
+```
+
+> A blockquote, for good measure.
+
+See the [Weekly Summary](./Weekly%20Summary.living.md) for the bound report.
+
+## Second Level Heading
+
+Some body under the H2.
+===== payload: listFirst (caret at END of '...for the bound report.') =====
+```ts
+const greeting = "hello";
+console.log(greeting);
+```
+
+> A blockquote, for good measure.
+
+See the [Weekly Summary](./Weekly%20Summary.living.md) for the bound report.
+
+* First bullet item
+
+* Second bullet item
+
+Body after the list.
+===== payload: combined (caret at END of '...for the bound report.') =====
+See the [Weekly Summary](./Weekly%20Summary.living.md) for the bound report.
+
+# Combined Report Heading
+
+Intro with **bold text** and normal words.
+
+* Alpha point
+
+* Beta point
+
+| Region | Value |
+| --- | --- |
+| EMEA | 42 |
+| APAC | 17 |
+===== payload: nonWord (caret at END of '...for the bound report.') =====
+console.log(greeting);
+```
+
+> A blockquote, for good measure.
+
+See the [Weekly Summary](./Weekly%20Summary.living.md) for the bound report.
+
+# Web Page Heading
+
+Regular paragraph.
+
+| Col A | Col B |
+| --- | --- |
+| 1 | 2 |

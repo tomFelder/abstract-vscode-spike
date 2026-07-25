@@ -24,6 +24,8 @@
 // so the sibling paste findings can extend the same seam without rewriting the paste listener: #138
 // (pasted tables -> table[data-md] -> table_block) and #139 (tracked-changes residue) each append a step.
 
+import { convertDocxHtml, formatImportSummary, IDocxDetections, noDetections } from './docxImport.js';
+
 /**
  * True when an HTML string looks like a Microsoft Word / Office clipboard payload. Cheap marker sniff
  * (no parse) used by the paste listener to decide whether to intercept; a non-Word paste returns false and
@@ -34,6 +36,30 @@ export function isWordHtml(html: string): boolean {
 		return false;
 	}
 	return /mso-list|MsoListParagraph|MsoNormal|urn:schemas-microsoft-com:office/i.test(html);
+}
+
+/**
+ * The paste-slice open-boundary decision (#256). ProseMirror parses a pasted fragment into a Slice whose start
+ * boundary is OPEN (`openStart` > 0) so an inline paste flows into the caret's current textblock - correct for a
+ * few words dropped mid-sentence. But when the FIRST pasted node is a STRUCTURAL block (heading / list / table /
+ * blockquote / code block) and the caret sits inside a NON-EMPTY paragraph, that open boundary merges the block's
+ * text into the paragraph and the block loses its identity - a pasted Word H1 glues onto the prior line. This is
+ * the pure predicate the webview's `transformPasted` guard consults to decide whether to CLOSE the slice's start
+ * (set `openStart` to 0) so the leading block lands as its own block. Returns true only when ALL hold: the paste
+ * is not plain text, the slice start is actually open, the slice's first child is one of the structural block
+ * types, and the caret's own textblock already holds content (an empty paragraph has nothing to glue onto, so its
+ * heading-lands-as-a-block behaviour is left untouched). DOM-free and self-contained for webview injection.
+ */
+export function pasteStartShouldClose(firstChildType: string, sliceOpenStart: number, isPlainText: boolean, caretParentIsTextblock: boolean, caretParentContentSize: number): boolean {
+	if (isPlainText || sliceOpenStart <= 0) {
+		return false;
+	}
+	// The block node types that must keep their own boundary when they lead a paste onto a non-empty line.
+	const structural = /^(?:heading|table_block|bullet_list|ordered_list|blockquote|code_block)$/;
+	if (typeof firstChildType !== 'string' || !structural.test(firstChildType)) {
+		return false;
+	}
+	return caretParentIsTextblock === true && caretParentContentSize > 0;
 }
 
 /**
@@ -61,6 +87,57 @@ export function normalizeWordPasteHtml(html: string): string {
 		// A paragraph whose only remaining content is whitespace / nbsp -> a spacer crumb; drop it whole.
 		out = out.replace(/<p\b[^>]*>(?:\s|&nbsp;|&#160;|\u00A0)*<\/p>/gi, '');
 		return out;
+	}
+
+	// --- Step: rewrite Word heading paragraphs into real <h1>-<h6> so they keep a clean block boundary (#256). ---
+	// Word's clipboard export does NOT always emit headings as <h1>-<h6>. When a document uses Word's built-in
+	// heading STYLES, several Word paths (Word Online, Mac Word, and some desktop paste routes) instead emit each
+	// heading as a styled PARAGRAPH: `<p class=MsoHeading1 ...>` / `<p class=MsoTitle ...>`, and/or a paragraph
+	// whose style carries `mso-outline-level:N`. Pasted as-is, ProseMirror parses that as an ordinary paragraph -
+	// an "open" inline block - so when the caret sits at the end of the previous paragraph PM MERGES the two and
+	// the heading text glues onto the prior line ("...for the boun" + "Pasted Heading One" -> one run-on line).
+	// A real <hN> is parsed as its own heading block and never glues, so this step maps Word heading paragraphs to
+	// the matching <hN>. The level is read from the class number (MsoHeadingN / MsoTitle=h1 / MsoSubtitle=h2) or,
+	// failing that, from `mso-outline-level:N` in the style. A paragraph with neither marker is left untouched, so
+	// body paragraphs pass through byte-for-byte. Runs before the table step so a heading inside a cell is not
+	// misread (Word never nests headings in cells in this export path; a cell's <p> has no heading class).
+	function rewriteWordHeadings(input: string): string {
+		// The heading level a Word paragraph's attributes imply, or 0 when it is not a heading paragraph.
+		function headingLevelOf(attrs: string): number {
+			// A built-in Title / Subtitle style maps to h1 / h2 (Word's own outline treatment).
+			if (/\bclass\s*=\s*"?[^">]*\bMsoTitle\b/i.test(attrs) || /\bclass\s*=\s*MsoTitle\b/i.test(attrs)) {
+				return 1;
+			}
+			if (/\bclass\s*=\s*"?[^">]*\bMsoSubtitle\b/i.test(attrs) || /\bclass\s*=\s*MsoSubtitle\b/i.test(attrs)) {
+				return 2;
+			}
+			// `class=MsoHeading1` / `class="MsoHeading2 ..."` etc. (levels beyond 6 clamp to 6, the deepest heading).
+			const cm = /\bMsoHeading([1-9])\b/i.exec(attrs);
+			if (cm) {
+				const n = parseInt(cm[1], 10);
+				return n > 6 ? 6 : n;
+			}
+			// `style='...mso-outline-level:2...'` on a heading-styled paragraph (0 / 'none' is body text, skipped).
+			const om = /mso-outline-level\s*:\s*(\d+)/i.exec(attrs);
+			if (om) {
+				const n = parseInt(om[1], 10);
+				if (n >= 1) {
+					return n > 6 ? 6 : n;
+				}
+			}
+			return 0;
+		}
+
+		const pRe = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
+		return input.replace(pRe, function (whole, attrs, inner) {
+			const level = headingLevelOf(attrs);
+			if (level === 0) {
+				return whole;
+			}
+			// Keep the inner markup (bold/italic/links survive into the heading); ProseMirror flattens a heading to
+			// plain text, but preserving the inline tags keeps parity with a pasted real <hN> and costs nothing.
+			return '<h' + level + '>' + inner + '</h' + level + '>';
+		});
 	}
 
 	// --- Step: rebuild runs of Word list paragraphs into nested <ul>/<ol>/<li>. ---
@@ -440,12 +517,69 @@ export function normalizeWordPasteHtml(html: string): string {
 		});
 	}
 
-	// Ordered transform chain. #138 (tables) appends its step last, so cells are serialised AFTER the office
-	// spacers, Word lists and tracked-changes residue inside them have already been cleaned.
-	const transforms: Array<(input: string) => string> = [stripOfficeSpacers, rebuildWordLists, stripTrackedChanges, rebuildPastedTables];
+	// Ordered transform chain. Headings are rewritten to real <hN> first (#256) so a heading paragraph is never
+	// swept into a later step; #138 (tables) appends its step last, so cells are serialised AFTER the office
+	// spacers, Word headings, Word lists and tracked-changes residue inside them have already been cleaned.
+	const transforms: Array<(input: string) => string> = [stripOfficeSpacers, rewriteWordHeadings, rebuildWordLists, stripTrackedChanges, rebuildPastedTables];
 	let out = html;
 	for (let i = 0; i < transforms.length; i++) {
 		out = transforms[i](out);
 	}
 	return out;
+}
+
+/**
+ * Detect the "named and dropped" structures a Word CLIPBOARD payload actually carried, so the paste honesty
+ * notice names a limitation only when it truly applies (never a fabricated caveat). Only the structures a
+ * clipboard fragment can carry are probed: tracked-change marks (the normaliser keeps the FINAL text and drops
+ * the mark, mirroring the docx importer) and Word comment anchors. Footnotes / text boxes / headers-footers
+ * never survive into clipboard HTML, so they stay false. Host-side only - not injected into the webview.
+ */
+function detectWordPasteDrops(html: string): IDocxDetections {
+	const base = noDetections();
+	if (typeof html !== 'string' || html.length === 0) {
+		return base;
+	}
+	// Tracked changes: a <del>/<ins> element or Word's msoDel/msoIns revision spans (the same residue the
+	// normaliser resolves paste-as-accepted). Guarded so a legit hand-authored <del>/<ins> in NON-Word HTML is
+	// not counted - the whole notice only runs for Word/Office payloads (see wordPasteNotice's isWordHtml gate).
+	const trackedChanges = /class\s*=\s*"?[^">]*mso(?:Del|Ins)\b/i.test(html)
+		|| (/<(?:del|ins)\b/i.test(html) && /mso[-A-Za-z]|urn:schemas-microsoft-com:office/i.test(html));
+	// Comments: Word anchors a comment with a `class=msoComment*` span / a `<w:commentReference>` / a
+	// `[if !supportAnnotations]` conditional block. The comment BODY is not in the clipboard fragment, so the
+	// mark is dropped on paste - named honestly here.
+	const comments = /class\s*=\s*"?[^">]*msoComment/i.test(html)
+		|| /commentReference|supportAnnotations/i.test(html);
+	return { ...base, trackedChanges, comments };
+}
+
+/**
+ * Build the plain-words kept/dropped honesty notice for a Word CLIPBOARD paste (issue #256), reusing the docx
+ * IMPORT pipeline's converter and summary so a pasted document and an imported one name kept/dropped
+ * IDENTICALLY. The cleaned HTML (the exact bytes handed to ProseMirror) is fed through `convertDocxHtml` for the
+ * real feature tally (headings, tables, lists, images, bold/italic, links, quotes), and the drops the clipboard
+ * fragment actually carried are detected separately. Returns a single line only when something was genuinely
+ * dropped - a lossless paste returns `null`, so the notice never cries wolf. Non-Word HTML returns `null`
+ * (out of scope). Host-side only (imports the docx converter); the webview posts the raw HTML for this to run.
+ */
+export function wordPasteNotice(html: string): string | null {
+	if (!isWordHtml(html)) {
+		return null;
+	}
+	const detections = detectWordPasteDrops(html);
+	// Feed the SAME cleaned HTML that ProseMirror receives through the import converter, so the "kept" phrases
+	// reflect exactly what landed (the stem is unused here - the paste path lifts no images to an assets folder).
+	// The table step emits `<table data-md="GFM">` (an empty element carrying the pipe table in an attribute); a
+	// minimal real <table> is reconstituted from the header row of that GFM so convertDocxHtml still tallies the
+	// table as a kept feature (the notice must NOT under-report what survived).
+	const cleaned = normalizeWordPasteHtml(html).replace(/<table\s+data-md="([\s\S]*?)"\s*>\s*<\/table>/gi, function (m, md) {
+		const first = String(md).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').split('\n')[0];
+		const heads = first.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => '<td>' + c.replace(/^\s+/, '').replace(/\s+$/, '') + '</td>').join('');
+		return '<table><tr>' + heads + '</tr></table>';
+	});
+	const conversion = convertDocxHtml(cleaned, 'paste', detections);
+	if (conversion.dropped.length === 0) {
+		return null;
+	}
+	return formatImportSummary(conversion.kept, conversion.dropped);
 }

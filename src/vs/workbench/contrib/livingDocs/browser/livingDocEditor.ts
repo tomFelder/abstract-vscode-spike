@@ -13,6 +13,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
@@ -37,6 +38,7 @@ import { renderPropertiesPanel } from './propertiesPanelRender.js';
 import { coerceDocPolicy } from '../common/docPolicy.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { advanceOnboardingOnPeek } from './onboardingWalkthrough.js';
+import { wordPasteNotice } from '../common/livingDocWordPaste.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -83,6 +85,7 @@ export class LivingDocEditor extends EditorPane {
 		@IInstantiationService private readonly _instantiation: IInstantiationService,
 		@IAbstractHeaderService private readonly _header: IAbstractHeaderService,
 		@IContextMenuService private readonly _contextMenuService: IContextMenuService,
+		@INotificationService private readonly _notification: INotificationService,
 	) {
 		super(LivingDocEditor.ID, group, telemetryService, themeService, _storageService);
 	}
@@ -231,7 +234,7 @@ export class LivingDocEditor extends EditorPane {
 		await apply();
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean; html?: string }): void {
 		switch (message?.type) {
 			case 'lwdReady':
 				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
@@ -251,6 +254,19 @@ export class LivingDocEditor extends EditorPane {
 					// the next (non-typing) render.
 					this._proto = recordPmBody(this._proto, parseLivingDoc(text).body);
 					void this._livingDocs.saveRawText(this._resource, text, { silent: true });
+				}
+				break;
+			case 'wordPaste':
+				// A Word/Office clipboard payload was just pasted into the live surface (issue #256). The structure
+				// itself is rebuilt in the webview (headings kept as blocks, tables as GFM, lists nested); here we
+				// weigh the honesty notice using the SAME converter the docx import uses, and raise a quiet toast
+				// ONLY when something was genuinely dropped (tracked-change marks, comments). A lossless paste says
+				// nothing - the notice is a contract, not noise.
+				if (typeof message.html === 'string') {
+					const notice = wordPasteNotice(message.html);
+					if (notice) {
+						this._notification.notify({ severity: Severity.Info, message: localize('livingDocs.wordPasteNotice', "Pasted from Word: {0}", notice) });
+					}
 				}
 				break;
 			case 'imageFile':

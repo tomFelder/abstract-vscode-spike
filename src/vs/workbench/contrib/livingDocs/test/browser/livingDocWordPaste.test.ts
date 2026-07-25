@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { decodeBase64 } from '../../../../../base/common/buffer.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { isWordHtml, normalizeWordPasteHtml } from '../../common/livingDocWordPaste.js';
+import { isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose, wordPasteNotice } from '../../common/livingDocWordPaste.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from '../../browser/prosemirrorBundle.js';
 
 // Pull the GFM Markdown out of a `<table data-md="...">` element the normaliser emits, resolving the HTML
@@ -472,6 +472,135 @@ suite('LivingDoc Word paste', () => {
 		assert.strictEqual(lwdpm.roundTrip(gfm).trim(), gfm);
 	});
 
+	// --- Word heading paragraphs -> real <hN> (issue #256, T1 re-run) -------------------------------------
+	// Word's clipboard export carries a heading that uses a built-in heading STYLE as a styled PARAGRAPH
+	// (`<p class=MsoHeadingN>` / `<p class=MsoTitle>` / a paragraph whose style has `mso-outline-level:N`), not
+	// as <hN>. Pasted as a plain paragraph it MERGES into the previous block ("...for the boun" + "Pasted
+	// Heading One"). normalizeWordPasteHtml rewrites those to real <hN> so each heading keeps its block boundary.
+
+	test('rewrites a Word heading paragraph (MsoHeading1 + mso-outline-level) to a real <h1> so it does not glue', () => {
+		const html = `<p class=MsoNormal>See the summary for the bound figure.<o:p></o:p></p>\n`
+			+ `<p class=MsoHeading1 style='mso-outline-level:1'><b>Pasted Heading One</b><o:p></o:p></p>`;
+		assert.strictEqual(
+			squash(normalizeWordPasteHtml(html)),
+			'<p class=MsoNormal>See the summary for the bound figure.</p><h1><b>Pasted Heading One</b></h1>'
+		);
+	});
+
+	test('maps heading level from the class number, MsoTitle/MsoSubtitle, and mso-outline-level (h1-h6)', () => {
+		const html = [
+			`<p class=MsoTitle>Title Line<o:p></o:p></p>`,
+			`<p class=MsoSubtitle>Subtitle Line<o:p></o:p></p>`,
+			`<p class="MsoHeading3 foo">Section Three<o:p></o:p></p>`,
+			`<p class=MsoNormal style='mso-outline-level:4'>Deep Four<o:p></o:p></p>`,
+			`<p class=MsoNormal>Body stays a paragraph.<o:p></o:p></p>`,
+		].join('\n');
+		assert.strictEqual(
+			squash(normalizeWordPasteHtml(html)),
+			'<h1>Title Line</h1><h2>Subtitle Line</h2><h3>Section Three</h3><h4>Deep Four</h4>'
+			+ '<p class=MsoNormal>Body stays a paragraph.</p>'
+		);
+	});
+
+	test('the full faithful Word payload converts to blocks a heading keeps, a table, a list, marks (snapshot)', () => {
+		const payload = [
+			`<html xmlns:o="urn:schemas-microsoft-com:office:office">`,
+			`<body>`,
+			`<p class=MsoNormal>See the <a href="https://ex.com">Weekly Summary</a> for the bound figure.<o:p></o:p></p>`,
+			`<p class=MsoHeading1 style='mso-outline-level:1'>Pasted Heading One<o:p></o:p></p>`,
+			`<p class=MsoNormal>This paragraph has <b>bold text</b> and <i>italic text</i>.<o:p></o:p></p>`,
+			WORD_LIST_BLOCK,
+			`<table class=MsoTableGrid border=1><tr><td><p class=MsoNormal>Name<o:p></o:p></p></td>`
+			+ `<td><p class=MsoNormal>Value<o:p></o:p></p></td></tr>`
+			+ `<tr><td><p class=MsoNormal>Alpha<o:p></o:p></p></td><td><p class=MsoNormal>100<o:p></o:p></p></td></tr>`
+			+ `<tr><td><p class=MsoNormal>Beta<o:p></o:p></p></td><td><p class=MsoNormal>200<o:p></o:p></p></td></tr></table>`,
+			`<p class=MsoNormal>Trailing paragraph after table.<o:p></o:p></p>`,
+			`</body></html>`,
+		].join('\n');
+		const out = normalizeWordPasteHtml(payload);
+		assert.deepStrictEqual(
+			{
+				heading: /<h1>Pasted Heading One<\/h1>/.test(out),
+				headingDidNotGlue: out.indexOf('figure.</p>') !== -1 && out.indexOf('figure.<h1>') === -1 && out.indexOf('bounPasted') === -1,
+				list: squash(out).indexOf('<ul><li>Pipeline grew in EMEA<ul>') !== -1,
+				tableGfm: extractDataMd(out),
+				tableMarkupGone: out.indexOf('MsoTableGrid') === -1,
+				trailingKept: out.indexOf('Trailing paragraph after table.') !== -1,
+			},
+			{
+				heading: true,
+				headingDidNotGlue: true,
+				list: true,
+				tableGfm: '| Name | Value |\n| --- | --- |\n| Alpha | 100 |\n| Beta | 200 |',
+				tableMarkupGone: true,
+				trailingKept: true,
+			}
+		);
+	});
+
+	// --- Kept/dropped honesty notice (issue #256) --------------------------------------------------------
+	// wordPasteNotice reuses the docx IMPORT converter + summary so a pasted document names kept/dropped
+	// IDENTICALLY to an imported one. It returns a line ONLY when the clipboard fragment genuinely dropped
+	// something (tracked-change marks, comments); a lossless paste and a non-Word paste both return null.
+
+	test('a lossless Word paste raises no notice; tracked changes and comments each raise the honest line', () => {
+		const clean = `<p class=MsoNormal>Plain <b>bold</b> text with a <a href="https://e.com">link</a>.<o:p></o:p></p>`;
+		const tracked = `<p class=MsoNormal>The forecast was <span class=msoDel>revised down</span>`
+			+ `<span class=msoIns>held flat</span>.<o:p></o:p></p>`;
+		const commented = `<p class=MsoNormal>Revenue<span class=msoCommentReference>[1]</span> was up.<o:p></o:p></p>`;
+		const plainTable = `<table><tr><td>a</td><td>b</td></tr></table>`;
+		assert.deepStrictEqual(
+			{
+				lossless: wordPasteNotice(clean),
+				tracked: wordPasteNotice(tracked),
+				commented: wordPasteNotice(commented),
+				nonWord: wordPasteNotice(plainTable),
+			},
+			{
+				lossless: null,
+				tracked: 'Paragraphs, The final text of tracked changes kept · Tracked-change marks (the final text was kept) not imported',
+				commented: 'Paragraphs kept · Comments not imported',
+				nonWord: null,
+			}
+		);
+	});
+
+	// --- Paste-slice open-boundary decision (issue #256, fix round 1) ------------------------------------
+	// The tag rewrite above turns a Word heading paragraph into a real <hN>, but on a LIVE paste ProseMirror
+	// still parses the fragment into a Slice with an OPEN start (openStart > 0) and, when the caret sits in a
+	// NON-EMPTY paragraph, merges that first heading's text into the paragraph - the "pasted H1 glues onto the
+	// previous line" audit symptom. pasteStartShouldClose is the pure predicate the webview's transformPasted
+	// guard consults to decide whether to close the slice's start (openStart -> 0) so the leading structural
+	// block lands as its own block. This covers the decision table directly (no DOM / no live view needed).
+
+	test('pasteStartShouldClose closes the start only for a structural first block landing on a non-empty line', () => {
+		// A non-empty caret paragraph (size 20) with an open-start slice (openStart 1), not a plain-text paste.
+		const onNonEmpty = (type: string) => pasteStartShouldClose(type, 1, false, true, 20);
+		assert.deepStrictEqual(
+			{
+				// Structural first blocks glue and MUST be split off.
+				heading: onNonEmpty('heading'),
+				bullet_list: onNonEmpty('bullet_list'),
+				ordered_list: onNonEmpty('ordered_list'),
+				table_block: onNonEmpty('table_block'),
+				blockquote: onNonEmpty('blockquote'),
+				code_block: onNonEmpty('code_block'),
+				// A leading plain paragraph keeps the ordinary inline-merge behaviour (not structural).
+				paragraph: onNonEmpty('paragraph'),
+				// Non-regression guards: plain-text paste, an already-closed slice, an empty caret paragraph,
+				// and a caret that is not a textblock all leave the slice untouched.
+				plainText: pasteStartShouldClose('heading', 1, true, true, 20),
+				alreadyClosed: pasteStartShouldClose('heading', 0, false, true, 20),
+				emptyParagraph: pasteStartShouldClose('heading', 1, false, true, 0),
+				notATextblock: pasteStartShouldClose('heading', 1, false, false, 20),
+			},
+			{
+				heading: true, bullet_list: true, ordered_list: true, table_block: true, blockquote: true, code_block: true,
+				paragraph: false, plainText: false, alreadyClosed: false, emptyParagraph: false, notATextblock: false,
+			}
+		);
+	});
+
 	// Self-containment guard (common brief): the helpers are injected into the webview RUNTIME verbatim via
 	// String(fn), so their serialized source must carry no imports, no require, and no transpiler helper
 	// references - otherwise they would throw when eval'd in the webview where those symbols do not exist.
@@ -479,7 +608,7 @@ suite('LivingDoc Word paste', () => {
 	// assert it is present and free of ES2020+ syntax (optional chaining / nullish coalescing) that would be
 	// emitted verbatim into the injected String(fn).
 	test('injected helpers are self-contained (no import/require/helper references in String(fn))', () => {
-		for (const fn of [isWordHtml, normalizeWordPasteHtml]) {
+		for (const fn of [isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose]) {
 			const src = String(fn);
 			assert.ok(!/\bimport\b/.test(src), `${fn.name}: no import`);
 			assert.ok(!/\brequire\b/.test(src), `${fn.name}: no require`);

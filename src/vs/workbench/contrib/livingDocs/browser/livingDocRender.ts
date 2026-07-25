@@ -12,7 +12,7 @@ import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.
 import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
 import { deleteCol, deleteRow, gfmEscapeCell, gfmIsAlignRow, gfmParseAlign, gfmSplitCells, insertCol, insertRow, parseGfmTable, serializeGfmTable, setCell } from '../common/livingDocTableEdit.js';
-import { isWordHtml, normalizeWordPasteHtml } from '../common/livingDocWordPaste.js';
+import { isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose } from '../common/livingDocWordPaste.js';
 import { POLICY_EDITOR_STYLE } from './policyEditorRender.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
@@ -579,6 +579,7 @@ let _pmEchoSuppressed = false;
 // internal transform chain - it never has to be rewritten.
 ${String(isWordHtml)}
 ${String(normalizeWordPasteHtml)}
+${String(pasteStartShouldClose)}
 // Per-key provenance for the hover tooltip (plan 29 iter 3), refreshed from every decoration payload so the
 // tooltip always reads the current lock state (a source edit that flips freshness re-renders the payload).
 let _prov = Object.create(null);
@@ -647,7 +648,40 @@ function showTip(el, key){ const p = _prov[key]; if (!p) { return; } if (!_tip) 
 	_tip.style.left = left + 'px'; _tip.style.top = top + 'px';
 }
 function hideTip(){ if (_tip) { _tip.classList.remove('show'); } }
-function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); pmDeco(spec); wireTableEditing(); resolveRelativeImages(); focusPm(); } }
+// Paste-slice open-boundary guard (#256). ProseMirror parses a pasted fragment into a Slice and, via
+// Slice.maxOpen, gives it an OPEN start boundary (openStart > 0) so an inline paste flows into the caret's
+// current textblock - correct for "a few words" pasted mid-sentence. But when the FIRST pasted node is a
+// STRUCTURAL block (a heading, list, table or blockquote) and the caret sits inside a NON-EMPTY paragraph,
+// that same open boundary merges the block's text INTO the paragraph: a pasted Word H1 loses its heading
+// level and glues onto the prior line ("...for the bound report.Quarterly Title Zed"). The normaliser
+// already rewrites Word heading paragraphs to real <hN>, so the slice's first child IS a heading node - the
+// defect is purely the open start boundary at the insertion site, not the tag rewrite. This registers a
+// transformPasted editor prop (the sanctioned ProseMirror hook, checked before plugin props by someProp)
+// that CLOSES the start boundary (openStart -> 0) for exactly that case, so the first structural block lands
+// as its own block. Everything else is returned byte-for-byte: an inline/plain-text paste still merges
+// inline, a paste into an empty paragraph is unchanged (nothing to glue onto), and a first pasted PARAGRAPH
+// keeps the ordinary merge behaviour. Installed once per mount (idempotent), no bundle edit, no core patch.
+function installPasteBoundaryGuard(view){
+	if (!view || view._lwdPasteGuard || typeof view.setProps !== 'function') { return; }
+	view._lwdPasteGuard = true;
+	view.setProps({ transformPasted: function(slice, v, isPlainText){
+		try {
+			if (!slice) { return slice; }
+			const first = slice.content && slice.content.firstChild;
+			const firstType = (first && first.type) ? first.type.name : '';
+			const parent = v.state.selection.$from.parent;
+			const parentIsTextblock = !!(parent && parent.isTextblock);
+			const parentSize = parent ? parent.content.size : 0;
+			// The decision (close the open start so a leading structural block lands as its own block) lives in
+			// the SAME pure predicate that is unit-tested in common/livingDocWordPaste.ts, injected verbatim.
+			if (pasteStartShouldClose(firstType, slice.openStart, isPlainText, parentIsTextblock, parentSize)) {
+				return new slice.constructor(slice.content, 0, slice.openEnd);
+			}
+			return slice;
+		} catch (err) { return slice; }
+	} });
+}
+function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); installPasteBoundaryGuard(pmView); pmDeco(spec); wireTableEditing(); resolveRelativeImages(); focusPm(); } }
 // plan 16 iter 3 (decision 56): land the caret in the document on first mount so a freshly-opened (or
 // freshly-created blank) doc is immediately writable -- "one click -> cursor ready", no extra click to
 // start typing. Only fires on the initial mount (mount-once-then-message, decision 50), so re-renders
@@ -782,6 +816,11 @@ root.addEventListener('paste', e => {
 	let cleaned;
 	try { cleaned = normalizeWordPasteHtml(html); } catch (err) { cleaned = html; }
 	try { pmView.pasteHTML(cleaned); } catch (err) {}
+	// Ask the host to weigh the kept/dropped honesty notice (#256). The host owns the notification service and the
+	// docx-import converter the notice reuses, so it computes wordPasteNotice(html) and shows a quiet toast only
+	// when something was genuinely dropped (tracked-change marks, comments) - a lossless paste raises nothing.
+	// Only Word/Office payloads carry droppable structure; a plain-HTML table paste needs no notice, so skip it.
+	if (isWordHtml(html)) { try { vscode.postMessage({ type: 'wordPaste', html: html }); } catch (err) {} }
 }, true);
 // Hovering a bound figure (or its marked gutter number) floats a quiet tooltip answering "where from, how
 // fresh" (plan 29 iter 3): the source file/endpoint, the cell within it, the relative sync time, and an amber
@@ -845,7 +884,7 @@ function teardownCellInput(){ if (tblToolbar){ if (tblToolbar.parentNode){ tblTo
 // if the cell is gone (its column/row was removed by the re-render), close the editor cleanly.
 function revalidateCellEditor(){ if (!tblEditor){ return; } const tableEl = tablesInView()[tblEditor.tIdx]; const cell = cellAt(tableEl, { r: tblEditor.r, c: tblEditor.c }); if (!cell){ teardownCellInput(); return; } placeOver(tblEditor.input, cell); if (tblToolbar && tableEl){ const b = tableEl.getBoundingClientRect(); tblToolbar.style.left = b.left + 'px'; tblToolbar.style.top = Math.max(6, b.top - tblToolbar.offsetHeight - 6) + 'px'; } }
 // Dispatch a single node-attr transaction: history-friendly (one undo step) and docChanged -> pmEdit save.
-function dispatchTableMd(pos, md){ if (!pmView){ return; } pmView.dispatch(pmView.state.tr.setNodeMarkup(pos, null, { markdown: md })); }
+function dispatchTableMd(pos, md){ if (!pmView){ return; } pmView.dispatch(pmView.state.tr.setNodeMarkup(pos, null, { markdown: md })); enrichBoundFigures(); }
 // Write the open editor's current value into the model and dispatch it (no-op when unchanged). Returns
 // the { pos, node } AFTER dispatch so callers can chain a follow-up (Tab / structural op) off fresh state.
 function commitCell(){ if (!tblEditor){ return null; } const ed = tblEditor; const loc = tableNodeByIndex(ed.tIdx); if (!loc){ return null; } const cur = cellRawText(loc.node, ed.r, ed.c); if (ed.input.value !== cur){ dispatchTableMd(loc.pos, serializeGfmTable(setCell(parseGfmTable(loc.node.attrs.markdown || ''), ed.r, ed.c, ed.input.value))); return tableNodeByIndex(ed.tIdx); } return loc; }
