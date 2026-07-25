@@ -736,12 +736,19 @@ export class ScreenEditor extends EditorPane {
 			case 'goTemplates':
 				void this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'templates'), { pinned: true });
 				break;
-			// Agents entry point (D23-B, CD-1 fix): the Agents screen's "Run across the project" header button
-			// emits this to open the project-run screen live. The instruction-carrying fan-out that fills the
-			// swarm is launched from the Home "Ask this project" composer (askProject -> _openProjectRun with the
-			// typed change request); this bare entry lands on the truthful idle state, from which Chat kicks a run.
+			// Agents entry point (D23-B, CD-1 fix; #265 CR-1): the Agents "Run Across the Project" header button
+			// carries NO instruction, so it must NOT auto-launch a default-prompt fan-out. It opens the project-run
+			// screen on the truthful idle state; the run is launched only by an explicit action (the idle surface's
+			// "Run Across the Project" button -> launchProjectRun, or the Home "Ask this project" composer, which
+			// passes a typed instruction via askProject -> _openProjectRun).
 			case 'runProject':
-				void this._openProjectRun();
+				void this._openProjectRunSurface();
+				break;
+			// The idle project-run surface's explicit launch action (#265 CR-1): one deliberate click starts the
+			// whole-project fan-out with the default security-review prompt. This is the single explicit action that
+			// keeps the 1j walk launchable after opening the surface idle.
+			case 'launchProjectRun':
+				void this._kickProjectRun();
 				break;
 			// Stop the in-flight whole-project fan-out (plan 27 iter 4): cancel the single model call anchored
 			// on the run's anchor document. The finally of the underlying chat delivery flips isChatBusy off and
@@ -1251,12 +1258,19 @@ export class ScreenEditor extends EditorPane {
 	}
 
 	// D23-B entry point: open the project-run screen (C4) via the SAME open-screen path every other
-	// Abstract screen uses (a singleton ScreenEditorInput opened through the editor service). Iter 2
-	// lands on the truthful idle state; the whole-project chat fan-out that fills the swarm is 23.3.
+	// Abstract screen uses (a singleton ScreenEditorInput opened through the editor service). Lands on the
+	// truthful idle state; the caller decides whether to kick a run (an explicit action or a typed instruction).
+	private async _openProjectRunSurface(): Promise<void> {
+		await this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'project-run'), { pinned: true });
+	}
+
+	// Open the project-run screen AND kick a run in one step (the instruction-carrying door: the Home
+	// "Ask this project" composer, which always passes a typed change request). The bare Agents-header entry
+	// does NOT use this - it opens the surface idle (#265 CR-1) and requires an explicit launch action.
 	private async _openProjectRun(instruction?: string, source?: string): Promise<void> {
 		// Open the screen first (idle) so the user lands immediately, then kick the run and let the
 		// onDidChange listener re-render the live swarm as the fan-out proceeds and settles.
-		await this._editors.openEditor(this._instantiation.createInstance(ScreenEditorInput, 'project-run'), { pinned: true });
+		await this._openProjectRunSurface();
 		await this._kickProjectRun(instruction, source);
 	}
 

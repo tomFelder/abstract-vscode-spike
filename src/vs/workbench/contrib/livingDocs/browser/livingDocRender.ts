@@ -815,7 +815,9 @@ root.addEventListener('paste', e => {
 	e.preventDefault(); e.stopPropagation();
 	let cleaned;
 	try { cleaned = normalizeWordPasteHtml(html); } catch (err) { cleaned = html; }
-	try { pmView.pasteHTML(cleaned); } catch (err) {}
+	// If the insertion itself throws, nothing landed in the document: bail before posting wordPaste so the host
+	// cannot raise a "content dropped" toast for content that was never inserted (#269 CR-3).
+	try { pmView.pasteHTML(cleaned); } catch (err) { return; }
 	// Ask the host to weigh the kept/dropped honesty notice (#256). The host owns the notification service and the
 	// docx-import converter the notice reuses, so it computes wordPasteNotice(html) and shows a quiet toast only
 	// when something was genuinely dropped (tracked-change marks, comments) - a lossless paste raises nothing.

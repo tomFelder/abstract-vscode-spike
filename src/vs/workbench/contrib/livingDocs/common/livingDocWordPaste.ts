@@ -29,13 +29,16 @@ import { convertDocxHtml, formatImportSummary, IDocxDetections, noDetections } f
 /**
  * True when an HTML string looks like a Microsoft Word / Office clipboard payload. Cheap marker sniff
  * (no parse) used by the paste listener to decide whether to intercept; a non-Word paste returns false and
- * falls through to ProseMirror untouched. Self-contained for webview injection.
+ * falls through to ProseMirror untouched. The marker set covers list/body/office namespaces AND the styled
+ * heading paragraphs (`MsoHeadingN` / `MsoTitle` / `MsoSubtitle` / `mso-outline-level`), so a fragment that
+ * carries ONLY a Word heading still opens the normalise gate and `rewriteWordHeadings` runs on it (#256).
+ * Self-contained for webview injection.
  */
 export function isWordHtml(html: string): boolean {
 	if (typeof html !== 'string' || html.length === 0) {
 		return false;
 	}
-	return /mso-list|MsoListParagraph|MsoNormal|urn:schemas-microsoft-com:office/i.test(html);
+	return /mso-list|MsoListParagraph|MsoNormal|MsoHeading[1-9]|MsoTitle|MsoSubtitle|mso-outline-level|urn:schemas-microsoft-com:office/i.test(html);
 }
 
 /**
@@ -540,16 +543,29 @@ function detectWordPasteDrops(html: string): IDocxDetections {
 	if (typeof html !== 'string' || html.length === 0) {
 		return base;
 	}
-	// Tracked changes: a <del>/<ins> element or Word's msoDel/msoIns revision spans (the same residue the
-	// normaliser resolves paste-as-accepted). Guarded so a legit hand-authored <del>/<ins> in NON-Word HTML is
-	// not counted - the whole notice only runs for Word/Office payloads (see wordPasteNotice's isWordHtml gate).
+	// Tracked changes: mirror exactly what stripTrackedChanges() drops (#269 CR-4), so the notice fires iff a
+	// mark was really removed. That step removes (a) <del>/<ins> elements, (b) msoDel/msoIns revision spans, and
+	// (c) style-only deletions - a <span> whose inline style strikes text through AND carries an mso marker. The
+	// third form was previously invisible to the detector, so a style-only Word deletion dropped silently.
+	// Guarded so a legit hand-authored <del>/<ins> in NON-Word HTML is not counted (the whole notice only runs
+	// for Word/Office payloads via wordPasteNotice's isWordHtml gate).
+	const isWordPayload = /mso[-A-Za-z]|urn:schemas-microsoft-com:office/i.test(html);
+	// A style-only deletion is a <span> whose OPENING-TAG attributes carry BOTH an mso marker and a
+	// line-through decoration (order-independent, matching stripTrackedChanges' per-span attribute test).
+	const styleStrikeDeletion = isWordPayload
+		&& (html.match(/<span\b([^>]*)>/gi) ?? []).some(tag =>
+			/text-decoration\s*:\s*[^;>"']*line-through/i.test(tag) && /mso/i.test(tag));
 	const trackedChanges = /class\s*=\s*"?[^">]*mso(?:Del|Ins)\b/i.test(html)
-		|| (/<(?:del|ins)\b/i.test(html) && /mso[-A-Za-z]|urn:schemas-microsoft-com:office/i.test(html));
-	// Comments: Word anchors a comment with a `class=msoComment*` span / a `<w:commentReference>` / a
-	// `[if !supportAnnotations]` conditional block. The comment BODY is not in the clipboard fragment, so the
-	// mark is dropped on paste - named honestly here.
+		|| (/<(?:del|ins)\b/i.test(html) && isWordPayload)
+		|| styleStrikeDeletion;
+	// Comments: Word anchors a comment with a `class=msoComment*` span, a `<w:commentReference>` element, or a
+	// `[if !supportAnnotations]` conditional-comment block. Match only these STRUCTURAL markers (#269 CR-4) -
+	// the earlier bare `commentReference|supportAnnotations` word test flagged any ordinary prose containing
+	// those words as a dropped comment. The comment BODY is not in the clipboard fragment, so the anchor is
+	// dropped on paste - named honestly here.
 	const comments = /class\s*=\s*"?[^">]*msoComment/i.test(html)
-		|| /commentReference|supportAnnotations/i.test(html);
+		|| /<\w*:?commentReference\b/i.test(html)
+		|| /<!--\s*\[if\s+!supportAnnotations\]/i.test(html);
 	return { ...base, trackedChanges, comments };
 }
 

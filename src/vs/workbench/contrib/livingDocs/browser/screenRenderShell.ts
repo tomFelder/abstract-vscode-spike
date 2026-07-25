@@ -515,6 +515,9 @@ for (const el of document.querySelectorAll('[data-msg]')) {
 // element fires the same click the mouse would, so every data-msg door is reachable without a pointer.
 for (const el of document.querySelectorAll('[data-keyactivate]')) {
 	el.addEventListener('keydown', (e) => {
+		// Only activate the card itself (#265 CR-2): Enter/Space on a nested Run Now / Open button must fire that
+		// control's own click, not bubble up and click the card. Ignore key events that did not originate on el.
+		if (e.target !== el) { return; }
 		if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); el.click(); }
 	});
 }

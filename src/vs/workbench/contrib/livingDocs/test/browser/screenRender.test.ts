@@ -491,6 +491,20 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('Run stopped'), 'the swarm heading reflects the stop honestly');
 	});
 
+	test('#265 CR-1: the idle project-run surface offers an EXPLICIT launch action, never auto-running a default prompt', () => {
+		// The bare Agents-header entry opens this surface with no run in flight. It must NOT read as a run already
+		// under way (no default-prompt fan-out), and it must carry ONE explicit launch affordance so the 1j walk is
+		// still launchable with a single deliberate action - alongside the calmer "Go to Agents" door.
+		const html = renderScreenHtml('project-run', { ...state });
+		assert.deepStrictEqual({
+			explicitLaunch: /data-msg="launchProjectRun"/.test(html),
+			launchLabel: html.includes('Run Across the Project'),
+			goAgents: /data-msg="goAgents"/.test(html),
+			noLivePill: !html.includes('>Live<'),
+			noStopControl: !/data-msg="stopProjectRun"/.test(html),
+		}, { explicitLaunch: true, launchLabel: true, goAgents: true, noLivePill: true, noStopControl: true });
+	});
+
 	// --- project-run: fan-out context budgeting UI (plan 30, track 3, D30-B) ---
 
 	test('a multi-batch project-run shows the Batch K of M chip in the command strip (plan 30 track 3)', () => {
@@ -611,7 +625,10 @@ suite('livingDocs screenRender', () => {
 			runNow: /data-msg="runWf"[^>]*data-arg="weekly-refresh"[^>]*data-stop/.test(html),
 			// The project-wide fan-out has a real emitter on the Agents screen (runProject had none before CD-1).
 			runProject: /data-msg="runProject"/.test(html),
-		}, { cardOpensAgent: true, cardFocusable: true, openButton: true, runNow: true, runProject: true });
+			// #265 CR-2: the injected keyboard-activation handler ignores key events bubbled from a nested control,
+			// so Enter on Run now / Open fires that button, not the card. The guard ships in every screen's SCRIPT.
+			keyactivateGuard: html.includes('if (e.target !== el) { return; }'),
+		}, { cardOpensAgent: true, cardFocusable: true, openButton: true, runNow: true, runProject: true, keyactivateGuard: true });
 	});
 
 	test('an active card shows the mono status line + accent pause toggle; a paused card is 75% opacity + resume (A2.1)', () => {
