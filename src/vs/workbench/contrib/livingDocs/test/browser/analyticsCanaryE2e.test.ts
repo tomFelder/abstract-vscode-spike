@@ -93,7 +93,7 @@ suite('analytics canary E2E (plan 36 iter 2: content never leaves via the live s
 				return { children };
 			},
 		} as unknown as IFileService;
-		const editorService = { openEditor: async () => undefined } as unknown as IEditorService;
+		const editorService = { openEditor: async () => undefined, onDidActiveEditorChange: Event.None } as unknown as IEditorService;
 		const viewsService = { openView: async () => null } as unknown as IViewsService;
 		const configurationService = { getValue: () => true, onDidChangeConfiguration: Event.None } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;

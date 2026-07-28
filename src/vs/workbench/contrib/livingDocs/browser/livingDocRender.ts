@@ -13,6 +13,7 @@ import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../c
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
 import { deleteCol, deleteRow, gfmEscapeCell, gfmIsAlignRow, gfmParseAlign, gfmSplitCells, insertCol, insertRow, parseGfmTable, serializeGfmTable, setCell } from '../common/livingDocTableEdit.js';
 import { isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose } from '../common/livingDocWordPaste.js';
+import { FRESHNESS_COLOURS, UNREACHABLE_SOURCE_LINE, UNREACHABLE_SOURCE_MARKER } from '../common/sourceFreshness.js';
 import { POLICY_EDITOR_STYLE } from './policyEditorRender.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
@@ -315,6 +316,14 @@ table.kpi td:first-child{text-align:left;font-weight:500}
 .srcdrawer .sp-then{color:#a3a8b2;text-decoration:line-through}
 .srcdrawer .sp-arrow{color:#a3a8b2;padding:0 2px}
 .srcdrawer .sp-now{color:#8a5a12;font-weight:600}
+/* UNREACHABLE state (the staleness-escape guardrail, docs/20 journey 1p): an api/mcp source that could not be
+ * read at all has no live value to compare, so the row keeps its last-synced reading but is marked in the
+ * STALE family from the one freshness vocabulary - the same cream field, amber dot and stale text the
+ * Knowledge table uses - never a fourth colour, and never presented as the source's current answer. */
+.srcdrawer tr.unreached td,.srcdrawer tr.sel.unreached td{background:${FRESHNESS_COLOURS.staleRowBg}}
+.srcdrawer .sp-unreach{margin:0 0 8px;font:500 11px/1.5 system-ui;color:${FRESHNESS_COLOURS.staleText}}
+.srcdrawer .sp-unreach-tag{display:inline-flex;align-items:center;gap:5px;margin-left:8px;font:500 11px/1.5 system-ui;color:${FRESHNESS_COLOURS.staleText}}
+.srcdrawer .sp-unreach-tag::before{content:"";width:6px;height:6px;border-radius:50%;background:${FRESHNESS_COLOURS.staleDot};flex:none}
 .prose{max-width:720px;margin:0 auto;padding:24px 40px 80px;font:400 15.5px/1.7 system-ui;color:#2a2a31}
 .prose h1{font:600 30px/1.12 system-ui;letter-spacing:-.02em;color:#15151a;margin:24px 0 12px}
 .prose h2{font:600 16px/1.3 system-ui;color:#26262d;margin:26px 0 10px}
@@ -625,8 +634,11 @@ function tipEsc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').repl
 function showTip(el, key){ const p = _prov[key]; if (!p) { return; } if (!_tip) { _tip = document.createElement('div'); _tip.className = 'lwd-tip'; document.body.appendChild(_tip); }
 	const loc = p.location ? (tipEsc(p.location) + ' &middot; ') : '';
 	// The ONE freshness vocabulary (#122 F12): the hover-peek leads with "Stale" so the tooltip agrees with the
-	// Knowledge table + drawer + tree meta, then names what drifted in plain words.
-	const stale = p.fresh ? '' : '<div class="tip-stale">Stale &middot; source changed since last sync</div>';
+	// Knowledge table + drawer + tree meta, then names what drifted in plain words. A source that could not be
+	// REACHED (p.fallback) is never in the document's stale set - nothing could be hash-compared - so it carries
+	// the same stale-family marker from its own label, and the plain-words line below says why.
+	const stale = !p.fresh ? '<div class="tip-stale">Stale &middot; source changed since last sync</div>'
+		: (p.fallback ? '<div class="tip-stale">${UNREACHABLE_SOURCE_MARKER}</div>' : '');
 	// The then-vs-now peek (#122 F13): when a stale source has a readable live value that drifted, show
 		// "then -> now" so the reader sees the value at bind time versus what the source says now - the same
 		// vocabulary the source drawer uses. For an api/mcp binding whose live value could NOT be fetched, name
@@ -1171,7 +1183,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	} else {
 		body = syncBar
 			+ `<div class="pmwrap"><div id="pm-root" class="prose"></div></div>`
-			+ (input.sourcePeek ? renderSourceDrawer(input.sourcePeek) : '');
+			+ (input.sourcePeek ? renderSourceDrawer(input.sourcePeek, input.provenance ?? []) : '');
 	}
 
 	const hint = (isPm && isLiving)
@@ -1218,17 +1230,26 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 
 // The bottom source drawer (the comp's "Workbench v2" overlay) for the PM surface: a full-width overlay
 // fixed to the bottom of the webview so the document is never split into a side-by-side pane.
-function renderSourceDrawer(peek: ISourcePeekRender): string {
+function renderSourceDrawer(peek: ISourcePeekRender, provenance: readonly IPmProvenance[]): string {
 	// then-vs-now (plan 37 F13): when the live source value has drifted from the applied value, show
 	// "then -> now" so the reader sees what was approved versus what the source says now.
 	const anyDrift = peek.rows.some(r => r.current !== undefined);
+	// The bind keys whose api/mcp source could not be reached this pass, read off the SAME provenance the hover
+	// peek uses (never a second staleness store): the drawer and the tooltip therefore mark the identical rows.
+	const unreached = new Set(provenance.filter(p => p.fallback !== undefined).map(p => p.key));
 	const rows = peek.rows.map(r => {
+		const out = unreached.has(r.key);
 		const resolved = r.current !== undefined
 			? `<span class="sp-then">${esc(r.value)}</span> <span class="sp-arrow">&rarr;</span> <span class="sp-now">${esc(r.current)}</span>`
-			: esc(r.value);
-		return `<tr class="${r.selected ? 'sel' : ''}${r.current !== undefined ? ' changed' : ''}"><td>${esc(r.key)}</td><td>${resolved}</td></tr>`;
+			: esc(r.value) + (out ? `<span class="sp-unreach-tag">${esc(UNREACHABLE_SOURCE_MARKER)}</span>` : '');
+		return `<tr class="${r.selected ? 'sel' : ''}${r.current !== undefined ? ' changed' : ''}${out ? ' unreached' : ''}"><td>${esc(r.key)}</td><td>${resolved}</td></tr>`;
 	}).join('');
 	const driftHint = anyDrift ? `<div class="sp-drift">&#9650; then &rarr; now: the source changed since these figures were last synced.</div>` : '';
+	// The staleness-escape guardrail (docs/20 journey 1p): when a listed figure's source could not be reached, say so
+	// in plain words above the table, so the last-synced values below are never read as this morning's numbers.
+	const unreachedHint = peek.rows.some(r => unreached.has(r.key))
+		? `<div class="sp-unreach">&#9650; ${esc(UNREACHABLE_SOURCE_LINE)}.</div>`
+		: '';
 	// The comp shows the source's raw CSV grid with the latest row (the one the document binds to)
 	// highlighted - rendered above the resolved bound-figure list.
 	const grid = peek.grid;
@@ -1264,7 +1285,7 @@ function renderSourceDrawer(peek: ISourcePeekRender): string {
 		+ `<div class="sd-head"><span class="sd-name">&#8862; ${esc(peek.source)}</span>`
 		+ `<span class="sd-meta">source &middot; ${rowCount} row${rowCount === 1 ? '' : 's'}</span>${pinned}`
 		+ `<span class="sd-actions">${action}<button class="sd-x" data-source-close title="Close source">&#10005;</button></span></div>`
-		+ `<div class="sd-body">${gridHtml}${payloadHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div>${driftHint}<table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
+		+ `<div class="sd-body">${gridHtml}${payloadHtml}<div class="sp-sec">BOUND FIGURES &middot; ${peek.rows.length}</div>${unreachedHint}${driftHint}<table><thead><tr><th>Key</th><th>Resolved</th></tr></thead><tbody>${rows}</tbody></table>${refs}</div></div>`;
 	return drawer;
 }
 

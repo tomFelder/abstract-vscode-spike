@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { freshnessLabel, relativeSyncedShort, sourceFreshness, SourceFreshness } from '../../common/sourceFreshness.js';
+import { freshnessLabel, relativeSyncedShort, sourceFreshness, SourceFreshness, unreachableSourceLabel } from '../../common/sourceFreshness.js';
 
 // The ONE freshness vocabulary (#122 F12, plan 49-a): pure classification + labels under an injectable clock,
 // so every surface (Knowledge table, drawer, tree meta, hover-peek, Context tab) speaks the same words and the
@@ -56,5 +56,14 @@ suite('sourceFreshness (F12 vocabulary)', () => {
 
 	test('a sub-day stale source reports hours, never a fabricated 0d', () => {
 		assert.strictEqual(freshnessLabel(SourceFreshness.Stale, '2026-07-09T20:00:00Z', NOW).label, 'stale · 4h');
+	});
+
+	test('an unreachable source borrows the STALE family (amber dot + stale text), never a fourth colour', () => {
+		assert.deepStrictEqual(unreachableSourceLabel(), {
+			label: 'Stale · source unreachable',
+			line: 'Live value unavailable - showing the last synced value',
+			dot: freshnessLabel(SourceFreshness.Stale, undefined, NOW).dot,
+			text: freshnessLabel(SourceFreshness.Stale, undefined, NOW).text,
+		});
 	});
 });

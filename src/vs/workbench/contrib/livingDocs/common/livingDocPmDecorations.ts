@@ -6,6 +6,7 @@
 import { buildBlockGutterEntries, IBlockGutterEntry, resolveBlockLine } from './livingDocAddress.js';
 import { scopeBlockEdit } from './livingDocMarkdown.js';
 import { ChangeKind, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
+import { UNREACHABLE_SOURCE_LINE } from './sourceFreshness.js';
 
 // The kind of source a bound value draws from, for the hover peek's fallback naming (#122 F13): a `file`
 // binding always has a "now" value (the file is on disk); an `api`/`mcp` binding depends on a live fetch,
@@ -16,7 +17,7 @@ export type ProvenanceKind = SourceKind;
 // The provenance a bound figure answers on hover (plan 29, iter 3; extended for #122 F13, the "then vs now"
 // peek): where the value came from, where in that source, when it last synced, whether the source has changed
 // since, the value AT bind time (`then`), the source's CURRENT value (`now`, only when it has drifted), the
-// source kind, and - for an api/mcp source whose live value could not be fetched - a plain `fallback` label.
+// source kind, and - for an api/mcp source that could not be reached at all - a plain `fallback` label.
 // Built purely from the lock's binding entries + the document's stale-binding set + the last freshness
 // recompute's live values, so the tooltip never fabricates a state: an entry the lock has never synced shows
 // the honest "Not yet synced", `fresh` is the real hash-compare result, and an api/mcp value with no live
@@ -38,9 +39,12 @@ export interface IPmProvenance {
 	readonly now?: string;
 	// The source kind, so the peek can label an api/mcp binding's fallback state (`file` always reads locally).
 	readonly kind: ProvenanceKind;
-	// Set ONLY for a stale api/mcp binding whose live value could not be fetched (the proxy was unavailable):
-	// a plain fallback label the peek shows in place of a "now" value, so a fallback is never dressed up as
-	// the current source reading. Absent for file bindings and for any binding with a real live value.
+	// Set ONLY for an api/mcp binding whose live value could not be READ at all this pass (the proxy was
+	// unavailable, the host was in cooldown): the plain-words line from the ONE freshness vocabulary, shown in
+	// place of a "now" value so a last-known reading is never dressed up as current. Its presence is what makes
+	// a surface mark the binding stale-amber - an unreachable source is NOT in the document's stale set (that
+	// set only grows from a hash compare, which needs a value to compare). Absent for file bindings (a file is
+	// read locally, and a deleted one already flags stale) and for any binding with a real live value.
 	readonly fallback?: string;
 }
 
@@ -74,7 +78,7 @@ function provenanceKind(key: string, source: string): ProvenanceKind {
  * (plan 29, iter 3; #122 F13 "then vs now"). `staleKeys` is the document's freshness `staleBindings` set - a
  * key in it flips `fresh` to false so the tooltip's amber "source changed since" line shows. `currentValues`
  * is the last freshness recompute's live re-resolved value per key (the "now"); a stale key present there
- * with a value that differs from the applied value populates `now`, while a stale api/mcp key ABSENT from it
+ * with a value that differs from the applied value populates `now`, while an api/mcp key ABSENT from it
  * (the live fetch was unavailable) is named as a fallback instead of masquerading as current. Pure so it is
  * unit-tested directly and reused by the render payload builder; `now` (the clock) is injectable for tests.
  */
@@ -90,10 +94,14 @@ export function buildFigureProvenance(lock: ILivingDocLock, staleKeys: ReadonlyS
 		// The live "now" value: only meaningful for a stale key (a fresh key by definition still equals `then`).
 		const live = stale ? currentValues?.get(key) : undefined;
 		const drifted = live !== undefined && live !== entry.resolved ? live : undefined;
-		// A stale api/mcp value with no live reading fell back: the proxy could not fetch it, so name the
-		// fallback plainly rather than presenting the last-synced value as the current source reading.
-		const fallback = stale && drifted === undefined && kind !== 'file'
-			? 'Live value unavailable - showing the last synced value'
+		// An api/mcp key ABSENT from the live-value map could not be read at all this pass (the proxy was down,
+		// the host in cooldown), so there is no current reading to show - name the fallback plainly rather than
+		// presenting the last-synced value as the source's answer today. Deliberately NOT gated on `stale`: an
+		// unresolved key can never enter the stale set (that set grows from a hash compare, which needs a value),
+		// so gating on it made this marker unreachable for the exact case it exists for. `currentValues`
+		// undefined means no freshness pass has run yet - nothing is known, so nothing is claimed either way.
+		const fallback = kind !== 'file' && currentValues !== undefined && !currentValues.has(key)
+			? UNREACHABLE_SOURCE_LINE
 			: undefined;
 		out.push({
 			key,

@@ -48,6 +48,24 @@ export function sourceFreshness(opts: { readonly fresh: boolean; readonly contex
 	return SourceFreshness.Fresh;
 }
 
+// A remote (api/mcp) source the app could not READ at all this pass - the proxy was down, the host was in
+// cooldown, the MCP server never answered - has no current reading whatsoever. That is not a fourth state:
+// it is presented in the STALE family (the same amber dot and stale text colour every other surface uses)
+// carrying these plain words, so its last-known value is never dressed up as current (the staleness-escape
+// guardrail, docs/20 journey 1p). The marker is the amber label; the line is the plain-words explanation that
+// sits under it on both the figure hover-peek and the source drawer.
+export const UNREACHABLE_SOURCE_MARKER = 'Stale · source unreachable';
+export const UNREACHABLE_SOURCE_LINE = 'Live value unavailable - showing the last synced value';
+
+/**
+ * The label + plain-words line + stale-family colours a surface renders for a source it could not reach.
+ * Deliberately NOT a `SourceFreshness` case: the vocabulary stays at three states, and an unreachable source
+ * borrows the stale presentation rather than inventing a fourth colour.
+ */
+export function unreachableSourceLabel(): { readonly label: string; readonly line: string; readonly dot: string; readonly text: string } {
+	return { label: UNREACHABLE_SOURCE_MARKER, line: UNREACHABLE_SOURCE_LINE, dot: FRESHNESS_COLOURS.staleDot, text: FRESHNESS_COLOURS.staleText };
+}
+
 /**
  * The short relative-time form the compact SYNC surfaces use ("2m ago" / "1h ago" / "3d ago"), agreeing on
  * the same thresholds as the long-form `relativeSyncedLabel` prose. `now` is injectable so the render is
