@@ -3222,6 +3222,46 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'pending changes were rejected by the restore');
 	});
 
+	// F6 (spec 20): ProseMirror's history is the ONE undo channel, so Cmd+Z genuinely takes an approved change
+	// back out of the body (decision 100 as amended by #142). The guardrail is that such a revert is never
+	// SILENT: the live surface flags the settled edit that brought the pre-approve body back, and the save
+	// records it with the SAME `via: 'restore'` vocabulary a snapshot restore uses (so History reads "Restored")
+	// and toasts what came back. The lock write rides the `.md` write, so a quit right after the undo still
+	// shows it in History - hence reading the ON-DISK sidecar here, not the in-memory lock. An ordinary typing
+	// save carries no flag and so no receipt.
+	test('an undo that crosses an approve is audited (via: restore) and toasted with what came back', async () => {
+		const service = createService([], { model: chatEditAndInsert() });
+		await service.loadDocument(WEEKLY);
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary and add a note');
+		const beforeApprove = service.getRawText(WEEKLY);
+		const edit = service.getPendingForDoc(WEEKLY).find(c => c.oldText === 'Growth remained steady this week.')!;
+		await service.approve(edit.id);
+		assert.notStrictEqual(service.getRawText(WEEKLY), beforeApprove, 'the approve moved the body');
+		lastNotifications = [];
+
+		// The live surface undid across the approve: the body it now holds is exactly the pre-approve body.
+		await service.saveRawText(WEEKLY, beforeApprove, { silent: true, revertedApprove: true });
+		// ...and ordinary typing afterwards is just a save - no second receipt.
+		await service.saveRawText(WEEKLY, beforeApprove.replace('Growth remained steady', 'Still typing here'), { silent: true });
+
+		const onDiskLock = lastFiles!.get(URI.file('/ws/Weekly Summary.lock.json').toString());
+		const onDiskAudit: IAuditEntry[] = onDiskLock ? JSON.parse(onDiskLock).audit : [];
+		const restores = onDiskAudit.filter(e => e.via === 'restore');
+		assert.deepStrictEqual({
+			restoreEntries: restores.length,
+			action: restores[0]?.action,
+			revertedTo: restores[0]?.newText === beforeApprove,
+			cameFrom: restores[0]?.oldText.includes('Growth accelerated this week.'),
+			toasts: lastNotifications.map(n => n.message),
+		}, {
+			restoreEntries: 1,
+			action: 'approved',
+			revertedTo: true,
+			cameFrom: true,
+			toasts: ['Undid an approved change in "Weekly Operating Summary" - "Growth remained steady this week." is back.'],
+		});
+	});
+
 	// (debt: sample root mount) Reproduce the web/memfs "mount" scenario for the SAMPLE ROOT: a single
 	// workspace folder labelled with a mount stub ("mount"), shipping an `.abstract-name` marker at its
 	// root AND holding documents both at the top level and inside a subfolder. The project name must

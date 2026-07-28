@@ -597,7 +597,18 @@ function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance
 // the edit persists the server re-renders the chip back to its honest saved state, with an optional version
 // suffix when a snapshot exists (plan 26 iter 4).
 function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
-function pmOnChange(){ if (_pmEchoSuppressed) { return; } setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
+// The receipt half of "Cmd+Z works across approves" (#F6, spec 20). An undo that crosses an approve takes an
+// approved change back OUT of the document, so it must never be silent - but only the live surface knows an
+// undo happened. These two strings are how it knows, and both are produced by the SAME serializer, so the
+// comparison below is an exact identity, never a fuzzy Markdown round-trip guess:
+//   _pmPreSwapMd  - the body as PM serialized it immediately BEFORE the last programmatic swap (the approve).
+//                   This is precisely what one Mod+Z brings back. null until a swap has happened.
+//   _pmLastBodyMd - the body the surface is last known to hold, so "it just came back" can be distinguished
+//                   from "it was already there".
+// When a settled edit serializes byte-identically to _pmPreSwapMd, the approve has been reverted and the
+// pmEdit carries revertedApprove:true; the host turns that into the audit entry + toast.
+let _pmPreSwapMd = null, _pmLastBodyMd = null;
+function pmOnChange(){ if (_pmEchoSuppressed) { return; } setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (!pmView) { return; } const text = window.LWDPM.toMarkdown(pmView); const reverted = _pmPreSwapMd !== null && text === _pmPreSwapMd && _pmLastBodyMd !== text; _pmLastBodyMd = text; vscode.postMessage({ type: 'pmEdit', text: text, revertedApprove: reverted }); }, 300); }
 function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } enrichBoundFigures(); }
 // Make every bound figure a real, reachable provenance door (#254). The bundle renders it as a plain
 // span.bound atom with no affordance beyond colour; here we give each one a keyboard tab-stop, a button role,
@@ -624,8 +635,11 @@ function pmReplaceBody(md){
 		const head = Math.min(tr.selection.head, tr.doc.content.size);
 		if (Sel && typeof Sel.near === 'function') { tr.setSelection(Sel.near(tr.doc.resolve(head))); }
 	} catch (e) {}
+	// Bracket the swap with the two serializations the revert receipt compares against (see _pmPreSwapMd).
+	try { _pmPreSwapMd = window.LWDPM.toMarkdown(pmView); } catch (e) { _pmPreSwapMd = null; }
 	_pmEchoSuppressed = true;
 	try { pmView.dispatch(tr); } finally { _pmEchoSuppressed = false; }
+	try { _pmLastBodyMd = window.LWDPM.toMarkdown(pmView); } catch (e) { _pmLastBodyMd = null; }
 }
 // A single reused tooltip element (created lazily), floated over the prose with pointer-events:none so it
 // never intercepts the click that opens the source drawer. esc keeps any source/location text inert markup.
@@ -696,14 +710,30 @@ function installPasteBoundaryGuard(view){
 function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); installPasteBoundaryGuard(pmView); pmDeco(spec); wireTableEditing(); resolveRelativeImages(); focusPm(); } }
 // plan 16 iter 3 (decision 56): land the caret in the document on first mount so a freshly-opened (or
 // freshly-created blank) doc is immediately writable -- "one click -> cursor ready", no extra click to
-// start typing. Only fires on the initial mount (mount-once-then-message, decision 50), so re-renders
-// never steal the caret. Fail-soft: a focus that throws (view torn down) is ignored.
+// start typing. Called on the initial mount, and (only under pmHoldsFocus, below) to give the caret BACK
+// after a re-render that detached the live node. PM's own focus() re-derives the DOM selection from the
+// state selection, so the caret lands where the model says it is - not at the top of the document.
+// Fail-soft: a focus that throws (view torn down) is ignored.
 function focusPm(){ try { if (pmView && pmView.focus) { setTimeout(function(){ try { pmView && pmView.focus(); } catch (e) {} }, 0); } } catch (e) {} }
+// The keystroke half of "Cmd+Z works across approves" (#F6, spec 20). applyUpdate DETACHES the live PM node
+// to swap the surrounding HTML, and detaching a focused contenteditable BLURS it - after an approve the caret
+// sat outside ProseMirror, so Mod+Z reached nothing at all. Focus is therefore given back after the swap, but
+// ONLY when PM genuinely held it beforehand:
+//   - document.hasFocus() - this webview must actually own the focus, so an approve fired from the chat rail
+//     (a different part of the workbench; the iframe keeps a stale activeElement when it is blurred) never
+//     yanks the user back into the prose.
+//   - inPm(activeElement) - the focus must be inside the PM node. The Properties inputs, the raw textarea and
+//     the floating table cell editor (which lives on document.body, not inside PM) all keep what they hold.
+// An approve button clicked in an in-document proposal widget IS inside the PM node, and the re-render is
+// about to destroy that button, so returning the caret to the prose is restoring focus, not stealing it.
+function pmHoldsFocus(){ try { return !!(pmView && pmView.dom && document.hasFocus() && inPm(document.activeElement)); } catch (e) { return false; } }
 // Re-render the body from a message. The live ProseMirror node is detached, the body HTML is swapped, and
 // the same node re-attached (PM is never remounted). A model-driven body change (an accepted proposal)
 // arrives as pmReset and resets the live doc to disk truth; pending proposals + the gutter are decorations.
 function applyUpdate(htmlStr, pmMd, spec, pmReset){
 	const live = (pmView && pmMd !== null) ? pmView.dom : null;
+	// Read the focus BEFORE the detach blurs it (see pmHoldsFocus).
+	const hadFocus = pmHoldsFocus();
 	if (live && live.parentNode) { live.parentNode.removeChild(live); }
 	root.innerHTML = htmlStr;
 	if (pmMd !== null) {
@@ -720,6 +750,9 @@ function applyUpdate(htmlStr, pmMd, spec, pmReset){
 			pmDeco(spec);
 			revalidateCellEditor();
 			resolveRelativeImages();
+			// Give the caret back to the surface the re-render blurred, so the very next Mod+Z reaches PM's
+			// history keymap (and typing continues where it left off).
+			if (hadFocus) { focusPm(); }
 		} else if (r && window.LWDPM) { teardownCellInput(); mountPm(pmMd, spec); }
 	} else if (pmView) { teardownCellInput(); window.LWDPM.destroy(pmView); pmView = null; }
 }
@@ -733,6 +766,23 @@ root.addEventListener('mousedown', e => {
 root.addEventListener('change', e => {
 	const s = e.target.closest('select[data-pmcmd]');
 	if (s && pmView && window.LWDPM) { window.LWDPM.cmd(pmView, s.value); }
+});
+// The last-resort undo route (#F6). Focus restoration above is the primary fix - with the caret back in the
+// prose, PM's own history keymap handles Mod+Z. This is the belt-and-braces for every other place the focus
+// can legitimately be sitting inside this webview (the toolbar, a chip, the body after a widget was removed):
+// a Mod+Z that NOTHING else handled is routed to the SAME history command the keymap would have run, and
+// LWDPM.cmd focuses the view itself, so the caret comes home with the undo.
+// - Bubble phase on the document, so ProseMirror's own keydown handler on the editor node runs FIRST; when
+//   it runs a command it calls preventDefault, and defaultPrevented is then the honest "already handled"
+//   signal. There is no double-undo.
+// - A chord typed inside a real form field or the tweak editor is left alone: those own their native undo,
+//   and the tweak editor's contenteditable is widget DOM, never the document.
+function isUndoChord(e){ return (e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'z' || e.key === 'Z'); }
+function ownsItsOwnUndo(t){ return !!(t && t.closest && t.closest('input, textarea, .tweakedit')); }
+document.addEventListener('keydown', e => {
+	if (!pmView || !window.LWDPM || e.defaultPrevented || !isUndoChord(e) || ownsItsOwnUndo(e.target)) { return; }
+	e.preventDefault();
+	window.LWDPM.cmd(pmView, e.shiftKey ? 'redo' : 'undo');
 });
 root.addEventListener('click', e => {
 	let el;

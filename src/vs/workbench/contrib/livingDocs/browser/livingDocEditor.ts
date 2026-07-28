@@ -234,7 +234,7 @@ export class LivingDocEditor extends EditorPane {
 		await apply();
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean; html?: string }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean; html?: string; revertedApprove?: boolean }): void {
 		switch (message?.type) {
 			case 'lwdReady':
 				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
@@ -253,7 +253,11 @@ export class LivingDocEditor extends EditorPane {
 					// The live surface already holds this body, so record it to suppress a spurious pmReset on
 					// the next (non-typing) render.
 					this._proto = recordPmBody(this._proto, parseLivingDoc(text).body);
-					void this._livingDocs.saveRawText(this._resource, text, { silent: true });
+					// ProseMirror's history is the ONE undo channel (decision 100 as amended by #142), so a Mod+Z
+					// can legitimately take an approved change back out of the body. The surface flags exactly that
+					// case - the body is byte-identical to what it held before the last model-driven swap - and the
+					// service turns the flag into the audit entry + toast, so the revert is never silent (#F6).
+					void this._livingDocs.saveRawText(this._resource, text, { silent: true, revertedApprove: message.revertedApprove === true });
 				}
 				break;
 			case 'wordPaste':

@@ -10,6 +10,7 @@ import { IntervalTimer, Limiter } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableMap, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
+import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { basename, dirname, isEqual, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
@@ -3694,7 +3695,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return { applied, queued };
 	}
 
-	async saveRawText(resource: URI, text: string, options?: { readonly silent?: boolean }): Promise<void> {
+	async saveRawText(resource: URI, text: string, options?: { readonly silent?: boolean; readonly revertedApprove?: boolean }): Promise<void> {
 		const id = resource.toString();
 		const doc = parseLivingDoc(text);
 		const prev = this._docs.get(id);
@@ -3738,6 +3739,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (overrodeExternal) {
 			state.lock.audit.push(this._entry(state, state.doc.blocks[0]?.id ?? '', 'external-overwrite-kept', '', `kept the version open in Abstract over an edit made to "${basename(resource)}" outside it`, 'heuristic'));
 		}
+		// An undo that crossed an approve (spec 20; decision 100 as amended by #142). ProseMirror's history is the
+		// ONE undo channel, so Mod+Z genuinely takes an approved change back out of the body - and the guardrail is
+		// that it is never SILENT. A no-op save (nothing actually moved) carries no receipt.
+		let revertedApprove = false;
+		if (options?.revertedApprove === true && prev !== undefined && prev.rawText !== text) {
+			revertedApprove = true;
+			this._recordApproveRevert(state, prev.rawText);
+		}
 		try {
 			await this._files.writeFile(resource, VSBuffer.fromString(text));
 		} catch (e) {
@@ -3747,7 +3756,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// this the entry lives only in memory: `_bootstrapLock` below early-returns for an already-bootstrapped doc,
 		// so `_lockStore.write` never runs, and the entry only reaches disk on a later unrelated `_persist` - a quit or
 		// reload in that window loses it, so History renders nothing. Mirror `_persist`'s error handling (catch + warn).
-		if (overrodeExternal) {
+		// The revert receipt rides the same atomic write, for the same reason.
+		if (overrodeExternal || revertedApprove) {
 			await this._lockStore.write(state.uri, state.lock).catch(e => this._log.warn('[livingDocs] keep-audit lock write failed', e));
 		}
 		state.keepMine = undefined;
@@ -3893,6 +3903,36 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		await this._recomputeFreshness(state);
 		this._notify.info(`Restored "${state.doc.title}" to "${snapshot.label}".`);
 		this._onDidChange.fire();
+	}
+
+	// The receipt for an undo that crossed an approve (spec 20: "Cmd+Z works across approves, not just
+	// keystrokes; the toast names what came back"). Deliberately mirrors `restoreSnapshot` above: the revert
+	// lands on the audit as an APPLIED change carrying `via: 'restore'`, so History renders it "Restored" and
+	// the ledger reads "Restored an earlier version of ..." - ONE vocabulary for every way back, and no second
+	// undo stack inside the service to drift against ProseMirror's history (which stays the single undo
+	// channel). It captures the SAME `undo_after_approve` guardrail metric, whose `depth` is a coarse count of
+	// audit entries stepped back over - never any content.
+	private _recordApproveRevert(state: IDocState, previousBody: string): void {
+		// The change this undo reversed is the most recent BLOCK-level applied entry on the trail: its `oldText`
+		// is literally what came back and its block is where, so the toast can name it rather than gesture at
+		// it. Earlier restores are excluded - their texts are whole bodies, not a block, so naming one would
+		// dump the document into a toast. A document with no applied history still gets a receipt, just without
+		// the naming: never a guess.
+		const applied = state.lock.audit.filter(e => e.via !== 'restore' && (e.action === 'approved' || e.action === 'auto-applied'));
+		const reversed = applied.length ? applied[applied.length - 1] : undefined;
+		const depth = reversed ? state.lock.audit.length - state.lock.audit.lastIndexOf(reversed) : 0;
+		this._analytics.capture('undo_after_approve', { depth });
+		state.lock.audit.push(this._entry(state, reversed?.blockId ?? state.doc.blocks[0]?.id ?? '', 'approved', previousBody, state.rawText, 'restore'));
+		const restored = (reversed?.oldText ?? '').replace(/\s+/g, ' ').trim();
+		const named = restored.length > 48 ? `${restored.slice(0, 47)}\u2026` : restored;
+		// The verb follows what was actually reversed: a body swap also happens on a policy-driven figure
+		// refresh, and calling that "approved" would be a small lie in the one toast whose job is honesty.
+		const wasAutoApplied = reversed?.action === 'auto-applied';
+		this._notify.info(!named
+			? localize('livingDocs.undoAcrossApproveUnnamed', "Undid an applied change in \"{0}\" - the earlier version is back.", state.doc.title)
+			: wasAutoApplied
+				? localize('livingDocs.undoAcrossAutoApply', "Undid an auto-applied change in \"{0}\" - \"{1}\" is back.", state.doc.title, named)
+				: localize('livingDocs.undoAcrossApprove', "Undid an approved change in \"{0}\" - \"{1}\" is back.", state.doc.title, named));
 	}
 
 	async exportDocument(resource: URI, force = false): Promise<URI | undefined> {

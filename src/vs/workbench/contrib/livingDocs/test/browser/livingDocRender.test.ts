@@ -410,6 +410,41 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		assert.ok(h.includes('if (_pmEchoSuppressed) { return; }'), 'pmOnChange short-circuits only while suppressed');
 	});
 
+	// F6 (spec 20): "Cmd+Z works across approves, not just keystrokes; the toast names what came back."
+	// Issue #142 (above) made the approve an undoable transaction, but the keystroke still never reached the
+	// keymap: applyUpdate DETACHES the live PM node to swap the surrounding HTML, detaching a focused
+	// contenteditable BLURS it, and focus was only ever restored on first mount - so after clicking Approve the
+	// caret sat outside ProseMirror and Mod+Z hit nothing. The RUNTIME now (a) reads the focus BEFORE the detach
+	// and gives it back after the swap, under a guard that can never steal it, (b) routes an otherwise-unhandled
+	// Mod+Z to the same history command the keymap would run, and (c) flags the settled edit that brings the
+	// pre-approve body back, so the host can write the audit entry + toast. Runtime-string change, so this is
+	// asserted at the string level exactly as the sibling #142 test is.
+	test('F6: an approve re-render hands ProseMirror its focus back, an unhandled Mod+Z reaches undo, and the revert is flagged', () => {
+		const h = html({ open: false, choice: 'html' });
+		assert.deepStrictEqual({
+			// The focus is read before the detach that would destroy the evidence, and handed back after the swap.
+			readsFocusBeforeDetach: h.indexOf('const hadFocus = pmHoldsFocus();') < h.indexOf('live.parentNode.removeChild(live)'),
+			restoresAfterSwap: h.includes('if (hadFocus) { focusPm(); }'),
+			// ...under a guard narrow enough never to STEAL focus: this webview must actually own the focus (so an
+			// approve fired from the chat rail is not yanked back) and it must sit inside the PM node (so the
+			// Properties inputs, the raw textarea and the body-hosted table cell editor keep what they hold).
+			guardedOnDocumentAndPm: h.includes('document.hasFocus() && inPm(document.activeElement)'),
+			// The last-resort route for a focus that legitimately sits elsewhere in the webview: an unhandled
+			// Mod+Z runs PM's own history command (which focuses the view itself). Anything already handled -
+			// PM's keymap calls preventDefault - or typed in a real form field is left alone, so no double-undo.
+			routesUnhandledUndo: h.includes('window.LWDPM.cmd(pmView, e.shiftKey ? \'redo\' : \'undo\')'),
+			skipsHandledAndFormFields: h.includes('e.defaultPrevented || !isUndoChord(e) || ownsItsOwnUndo(e.target)'),
+			// The receipt signal: the programmatic swap is bracketed by the two serializations, and a settled edit
+			// that is byte-identical to the pre-swap body posts pmEdit with revertedApprove set.
+			bracketsTheSwap: h.includes('_pmPreSwapMd = window.LWDPM.toMarkdown(pmView)'),
+			flagsTheRevert: h.includes('const reverted = _pmPreSwapMd !== null && text === _pmPreSwapMd && _pmLastBodyMd !== text;')
+				&& h.includes('revertedApprove: reverted'),
+		}, {
+			readsFocusBeforeDetach: true, restoresAfterSwap: true, guardedOnDocumentAndPm: true,
+			routesUnhandledUndo: true, skipsHandledAndFormFields: true, bracketsTheSwap: true, flagsTheRevert: true,
+		});
+	});
+
 	// (plan 44-b PH.4) The breadcrumb moved off the doc webview onto the one global Abstract header (the
 	// repurposed title bar): the LivingDocEditor publishes { breadcrumb: doc.title, fileName } to the header
 	// content service, and AbstractHeaderContribution paints it natively via textContent (injection-safe by

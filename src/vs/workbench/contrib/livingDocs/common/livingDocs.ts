@@ -1156,8 +1156,14 @@ export interface ILivingDocsService {
 	 * Persist edited raw Markdown verbatim and reparse the document. Pass `{ silent: true }` to skip
 	 * the change event so a live editing surface (e.g. the ProseMirror editor) is not forced to
 	 * re-render and lose its cursor while the user is still typing.
+	 *
+	 * Pass `{ revertedApprove: true }` when this save is an undo that crossed an approve - i.e. the live
+	 * surface has brought the body back to exactly what it held before an approved change was written into
+	 * it. The save then records the revert on the audit trail (the same `via: 'restore'` vocabulary a
+	 * snapshot restore uses) and names what came back in a toast, so an approved change can never leave the
+	 * document silently (spec 20; decision 100 as amended).
 	 */
-	saveRawText(resource: URI, text: string, options?: { readonly silent?: boolean }): Promise<void>;
+	saveRawText(resource: URI, text: string, options?: { readonly silent?: boolean; readonly revertedApprove?: boolean }): Promise<void>;
 
 	/**
 	 * Edit a non-bound prose block in place (WYSIWYG) and persist it. Bound blocks are
