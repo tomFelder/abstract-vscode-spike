@@ -62,6 +62,9 @@ Motivated and sequenced by [../18-beta-plan.md](../18-beta-plan.md) (the gate: "
 | [36-analytics-loop.md](36-analytics-loop.md) | PostHog per doc 15: consent-first capture, the full event dictionary mirrored off the audit trail, session replay with document text masked (canary-tested), and the four dashboards incl. the trust guardrails. |
 | [37-journey-robustness-loop.md](37-journey-robustness-loop.md) | **Authored by plan 34's output.** Fix the prioritised journey findings in tier order: the persistence tier first (re-scoped Electron-only by decision 162 → #121), then the cheap aha-path off-path fixes, then the silent-model-outage trust breach, then the smallest walkable v1 of the MISSING aha-path surfaces (1w, 1d, 1b "From sources", 1x). Validated against the [docs/20](../20-journey-specs-aha-path.md) specs; closes doc 18 §2.3 R2/R3. |
 | [39-t1-editor-audit-loop.md](39-t1-editor-audit-loop.md) | **The T1 editor audit as a runnable loop** (paste into a fresh session): 8 graded areas (paste-from-Word first), Word-clipboard fixtures, evidence per probe, gating-vs-polish triage, verdict PROCEED/FIX-FIRST/DISQUALIFIED posted to #128. Its verdict gates the import/export work (#129/#130). |
+| [40-file-interop-and-gate-close-loop.md](40-file-interop-and-gate-close-loop.md) | **The file-interop door + the buildable gate residual.** Track A: docx import (#129), docx/PDF export (#130), xlsx/PDF sources (#131), validated against doc 22 §6. Track B: the X1 survivability residual (#121). Closes with the two you-dependent items parked for the owner (#120 needs a live OpenAI subscription; #134's cloud half needs a real PostHog key). **Done** - the work landed via #160/#162 and kin; the plan itself was only committed on 29 Jul, having lived on an un-pushed local branch until then. |
+| [42-light-path-loop.md](42-light-path-loop.md) | The light-path wave (PRs #195-#210): first-run weight off the cold start, model access moved to first AI use, editor as the cold-start default. Residuals tracked in #211. |
+| 38-onboarding · 41 | **No plan doc exists for either.** Both ran and left evidence folders (`38-verify/`, `41-verify/`), but their handoff prompts were never committed. The evidence is the only record. |
 
 ### Abstract Editor v2 (the live wave — plans 43-49, ratified 21 Jul 2026)
 
@@ -80,7 +83,12 @@ The next major UI iteration: elevation shell (floating panels on `#EDEFF3` chrom
 
 ## How to use a handoff
 Paste the relevant file into a fresh Claude Code session. The handoffs are self-contained: repo /
-branch / build / conventions / design source / ordered work items / verification. Plans 06–33 are
-**done / merged** (branches/PRs noted above); **the live set is the beta gate** — plan 37 (journey
-robustness, fixing the plan-34 findings) and plans 36/38 (analytics, onboarding), tracked as
-issues #120–#133 per [../21-beta-v1-prioritization.md](../21-beta-v1-prioritization.md).
+branch / build / conventions / design source / ordered work items / verification.
+
+**Status (29 Jul 2026).** Plans 06–42 are **done / merged** (branches/PRs noted above): the beta gate
+that plans 36–40 were written against was largely closed by the 13-14 Jul wave (#143–#158) and the
+file-reality wave (#246–#251). The Abstract Editor v2 wave (plans 43–49) and the audit fix wave
+(plan 50) have since run. What remains of the gate is the two items no agent can finish, both listed
+at the end of [40-file-interop-and-gate-close-loop.md](40-file-interop-and-gate-close-loop.md):
+#120 (needs a live OpenAI subscription to debug against) and #134's cloud half (needs a real PostHog
+key). Priorities per [../21-beta-v1-prioritization.md](../21-beta-v1-prioritization.md).

@@ -1,5 +1,17 @@
 # Plan 37 - Journey robustness: make the aha path survive one step off the golden path
 
+> **Status (recorded 29 Jul 2026): done, but NOT via this document's own verify folder.** F1-F18 landed in
+> the 13-14 Jul wave through PRs #145 (F6 undo), #152 (F14 fan-out outage), #153 (the F2/F4/F5/F7-F10/F12/F13
+> batch), #154 (F16 file ops), #155 (F15 Project Home) and #157 (F17/F18 the two remaining births). The
+> `37-verify/` folder this plan asks for below was never committed, so **the evidence of record is those PRs**,
+> not a folder in this repo. Do not read the missing folder as work not done.
+>
+> Three residuals were found on 28 Jul by re-verifying each item against `main`, and fixed separately: F3 (a
+> named blank document was born untitled in its content), F5 (the confidence chip was still driven by a
+> hardcoded constant, so every chat proposal read "High" by construction) and F13 (an unreachable source was
+> presented as current, because its honesty marker was gated on a state it could never reach). F6 had landed
+> its mechanism but the keystroke never reached ProseMirror, because the approve re-render blurred the editor.
+
 > **For agentic workers:** implement with `superpowers:subagent-driven-development`; small, live-verified, stacked PRs off `main`. This is a **build loop** - it fixes the findings plan 34 assessed; it does not re-grade.
 > Context of record: the prioritised fix list and gate check in [34-verify/journey-grades.md](34-verify/journey-grades.md) §iteration-4; the aha-path specs in [20-journey-specs-aha-path.md](../20-journey-specs-aha-path.md); the gate requirements in [18-beta-plan.md](../18-beta-plan.md) §2.3; the principles in [16-principles.md](../16-principles.md) (P0 trust, P3/engine review-routing, journey-completeness, "spec the merge").
 
