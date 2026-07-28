@@ -31,8 +31,10 @@ export interface IPropertiesPanelInput {
 	readonly updated?: number;
 	/** The document's bound sources with truthful per-source bind counts. */
 	readonly boundSources: readonly IBoundSourceSummary[];
-	/** The current autonomy level for the shared policy editor. */
+	/** The autonomy level actually IN EFFECT for the shared policy editor (`effectiveDocPolicy`, never the coerced middle). */
 	readonly policy: DocAutonomyLevel;
+	/** Whether a human dialled that level. False on a never-dialled document, which the editor badges "Default". */
+	readonly policyAuthored: boolean;
 }
 
 function esc(s: string): string {
@@ -98,8 +100,10 @@ export function renderPropertiesPanel(input: IPropertiesPanelInput): string {
 		: `<div class="pp-empty">No bound sources yet.</div>`;
 	const sourcesField = field('Bound Sources', `<div class="pp-srcs">${sourceRows}</div>`);
 
-	// AGENT POLICY: the shared plain-language policy editor (spec 3.4), reused verbatim by plan 49.
-	const policyField = field('Agent Policy', renderPolicyEditor({ selected: input.policy, name: input.docId }));
+	// AGENT POLICY: the shared plain-language policy editor (spec 3.4), reused verbatim by plan 49. A document
+	// nobody has dialled shows the level that is genuinely in effect, badged "Default" with the unset hint -
+	// never a stricter level than the pipeline enforces.
+	const policyField = field('Agent Policy', renderPolicyEditor({ selected: input.policy, name: input.docId, unset: !input.policyAuthored }));
 
 	const header = `<div class="pp-head"><span class="pp-title">Properties</span>`
 		+ `<button type="button" class="pp-x" data-props-close title="Close properties">&#10005;</button></div>`;

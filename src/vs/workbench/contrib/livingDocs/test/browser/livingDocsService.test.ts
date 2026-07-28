@@ -250,7 +250,7 @@ suite('livingDocs Service', () => {
 	// notice racing ahead and deduping it.
 	let writeExternalNoWatcher: ((resource: URI, content: string) => void) | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; brokerDownAfterFirstProbe?: boolean; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		// Correlated watchers registered per resource (issue #133), so `simulateExternalEdit` can fire the same
 		// change event the real file service delivers for an edit made outside Abstract.
@@ -364,6 +364,7 @@ suite('livingDocs Service', () => {
 		} as unknown as INotificationService;
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
+		let healthzCalls = 0;
 		const requestService = {
 			request: async (options: { url?: string; data?: string }) => {
 				const url = options.url ?? '';
@@ -393,7 +394,10 @@ suite('livingDocs Service', () => {
 				else if (url.includes('/sources/xlsx')) { payload = opts.xlsx ?? XLSX_SHEETS; }
 				else if (url.includes('/sources/pdf')) { payload = opts.pdf ?? PDF_TEXT; }
 				else if (opts.model || opts.modelSequence) {
-					if (url.includes('/healthz')) { payload = { ok: true }; }
+					// `brokerDownAfterFirstProbe` models the broker dropping right after a caller's own model check:
+					// the FIRST /healthz answers healthy (so a birth gets past `_hasModel`), every later one reports no
+					// configured backend - which is exactly the state the first-AI-use choice exists for.
+					if (url.includes('/healthz')) { payload = { ok: !(opts.brokerDownAfterFirstProbe && healthzCalls++ > 0) }; }
 					else if (url.includes('/v1/messages')) {
 						// A `modelSequence` returns a DIFFERENT canned reply per call (the Nth /v1/messages call
 						// gets the Nth reply), so a multi-batch fan-out can be given one reply per batch; a single
@@ -496,10 +500,26 @@ suite('livingDocs Service', () => {
 			[{ source: 'metrics.csv', count: 3, keys: ['metrics.mrr', 'metrics.mrr.delta', 'metrics.signups'] }]);
 	});
 
-	test('getDocPolicy degrades an unauthored policy to the safe default (ask-first)', async () => {
+	// The dial must never claim a stricter setting than the code enforces. An UN-DIALLED document runs on the
+	// golden-path default (figures auto-apply, doc 20 1g), so that is what the panel reads - flagged unauthored so
+	// the control can badge it "Default" rather than presenting it as the reader's own choice. A dialled document
+	// reads exactly what the human picked.
+	test('getDocPolicy reads the level ACTUALLY in effect, and says whether a human dialled it', async () => {
 		const service = createService();
-		await service.loadDocument(WEEKLY);
-		assert.strictEqual(service.getDocPolicy(WEEKLY), 'ask-first');
+		await service.loadDocument(WEEKLY); // WEEKLY_MD carries no policy: line
+		const unauthored = { level: service.getDocPolicy(WEEKLY), authored: service.isDocPolicyAuthored(WEEKLY) };
+
+		await service.setDocPolicy(WEEKLY, 'ask-first');
+		const dialled = { level: service.getDocPolicy(WEEKLY), authored: service.isDocPolicyAuthored(WEEKLY) };
+
+		assert.deepStrictEqual(
+			{ unauthored, dialled },
+			{
+				// Never `ask-first` here: the figure pipeline auto-applies on this doc, so claiming "Ask me first" lied.
+				unauthored: { level: 'auto-apply', authored: false },
+				dialled: { level: 'ask-first', authored: true },
+			},
+		);
 	});
 
 	// --- Image assets (issue #141): paste/drop writes beside the doc; relative srcs resolve to data URIs ---
@@ -1185,7 +1205,7 @@ suite('livingDocs Service', () => {
 		await service.sendChatMessage(
 			WEEKLY,
 			'Generate the first draft of "Week 24" from the "Weekly" template.\n\nTemplate brief:\n## Summary\nSummarise the figures.',
-			'Draft "Week 24" from the Weekly template.',
+			{ displayText: 'Draft "Week 24" from the Weekly template.' },
 		);
 
 		const user = service.getChatMessages(WEEKLY)[0];
@@ -2058,9 +2078,16 @@ suite('livingDocs Service', () => {
 
 		const highlights = blockText(service, WEEKLY, 'h-highlights');
 		assert.deepStrictEqual(
-			{ applied: highlights.includes('[$48.6k](bind:metrics.mrr)'), queued: service.getPendingForDoc(WEEKLY).length },
-			{ applied: true, queued: 0 },
-			'the default figure behaviour is auto-apply, unchanged by the enforcement',
+			{
+				applied: highlights.includes('[$48.6k](bind:metrics.mrr)'),
+				queued: service.getPendingForDoc(WEEKLY).length,
+				// ...and the Properties dial SAYS so: it reads the same level this refresh just enforced, marked as
+				// the default rather than a choice. Before the fix it displayed "Ask me first" over this behaviour.
+				dialShows: service.getDocPolicy(WEEKLY),
+				dialSaysAuthored: service.isDocPolicyAuthored(WEEKLY),
+			},
+			{ applied: true, queued: 0, dialShows: 'auto-apply', dialSaysAuthored: false },
+			'the default figure behaviour is auto-apply, unchanged by the enforcement - and the dial displays it honestly',
 		);
 	});
 
@@ -2240,26 +2267,50 @@ suite('livingDocs Service', () => {
 		);
 	});
 
-	test('the onboarding demo path (a substituted displayText) is exempt from the first-use gate - it answers, not held (plan 42 L2)', async () => {
-		// A send WITH displayText is the walkthrough deliberately driving the model (its own no-model guidance
-		// covers it), so it is NOT held even with no backend: the gate opens only for a genuine user send. With no
-		// model the reply is the honest fallback turn - proving the exemption reaches `_deliverChatReply`.
-		const service = createService();
-		await service.loadDocument(WEEKLY);
+	test('the first-use gate keys off the EXPLICIT exemption, never the presence of substituted display text (plan 42 L2)', async () => {
+		// Two sends that differ ONLY in `skipFirstUseGate`, both carrying plain-words display text and no backend:
+		//   - the walkthrough's send (exempt) drives the model deliberately, so it answers - with no model that is
+		//     the honest fallback turn, proving the exemption reaches `_deliverChatReply`;
+		//   - a user-initiated send (the document births) is HELD for the sign-in vs included-model choice, with the
+		//     plain words shown in the rail and the FULL instruction held for replay.
+		// Showing plain words must never buy an exemption: that is what silently ungated the F17/F18 births.
+		const exempt = createService();
+		await exempt.loadDocument(WEEKLY);
+		await exempt.sendChatMessage(WEEKLY, 'Generate the first draft from the Weekly template.', { displayText: 'Draft from the Weekly template.', skipFirstUseGate: true });
 
-		await service.sendChatMessage(WEEKLY, 'Generate the first draft from the Weekly template.', 'Draft from the Weekly template.');
+		const gated = createService();
+		await gated.loadDocument(WEEKLY);
+		await gated.sendChatMessage(WEEKLY, 'Draft the first version of "Board note" using [value](bind:key) links.', { displayText: 'Draft "Board note" from metrics.csv.' });
 
-		const msgs = service.getChatMessages(WEEKLY);
+		const exemptMsgs = exempt.getChatMessages(WEEKLY);
 		assert.deepStrictEqual(
 			{
-				roles: msgs.map(m => ({ role: m.role, via: m.via })),
-				fallbackNamesModel: /proxy|model/i.test(msgs.at(-1)!.content),
-				held: service.getPendingModelPrompt(WEEKLY),
+				exempt: {
+					roles: exemptMsgs.map(m => ({ role: m.role, via: m.via })),
+					fallbackNamesModel: /proxy|model/i.test(exemptMsgs.at(-1)!.content),
+					held: exempt.getPendingModelPrompt(WEEKLY),
+				},
+				gated: {
+					roles: gated.getChatMessages(WEEKLY).map(m => ({ role: m.role, via: m.via })),
+					shown: gated.getChatMessages(WEEKLY)[0].content,
+					held: gated.getPendingModelPrompt(WEEKLY),
+				},
 			},
 			{
-				roles: [{ role: 'user', via: undefined }, { role: 'assistant', via: 'fallback' }],
-				fallbackNamesModel: true,
-				held: undefined,
+				exempt: {
+					roles: [{ role: 'user', via: undefined }, { role: 'assistant', via: 'fallback' }],
+					fallbackNamesModel: true,
+					held: undefined,
+				},
+				gated: {
+					roles: [{ role: 'user', via: undefined }],
+					shown: 'Draft "Board note" from metrics.csv.',
+					held: {
+						resource: WEEKLY,
+						text: 'Draft the first version of "Board note" using [value](bind:key) links.',
+						displayText: 'Draft "Board note" from metrics.csv.',
+					},
+				},
 			},
 		);
 	});
@@ -2764,6 +2815,74 @@ suite('livingDocs Service', () => {
 		assert.ok(raw.includes('sources:') && raw.includes('metrics.csv') && raw.includes('# Draft'), 'the source-declared skeleton is on disk');
 		assert.strictEqual(service.getPendingForDoc(uri!).length, 0, 'no fabricated prose is queued without a model');
 		assert.ok(/model/i.test(service.getStatus(uri!)), `the status names the model, never fake content: ${service.getStatus(uri!)}`);
+	});
+
+	// Doc 20 section D26 pins "plain-words progress only" for the rail: a birth's composed brief is internal
+	// plumbing (it spells out the `bind:` link syntax), so it must drive the model WITHOUT ever being dumped into
+	// the human's transcript. The template birth has read this way since plan 37 F4; these two births did not.
+	test('both later births show plain words in the rail while the composed brief drives the model (F4 leak)', async () => {
+		const service = createService([], { model: modelMessage({ reply: 'Drafted.', edits: [], inserts: [] }) });
+
+		const fromSources = await service.generateFromSources(['metrics.csv', 'market-research.md'], 'Board note - March', 'Lead with churn.');
+		const sourcesTurn = service.getChatMessages(fromSources!)[0];
+		const sourcesModelBody = lastModelBody ?? '';
+
+		const fromExamples = await service.generateTemplateFromExamples(['Team Notes.md', 'Weekly Summary.md', 'market-research.md'], 'Board note');
+		const examplesTurn = service.getChatMessages(fromExamples!)[0];
+
+		assert.deepStrictEqual(
+			{
+				fromSources: {
+					shown: sourcesTurn.content,
+					leaksPlumbing: /bind:|Draft the first version of/.test(sourcesTurn.content),
+					briefKeptForRetry: (sourcesTurn.prompt ?? '').includes('Draft the first version of'),
+					briefDroveTheModel: sourcesModelBody.includes('Draft the first version of'),
+				},
+				fromExamples: {
+					shown: examplesTurn.content,
+					leaksPlumbing: /Study the 3 attached example documents/.test(examplesTurn.content),
+					briefKeptForRetry: (examplesTurn.prompt ?? '').includes('Study the 3 attached example documents'),
+					briefDroveTheModel: (lastModelBody ?? '').includes('Study the 3 attached example documents'),
+				},
+			},
+			{
+				fromSources: {
+					shown: 'Draft "Board note - March" from metrics.csv, market-research.md. Lead with churn.',
+					leaksPlumbing: false, briefKeptForRetry: true, briefDroveTheModel: true,
+				},
+				fromExamples: {
+					shown: 'Grow the "Board note" template from 3 example documents.',
+					leaksPlumbing: false, briefKeptForRetry: true, briefDroveTheModel: true,
+				},
+			},
+		);
+	});
+
+	// Plain words in the rail must NOT buy an exemption from the first-AI-use model-access choice: a birth is a
+	// genuine user-initiated AI use. Here the broker drops right after the birth's own model check, so the send
+	// meets an unconfigured backend: the prompt is HELD for the sign-in vs included-model doors (the full brief
+	// held for replay), and nothing is faked.
+	test('the "From sources..." birth is still subject to the first-use model choice (the gate is not skipped)', async () => {
+		const service = createService([], { model: modelMessage({ reply: 'Drafted.', edits: [], inserts: [] }), brokerDownAfterFirstProbe: true });
+
+		const uri = await service.generateFromSources(['metrics.csv'], 'Board note - March', '');
+		const held = service.getPendingModelPrompt(uri!);
+
+		assert.deepStrictEqual(
+			{
+				messages: service.getChatMessages(uri!).map(m => ({ role: m.role, content: m.content })),
+				heldDrivesTheBrief: (held?.text ?? '').includes('Draft the first version of'),
+				heldShows: held?.displayText,
+				pending: service.getPendingForDoc(uri!).length,
+			},
+			{
+				messages: [{ role: 'user', content: 'Draft "Board note - March" from metrics.csv.' }],
+				heldDrivesTheBrief: true,
+				heldShows: 'Draft "Board note - March" from metrics.csv.',
+				pending: 0,
+			},
+			'the birth waits at the model-access choice instead of silently skipping it',
+		);
 	});
 
 	test('generateFromSources refuses an empty selection', async () => {

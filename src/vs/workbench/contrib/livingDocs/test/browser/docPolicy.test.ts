@@ -5,8 +5,9 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { coerceDocPolicy, defaultDocPolicy, DOC_AUTONOMY_LEVELS, docPolicyOption, docPolicyToneHex } from '../../common/docPolicy.js';
+import { coerceDocPolicy, defaultDocPolicy, DOC_AUTONOMY_LEVELS, docPolicyAuthored, docPolicyOption, docPolicyToneHex, effectiveDocPolicy } from '../../common/docPolicy.js';
 import { renderPolicyEditor } from '../../browser/policyEditorRender.js';
+import { renderPropertiesPanel } from '../../browser/propertiesPanelRender.js';
 
 // The shared plain-language policy grammar + its browser renderer (plan 45 pin 12 / #122 F11, spec 43 section
 // 3.4). These are the ONE source of truth reused verbatim by plan 49's agent cards, so the tests pin the
@@ -55,6 +56,72 @@ suite('Shared doc policy (plan 45 pin 12 / #122 F11)', () => {
 		// The selected option is the one whose data-policy is `never`, tinted with its removed tone.
 		assert.ok(html.includes('data-policy="never" style="--pol-tone:#B5514B"'));
 		assert.strictEqual(renderPolicyEditor.CLICK_SELECTOR, '[data-policy]');
+	});
+
+	// The display rule the figure pipeline enforces: only an EXPLICIT dial changes behaviour, so an unauthored
+	// document is `auto-apply` (its real behaviour), not the coerced `ask-first` middle the dial used to show.
+	test('effectiveDocPolicy reports what is really in effect, and docPolicyAuthored who chose it', () => {
+		assert.deepStrictEqual(
+			['auto-apply', 'ask-first', 'never', 'nonsense', ' ', '', undefined]
+				.map(raw => ({ level: effectiveDocPolicy(raw), authored: docPolicyAuthored(raw) })),
+			[
+				{ level: 'auto-apply', authored: true },
+				{ level: 'ask-first', authored: true },
+				{ level: 'never', authored: true },
+				// A hand-edited typo IS an authored value and coerces exactly as the enforcement does, so the dial
+				// and the pipeline still agree.
+				{ level: 'ask-first', authored: true },
+				{ level: 'auto-apply', authored: false },
+				{ level: 'auto-apply', authored: false },
+				{ level: 'auto-apply', authored: false },
+			]);
+	});
+
+	// An UN-DIALLED document must not have an unchosen level presented as the reader's own: the row in effect is
+	// still marked (that IS what happens) but badged "Default" instead of ticked, with a hint naming the unset
+	// state. The Agents cards, whose level always comes from the registry, pass no `unset` and are untouched.
+	test('renderPolicyEditor badges the default instead of ticking it when no human has dialled the level', () => {
+		const unset = renderPolicyEditor({ selected: 'auto-apply', name: 'doc-1', unset: true });
+		const dialled = renderPolicyEditor({ selected: 'auto-apply', name: 'doc-1' });
+		assert.deepStrictEqual(
+			{
+				unset: {
+					marksTheEffectiveRow: (unset.match(/class="pol-opt on"/g) ?? []).length,
+					badgesDefault: unset.includes('<span class="pol-default">Default</span>'),
+					ticked: unset.includes('&#10003;'),
+					saysUnset: /Not set for this document yet/.test(unset),
+					flagged: unset.includes('data-policy-unset'),
+				},
+				dialled: {
+					marksTheEffectiveRow: (dialled.match(/class="pol-opt on"/g) ?? []).length,
+					badgesDefault: dialled.includes('pol-default'),
+					ticked: dialled.includes('&#10003;'),
+					saysUnset: /Not set for this document yet/.test(dialled),
+					flagged: dialled.includes('data-policy-unset'),
+				},
+			},
+			{
+				unset: { marksTheEffectiveRow: 1, badgesDefault: true, ticked: false, saysUnset: true, flagged: true },
+				dialled: { marksTheEffectiveRow: 1, badgesDefault: false, ticked: true, saysUnset: false, flagged: false },
+			});
+	});
+
+	// The Properties panel is where a reader meets the dial, so it must carry the unauthored state through to the
+	// shared control rather than quietly presenting the effective level as a choice.
+	test('the Properties panel passes the unauthored state to the dial (the reader sees Default, not a choice)', () => {
+		const panel = (policyAuthored: boolean) => renderPropertiesPanel({
+			docId: 'doc-1', title: '', displayTitle: 'Weekly Summary', status: '', tags: [],
+			boundSources: [], policy: 'auto-apply', policyAuthored,
+		});
+		assert.deepStrictEqual(
+			{
+				undialled: { badgesDefault: panel(false).includes('pol-default'), saysUnset: /Not set for this document yet/.test(panel(false)) },
+				dialled: { badgesDefault: panel(true).includes('pol-default'), saysUnset: /Not set for this document yet/.test(panel(true)) },
+			},
+			{
+				undialled: { badgesDefault: true, saysUnset: true },
+				dialled: { badgesDefault: false, saysUnset: false },
+			});
 	});
 
 	test('renderPolicyEditor escapes the control name (no markup injection)', () => {

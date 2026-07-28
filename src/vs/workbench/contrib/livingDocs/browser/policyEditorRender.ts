@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DOC_AUTONOMY_LEVELS, DocAutonomyLevel, docPolicyToneHex } from '../common/docPolicy.js';
+import { localize } from '../../../../nls.js';
+import { DOC_AUTONOMY_LEVELS, DocAutonomyLevel, docPolicyDefaultHint, docPolicyToneHex } from '../common/docPolicy.js';
 
 // The shared plain-language policy editor - browser renderer (spec 43 section 3.4; owner plan 45 / PR-c;
 // consumer plan 49). Pairs with the pure `common/docPolicy.ts` grammar. This is the ONE renderer for the
@@ -18,7 +19,9 @@ import { DOC_AUTONOMY_LEVELS, DocAutonomyLevel, docPolicyToneHex } from '../comm
 // name, then persist that level however the host persists (the Properties panel writes the doc's frontmatter
 // `policy:` on disk; plan 49's agent card writes the agent registry). The renderer owns no state and posts no
 // messages - it is pure `(model) -> html`, so a host in a webview and a host in the workbench render it the
-// same way. `renderPolicyEditor.CLICK_SELECTOR` names the delegation target so hosts never hard-code it.
+// same way. `renderPolicyEditor.CLICK_SELECTOR` names the delegation target so hosts never hard-code it. A host
+// whose level is only a DEFAULT (an un-dialled document) adds `unset: true`, and the control says so rather than
+// dressing an unchosen level up as the reader's own choice.
 
 /** The input a host hands the renderer: which level is current, plus a stable name to disambiguate the control. */
 export interface IPolicyEditorInput {
@@ -30,6 +33,14 @@ export interface IPolicyEditorInput {
 	 * Properties panel this is the document id; for an agent card it is the agent id.
 	 */
 	readonly name: string;
+	/**
+	 * True when NO human has chosen this level yet and `selected` is merely what is in effect by default (an
+	 * un-dialled document - pass `effectiveDocPolicy(...)` as `selected`). The row still reads in its tone,
+	 * because that IS the behaviour, but it is badged "Default" instead of ticked and a hint says the level is
+	 * unset - so the control never presents an unchosen level as the reader's own choice. Hosts whose level is
+	 * always authored (the Agents cards, whose registry always carries a policy) simply omit it.
+	 */
+	readonly unset?: boolean;
 }
 
 function escAttr(value: string): string {
@@ -39,6 +50,8 @@ function escAttr(value: string): string {
 /**
  * Render the three-tier policy control as an HTML string. The selected row reads in its spec tone; the others
  * are quiet. Every row is a `[data-policy]` button so the host can delegate one click handler over the group.
+ * When `unset` is set the marked row is the one in effect BY DEFAULT: it is badged "Default" rather than ticked
+ * and the group carries a hint naming the unset state, so an un-dialled document reads honestly.
  */
 export function renderPolicyEditor(input: IPolicyEditorInput): string {
 	const rows = DOC_AUTONOMY_LEVELS.map(option => {
@@ -47,13 +60,17 @@ export function renderPolicyEditor(input: IPolicyEditorInput): string {
 		// The selected row carries its tone in an inline custom property the CSS reads, so the one stylesheet
 		// paints ok/attention/removed without a rule per level. Idle rows stay neutral.
 		const style = on ? ` style="--pol-tone:${toneHex}"` : '';
+		// A tick means "you chose this"; an unset control says "Default" instead, so the badge never claims a
+		// choice nobody made while the row still shows what actually happens.
+		const mark = on ? (input.unset ? `<span class="pol-default">${escAttr(localize('livingDocs.policy.defaultBadge', "Default"))}</span>` : '&#10003;') : '';
 		return `<button type="button" class="pol-opt${on ? ' on' : ''}" data-policy="${escAttr(option.level)}"${style}>`
 			+ `<span class="pol-dot"></span>`
 			+ `<span class="pol-text"><span class="pol-label">${escAttr(option.label)}</span>`
 			+ `<span class="pol-desc">${escAttr(option.description)}</span></span>`
-			+ `<span class="pol-check">${on ? '&#10003;' : ''}</span></button>`;
+			+ `<span class="pol-check">${mark}</span></button>`;
 	}).join('');
-	return `<div class="policy-editor" data-policy-editor="${escAttr(input.name)}">${rows}</div>`;
+	const hint = input.unset ? `<div class="pol-hint">${escAttr(docPolicyDefaultHint())}</div>` : '';
+	return `<div class="policy-editor" data-policy-editor="${escAttr(input.name)}"${input.unset ? ' data-policy-unset' : ''}>${rows}${hint}</div>`;
 }
 
 /** The delegation target a host binds one click handler to; also selects a row's level via `data-policy`. */
@@ -73,4 +90,6 @@ export const POLICY_EDITOR_STYLE = `.policy-editor{display:flex;flex-direction:c
 .pol-label{font:600 12.5px/1.2 system-ui;color:#3a3f49}
 .pol-opt.on .pol-label{color:var(--pol-tone)}
 .pol-desc{font:400 11px/1.35 system-ui;color:#868b95}
-.pol-check{flex:none;margin-left:auto;font:600 12px/1 system-ui;color:var(--pol-tone);min-width:12px;text-align:right}`;
+.pol-check{flex:none;margin-left:auto;font:600 12px/1 system-ui;color:var(--pol-tone);min-width:12px;text-align:right}
+.pol-default{display:inline-block;border:1px solid color-mix(in srgb,var(--pol-tone) 35%,#E9EAEE);border-radius:999px;padding:2px 7px;font:600 9.5px/1 system-ui;letter-spacing:.04em;text-transform:uppercase;color:var(--pol-tone);background:color-mix(in srgb,var(--pol-tone) 10%,#fff)}
+.pol-hint{font:400 11px/1.45 system-ui;color:#868b95;padding:2px 2px 0}`;

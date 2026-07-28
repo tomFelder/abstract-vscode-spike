@@ -622,6 +622,7 @@ export class LivingDocEditor extends EditorPane {
 			updated: this._docTimes.updated,
 			boundSources: this._livingDocs.getBoundSources(resource),
 			policy: this._livingDocs.getDocPolicy(resource),
+			policyAuthored: this._livingDocs.isDocPolicyAuthored(resource),
 		});
 		return { open: this._propsOpen, html };
 	}

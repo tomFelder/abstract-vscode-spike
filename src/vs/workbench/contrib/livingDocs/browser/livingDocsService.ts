@@ -30,7 +30,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISendChatMessageOptions, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageAssetName } from '../common/livingDocAssets.js';
@@ -38,7 +38,7 @@ import { IAnalyticsService } from '../common/analytics.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
 import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
-import { coerceDocPolicy, docPolicyNeverRefusal, docPolicyNeverSkipReason, DocAutonomyLevel } from '../common/docPolicy.js';
+import { coerceDocPolicy, docPolicyAuthored, docPolicyNeverRefusal, docPolicyNeverSkipReason, DocAutonomyLevel, effectiveDocPolicy } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
 import { buildDemoReportMarkdown, DEMO_CSV, DEMO_CSV_NAME, DEMO_DOC_NAME, founderFeedbackLogLine, IFeedbackReport, onboardingStepLabel, OnboardingStep } from '../common/onboarding.js';
@@ -804,10 +804,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			.sort((a, b) => a.source.localeCompare(b.source));
 	}
 
-	// The document's autonomy policy, coerced from its frontmatter `policy:` onto the shared three-tier grammar
-	// (plan 45 pin 12 / #122 F11). An unauthored / unknown value degrades to the safe default (`ask-first`).
+	// The document's autonomy policy AS ACTUALLY ENFORCED, on the shared three-tier grammar (plan 45 pin 12 /
+	// #122 F11). This is what the Properties dial displays, so it reads through the SAME `effectiveDocPolicy`
+	// rule the figure pipeline enforces (`_figurePolicyForState`): a never-dialled document is `auto-apply`
+	// (doc 20 section 1g), not the coerced `ask-first` middle the dial used to claim while figures auto-applied.
+	// Pair it with `isDocPolicyAuthored` so a surface can mark that level as a default rather than a choice.
 	getDocPolicy(resource: URI): DocAutonomyLevel {
-		return coerceDocPolicy(this._docs.get(resource.toString())?.doc.policy);
+		return effectiveDocPolicy(this._docs.get(resource.toString())?.doc.policy);
+	}
+
+	// Whether a human actually dialled this document (a real `policy:` in its frontmatter) rather than running on
+	// the default. The Properties dial badges the unauthored case "Default" instead of ticking it as a choice.
+	isDocPolicyAuthored(resource: URI): boolean {
+		return docPolicyAuthored(this._docs.get(resource.toString())?.doc.policy);
 	}
 
 	// The enforced autonomy level for a loaded document state (issue #257). Read from the doc's parsed frontmatter
@@ -844,9 +853,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// the dial's `ask-first` middle. Only an EXPLICIT dial changes the figure behaviour: explicit `ask-first`
 	// queues each figure for review, `never` leaves the doc alone. So enabling enforcement never silently gates
 	// figures on the thousands of existing docs that never touched the dial - it honours what the human actually set.
+	// The rule itself lives in `effectiveDocPolicy` beside the grammar, because the Properties dial DISPLAYS the
+	// very same function this path enforces - that is what stops the dial claiming a stricter level than this one.
 	private _figurePolicyForState(state: IDocState): DocAutonomyLevel {
-		const raw = (state.doc.policy ?? '').trim();
-		return raw ? coerceDocPolicy(raw) : 'auto-apply';
+		return effectiveDocPolicy(state.doc.policy);
 	}
 
 	// Write the document's autonomy policy back to its frontmatter `policy:` on disk (plan 45 pin 12 / P12.4).
@@ -2318,9 +2328,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
 		const trimmedNote = (note ?? '').trim();
 		const display = trimmedNote
-			? `Draft "${requested}" from the ${templateName} template. ${trimmedNote}`
-			: `Draft "${requested}" from the ${templateName} template.`;
-		await this.sendChatMessage(target, instruction, display);
+			? localize('livingDocs.birth.fromTemplate.note', "Draft \"{0}\" from the {1} template. {2}", requested, templateName, trimmedNote)
+			: localize('livingDocs.birth.fromTemplate', "Draft \"{0}\" from the {1} template.", requested, templateName);
+		// `skipFirstUseGate`: this birth is also the onboarding walkthrough's generation, which drives the model
+		// deliberately and carries its own no-model guidance, so it keeps its long-standing exemption from the
+		// first-AI-use choice. The exemption is stated here, NOT inferred from the display text.
+		await this.sendChatMessage(target, instruction, { displayText: display, skipFirstUseGate: true });
 		return target;
 	}
 
@@ -2364,8 +2377,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._onDidChange.fire();
 			return target;
 		}
+		// The rail shows plain-words progress (F4, doc 20 section 1 "plain-words progress only"), never the composed
+		// brief - that instruction carries internal plumbing (the `bind:` link syntax) which has no business in a
+		// human's transcript. The brief still drives the model and is kept on the turn for retry. No
+		// `skipFirstUseGate`: this is a genuine user-initiated first AI use, so the model-access choice still opens.
 		const instruction = composeSourcesInstruction(requested, valueSources, contextSources, note ?? '');
-		await this.sendChatMessage(target, instruction);
+		const sourceList = picks.join(', ');
+		const trimmedSourcesNote = (note ?? '').trim();
+		const sourcesDisplay = trimmedSourcesNote
+			? localize('livingDocs.birth.fromSources.note', "Draft \"{0}\" from {1}. {2}", requested, sourceList, trimmedSourcesNote)
+			: localize('livingDocs.birth.fromSources', "Draft \"{0}\" from {1}.", requested, sourceList);
+		await this.sendChatMessage(target, instruction, { displayText: sourcesDisplay });
 		return target;
 	}
 
@@ -2407,8 +2429,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._onDidChange.fire();
 			return target;
 		}
+		// Plain-words progress in the rail (F4), never the composed analysis brief; the brief drives the model and
+		// stays on the turn for retry. No `skipFirstUseGate` - a user-initiated birth still gets the first-use choice.
 		const instruction = composeExamplesInstruction(name, picks);
-		await this.sendChatMessage(target, instruction);
+		const examplesDisplay = localize('livingDocs.birth.fromExamples', "Grow the \"{0}\" template from {1} example documents.", name, picks.length);
+		await this.sendChatMessage(target, instruction, { displayText: examplesDisplay });
 		return target;
 	}
 
@@ -5278,11 +5303,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._chatBusy.has(resource.toString());
 	}
 
-	// `displayText`, when given, is the plain-words progress shown to the user in the rail while the model
-	// is driven with the full `text` instruction (plan 37 F4): a template generation shows "Draft ... from
-	// the ... template." rather than dumping the internal template brief/prompt into the chat. The full
-	// instruction is kept on the turn's `prompt` so a retry re-runs the brief, not the shown words.
-	async sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void> {
+	// `options.displayText`, when given, is the plain-words progress shown to the user in the rail while the model
+	// is driven with the full `text` instruction (plan 37 F4): a generation shows "Draft ... from the ...
+	// template." rather than dumping the internal brief/prompt into the chat. The full instruction is kept on the
+	// turn's `prompt` so a retry re-runs the brief, not the shown words. Showing plain words is INDEPENDENT of
+	// `options.skipFirstUseGate` (see below): every birth substitutes display text, but only the walkthrough
+	// skips the model-access choice.
+	async sendChatMessage(resource: URI, text: string, options?: ISendChatMessageOptions): Promise<void> {
 		const trimmed = text.trim();
 		if (!trimmed) { return; }
 		const id = resource.toString();
@@ -5290,15 +5317,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chats.set(id, history);
 
 		const mentions = this._parseMentions(resource, trimmed);
-		const shown = (displayText ?? '').trim();
+		const shown = (options?.displayText ?? '').trim();
 		history.push({ role: 'user', content: shown || trimmed, prompt: shown ? trimmed : undefined, mentions: mentions.length ? mentions : undefined });
 
 		// Plan 42 slice L2 - model access moves to first AI use. When no backend is configured yet, this is the
 		// first-AI-use moment: rather than answering with the honest "model unavailable" line, HOLD the prompt and
 		// render the inline sign-in vs included-model choice in the rail (the user turn above stays visible, so the
-		// typed prompt is preserved). Picking a door replays this exact prompt. The onboarding demo path (a signed
-		// substituted `displayText`) is exempt - the walkthrough drives the model deliberately and its own no-model
-		// guidance already covers it - so only a genuine user send (no displayText) opens the first-use choice.
+		// typed prompt is preserved). Picking a door replays this exact prompt.
+		//
+		// The exemption is an EXPLICIT `skipFirstUseGate`, never the mere presence of substituted display text: the
+		// walkthrough drives the model deliberately (its own no-model guidance covers it), whereas a user-initiated
+		// birth ("From sources...", "New template from examples") also shows plain words yet is a genuine first AI
+		// use and MUST get the choice. Overloading `displayText` for both would silently exempt those births.
 		//
 		// A WHOLE-PROJECT FAN-OUT is exempt too (V1, WP-E): the run screen has no chat-rail to render the inline
 		// choice, so holding the prompt here would strand the run reading a silent "8/8 done, 0 changes" all-clear.
@@ -5306,8 +5336,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// whose no-model branch surfaces the honest F14 named outage on the run screen (every doc named, Retry
 		// failed offered) - the pre-flight no-model case reuses the SAME outage surface the mid-run death does.
 		const isFanout = this.getWorkingSet(resource).length > 0;
-		if (!shown && !isFanout && needsModelChoice(await this.getModelProviderStatus())) {
-			this._modelAccessGate.holdPrompt(resource, trimmed);
+		if (!options?.skipFirstUseGate && !isFanout && needsModelChoice(await this.getModelProviderStatus())) {
+			// The held prompt carries BOTH texts: a replay drives the model with the full instruction while the
+			// turn already visible in the rail keeps its plain words.
+			this._modelAccessGate.holdPrompt(resource, trimmed, shown || undefined);
 			// Reveal the chat rail so the inline choice is seen at the moment it appears (the send may have come
 			// from a skill/AI door, not only the visible composer). holdPrompt already fired onDidChange to render it.
 			this.focusPanel('chat');

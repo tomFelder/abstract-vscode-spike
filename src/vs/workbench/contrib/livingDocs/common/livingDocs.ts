@@ -134,6 +134,26 @@ export interface IPendingModelPrompt {
 	readonly displayText?: string;
 }
 
+/**
+ * The options a chat send may carry. Deliberately TWO independent switches: what the rail SHOWS and whether the
+ * first-AI-use model-access choice applies. They were once one signal (a substituted `displayText` also meant
+ * "exempt"), which silently exempted every document birth that shows plain-words progress - a genuine user
+ * action skipping the sign-in choice. Keep them separate.
+ */
+export interface ISendChatMessageOptions {
+	/**
+	 * Plain-words progress to show in the rail instead of `text` (plan 37 F4): the internal brief still drives
+	 * the model and is kept on the turn for retry, but never leaks into the human's transcript.
+	 */
+	readonly displayText?: string;
+	/**
+	 * Skip the first-AI-use model-access choice for this send. ONLY for a send the product itself drives with
+	 * its own no-model guidance (the onboarding walkthrough's generation) - never for a user-initiated action,
+	 * which must be offered the sign-in vs included-model doors.
+	 */
+	readonly skipFirstUseGate?: boolean;
+}
+
 /** The stage of the "Sign in with ChatGPT" flow the Settings step polls (plan 35 iter 2 + 4). */
 export type ChatGptSignInStage = 'signed-out' | 'pending' | 'signed-in' | 'error';
 
@@ -849,8 +869,14 @@ export interface ILivingDocsService {
 	getDocTimes(resource: URI): Promise<{ readonly created?: number; readonly updated?: number }>;
 	/** The document's bound sources grouped from the lock, with truthful per-source bind counts + keys. */
 	getBoundSources(resource: URI): readonly IBoundSourceSummary[];
-	/** The document's autonomy policy, coerced from frontmatter onto the shared three-tier grammar (#122 F11). */
+	/**
+	 * The document's autonomy policy AS ENFORCED, on the shared three-tier grammar (#122 F11): the same
+	 * `effectiveDocPolicy` rule the figure pipeline applies, so a never-dialled document reads `auto-apply`
+	 * (its real behaviour) rather than the coerced `ask-first` middle. Pair with `isDocPolicyAuthored`.
+	 */
 	getDocPolicy(resource: URI): DocAutonomyLevel;
+	/** Whether a human explicitly dialled the document (a real `policy:` in frontmatter) or it runs on the default. */
+	isDocPolicyAuthored(resource: URI): boolean;
 	/** Write the document's autonomy policy to its frontmatter `policy:` on disk (#122 F11). */
 	setDocPolicy(resource: URI, policy: DocAutonomyLevel): Promise<void>;
 	/** Write the document's plain-language status to its frontmatter `status:` on disk (empty clears it). */
@@ -1291,7 +1317,7 @@ export interface ILivingDocsService {
 	 * may also propose prose edits - those queue into the Review rail like any other pending change.
 	 * With no model reachable it appends an honest fallback turn and proposes nothing (never fakes a reply).
 	 */
-	sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void>;
+	sendChatMessage(resource: URI, text: string, options?: ISendChatMessageOptions): Promise<void>;
 	/**
 	 * Answer a READ-ONLY, whole-project question for the Project Home composer (F15 / journey 1w, map-D24:
 	 * "asking a question answers read-only with citations"). Reads every project document (figures resolved)
