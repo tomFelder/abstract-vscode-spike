@@ -568,6 +568,14 @@ export function groupDecisions(pending: readonly IProposedChange[]): IDecisionGr
  * change (any `figure` change, or a `meaning` change with `confidence >= 0.8`) is `high`. Figure changes
  * are deterministic source substitutions so they are always `high`; a meaning change is a rewrite of
  * prose, so only a confident one reads as `high` and a low-confidence one is flagged for the writer's eyes.
+ *
+ * D24-B - where the number comes from. This rule is only as honest as its input, and for a model-proposed
+ * prose change that input is NOT a model self-report: the chat/fan-out response schema carries no confidence
+ * field. A chat/fan-out proposal's `confidence` is a two-valued encoding of one real, checkable fact - was
+ * the model's verbatim supporting quote actually LOCATED in the attached source text? Grounded lands on this
+ * rule's `high` side, ungrounded on `inferred`. See `GROUNDED_PROPOSAL_CONFIDENCE` in `livingDocsService.ts`.
+ * Do not stamp a hand-picked number onto a proposal: a constant that clears the threshold makes this rule
+ * decorative, which is exactly the defect D24-B fixed.
  */
 export type ReviewConfidence = 'high' | 'inferred';
 

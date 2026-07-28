@@ -24,7 +24,7 @@ import { ICommandService } from '../../../../../platform/commands/common/command
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
-import { AgentPolicy, IAgentDef, IAuditEntry, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
+import { AgentPolicy, IAgentDef, IAuditEntry, IFreshness, ILivingDoc, reviewConfidence } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
 import { extractBindLinks, parseLivingDoc } from '../../common/livingDocMarkdown.js';
 
@@ -1321,6 +1321,26 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(blockText(service, WEEKLY, 'h-commentary'), newText, 'approving the chat-proposed edit rewrites the block');
 	});
 
+	// D24-B (the F5 honesty fix): the single-document chat contract asks the model for no supporting quote and
+	// `parseChatResponse` carries none, so NOTHING about one of these rewrites is verified against a source.
+	// It must therefore read "Inferred - needs your eyes". Before D24-B a hardcoded 0.85 made every one of them
+	// read "High" by construction, which was decoration wearing the clothes of a judgement.
+	test('a single-document chat proposal reads Inferred: nothing was cited, so nothing is claimed (D24-B)', async () => {
+		const service = createService([], {
+			model: chatReply('Drafted a sharper commentary line.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'The +18% MRR delta crosses the accelerating threshold.' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+
+		assert.deepStrictEqual(
+			service.getPendingForDoc(WEEKLY).map(c => ({ kind: c.kind, confidence: reviewConfidence(c), sourceQuote: c.sourceQuote })),
+			[{ kind: 'meaning', confidence: 'inferred', sourceQuote: undefined }],
+		);
+	});
+
 	// #253: the editor action bar's "Approve all in this doc" must apply EVERY pending change for the open
 	// document, addressing them through the proposals' OWN docId (pendingDocIdFor + approveAll) - the path the
 	// editor pane now takes. The audit caught it silently no-opping: routing the apply through a re-derived
@@ -1746,6 +1766,40 @@ suite('livingDocs Service', () => {
 			[...docIds].sort(),
 			[BOARD.toString(), README.toString(), WEEKLY.toString()].sort(),
 			'proposals are queued across all three working-set documents',
+		);
+	});
+
+	// D24-B (the F5 honesty fix): the confidence chip rides ONE real signal - was the model's verbatim
+	// supporting quote actually located in the attached source text? The fan-out prompt is the only path that
+	// asks for such a quote, so it is the only path that can EARN "High". The three cases below are the whole
+	// rule: a quote found in market-research.md (a real context source of the Weekly) -> High; no quote at
+	// all -> Inferred; a quote that is NOT in the source -> Inferred even though the model also claimed a
+	// line number, because a claimed line is an assertion ABOUT the source, not evidence FROM it. That claimed
+	// line is still DISPLAYED (grounding behaviour is unchanged) - it just buys no confidence.
+	test('a fan-out proposal reads High only when its quote is FOUND in the real source; a model-claimed line is not evidence (D24-B)', async () => {
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			model: multiReply('Reflected the market research across the set.', [
+				{ doc: 'Weekly Operating Summary', edits: [{ oldText: 'Growth remained steady this week.', newText: 'Growth held steady against a flat competitive field.', rationale: 'r', sourceQuote: 'Steady competitive landscape; no major moves this week.' }] },
+				{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum held steady this week.', rationale: 'r' }] },
+				{ doc: 'Team Notes', inserts: [{ afterHeading: '', newText: 'The competitive field moved sharply this week.', rationale: 'r', sourceQuote: 'A decision that was never made.', sourceLine: 7 }] },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
+
+		await service.sendChatMessage(WEEKLY, 'reflect the market research across the set');
+
+		assert.deepStrictEqual(
+			service.getAllPending()
+				.map(c => ({ doc: c.docTitle, confidence: reviewConfidence(c), sourceLine: c.sourceLine }))
+				.sort((a, b) => a.doc.localeCompare(b.doc)),
+			[
+				{ doc: 'Board Note', confidence: 'inferred', sourceLine: undefined },
+				{ doc: 'Team Notes', confidence: 'inferred', sourceLine: 7 },
+				{ doc: 'Weekly Operating Summary', confidence: 'high', sourceLine: 8 },
+			],
 		);
 	});
 

@@ -233,6 +233,17 @@ const SOURCE_FETCH_CONCURRENCY = 4;
 const MODEL_CALL_CONCURRENCY = 2;
 const SOURCE_COOLDOWN_MS = 30_000;
 
+// The confidence a model-proposed PROSE change carries (D24-B, the F5 honesty fix). These are NOT
+// probabilities and NOT a model self-report: the chat/fan-out response schema carries no confidence field and
+// the model is never asked for one. They encode exactly ONE real, checkable fact - whether the model's
+// verbatim supporting quote was LOCATED in the attached source text (`findQuoteLine`). A grounded proposal
+// sits on the D24-A "high" threshold, so every review surface reads it as High; an ungrounded one sits below
+// it and reads "Inferred - needs your eyes", which is the honest label for a prose rewrite the app could not
+// check against anything real. Two values because there is exactly one signal: never widen this into a scale
+// (and never put a literal back at a call site) - a graded number here would be decoration, not judgement.
+const GROUNDED_PROPOSAL_CONFIDENCE = 0.8;
+const UNGROUNDED_PROPOSAL_CONFIDENCE = 0.4;
+
 // Persisted flag (application scope): has this install ever emitted project_opened? Drives the is_first
 // property of the project_opened analytics event so the activation funnel can tell a first project apart.
 const FIRST_PROJECT_KEY = 'abstract.analytics.firstProjectOpened';
@@ -5148,7 +5159,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return {
 			newText: String(json.newText ?? oldText),
 			kind: json.kind === 'meaning' ? 'meaning' : 'figure',
-			confidence: typeof json.confidence === 'number' ? json.confidence : 0.8,
+			// The impact prompt DOES ask the model to self-report a confidence, so a number it actually returns
+			// is its own claim and is surfaced as such. When it returns none we must not invent one on its
+			// behalf: the old default sat exactly on the D24-A threshold, so a silent model read as "High". An
+			// unstated confidence is not a confident one - it degrades to Inferred (D24-B).
+			confidence: typeof json.confidence === 'number' ? json.confidence : UNGROUNDED_PROPOSAL_CONFIDENCE,
 			rationale: String(json.rationale ?? ''),
 			via: 'model',
 		};
@@ -5859,7 +5874,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (scoped.oldText.trim() === newText) { return undefined; }
 		const label = this._blockLabel(state.doc, best.id);
 		const id = generateUuid();
-		const grounding = this._resolveSourceGrounding(edit.sourceQuote, edit.sourceLine, sourceText);
+		const { grounding, verified } = this._resolveSourceGrounding(edit.sourceQuote, edit.sourceLine, sourceText);
 		const change: IProposedChange = {
 			id,
 			docId: state.uri.toString(),
@@ -5869,7 +5884,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			oldText: scoped.oldText,
 			newText,
 			kind: 'meaning',
-			confidence: 0.85,
+			// D24-B: the real signal, not a constant. Only a rewrite whose supporting quote we FOUND in the
+			// attached source earns High; anything else reads Inferred, because nothing was verified.
+			confidence: verified ? GROUNDED_PROPOSAL_CONFIDENCE : UNGROUNDED_PROPOSAL_CONFIDENCE,
 			rationale: String(edit.rationale ?? 'Proposed by the Chat agent.'),
 			sourceCells: [],
 			via: 'model',
@@ -5884,14 +5901,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// verbatim quote, and take its line number from the model when given, else look the quote up in the
 	// real source text to fill a TRUE line. If the quote is not found we leave the line undefined - the
 	// card then shows the quote with no line chip. A line number is NEVER fabricated.
-	private _resolveSourceGrounding(sourceQuote?: string, sourceLine?: number, sourceText?: string): { sourceQuote?: string; sourceLine?: number } {
+	//
+	// `verified` (D24-B) answers the separate, stronger question the confidence chip now rides on: was the
+	// quote actually FOUND in the attached source text? It is always computed by looking the quote up for
+	// real, never taken from the model's own claim - a model-supplied `sourceLine` is a claim ABOUT the
+	// source, not evidence FROM it, so on its own it never makes a change verified. The returned `grounding`
+	// is unchanged from before (the model's line still wins for DISPLAY); only the new flag is derived.
+	private _resolveSourceGrounding(sourceQuote?: string, sourceLine?: number, sourceText?: string): { grounding: { sourceQuote?: string; sourceLine?: number }; verified: boolean } {
 		const quote = typeof sourceQuote === 'string' ? sourceQuote.trim() : '';
-		if (!quote) { return {}; }
-		if (typeof sourceLine === 'number' && Number.isFinite(sourceLine)) {
-			return { sourceQuote: quote, sourceLine };
-		}
+		if (!quote) { return { grounding: {}, verified: false }; }
 		const found = sourceText ? findQuoteLine(sourceText, quote) : undefined;
-		return found ? { sourceQuote: quote, sourceLine: found } : { sourceQuote: quote };
+		const line = typeof sourceLine === 'number' && Number.isFinite(sourceLine) ? sourceLine : found;
+		return {
+			grounding: typeof line === 'number' ? { sourceQuote: quote, sourceLine: line } : { sourceQuote: quote },
+			verified: found !== undefined,
+		};
 	}
 
 	// Queue a generative insertion: brand-new Markdown content (a list, a section) to be added after the
@@ -5916,6 +5940,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (best) { afterBlockId = best.id; label = best.text; }
 		}
 		const id = generateUuid();
+		const { grounding, verified } = this._resolveSourceGrounding(insert.sourceQuote, insert.sourceLine, sourceText);
 		const change: IProposedChange = {
 			id,
 			docId: state.uri.toString(),
@@ -5925,13 +5950,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			oldText: '',
 			newText,
 			kind: 'meaning',
-			confidence: 0.8,
+			// D24-B, as for an edit: generated content earns High only when the quote it claims to implement
+			// was actually located in the attached source.
+			confidence: verified ? GROUNDED_PROPOSAL_CONFIDENCE : UNGROUNDED_PROPOSAL_CONFIDENCE,
 			rationale: String(insert.rationale ?? 'New content proposed by the Chat agent.'),
 			sourceCells: [],
 			via: 'model',
 			insert: true,
 			afterBlockId,
-			...this._resolveSourceGrounding(insert.sourceQuote, insert.sourceLine, sourceText),
+			...grounding,
 		};
 		this._pending.push(change);
 		this._captureProposalCreated(change, source);
