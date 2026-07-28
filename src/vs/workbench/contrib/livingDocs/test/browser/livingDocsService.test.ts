@@ -26,7 +26,7 @@ import { IViewsService } from '../../../../services/views/common/viewsService.js
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AgentPolicy, IAgentDef, IAuditEntry, IFreshness, ILivingDoc, reviewConfidence } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
-import { extractBindLinks, parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { documentDisplayTitle, extractBindLinks, parseLivingDoc, serializeLivingDoc } from '../../common/livingDocMarkdown.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -2939,13 +2939,63 @@ suite('livingDocs Service', () => {
 		assert.ok(!/no commonalities/i.test(status), 'a model outage is NEVER rendered as "no commonalities" (the F14 rule)');
 	});
 
-	// Plan 28, iter 4: a named blank create is born titled; an empty name keeps decision 56's Untitled path.
-	test('createDocument(name) writes a titled <name>.md; an empty name keeps the Untitled escape hatch', async () => {
+	// Plan 28, iter 4 + F3 (spec 20 journey 1b, "name-first birth must hold for all three births, blank
+	// included"): a named blank create is born titled in BOTH places - the file name AND the document's own
+	// content, so `doc.title` is the typed name rather than the derived 'Untitled' that used to leak into the
+	// exported H1, the model prompt, the audit identity and the header breadcrumb. The name is recorded as a
+	// frontmatter `title:`, not a seeded H1, for two reasons this snapshot pins: the body stays the bare
+	// newline ProseMirror needs (one empty paragraph for the start-of-document caret to land in - an H1 would
+	// be the only block and would swallow the first keystrokes), and a name the FILE name cannot hold
+	// (`Q3: plan`, whose colon is stripped for the path) keeps its exact characters as a title. An empty name
+	// keeps decision 56's `Untitled.md` name-on-first-save path: no frontmatter, plain Markdown the user owns.
+	test('createDocument(name) is born titled: the typed name is doc.title, the body stays caret-safe, and an empty name keeps the Untitled escape hatch', async () => {
 		const service = createService();
-		const named = await service.createDocument('Quarterly plan');
-		assert.ok(named && named.path.endsWith('Quarterly plan.md'), 'a provided name is born titled');
-		const blank = await service.createDocument();
-		assert.ok(blank && blank.path.endsWith('Untitled.md'), 'no name keeps the Untitled name-on-first-save path');
+		const born = async (name?: string) => {
+			const uri = await service.createDocument(name);
+			const file = uri!.path.split('/').pop()!;
+			const raw = lastFiles!.get(uri!.toString()) ?? '';
+			const doc = parseLivingDoc(raw);
+			return {
+				file,
+				raw,
+				title: doc.title,
+				display: documentDisplayTitle(doc, file),
+				body: doc.body,
+				isLiving: doc.isLiving,
+				// The seed must survive a re-serialise (an approved edit / figure sync rebuilds the file from blocks).
+				reserialisedTitle: parseLivingDoc(serializeLivingDoc(doc)).title,
+			};
+		};
+
+		assert.deepStrictEqual([await born('Quarterly plan'), await born('Q3: plan'), await born()], [
+			{
+				file: 'Quarterly plan.md',
+				raw: '---\ntitle: Quarterly plan\n---\n\n',
+				title: 'Quarterly plan',
+				display: 'Quarterly plan',
+				body: '\n',
+				isLiving: false,
+				reserialisedTitle: 'Quarterly plan',
+			},
+			{
+				file: 'Q3 plan.md',
+				raw: '---\ntitle: Q3: plan\n---\n\n',
+				title: 'Q3: plan',
+				display: 'Q3: plan',
+				body: '\n',
+				isLiving: false,
+				reserialisedTitle: 'Q3: plan',
+			},
+			{
+				file: 'Untitled.md',
+				raw: '\n',
+				title: 'Untitled',
+				display: 'Untitled',
+				body: '\n',
+				isLiving: false,
+				reserialisedTitle: 'Untitled',
+			},
+		]);
 	});
 
 	test('getWorkspaceFolderName returns the open folder name, or undefined when no folder is open', async () => {

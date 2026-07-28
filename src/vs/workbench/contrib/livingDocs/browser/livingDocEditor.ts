@@ -243,13 +243,14 @@ export class LivingDocEditor extends EditorPane {
 			case 'pmEdit':
 				// The ProseMirror editing surface serialized its current state back to Markdown. Persist it
 				// silently so the live editor keeps its cursor (no remount). ProseMirror round-trips only the
-				// BODY, so for a living doc re-attach the existing frontmatter (`sources:`/`context:`) - else a
-				// PM edit would strip what makes it a living document (plan 15 iter 3).
+				// BODY, so re-attach the file's existing frontmatter - else a PM edit would strip it. That is
+				// what makes a living document living (`sources:`/`context:`, plan 15 iter 3), but it is also
+				// the blank birth's `title:` (F3) and the Properties panel's `status:`/`tags:`/`policy:`:
+				// metadata the editing surface never shows, and so must never destroy on the first keystroke.
+				// `withReplacedBody` returns the body alone when the file has no frontmatter, so plain Markdown
+				// that the user simply wrote still round-trips byte-clean.
 				if (this._resource && typeof message.text === 'string') {
-					const doc = this._livingDocs.getDoc(this._resource);
-					const text = doc?.isLiving
-						? withReplacedBody(this._livingDocs.getRawText(this._resource), message.text)
-						: message.text;
+					const text = withReplacedBody(this._livingDocs.getRawText(this._resource), message.text);
 					// The live surface already holds this body, so record it to suppress a spurious pmReset on
 					// the next (non-typing) render.
 					this._proto = recordPmBody(this._proto, parseLivingDoc(text).body);

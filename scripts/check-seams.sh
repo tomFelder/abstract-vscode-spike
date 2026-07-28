@@ -53,11 +53,15 @@ WORKBENCH_DEV_HTML="src/vs/code/electron-browser/workbench/workbench-dev.html"
 
 echo "check-seams: verifying the merge-tax ledger's shell seams..."
 
-# --- Seam 1: the five deregistered IDE view containers (HIGH / fails UNSAFE - the IDE icon reappears) ---
+# --- Seam 1: the six deregistered IDE view containers (HIGH / fails UNSAFE - the IDE icon reappears) ---
 # Each id must (a) be present in our deregister list, and (b) still be registered upstream somewhere
 # OTHER than our contribution (so the deregister still targets a real container). If upstream renames
 # a container, (b) fails here loudly instead of the icon silently returning to the activity bar.
-CONTAINER_IDS=(workbench.view.explorer workbench.view.search workbench.view.scm workbench.view.debug workbench.view.extensions)
+# `workbench.panel.chat` is the stock Copilot Chat tab (plan 37 F2, ledger rows 37-F2a/37-F2b). It carries
+# the same fails-unsafely risk as the other five - on an upstream rename the deregistration silently no-ops
+# and the raw "Build with Agent" panel returns beside the Abstract Review rail - and `chat.disableAIFeatures`
+# does NOT remove the container, so this guard is the only thing standing between a rename and its return.
+CONTAINER_IDS=(workbench.view.explorer workbench.view.search workbench.view.scm workbench.view.debug workbench.view.extensions workbench.panel.chat)
 for id in "${CONTAINER_IDS[@]}"; do
 	if ! grep_has "$LDC" "'${id}'"; then
 		fail "deregister-list" "container id '${id}' is missing from IDE_VIEW_CONTAINER_IDS in $LDC"

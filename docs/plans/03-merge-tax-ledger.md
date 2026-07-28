@@ -483,3 +483,16 @@ seam of the wave, budgeted up front.
 **File-reality wave core-patch count: +1 (both legs are the same two html files, one CSP entry pair).** The
 seam is CSS-adjacent config in a stable, rarely-churned file pair, low fragility, fail-soft, and product-correct:
 it only widens an allow-list to the fork's own loopback broker, which the packaged app requires to function.
+
+### Backfill: plan 37 F2 (stock Copilot chat removal, landed in #153): 0 ADDED core patches
+
+Recorded late. F2 landed on 14 Jul in `bb2b5821863` ("the cheap FRAGILE cures batch") but never got its own
+ledger rows, so the fork's most rename-fragile deregistration was documented only obliquely inside row K2.
+The two rows below describe what is actually in `main` today. **0 core patches** - the public
+`deregisterViewContainer` and `KeybindingsRegistry` routes reached it with none, so this backfill changes no
+count.
+
+| # | Change | Tier | File(s) | Note / re-pin check |
+|---|--------|------|---------|---------------------|
+| 37-F2a | Deregister the stock GitHub Copilot chat container so the "Chat" tab beside the Abstract Review rail no longer opens the raw upstream "Build with Agent" / "sign in to use Copilot" panel (walk 1e X4). Adds `'workbench.panel.chat'` (`ChatViewContainerId`) to `IDE_VIEW_CONTAINER_IDS`, hidden by the existing `HideIdeContainersContribution` via the public `deregisterViewContainer` registry route - the same seam already used for Explorer/Search/SCM/Debug/Extensions | additive-contribution | `livingDocs/browser/livingDocs.contribution.ts` | **Joins the HIGH-risk "fails-unsafely on container-id rename" set:** if upstream renames `workbench.panel.chat` the deregistration silently no-ops and the stock chat tab returns. `chat.disableAIFeatures:true` (decision 55) strips the AI chrome but does NOT remove the container, so config alone cannot hold this. **Now guarded:** `check-seams.sh` seam 1 carries the id (added 28 Jul), so a rename fails the seam loudly instead of silently restoring the tab. No core edit. |
+| 37-F2b | Neutralise the stock Copilot chat-open chord by shadowing it with the built-in `noop` command at weight 1000, the same additive `KeybindingsRegistry` route as the other IDE chords (plan 33 iter 3) | additive-contribution | `livingDocs/browser/livingDocs.contribution.ts` (`NEUTRALISED_IDE_CHORDS`) | Belt-and-braces: the container is already gone (37-F2a), so the chord would open nothing; this stops it trying. Pinned to upstream's real binding `CtrlCmd|Alt|KeyI` (mac `CtrlCmd|WinCtrl|KeyI`), matching `chatActions.ts`. Re-pin if the chord changes upstream. No core edit. |

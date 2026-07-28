@@ -325,11 +325,13 @@ function similarity(a: string, b: string): number {
 }
 
 // The "New document" starting point (plan 16 iter 3, decision 56): a BLANK writing surface, not an
-// IDE boilerplate template. A new doc is clean Markdown the user owns -- no injected `title:`
-// frontmatter and no "## Overview / Write your document here" placeholder, so opening it reads as
-// "just start writing" (the editor focuses the first line on mount). It becomes a Living Document the
-// moment a source is connected (a `sources:`/`context:` entry or a bind link). A single trailing
-// newline (not a 0-byte file) gives ProseMirror one empty paragraph to land the caret in.
+// IDE boilerplate template. A new doc is clean Markdown the user owns -- no "## Overview / Write your
+// document here" placeholder and no heading, so opening it reads as "just start writing" (the editor
+// focuses the first line on mount). It becomes a Living Document the moment a source is connected (a
+// `sources:`/`context:` entry or a bind link). A single trailing newline (not a 0-byte file) gives
+// ProseMirror one empty paragraph to land the caret in. This is the BODY of every blank birth; a birth
+// with a typed name prepends a `title:` frontmatter line in front of it (see `createDocument`), which
+// leaves this body -- and so the caret -- byte-identical.
 const NEW_DOCUMENT_TEMPLATE = `\n`;
 
 // The seed content for New Template (plan 28, iter 2). A template is honest Markdown: `template: true`
@@ -1777,12 +1779,28 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._notify.info('Open a folder to create a document.');
 			return undefined;
 		}
-		// A provided name is born titled (`<name>.md`); an empty name keeps decision 56's `Untitled.md`
-		// name-on-first-save escape hatch. Path-hostile characters are stripped so the name is a safe stem.
+		// A provided name is born titled in BOTH places (F3, spec 20 journey 1b: "name-first birth must hold for
+		// all three births, blank included"): the file name (`<name>.md`, path-hostile characters stripped) and
+		// the document itself (a frontmatter `title:`). Without the second, the file was named but its CONTENT
+		// was untitled -- `parseLivingDoc` derived `title = 'Untitled'`, which leaked into the exported `# ` H1,
+		// the model prompt, the audit trail's document identity and the header breadcrumb.
+		//
+		// The name is recorded as frontmatter rather than as an H1 for two reasons. It is caret-safe: the body
+		// stays the bare `NEW_DOCUMENT_TEMPLATE` newline, so ProseMirror still opens on one empty paragraph and
+		// `focusPm`'s start-of-document caret lands IN it -- a seeded H1 would be the only block, and the first
+		// keystrokes would land inside the heading. And it is lossless: `_safeStem` has to strip path-hostile
+		// characters for the file name (`Q3: plan` -> `Q3 plan.md`), whereas the title carries the exact typed
+		// string. `documentDisplayTitle` already prefers a frontmatter title over the H1 over the filename stem,
+		// so every visible surface reads the typed name too.
+		//
+		// An empty name keeps decision 56's `Untitled.md` name-on-first-save escape hatch untouched: no
+		// frontmatter is written at all, so an unnamed blank birth is still plain Markdown the user owns.
 		const stem = LivingDocsService._safeStem(name);
+		const title = LivingDocsService._safeTitle(name);
+		const content = title ? `---\ntitle: ${title}\n---\n${NEW_DOCUMENT_TEMPLATE}` : NEW_DOCUMENT_TEMPLATE;
 		const target = await this._uniqueDocUri(folder.uri, stem || 'Untitled');
 		try {
-			await this._files.writeFile(target, VSBuffer.fromString(NEW_DOCUMENT_TEMPLATE));
+			await this._files.writeFile(target, VSBuffer.fromString(content));
 			await this._editors.openEditor({ resource: target, options: { pinned: true } });
 			this._onDidChange.fire();
 			return target;
@@ -1795,7 +1813,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Reduce a free-text document name to a safe filename stem: drop path separators and characters no OS
 	// allows in a name, collapse whitespace. An empty result signals "no name" (the caller keeps Untitled).
 	private static _safeStem(name: string | undefined): string {
-		return (name ?? '').replace(/[\/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+		return LivingDocsService._safeTitle((name ?? '').replace(/[\/\\:*?"<>|]+/g, ' '));
+	}
+
+	// Reduce a free-text document name to a one-line TITLE. Unlike `_safeStem` this keeps every character the
+	// user typed (`Q3: plan` keeps its colon) -- only the FILE name has to be path-safe -- and collapses all
+	// whitespace, so the value can never break out of the single-line frontmatter `title:` scalar it is written
+	// into. An empty result signals "no name" (the caller writes no frontmatter at all).
+	private static _safeTitle(name: string | undefined): string {
+		return (name ?? '').replace(/\s+/g, ' ').trim();
 	}
 
 	// --- provenance-safe file operations (docs 20 section 1d / map-D6): rename, delete, Add to chat ---

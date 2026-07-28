@@ -11,7 +11,13 @@ import { PROSEMIRROR_BUNDLE_BASE64 } from '../../browser/prosemirrorBundle.js';
 // A minimal handle on the live ProseMirror view - enough to drive edits and read the doc back in a test
 // without pulling PM's own types (the bundle is a base64 artifact, not an importable module).
 interface ILwdpmView {
-	state: { doc: { textContent: string; content: { size: number }; nodeSize: number }; tr: unknown };
+	state: {
+		doc: { textContent: string; content: { size: number }; nodeSize: number };
+		tr: unknown;
+		// Where the caret sits. `mount` creates the state without an explicit selection, so ProseMirror
+		// defaults it to the start of the document - which is exactly what `focusPm` restores on mount.
+		selection: { $head: { parent: { type: { name: string }; textContent: string } } };
+	};
 	dispatch(tr: unknown): void;
 	destroy(): void;
 }
@@ -83,6 +89,25 @@ suite('ProseMirror vendored bundle (LWDPM)', () => {
 		assert.strictEqual(json.split('"bound_figure"').length - 1, 1);
 		assert.ok(json.includes('https://example.com'), 'normal link href should survive');
 		assert.strictEqual(lwdpm.roundTrip(md).trim(), md);
+	});
+
+	test('a blank birth opens with the caret in an empty paragraph, titled or not (F3 caret safety)', () => {
+		// The blank birth records a typed name as frontmatter, NOT as a seeded `# Heading`, so the BODY handed
+		// to ProseMirror is the same bare newline whether or not the user typed a name. This pins the reason:
+		// a seeded H1 would be the document's only block, and `focusPm`'s start-of-document caret would land
+		// inside the heading, so the user's first keystrokes would extend the title instead of writing prose.
+		const parent = document.createElement('div');
+		const view = lwdpm.mount(parent, '\n', {});
+		try {
+			const caret = view.state.selection.$head.parent;
+			assert.deepStrictEqual(
+				{ block: caret.type.name, text: caret.textContent },
+				{ block: 'paragraph', text: '' },
+				'the caret must open in an empty paragraph, never inside a heading'
+			);
+		} finally {
+			lwdpm.destroy(view);
+		}
 	});
 
 	// --- Keystroke-level history (plan 26 iter 1) --------------------------------
