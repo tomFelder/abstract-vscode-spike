@@ -8,6 +8,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
 import { emptyLock, ILivingDocLock, IProposedChange } from '../../common/livingDocsModel.js';
 import { buildPmDecorationSpec, buildFigureProvenance, relativeSyncedLabel, wordDiffSegments } from '../../common/livingDocPmDecorations.js';
+import { UNREACHABLE_SOURCE_LINE } from '../../common/sourceFreshness.js';
 
 // A living document with a plain prose block (an editable target), a bound block, and headings, so the
 // decoration mapping can be exercised against a realistic ProseMirror-backed surface.
@@ -389,13 +390,10 @@ suite('LivingDoc PM decoration mapping', () => {
 			});
 			// Both are stale; neither is present in the live-value map (the proxy fetch was unavailable).
 			const prov = buildFigureProvenance(lock, new Set(['crm.pipeline', 'pipeline@mcp:demo.query/total']), new Map(), NOW);
-			const api = prov.find(p => p.key === 'crm.pipeline')!;
-			const mcp = prov.find(p => p.key === 'pipeline@mcp:demo.query/total')!;
-			assert.strictEqual(api.kind, 'api');
-			assert.strictEqual(api.now, undefined);
-			assert.strictEqual(api.fallback, 'Live value unavailable - showing the last synced value');
-			assert.strictEqual(mcp.kind, 'mcp');
-			assert.strictEqual(mcp.fallback, 'Live value unavailable - showing the last synced value');
+			assert.deepStrictEqual(prov.map(p => ({ key: p.key, kind: p.kind, now: p.now, fallback: p.fallback })), [
+				{ key: 'crm.pipeline', kind: 'api', now: undefined, fallback: UNREACHABLE_SOURCE_LINE },
+				{ key: 'pipeline@mcp:demo.query/total', kind: 'mcp', now: undefined, fallback: UNREACHABLE_SOURCE_LINE },
+			]);
 		});
 
 		test('a stale file binding with no readable live value gets no fallback (a file is not an api/mcp fetch)', () => {
@@ -405,6 +403,33 @@ suite('LivingDoc PM decoration mapping', () => {
 			const prov = buildFigureProvenance(lock, new Set(['metrics.mrr']), new Map(), NOW);
 			assert.strictEqual(prov[0].fallback, undefined);
 			assert.strictEqual(prov[0].now, undefined);
+		});
+
+		// The staleness-escape guardrail (docs/20 journey 1p). An UNREACHABLE remote source resolves nothing, so it can
+		// never enter the stale set (that set grows from a hash compare, which needs a value) - the marker must
+		// therefore key off the live-value map's silence, not off staleness, or it can never fire at all.
+		test('an unreachable api/mcp binding is marked even though it is NOT stale, while its reachable neighbours are not', () => {
+			const lock = lockWith({
+				'crm.pipeline': { resolved: '128,000', source: 'https://crm.example.com/data#pipeline', sourceHash: 'b2', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+				'pipeline@mcp:demo.query/total': { resolved: '512', source: 'demo.query', sourceHash: 'c3', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+				'live.arr': { resolved: '$1.2m', source: 'https://crm.example.com/data#arr', sourceHash: 'd4', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+				'metrics.mrr': { resolved: '$48.6k', source: 'metrics.csv#mrr', sourceHash: 'a1', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+			});
+			// Nothing is stale (the proxy is down, so no hash could be compared at all); only `live.arr` re-read.
+			const prov = buildFigureProvenance(lock, new Set(), new Map([['live.arr', '$1.2m']]), NOW);
+			assert.deepStrictEqual(prov.map(p => ({ key: p.key, fresh: p.fresh, synced: p.synced, then: p.then, fallback: p.fallback })), [
+				{ key: 'crm.pipeline', fresh: true, synced: 'Synced 2 h ago', then: '128,000', fallback: UNREACHABLE_SOURCE_LINE },
+				{ key: 'pipeline@mcp:demo.query/total', fresh: true, synced: 'Synced 2 h ago', then: '512', fallback: UNREACHABLE_SOURCE_LINE },
+				{ key: 'live.arr', fresh: true, synced: 'Synced 2 h ago', then: '$1.2m', fallback: undefined },
+				{ key: 'metrics.mrr', fresh: true, synced: 'Synced 2 h ago', then: '$48.6k', fallback: undefined },
+			]);
+		});
+
+		test('before the first freshness pass (no live-value map at all) nothing is claimed either way', () => {
+			const lock = lockWith({
+				'crm.pipeline': { resolved: '128,000', source: 'https://crm.example.com/data#pipeline', sourceHash: 'b2', syncedAt: '2026-07-06T10:00:00Z', appliedBy: 'agent', kind: 'figure' },
+			});
+			assert.strictEqual(buildFigureProvenance(lock, new Set(), undefined, NOW)[0].fallback, undefined);
 		});
 
 		test('relativeSyncedLabel is truthful across buckets and never fabricates on a missing time', () => {

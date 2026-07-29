@@ -8,6 +8,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { ILivingDocRenderInput, IPresentState, PresentChoice, renderExportHtml, renderLivingDocContent, renderLivingDocHtml } from '../../browser/livingDocRender.js';
 import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange } from '../../common/livingDocsModel.js';
+import { FRESHNESS_COLOURS, UNREACHABLE_SOURCE_LINE, UNREACHABLE_SOURCE_MARKER } from '../../common/sourceFreshness.js';
 
 // Plan 15 iter 5 flipped the default: every living document now opens in the unified ProseMirror surface
 // ('pm'), the bespoke renderDoc HTML body is retired, and the calm chrome (formatting toolbar + Present)
@@ -224,6 +225,58 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		}, {
 			figureClickReveals: true, cellEditIsSecondGesture: true, keyboardRoute: true, a11yEnriched: true,
 		});
+	});
+
+	// The staleness-escape guardrail (docs/20 journey 1p): with the proxy down there is NO live reading for a remote
+	// figure, so the drawer must mark that row in the stale family and say so in plain words - the same
+	// provenance signal the figure hover-peek reads, so the two surfaces can never disagree.
+	test('source drawer marks an unreachable api/mcp figure stale-amber and names it, leaving reachable rows alone', () => {
+		const h = renderLivingDocHtml({
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'pm', rawText: '', present: { open: false, choice: 'html' }, syncDiff: [],
+			provenance: [
+				{
+					key: 'crm.pipeline', source: 'https://crm.example.com/data', location: 'pipeline',
+					synced: 'Synced 2 h ago', fresh: true, then: '128,000', kind: 'api',
+					fallback: UNREACHABLE_SOURCE_LINE,
+				},
+				{
+					key: 'metrics.mrr', source: 'metrics.csv', location: 'mrr',
+					synced: 'Synced 2 h ago', fresh: true, then: '$48.6k', kind: 'file',
+				},
+			],
+			sourcePeek: {
+				source: 'metrics.csv', referencedBy: [], synced: false, syncedCount: 0, grid: undefined,
+				rows: [
+					{ key: 'crm.pipeline', value: '128,000', selected: true },
+					{ key: 'metrics.mrr', value: '$48.6k', selected: false },
+				],
+			},
+		});
+		assert.deepStrictEqual({
+			unreachableRowMarked: h.includes(`<tr class="sel unreached"><td>crm.pipeline</td>`),
+			rowCarriesTheMarker: h.includes(`<span class="sp-unreach-tag">${UNREACHABLE_SOURCE_MARKER}</span>`),
+			plainWordsAboveTheTable: h.includes(`<div class="sp-unreach">&#9650; ${UNREACHABLE_SOURCE_LINE}.</div>`),
+			reachableRowUntouched: h.includes(`<tr class=""><td>metrics.mrr</td><td>$48.6k</td></tr>`),
+			// The marker borrows the stale family's cream/amber - no fourth colour is invented for it.
+			staleFamilyColours: h.includes(`.srcdrawer tr.unreached td,.srcdrawer tr.sel.unreached td{background:${FRESHNESS_COLOURS.staleRowBg}}`),
+		}, {
+			unreachableRowMarked: true, rowCarriesTheMarker: true, plainWordsAboveTheTable: true,
+			reachableRowUntouched: true, staleFamilyColours: true,
+		});
+	});
+
+	test('the hover peek marks an unreachable source stale-amber even though it is not in the stale set', () => {
+		const h = renderLivingDocHtml({
+			doc, pending: [], resolved: new Map(), dirty: false, status: '', recent: new Set(),
+			mode: 'pm', rawText: '', present: { open: false, choice: 'html' }, syncDiff: [],
+		});
+		assert.deepStrictEqual({
+			// The amber marker is driven by p.fallback, not only by p.fresh (an unreachable key is never stale).
+			markerOffFallback: h.includes(`: (p.fallback ? '<div class="tip-stale">${UNREACHABLE_SOURCE_MARKER}</div>' : '')`),
+			// ... and the plain-words line under it still comes from the provenance payload.
+			plainWordsLine: h.includes(`'<div class="tip-fallback">`),
+		}, { markerOffFallback: true, plainWordsLine: true });
 	});
 
 	test('source-peek drawer, once synced, swaps the Sync button for a "N synced" chip', () => {

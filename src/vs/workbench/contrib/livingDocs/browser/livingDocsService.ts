@@ -174,8 +174,11 @@ function parseMcpKey(key: string): { server: string; tool: string; field: string
 
 // The single freshness compare (spec 3.4), shared by the per-document dirty-bit recompute and the source
 // registry projection (plan 29, iter 1): a resolved source value is fresh when its current hash still
-// matches the hash the lock recorded at last sync. A value we can no longer resolve (undefined) is not
-// counted stale here - the caller decides how an unreadable source is presented.
+// matches the hash the lock recorded at last sync. A value we can no longer resolve (undefined) is NOT
+// counted stale here - there is nothing to hash-compare - and it never enters `staleBindings`. Presenting
+// an unreadable source is a separate job, done off the live-value map: a key missing from `state.current`
+// is marked stale-amber + "source unreachable" by `buildFigureProvenance` (hover peek + source drawer),
+// and a MISSING local file is re-flagged explicitly in `_recomputeFreshness`.
 function bindingIsFresh(current: IResolution | undefined, entry: IBindingEntry): boolean {
 	return !current || current.sourceHash === entry.sourceHash;
 }
@@ -3033,7 +3036,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const staleBindings = new Set<string>();
 		const staleContext = new Set<string>();
 		// The current re-resolved values (the "now" for the drawer's then-vs-now, F13). We already read every
-		// source here for the dirty-bit compare, so retaining the values costs nothing extra.
+		// source here for the dirty-bit compare, so retaining the values costs nothing extra. It is also the
+		// REACHABILITY signal the peek surfaces read: only keys that actually resolved land here, so an api/mcp
+		// key missing from it is one the app could not read this pass (no parallel state store needed).
 		const current = new Map<string, string>();
 		if (state.doc.isLiving) {
 			const resolution = await this._resolveCurrent(state, pass);
@@ -3047,7 +3052,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// bindings under a declared file source that is now missing on disk, so a dependent of a deleted
 			// source honestly reads stale (map-D6 orphan: cached values kept, flagged, never broken). Scoped
 			// to local file sources with recorded lock entries: api/mcp resolution misses (proxy down, host
-			// cooldown) and never-synced keys keep their previous not-stale behaviour, matching how a deleted
+			// cooldown) stay out of this set - they carry no hash to compare, and are marked unreachable off
+			// their absence from `current` instead - and never-synced keys keep their behaviour, matching how a deleted
 			// CONTEXT file already flags below via its reviewedHash mismatch. The exists probe only runs when
 			// nothing under the source's alias resolved (a readable source skips it), and is guarded for
 			// harnesses whose file service has no `exists` (mirrors the `createWatcher` guard).
@@ -3259,7 +3265,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// Inline `mcp` bindings (bind:key@mcp:server.tool/field, D29-B) resolve through the proxy, which owns the
 		// server process + credentials (decision 14) - the web build cannot spawn, so the proxy does the spawning
 		// and the same code path works on web and desktop. A server that is down leaves the key unresolved (the
-		// binding flags stale, the document still renders) rather than throwing.
+		// document still renders, and the key's absence from the live-value map is what marks the figure
+		// unreachable on the peek surfaces) rather than throwing.
 		for (const block of state.doc.blocks) {
 			for (const bind of block.binds) {
 				const mcp = parseMcpKey(bind.key);
@@ -3454,8 +3461,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Resolve one inline `mcp` binding through the proxy's /mcp/resolve route (plan 29, iter 4). The proxy
 	// spawns/reuses the configured MCP server (stdio JSON-RPC) and extracts the requested field; a failure
-	// (server down, unknown tool, timeout) leaves the key unresolved so the binding flags stale and the
-	// document still renders - never an error toast. The lock's `source` records the mcp origin for provenance.
+	// (server down, unknown tool, timeout) leaves the key unresolved and the document still renders - never an
+	// error toast. An unresolved key does NOT flag stale: `bindingIsFresh` needs a value to hash-compare, and
+	// `_recomputeFreshness` only considers keys that resolved. What marks it instead is its ABSENCE from
+	// `state.current`, which `buildFigureProvenance` reads to give the figure hover-peek and the source drawer
+	// their stale-amber "source unreachable" marker, so the last-synced value is never shown as current.
+	// The lock's `source` records the mcp origin for provenance.
 	private async _resolveMcpSource(fullKey: string, mcp: { server: string; tool: string; field: string }, resolved: Map<string, IResolution>): Promise<void> {
 		try {
 			const context = await this._request.request({
