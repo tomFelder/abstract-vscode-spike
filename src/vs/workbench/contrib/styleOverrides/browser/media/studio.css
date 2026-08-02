@@ -81,6 +81,17 @@
 	 * 10px card, not a 4px control. */
 	border-radius: 10px !important;
 }
+/* Centre the 60px nav chip in the ~76px rail so the top nav lines up with the bottom account/settings
+ * pins. The base rule above sets `margin: 0 auto`, but the stock activity-bar rule
+ * (`activityaction.css`: `.action-label { margin-right: 0 }`) out-specifies it, so only the LEFT margin
+ * resolved to auto and shoved the chip flush-right (chip centre 52px vs rail centre 44px) - and because
+ * the active white chip paints on this same element, it was off-centre too. Restore true centring with a
+ * selector specific enough to beat the stock `margin-right: 0` (matching how the active-chip rule below
+ * out-specifies the theme). */
+.style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon .action-label.action-label.codicon {
+	margin-left: auto;
+	margin-right: auto;
+}
 /* Inactive glyph = `muted` #868B95 (comp C1). The colour is set inline by the composite bar and
  * `activityBar.css` also paints inactive items `--vscode-descriptionForeground` (#606060) via an
  * `!important` rule at the SAME (0,9,0) specificity that lands later in the cascade, so it wins the
@@ -89,11 +100,15 @@
 .style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon .action-label.action-label.codicon {
 	color: #868B95 !important;
 }
-/* Idle hover = `slate` #52575F (comp C1 / mock `style-hover`, plan 44 pin 3 P3.3). Matches the idle
- * rule's specificity (0,10,0) and lands later in the cascade, plus `!important` to win over the inline
- * composite-bar colour. Excludes the active chip so hovering it keeps the #4650B8 accent. */
+/* Idle hover = `slate` #52575F (comp C1 / mock `style-hover`, plan 44 pin 3 P3.3) on a full-chip fill.
+ * Matches the idle rule's specificity (0,10,0) and lands later in the cascade, plus `!important` to win
+ * over the inline composite-bar colour. The #E2E4EA fill paints on the SAME 60px 10px-radius chip element
+ * the active state uses, so the hover box encapsulates the whole button exactly like the selected chip
+ * (matching the header rail-toggle hover). Excludes the active chip so hovering it keeps its white chip +
+ * #4650B8 accent. */
 .style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon:not(.lwd-nav-active):hover .action-label.action-label.codicon {
 	color: #52575F !important;
+	background: #E2E4EA;
 }
 /* A 1px hairline after Editor, separating the document group (Home . Editor) from the collections
  * group (Templates . Knowledge . Agents), per the comp's icon-nav: a 34px x 1px `#E4E6EA` rule with
@@ -261,6 +276,30 @@
 	background: var(--abstract-chrome, #EDEFF3);
 	border-bottom: 1px solid #E2E4EA;
 	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	/* The empty header space is a window drag handle, like a native title bar (the stock
+	 * `.titlebar-drag-region` is hidden by the rules above, so this overlay must carry the drag itself).
+	 * Interactive controls opt back out below with `no-drag`, and the OS still owns the macOS traffic
+	 * lights painted over the reserved inset. */
+	-webkit-app-region: drag;
+}
+
+/* On macOS desktop the OS paints the traffic lights over the top-left ~70px of the title bar. Inset the
+ * header's leading content by that reserved width so the logo/rail-toggle clears them instead of sliding
+ * underneath (matches the stock 70px `window-controls-container` reservation). Native desktop only - the
+ * lights do not exist on web - and dropped in fullscreen, where they are hidden. */
+.style-override.monaco-workbench.mac:not(.web) .abstract-header {
+	padding-left: 70px;
+}
+.style-override.monaco-workbench.mac:not(.web).fullscreen .abstract-header {
+	padding-left: 16px;
+}
+
+/* The interactive controls opt out of the drag region so their clicks/hover still land (a drag region
+ * swallows pointer events on macOS). Everything else in the header - logo, workspace/breadcrumb text,
+ * sync pill, spacer - stays draggable. */
+.style-override .abstract-header-toggle,
+.style-override .abstract-header-action,
+.style-override .abstract-header-avatar {
 	-webkit-app-region: no-drag;
 }
 
