@@ -134,14 +134,69 @@ export interface IPendingModelPrompt {
 	readonly displayText?: string;
 }
 
-/** The stage of the "Sign in with ChatGPT" flow the Settings step polls (plan 35 iter 2 + 4). */
-export type ChatGptSignInStage = 'signed-out' | 'pending' | 'signed-in' | 'error';
+/**
+ * The stage of the "Sign in with ChatGPT" flow the sign-in door polls (plan 35 iter 2+4; plan 51 device
+ * auth). Mirrors the broker's `/auth/openai/status` `state` verbatim (issue #283 frozen contract): the door
+ * never invents a stage the broker did not report. `expired` is the device-code lifetime running out before
+ * the user approved; `error` is a truthful upstream/broker failure carrying a plain-words reason.
+ */
+export type ChatGptSignInStage = 'signed-out' | 'pending' | 'signed-in' | 'expired' | 'error';
 
-/** The result of a sign-in poll: the current stage and, on failure, a plain-words reason. */
+/**
+ * The result of a sign-in poll (plan 51): the current stage and, on `error`/`expired`, a plain-words reason,
+ * plus the signed-in account's email when the broker knows it. Maps `/auth/openai/status` (issue #283).
+ */
 export interface IChatGptSignInStatus {
 	readonly stage: ChatGptSignInStage;
+	/** A plain-words reason to show the user when the stage is `error` or `expired`. */
 	readonly error?: string;
+	/** The signed-in account's email, when the broker reports it. */
+	readonly email?: string;
 }
+
+/**
+ * Why a `startChatGptSignIn` attempt failed (plan 51). Each maps to a visually distinct, honest UI state -
+ * the door never collapses these into one "something went wrong" (issue #283 §B):
+ * - `broker-unreachable`: the fetch itself failed (the local model helper is not running / cannot be reached).
+ *   This is a UI-layer verdict, not a broker response - the broker never got a chance to answer.
+ * - `upstream-rejected`: the broker reached OpenAI's device-auth endpoint but it rejected the request. The
+ *   broker forwards the upstream HTTP status and a short body snippet so the door can show the real reason.
+ * - `broker-error`: the broker answered `{ ok: false }` for a local reason (no upstream status attached).
+ */
+export type ChatGptSignInFailureKind = 'broker-unreachable' | 'upstream-rejected' | 'broker-error';
+
+/**
+ * The typed outcome of beginning "Sign in with ChatGPT" (plan 51, replacing the silent-`undefined` catch).
+ * On success it carries the RFC 8628 device-authorization fields the door renders (the user code the user
+ * copies, the verification link they open, and the poll `interval` the door must not beat); on failure it
+ * names its real cause so the door tells the truth. Shapes track the `/auth/openai/start` frozen contract
+ * (issue #283): `verificationUriComplete` is preferred for the browser open when the broker provides it.
+ */
+export type IChatGptSignInStart =
+	| {
+		readonly ok: true;
+		/** The device code the user enters/confirms on the verification page (shown copyable in one click). */
+		readonly userCode: string;
+		/** The verification page the user opens in their browser. */
+		readonly verificationUri: string;
+		/** The verification page pre-filled with the code, when the broker provides it (preferred for opening). */
+		readonly verificationUriComplete?: string;
+		/** How long (seconds) the device code is valid before it expires. */
+		readonly expiresIn: number;
+		/** The poll interval (seconds) the door MUST honour when polling `/auth/openai/status` (never faster). */
+		readonly interval: number;
+	}
+	| {
+		readonly ok: false;
+		/** Why the attempt failed, for a visually distinct honest UI state. */
+		readonly kind: ChatGptSignInFailureKind;
+		/** A plain-words reason to show the user. */
+		readonly reason: string;
+		/** The upstream HTTP status, when `kind` is `upstream-rejected`. */
+		readonly upstreamStatus?: number;
+		/** A short snippet of the upstream response body, when `kind` is `upstream-rejected`. */
+		readonly upstreamBody?: string;
+	};
 
 /**
  * The onboarding survey captured at the provider step (plan 35 iter 4; doc 18 section 2.4). Free-text, plain
@@ -753,8 +808,12 @@ export interface ILivingDocsService {
 	getSelectedModelId(): Promise<string | undefined>;
 	/** Persist the user's model choice for the active backend (issue #179); subsequent calls carry it. */
 	setSelectedModelId(modelId: string): Promise<void>;
-	/** Begin "Sign in with ChatGPT": returns the authorize URL to open in a browser (or undefined on failure). */
-	startChatGptSignIn(): Promise<string | undefined>;
+	/**
+	 * Begin "Sign in with ChatGPT" (plan 51 device auth): returns a typed outcome - on success the device
+	 * code + verification link + poll interval the door renders; on failure the real cause (broker unreachable,
+	 * upstream rejected with status + body snippet, or a local broker error). Never swallows into `undefined`.
+	 */
+	startChatGptSignIn(): Promise<IChatGptSignInStart>;
 	/** Poll the sign-in flow's stage while the Settings step waits for the browser round-trip to complete. */
 	pollChatGptSignIn(): Promise<IChatGptSignInStatus>;
 	/** Clean sign-out: forget the stored ChatGPT token bundle. */
@@ -772,8 +831,8 @@ export interface ILivingDocsService {
 	dismissModelChoice(resource: URI): void;
 	/** Choose "Use the included model" at first use: select the included tier, then replay the held prompt. */
 	chooseIncludedModelAndReplay(resource: URI): Promise<void>;
-	/** Begin "Sign in with ChatGPT" from the rail's first-use choice; returns the authorize URL to open. */
-	startSignInForChat(): Promise<string | undefined>;
+	/** Begin "Sign in with ChatGPT" from the rail's first-use choice; returns the same typed device-auth outcome. */
+	startSignInForChat(): Promise<IChatGptSignInStart>;
 	/** After the ChatGPT sign-in round-trip lands signed-in, replay the prompt held for `resource`. */
 	completeSignInAndReplay(resource: URI): Promise<void>;
 

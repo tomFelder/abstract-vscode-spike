@@ -818,11 +818,33 @@ suite('livingDocs screenRender', () => {
 		assert.ok(html.includes('<svg') && html.includes('60%'), 'a usage ring reflects the 60% spent fraction');
 	});
 
-	test('a pending sign-in shows the "waiting for your browser" state, and an error shows plain-words copy', () => {
-		const pending = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'pending' });
-		assert.ok(/Waiting for you to finish signing in/i.test(pending), 'the pending state tells the user to complete sign-in in the browser');
-		const errored = renderScreenHtml('settings', { ...state, providerStatus: { provider: 'none', readiness: 'unconfigured', signedIn: false, dailyBudgetUsd: 0 }, signInStage: 'error', signInError: 'Sign-in did not complete - please try again.' });
-		assert.ok(errored.includes('Sign-in did not complete'), 'a sign-in error is surfaced in plain words');
+	// Plan 51 device auth: the pending state renders the device code (copyable in one click) + the verification
+	// link (opens the browser), and each failure names its real, visually distinct state - never a catch-all.
+	const signedOutStatus = { provider: 'none' as const, readiness: 'unconfigured' as const, signedIn: false, dailyBudgetUsd: 0 };
+
+	test('a pending sign-in renders the device code (copyable) + the verification link, and honours the poll interval', () => {
+		const pending = renderScreenHtml('settings', {
+			...state, providerStatus: signedOutStatus,
+			signInStage: 'pending', signInUserCode: 'ABCD-EFGH', signInVerificationUri: 'https://auth.example/device?user_code=ABCD-EFGH',
+		});
+		assert.deepStrictEqual({
+			waiting: /Waiting for you to finish signing in/i.test(pending),
+			showsCode: pending.includes('ABCD-EFGH'),
+			codeIsCopyable: /data-copy-link data-link="ABCD-EFGH"/.test(pending),
+			opensVerificationLink: /data-open-external href="https:\/\/auth\.example\/device/.test(pending),
+		}, { waiting: true, showsCode: true, codeIsCopyable: true, opensVerificationLink: true });
+	});
+
+	test('every sign-in failure names its real, visually distinct state (broker-down / upstream-rejected / expired)', () => {
+		const brokerDown = renderScreenHtml('settings', { ...state, providerStatus: signedOutStatus, signInStage: 'error', signInError: 'The local model helper isn\'t running or can\'t be reached.' });
+		const upstream = renderScreenHtml('settings', { ...state, providerStatus: signedOutStatus, signInStage: 'error', signInError: 'OpenAI rejected the sign-in.', signInUpstreamStatus: 429, signInUpstreamBody: 'slow_down' });
+		const expired = renderScreenHtml('settings', { ...state, providerStatus: signedOutStatus, signInStage: 'expired', signInError: 'The sign-in code expired before it was approved. Start again to get a fresh code.' });
+		assert.deepStrictEqual({
+			brokerDownNamesHelper: brokerDown.includes('The local model helper isn\'t running or can\'t be reached.'),
+			upstreamShowsStatus: upstream.includes('OpenAI rejected the sign-in.') && upstream.includes('OpenAI responded with 429') && upstream.includes('slow_down'),
+			expiredNamesExpiry: expired.includes('The sign-in code expired before it was approved.'),
+			expiredOffersStartAgain: expired.includes('Start Again'),
+		}, { brokerDownNamesHelper: true, upstreamShowsStatus: true, expiredNamesExpiry: true, expiredOffersStartAgain: true });
 	});
 
 	test('the onboarding survey captures the three questions and saves once (thank-you state after)', () => {

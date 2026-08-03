@@ -242,10 +242,20 @@ export interface IScreenState {
 	/** Settings: a plain-words sign-in error to show under the button, if the last attempt failed. */
 	readonly signInError?: string;
 	/**
-	 * Settings: the OpenAI authorize URL for the in-flight sign-in, surfaced in the pending state as a real
-	 * clickable link (a genuine user gesture that the browser will not popup-block) plus a copyable fallback.
+	 * Settings (plan 51 device auth): the device code the user copies in one click during the pending state.
+	 * Present only while a sign-in is pending.
 	 */
-	readonly signInAuthorizeUrl?: string;
+	readonly signInUserCode?: string;
+	/**
+	 * Settings (plan 51): the verification link the user opens in their browser during the pending state (the
+	 * pre-filled `verificationUriComplete` when the broker provides it). A real clickable link (a genuine user
+	 * gesture the browser will not popup-block) plus a copyable fallback. Present only while pending.
+	 */
+	readonly signInVerificationUri?: string;
+	/** Settings (plan 51): the broker-forwarded upstream HTTP status for the honest upstream-rejected error state. */
+	readonly signInUpstreamStatus?: number;
+	/** Settings (plan 51): a short snippet of the upstream response body for the upstream-rejected error state. */
+	readonly signInUpstreamBody?: string;
 	/** Settings: true once the onboarding survey has been recorded this session (shows the thank-you state). */
 	readonly surveySaved?: boolean;
 	/** Settings: the current analytics consent (the `abstract.analytics.enabled` setting), for the data-flow card row. */

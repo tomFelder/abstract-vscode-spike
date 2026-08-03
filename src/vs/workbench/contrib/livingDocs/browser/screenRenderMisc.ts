@@ -38,20 +38,34 @@ function usageRing(fraction: number): string {
 	</svg>`;
 }
 
-// The pending "Sign in with ChatGPT" block (plan 38): we still attempt the automatic browser open, but a
-// post-await window.open is popup-blocked (especially in Incognito), so we never depend on it. Instead we
-// surface a real anchor the user clicks directly - a genuine user gesture opens the tab, never swallowed -
-// routed to the host so it opens OUTSIDE the sandboxed webview (openerService -> system browser). A "Copy
-// link" fallback covers corporate/blocked environments where even the direct open is intercepted, and the
-// URL is shown as selectable text so it can always be pasted by hand. Plain words throughout (P5).
-function pendingSignInBlock(authorizeUrl: string | undefined): string {
+// The pending "Sign in with ChatGPT" device-authorization block (plan 51, issue #283). We show the two things
+// the RFC 8628 device flow needs the user to do: (1) enter/confirm the DEVICE CODE - shown large, copyable in
+// one click; (2) open the VERIFICATION LINK in their browser. We still attempt the automatic browser open, but
+// a post-await window.open is popup-blocked (especially in Incognito), so we never depend on it - the anchor is
+// a genuine user gesture the host opens OUTSIDE the sandboxed webview (openerService -> system browser). A "Copy
+// link" fallback covers blocked environments, and the URL is selectable text so it can always be pasted by hand.
+// Plain words throughout (P5); no "OAuth"/"device code" jargon in the copy.
+function pendingSignInBlock(userCode: string | undefined, verificationUri: string | undefined): string {
 	const waiting = `<div style="display:inline-flex;align-items:center;gap:9px;font:600 13px/1 system-ui;color:#52575f;margin-bottom:14px"><span style="width:13px;height:13px;border:2px solid #d3d6dd;border-top-color:${ACCENT};border-radius:50%;animation:lwdSpin .8s linear infinite"></span>Waiting for you to finish signing in&hellip;</div>`;
-	if (!authorizeUrl) {
-		return `<div>${waiting}</div>`;
+	// The device code the user confirms on the sign-in page: shown large, copyable in one click (reuses the
+	// generic data-copy-link handler by carrying the code in data-link). Absent only if the broker omitted it.
+	const codeBlock = userCode
+		? `<div style="margin:0 0 16px">
+			<div style="font:600 11.5px/1 system-ui;color:#868b95;text-transform:uppercase;letter-spacing:.04em;margin:0 0 8px">Your code</div>
+			<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+				<span style="font:700 22px/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:.12em;color:#15171c;background:#f4f5f8;border:1px solid #e4e6eb;border-radius:10px;padding:12px 16px;user-select:all">${esc(userCode)}</span>
+				<button data-copy-link data-link="${esc(userCode)}" style="border:1px solid #d4d7dd;background:#fff;border-radius:10px;padding:11px 16px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Copy code</button>
+			</div>
+			<p style="margin:9px 0 0;font:400 12px/1.5 system-ui;color:#868b95">Enter this on the sign-in page if it asks for it.</p>
+		</div>`
+		: '';
+	if (!verificationUri) {
+		return `<div>${waiting}${codeBlock}</div>`;
 	}
-	const url = esc(authorizeUrl);
+	const url = esc(verificationUri);
 	return `<div>
 		${waiting}
+		${codeBlock}
 		<p style="margin:0 0 12px;font:400 12.5px/1.55 system-ui;color:#696e78">If your browser didn&#39;t open, open the sign-in page yourself:</p>
 		<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:12px">
 			<a data-open-external href="${url}" style="display:inline-flex;align-items:center;gap:8px;border:none;border-radius:10px;padding:12px 20px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;text-decoration:none;cursor:pointer">Open the sign-in page &#8599;</a>
@@ -124,15 +138,33 @@ export function renderSettings(state: IScreenState): string {
 				<span style="font:600 13px/1 system-ui;color:oklch(0.5 0.13 150);display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>${esc(localize('livingDocs.settings.signedIn', "Signed in to ChatGPT"))}</span>
 				<button data-msg="signOutChatGpt" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${esc(localize('livingDocs.settings.signOut', "Sign Out"))}</button>
 			</div>`;
+	// When the flow ended (error / expired), the button offers a fresh attempt with honest label copy: an
+	// expired code says "Start again", a failure says "Try again" - never a bare "Sign in" that hides that the
+	// last attempt failed. Signed-out shows the plain primary button; pending shows the device-code block.
+	const primaryLabel = stage === 'expired'
+		? localize('livingDocs.settings.signInAgain', "Start Again")
+		: stage === 'error'
+			? localize('livingDocs.settings.signInRetry', "Try Again")
+			: localize('livingDocs.settings.signInChatGpt', "Sign in with ChatGPT");
 	const signInBtn = stage === 'signed-in'
 		? signedInBadge
 		: stage === 'pending'
-			? pendingSignInBlock(state.signInAuthorizeUrl)
-			: `<button data-msg="signInChatGpt" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">${esc(localize('livingDocs.settings.signInChatGpt', "Sign in with ChatGPT"))}</button>`;
+			? pendingSignInBlock(state.signInUserCode, state.signInVerificationUri)
+			: `<button data-msg="signInChatGpt" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">${esc(primaryLabel)}</button>`;
 
-	const signInError = stage === 'error' && state.signInError
-		? `<p style="margin:12px 0 0;font:400 12.5px/1.5 system-ui;color:#b4332f">${esc(state.signInError)}</p>`
-		: '';
+	// The honest failure state (plan 51, issue #283 §B): each cause reads distinctly. Expired uses a calm amber
+	// note (nothing broke - the code just timed out); a real error uses the red note and, when the broker
+	// forwarded an upstream rejection, appends the HTTP status + a short body snippet so the reason is the real
+	// one, never invented. Broker-unreachable / broker-error carry only the plain-words reason.
+	let signInError = '';
+	if (stage === 'expired' && state.signInError) {
+		signInError = `<p style="margin:12px 0 0;font:400 12.5px/1.5 system-ui;color:#9a6b16">${esc(state.signInError)}</p>`;
+	} else if (stage === 'error' && state.signInError) {
+		const upstreamLine = typeof state.signInUpstreamStatus === 'number'
+			? `<div style="margin:8px 0 0;font:400 11.5px/1.5 ui-monospace,SFMono-Regular,monospace;color:#9aa0ac;background:#faf7f7;border:1px solid #f0e0e0;border-radius:8px;padding:8px 10px;word-break:break-word">${esc(localize('livingDocs.settings.upstreamStatus', "OpenAI responded with {0}", String(state.signInUpstreamStatus)))}${state.signInUpstreamBody ? ` &middot; ${esc(state.signInUpstreamBody)}` : ''}</div>`
+			: '';
+		signInError = `<div style="margin:12px 0 0"><p style="margin:0;font:400 12.5px/1.5 system-ui;color:#b4332f">${esc(state.signInError)}</p>${upstreamLine}</div>`;
+	}
 
 	// The survey: three plain-words questions. Recorded once; a thank-you replaces the form after saving.
 	const surveyBody = state.surveySaved

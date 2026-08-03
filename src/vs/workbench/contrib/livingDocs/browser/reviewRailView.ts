@@ -12,6 +12,7 @@ import { ThemeIcon } from '../../../../base/common/themables.js';
 import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
+import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -201,10 +202,18 @@ export class ReviewRailView extends ViewPane {
 	// so opening a second popover, selecting a model, or re-rendering the composer tears the previous one down -
 	// the DOM node + its outside-click/Escape listeners live in the store this holds, so nothing leaks.
 	private readonly _modelPopover = this._register(new MutableDisposable<DisposableStore>());
-	// Plan 42 slice L2 (issue #198): the inline first-use ChatGPT sign-in state. Undefined = no sign-in in flight
-	// (the two-door choice shows); a string (possibly empty) = the round-trip is pending, so the choice renders
-	// the "open the sign-in page" affordance + spinner. Reset once the flow completes, errors, or is dismissed.
+	// Plan 42 slice L2 (issue #198) + plan 51 device auth: the inline first-use ChatGPT sign-in state. Undefined
+	// = no sign-in in flight (the two-door choice shows); a set `_inlineSignInPending` = the device round-trip is
+	// in flight, so the choice renders the device code + verification link + spinner. Reset once the flow
+	// completes, errors, or is dismissed. The device code + verification URI are the RFC 8628 fields from the
+	// broker's `/auth/openai/start` (issue #283); the interval is the poll cadence the rail must not beat.
+	private _inlineSignInPending = false;
+	private _inlineSignInUserCode: string | undefined;
 	private _inlineSignInUrl: string | undefined;
+	private _inlineSignInPollMs = 5000;
+	// A plain-words inline sign-in error to show in the choice card when the last attempt failed (plan 51): the
+	// local model helper isn't running, or upstream rejected. Cleared when a fresh attempt starts.
+	private _inlineSignInError: string | undefined;
 	// The single in-flight inline sign-in poll timer; a MutableDisposable so a re-open / completion never leaks one.
 	private readonly _inlineSignInPoll = this._register(new MutableDisposable());
 
@@ -223,6 +232,7 @@ export class ReviewRailView extends ViewPane {
 		@IEditorService private readonly _editors: IEditorService,
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IQuickInputService private readonly _quickInput: IQuickInputService,
+		@IClipboardService private readonly _clipboardService: IClipboardService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -412,14 +422,32 @@ export class ReviewRailView extends ViewPane {
 		sub.style.cssText = 'font:400 12px/1.5 system-ui;color:#696e78;margin:0 0 13px';
 		sub.textContent = localize('livingDocs.inlineModel.sub', "Your message is ready to send. Pick a model to answer it - your typed prompt is kept either way.");
 
-		// The pending sign-in state: once the user clicks "Sign in with ChatGPT" we show a clickable sign-in link
-		// (never popup-dependent) + a spinner, and poll the flow. A completed sign-in replays the held prompt.
-		if (this._inlineSignInUrl !== undefined) {
+		// The pending sign-in state (plan 51 device auth): once the user clicks "Sign in with ChatGPT" we show
+		// the device code (copyable in one click) + a clickable verification link (never popup-dependent) + a
+		// spinner, and poll the flow at the broker's interval. A completed sign-in replays the held prompt.
+		if (this._inlineSignInPending) {
 			const waiting = append(card, $('div'));
 			waiting.style.cssText = 'display:flex;align-items:center;gap:9px;font:600 12.5px/1 system-ui;color:#52575f;margin:0 0 12px';
 			const spin = append(waiting, $('span'));
 			spin.style.cssText = 'width:12px;height:12px;border:2px solid #d3d6dd;border-top-color:oklch(0.55 0.13 255);border-radius:50%;animation:lwdSpin .8s linear infinite';
 			append(waiting, $('span')).textContent = localize('livingDocs.inlineModel.waiting', "Waiting for you to finish signing in…");
+			// The device code: shown large, copyable in one click. Absent only if the broker omitted it.
+			if (this._inlineSignInUserCode) {
+				const codeRow = append(card, $('div'));
+				codeRow.style.cssText = 'display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 12px';
+				const code = append(codeRow, $('span'));
+				code.style.cssText = 'font:700 18px/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:.1em;color:#15171c;background:#f4f5f8;border:1px solid #e4e6eb;border-radius:9px;padding:10px 14px;user-select:all';
+				code.textContent = this._inlineSignInUserCode;
+				const copy = append(codeRow, $('button')) as HTMLButtonElement;
+				copy.style.cssText = 'border:1px solid #d4d7dd;background:#fff;border-radius:9px;padding:9px 13px;font:600 12px/1 system-ui;color:#52575f;cursor:pointer';
+				copy.textContent = localize('livingDocs.inlineModel.copyCode', "Copy code");
+				this._renderDisposables.add(addDisposableListener(copy, 'click', () => {
+					const codeText = this._inlineSignInUserCode ?? '';
+					const restore = () => { copy.textContent = localize('livingDocs.inlineModel.copyCode', "Copy code"); };
+					copy.textContent = localize('livingDocs.inlineModel.copied', "Copied");
+					this._clipboardService.writeText(codeText).finally(() => setTimeout(restore, 1400));
+				}));
+			}
 			if (this._inlineSignInUrl) {
 				const open = append(card, $('a')) as HTMLAnchorElement;
 				open.href = this._inlineSignInUrl;
@@ -430,10 +458,18 @@ export class ReviewRailView extends ViewPane {
 			return;
 		}
 
+		// An honest inline error from the last attempt (plan 51): the local model helper isn't running, or
+		// upstream rejected. Shown above the choice so the user can read the real reason and try again.
+		if (this._inlineSignInError) {
+			const err = append(card, $('div'));
+			err.style.cssText = 'font:400 12px/1.5 system-ui;color:#b4332f;background:#faf7f7;border:1px solid #f0e0e0;border-radius:9px;padding:9px 11px;margin:0 0 12px';
+			err.textContent = this._inlineSignInError;
+		}
+
 		const buttons = append(card, $('div'));
 		buttons.style.cssText = 'display:flex;flex-direction:column;gap:9px';
 
-		// "Sign in with ChatGPT" - the user's own subscription (unlimited); starts the same loopback flow the
+		// "Sign in with ChatGPT" - the user's own subscription (unlimited); starts the same device-auth flow the
 		// settings screen uses, kept in place so the held prompt replays once the round-trip lands signed-in.
 		const signIn = append(buttons, $('button')) as HTMLButtonElement;
 		signIn.style.cssText = 'border:none;border-radius:10px;padding:11px 16px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1.3 system-ui;cursor:pointer;text-align:left';
@@ -447,14 +483,28 @@ export class ReviewRailView extends ViewPane {
 		this._renderDisposables.add(addDisposableListener(included, 'click', () => void this._livingDocs.chooseIncludedModelAndReplay(doc)));
 	}
 
-	// Begin the ChatGPT sign-in from the inline choice: fetch the authorize URL, open it externally, move to the
-	// pending state, and poll until the round-trip lands signed-in (then replay the held prompt) or resets. The
-	// poll re-reads the pending flag so a completion or dismissal never leaves a stale spinner.
+	// Begin the ChatGPT sign-in from the inline choice (plan 51 device auth): fetch the device code + verification
+	// link, open it externally, move to the pending state, and poll at the broker's interval until the round-trip
+	// lands signed-in (then replay the held prompt) or resets. On failure, show the real reason in the choice card
+	// instead of silently doing nothing. The poll re-reads the pending flag so a dismissal never leaves a spinner.
 	private async _inlineSignIn(doc: URI): Promise<void> {
-		const url = await this._livingDocs.startSignInForChat();
-		if (!url) { return; }
-		this._inlineSignInUrl = url;
-		this.openerService.open(URI.parse(url), { openExternal: true });
+		this._inlineSignInError = undefined;
+		const start = await this._livingDocs.startSignInForChat();
+		if (!start.ok) {
+			// Honest failure: name the real cause (broker unreachable / upstream rejected / broker error). The
+			// reason is plain words from the service; an upstream rejection appends its forwarded status.
+			this._inlineSignInError = start.kind === 'upstream-rejected' && typeof start.upstreamStatus === 'number'
+				? localize('livingDocs.inlineModel.errorUpstream', "{0} (OpenAI responded with {1})", start.reason, String(start.upstreamStatus))
+				: start.reason;
+			this._render();
+			return;
+		}
+		const openUri = start.verificationUriComplete ?? start.verificationUri;
+		this._inlineSignInPending = true;
+		this._inlineSignInUserCode = start.userCode;
+		this._inlineSignInUrl = openUri;
+		this._inlineSignInPollMs = Math.max(1000, start.interval * 1000);
+		this.openerService.open(URI.parse(openUri), { openExternal: true });
 		this._render();
 		this._pollInlineSignIn(doc);
 	}
@@ -462,20 +512,31 @@ export class ReviewRailView extends ViewPane {
 	private _pollInlineSignIn(doc: URI): void {
 		this._inlineSignInPoll.value = disposableTimeout(async () => {
 			// The user dismissed or the prompt was replayed elsewhere: stop polling and drop the pending state.
-			if (!this._livingDocs.getPendingModelPrompt(doc)) { this._inlineSignInUrl = undefined; return; }
-			const { stage } = await this._livingDocs.pollChatGptSignIn();
+			if (!this._livingDocs.getPendingModelPrompt(doc)) { this._resetInlineSignIn(); return; }
+			const { stage, error } = await this._livingDocs.pollChatGptSignIn();
 			if (stage === 'signed-in') {
-				this._inlineSignInUrl = undefined;
+				this._resetInlineSignIn();
 				await this._livingDocs.completeSignInAndReplay(doc);
 				return;
 			}
-			if (stage === 'error') {
-				this._inlineSignInUrl = undefined;
+			if (stage === 'expired' || stage === 'error') {
+				this._resetInlineSignIn();
+				this._inlineSignInError = error ?? (stage === 'expired'
+					? localize('livingDocs.inlineModel.expired', "The sign-in code expired. Try again to get a fresh one.")
+					: localize('livingDocs.inlineModel.errorGeneric', "Sign-in didn't complete. Please try again."));
 				this._render();
 				return;
 			}
 			this._pollInlineSignIn(doc);
-		}, 1200);
+		}, this._inlineSignInPollMs);
+	}
+
+	// Drop the in-flight inline sign-in state (pending flag, code, link). Leaves any error untouched so a caller
+	// can set one after resetting.
+	private _resetInlineSignIn(): void {
+		this._inlineSignInPending = false;
+		this._inlineSignInUserCode = undefined;
+		this._inlineSignInUrl = undefined;
 	}
 
 	// Open an Abstract screen (e.g. Model Access) without leaking the transient editor input. `ScreenEditorInput`
