@@ -1087,30 +1087,38 @@ const server = http.createServer((req, res) => {
 			.catch(err => sendJson(res, 502, { error: { type: 'models_error', message: String(err && err.message ? err.message : err) } }));
 		return;
 	}
-	// --- "Sign in with ChatGPT" OAuth routes (plan 35 iter 2) ---
-	// GET /auth/openai/start -> begins the loopback PKCE flow and returns the authorize URL to open in a
-	// browser. GET /auth/openai/status -> polls signed-out | pending | signed-in | error. POST
-	// /auth/openai/signout -> forgets the token bundle. The renderer only ever sees the authorize URL and a
-	// status string; the token itself never leaves this process (decision 14).
+	// --- "Sign in with ChatGPT" device-authorization routes (plan 51 WP-A; frozen contract on issue #283) ---
+	// GET /auth/openai/start -> begins the Codex device flow and returns the frozen success shape
+	//   { ok, userCode, verificationUri, verificationUriComplete?, expiresIn, interval }. Idempotent while a
+	//   flow is pending (same code until it expires). On failure: { ok:false, reason, upstreamStatus?,
+	//   upstreamBody? } with an appropriate HTTP status.
+	// GET /auth/openai/status -> { ok:true, state: signed-out|pending|signed-in|expired|error, reason?, email? }.
+	// POST /auth/openai/signout -> forgets the token bundle. The renderer only ever sees the code + a status
+	//   string; the token itself never leaves this process (decision 14).
 	if (req.method === 'GET' && url.startsWith('/auth/openai/start')) {
 		setCors(res);
-		try {
-			const { authorizeUrl } = openaiOAuth.start();
-			sendJson(res, 200, { authorizeUrl });
-		} catch (e) {
-			sendJson(res, 502, { error: { type: 'auth_error', message: String(e && e.message ? e.message : e) } });
-		}
+		openaiOAuth.start()
+			.then(started => sendJson(res, 200, { ok: true, ...started }))
+			.catch(e => {
+				// Log the full body to broker stdout for diagnosability (issue #120's ask); the UI gets a
+				// plain-words reason plus the upstream status/body snippet when known.
+				console.error('[lwd-proxy] /auth/openai/start failed:', e && e.message ? e.message : e, e && e.upstreamStatus ? `(upstream ${e.upstreamStatus}: ${e.upstreamBody || ''})` : '');
+				const payload = { ok: false, reason: String(e && e.message ? e.message : e) };
+				if (e && typeof e.upstreamStatus === 'number') { payload.upstreamStatus = e.upstreamStatus; }
+				if (e && e.upstreamBody) { payload.upstreamBody = String(e.upstreamBody); }
+				sendJson(res, e && e.upstreamStatus ? 502 : 500, payload);
+			});
 		return;
 	}
 	if (req.method === 'GET' && url.startsWith('/auth/openai/status')) {
 		setCors(res);
-		sendJson(res, 200, openaiOAuth.status());
+		sendJson(res, 200, { ok: true, ...openaiOAuth.status() });
 		return;
 	}
 	if (req.method === 'POST' && url.startsWith('/auth/openai/signout')) {
 		setCors(res);
 		openaiOAuth.signOut();
-		sendJson(res, 200, { status: 'signed-out' });
+		sendJson(res, 200, { ok: true, state: 'signed-out' });
 		return;
 	}
 	if (req.method === 'POST' && url.startsWith('/v1/messages')) {
