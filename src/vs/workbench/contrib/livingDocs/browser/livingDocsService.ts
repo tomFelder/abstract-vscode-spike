@@ -29,7 +29,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { IBoundSourceSummary, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { ChatGptSignInStage, IBoundSourceSummary, IChatGptSignInStart, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageAssetName } from '../common/livingDocAssets.js';
@@ -4698,28 +4698,64 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._providerStatusProbe = undefined;
 	}
 
-	async startChatGptSignIn(): Promise<string | undefined> {
+	async startChatGptSignIn(): Promise<IChatGptSignInStart> {
+		// The device-authorization start (plan 51, issue #283 frozen contract). Three honest outcomes, never a
+		// swallowed `undefined`: (1) the fetch itself throws -> the broker (local model helper) is not running
+		// or cannot be reached; (2) the broker answers `{ ok: false }` with an upstream status/body -> OpenAI
+		// rejected the request, forwarded verbatim; (3) the broker answers `{ ok: false }` with no upstream
+		// status -> a local broker error. The success shape carries the code + verification link + poll interval.
+		let context;
 		try {
-			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/auth/openai/start`, callSite: 'livingDocs.signInStart', disableCache: true }, CancellationToken.None);
-			const json = await asJson<{ authorizeUrl?: string }>(context);
-			return json?.authorizeUrl;
+			context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/auth/openai/start`, callSite: 'livingDocs.signInStart', disableCache: true }, CancellationToken.None);
 		} catch (e) {
-			this._log.warn('[livingDocs] ChatGPT sign-in start failed', e instanceof Error ? e.message : String(e));
-			return undefined;
+			// A failed fetch is, by the contract's definition, the broker-unreachable case: the broker never got
+			// to answer. This is a UI-layer verdict, not a broker response - so name it plainly here.
+			this._log.warn('[livingDocs] ChatGPT sign-in start: broker unreachable', e instanceof Error ? e.message : String(e));
+			return { ok: false, kind: 'broker-unreachable', reason: 'The local model helper isn\'t running or can\'t be reached.' };
 		}
+		const json = await asJson<{
+			ok?: boolean; userCode?: string; verificationUri?: string; verificationUriComplete?: string; expiresIn?: number; interval?: number;
+			reason?: string; upstreamStatus?: number; upstreamBody?: string;
+		}>(context);
+		if (json && json.ok === true && typeof json.userCode === 'string' && typeof json.verificationUri === 'string') {
+			return {
+				ok: true,
+				userCode: json.userCode,
+				verificationUri: json.verificationUri,
+				verificationUriComplete: typeof json.verificationUriComplete === 'string' ? json.verificationUriComplete : undefined,
+				// The contract carries these; fall back to sane, contract-legal defaults if an older broker omits
+				// them (15 min lifetime, 5s poll) so the door still renders and never polls faster than allowed.
+				expiresIn: typeof json.expiresIn === 'number' && json.expiresIn > 0 ? json.expiresIn : 900,
+				interval: typeof json.interval === 'number' && json.interval > 0 ? json.interval : 5,
+			};
+		}
+		// A failure response from the broker. An attached upstream status means OpenAI rejected the request
+		// (upstream-rejected); its absence means a local broker error. Either way the reason is plain words.
+		const reason = (json && typeof json.reason === 'string' && json.reason) ? json.reason : 'Sign-in couldn\'t be started.';
+		const upstreamStatus = json && typeof json.upstreamStatus === 'number' ? json.upstreamStatus : undefined;
+		const upstreamBody = json && typeof json.upstreamBody === 'string' ? json.upstreamBody : undefined;
+		this._log.warn('[livingDocs] ChatGPT sign-in start rejected', reason, upstreamStatus ?? '', context.res.statusCode ?? '');
+		if (upstreamStatus !== undefined) {
+			return { ok: false, kind: 'upstream-rejected', reason, upstreamStatus, upstreamBody };
+		}
+		return { ok: false, kind: 'broker-error', reason };
 	}
 
 	async pollChatGptSignIn(): Promise<IChatGptSignInStatus> {
 		try {
 			const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/auth/openai/status`, callSite: 'livingDocs.signInStatus', disableCache: true }, CancellationToken.None);
-			const json = await asJson<{ status?: string; error?: string }>(context);
-			const stage = json?.status === 'signed-in' ? 'signed-in'
-				: json?.status === 'pending' ? 'pending'
-					: json?.status === 'error' ? 'error' : 'signed-out';
+			// The frozen contract (issue #283) reports the flow's stage as `state`; read `status` too so an older
+			// broker (pre-plan-51) still maps. `expired` is now a first-class terminal stage the door settles on.
+			const json = await asJson<{ ok?: boolean; state?: string; status?: string; error?: string; reason?: string; email?: string }>(context);
+			const raw = json?.state ?? json?.status;
+			const stage: ChatGptSignInStage = raw === 'signed-in' ? 'signed-in'
+				: raw === 'pending' ? 'pending'
+					: raw === 'expired' ? 'expired'
+						: raw === 'error' ? 'error' : 'signed-out';
 			// A newly-signed-in ChatGPT tier changes what the app can do; refresh model-backed UI once. The active
 			// backend can change with it, so drop the cached model catalogue (issue #179) - the next read re-fetches.
 			if (stage === 'signed-in') { this._invalidateModelCatalogue(); void this._probeModel(); this._onDidChange.fire(); }
-			return { stage, error: json?.error };
+			return { stage, error: json?.reason ?? json?.error, email: json?.email };
 		} catch {
 			return { stage: 'signed-out' };
 		}
@@ -5294,12 +5330,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
-	 * The user chose "Sign in with ChatGPT" at the first-AI-use moment (issue #198). Begin the same loopback
-	 * sign-in flow the settings screen uses (returning the authorize URL for the rail to open), leaving the held
-	 * prompt in place - it is replayed by `completeSignInAndReplay` once the round-trip lands signed-in, so the
-	 * typed prompt survives the browser round-trip. Returns undefined when the flow could not start.
+	 * The user chose "Sign in with ChatGPT" at the first-AI-use moment (issue #198). Begin the same device-auth
+	 * flow the settings screen uses (returning the typed outcome - code + verification link, or the real failure
+	 * cause - for the rail to render), leaving the held prompt in place; it is replayed by `completeSignInAndReplay`
+	 * once the round-trip lands signed-in, so the typed prompt survives the browser round-trip.
 	 */
-	startSignInForChat(): Promise<string | undefined> {
+	startSignInForChat(): Promise<IChatGptSignInStart> {
 		return this.startChatGptSignIn();
 	}
 

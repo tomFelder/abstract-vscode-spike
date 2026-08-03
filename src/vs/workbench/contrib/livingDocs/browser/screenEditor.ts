@@ -131,9 +131,15 @@ interface IScreenEditorState {
 	providerStatus?: IModelProviderStatus;
 	signInStage?: ChatGptSignInStage;
 	signInError?: string;
-	// The OpenAI authorize URL for the in-flight sign-in (plan 38): surfaced in the pending state as a real
-	// clickable link + copyable fallback so a fresh user reaches the sign-in page without a swallowed popup.
-	signInAuthorizeUrl?: string;
+	// The device-authorization pending state (plan 51, issue #283): the user code to copy in one click and the
+	// verification link to open in the browser (verificationUriComplete preferred when present). Set when a
+	// sign-in starts successfully; cleared when the flow settles.
+	signInUserCode?: string;
+	signInVerificationUri?: string;
+	// The upstream failure detail for the honest error state (plan 51): the broker-forwarded HTTP status and a
+	// short body snippet when OpenAI rejected the request, so the door shows the real reason - never invented.
+	signInUpstreamStatus?: number;
+	signInUpstreamBody?: string;
 	surveySaved?: boolean;
 	analyticsEnabled?: boolean;
 	// Home front door (F15 / journey 1w): the WHILE YOU WERE AWAY feed (built on open + refresh from the run
@@ -182,6 +188,9 @@ export class ScreenEditor extends EditorPane {
 	// The single in-flight "Sign in with ChatGPT" poll (plan 35 iter 4), replaced each poll so a re-open or a
 	// completed sign-in never leaves a timer running on the class store.
 	private readonly _signInPoll = this._register(new MutableDisposable());
+	// The poll interval (ms) the broker set for the in-flight device flow (plan 51, issue #283): the door polls
+	// `/auth/openai/status` at this cadence and NEVER faster. Seeded from `/auth/openai/start`'s `interval`.
+	private _signInPollMs = 5000;
 	// Holds the current webview. The iframe reloads (blank) whenever this pane is hidden by another
 	// editor in the group and later re-shown (DOM re-parent), and the low-level webview does not
 	// re-apply its HTML, so we recreate it fresh each time the pane becomes visible.
@@ -1076,51 +1085,80 @@ export class ScreenEditor extends EditorPane {
 		});
 	}
 
-	// Begin "Sign in with ChatGPT": ask the proxy for the authorize URL, open it in the browser, move to the
-	// pending state, and poll the flow until it lands signed-in or errors. Each poll replaces the timer so a
-	// re-open or completion never leaks one.
+	// Begin "Sign in with ChatGPT" (plan 51 device auth): ask the broker for the device code + verification
+	// link, open the link in the browser, move to the pending state (which renders the code + link), and poll
+	// `/auth/openai/status` at the broker's interval. On failure, name the REAL cause in a visually distinct
+	// state - the local model helper isn't running, or upstream rejected (status + short body) - never the old
+	// swallowed catch-all. Each poll replaces the timer so a re-open or completion never leaks one.
 	private async _startChatGptSignIn(): Promise<void> {
-		const authorizeUrl = await this._livingDocs.startChatGptSignIn();
-		if (!authorizeUrl) {
-			this._state = { ...this._state, signInStage: 'error', signInError: 'Could not start sign-in - is the model connected?' };
+		const start = await this._livingDocs.startChatGptSignIn();
+		if (!start.ok) {
+			// Honest, distinct failure states. Broker unreachable / broker error carry only a reason; an
+			// upstream rejection also carries the forwarded status + a short body snippet the door shows.
+			this._state = {
+				...this._state,
+				signInStage: 'error',
+				signInError: start.reason,
+				signInUserCode: undefined,
+				signInVerificationUri: undefined,
+				signInUpstreamStatus: start.kind === 'upstream-rejected' ? start.upstreamStatus : undefined,
+				signInUpstreamBody: start.kind === 'upstream-rejected' ? start.upstreamBody : undefined,
+			};
 			this._render();
 			return;
 		}
-		// Still attempt the automatic open, but never depend on it (a post-await window.open is popup-blocked,
-		// especially in Incognito). The pending state renders a real clickable link + copyable URL so the user
-		// can always reach the sign-in page with a genuine gesture; the poll settles the flow either way.
-		this._openInBrowser(authorizeUrl);
-		this._state = { ...this._state, signInStage: 'pending', signInError: undefined, signInAuthorizeUrl: authorizeUrl };
+		// Prefer the pre-filled verification link when the broker provides it, so the browser lands with the code
+		// already entered; fall back to the bare verification URI otherwise. The automatic open is best-effort
+		// (a post-await window.open can be blocked); the pending state always renders a real clickable link too.
+		const openUri = start.verificationUriComplete ?? start.verificationUri;
+		this._openInBrowser(openUri);
+		// Honour the broker's poll interval (never faster), converted to ms.
+		this._signInPollMs = Math.max(1000, start.interval * 1000);
+		this._state = {
+			...this._state,
+			signInStage: 'pending',
+			signInError: undefined,
+			signInUserCode: start.userCode,
+			signInVerificationUri: openUri,
+			signInUpstreamStatus: undefined,
+			signInUpstreamBody: undefined,
+		};
 		this._render();
 		this._pollSignIn();
 	}
 
-	// Poll the sign-in status once, then either settle (signed-in / error) or schedule the next poll. The
-	// pending state shows the "waiting for your browser" spinner; a completed sign-in refreshes the door.
+	// Poll the sign-in status once, then either settle (signed-in / expired / error) or schedule the next poll
+	// at the broker's interval. The pending state shows the device code + verification link; a completed sign-in
+	// refreshes the door. `expired` and `error` are honest terminal states, each with its own plain-words copy.
 	private _pollSignIn(): void {
 		this._signInPoll.value = disposableTimeout(async () => {
 			const { stage, error } = await this._livingDocs.pollChatGptSignIn();
 			if (stage === 'signed-in') {
 				const status = await this._livingDocs.getModelProviderStatus();
-				this._state = { ...this._state, signInStage: 'signed-in', signInError: undefined, signInAuthorizeUrl: undefined, providerStatus: status };
+				this._state = { ...this._state, signInStage: 'signed-in', signInError: undefined, signInUserCode: undefined, signInVerificationUri: undefined, providerStatus: status };
+				this._render();
+				return;
+			}
+			if (stage === 'expired') {
+				this._state = { ...this._state, signInStage: 'expired', signInError: error ?? 'The sign-in code expired before it was approved. Start again to get a fresh code.', signInUserCode: undefined, signInVerificationUri: undefined };
 				this._render();
 				return;
 			}
 			if (stage === 'error') {
-				this._state = { ...this._state, signInStage: 'error', signInError: error ?? 'Sign-in did not complete - please try again.' };
+				this._state = { ...this._state, signInStage: 'error', signInError: error ?? 'Sign-in didn\'t complete - please try again.', signInUserCode: undefined, signInVerificationUri: undefined };
 				this._render();
 				return;
 			}
-			// still pending (or the listener has not seen the callback yet): keep waiting.
+			// still pending (or the broker has not seen the approval yet): keep waiting at the broker's cadence.
 			this._pollSignIn();
-		}, 1200);
+		}, this._signInPollMs);
 	}
 
 	private async _signOutChatGpt(): Promise<void> {
 		this._signInPoll.clear();
 		await this._livingDocs.signOutChatGpt();
 		const status = await this._livingDocs.getModelProviderStatus();
-		this._state = { ...this._state, signInStage: 'signed-out', signInError: undefined, signInAuthorizeUrl: undefined, providerStatus: status };
+		this._state = { ...this._state, signInStage: 'signed-out', signInError: undefined, signInUserCode: undefined, signInVerificationUri: undefined, signInUpstreamStatus: undefined, signInUpstreamBody: undefined, providerStatus: status };
 		this._render();
 	}
 
