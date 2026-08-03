@@ -57,10 +57,18 @@ const PORT = Number(process.env.LWD_PROXY_PORT || 8090);
 // and self-reports read this rather than a fixed constant. Defaults to the preferred host until listen resolves.
 let boundHost = PREFERRED_HOST;
 
-// Backend selection. `openrouter` is the founder-funded fallback tier (the only backend implemented in
-// plan 35 iter 1); `openai-oauth` is reserved for the subscription path (plan 35 iter 2) and reports
-// itself as not-configured until then, so the renderer stays on its heuristic fallback rather than 500ing.
-const BACKEND = (process.env.LWD_BACKEND || 'openrouter').toLowerCase();
+// Backend selection is PER REQUEST (plan 51 WP-C, fixing #120's root cause). Historically the backend was
+// fixed at spawn via LWD_BACKEND (default `openrouter`) and never switched, so a mid-session ChatGPT sign-in
+// changed /auth/openai/status to signed-in while /v1/messages kept routing to openrouter. Now selectBackend()
+// runs on every request: in dynamic mode (the default) it prefers `openai-oauth` whenever the OAuth bundle can
+// serve (valid, or expired-but-refreshable - the forward refreshes transparently), else `openrouter`. Deleting
+// the bundle falls back on the very next request; signing in switches serving on the very next request. No
+// broker restart, ever. Selection is at REQUEST START only: a forward that then fails upstream returns the
+// honest error - we NEVER silently retry a failed request on the other backend mid-flight (that would hide a
+// real fault and double-bill). LWD_BACKEND demotes to an explicit dev override: unset = dynamic; set = forced
+// to exactly that backend (and /healthz says so).
+const BACKEND_OVERRIDE = process.env.LWD_BACKEND ? process.env.LWD_BACKEND.toLowerCase() : null;
+const BACKEND_MODE = BACKEND_OVERRIDE ? 'forced' : 'dynamic';
 
 const OPENROUTER_URL = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
 // Default fallback model: a capable mid-tier model, NOT the cheapest available. The beta bar is "more
@@ -288,6 +296,9 @@ async function openRouterForward(body, req) {
 	try { orJson = JSON.parse(orText); } catch { orJson = undefined; }
 	if (!upstream.ok || !orJson || orJson.error) {
 		const message = (orJson && orJson.error) ? (orJson.error.message || 'openrouter error') : `openrouter http ${upstream.status}`;
+		// Log the FULL upstream status + body to broker stdout for diagnosability (#120's ask); the client only
+		// ever gets the honest short error shape (no token, no raw upstream body). Never a silent fallback.
+		console.error(`[lwd-proxy] openrouter forward failed: upstream ${upstream.status}; body: ${orText}`);
 		return proxyError(message);
 	}
 	const choice = (orJson.choices && orJson.choices[0]) || {};
@@ -329,6 +340,7 @@ async function openRouterForwardStream(req, res) {
 		const text = await upstream.text().catch(() => '');
 		let message = `openrouter http ${upstream.status}`;
 		try { const j = JSON.parse(text); if (j && j.error && j.error.message) { message = j.error.message; } } catch { /* keep default */ }
+		console.error(`[lwd-proxy] openrouter stream forward failed: upstream ${upstream.status}; body: ${text}`);
 		setCors(res);
 		res.writeHead(502, { 'content-type': 'application/json' });
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }));
@@ -466,6 +478,11 @@ async function openAiForward(_body, req) {
 	try { json = JSON.parse(rawText); } catch { json = undefined; }
 	if (!upstream.ok || !json || json.error) {
 		const message = (json && json.error) ? (json.error.message || 'openai error') : `openai http ${upstream.status}`;
+		// Log the full upstream status + body to broker stdout (#120's diagnosability ask); the client receives
+		// only the honest short error shape. This is the chosen door's own failure - NOT a trigger to retry the
+		// request on openrouter (a mid-request cross-backend retry would mask a real fault and is deliberately
+		// never done here; the fallback is a next-request selection concern, not an in-flight one).
+		console.error(`[lwd-proxy] openai-oauth forward failed: upstream ${upstream.status}; body: ${rawText}`);
 		return proxyError(message);
 	}
 	const text = textFromResponses(json);
@@ -495,6 +512,7 @@ async function openAiForwardStream(req, res) {
 		const text = await upstream.text().catch(() => '');
 		let message = `openai http ${upstream.status}`;
 		try { const j = JSON.parse(text); if (j && j.error && j.error.message) { message = j.error.message; } } catch { /* keep default */ }
+		console.error(`[lwd-proxy] openai-oauth stream forward failed: upstream ${upstream.status}; body: ${text}`);
 		setCors(res);
 		res.writeHead(502, { 'content-type': 'application/json' });
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }));
@@ -557,8 +575,20 @@ const backends = {
 	},
 };
 
-function activeBackend() {
-	return backends[BACKEND] || backends.openrouter;
+/**
+ * Choose the backend for THIS moment (plan 51 WP-C). Forced mode honours LWD_BACKEND exactly (dev override).
+ * Dynamic mode (the default) prefers `openai-oauth` whenever the OAuth bundle can serve - valid, or expired but
+ * refreshable, decided by lwd-openai-oauth.canServe() from the bundle alone (no network) - otherwise falls back
+ * to `openrouter`. Pure and synchronous, so every request re-decides from live state: a mid-session sign-in or a
+ * bundle deletion takes effect on the next call with no restart. This is the fix for #120 (backend no longer
+ * fixed at spawn). Selection happens once per request, at the start; a chosen backend that then fails upstream
+ * surfaces its honest error - there is deliberately NO mid-request cross-backend retry here.
+ */
+function selectBackend() {
+	if (BACKEND_MODE === 'forced') {
+		return backends[BACKEND_OVERRIDE] || backends.openrouter;
+	}
+	return openaiOAuth.canServe() ? backends['openai-oauth'] : backends.openrouter;
 }
 
 // --- model listing (issue #179) -----------------------------------------------------------------------
@@ -569,11 +599,11 @@ function activeBackend() {
 // the user's own subscription drives. The openrouter backend serves ONE included model, so its list is a single
 // `included` entry; the openai-oauth backend returns the subscription's `own-key` catalogue (static today - the
 // Codex OAuth token cannot enumerate models live - behind lwd-openai-oauth.listModels(), which is the seam a
-// future live query slots into). #120 note: the backend is fixed at spawn (LWD_BACKEND) and does not switch
-// after a mid-session ChatGPT sign-in; this reports for whatever backend is active NOW and, for a backend that
-// is not configured, still returns its catalogue so the picker renders consistently (the call path itself
-// degrades via /healthz + the renderer's heuristic fallback, not by an empty picker). `tier` is additive: an
-// older renderer that ignores it still reads id/label/default unchanged.
+// future live query slots into). This returns ONE backend's catalogue; mergedModels() (below) stitches both
+// backends' lists together for /models so the composer selector sees every door at once and can name which is
+// serving. A backend that is not configured still returns its catalogue (its entries carry `available:false`
+// in the merge) so the picker renders consistently rather than emptying. `tier` is additive: an older renderer
+// that ignores it still reads id/label/default unchanged.
 async function modelsForBackend(backend) {
 	if (backend.name === 'openai-oauth') {
 		try {
@@ -585,6 +615,29 @@ async function modelsForBackend(backend) {
 	}
 	// openrouter: a single founder-funded included model, product-labelled (never the raw upstream id).
 	return [{ id: OPENROUTER_MODEL, label: 'Included model', default: true, tier: 'included' }];
+}
+
+// The merged /models catalogue (plan 51 WP-C): BOTH backends' models in one list, each entry carrying its
+// `backend` and a truthful `available` flag, so the composer selector can render every door and name which is
+// serving right now. `available` is the door's real health: openai-oauth entries are available only when the
+// bundle can serve (signed in, valid-or-refreshable via canServe()); openrouter entries are available only when
+// a key is present. `serving` marks the entries on the door selectBackend() would use for this next request, so
+// the UI can highlight the live door without re-deriving the selection logic. This is purely ADDITIVE over the
+// prior single-backend shape: id/label/default/tier are unchanged, so an older renderer keeps working; the
+// response still carries a top-level `backend` naming the serving door for backward compatibility.
+async function mergedModels() {
+	const serving = selectBackend();
+	const openrouterAvailable = backends.openrouter.isConfigured();
+	const oauthAvailable = backends['openai-oauth'].isConfigured() && openaiOAuth.canServe();
+	const availabilityFor = name => (name === 'openai-oauth' ? oauthAvailable : openrouterAvailable);
+	const out = [];
+	for (const name of ['openai-oauth', 'openrouter']) {
+		const list = await modelsForBackend(backends[name]);
+		for (const m of list) {
+			out.push({ ...m, backend: name, available: availabilityFor(name), serving: serving.name === name });
+		}
+	}
+	return out;
 }
 
 // The default model id for a backend's list (the entry flagged default, else the first). Used to resolve an
@@ -643,7 +696,10 @@ async function forwardMessages(req, res) {
 		sendJson(res, 400, { type: 'error', error: { type: 'proxy_error', message: 'invalid request body' } });
 		return;
 	}
-	const backend = activeBackend();
+	// Pick the door for THIS request (plan 51 WP-C): dynamic mode prefers a servable ChatGPT bundle, else the
+	// included fallback; forced mode honours LWD_BACKEND. Chosen once, here, at request start - a forward that
+	// then fails upstream returns its honest error, never a silent retry on the other door (see selectBackend).
+	const backend = selectBackend();
 	const streaming = parsed.stream === true;
 	// Resolve the caller's optional `model` against the active backend's list (issue #179): an absent, unknown,
 	// or stale-persisted id falls back to the backend default rather than 500ing. The resolved id is stamped
@@ -1053,7 +1109,11 @@ const server = http.createServer((req, res) => {
 		// provider + usage display (plan 35 iter 4): which door is active, and - for the metered fallback - how
 		// much of today's included usage is spent. A subscription backend (openai-oauth) is NOT metered, so it
 		// reports no daily figure; today's spend comes from the same authoritative SpendMeter the cap uses.
-		const backend = activeBackend();
+		// Backend is now chosen per request (plan 51 WP-C); healthz reports the door that WOULD serve the next
+		// request, decided by the same selectBackend() the request path uses - so the probe never disagrees with
+		// what a real call does. `backendMode` names whether that choice is dynamic (the default) or forced by
+		// LWD_BACKEND, so a dev override is visible rather than silent.
+		const backend = selectBackend();
 		const configured = backend.isConfigured();
 		// A single honest `reason` the renderer can key its status copy off without re-deriving the logic here
 		// (issue #170): the broker is the only place that knows the true state. `unconfigured` = the backend has
@@ -1065,7 +1125,8 @@ const server = http.createServer((req, res) => {
 		}
 		sendJson(res, 200, {
 			ok: configured,
-			backend: BACKEND,
+			backend: backend.name,
+			backendMode: BACKEND_MODE,
 			reason,
 			meters: backend.meters,
 			signedIn: openaiOAuth.isSignedIn(),
@@ -1074,16 +1135,18 @@ const server = http.createServer((req, res) => {
 		});
 		return;
 	}
-	// GET /models (issue #179; tier added #236): the models the ACTIVE backend can drive, for the composer's
-	// picker. Shape: { backend, models: [{ id, label, default, tier }] } where tier is `included` | `own-key`
-	// (plan 47 pin 14's popover grouping). The renderer fetches this cheaply (on backend change or rail render,
-	// not on every healthz poll) and passes the chosen id on /v1/messages. Reports for whatever backend is
-	// active now; #120 (backend fixed at spawn, does not switch after sign-in) is out of scope here.
+	// GET /models (issue #179; tier added #236; merged both backends in plan 51 WP-C): every model BOTH doors
+	// can drive, for the composer's picker. Shape: { backend, backendMode, models: [{ id, label, default, tier,
+	// backend, available, serving }] }. `backend` at top-level names the door serving the next request (kept for
+	// backward compatibility with the single-backend shape). Per-entry `backend` tags each model's door,
+	// `available` is that door's real health (oauth: signed-in + servable; openrouter: key present), and
+	// `serving` marks the door selectBackend() would use now - so the selector can render every door and name
+	// which is live without re-deriving selection. Purely additive: id/label/default/tier are unchanged.
 	if (req.method === 'GET' && url.startsWith('/models')) {
 		setCors(res);
-		const backend = activeBackend();
-		modelsForBackend(backend)
-			.then(models => sendJson(res, 200, { backend: BACKEND, models }))
+		const serving = selectBackend();
+		mergedModels()
+			.then(models => sendJson(res, 200, { backend: serving.name, backendMode: BACKEND_MODE, models }))
 			.catch(err => sendJson(res, 502, { error: { type: 'models_error', message: String(err && err.message ? err.message : err) } }));
 		return;
 	}
@@ -1242,15 +1305,14 @@ function startListening() {
 }
 
 function reportListening() {
-	const backend = activeBackend();
-	console.log(`[lwd-proxy] listening on ${hostLabel(boundHost)}:${PORT} (backend ${backend.name}, model ${OPENROUTER_MODEL})`);
-	if (backend.name === 'openrouter') {
-		console.log(`[lwd-proxy] key source: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$${DAILY_BUDGET_USD}/user`);
-		if (!backend.isConfigured()) { console.log('[lwd-proxy] no OpenRouter key configured - the app runs on its built-in heuristic fallback'); }
-	} else if (backend.name === 'openai-oauth') {
-		console.log(`[lwd-proxy] "Sign in with ChatGPT" backend; model ${openaiOAuth.OPENAI_MODEL}; token store ${openaiOAuth.STORE_PATH} (0600)`);
-		if (!backend.isConfigured()) { console.log('[lwd-proxy] not signed in - open Abstract Settings and choose "Sign in with ChatGPT", or run on the included model'); }
-	}
+	// Backend is chosen per request now (plan 51 WP-C); report the mode and the door that would serve right now.
+	const backend = selectBackend();
+	const modeLabel = BACKEND_MODE === 'forced' ? `forced=${BACKEND_OVERRIDE}` : 'dynamic';
+	console.log(`[lwd-proxy] listening on ${hostLabel(boundHost)}:${PORT} (backend selection ${modeLabel}, serving ${backend.name} now)`);
+	console.log(`[lwd-proxy] fallback door: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$${DAILY_BUDGET_USD}/user`);
+	if (!backends.openrouter.isConfigured()) { console.log('[lwd-proxy] no OpenRouter key configured - the fallback runs on the built-in heuristic path'); }
+	console.log(`[lwd-proxy] subscription door: "Sign in with ChatGPT"; model ${openaiOAuth.OPENAI_MODEL}; token store ${openaiOAuth.STORE_PATH} (0600)`);
+	if (!openaiOAuth.isSignedIn()) { console.log('[lwd-proxy] not signed in - open Abstract Settings and choose "Sign in with ChatGPT" to serve on your own subscription'); }
 }
 
 startListening();
