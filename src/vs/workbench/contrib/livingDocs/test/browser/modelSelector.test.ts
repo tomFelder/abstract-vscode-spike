@@ -136,6 +136,58 @@ suite('livingDocs model selector (plan 47 47-b, issue #236)', () => {
 		return predicate();
 	}
 
+	// A service whose /healthz answers a fixed body, so a test can assert how a specific wire shape maps to the
+	// IModelProviderStatus the composer + Model Access read. Used to pin the signed-in-but-cannot-serve mapping.
+	function createServiceWithHealth(healthBody: object): LivingDocsService {
+		const requestService = {
+			request: async (options: { url?: string }) => {
+				const url = options.url ?? '';
+				const payload: object = url.includes('/healthz') ? healthBody : (url.includes('/models') ? MODELS_BODY : {});
+				return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))) };
+			},
+		} as unknown as IRequestService;
+		const fileService = { onDidFilesChange: Event.None, onDidChangeFileSystemProviderRegistrations: Event.None, onDidChangeFileSystemProviderCapabilities: Event.None } as unknown as IFileService;
+		const editorService = { openEditor: async () => undefined, onDidActiveEditorChange: Event.None, activeEditor: undefined } as unknown as IEditorService;
+		const viewsService = { openView: async () => null } as unknown as IViewsService;
+		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.modelProxyUrl' ? 'http://127.0.0.1:9' : true) } as unknown as IConfigurationService;
+		const notificationService = { info: () => undefined } as unknown as INotificationService;
+		const workspaceService = { getWorkspace: () => ({ folders: [] }), onDidChangeWorkspaceFolders: Event.None } as unknown as IWorkspaceContextService;
+		const fileDialogService = { showOpenDialog: async () => undefined } as unknown as IFileDialogService;
+		const hostService = { openWindow: async () => undefined } as unknown as IHostService;
+		const clipboardService = { writeText: async () => undefined } as unknown as IClipboardService;
+		const commandService = { executeCommand: async () => undefined } as unknown as ICommandService;
+		const storage = store.add(new InMemoryStorageService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), storage, commandService, clipboardService, { isVisible: () => false } as unknown as IWorkbenchLayoutService);
+		store.add(service);
+		return service;
+	}
+
+	// The signed-in-but-cannot-serve state (plan 51 WP-D; #120/#259): the broker's /healthz reports a valid,
+	// serving OpenRouter door (ok:true, backend:openrouter) WHILE a ChatGPT bundle is on disk (signedIn:true) -
+	// the ChatGPT door is signed in but not the one answering. The composer + Model Access key off exactly these
+	// three fields to say so honestly, so the mapping is pinned here: provider must be `included` (the door that
+	// answered), signedIn must stay true, and readiness ready - never a provider:'chatgpt' that would falsely
+	// claim ChatGPT is serving.
+	test('signed in to ChatGPT but the included door serves -> provider:included + signedIn:true (the composer fallback truth)', async () => {
+		const service = createServiceWithHealth({ ok: true, backend: 'openrouter', reason: 'ready', meters: true, signedIn: true, dailyBudgetUsd: 1, dailyTotalUsd: 0.2 });
+		const status = await service.getModelProviderStatus();
+		assert.deepStrictEqual(
+			{ provider: status.provider, signedIn: status.signedIn, readiness: status.readiness },
+			{ provider: 'included', signedIn: true, readiness: 'ready' },
+		);
+	});
+
+	// The contrast case: when ChatGPT actually IS the serving door, provider is `chatgpt` and the composer stays
+	// silent (no fallback line), so the two states never blur.
+	test('ChatGPT actually serving -> provider:chatgpt + signedIn:true (no fallback line)', async () => {
+		const service = createServiceWithHealth({ ok: true, backend: 'openai-oauth', reason: 'ready', meters: false, signedIn: true, dailyBudgetUsd: 1 });
+		const status = await service.getModelProviderStatus();
+		assert.deepStrictEqual(
+			{ provider: status.provider, signedIn: status.signedIn },
+			{ provider: 'chatgpt', signedIn: true },
+		);
+	});
+
 	test('the readiness -> health-dot colour + plain-words mapping is honest per state (P14.5)', () => {
 		assert.deepStrictEqual({
 			readyDot: modelHealthDotColour('ready'),

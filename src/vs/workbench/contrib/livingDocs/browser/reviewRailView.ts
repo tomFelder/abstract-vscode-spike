@@ -27,7 +27,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
-import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelReadiness, ModelTier } from '../common/livingDocs.js';
+import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
@@ -193,6 +193,11 @@ export class ReviewRailView extends ViewPane {
 	// The truthful broker readiness (issue #170): the composer status line MUST reflect /healthz, never claim
 	// "Using the included model" when the broker is down or no backend is wired. Undefined until first fetch.
 	private _readiness: ModelReadiness | undefined;
+	// The door actually answering right now (plan 51 WP-D): needed alongside `_signedIn` so the composer can name
+	// the honest signed-in-but-can't-serve state - signed in to ChatGPT while the included model is the door that
+	// answered (the #120/#259 fallback). Without this the composer would fall silent in that state and only the
+	// Model Access screen would tell the truth. Undefined until the first /healthz probe resolves.
+	private _provider: ModelProvider | undefined;
 	// The model picker (issue #179): the active backend's models and the selected id, fetched cheaply from the
 	// service (which caches /models) and refreshed alongside the sign-in state. The composer renders a compact
 	// dropdown from these; empty models -> no picker. Undefined until the first fetch resolves.
@@ -349,9 +354,10 @@ export class ReviewRailView extends ViewPane {
 			const models = await this._livingDocs.getModelCatalogue();
 			const selected = await this._livingDocs.getSelectedModelId();
 			const modelsChanged = JSON.stringify(this._models ?? null) !== JSON.stringify(models.models) || this._selectedModelId !== selected;
-			if (this._signedIn !== status.signedIn || this._readiness !== status.readiness || modelsChanged) {
+			if (this._signedIn !== status.signedIn || this._readiness !== status.readiness || this._provider !== status.provider || modelsChanged) {
 				this._signedIn = status.signedIn;
 				this._readiness = status.readiness;
+				this._provider = status.provider;
 				this._models = models.models;
 				this._selectedModelId = selected;
 				this._render();
@@ -386,6 +392,25 @@ export class ReviewRailView extends ViewPane {
 			const link = append(text, $('button')) as HTMLButtonElement;
 			link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
 			link.textContent = 'Open Model access';
+			this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
+			return;
+		}
+
+		// Ready + signed in to ChatGPT but the INCLUDED model is the door that answered (plan 51 WP-D; the #120/#259
+		// fallback): say so honestly here too, not only on the Model Access screen. Driven from /healthz truth
+		// (signedIn AND the serving provider is 'included'), never invented - so the composer never falls silent on
+		// a state where the user is signed in yet ChatGPT is not the door serving them. A fix-it link opens Model
+		// Access for the full explanation. When ChatGPT actually serves (provider 'chatgpt'), this does not fire.
+		if (this._signedIn === true && this._provider === 'included') {
+			const row = append(footer, $('div'));
+			row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
+			const dot = append(row, $('span'));
+			dot.style.cssText = 'width:6px;height:6px;flex:none;border-radius:50%;background:#e0a63a';
+			const text = append(row, $('span'));
+			text.textContent = localize('livingDocs.composer.signedInFallback', "Signed in to ChatGPT, but the included model is serving · ");
+			const link = append(text, $('button')) as HTMLButtonElement;
+			link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
+			link.textContent = localize('livingDocs.composer.signedInFallbackLink', "Details");
 			this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
 			return;
 		}
