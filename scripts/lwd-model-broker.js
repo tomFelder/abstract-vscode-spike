@@ -97,7 +97,21 @@ const MAX_IMPORT_BODY_BYTES = 40 * 1024 * 1024;
 // gives it the wall clock. At the cap it returns a structured overspend so the renderer pauses the run via
 // the D15 machinery (never 500s), and it emits a `model_spend` audit record per request (doc 15 section 3.1).
 const DAILY_BUDGET_USD = Number(process.env.LWD_DAILY_BUDGET_USD || 1);
-const spendMeter = new SpendMeter({ dailyBudgetUsd: DAILY_BUDGET_USD, clock: { now: () => Date.now() } });
+// The meter's clock is the wall clock in production. For automated proof of the day-boundary RESET without
+// racing a real midnight or mutating Date.now (which breaks unrelated timers), an OPTIONAL test seam adds a
+// millisecond offset read from a file: point LWD_SPEND_CLOCK_FILE at a file whose contents are an integer ms
+// offset, and the test advances the clock by writing a full-day offset to it. Unset (the default, and every
+// real launch) it is a plain wall clock with zero overhead. The file is read best-effort on each tick; a
+// missing/garbage file contributes a zero offset, so the seam can never make the meter misbehave in the wild.
+const SPEND_CLOCK_FILE = process.env.LWD_SPEND_CLOCK_FILE || '';
+function spendClockNow() {
+	if (!SPEND_CLOCK_FILE) { return Date.now(); }
+	let offset = 0;
+	try { const n = Number.parseInt(fs.readFileSync(SPEND_CLOCK_FILE, 'utf8').trim(), 10); if (Number.isFinite(n)) { offset = n; } }
+	catch { /* no file yet / unreadable -> zero offset, plain wall clock */ }
+	return Date.now() + offset;
+}
+const spendMeter = new SpendMeter({ dailyBudgetUsd: DAILY_BUDGET_USD, clock: { now: spendClockNow } });
 
 // The local audit sink for `model_spend` records. PostHog wiring is plan 36's job (doc 18 section 2.2);
 // for now every record appends as one JSON line to ~/.abstract/model-spend.log (0600) so per-user spend is
@@ -122,9 +136,36 @@ function auditModelSpend(record) {
 	appendAudit(SPEND_LOG_PATH, record);
 }
 
-/** Standard permissive CORS for a localhost-only dev proxy (the page origin is http://localhost:8080). */
-function setCors(res) {
-	res.setHeader('Access-Control-Allow-Origin', '*');
+// The app origins allowed to call this localhost-only broker. The web build is served by @vscode/test-web on
+// http://localhost:8080; the desktop build's renderer + webviews run under vscode-file://vscode-app (and the
+// webview iframes under vscode-webview://). We reflect the request's Origin when it is one of these (a scoped
+// allow, not a blanket '*'), plus a couple of extra localhost ports operators use, and fall back to '*' only
+// when there is NO Origin header at all (a same-process/tool call, never a browser). This keeps a real app
+// origin echoed back - which a browser requires to READ the response - without opening the broker to any web
+// page. Extra origins can be added via LWD_ALLOWED_ORIGINS (comma-separated) for a non-default web port.
+const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:8080', 'http://127.0.0.1:8080', 'vscode-file://vscode-app'];
+const EXTRA_ALLOWED_ORIGINS = (process.env.LWD_ALLOWED_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+const ALLOWED_ORIGINS = new Set([...DEFAULT_ALLOWED_ORIGINS, ...EXTRA_ALLOWED_ORIGINS]);
+// The desktop webview origin is vscode-webview://<guid> - a per-webview opaque guid we cannot enumerate, so
+// match the scheme rather than a fixed value. Same trust boundary (the app's own webviews), still not the web.
+function isAllowedOrigin(origin) {
+	if (!origin) { return false; }
+	if (ALLOWED_ORIGINS.has(origin)) { return true; }
+	return origin.startsWith('vscode-webview://');
+}
+
+/**
+ * CORS for a localhost-only dev proxy, scoped to the app's own origins (plan 51 WP-D). Reflects the request's
+ * Origin when it is an allowed app origin (the web build's localhost:8080, the desktop app's vscode-file /
+ * vscode-webview) so a browser can READ the response; a request with no Origin (a same-process/tool call) gets
+ * '*'. An unrecognised browser Origin is NOT echoed - the broker never becomes callable from an arbitrary web
+ * page. Passing `req` is what lets this be scoped; the OPTIONS preflight and every route response run through it.
+ * @param {import('http').IncomingMessage} [req]
+ */
+function setCors(res, req) {
+	const origin = req && req.headers ? req.headers.origin : undefined;
+	res.setHeader('Access-Control-Allow-Origin', isAllowedOrigin(origin) ? origin : '*');
+	res.setHeader('Vary', 'Origin');
 	res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
 	res.setHeader('Access-Control-Allow-Headers', 'content-type, anthropic-version, anthropic-beta');
 	res.setHeader('Access-Control-Max-Age', '600');
@@ -319,7 +360,7 @@ async function openRouterForward(body, req) {
 async function openRouterForwardStream(req, res) {
 	const key = openRouterKey();
 	if (!key) {
-		setCors(res);
+		setCors(res, req);
 		res.writeHead(502, { 'content-type': 'application/json' });
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'OPENROUTER_API_KEY (or OPENROUTER_API_KEY_FILE) is not set' } }));
 		return { usage: undefined };
@@ -341,7 +382,7 @@ async function openRouterForwardStream(req, res) {
 		let message = `openrouter http ${upstream.status}`;
 		try { const j = JSON.parse(text); if (j && j.error && j.error.message) { message = j.error.message; } } catch { /* keep default */ }
 		console.error(`[lwd-proxy] openrouter stream forward failed: upstream ${upstream.status}; body: ${text}`);
-		setCors(res);
+		setCors(res, req);
 		res.writeHead(502, { 'content-type': 'application/json' });
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }));
 		return { usage: undefined };
@@ -513,7 +554,7 @@ async function openAiForwardStream(req, res) {
 		let message = `openai http ${upstream.status}`;
 		try { const j = JSON.parse(text); if (j && j.error && j.error.message) { message = j.error.message; } } catch { /* keep default */ }
 		console.error(`[lwd-proxy] openai-oauth stream forward failed: upstream ${upstream.status}; body: ${text}`);
-		setCors(res);
+		setCors(res, req);
 		res.writeHead(502, { 'content-type': 'application/json' });
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }));
 		return { usage: undefined };
@@ -621,13 +662,17 @@ async function modelsForBackend(backend) {
 // `backend` and a truthful `available` flag, so the composer selector can render every door and name which is
 // serving right now. `available` is the door's real health: openai-oauth entries are available only when the
 // bundle can serve (signed in, valid-or-refreshable via canServe()); openrouter entries are available only when
-// a key is present. `serving` marks the entries on the door selectBackend() would use for this next request, so
-// the UI can highlight the live door without re-deriving the selection logic. This is purely ADDITIVE over the
-// prior single-backend shape: id/label/default/tier are unchanged, so an older renderer keeps working; the
-// response still carries a top-level `backend` naming the serving door for backward compatibility.
+// a key is present AND the daily included cap is not already spent - a budget-paused door is NOT available, so
+// /models names the pause the same way /healthz does (plan 51 WP-D: the cap pause must name itself in BOTH).
+// `serving` marks the entries on the door selectBackend() would use for this next request, so the UI can
+// highlight the live door without re-deriving the selection logic. This is purely ADDITIVE over the prior
+// single-backend shape: id/label/default/tier are unchanged, so an older renderer keeps working; the response
+// still carries a top-level `backend` naming the serving door for backward compatibility.
 async function mergedModels() {
 	const serving = selectBackend();
-	const openrouterAvailable = backends.openrouter.isConfigured();
+	// The metered fallback is unavailable while its daily cap is spent, mirroring /healthz's `budget-paused`
+	// reason - so the picker's included row honestly greys out for the rest of the day, not just when key-less.
+	const openrouterAvailable = backends.openrouter.isConfigured() && !spendMeter.isOverBudget();
 	const oauthAvailable = backends['openai-oauth'].isConfigured() && openaiOAuth.canServe();
 	const availabilityFor = name => (name === 'openai-oauth' ? oauthAvailable : openrouterAvailable);
 	const out = [];
@@ -692,7 +737,7 @@ async function forwardMessages(req, res) {
 	let parsed;
 	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
 	if (!parsed) {
-		setCors(res);
+		setCors(res, req);
 		sendJson(res, 400, { type: 'error', error: { type: 'proxy_error', message: 'invalid request body' } });
 		return;
 	}
@@ -717,7 +762,7 @@ async function forwardMessages(req, res) {
 		if (streaming) { writeCapStream(res); }
 		else {
 			const capped = capReached();
-			setCors(res);
+			setCors(res, req);
 			res.writeHead(capped.status, { 'content-type': capped.contentType });
 			res.end(capped.text);
 		}
@@ -731,7 +776,7 @@ async function forwardMessages(req, res) {
 	const result = await backend.forward(body, parsed);
 	// Only meter a successful model call (a proxy/backend error did not spend the founder's budget).
 	if (result.status === 200) { meterCall(backend, result.usage); }
-	setCors(res);
+	setCors(res, req);
 	res.writeHead(result.status, { 'content-type': result.contentType });
 	res.end(result.text);
 }
@@ -889,7 +934,7 @@ async function proxyFetch(req, res) {
 		}
 		const upstream = await fetch(parsed.url, { method: 'GET', headers });
 		const text = await upstream.text();
-		setCors(res);
+		setCors(res, req);
 		res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
 		res.end(text);
 	} catch (e) {
@@ -932,7 +977,7 @@ async function detectDocxFidelity(buffer) {
 }
 
 async function importDocx(req, res) {
-	setCors(res);
+	setCors(res, req);
 	const body = await readBody(req, MAX_IMPORT_BODY_BYTES);
 	let parsed;
 	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
@@ -978,7 +1023,13 @@ async function importDocx(req, res) {
 // the onboarding survey to record `model_configured` locally; plan 36 forwards this log to PostHog. The proxy
 // stamps a UTC timestamp; the body carries no document text or credential (the renderer only sends survey
 // answers + the event name). Best effort - a log failure still returns ok so onboarding never blocks.
+// CORS is set on EVERY response here (plan 51 WP-D): this route previously called sendJson directly without
+// setCors, so the actual POST response carried no Access-Control-Allow-Origin and the browser blocked the
+// renderer from reading it ("No 'Access-Control-Allow-Origin'", WP-B validator finding) - the OPTIONS preflight
+// passed but the real response did not, so the event never landed. Now the scoped-origin header is present on
+// the 200, the 400, and the dispatcher's 502, so the renderer's analytics.capture() completes end to end.
 async function postEvent(req, res) {
+	setCors(res, req);
 	const body = await readBody(req);
 	let parsed;
 	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
@@ -998,7 +1049,7 @@ async function postEvent(req, res) {
 // images make the payload larger than the default JSON routes.
 const DOCX_MAX_BODY_BYTES = 24 * 1024 * 1024;
 async function exportDocx(req, res) {
-	setCors(res);
+	setCors(res, req);
 	const body = await readBody(req, DOCX_MAX_BODY_BYTES);
 	let parsed;
 	try { parsed = JSON.parse(body); } catch { parsed = undefined; }
@@ -1034,7 +1085,7 @@ function optionalLib(name) {
 // warnings }] }. Each sheet is a clean comma-delimited, number/date-normalised CSV the renderer writes to
 // data/<workbook>/<sheet>.csv. A merged-header/pivot sheet carries a NAMED warning, never a silent misread.
 async function extractXlsx(req, res) {
-	setCors(res);
+	setCors(res, req);
 	const engine = sourceExtractEngine();
 	const xlsx = optionalLib('xlsx');
 	if (!engine || !xlsx) {
@@ -1062,7 +1113,7 @@ async function extractXlsx(req, res) {
 // extracted text (read-only CONTEXT, never value bindings); a scanned/image-only or password-protected PDF
 // returns readable:false with a plain-words reason, never empty context masquerading as a read.
 async function extractPdfRoute(req, res) {
-	setCors(res);
+	setCors(res, req);
 	const engine = sourceExtractEngine();
 	const pdfParse = optionalLib('pdf-parse');
 	if (!engine || !pdfParse || !pdfParse.PDFParse) {
@@ -1097,13 +1148,13 @@ const server = http.createServer((req, res) => {
 		console.log(`[lwd-proxy] ${req.method} ${url} from ${req.socket.remoteAddress}`);
 	}
 	if (req.method === 'OPTIONS') {
-		setCors(res);
+		setCors(res, req);
 		res.writeHead(204);
 		res.end();
 		return;
 	}
 	if (req.method === 'GET' && url.startsWith('/healthz')) {
-		setCors(res);
+		setCors(res, req);
 		// `ok` is true only when the active backend is actually configured, so the renderer's probe stays honest
 		// and falls back to the heuristic path when no backend is wired. The extra fields feed the Settings
 		// provider + usage display (plan 35 iter 4): which door is active, and - for the metered fallback - how
@@ -1143,7 +1194,7 @@ const server = http.createServer((req, res) => {
 	// `serving` marks the door selectBackend() would use now - so the selector can render every door and name
 	// which is live without re-deriving selection. Purely additive: id/label/default/tier are unchanged.
 	if (req.method === 'GET' && url.startsWith('/models')) {
-		setCors(res);
+		setCors(res, req);
 		const serving = selectBackend();
 		mergedModels()
 			.then(models => sendJson(res, 200, { backend: serving.name, backendMode: BACKEND_MODE, models }))
@@ -1159,7 +1210,7 @@ const server = http.createServer((req, res) => {
 	// POST /auth/openai/signout -> forgets the token bundle. The renderer only ever sees the code + a status
 	//   string; the token itself never leaves this process (decision 14).
 	if (req.method === 'GET' && url.startsWith('/auth/openai/start')) {
-		setCors(res);
+		setCors(res, req);
 		openaiOAuth.start()
 			.then(started => sendJson(res, 200, { ok: true, ...started }))
 			.catch(e => {
@@ -1174,12 +1225,12 @@ const server = http.createServer((req, res) => {
 		return;
 	}
 	if (req.method === 'GET' && url.startsWith('/auth/openai/status')) {
-		setCors(res);
+		setCors(res, req);
 		sendJson(res, 200, { ok: true, ...openaiOAuth.status() });
 		return;
 	}
 	if (req.method === 'POST' && url.startsWith('/auth/openai/signout')) {
-		setCors(res);
+		setCors(res, req);
 		openaiOAuth.signOut();
 		sendJson(res, 200, { ok: true, state: 'signed-out' });
 		return;
@@ -1188,7 +1239,7 @@ const server = http.createServer((req, res) => {
 		forwardMessages(req, res).catch(err => {
 			// Surface a clean error to the renderer; never echo the token or message body.
 			console.error('[lwd-proxy] request failed:', err && err.message ? err.message : err);
-			setCors(res);
+			setCors(res, req);
 			sendJson(res, 502, { type: 'error', error: { type: 'proxy_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
@@ -1196,7 +1247,7 @@ const server = http.createServer((req, res) => {
 	if (req.method === 'POST' && url.startsWith('/mcp/resolve')) {
 		resolveMcp(req, res).catch(err => {
 			console.error('[lwd-proxy] mcp resolve failed:', err && err.message ? err.message : err);
-			setCors(res);
+			setCors(res, req);
 			sendJson(res, 502, { error: { type: 'mcp_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
@@ -1204,7 +1255,7 @@ const server = http.createServer((req, res) => {
 	if (req.method === 'POST' && url.startsWith('/proxy/fetch')) {
 		proxyFetch(req, res).catch(err => {
 			console.error('[lwd-proxy] proxy fetch failed:', err && err.message ? err.message : err);
-			setCors(res);
+			setCors(res, req);
 			sendJson(res, 502, { error: { type: 'proxy_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
@@ -1212,7 +1263,7 @@ const server = http.createServer((req, res) => {
 	if (req.method === 'POST' && url.startsWith('/import/docx')) {
 		importDocx(req, res).catch(err => {
 			console.error('[lwd-proxy] docx import failed:', err && err.message ? err.message : err);
-			setCors(res);
+			setCors(res, req);
 			sendJson(res, 502, { error: { type: 'import_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
@@ -1220,7 +1271,7 @@ const server = http.createServer((req, res) => {
 	if (req.method === 'POST' && url.startsWith('/event')) {
 		postEvent(req, res).catch(err => {
 			console.error('[lwd-proxy] event log failed:', err && err.message ? err.message : err);
-			setCors(res);
+			setCors(res, req);
 			sendJson(res, 502, { error: { type: 'event_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
@@ -1228,7 +1279,7 @@ const server = http.createServer((req, res) => {
 	if (req.method === 'POST' && url.startsWith('/export/docx')) {
 		exportDocx(req, res).catch(err => {
 			console.error('[lwd-proxy] docx export failed:', err && err.message ? err.message : err);
-			setCors(res);
+			setCors(res, req);
 			sendJson(res, 502, { error: { type: 'export_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
@@ -1236,7 +1287,7 @@ const server = http.createServer((req, res) => {
 	if (req.method === 'POST' && url.startsWith('/sources/xlsx')) {
 		extractXlsx(req, res).catch(err => {
 			console.error('[lwd-proxy] xlsx extraction failed:', err && err.message ? err.message : err);
-			setCors(res);
+			setCors(res, req);
 			sendJson(res, 502, { error: { type: 'source_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
@@ -1244,12 +1295,12 @@ const server = http.createServer((req, res) => {
 	if (req.method === 'POST' && url.startsWith('/sources/pdf')) {
 		extractPdfRoute(req, res).catch(err => {
 			console.error('[lwd-proxy] pdf extraction failed:', err && err.message ? err.message : err);
-			setCors(res);
+			setCors(res, req);
 			sendJson(res, 502, { error: { type: 'source_error', message: String(err && err.message ? err.message : err) } });
 		});
 		return;
 	}
-	setCors(res);
+	setCors(res, req);
 	sendJson(res, 404, { type: 'error', error: { type: 'not_found', message: 'unknown route' } });
 });
 

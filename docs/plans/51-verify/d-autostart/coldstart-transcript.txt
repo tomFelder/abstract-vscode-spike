@@ -1,0 +1,43 @@
+[coldstart] fake HOME: /tmp/wpd-coldstart-home-LHRSys
+[coldstart] spawning broker exactly as the supervisor does (zero relevant env, ELECTRON_RUN_AS_NODE=1, cwd=/Users/tommy/Sites/abstract-vscode-spike)
+
+===== COLD AUTO-START RESULT =====
+{
+  "healthzAnsweredMs": 59,
+  "firstHealthz": {
+    "ok": false,
+    "backend": "openrouter",
+    "backendMode": "dynamic",
+    "reason": "unconfigured",
+    "meters": true,
+    "signedIn": false,
+    "dailyBudgetUsd": 1,
+    "dailyTotalUsd": 0
+  },
+  "signInDoorAnsweredMs": 60,
+  "signInDoorStatus": {
+    "ok": true,
+    "state": "signed-out"
+  },
+  "settledHealthz": {
+    "ok": false,
+    "backend": "openrouter",
+    "backendMode": "dynamic",
+    "reason": "unconfigured",
+    "meters": true,
+    "signedIn": false,
+    "dailyBudgetUsd": 1,
+    "dailyTotalUsd": 0
+  },
+  "within5s": true
+}
+
+===== BROKER STDOUT/STDERR (as the supervisor would log) =====
+[lwd-proxy] listening on localhost (dual-stack ::):8090 (backend selection dynamic, serving openrouter now)
+[lwd-proxy] fallback door: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$1/user
+[lwd-proxy] no OpenRouter key configured - the fallback runs on the built-in heuristic path
+[lwd-proxy] subscription door: "Sign in with ChatGPT"; model gpt-5.6-sol; token store /tmp/wpd-coldstart-home-LHRSys/.abstract/openai-oauth.json (0600)
+[lwd-proxy] not signed in - open Abstract Settings and choose "Sign in with ChatGPT" to serve on your own subscription
+
+===== FAKE HOME AFTER RUN (any writes land here, NOT the real ~/.abstract) =====
+(no .abstract created - nothing written)

@@ -1,0 +1,4 @@
+[90m[main 2026-08-03T15:30:00.708Z][0m [livingDocsBroker] spawning broker: node /Users/tommy/Sites/abstract-vscode-spike/scripts/lwd-model-broker.js (cwd /Users/tommy/Sites/abstract-vscode-spike)
+[90m[main 2026-08-03T15:30:00.897Z][0m [livingDocsBroker] [lwd-proxy] listening on localhost (dual-stack ::):8090 (backend selection dynamic, serving openai-oauth now)
+[90m[main 2026-08-03T15:30:01.215Z][0m [livingDocsBroker] broker healthy on 127.0.0.1:8090
+=== supervisor spawn->healthy timing (desktop, real launch) ===

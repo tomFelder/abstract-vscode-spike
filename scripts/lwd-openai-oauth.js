@@ -91,14 +91,103 @@ const REFRESH_SKEW_MS = 5 * 60 * 1000;
 // Codex access token JWT always carries an exp, so this only guards a malformed/stub-opaque token.
 const FALLBACK_EXPIRY_MS = 60 * 60 * 1000;
 
+// --- catalogue-as-data: the ~/.abstract/models.json overlay (plan 51 WP-D) ------------------------------
+// Model ids are DATA, not code (plan 51 WP-D): a config file at ~/.abstract/models.json overlays the built-in
+// gpt-5.6 defaults so the next OpenAI rename (as the 5.4->5.6 migration showed they do) never needs a broker
+// edit. There is NO live-list path for the ChatGPT-sign-in door: the Codex OAuth token carries no
+// model-listing entitlement (upstream-notes §10 - the Responses backend exposes no models route the token is
+// scoped for), so the overlay is the intended fix path, not a wire enumeration. Where a token ever DID permit
+// a live listing, that query would slot in ahead of the overlay inside listModels(); today it does not exist,
+// so the static list + overlay is the whole story and this comment is the honest record of why.
+//
+// Documented config shape (also in docs/plans/51-verify/upstream-notes.md §catalogue):
+//   {
+//     "openai-oauth": {
+//       "default": "gpt-5.6-terra",                       // optional: which id is the default (must be in the list)
+//       "models": [                                         // optional: the full replacement/extension list
+//         { "id": "gpt-5.6-sol",   "label": "Sol" },
+//         { "id": "gpt-5.7-nova",  "label": "Nova" }        // a NEW id ships with zero broker edits
+//       ]
+//     }
+//   }
+// Merge semantics (deliberately simple + predictable):
+//   - `models` REPLACES the built-in list when present and non-empty (so an operator can drop a retired id),
+//     else the built-ins stand. Each entry needs a string `id`; a missing/blank label falls back to the id.
+//   - `default` names the default id; if it names an id that IS in the effective list, that entry becomes the
+//     sole default, else the effective list's own default (or its first entry) is kept - never zero defaults.
+//   - A bogus file (unparseable, wrong-typed, or empty) degrades HONESTLY: it logs once and the built-ins
+//     stand. It NEVER crashes and NEVER empties the picker.
+function modelsConfigPath() {
+	return path.join(storeDir(), 'models.json');
+}
+
+// Log a bogus-config warning at most once per distinct message, so a persistently malformed file does not spam
+// the broker log on every /models poll (listModels runs per merged-catalogue request).
+let _lastConfigWarning = '';
+function warnBadModelsConfig(message) {
+	if (message === _lastConfigWarning) { return; }
+	_lastConfigWarning = message;
+	// eslint-disable-next-line no-console
+	console.error(`[lwd-oauth] ${message}; using the built-in model catalogue`);
+}
+
 /**
- * The models the signed-in subscription can drive (issue #179). STATIC today (see OPENAI_MODELS): the Codex
- * OAuth token cannot enumerate models live, so this returns the known Codex family. Async + Promise-returning
- * deliberately, so a future live query (or WP-D's models.json overlay) drops in here without changing the
- * broker's call site. Returns a fresh array copy so a caller can never mutate the module's list.
+ * Read + validate the openai-oauth slice of ~/.abstract/models.json. Returns the operator overlay, or null
+ * when there is no (valid) config. Never throws: a missing file is silent; a malformed one logs once and
+ * yields null so the caller keeps the built-in defaults.
+ * @returns {{ models?: {id: string; label: string}[]; default?: string } | null}
+ */
+function readModelsConfig() {
+	let raw;
+	try { raw = fs.readFileSync(modelsConfigPath(), 'utf8'); }
+	catch { return null; } // no file -> silently use the built-ins (the common, non-error case)
+	let parsed;
+	try { parsed = JSON.parse(raw); }
+	catch { warnBadModelsConfig('models.json is not valid JSON'); return null; }
+	if (!parsed || typeof parsed !== 'object') { warnBadModelsConfig('models.json is not a JSON object'); return null; }
+	const slice = parsed['openai-oauth'];
+	if (slice === undefined) { return null; } // a config with no openai-oauth slice -> built-ins, no warning
+	if (!slice || typeof slice !== 'object') { warnBadModelsConfig('models.json "openai-oauth" is not an object'); return null; }
+	const out = {};
+	if (slice.models !== undefined) {
+		if (!Array.isArray(slice.models)) { warnBadModelsConfig('models.json "openai-oauth.models" is not an array'); return null; }
+		const models = [];
+		for (const m of slice.models) {
+			if (!m || typeof m.id !== 'string' || !m.id) { continue; } // skip a malformed entry, keep the rest
+			models.push({ id: m.id, label: (typeof m.label === 'string' && m.label) ? m.label : m.id });
+		}
+		// An array that parsed but yielded no usable entry is treated as "no override" so the picker never empties.
+		if (models.length) { out.models = models; }
+		else { warnBadModelsConfig('models.json "openai-oauth.models" had no usable entries'); }
+	}
+	if (typeof slice.default === 'string' && slice.default) { out.default = slice.default; }
+	return (out.models || out.default) ? out : null;
+}
+
+/**
+ * The models the signed-in subscription can drive (issue #179), as DATA (plan 51 WP-D). Starts from the
+ * built-in gpt-5.6 Codex family (OPENAI_MODELS) and overlays ~/.abstract/models.json when present + valid, so
+ * a new/renamed id never needs a broker edit. There is no live-list query for this door (see the overlay
+ * comment above / upstream-notes §10); this method stays async + Promise-returning so a future live source
+ * drops in here without changing the broker's call site. Returns fresh objects so a caller can never mutate
+ * the module's list. Exactly one entry carries `default:true`.
  */
 async function listModels() {
-	return OPENAI_MODELS.map(m => ({ id: m.id, label: m.label, default: m.default }));
+	const config = readModelsConfig();
+	const base = (config && config.models)
+		? config.models.map(m => ({ id: m.id, label: m.label, default: false }))
+		: OPENAI_MODELS.map(m => ({ id: m.id, label: m.label, default: m.default }));
+	// Resolve the single default: an operator-named default that IS in the effective list wins; otherwise keep
+	// the list's own default (from the built-ins) or fall back to its first entry - never leave zero defaults.
+	const named = config && config.default && base.some(m => m.id === config.default) ? config.default : undefined;
+	let defaulted = false;
+	const withDefault = base.map(m => {
+		const isDefault = named ? m.id === named : (m.default === true && !defaulted);
+		if (isDefault) { defaulted = true; }
+		return { id: m.id, label: m.label, default: isDefault };
+	});
+	if (!defaulted && withDefault.length) { withDefault[0].default = true; }
+	return withDefault;
 }
 
 // The token bundle lives in its own 0600 file (see the header for why it is NOT in secrets.json). HOME is
@@ -554,8 +643,9 @@ module.exports = {
 	// endpoints / model (read by the proxy backend)
 	RESPONSES_URL,
 	OPENAI_MODEL,
-	// the subscription's model catalogue for the picker (issue #179; static today, live-query seam)
+	// the subscription's model catalogue for the picker (issue #179; overlaid by models.json, plan 51 WP-D)
 	listModels,
+	readModelsConfig,
 	// lifecycle
 	isSignedIn,
 	canServe,
@@ -576,5 +666,6 @@ module.exports = {
 	emailFromIdToken,
 	expiryFromToken,
 	get STORE_PATH() { return storePath(); },
+	get MODELS_CONFIG_PATH() { return modelsConfigPath(); },
 	_setSleepForTest,
 };

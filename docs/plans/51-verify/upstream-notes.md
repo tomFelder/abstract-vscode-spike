@@ -141,3 +141,31 @@ The subscription (Codex) path serves the **`gpt-5.6`** family; the OAuth bundle 
 - On 2xx: exchange the server's `authorization_code` + `code_verifier` at `/oauth/token` (form-encoded, `redirect_uri = {issuer}/deviceauth/callback`), stamp expiry from the access_token JWT, write the 0600 bundle.
 - Refresh switches to **JSON** body, drops `scope`, and classifies the permanent error codes.
 - Bundle now also records `granted_scopes` and (already) `account_id`.
+
+## 12. Catalogue as data - the `~/.abstract/models.json` overlay (plan 51 WP-D)
+
+Model ids are **data, not code**. The next OpenAI rename (the `gpt-5.4` -> `gpt-5.6` migration in §10 shows they happen) must not need a broker edit. Since the ChatGPT-sign-in door has **no live model-listing route** the OAuth token can enumerate (§10 - the Responses backend exposes none the token is scoped for), the intended fix path for a new/renamed id is this config overlay, not a wire query. `lwd-openai-oauth.listModels()` reads it and overlays it over the built-in gpt-5.6 defaults; the file is re-read on every call, so editing it is picked up without a broker restart. There is no live-list branch to prefer because there is no live list; the async signature of `listModels()` is kept only so a future live source could slot in ahead of the overlay if OpenAI ever ships one.
+
+**File:** `~/.abstract/models.json` (0600 in practice; the broker only reads it). **Shape:**
+
+```json
+{
+  "openai-oauth": {
+    "default": "gpt-5.6-terra",
+    "models": [
+      { "id": "gpt-5.6-sol",  "label": "Sol" },
+      { "id": "gpt-5.7-nova", "label": "Nova" }
+    ]
+  }
+}
+```
+
+**Merge semantics** (deliberately simple + predictable, all validated by `scripts/test/lwd-catalogue-fallback.test.js`):
+
+- `openai-oauth.models` **replaces** the built-in list when present and non-empty, so an operator can drop a retired id or add a brand-new one (e.g. `gpt-5.7-nova`) with zero broker edits. Each entry needs a string `id`; a missing/blank `label` falls back to the id. A malformed entry is skipped, the rest kept.
+- `openai-oauth.default` names which id is the sole `default:true`. If it names an id that IS in the effective list, that entry becomes the default; otherwise the effective list's own default (from the built-ins) or its first entry is kept - **never zero defaults**, so an absent/stale selection always resolves.
+- A **bogus file degrades honestly**: unparseable JSON, a non-object, a wrong-typed `models`, an empty list, or a list with no usable entries all log **once** (`[lwd-oauth] ...; using the built-in model catalogue`) and fall back to the built-ins. It never crashes and never empties the picker. A file with no `openai-oauth` slice is silent (the common non-error case).
+
+The overlay flows all the way through `/models` (the merged catalogue tags each entry's `backend`/`available`/`serving`), so the composer's picker shows the renamed/new id with no code change. The `LWD_OPENAI_MODEL` env override remains a second, lighter way to pin a single default slug.
+
+**Note on the OpenRouter (included) door:** its single model id is a product-labelled "Included model" (the raw upstream id is intentionally not surfaced), driven by `OPENROUTER_MODEL`; it needs no config overlay because it is one founder-chosen model, not a user-facing catalogue.
