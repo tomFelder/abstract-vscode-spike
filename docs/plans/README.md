@@ -78,6 +78,17 @@ The next major UI iteration: elevation shell (floating panels on `#EDEFF3` chrom
 | [49-screens-knowledge-agents-loop.md](49-screens-knowledge-agents-loop.md) | **Lane C second.** Knowledge as the SOURCE/KIND/SYNC/FEEDS/BINDS table + one-card health strip (absorbs #131 surfaces, #122 F12), and Agents as the trust ledger: policy-table cards (shared editor) + the line-addressed activity ledger. |
 | [RUN-editor-v2-loop.md](RUN-editor-v2-loop.md) | **The master loop prompt for the wave.** Paste into a fresh session: bootstrap + pre-step `screenRender` split PR, plan 44 alone, then 3 lanes under plan 43 §5 THE PROTOCOL, iteration budget 40, wave closing audit against the mock. |
 
+### The use-it-daily round (plans 51-54, authored 3 Aug 2026)
+
+Born from the founder's 3 Aug scratchpad triage: the app is close but not daily-usable, and the model door is the blocker. Decisions 176-181. Each plan is self-contained and carries its own RUN prompt (§7/§6) - the three-role protocol of decision 174 (Fable orchestrator that never implements, Opus implementer sub-agents, independent Opus adversarial validators, the exchange living on open PRs whose checklists only validators tick, screenshots as evidence). Run order: **51 → 52 → 53 → 54**.
+
+| File | What it is |
+|---|---|
+| [51-model-access-device-auth-loop.md](51-model-access-device-auth-loop.md) | **Run first - gates daily use.** The Codex device-authorization flow replaces loopback OAuth, per-request backend selection closes #120's root cause, the sign-in door tells the truth about failures, the model catalogue becomes data, and the OpenRouter fallback is proven with the founder key. One founder-in-the-loop pause (real subscription sign-in). |
+| [52-cursor-parity-loop.md](52-cursor-parity-loop.md) | **The core-loop feel wave.** Cursor-style inline diffs in the document (the centrepiece), workspace chat tabs + Cmd+T, `[[wikilinks]]`, the Files rail as a pure tree, editor find & replace, VS Code-style preview tabs + tab context menu, and the outline/History truth fixes. |
+| [53-strip-back-loop.md](53-strip-back-loop.md) | **The package cut.** Evidence-based extension keep-list (from ~108), cut-by-cut size ledger targeting <441MB from 1.39GB, packaged-build golden-path validation, plus the wave-50 issue hygiene (#253/#255 verify-close, #263 closing summary, #262 sweep). |
+| [54-structural-extras-loop.md](54-structural-extras-loop.md) | **Structure, run last.** Per-source agent permissions (read / read-write / read-write-delete, enforced not decorative), the template-from-examples wizard (F18), honest Review starter skills, and the artefact-placement tidy per doc 22. |
+
 ## How to use a handoff
 Paste the relevant file into a fresh Claude Code session. The handoffs are self-contained: repo /
 branch / build / conventions / design source / ordered work items / verification. Plans 06–33 are
