@@ -149,6 +149,46 @@ function isSignedIn() {
 	return !!(s && typeof s.access_token === 'string' && s.access_token.length > 0);
 }
 
+/**
+ * Whether the openai-oauth backend can serve THIS request, decided from the on-disk bundle alone (no network).
+ * This is the single source of truth for the broker's per-request backend selection (plan 51 WP-C, #120): the
+ * broker prefers openai-oauth whenever this returns true, else falls back to openrouter. "Can serve" means a
+ * bundle exists AND is either unexpired OR refreshable (it carries a refresh_token) - an expired-but-refreshable
+ * bundle still counts, because the forward path's validBundle() will transparently refresh it before the call.
+ * A bundle that is expired with no refresh_token is NOT servable and demotes to the fallback. Selection stays
+ * synchronous and side-effect-free (the actual refresh happens later, inside the forward); this only reads the
+ * bundle the module already owns, so bundle parsing lives in exactly one place.
+ * @returns {boolean}
+ */
+function canServe() {
+	return bundleHealth().canServe;
+}
+
+/**
+ * Structured availability of the openai-oauth door, for /healthz + the /models merge. Reports the truthful
+ * state from the bundle without ever making a network call. `state` is a plain-words summary the UI can key
+ * off; `canServe` is the boolean the broker's selection uses.
+ * @returns {{ signedIn: boolean; canServe: boolean; expired: boolean; refreshable: boolean; state: 'signed-out'|'valid'|'expired-refreshable'|'expired-stuck'; email?: string; }}
+ */
+function bundleHealth() {
+	const s = readStore();
+	const hasAccess = !!(s && typeof s.access_token === 'string' && s.access_token.length > 0);
+	if (!hasAccess) {
+		return { signedIn: false, canServe: false, expired: false, refreshable: false, state: 'signed-out' };
+	}
+	const refreshable = typeof s.refresh_token === 'string' && s.refresh_token.length > 0;
+	// Treat "within the refresh skew of expiry" as expired for selection: the forward would refresh it anyway,
+	// and a bundle that close to the boundary is not safely servable without one. A bundle with no numeric
+	// expiry (opaque token) is treated as unexpired - only a real, past `exp` demotes it.
+	const expired = typeof s.expires_at === 'number' && s.expires_at - REFRESH_SKEW_MS <= Date.now();
+	const canServeNow = !expired || refreshable;
+	let state;
+	if (!expired) { state = 'valid'; }
+	else if (refreshable) { state = 'expired-refreshable'; }
+	else { state = 'expired-stuck'; }
+	return { signedIn: true, canServe: canServeNow, expired, refreshable, state, email: (s && s.email) || undefined };
+}
+
 // --- JWT claims -> account id + expiry -------------------------------------------------------------------
 // The id_token/access_token are JWTs. We only READ the payload (never verify the signature here - the token
 // came straight from the token endpoint over TLS in this same process); a malformed token just yields no
@@ -518,6 +558,8 @@ module.exports = {
 	listModels,
 	// lifecycle
 	isSignedIn,
+	canServe,
+	bundleHealth,
 	validBundle,
 	refresh,
 	// interactive device flow
