@@ -49,15 +49,21 @@ function writeModelsConfig(home, config) {
 	fs.writeFileSync(path.join(dir, 'models.json'), typeof config === 'string' ? config : JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
-/** Write a valid openai-oauth bundle so the door can serve (used by the "signed in" states). */
-function writeBundle(home) {
+/**
+ * Write an openai-oauth bundle into a fake HOME. Defaults to a valid, servable bundle; pass
+ * `{ expired: true, refreshable: false }` for the expired-unrefreshable ("signed in but cannot serve") state.
+ */
+function writeBundle(home, opts = {}) {
+	const expired = opts.expired === true;
+	const refreshable = opts.refreshable !== false;
+	const expSec = expired ? -60 : 3600;
 	const bundle = {
-		access_token: mintJwt({ exp: Math.floor(Date.now() / 1000) + 3600, scope: 'openid profile email' }),
-		refresh_token: 'stub-refresh-token',
+		access_token: mintJwt({ exp: Math.floor(Date.now() / 1000) + expSec, scope: 'openid profile email' }),
+		refresh_token: refreshable ? 'stub-refresh-token' : '',
 		id_token: mintJwt({ 'https://api.openai.com/auth': { chatgpt_account_id: 'acct_stub', email: 'founder@example.com' }, email: 'founder@example.com' }),
 		account_id: 'acct_stub',
 		email: 'founder@example.com',
-		expires_at: Date.now() + 3600 * 1000,
+		expires_at: Date.now() + expSec * 1000,
 		granted_scopes: 'openid profile email offline_access',
 	};
 	const dir = path.join(home, '.abstract');
@@ -395,6 +401,51 @@ test('/models reflects the ~/.abstract/models.json overlay (a renamed/new id app
 // =========================================================================================================
 // 5) E2E: the renderer->broker POST /event CORS fix (scoped origin echoed; the event lands)
 // =========================================================================================================
+
+// =========================================================================================================
+// 6) E2E: the signed-in-but-cannot-serve wire truth (an expired-unrefreshable bundle)
+// =========================================================================================================
+
+test('signed in but cannot serve: an expired-unrefreshable bundle -> /healthz says signedIn:true while openrouter serves; /models marks the own-key door unavailable but the included door serving', async () => {
+	const home = mkHome();
+	// An expired bundle with NO refresh token: the ChatGPT door is signed in (a bundle is on disk) but cannot
+	// serve (nothing to refresh), so the broker must fall back to openrouter and say so - the exact state the UI
+	// phrases as "signed in to ChatGPT, but the included model is serving".
+	writeBundle(home, { expired: true, refreshable: false });
+	const openrouter = await startUpstream((req, res) => { res.writeHead(200, {}); res.end('{}'); });
+	const port = 8480 + Math.floor(Math.random() * 90);
+	const broker = startBroker({ home, port, openrouterUrl: openrouter.base, openrouterKey: 'sk-or-test' });
+	try {
+		await broker.ready;
+		const health = await getJson(port, '/healthz');
+		const models = await getJson(port, '/models');
+		const ownKey = models.json.models.filter(m => m.backend === 'openai-oauth');
+		const included = models.json.models.filter(m => m.tier === 'included');
+		assert.deepStrictEqual({
+			// signed in (a bundle exists) BUT the serving door is openrouter (the included model), never chatgpt.
+			signedIn: health.json.signedIn,
+			servingBackend: health.json.backend,
+			ok: health.json.ok,
+			reason: health.json.reason,
+			// /models tells the same truth: the own-key door is unavailable, the included door is the serving one.
+			ownKeyAvailable: ownKey.some(m => m.available),
+			includedServing: included.some(m => m.serving),
+			includedAvailable: included.every(m => m.available),
+		}, {
+			signedIn: true,
+			servingBackend: 'openrouter',
+			ok: true,
+			reason: 'ready',
+			ownKeyAvailable: false,
+			includedServing: true,
+			includedAvailable: true,
+		});
+	} finally {
+		await killBroker(broker.child);
+		openrouter.server.close();
+		fs.rmSync(home, { recursive: true, force: true });
+	}
+});
 
 test('POST /event: an allowed app Origin is echoed (scoped, not blanket) and the event is written to events.log', async () => {
 	const home = mkHome();
