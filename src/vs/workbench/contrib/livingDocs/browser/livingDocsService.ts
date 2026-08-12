@@ -31,7 +31,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { ChatGptSignInStage, IBoundSourceSummary, IChatGptSignInStart, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { ChatGptSignInStage, IBoundSourceSummary, IChatGptSignInStart, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID, DOCUMENTS_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageAssetName } from '../common/livingDocAssets.js';
@@ -402,6 +402,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Pin 6 "Present": the context menu opens the document then asks its editor to run the existing Present flow.
 	private readonly _onDidRequestPresent = this._register(new Emitter<{ docId: string }>());
 	readonly onDidRequestPresent: Event<{ docId: string }> = this._onDidRequestPresent.event;
+
+	// Pin 6 "Rename…" / "Bind Sources…": the two menu items whose UI lives on the Files rail (an edit-in-place
+	// tree row, and the Context tab's Add-source picker). Plan 52 WP-F raises the SAME menu from a product tab,
+	// which holds no reference to the rail, so both items route through the service exactly as "Present" does.
+	private readonly _onDidRequestRenameDocument = this._register(new Emitter<{ docId: string }>());
+	readonly onDidRequestRenameDocument: Event<{ docId: string }> = this._onDidRequestRenameDocument.event;
+
+	private readonly _onDidRequestBindSources = this._register(new Emitter<{ docId: string }>());
+	readonly onDidRequestBindSources: Event<{ docId: string }> = this._onDidRequestBindSources.event;
 
 	private readonly _onDidRequestRevealBlock = this._register(new Emitter<{ docId: string; blockIndex: number }>());
 	readonly onDidRequestRevealBlock: Event<{ docId: string; blockIndex: number }> = this._onDidRequestRevealBlock.event;
@@ -1105,6 +1114,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// present logic. The editor listens for its own docId and opens the same modal the header action drives.
 		await this._editors.openEditor({ resource, options: { pinned: true } });
 		this._onDidRequestPresent.fire({ docId: resource.toString() });
+	}
+
+	async requestRenameDocument(resource: URI): Promise<void> {
+		// Pin 6 "Rename…": the rename UI is the Files tree row's edit-in-place input, so this reveals the Workspace
+		// rail (the tab-strip caller of plan 52 WP-F may raise the menu while the sidebar is collapsed) and asks the
+		// rail to mount it. `false` keeps focus where it is, so the rail's own input can take it. Never renames here
+		// - `renameFile` does the work once the user commits.
+		await this._views.openView(DOCUMENTS_VIEW_ID, false);
+		this._onDidRequestRenameDocument.fire({ docId: resource.toString() });
+	}
+
+	async requestBindSources(resource: URI): Promise<void> {
+		// Pin 6 "Bind Sources…": open the document (the Context tab tracks the ACTIVE document), reveal the
+		// Workspace rail, then ask it to switch to Context and expand the Add-source picker - the same door the
+		// PN.1 nudge uses. Pinned, because choosing a menu item is a deliberate "work on this" gesture.
+		await this._editors.openEditor({ resource, options: { pinned: true } });
+		await this._views.openView(DOCUMENTS_VIEW_ID, false);
+		this._onDidRequestBindSources.fire({ docId: resource.toString() });
 	}
 
 	// Deep-link a Home NEEDS-YOU card into its document (plan 48 H2.3u): open the document, open the Review

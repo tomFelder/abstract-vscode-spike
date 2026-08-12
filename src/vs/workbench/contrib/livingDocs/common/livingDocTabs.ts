@@ -29,6 +29,13 @@ export interface ITabModel {
 	 * `none` = no dot (a plain doc / a source with nothing to say). Only the active tab renders its dot.
 	 */
 	readonly dot: 'ok' | 'attention' | 'none';
+	/**
+	 * True while this tab is the group's PREVIEW tab (plan 52 WP-F): the ephemeral "I am only peeking" tab a
+	 * single click in the Files tree opens, which the next single click REUSES instead of adding a tab. Rendered
+	 * italic, exactly like VS Code's preview tab. Mirrors `IEditorGroup.isPinned(editor) === false` - the strip
+	 * never owns this state, it projects the group's own preview slot (a group has at most one).
+	 */
+	readonly preview: boolean;
 }
 
 /** The whole tab strip for one editor group: the ordered tabs plus which one is active. */
@@ -80,27 +87,46 @@ export function neighbourAfterClose(model: ITabStripModel, closeId: string): str
 export interface IPersistedTabStrip {
 	readonly ids: readonly string[];
 	readonly activeId: string | undefined;
+	/**
+	 * The id of the tab that was the group's PREVIEW tab, or undefined when every tab was pinned (plan 52 WP-F).
+	 * A group has at most one preview tab, so this is a single id rather than a set. Restoring it keeps the
+	 * relaunch honest: a tab the user only peeked at comes back italic and is still reused by the next peek,
+	 * matching what VS Code does for its own tabs (`EditorGroupModel` serialises its preview index too).
+	 */
+	readonly previewId: string | undefined;
 }
 
-/** Project a strip down to its persistable shape (ids + active id). */
+/**
+ * The id of the strip's preview tab, or undefined when every tab is pinned. A group owns at most ONE preview
+ * tab (core's `EditorGroupModel.preview`), so a well-formed strip has at most one `preview: true` tab; if a
+ * malformed model ever carried more, the FIRST wins, so this is total and never throws.
+ */
+export function previewTabId(model: ITabStripModel): string | undefined {
+	return model.tabs.find(t => t.preview)?.id;
+}
+
+/** Project a strip down to its persistable shape (ids + active id + the preview tab's id). */
 export function toPersistedTabStrip(model: ITabStripModel): IPersistedTabStrip {
-	return { ids: model.tabs.map(t => t.id), activeId: model.activeId };
+	return { ids: model.tabs.map(t => t.id), activeId: model.activeId, previewId: previewTabId(model) };
 }
 
 /**
  * Parse a persisted strip back from its stored JSON string, tolerating any malformed/legacy value by returning
  * an empty persisted strip (never throws - a corrupt key must degrade to "no restored tabs", not wedge the
- * editor). Validates shape defensively: `ids` must be an array of strings; `activeId`, when present, must be a
- * string that also appears in `ids` (else it is dropped so no phantom active tab survives).
+ * editor). Validates shape defensively: `ids` must be an array of strings; `activeId` and `previewId`, when
+ * present, must each be a string that also appears in `ids` (else they are dropped so no phantom active or
+ * preview tab survives). A key written before WP-F carries no `previewId` at all, which reads back as
+ * undefined - every restored tab is then pinned, exactly as that older build behaved.
  */
 export function parsePersistedTabStrip(raw: string | undefined): IPersistedTabStrip {
-	if (!raw) { return { ids: [], activeId: undefined }; }
+	if (!raw) { return { ids: [], activeId: undefined, previewId: undefined }; }
 	try {
-		const parsed = JSON.parse(raw) as { ids?: unknown; activeId?: unknown };
+		const parsed = JSON.parse(raw) as { ids?: unknown; activeId?: unknown; previewId?: unknown };
 		const ids = Array.isArray(parsed.ids) ? parsed.ids.filter((id): id is string => typeof id === 'string') : [];
 		const activeId = typeof parsed.activeId === 'string' && ids.includes(parsed.activeId) ? parsed.activeId : undefined;
-		return { ids, activeId };
+		const previewId = typeof parsed.previewId === 'string' && ids.includes(parsed.previewId) ? parsed.previewId : undefined;
+		return { ids, activeId, previewId };
 	} catch {
-		return { ids: [], activeId: undefined };
+		return { ids: [], activeId: undefined, previewId: undefined };
 	}
 }
