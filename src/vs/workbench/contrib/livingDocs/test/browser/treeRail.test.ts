@@ -10,7 +10,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
 import { TreeRailLeafRenderer } from '../../browser/treeRailFilesTree.js';
-import { ASSETS_FOLDER_ID, buildFileTree, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, sourceKindGlyph } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, sourceKindGlyph } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -31,55 +31,55 @@ function doc(title: string, headings: readonly { text: string; level: number }[]
 suite('treeRail', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('buildFileTree groups documents under Reports and deduped sources under Sources', () => {
-		const folders = buildFileTree([
+	test('buildFileTree returns root documents and sources separately - no synthetic "Reports" wrapper (plan 52 WP-D)', () => {
+		const tree = buildFileTree([
 			{ title: 'Weekly Summary', resource: WEEKLY, pendingCount: 1, sources: ['metrics.csv', 'crm.api'] },
 			{ title: 'Board Note', resource: BOARD, pendingCount: 0, sources: ['metrics.csv'] },
 		]);
-		const projection = folders.map(f => ({
-			name: f.name,
-			items: f.items.map(i => ({ label: i.label, kind: i.kind, pending: i.pending })),
-		}));
-		// Reports sorted by title (pending = pendingCount > 0); Sources deduped + sorted.
-		assert.deepStrictEqual(projection, [
-			{
-				name: 'Reports', items: [
-					{ label: 'Board Note', kind: 'doc', pending: false },
-					{ label: 'Weekly Summary', kind: 'doc', pending: true },
-				]
-			},
-			{
-				name: 'Sources', items: [
-					{ label: 'crm.api', kind: 'source', pending: false },
-					{ label: 'metrics.csv', kind: 'source', pending: false },
-				]
-			},
-		]);
+		const project = (items: readonly ITreeRailItem[]) => items.map(i => ({ label: i.label, kind: i.kind, pending: i.pending }));
+		// Root documents sorted by title (pending = pendingCount > 0); sources deduped + sorted, and no longer
+		// pre-grouped - placement is the caller's call now.
+		assert.deepStrictEqual({
+			items: project(tree.items),
+			folders: tree.folders,
+			sources: project(tree.sources),
+			unsupported: project(tree.unsupported),
+		}, {
+			items: [
+				{ label: 'Board Note', kind: 'doc', pending: false },
+				{ label: 'Weekly Summary', kind: 'doc', pending: true },
+			],
+			folders: [],
+			sources: [
+				{ label: 'crm.api', kind: 'source', pending: false },
+				{ label: 'metrics.csv', kind: 'source', pending: false },
+			],
+			unsupported: [],
+		});
 	});
 
 	test('buildFileTree computes each row\'s status dot: doc precedence (grey/green/yellow/red) + grey source/unsupported dashes (livingDocs #212)', () => {
-		const folders = buildFileTree([
+		const tree = buildFileTree([
 			{ title: 'Calm', resource: URI.file('/ws/Calm.md'), pendingCount: 0, sources: ['metrics.csv'] },
 			{ title: 'Applied', resource: URI.file('/ws/Applied.md'), pendingCount: 0, sources: [], unseenAgentEdits: 2 },
 			{ title: 'Pending', resource: URI.file('/ws/Pending.md'), pendingCount: 3, sources: [] },
 			{ title: 'Needs input', resource: URI.file('/ws/Needs.md'), pendingCount: 1, sources: [], stale: true },
 		], ['legacy.doc']);
-		const projection = folders.map(f => ({
-			name: f.name,
-			items: f.items.map(i => ({ label: i.label, kind: i.kind, shape: i.dot.shape, color: i.dot.color })),
-		}));
-		assert.deepStrictEqual(projection, [
-			{
-				name: 'Reports', items: [
-					{ label: 'Applied', kind: 'doc', shape: 'dot', color: 'green' },
-					{ label: 'Calm', kind: 'doc', shape: 'dot', color: 'grey' },
-					{ label: 'Needs input', kind: 'doc', shape: 'dot', color: 'red' },
-					{ label: 'Pending', kind: 'doc', shape: 'dot', color: 'yellow' },
-				]
-			},
-			{ name: 'Sources', items: [{ label: 'metrics.csv', kind: 'source', shape: 'dash', color: 'grey' }] },
-			{ name: 'Not yet imported', items: [{ label: 'legacy.doc', kind: 'unsupported', shape: 'dash', color: 'grey' }] },
-		]);
+		const dots = (items: readonly ITreeRailItem[]) => items.map(i => ({ label: i.label, kind: i.kind, shape: i.dot.shape, color: i.dot.color }));
+		assert.deepStrictEqual({
+			items: dots(tree.items),
+			sources: dots(tree.sources),
+			unsupported: dots(tree.unsupported),
+		}, {
+			items: [
+				{ label: 'Applied', kind: 'doc', shape: 'dot', color: 'green' },
+				{ label: 'Calm', kind: 'doc', shape: 'dot', color: 'grey' },
+				{ label: 'Needs input', kind: 'doc', shape: 'dot', color: 'red' },
+				{ label: 'Pending', kind: 'doc', shape: 'dot', color: 'yellow' },
+			],
+			sources: [{ label: 'metrics.csv', kind: 'source', shape: 'dash', color: 'grey' }],
+			unsupported: [{ label: 'legacy.doc', kind: 'unsupported', shape: 'dash', color: 'grey' }],
+		});
 	});
 
 	test('TreeRailLeafRenderer emits the LWD chip or the pending pill from the REAL render path, never both (P5.3)', () => {
@@ -141,19 +141,19 @@ suite('treeRail', () => {
 		);
 	});
 
-	test('buildTreeRailNodes adds a capped, MRU-ordered Recent group above Reports with distinct collision-free ids, hidden below two (livingDocs #212)', () => {
+	test('buildTreeRailNodes adds a capped, MRU-ordered Recent group above the file tree with distinct collision-free ids, hidden below two (livingDocs #212)', () => {
 		const docInputs = ['A', 'B', 'C', 'D', 'E', 'F'].map(t => ({ title: t, resource: URI.file(`/ws/${t}.md`), pendingCount: 0, sources: [] }));
 		// Six MRU resources (newest first); the group caps at five and drops the rest, in MRU order.
 		const recent = ['F', 'E', 'D', 'C', 'B', 'A'].map(t => URI.file(`/ws/${t}.md`));
 		const nodes = buildTreeRailNodes(docInputs, [], recent);
 		const recentNode = nodes.find(n => n.type === 'folder' && n.id === RECENT_FOLDER_ID);
-		assert.ok(recentNode && recentNode.type === 'folder', 'Recent is the first group above Reports');
+		assert.ok(recentNode && recentNode.type === 'folder', 'Recent is the first group above the file tree');
 		assert.deepStrictEqual(
 			{
 				firstGroupIsRecent: nodes[0].type === 'folder' && nodes[0].id === RECENT_FOLDER_ID,
 				recentLeaves: recentNode.children.map(c => c.type === 'leaf' ? { label: c.item.label, id: c.id } : { folder: c.label }),
-				// A Recent leaf carries the distinct RECENT_FOLDER_ID prefix, never colliding with its Reports twin.
-				idsAllDistinctFromReports: recentNode.children.every(c => c.id.startsWith(`${RECENT_FOLDER_ID}/leaf:`)),
+				// A Recent leaf carries the distinct RECENT_FOLDER_ID prefix, never colliding with its file-tree twin.
+				idsAllDistinctFromTree: recentNode.children.every(c => c.id.startsWith(`${RECENT_FOLDER_ID}/leaf:`)),
 				// One recent doc is not worth a group.
 				hiddenBelowTwo: buildTreeRailNodes(docInputs, [], [URI.file('/ws/A.md')]).some(n => n.type === 'folder' && n.id === RECENT_FOLDER_ID),
 			},
@@ -166,17 +166,17 @@ suite('treeRail', () => {
 					{ label: 'C', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/C.md').toString()}` },
 					{ label: 'B', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/B.md').toString()}` },
 				],
-				idsAllDistinctFromReports: true,
+				idsAllDistinctFromTree: true,
 				hiddenBelowTwo: false,
 			},
 		);
 	});
 
 	test('buildFileTree resolves a file source to a URI in the referencing document\'s folder (for the Files-tab menu), but not an api (URL) source', () => {
-		const folders = buildFileTree([
+		const tree = buildFileTree([
 			{ title: 'Weekly Summary', resource: WEEKLY, pendingCount: 0, sources: ['metrics.csv', 'https://api.example.com/mrr'] },
 		]);
-		const sources = folders.find(f => f.name === 'Sources')!.items;
+		const sources = tree.sources;
 		const csv = sources.find(i => i.label === 'metrics.csv')!;
 		const api = sources.find(i => i.label === 'https://api.example.com/mrr')!;
 		// A file source is renamable/deletable, so it carries a real sibling URI; an api (URL) source has no file.
@@ -189,16 +189,16 @@ suite('treeRail', () => {
 		const B = URI.file('/ws/subfolder-a/note.md');
 		const C = URI.file('/ws/subfolder-a/deep/deep.md');
 		const D = URI.file('/ws/reports/2025/q1.md');
-		const folders = buildFileTree([
+		const tree = buildFileTree([
 			{ title: 'Root Doc', resource: A, pendingCount: 0, sources: [], folder: '' },
 			{ title: 'Sub Note', resource: B, pendingCount: 0, sources: [], folder: 'subfolder-a' },
 			{ title: 'Deep Doc', resource: C, pendingCount: 0, sources: [], folder: 'subfolder-a/deep' },
 			{ title: 'Q1', resource: D, pendingCount: 0, sources: [], folder: 'reports/2025' },
 		]);
-		// One "Reports" group: root docs at top level, subfolders nested by their path (not flattened).
-		const reports = folders.find(f => f.name === 'Reports')!;
-		assert.deepStrictEqual(reports.items.map(i => i.label), ['Root Doc']);
-		const shape = reports.folders.map(f => ({
+		// The workspace's own shape: root docs at the top level, subfolders nested by their path (not flattened),
+		// and nothing synthetic wrapping either (plan 52 WP-D).
+		assert.deepStrictEqual(tree.items.map(i => i.label), ['Root Doc']);
+		const shape = tree.folders.map(f => ({
 			name: f.name,
 			items: f.items.map(i => i.label),
 			subs: f.folders.map(s => ({ name: s.name, items: s.items.map(i => i.label) })),
@@ -211,20 +211,18 @@ suite('treeRail', () => {
 
 	test('buildFileTree lists discovered non-Markdown files as SOURCES and unsupported files as "Not yet imported" (F9/F10)', () => {
 		const A = URI.file('/ws/report.md');
-		const folders = buildFileTree(
+		const tree = buildFileTree(
 			[{ title: 'Report', resource: A, pendingCount: 0, sources: ['metrics.csv'], folder: '' }],
 			['data.csv', 'notes.txt', 'chart.png', 'metrics.csv', 'brief.docx', 'old.doc', 'deck.pptx'],
 		);
-		const sources = folders.find(f => f.name === 'Sources')!;
 		// Bound source + discovered data/txt/image files, deduped (metrics.csv appears once), sorted.
-		assert.deepStrictEqual(sources.items.map(i => ({ label: i.label, kind: i.kind })), [
+		assert.deepStrictEqual(tree.sources.map(i => ({ label: i.label, kind: i.kind })), [
 			{ label: 'chart.png', kind: 'source' },
 			{ label: 'data.csv', kind: 'source' },
 			{ label: 'metrics.csv', kind: 'source' },
 			{ label: 'notes.txt', kind: 'source' },
 		]);
-		const notYet = folders.find(f => f.name === 'Not yet imported')!;
-		assert.deepStrictEqual(notYet.items.map(i => ({ label: i.label, kind: i.kind, hasReason: !!i.note, importable: !!i.importable })), [
+		assert.deepStrictEqual(tree.unsupported.map(i => ({ label: i.label, kind: i.kind, hasReason: !!i.note, importable: !!i.importable })), [
 			{ label: 'brief.docx', kind: 'unsupported', hasReason: false, importable: true },
 			{ label: 'deck.pptx', kind: 'unsupported', hasReason: true, importable: false },
 			{ label: 'old.doc', kind: 'unsupported', hasReason: true, importable: false },
@@ -241,7 +239,7 @@ suite('treeRail', () => {
 		assert.ok(!docx?.reason, 'an importable .docx carries no refusal reason');
 		const doc = classifyWorkspaceExtra('old.doc');
 		assert.ok(doc?.reason && doc.reason.length > 0, 'a genuinely-unsupported file carries a plain-words reason');
-		// Never surfaced: Markdown (the Reports tree owns it), lock sidecars, the agents registry, hidden files.
+		// Never surfaced: Markdown (the file tree owns it), lock sidecars, the agents registry, hidden files.
 		assert.strictEqual(classifyWorkspaceExtra('doc.md'), undefined);
 		assert.strictEqual(classifyWorkspaceExtra('report.lock.json'), undefined);
 		assert.strictEqual(classifyWorkspaceExtra('agents.json'), undefined);
@@ -254,13 +252,12 @@ suite('treeRail', () => {
 		assert.deepStrictEqual(classifyWorkspaceExtra('legacy.XLS'), { kind: 'source', action: 'use-xlsx' });
 		assert.deepStrictEqual(classifyWorkspaceExtra('Report.pdf'), { kind: 'source', action: 'use-pdf' });
 		// A workbook/PDF lands in SOURCES (with its action), never in the dead "Not yet imported" section.
-		const folders = buildFileTree([], ['Budget.xlsx', 'Report.pdf']);
-		const sources = folders.find(f => f.name === 'Sources')!;
-		assert.deepStrictEqual(sources.items.map(i => ({ label: i.label, kind: i.kind, action: i.action })), [
+		const tree = buildFileTree([], ['Budget.xlsx', 'Report.pdf']);
+		assert.deepStrictEqual(tree.sources.map(i => ({ label: i.label, kind: i.kind, action: i.action })), [
 			{ label: 'Budget.xlsx', kind: 'source', action: 'use-xlsx' },
 			{ label: 'Report.pdf', kind: 'source', action: 'use-pdf' },
 		]);
-		assert.strictEqual(folders.find(f => f.name === 'Not yet imported'), undefined);
+		assert.deepStrictEqual(tree.unsupported, []);
 	});
 
 	test('isAssetName flags image/screenshot files (case-insensitive) and nothing else', () => {
@@ -277,14 +274,11 @@ suite('treeRail', () => {
 			{ title: 'Root Doc', resource: A, pendingCount: 0, sources: ['metrics.csv'], folder: '' },
 			{ title: 'Q1', resource: B, pendingCount: 0, sources: [], folder: 'reports/2025' },
 		]);
-		// Reports keeps the on-disk hierarchy as nested folder nodes; Sources becomes a folder of leaves.
+		// The on-disk hierarchy IS the top level - real directories first, then root documents, with no
+		// synthetic wrapper above them (plan 52 WP-D). Sources trails as its own group.
 		assert.deepStrictEqual(project(nodes), [
-			{
-				folder: 'Reports', children: [
-					{ folder: 'reports', children: [{ folder: '2025', children: [{ leaf: 'Q1', kind: 'doc' }] }] },
-					{ leaf: 'Root Doc', kind: 'doc' },
-				]
-			},
+			{ folder: 'reports', children: [{ folder: '2025', children: [{ leaf: 'Q1', kind: 'doc' }] }] },
+			{ leaf: 'Root Doc', kind: 'doc' },
 			{ folder: 'Sources', children: [{ leaf: 'metrics.csv', kind: 'source' }] },
 		]);
 	});
@@ -297,8 +291,7 @@ suite('treeRail', () => {
 			{ title: 'Status', resource: URI.file('/ws/reports/Status.md'), pendingCount: 0, sources: [], folder: 'reports' },
 			{ title: 'Status', resource: URI.file('/ws/reports/Status-2.md'), pendingCount: 0, sources: [], folder: 'reports' },
 		]);
-		const reports = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'Reports')!;
-		const reportsFolder = reports.children.find((c): c is Extract<ITreeRailNode, { type: 'folder' }> => c.type === 'folder' && c.label === 'reports')!;
+		const reportsFolder = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'reports')!;
 		const leafIds = reportsFolder.children.filter(c => c.type === 'leaf').map(c => c.id);
 		assert.strictEqual(new Set(leafIds).size, 2, 'the two same-titled documents have distinct leaf ids');
 		assert.ok(leafIds.every(id => id.includes('Status')), 'each leaf id carries its own resource');
@@ -456,7 +449,7 @@ suite('treeRail', () => {
 	});
 
 	test('filterTreeRailNodes narrows to matching rows, keeps ancestor folders, and passes a blank query through', () => {
-		// Two docs in nested Reports folders + one loose source, so the filter must prune folders that hold no match.
+		// Two docs in nested folders + one loose source, so the filter must prune folders that hold no match.
 		const nodes = buildTreeRailNodes(
 			[
 				{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), pendingCount: 0, sources: [], folder: 'reports/2025' },

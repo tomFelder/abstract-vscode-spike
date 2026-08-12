@@ -61,6 +61,23 @@ export interface ITreeRailFolder {
 	readonly folders: readonly ITreeRailFolder[];
 }
 
+/**
+ * What `buildFileTree` finds in a workspace folder, separated by kind rather than pre-grouped (plan 52 WP-D).
+ * `items` + `folders` ARE the file tree - the workspace's own shape, with nothing synthetic above it. The
+ * other two are adjacent concerns the caller places: sources belong to Context, and unsupported files are a
+ * standing "we saw these and could not import them" affordance, never a silent drop (F10).
+ */
+export interface IFileTree {
+	/** Documents sitting at the root of the workspace folder. */
+	readonly items: readonly ITreeRailItem[];
+	/** The on-disk subfolder hierarchy, verbatim. */
+	readonly folders: readonly ITreeRailFolder[];
+	/** Bound sources + discovered data files, deduped and kind-tagged (F9). */
+	readonly sources: readonly ITreeRailItem[];
+	/** Files we cannot import yet, each carrying a plain-words reason (F10). */
+	readonly unsupported: readonly ITreeRailItem[];
+}
+
 export interface ITreeRailDocInput {
 	readonly title: string;
 	readonly resource: URI;
@@ -93,7 +110,7 @@ export interface ITreeRailDocInput {
 export function classifyWorkspaceExtra(name: string): { kind: 'source' | 'unsupported'; reason?: string; action?: TreeRailAction; importable?: boolean } | undefined {
 	if (!name || name.startsWith('.')) { return undefined; }
 	const lower = name.toLowerCase();
-	// Markdown documents are the Reports tree's job; system sidecars and the agents registry are not user data.
+	// Markdown documents are the file tree's job; system sidecars and the agents registry are not user data.
 	if (lower.endsWith('.md')) { return undefined; }
 	if (lower.endsWith('.lock.json') || lower === 'agents.json') { return undefined; }
 	const dot = lower.lastIndexOf('.');
@@ -172,16 +189,18 @@ interface IMutableFolder {
 }
 
 /**
- * The Files-tab folder tree. Living documents land under "Reports" with their on-disk subfolder hierarchy
- * preserved (F7 - nested folders are not flattened). The distinct sources the documents bind to, plus any
- * data/source files (CSV/txt/image) discovered in the folder, land under "Sources" (deduped, kind-tagged,
- * F9). Files we cannot yet import (.doc/.docx and kin) land under "Not yet imported" with a plain-words
- * reason (F10). Empty groups are omitted so the rail only shows what the workspace actually has. Pure.
+ * The Files-tab folder tree. Living documents ARE the tree: a root-level document is a root-level row and an
+ * on-disk subfolder is a folder row, verbatim (F7 - nested folders are not flattened), with no synthetic
+ * grouping above them. The distinct sources the documents bind to, plus any data/source files (CSV/txt/image)
+ * discovered in the folder, come back separately (deduped, kind-tagged, F9), as do files we cannot yet import
+ * (.doc/.docx and kin) with a plain-words reason (F10). Pure - placement is the caller's decision.
+ *
+ * The "Reports" wrapper this used to push (plan 52 WP-D, decision 180) is gone: it was a synthetic group that
+ * made a document tool look like a reporting tool and cost every row a level of indent for nothing. A folder
+ * of Markdown files should read as that folder, so the rail now shows exactly the workspace's own shape.
  */
-export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): ITreeRailFolder[] {
-	const folders: ITreeRailFolder[] = [];
-
-	// --- Reports: the document tree, on-disk hierarchy preserved (F7) ---
+export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): IFileTree {
+	// --- the document tree, on-disk hierarchy preserved (F7) ---
 	const rootItems: ITreeRailItem[] = [];
 	const roots = new Map<string, IMutableFolder>();
 	for (const d of [...docs].sort((a, b) => a.title.localeCompare(b.title))) {
@@ -208,10 +227,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 		[...level.values()]
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map(f => ({ name: f.name, items: f.items, folders: freeze(f.children) }));
-	const reportsSubfolders = freeze(roots);
-	if (rootItems.length || reportsSubfolders.length) {
-		folders.push({ name: 'Reports', items: rootItems, folders: reportsSubfolders });
-	}
+	const docFolders = freeze(roots);
 
 	// --- Sources: bound sources + discovered data/source files, deduped (F9) ---
 	const seen = new Set<string>();
@@ -247,23 +263,21 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	sources.sort((a, b) => a.label.localeCompare(b.label));
 	unsupported.sort((a, b) => a.label.localeCompare(b.label));
 
-	if (sources.length) { folders.push({ name: 'Sources', items: sources, folders: [] }); }
-	if (unsupported.length) { folders.push({ name: 'Not yet imported', items: unsupported, folders: [] }); }
-	return folders;
+	return { items: rootItems, folders: docFolders, sources, unsupported };
 }
 
 // --- The Files-tab tree model (issue #171) ---
-// `buildFileTree` above shapes the raw grouping (Reports / Sources / Not-yet-imported, on-disk hierarchy).
+// `buildFileTree` above finds what is in the folder (documents + on-disk hierarchy, sources, not-yet-imported).
 // `buildTreeRailNodes` below turns that into the node model the `WorkbenchObjectTree` renders: a `folder`
 // node (a group header or a real on-disk directory, collapsible) or a `leaf` node (a document / source /
 // unsupported row, carrying the underlying `ITreeRailItem`). Every node has a stable `id` so the tree can
 // keep identity (selection, focus, and persisted collapse state) across re-renders. Kept pure and unit-
 // tested; the DOM view (`treeRailView.ts`) owns only widget wiring.
 
-/** A collapsible folder in the Files tree: a top-level group (Reports/Sources/...) or a real disk directory. */
+/** A collapsible folder in the Files tree: a real disk directory, or one of the trailing groups (Sources / Not yet imported). */
 export interface ITreeRailFolderNode {
 	readonly type: 'folder';
-	/** Stable identity for tree selection + persisted collapse state (e.g. "folder:Reports/reports/2025"). */
+	/** Stable identity for tree selection + persisted collapse state (e.g. "folder:brief/2025"). */
 	readonly id: string;
 	readonly label: string;
 	readonly children: readonly ITreeRailNode[];
@@ -281,8 +295,8 @@ export type ITreeRailNode = ITreeRailFolderNode | ITreeRailLeafNode;
 /** Id of the collapsed screenshot bucket under Sources; the view seeds this collapsed on first open (issue #171). */
 export const ASSETS_FOLDER_ID = 'folder:Sources/Assets';
 
-/** Id of the MRU "Recent" group above Reports (issue #212). Its leaf ids carry a distinct prefix so a document
- * that appears BOTH in Recent and in Reports keeps two collision-free ids (the identityProvider stays unique). */
+/** Id of the MRU "Recent" group above the file tree (issue #212). Its leaf ids carry a distinct prefix so a
+ * document appearing BOTH in Recent and in the tree keeps two collision-free ids (identityProvider stays unique). */
 export const RECENT_FOLDER_ID = 'folder:Recent';
 
 /** The largest number of documents the Recent group ever shows (issue #212); older MRU entries are dropped. */
@@ -309,7 +323,7 @@ export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[
  * Empty groups are omitted. Pure - the widget wiring lives in the view.
  */
 export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], recentResources: readonly URI[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): ITreeRailNode[] {
-	const folders = buildFileTree(docs, extras, sourceFreshness);
+	const tree = buildFileTree(docs, extras, sourceFreshness);
 	// Sources a document actually binds to stay visible even when they are images (a bound chart PNG is data,
 	// not noise); only un-bound loose screenshots are bucketed into the collapsed Assets node (issue #171).
 	const boundLabels = new Set<string>();
@@ -332,35 +346,44 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 		return nodes;
 	};
 	const result: ITreeRailNode[] = [];
-	for (const group of folders) {
-		const id = `folder:${group.name}`;
-		if (group.name === 'Sources') {
-			// Split the flat Sources list: un-bound image assets go behind one collapsed child so the default
-			// view is calm; bound sources + all data files (csv/json/txt) stay directly visible.
-			const isAsset = (label: string) => isAssetName(label) && !boundLabels.has(label);
-			const visible = group.items.filter(i => !isAsset(i.label));
-			const assets = group.items.filter(i => isAsset(i.label));
-			const children: ITreeRailNode[] = visible.map(item => ({ type: 'leaf', id: leafId(id, item), item }));
-			if (assets.length) {
-				const assetsId = ASSETS_FOLDER_ID;
-				children.push({
-					type: 'folder',
-					id: assetsId,
-					label: `Assets (${assets.length})`,
-					children: assets.map(item => ({ type: 'leaf', id: leafId(assetsId, item), item })),
-				});
-			}
-			if (children.length) { result.push({ type: 'folder', id, label: group.name, children }); }
-			continue;
+	// The workspace's own shape, at the top level: real directories first, then root-level documents. No
+	// synthetic wrapper - the rail reads as a plain file explorer of the folder (plan 52 WP-D, decision 180).
+	for (const sub of tree.folders) {
+		const id = `folder:${sub.name}`;
+		result.push({ type: 'folder', id, label: sub.name, children: toNodes(sub, id) });
+	}
+	for (const item of tree.items) {
+		result.push({ type: 'leaf', id: leafId('folder:', item), item });
+	}
+	if (tree.sources.length) {
+		// Split the flat Sources list: un-bound image assets go behind one collapsed child so the default
+		// view is calm; bound sources + all data files (csv/json/txt) stay directly visible.
+		const id = 'folder:Sources';
+		const isAsset = (label: string) => isAssetName(label) && !boundLabels.has(label);
+		const visible = tree.sources.filter(i => !isAsset(i.label));
+		const assets = tree.sources.filter(i => isAsset(i.label));
+		const children: ITreeRailNode[] = visible.map(item => ({ type: 'leaf', id: leafId(id, item), item }));
+		if (assets.length) {
+			const assetsId = ASSETS_FOLDER_ID;
+			children.push({
+				type: 'folder',
+				id: assetsId,
+				label: `Assets (${assets.length})`,
+				children: assets.map(item => ({ type: 'leaf', id: leafId(assetsId, item), item })),
+			});
 		}
-		result.push({ type: 'folder', id, label: group.name, children: toNodes(group, id) });
+		if (children.length) { result.push({ type: 'folder', id, label: 'Sources', children }); }
+	}
+	if (tree.unsupported.length) {
+		const id = 'folder:Not yet imported';
+		result.push({ type: 'folder', id, label: 'Not yet imported', children: tree.unsupported.map(item => ({ type: 'leaf', id: leafId(id, item), item })) });
 	}
 
-	// --- Recent: an MRU shortcut group above Reports (issue #212) ---
+	// --- Recent: an MRU shortcut group above the file tree (issue #212) ---
 	// A collapsible "Recent" group of the most-recently-opened documents, capped at RECENT_GROUP_CAP and shown
 	// only when it holds at least two (one recent doc is not worth a whole group). Each row reuses the SAME doc
 	// item (so it carries the same status dot) but under the distinct RECENT_FOLDER_ID prefix, so a document that
-	// also appears in Reports keeps two collision-free ids. The on-disk hierarchy below is untouched.
+	// also appears in the tree below keeps two collision-free ids. The on-disk hierarchy below is untouched.
 	const docItemByResource = new Map<string, ITreeRailItem>();
 	for (const d of docs) {
 		docItemByResource.set(d.resource.toString(), { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot: docRailDot({ pendingCount: d.pendingCount, unseenAgentEdits: d.unseenAgentEdits ?? 0, relinkCount: d.relinkCount ?? 0, stale: d.stale ?? false, fanoutFailed: d.fanoutFailed ?? false }), needsSourceBinding: d.needsSourceBinding ?? false });
