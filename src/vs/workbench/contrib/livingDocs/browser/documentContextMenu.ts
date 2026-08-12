@@ -138,15 +138,35 @@ function deriveProjectRoot(documents: readonly ILivingDocSummary[]): URI | undef
 
 // map-D6: delete warns and LISTS the dependent documents; on proceed the service orphans them
 // gracefully (their cached values survive, flagged stale) and offers Undo - the delete never blocks.
+//
+// Every user-visible string here goes through `localize` with `{0}` placeholders, never concatenation. The
+// singular and plural dependent counts are SEPARATE keys rather than an inlined `document${n === 1 ? '' : 's'}`:
+// `localize` has no plural form, and pluralising by string surgery cannot be translated (many languages have
+// more than two forms, and several put the count elsewhere in the sentence). The dependents' titles are the one
+// thing still joined in code - that is a DATA list, not a sentence, so it is built here and handed to the
+// translated sentence as a placeholder.
 async function deleteDocument(services: IDocumentMenuServices, resource: URI, label: string): Promise<void> {
 	const dependents = await services.livingDocs.getFileDependents(resource);
-	const message = dependents.length
-		? `Delete "${label}"? ${dependents.length} document${dependents.length === 1 ? '' : 's'} depend on it.`
-		: `Delete "${label}"?`;
-	const detail = dependents.length
-		? `These documents will keep their last cached values, flagged as stale (not broken):\n${dependents.map(d => `• ${d.title}`).join('\n')}\n\nYou can undo this.`
-		: 'You can undo this.';
-	const { confirmed } = await services.dialogService.confirm({ type: 'warning', message, detail, primaryButton: 'Delete' });
+	const message = dependents.length === 0
+		? localize('livingDocs.delete.message', "Delete \"{0}\"?", label)
+		: dependents.length === 1
+			? localize('livingDocs.delete.messageOne', "Delete \"{0}\"? 1 document depends on it.", label)
+			: localize('livingDocs.delete.messageMany', "Delete \"{0}\"? {1} documents depend on it.", label, dependents.length);
+	const undoNote = localize('livingDocs.delete.undo', "You can undo this.");
+	const detail = dependents.length === 0
+		? undoNote
+		: localize(
+			'livingDocs.delete.detail',
+			"These documents will keep their last cached values, flagged as stale (not broken):\n{0}\n\n{1}",
+			dependents.map(d => `• ${d.title}`).join('\n'),
+			undoNote,
+		);
+	const { confirmed } = await services.dialogService.confirm({
+		type: 'warning',
+		message,
+		detail,
+		primaryButton: localize('livingDocs.delete.confirmButton', "Delete"),
+	});
 	if (!confirmed) { return; }
 	await services.livingDocs.deleteFile(resource);
 }
