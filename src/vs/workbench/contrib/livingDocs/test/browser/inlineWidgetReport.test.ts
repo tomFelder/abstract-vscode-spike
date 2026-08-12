@@ -24,7 +24,7 @@ import { IWorkbenchLayoutService } from '../../../../services/layout/browser/lay
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { NullAnalyticsService } from '../../common/analytics.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
-import { changePointerRoute } from '../../common/changePointer.js';
+import { changePointerRoute, inlineWidgetAnswer } from '../../common/changePointer.js';
 
 // Plan 52 WP-A1 fix 2 (issue #301): the rule that a document's inline-widget report is an OBSERVATION with a
 // lifetime, not a fact that is true forever.
@@ -143,6 +143,34 @@ suite('livingDocs - the inline-widget report has a lifetime (plan 52 WP-A1 fix 2
 			// The truth, observed: Review is the only surface that can show this change, so that is where it goes.
 			'resurfaced: review',
 		]);
+	});
+
+	test('a report answers three ways, and silence is one of them', () => {
+		// The rule the whole fix turns on, pinned in the pure layer both readers share. The click asks this
+		// question at every exit - including at the end of its wait, against the LIVE report rather than the one
+		// it started with - so "mounted", "asked and bare" and "says nothing" must stay three distinct answers.
+		// Collapsing the third into either of the others is what strands readers: read as "mounted" it keeps them
+		// in a document with nothing on it, and read as "bare" it flashes a wrong REVIEW badge onto every
+		// brand-new proposal.
+		const report = { requested: new Set(['mounted', 'bare']), mounted: new Set(['mounted']) };
+		const answers = (changeId: string) => ({
+			answer: inlineWidgetAnswer(report, changeId),
+			route: changePointerRoute(report, changeId),
+			// The same question after the surface stops watching: `getInlineWidgets` returns undefined, and every
+			// change the report used to speak for goes silent with it.
+			retired: inlineWidgetAnswer(undefined, changeId),
+			retiredRoute: changePointerRoute(undefined, changeId),
+		});
+
+		assert.deepStrictEqual({
+			mounted: answers('mounted'),
+			bare: answers('bare'),
+			proposedSinceTheLastPass: answers('never-asked-about'),
+		}, {
+			mounted: { answer: true, route: 'document', retired: undefined, retiredRoute: 'unknown' },
+			bare: { answer: false, route: 'review', retired: undefined, retiredRoute: 'unknown' },
+			proposedSinceTheLastPass: { answer: undefined, route: 'unknown', retired: undefined, retiredRoute: 'unknown' },
+		});
 	});
 
 	test('retiring is scoped, announced once, and silent when there is nothing to retire', async () => {

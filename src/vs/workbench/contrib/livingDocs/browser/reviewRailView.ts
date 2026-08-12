@@ -27,7 +27,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
-import { buildTurnPointers, coversChange, IChangePointer } from '../common/changePointer.js';
+import { buildTurnPointers, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
@@ -1371,36 +1371,45 @@ export class ReviewRailView extends ViewPane {
 	// to correct it. Both only ever move the answer towards Review, which can render any change; neither can
 	// keep a reader in a document that has nothing to show them.
 	private _landedOnInlineWidget(resource: URI, changeId: string): Promise<boolean> {
-		const known = this._livingDocs.getInlineWidgets(resource);
-		if (!coversChange(known, changeId)) {
-			// Nobody has looked at this change yet. Wait for the observation - there is nothing else honest to do.
-			return this._nextInlineWidgetReport(resource, changeId, POINTER_WIDGET_REPORT_TIMEOUT, false);
+		const known = inlineWidgetAnswer(this._livingDocs.getInlineWidgets(resource), changeId);
+		if (known === undefined) {
+			// Silence: nobody has looked at this change yet, or what looked at it has gone. Wait for a real
+			// observation - there is nothing else honest to do.
+			return this._awaitInlineWidgetReport(resource, changeId, POINTER_WIDGET_REPORT_TIMEOUT);
 		}
 		// Observed and NOT mounted: the surface tried and there is nothing there. Settled, and Review is the answer.
-		if (!known?.mounted.has(changeId)) { return Promise.resolve(false); }
+		if (!known) { return Promise.resolve(false); }
 		// Observed and mounted - but observed BEFORE this click, and a render may be in flight right now (the reader
 		// typed over the anchor, a source refresh landed, the file was reloaded). Give a fresher observation a beat
 		// to overrule this one. It costs the reader nothing: the scroll-and-flash has already been asked for, so
 		// this beat only delays the decision to ALSO open Review, which on a healthy widget is a decision to do
 		// nothing at all.
-		return this._nextInlineWidgetReport(resource, changeId, POINTER_WIDGET_RECHECK_WINDOW, true);
+		return this._awaitInlineWidgetReport(resource, changeId, POINTER_WIDGET_RECHECK_WINDOW);
 	}
 
-	// Resolve on this document's next report that covers `changeId`, or `fallback` if none arrives within `ms`.
-	private _nextInlineWidgetReport(resource: URI, changeId: string, ms: number, fallback: boolean): Promise<boolean> {
+	// Resolve on this document's next report that covers `changeId`; if none arrives within `ms`, answer from
+	// whatever the service holds AT THAT MOMENT.
+	//
+	// Reading the live report at the deadline rather than closing over the one this wait began with is the whole
+	// point (plan 52 WP-A1 fix 2, #301): a captured value is a memory, and answering from a memory is the defect.
+	// So every exit here is a live read, and anything short of a live report that names this change as mounted is
+	// `false` - no report, a retired one, or one that has stopped naming this change all mean "nothing is known to
+	// be on screen", and Review can render any change.
+	private _awaitInlineWidgetReport(resource: URI, changeId: string, ms: number): Promise<boolean> {
 		return new Promise(resolve => {
 			// A local store, not `this._renderDisposables` and not `this._register`: this runs once per click, so
 			// hanging it off the view would leak a listener and a timer per click for the view's whole lifetime.
 			const store = new DisposableStore();
 			const settle = (answer: boolean) => { store.dispose(); resolve(answer); };
+			const readNow = () => inlineWidgetAnswer(this._livingDocs.getInlineWidgets(resource), changeId);
 			store.add(this._livingDocs.onDidReportInlineWidgets(e => {
 				if (e.docId !== resource.toString()) { return; }
-				const report = this._livingDocs.getInlineWidgets(resource);
 				// Only a report that COVERS this change is an answer about it. A report that has simply not been asked
 				// about it (or the report being retired) says nothing, so it must not cut the wait short.
-				if (coversChange(report, changeId)) { settle(!!report?.mounted.has(changeId)); }
+				const answer = readNow();
+				if (answer !== undefined) { settle(answer); }
 			}));
-			store.add(disposableTimeout(() => settle(fallback), ms));
+			store.add(disposableTimeout(() => settle(readNow() ?? false), ms));
 		});
 	}
 

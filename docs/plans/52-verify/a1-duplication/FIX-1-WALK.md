@@ -1,5 +1,7 @@
 # WP-A1 fix round 1 - the block-class walk, 13 Aug 2026
 
+> **Corrected after independent validation (fix round 2).** Two rows of the table below were wrong, and validator 2 proved both by re-walking them. **Indented code block: a widget DOES mount**, and the observation-based route correctly sent it to `document` - the table said `no`/`review`. **Nested list: no proposal is produced at all**, so there is no pointer to route, rather than a pointer with no widget. The corrected rows are marked in the table. Nothing in the shipped code changed as a result: the route is read from what the surface reports, and nothing at runtime reads this table - which is the point. A description of the mechanism can be wrong; an observation of it cannot.
+
 Walked the real desktop app on `52-a1-pointer-cards` (OpenRouter door serving) after replacing the pointer's routing PREDICTION with an OBSERVATION reported by the document itself.
 
 The walk used a throwaway copy of `living-docs-sample` (kept outside the repo so the diff stays inside `contrib/livingDocs/` and `docs/`) with one added fixture, `Block Classes.md`: one clearly named section per Markdown block class, so a proposal could be aimed at each in turn. Its content is reproduced at the bottom of this file.
@@ -10,13 +12,13 @@ The walk used a throwaway copy of `living-docs-sample` (kept outside the repo so
 |---|---|---|---|
 | paragraph | yes | `document` | yes - the inline widget, with Edit / Approve changes / Reject |
 | bullet list | no | `review` | yes - the Review card, with Approve & apply / Reject |
-| nested list | no | `review` | yes - Review card |
+| nested list | **CORRECTED: no proposal is produced at all**, so there is no pointer | n/a | n/a - filed as #303 |
 | table cell | no (the whole table block mounts nothing) | `review` | yes - Review card |
 | heading | could not produce a proposal at all | n/a | n/a - see below |
 | block quote | no | `review` | yes - Review card |
 | code block (fenced) | no | `review` | yes - Review card |
 | paragraph with a hard line break | no | `review` | yes - Review card |
-| code block (indented) | no | `review` | yes - Review card |
+| code block (indented) | **CORRECTED: yes, a widget mounts** | `document` | yes - the inline widget |
 | paragraph with an HTML entity | no | `review` | yes - Review card |
 
 The last three rows are not block classes the brief asked for. They are there because they are the rows that matter: **each one is a case the old prediction routed to `document`, where nothing mounts.**
@@ -46,14 +48,15 @@ The anchors below are the real strings the live decoration payload carried (`win
 | code block (fenced) | `review` | `review` | agrees |
 | nested list | `review` | `review` | agrees |
 | paragraph with a hard line break | `document` | `review` | **MIS-ROUTE - lands on nothing** |
-| code block (indented) | `document` | `review` | **MIS-ROUTE - lands on nothing** |
+| code block (indented) | `document` | ~~`review`~~ **CORRECTED: `document`** | agrees - a widget really does mount here |
 | paragraph with an HTML entity | `document` | `review` | **MIS-ROUTE - lands on nothing** |
 
-The mechanism is the same in all three: the predicate asked "does this anchor still carry Markdown syntax?", and each of these anchors is syntax-free while still failing to match its rendered node.
+The mechanism is the same in both surviving mis-routes: the predicate asked "does this anchor still carry Markdown syntax?", and each of these anchors is syntax-free while still failing to match its rendered node.
 
 - `The first half of the sentence sits here, and the second half follows a hard line break.` - the hard break renders as `<br>`, so the node reads `…sits here,and the second…` with no space.
-- `const secondary = '#101214'; console.log(secondary);` - an indented code block, whose four leading spaces the anchor has already trimmed away.
 - `The conversion rate was 5 &amp; rising through the whole of the quarter.` - the node reads `5 & rising`.
+
+The indented-code row was my error, not the code's: I read the route off this table rather than off the surface. Validator 2 re-walked it and found the widget mounts and the pointer routes to `document`. It cost nothing precisely because **nothing at runtime consults this table** - which is the argument for the whole fix.
 
 None of these are exotic. The third is what any document imported from Word or HTML looks like.
 

@@ -90,23 +90,35 @@ export interface IChangePointer {
  * function used to be and exactly what stranded readers.
  */
 export function changePointerRoute(report: IInlineWidgetReport | undefined, changeId: string): ChangePointerRoute {
-	if (!coversChange(report, changeId)) {
-		// No report, or one that predates this change (it was proposed after the last decoration pass). Nobody has
-		// looked at it yet, and saying "review" here would flash a wrong badge onto every brand-new proposal.
+	const answer = inlineWidgetAnswer(report, changeId);
+	if (answer === undefined) {
+		// No report, one that predates this change (it was proposed after the last decoration pass), or one that
+		// has been retired because the surface stopped watching. Nobody has looked at it, and saying "review" here
+		// would flash a wrong badge onto every brand-new proposal.
 		return 'unknown';
 	}
 	// Asked for and not mounted: the surface tried and there is nothing there. This is the #300 case.
-	return report!.mounted.has(changeId) ? 'document' : 'review';
+	return answer ? 'document' : 'review';
 }
 
 /**
- * Whether this report says anything at all about this change - i.e. whether the surface was ASKED to decorate it
- * (and so either mounted a widget or demonstrably did not). A report that does not cover a change is not a "no":
- * it is silence, and the caller must wait rather than act on it. Shared by the route above and by the pointer
- * click, so "the report answers this question" means one thing in both places.
+ * What this report says about this change, as three distinct states rather than two:
+ *
+ * - `true`  - the surface mounted an inline widget for it, so the document can show it;
+ * - `false` - the surface was ASKED to decorate it and demonstrably did not (the #300 case);
+ * - `undefined` - the report says nothing about this change at all, which is SILENCE, not a "no".
+ *
+ * The third state is the one that matters and the one the first cut of this package lacked. Silence is what a
+ * change proposed since the last decoration pass looks like, and it is also what a RETIRED report looks like
+ * (`clearInlineWidgets`, when the surface that made a report stops watching the content it described). Neither
+ * is grounds to act: the caller must wait for a real observation, and if none comes, send the reader to Review,
+ * which can render any change. Defined once here so the route marker in the transcript and the decision the
+ * click makes are literally the same rule (plan 52 WP-A1 fix 2, #301).
  */
-export function coversChange(report: IInlineWidgetReport | undefined, changeId: string): boolean {
-	return !!report && (report.mounted.has(changeId) || report.requested.has(changeId));
+export function inlineWidgetAnswer(report: IInlineWidgetReport | undefined, changeId: string): boolean | undefined {
+	if (!report) { return undefined; }
+	if (report.mounted.has(changeId)) { return true; }
+	return report.requested.has(changeId) ? false : undefined;
 }
 
 /**
