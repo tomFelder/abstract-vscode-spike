@@ -27,6 +27,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
+import { buildTurnPointers, changePointerRoute, IChangePointer } from '../common/changePointer.js';
 import { IChatSession, splitTabs } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
@@ -1145,7 +1146,7 @@ export class ReviewRailView extends ViewPane {
 			retry.textContent = 'Retry failed';
 			this._renderDisposables.add(addDisposableListener(retry, 'click', () => { const d = this._activeDoc(); if (d) { this._livingDocs.retryFailedDocs(d); } }));
 			// Fall through so any proposals this partial run DID land still render as review cards below.
-			this._appendProposalCards(col, m);
+			this._appendProposalPointers(col, m);
 			return;
 		}
 
@@ -1176,55 +1177,112 @@ export class ReviewRailView extends ViewPane {
 			tag.textContent = 'STOPPED';
 		}
 
-		// F5: a Copilot/Cursor-style review card per proposal this turn produced.
-		this._appendProposalCards(col, m);
+		// One compact pointer per proposal this turn produced (plan 52 WP-A1) - the document owns the controls.
+		this._appendProposalPointers(col, m);
 	}
 
-	// F5: a Copilot/Cursor-style review card per proposal this turn produced. Read the LIVE pending change by
-	// id so the card naturally disappears once accepted/rejected (here or in the document). Shared by the plain
-	// assistant turn and the F14 partial-failure turn (proposals that landed alongside a model outage).
-	private _appendProposalCards(col: HTMLElement, m: IChatMessage): void {
+	// Plan 52 WP-A1 (issue #301): one POINTER per proposal this turn produced - never a second copy of it.
+	//
+	// This used to render a full review card: the whole proposed sentence repeated verbatim, under its own
+	// Apply / Reject. The document was already rendering the same change as an inline widget with its own
+	// Edit / Approve changes / Reject, so a single pending change had two renderings and two live controls.
+	// That is the "doesn't feel trustworthy" complaint: the reader cannot tell which one is the real change,
+	// or what happens if they disagree. The document owns the controls now. The transcript keeps only enough
+	// to know a change landed and where to go and read it: kind, section, "Line N", and the same word-run
+	// counts the inline widget prints. No prose, no Apply, no Reject.
+	//
+	// Read from the LIVE pending set by id, so a pointer disappears the moment its change is approved or
+	// rejected anywhere - the inline widget, the Review tab, Accept all. The transcript stays honest about
+	// what is still open. Shared by the plain assistant turn and the F14 partial-failure turn.
+	private _appendProposalPointers(col: HTMLElement, m: IChatMessage): void {
 		if (!m.proposedIds || !m.proposedIds.length) { return; }
-		const live = this._livingDocs.getAllPending().filter(c => m.proposedIds!.includes(c.id));
-		for (const change of live) {
-			const isInsert = !!change.insert;
-			const card = append(col, $('div'));
-			card.style.cssText = 'border:1px solid #e4e7ee;border-radius:10px;overflow:hidden;background:#fbfcff';
-			const head = append(card, $('div'));
-			head.style.cssText = `display:flex;align-items:center;gap:7px;padding:9px 12px 7px;font:600 10.5px/1 ui-monospace,monospace;letter-spacing:.04em;color:${isInsert ? '#1f7a44' : '#9a6b16'}`;
-			const tag = append(head, $('span'));
-			tag.textContent = isInsert ? '+ NEW CONTENT' : '\u270E EDIT';
-			const where = append(head, $('span'));
-			where.style.cssText = 'color:#868b95;font-weight:400';
-			where.textContent = isInsert ? `after ${change.blockLabel}` : change.blockLabel;
-			// Pin 13.5: a chat meaning-change card cites the same clickable "Line N" gutter address the Review card
-			// and the inline widget cite (via the address model), so the transcript speaks one address vocabulary and
-			// the citation scrolls the editor to the block. An insert has no existing block to address; an edit whose
-			// block resolves gets the link (omitted when the doc is not loaded or the block is gone - same rule as Review).
-			if (!isInsert) {
-				const changeDoc = this._livingDocs.getDoc(URI.parse(change.docId));
-				const addressLine = changeDoc ? resolveBlockLine(changeDoc, change.blockId) : undefined;
-				if (typeof addressLine === 'number') {
-					this._appendAddressLink(head, change.docId, change.blockId, addressLine);
-				}
+		const pointers = buildTurnPointers(m.proposedIds, this._livingDocs.getAllPending(), docId => this._livingDocs.getDoc(URI.parse(docId)));
+		if (!pointers.length) { return; }
+		const list = append(col, $('div'));
+		list.style.cssText = 'display:flex;flex-direction:column;gap:5px';
+		for (const pointer of pointers) {
+			// The whole row is the click target: one control, one destination. A nested "Line N" button (as the
+			// Review card carries) would be invalid inside it and would re-introduce a second thing to aim at.
+			const row = append(list, $('button')) as HTMLButtonElement;
+			row.style.cssText = 'display:flex;align-items:center;gap:7px;width:100%;box-sizing:border-box;text-align:left;border:1px solid #e4e7ee;border-radius:9px;padding:7px 10px;background:#fbfcff;cursor:pointer';
+			row.title = pointer.route === 'review'
+				? localize('livingDocs.pointer.tip.review', "This change has no inline preview in the document. Open it in Review, where it can be read and approved.")
+				: localize('livingDocs.pointer.tip.document', "Go to this change in the document, where it can be read and approved.");
+
+			const tone = pointer.insert ? '#1f7a44' : pointer.attention ? '#9a6b16' : '#5b6dc4';
+			const kind = append(row, $('span'));
+			kind.style.cssText = `flex:none;font:600 10px/1 ui-monospace,monospace;letter-spacing:.04em;color:${tone}`;
+			kind.textContent = pointer.insert ? localize('livingDocs.pointer.kind.insert', "NEW") : localize('livingDocs.pointer.kind.edit', "EDIT");
+
+			const where = append(row, $('span'));
+			where.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/1.3 system-ui;color:#2c2f36';
+			where.textContent = pointer.insert
+				? localize('livingDocs.pointer.after', "after {0}", pointer.blockLabel)
+				: pointer.blockLabel;
+
+			// The shared address vocabulary (spec 43 section 3.1): the same "Line N" string the gutter, the inline
+			// widget, the Review card and the ledger cite, so the transcript names the place the same way they do.
+			if (typeof pointer.line === 'number') {
+				const addr = append(row, $('span'));
+				addr.style.cssText = 'flex:none;font:500 10.5px/1 ui-monospace,monospace;color:#5b6dc4';
+				addr.textContent = addressLabel(pointer.line);
 			}
-			const preview = append(card, $('div'));
-			preview.style.cssText = 'padding:2px 12px 9px;font:400 12.5px/1.5 system-ui;color:#52575f;white-space:pre-wrap;max-height:96px;overflow:hidden;cursor:pointer';
-			preview.title = 'Open in the document';
-			preview.textContent = change.newText.length > 240 ? change.newText.slice(0, 240) + '\u2026' : change.newText;
-			// Click the preview to read this change inline in the document (navigate-only; Apply still applies).
-			this._renderDisposables.add(addDisposableListener(preview, 'click', () => void this._navigateToChange(change)));
-			const actions = append(card, $('div'));
-			actions.style.cssText = 'display:flex;gap:7px;padding:9px 12px;border-top:1px solid #eef0f3';
-			const approve = append(actions, $('button')) as HTMLButtonElement;
-			approve.style.cssText = 'flex:1;border:none;border-radius:7px;padding:8px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer';
-			approve.textContent = isInsert ? 'Insert' : 'Apply';
-			this._renderDisposables.add(addDisposableListener(approve, 'click', () => void this._livingDocs.approve(change.id)));
-			const reject = append(actions, $('button')) as HTMLButtonElement;
-			reject.style.cssText = 'border:1px solid #e0e2e8;border-radius:7px;padding:8px 12px;background:#fff;color:#696e78;font:500 12px/1 system-ui;cursor:pointer';
-			reject.textContent = 'Reject';
-			this._renderDisposables.add(addDisposableListener(reject, 'click', () => void this._rejectWithReason(change.id)));
+
+			// The size of the change, in the same word-run counts the inline widget prints, so the pointer and the
+			// widget never disagree about how big it is. An insertion has nothing to diff, so it carries none.
+			if (typeof pointer.added === 'number' && typeof pointer.removed === 'number') {
+				const stat = append(row, $('span'));
+				stat.style.cssText = 'flex:none;font:500 10.5px/1 ui-monospace,monospace;color:#868b95';
+				stat.textContent = localize('livingDocs.pointer.stat', "+{0} -{1}", pointer.added, pointer.removed);
+			}
+
+			// Say plainly where a review-routed pointer goes, rather than surprising the reader with a tab switch.
+			if (pointer.route === 'review') {
+				const hint = append(row, $('span'));
+				hint.style.cssText = 'flex:none;font:600 9px/1 ui-monospace,monospace;letter-spacing:.04em;color:#868b95;background:#eef1f6;border-radius:999px;padding:4px 6px';
+				hint.textContent = localize('livingDocs.pointer.hint.review', "REVIEW");
+			}
+
+			const go = append(row, $('span'));
+			go.style.cssText = 'flex:none;font:400 12px/1 system-ui;color:#bcc0c8';
+			go.textContent = '\u2192';
+
+			this._renderDisposables.add(addDisposableListener(row, 'click', () => void this._openPointer(pointer)));
 		}
+	}
+
+	// Follow a transcript pointer to its change (plan 52 WP-A1). Navigate-only: this never approves anything.
+	//
+	// The route is re-resolved HERE rather than trusted from render time, because a pointer whose document was
+	// closed had no parsed blocks to reason about when it was drawn - the click is what loads them. Loading
+	// first therefore fixes the "pointer clicked with its document closed" path, which would otherwise always
+	// fall back to Review.
+	private async _openPointer(pointer: IChangePointer): Promise<void> {
+		const resource = URI.parse(pointer.docId);
+		// The change may have been approved or rejected between this pointer being drawn and being clicked. Open
+		// its document anyway (the reader asked to go there) but reveal nothing - there is no change to land on.
+		const change = this._livingDocs.getAllPending().find(c => c.id === pointer.changeId);
+		if (!change) {
+			await this._editors.openEditor({ resource });
+			return;
+		}
+		await this._livingDocs.loadDocument(resource);
+		const route = changePointerRoute(this._livingDocs.getDoc(resource), change);
+		if (route === 'review') {
+			// No inline widget to land on (#300 - a list, table or any block whose Markdown carries syntax). Send
+			// the reader to the Review tab, which renders the full red/green diff and Approve & apply / Reject for
+			// exactly this change. `reviewBlock` also scrolls the document to the block and flashes it, so the
+			// reader still sees WHERE the change is even though the document cannot show them WHAT it is.
+			await this._livingDocs.reviewBlock(resource, pointer.blockId);
+			return;
+		}
+		// Both reveal seams are used deliberately. `revealBlockAddress` scrolls to and flashes the BLOCK, which
+		// works for any block at all; `focusChange` scrolls to and flashes the WIDGET, which is the change itself
+		// and is the only thing that can land an insertion (it has no block of its own to address). Firing both
+		// means the click is never dead: if the widget is there it wins the scroll, and if the prediction was
+		// wrong the block flash still shows the reader where they were taken.
+		await this._livingDocs.revealBlockAddress(resource, pointer.blockId);
+		this._livingDocs.focusChange(pointer.changeId);
 	}
 
 	// Reject one proposal, first offering an optional plain-words reason (1f frame-3: "the optional reason
