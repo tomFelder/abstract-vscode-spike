@@ -169,6 +169,8 @@ export class ReviewRailView extends ViewPane {
 	private _stylesInjected = false;
 	// The unsent composer text, kept across re-renders so a background refresh never eats a draft.
 	private _chatDraft = '';
+	// The block a Review deep link asked for (plan 52 WP-A1), consumed by the next Review render and cleared.
+	private _revealReviewBlockId: string | undefined;
 	// The Document-Agents section is relocated to an on-demand disclosure at the bottom of Review (the
 	// "Workbench v2" comp drops the always-on panel; the agents stay reachable). Collapsed by default so the
 	// Review tab matches the comp; this remembers the open/closed state across re-renders this session.
@@ -269,7 +271,13 @@ export class ReviewRailView extends ViewPane {
 		this._register(this._livingDocs.watchProviderStatus());
 		// Append streamed chat deltas to the live turn without a full re-render (plan 27 iter 3).
 		this._register(this._livingDocs.onDidStreamChat(resource => this._onStreamDelta(resource)));
-		this._register(this._livingDocs.onDidRequestPanel(request => { this._activeTab = request.tab; this._render(); }));
+		this._register(this._livingDocs.onDidRequestPanel(request => {
+			this._activeTab = request.tab;
+			// A Review deep link names the block it wants read (plan 48's Home cards, and now a transcript pointer
+			// whose change has no inline widget). Hold it for the render below to scroll to.
+			this._revealReviewBlockId = request.payload?.blockId;
+			this._render();
+		}));
 		this._register(this._livingDocs.onDidRequestChatAttach(file => this._attachToChatDraft(file)));
 		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'review' || this._activeTab === 'chat') { this._render(); } }));
 		void this._refreshSignedIn();
@@ -279,6 +287,7 @@ export class ReviewRailView extends ViewPane {
 		const pending = this._livingDocs.consumePendingPanel();
 		if (pending) {
 			this._activeTab = pending.tab;
+			this._revealReviewBlockId = pending.payload?.blockId;
 		}
 		this._render();
 	}
@@ -642,6 +651,11 @@ export class ReviewRailView extends ViewPane {
 
 			for (const change of changes) {
 				const card = append(group, $('div.ldr-card'));
+				// Plan 52 WP-A1: the durable block id this card is about, so a deep link that reveals Review (a
+				// transcript pointer whose change has no inline widget) can scroll to THIS card rather than dropping
+				// the reader at the top of a list of every pending change across every document. It is the same id
+				// the panel request already carries as its payload. Purely an anchor - the card renders unchanged.
+				card.dataset.blockId = change.blockId;
 
 				// The self-explaining framing (plan 31 iter 2): the same kind tag, confidence chip, rationale and
 				// source chip the inline widget and cross-doc cards render, built from the one `reviewFraming`.
@@ -706,6 +720,17 @@ export class ReviewRailView extends ViewPane {
 		// Review (v4 iter 4): collapsed by default so the Review tab matches the comp, expandable to reach
 		// the wired v1 agents (Run / Re-run / Apply fix). The disclosure only shows for a living document.
 		this._appendChecks(content);
+
+		// Plan 52 WP-A1: a deep link asked for a specific block's card (a transcript pointer whose change has no
+		// inline widget). Bring that card into view, consume-and-clear so a later re-render does not yank the
+		// scroll back, and do it after the checks disclosure so the content is at its final height. A block id
+		// that matches no card (the change was approved in the meantime) simply leaves the scroll alone.
+		const revealBlockId = this._revealReviewBlockId;
+		this._revealReviewBlockId = undefined;
+		if (revealBlockId) {
+			const card = content.querySelector(`.ldr-card[data-block-id="${CSS.escape(revealBlockId)}"]`);
+			card?.scrollIntoView({ block: 'center' });
+		}
 	}
 
 	// Group pending changes by their document, preserving first-seen order, so the changed-docs list and
