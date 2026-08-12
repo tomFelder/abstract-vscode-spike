@@ -1201,51 +1201,55 @@ export class ReviewRailView extends ViewPane {
 		const list = append(col, $('div'));
 		list.style.cssText = 'display:flex;flex-direction:column;gap:5px';
 		for (const pointer of pointers) {
-			// The whole row is the click target: one control, one destination. A nested "Line N" button (as the
-			// Review card carries) would be invalid inside it and would re-introduce a second thing to aim at.
+			// The whole pointer is ONE click target: one control, one destination. A nested "Line N" button (as
+			// the Review card carries) would be invalid inside it and would re-introduce a second thing to aim at.
 			const row = append(list, $('button')) as HTMLButtonElement;
-			row.style.cssText = 'display:flex;align-items:center;gap:7px;width:100%;box-sizing:border-box;text-align:left;border:1px solid #e4e7ee;border-radius:9px;padding:7px 10px;background:#fbfcff;cursor:pointer';
+			row.style.cssText = 'display:flex;flex-direction:column;align-items:stretch;gap:3px;width:100%;box-sizing:border-box;text-align:left;border:1px solid #e4e7ee;border-radius:9px;padding:7px 10px;background:#fbfcff;cursor:pointer';
 			row.title = pointer.route === 'review'
 				? localize('livingDocs.pointer.tip.review', "This change has no inline preview in the document. Open it in Review, where it can be read and approved.")
 				: localize('livingDocs.pointer.tip.document', "Go to this change in the document, where it can be read and approved.");
 
+			// Row one names the change: what kind it is and which section it lands in. The section gets the whole
+			// line because it is the part the reader navigates by - the rail is ~300px, and sharing that line with
+			// the address and the counts clipped "Commentary" to "Commen..." in the live walk.
+			const head = append(row, $('div'));
+			head.style.cssText = 'display:flex;align-items:center;gap:7px';
 			const tone = pointer.insert ? '#1f7a44' : pointer.attention ? '#9a6b16' : '#5b6dc4';
-			const kind = append(row, $('span'));
+			const kind = append(head, $('span'));
 			kind.style.cssText = `flex:none;font:600 10px/1 ui-monospace,monospace;letter-spacing:.04em;color:${tone}`;
 			kind.textContent = pointer.insert ? localize('livingDocs.pointer.kind.insert', "NEW") : localize('livingDocs.pointer.kind.edit', "EDIT");
-
-			const where = append(row, $('span'));
+			const where = append(head, $('span'));
 			where.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/1.3 system-ui;color:#2c2f36';
 			where.textContent = pointer.insert
 				? localize('livingDocs.pointer.after', "after {0}", pointer.blockLabel)
 				: pointer.blockLabel;
+			const go = append(head, $('span'));
+			go.style.cssText = 'flex:none;font:400 12px/1 system-ui;color:#bcc0c8';
+			go.textContent = '\u2192';
 
+			// Row two locates and sizes it, quietly.
+			const meta = append(row, $('div'));
+			meta.style.cssText = 'display:flex;align-items:center;gap:6px;font:500 10.5px/1.4 ui-monospace,monospace';
 			// The shared address vocabulary (spec 43 section 3.1): the same "Line N" string the gutter, the inline
 			// widget, the Review card and the ledger cite, so the transcript names the place the same way they do.
 			if (typeof pointer.line === 'number') {
-				const addr = append(row, $('span'));
-				addr.style.cssText = 'flex:none;font:500 10.5px/1 ui-monospace,monospace;color:#5b6dc4';
+				const addr = append(meta, $('span'));
+				addr.style.cssText = 'color:#5b6dc4';
 				addr.textContent = addressLabel(pointer.line);
 			}
-
 			// The size of the change, in the same word-run counts the inline widget prints, so the pointer and the
 			// widget never disagree about how big it is. An insertion has nothing to diff, so it carries none.
 			if (typeof pointer.added === 'number' && typeof pointer.removed === 'number') {
-				const stat = append(row, $('span'));
-				stat.style.cssText = 'flex:none;font:500 10.5px/1 ui-monospace,monospace;color:#868b95';
+				const stat = append(meta, $('span'));
+				stat.style.cssText = 'color:#868b95';
 				stat.textContent = localize('livingDocs.pointer.stat', "+{0} -{1}", pointer.added, pointer.removed);
 			}
-
 			// Say plainly where a review-routed pointer goes, rather than surprising the reader with a tab switch.
 			if (pointer.route === 'review') {
-				const hint = append(row, $('span'));
-				hint.style.cssText = 'flex:none;font:600 9px/1 ui-monospace,monospace;letter-spacing:.04em;color:#868b95;background:#eef1f6;border-radius:999px;padding:4px 6px';
+				const hint = append(meta, $('span'));
+				hint.style.cssText = 'font-weight:600;font-size:9px;letter-spacing:.04em;color:#868b95;background:#eef1f6;border-radius:999px;padding:3px 6px';
 				hint.textContent = localize('livingDocs.pointer.hint.review', "REVIEW");
 			}
-
-			const go = append(row, $('span'));
-			go.style.cssText = 'flex:none;font:400 12px/1 system-ui;color:#bcc0c8';
-			go.textContent = '\u2192';
 
 			this._renderDisposables.add(addDisposableListener(row, 'click', () => void this._openPointer(pointer)));
 		}
