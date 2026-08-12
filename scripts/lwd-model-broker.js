@@ -437,26 +437,31 @@ class OpenAiAuthError extends Error {
 
 /** Get a valid subscription bearer + account id, refreshing silently; throw OpenAiAuthError on a hard fail. */
 async function openAiAuthHeaders() {
-	let bundle;
 	try {
-		bundle = await openaiOAuth.validBundle();
+		// The header shape lives with the bundle it authenticates (lwd-openai-oauth.authHeaders) so the
+		// entitlement probe and the serve paths can never drift apart; this wrapper only adds the typed failure.
+		return await openaiOAuth.authHeaders();
 	} catch (e) {
 		throw new OpenAiAuthError(e && e.message ? e.message : 'not signed in');
 	}
-	const headers = {
-		'authorization': `Bearer ${bundle.access_token}`,
-		'content-type': 'application/json',
-		'originator': 'codex_cli_rs',
-		'OpenAI-Beta': 'responses=v1',
-	};
-	if (bundle.account_id) { headers['chatgpt-account-id'] = bundle.account_id; }
-	return headers;
 }
 
 // Translate an Anthropic Messages request to an OpenAI Responses request. The system prompt maps to
 // `instructions`; the conversation maps to `input` with typed text parts (an assistant turn uses
 // `output_text`, everything else `input_text`), reusing the shared toOpenRouterMessages flattening.
-function toResponsesRequest(req, stream) {
+//
+// The three constants below are NOT stylistic - the Codex Responses backend rejects a request missing any of
+// them, each with its own 400. Established at the wire during the 12 Aug founder smoke (plan 51 §5), which is
+// where the stub-validated shape and the real shape were first compared:
+//   - no `store`             -> {"detail":"Store must be set to false"}
+//   - `stream:false`         -> {"detail":"Stream must be set to true"}
+//   - any `max_output_tokens`-> {"detail":"Unsupported parameter: max_output_tokens"}
+// So this endpoint is stream-only: the buffered caller assembles the completion from the stream (see
+// openAiForward) rather than asking upstream for a whole body it will never serve. The Anthropic request's
+// `max_tokens` has NO representation here - upstream refuses to be told - so a caller's cap is honoured by
+// the renderer's own handling, not by upstream truncation. The `stream` parameter is kept in the signature
+// because callers still read it, but it can only ever be true on the wire.
+function toResponsesRequest(req, _stream) {
 	const flattened = toOpenRouterMessages(req);
 	const instructionsParts = flattened.filter(m => m.role === 'system').map(m => m.content);
 	const input = flattened.filter(m => m.role !== 'system').map(m => ({
@@ -469,11 +474,41 @@ function toResponsesRequest(req, stream) {
 		// when the request carried none (a direct hand-run call), never an undefined model.
 		model: (typeof req.model === 'string' && req.model) ? req.model : openaiOAuth.OPENAI_MODEL,
 		input,
-		max_output_tokens: req.max_tokens || 1024,
+		store: false,
+		stream: true,
 	};
 	if (instructionsParts.length) { body.instructions = instructionsParts.join('\n\n'); }
-	if (stream) { body.stream = true; }
 	return body;
+}
+
+// Read a Codex Responses SSE body, handing each text delta to `onDelta` and resolving the terminal
+// `response.completed` payload (or undefined if the stream ended without one). Shared by both forward paths
+// so the event vocabulary - `response.output_text.delta`, `response.completed` - is parsed in exactly one
+// place; the real event sequence it is written against is pinned in scripts/test/fixtures/.
+async function readResponsesStream(webStream, onDelta) {
+	const nodeStream = Readable.fromWeb(webStream);
+	let buf = '';
+	let completed;
+	for await (const chunk of nodeStream) {
+		buf += chunk.toString('utf8');
+		let nl;
+		while ((nl = buf.indexOf('\n')) >= 0) {
+			const line = buf.slice(0, nl).trim();
+			buf = buf.slice(nl + 1);
+			if (!line.startsWith('data:')) { continue; }
+			const payload = line.slice(5).trim();
+			if (payload === '[DONE]') { return completed; }
+			let j;
+			try { j = JSON.parse(payload); } catch { continue; } // keep-alive comment or partial chunk
+			if (j.type === 'response.output_text.delta' && typeof j.delta === 'string' && j.delta.length) {
+				onDelta(j.delta);
+			} else if (j.type === 'response.completed') {
+				completed = j.response || j;
+				return completed;
+			}
+		}
+	}
+	return completed;
 }
 
 // Pull the assistant text out of a buffered Responses result. Prefer the `output_text` convenience field;
@@ -506,91 +541,88 @@ async function openAiForward(_body, req) {
 	let headers;
 	try { headers = await openAiAuthHeaders(); }
 	catch (e) { if (e instanceof OpenAiAuthError) { return reauthReached(); } throw e; }
+	const sent = toResponsesRequest(req, false);
+	// Upstream is stream-only (see toResponsesRequest), so even this buffered caller opens an SSE stream and
+	// assembles the completion itself. The client still receives one whole Anthropic message.
 	const upstream = await fetch(openaiOAuth.RESPONSES_URL, {
 		method: 'POST',
-		headers,
-		body: JSON.stringify(toResponsesRequest(req, false)),
+		headers: Object.assign({}, headers, { 'accept': 'text/event-stream' }),
+		body: JSON.stringify(sent),
 	});
-	const rawText = await upstream.text();
 	// A 401 means the access token was rejected despite the pre-flight refresh (revoked mid-life): surface the
 	// plain-words re-auth pause rather than a proxy error, so the run pauses cleanly and prompts a sign-in.
 	if (upstream.status === 401 || upstream.status === 403) { return reauthReached(); }
-	let json;
-	try { json = JSON.parse(rawText); } catch { json = undefined; }
-	if (!upstream.ok || !json || json.error) {
-		const message = (json && json.error) ? (json.error.message || 'openai error') : `openai http ${upstream.status}`;
+	if (!upstream.ok || !upstream.body) {
+		const rawText = await upstream.text().catch(() => '');
 		// Log the full upstream status + body to broker stdout (#120's diagnosability ask); the client receives
 		// only the honest short error shape. This is the chosen door's own failure - NOT a trigger to retry the
 		// request on openrouter (a mid-request cross-backend retry would mask a real fault and is deliberately
 		// never done here; the fallback is a next-request selection concern, not an in-flight one).
 		console.error(`[lwd-proxy] openai-oauth forward failed: upstream ${upstream.status}; body: ${rawText}`);
-		return proxyError(message);
+		return proxyError(upstreamRefusal(sent.model, upstream.status, rawText));
 	}
-	const text = textFromResponses(json);
+	let text = '';
+	const completed = await readResponsesStream(upstream.body, delta => { text += delta; });
+	const json = completed || {};
 	const anthropic = {
 		id: json.id || 'oa-msg',
 		type: 'message',
 		role: 'assistant',
-		model: json.model || openaiOAuth.OPENAI_MODEL,
+		model: json.model || sent.model,
 		stop_reason: responsesStopReason(json),
-		content: [{ type: 'text', text: String(text) }],
+		content: [{ type: 'text', text: String(text || textFromResponses(json)) }],
 	};
 	// meters:false, so no usage is returned to the meter (a subscription call is not the founder's budget).
 	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic), usage: undefined };
+}
+
+/**
+ * Turn an upstream refusal into the plain-words message the client sees, and - when upstream definitively
+ * refused the MODEL rather than the request - record that verdict so the catalogue stops offering it (the
+ * self-healing rule in lwd-openai-oauth's entitlement block). Returns the message to surface.
+ */
+function upstreamRefusal(model, status, rawBody) {
+	let detail = '';
+	try { const j = JSON.parse(rawBody); detail = (j && (j.detail || (j.error && j.error.message))) || ''; } catch { /* no JSON body */ }
+	if (detail && /\bis not supported\b/i.test(detail) && detail.includes(model)) {
+		openaiOAuth.markUnentitled(model, detail);
+		console.error(`[lwd-proxy] ${model} is not available to this subscription; removed from the catalogue: ${detail}`);
+	}
+	return detail || `openai http ${status}`;
 }
 
 async function openAiForwardStream(req, res) {
 	let headers;
 	try { headers = await openAiAuthHeaders(); }
 	catch (e) { if (e instanceof OpenAiAuthError) { writeReauthStream(res); return { usage: undefined }; } throw e; }
+	const sent = toResponsesRequest(req, true);
 	const upstream = await fetch(openaiOAuth.RESPONSES_URL, {
 		method: 'POST',
 		headers: Object.assign({}, headers, { 'accept': 'text/event-stream' }),
-		body: JSON.stringify(toResponsesRequest(req, true)),
+		body: JSON.stringify(sent),
 	});
 	if (upstream.status === 401 || upstream.status === 403) { writeReauthStream(res); return { usage: undefined }; }
 	if (!upstream.ok || !upstream.body) {
 		const text = await upstream.text().catch(() => '');
-		let message = `openai http ${upstream.status}`;
-		try { const j = JSON.parse(text); if (j && j.error && j.error.message) { message = j.error.message; } } catch { /* keep default */ }
 		console.error(`[lwd-proxy] openai-oauth stream forward failed: upstream ${upstream.status}; body: ${text}`);
+		const message = upstreamRefusal(sent.model, upstream.status, text);
 		setCors(res, req);
 		res.writeHead(502, { 'content-type': 'application/json' });
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }));
 		return { usage: undefined };
 	}
 	writeSseHead(res);
-	const nodeStream = Readable.fromWeb(upstream.body);
-	res.on('close', () => nodeStream.destroy());
-	let buf = '';
 	const endStream = () => { if (!res.writableEnded) { res.write(sseEvent('message_stop', { type: 'message_stop' })); res.end(); } };
-	return await new Promise(resolve => {
-		nodeStream.on('data', chunk => {
-			buf += chunk.toString('utf8');
-			let nl;
-			while ((nl = buf.indexOf('\n')) >= 0) {
-				const line = buf.slice(0, nl).trim();
-				buf = buf.slice(nl + 1);
-				if (!line.startsWith('data:')) { continue; }
-				const payload = line.slice(5).trim();
-				if (payload === '[DONE]') { endStream(); resolve({ usage: undefined }); return; }
-				try {
-					const j = JSON.parse(payload);
-					// The Responses stream emits typed events; translate the text deltas into the Anthropic-shaped
-					// content_block_delta the renderer's SSE parser reads. `response.completed` ends the stream.
-					if (j.type === 'response.output_text.delta' && typeof j.delta === 'string' && j.delta.length) {
-						res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: j.delta } }));
-					} else if (j.type === 'response.completed') {
-						endStream();
-						resolve({ usage: undefined });
-						return;
-					}
-				} catch { /* keep-alive comment or malformed chunk -> ignore */ }
-			}
-		});
-		nodeStream.on('end', () => { endStream(); resolve({ usage: undefined }); });
-		nodeStream.on('error', () => { if (!res.writableEnded) { res.end(); } resolve({ usage: undefined }); });
-	});
+	res.on('close', () => { /* the shared reader stops when the client hangs up */ });
+	// Translate each upstream text delta into the Anthropic-shaped content_block_delta the renderer's SSE
+	// parser reads; the shared reader owns the event vocabulary and the terminal `response.completed`.
+	await readResponsesStream(upstream.body, delta => {
+		if (!res.writableEnded) {
+			res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } }));
+		}
+	}).catch(() => undefined);
+	endStream();
+	return { usage: undefined };
 }
 
 // --- backend registry ---------------------------------------------------------------------------------
@@ -679,7 +711,11 @@ async function mergedModels() {
 	for (const name of ['openai-oauth', 'openrouter']) {
 		const list = await modelsForBackend(backends[name]);
 		for (const m of list) {
-			out.push({ ...m, backend: name, available: availabilityFor(name), serving: serving.name === name });
+			// A model this subscription is known to be refused is NOT available, however healthy its door is
+			// (plan 51 founder smoke: gpt-5.6-sol exists in the docs but no ChatGPT account may call it). An
+			// unverified model (`entitled: null`) stays available - we only ever demote on a proven refusal.
+			const available = availabilityFor(name) && m.entitled !== false;
+			out.push({ ...m, backend: name, available, serving: serving.name === name });
 		}
 	}
 	return out;
@@ -688,8 +724,12 @@ async function mergedModels() {
 // The default model id for a backend's list (the entry flagged default, else the first). Used to resolve an
 // absent/invalid `model` on /v1/messages so a stale persisted id can never 500 - it just lands on the default.
 function defaultModelId(models) {
-	const flagged = models.find(m => m && m.default);
-	return (flagged && flagged.id) || (models[0] && models[0].id) || '';
+	// Never resolve onto a model upstream is known to refuse - that would turn an absent/stale pick into a
+	// guaranteed 400 (plan 51 founder smoke). Prefer the flagged default, then any callable entry, then anything.
+	const callable = m => m && m.entitled !== false;
+	const flagged = models.find(m => m && m.default && callable(m));
+	const firstCallable = models.find(callable);
+	return (flagged && flagged.id) || (firstCallable && firstCallable.id) || (models[0] && models[0].id) || '';
 }
 
 // Resolve the caller's requested model against the active backend's list: keep it when it is a known id,
@@ -699,7 +739,10 @@ function defaultModelId(models) {
 function resolveRequestedModel(requested, models) {
 	const fallback = defaultModelId(models);
 	if (typeof requested !== 'string' || !requested) { return fallback; }
-	return models.some(m => m && m.id === requested) ? requested : fallback;
+	// A known-refused id is treated exactly like a stale one: fall back rather than forward a request upstream
+	// has already told us it will reject (plan 51 founder smoke).
+	const match = models.find(m => m && m.id === requested);
+	return (match && match.entitled !== false) ? requested : fallback;
 }
 
 // Cap a caller-supplied value before it is echoed into the broker log. `parsed.model` is attacker-controllable
@@ -1364,6 +1407,29 @@ function reportListening() {
 	if (!backends.openrouter.isConfigured()) { console.log('[lwd-proxy] no OpenRouter key configured - the fallback runs on the built-in heuristic path'); }
 	console.log(`[lwd-proxy] subscription door: "Sign in with ChatGPT"; model ${openaiOAuth.OPENAI_MODEL}; token store ${openaiOAuth.STORE_PATH} (0600)`);
 	if (!openaiOAuth.isSignedIn()) { console.log('[lwd-proxy] not signed in - open Abstract Settings and choose "Sign in with ChatGPT" to serve on your own subscription'); }
+	refreshEntitlementsInBackground();
+}
+
+// Establish at the wire which catalogue models this subscription may actually call, so the picker never
+// offers a model upstream will refuse (plan 51 founder smoke; the entitlement block in lwd-openai-oauth).
+// Deliberately NOT awaited: the cold-start floor plan 51 §3 box 1 proved (~0.5s spawn -> healthy) must not
+// regress behind network probes, and /healthz is already answering while this settles. Verdicts are cached
+// for 24h, so a normal start does no upstream work at all.
+function refreshEntitlementsInBackground() {
+	// Off-switch for harnesses that count upstream hits for a SERVE (a startup probe would pollute the count)
+	// and for any operator who would rather spend no subscription calls on catalogue truth.
+	if (process.env.LWD_ENTITLEMENT_PROBE === '0' || process.env.LWD_ENTITLEMENT_PROBE === 'false') { return; }
+	if (!openaiOAuth.canServe() || !openaiOAuth.entitlementStale()) { return; }
+	openaiOAuth.refreshEntitlements().then(verdicts => {
+		if (!verdicts) { return; }
+		const refused = Object.keys(verdicts).filter(id => verdicts[id].entitled === false);
+		const allowed = Object.keys(verdicts).filter(id => verdicts[id].entitled === true);
+		console.log(`[lwd-proxy] subscription entitlement checked: ${allowed.length ? allowed.join(', ') : 'none'} available${refused.length ? `; refused: ${refused.join(', ')}` : ''}`);
+	}).catch(e => {
+		// An entitlement probe that cannot run leaves every verdict unverified - the picker keeps its
+		// catalogue and nothing is demoted on our own failure.
+		console.error(`[lwd-proxy] entitlement probe skipped: ${(e && e.message) || e}`);
+	});
 }
 
 startListening();

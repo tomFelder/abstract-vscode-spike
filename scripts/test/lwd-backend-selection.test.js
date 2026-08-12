@@ -98,7 +98,11 @@ function startUpstream(handler) {
 
 /**
  * Spawn the real broker against a fake HOME + stub upstreams and wait until it is listening.
- * @param {{ home: string; port: number; responsesUrl: string; openrouterUrl: string; openrouterKey?: string; backend?: string }} cfg
+ *
+ * The startup entitlement probe is OFF by default here: it calls the Responses upstream once per catalogue
+ * model, which would silently inflate every hit count these tests assert on. The entitlement suite turns it
+ * back on explicitly with `entitlementProbe: true`, which is the only place its wire behaviour is asserted.
+ * @param {{ home: string; port: number; responsesUrl: string; openrouterUrl: string; openrouterKey?: string; backend?: string; entitlementProbe?: boolean }} cfg
  */
 function startBroker(cfg) {
 	const env = Object.assign({}, process.env, {
@@ -108,6 +112,7 @@ function startBroker(cfg) {
 		LWD_OPENAI_RESPONSES_URL: cfg.responsesUrl,
 		OPENROUTER_URL: cfg.openrouterUrl,
 		OPENROUTER_API_KEY: cfg.openrouterKey || '',
+		LWD_ENTITLEMENT_PROBE: cfg.entitlementProbe ? '1' : '0',
 	});
 	// LWD_BACKEND must be genuinely unset for dynamic mode - deleting it from the child's env.
 	if (cfg.backend) { env.LWD_BACKEND = cfg.backend; } else { delete env.LWD_BACKEND; }
@@ -150,9 +155,26 @@ function killBroker(child) {
 	});
 }
 
-// A minimal well-formed OpenAI Responses success body the broker's textFromResponses() reads.
-function responsesOk(model) {
-	return { id: 'resp_stub', model, status: 'completed', output_text: `served-by-openai-oauth on ${model}` };
+// A minimal OpenAI Responses success in the REAL wire shape: an SSE stream of typed events ending in
+// `response.completed`. The buffered JSON body this stub used to return was invented pre-#120 and the 12 Aug
+// founder smoke proved the real backend never sends one - it is stream-only, and its terminal payload carries
+// no `output_text` convenience field, so the text only exists in the deltas. The byte-for-byte recorded
+// transcript lives in scripts/test/fixtures/ and is asserted by lwd-responses-parity.test.js.
+function responsesOkStream(model) {
+	const text = `served-by-openai-oauth on ${model}`;
+	const message = { id: 'msg_stub', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text }] };
+	const events = [
+		{ type: 'response.created', response: { id: 'resp_stub', model, status: 'in_progress' } },
+		{ type: 'response.output_text.delta', content_index: 0, delta: text },
+		{ type: 'response.completed', response: { id: 'resp_stub', model, status: 'completed', output: [message] } },
+	];
+	return events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+}
+
+/** Answer a Responses request the way the real backend does: 200 + an SSE stream. */
+function serveResponsesStream(res, model) {
+	res.writeHead(200, { 'content-type': 'text/event-stream' });
+	res.end(responsesOkStream(model));
 }
 // A minimal OpenRouter chat-completion success body.
 function openrouterOk(model) {
@@ -210,7 +232,7 @@ test('canServe: valid bundle -> serves; expired+refreshable -> serves; expired+s
 
 test('dynamic selection: valid bundle -> openai-oauth; remove bundle -> openrouter; restore -> openai-oauth (no restart)', async () => {
 	const home = mkHome();
-	const responses = await startUpstream((req, res, _body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(responsesOk('gpt-5.6-sol'))); });
+	const responses = await startUpstream((req, res, _body) => serveResponsesStream(res, 'gpt-5.6-sol'));
 	const openrouter = await startUpstream((req, res, _body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(openrouterOk('openai/gpt-4.1-mini'))); });
 	const port = 8300 + Math.floor(Math.random() * 500);
 	writeBundle(home, { expiresInSec: 3600, withRefresh: true });
@@ -253,7 +275,7 @@ test('dynamic selection: valid bundle -> openai-oauth; remove bundle -> openrout
 
 test('forced override (LWD_BACKEND) is honoured both ways and named in /healthz', async () => {
 	const home = mkHome();
-	const responses = await startUpstream((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(responsesOk('gpt-5.6-sol'))); });
+	const responses = await startUpstream((req, res) => serveResponsesStream(res, 'gpt-5.6-sol'));
 	const openrouter = await startUpstream((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(openrouterOk('openai/gpt-4.1-mini'))); });
 
 	// forced=openrouter DESPITE a valid bundle -> serves openrouter.
