@@ -14,6 +14,7 @@ import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
@@ -86,6 +87,7 @@ export class LivingDocEditor extends EditorPane {
 		@IAbstractHeaderService private readonly _header: IAbstractHeaderService,
 		@IContextMenuService private readonly _contextMenuService: IContextMenuService,
 		@INotificationService private readonly _notification: INotificationService,
+		@IQuickInputService private readonly _quickInputService: IQuickInputService,
 	) {
 		super(LivingDocEditor.ID, group, telemetryService, themeService, _storageService);
 	}
@@ -101,7 +103,7 @@ export class LivingDocEditor extends EditorPane {
 		// bound to this pane's group and mirrors it live via its own listeners, so an "Open to the right", a
 		// close, or a programmatic open all repaint it.
 		parent.appendChild(createTabStripStyle());
-		this._tabStrip = this._register(new AbstractTabStrip(this.group, this._livingDocs, this._storageService, this._contextMenuService, this._editorService));
+		this._tabStrip = this._register(new AbstractTabStrip(this.group, this._livingDocs, this._storageService, this._contextMenuService, this._editorService, this._dialogService, this._quickInputService));
 		this._container.appendChild(this._tabStrip.element);
 		this._webviewHost = $('.living-doc-webview-host');
 		this._webviewHost.style.flex = '1';
@@ -234,6 +236,18 @@ export class LivingDocEditor extends EditorPane {
 		await apply();
 	}
 
+	/**
+	 * Editing the document PINS its preview tab (plan 52 WP-F) - the same rule VS Code applies when an editor
+	 * becomes dirty. Core does that automatically (`onDidChangeEditorDirty` -> `pinEditor` in editorGroupView),
+	 * but a living document is never dirty: `LivingDocEditorInput` is Readonly and every edit is written straight
+	 * to disk by the service, so no dirty event ever fires for it. We therefore make core's OWN call explicitly on
+	 * the paths that change the document's content. Pinning an already-pinned editor is a no-op in the group model,
+	 * so this is safe to call on every keystroke-driven save.
+	 */
+	private _pinOnEdit(): void {
+		if (this.input) { this.group.pinEditor(this.input); }
+	}
+
 	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean; html?: string }): void {
 		switch (message?.type) {
 			case 'lwdReady':
@@ -254,6 +268,7 @@ export class LivingDocEditor extends EditorPane {
 					// the next (non-typing) render.
 					this._proto = recordPmBody(this._proto, parseLivingDoc(text).body);
 					void this._livingDocs.saveRawText(this._resource, text, { silent: true });
+					this._pinOnEdit();
 				}
 				break;
 			case 'wordPaste':
@@ -438,6 +453,7 @@ export class LivingDocEditor extends EditorPane {
 			case 'edit':
 				if (this._resource && typeof message.blockId === 'string' && typeof message.text === 'string') {
 					void this._livingDocs.editBlock(this._resource, message.blockId, message.text);
+					this._pinOnEdit();
 				}
 				break;
 			case 'setMode':
@@ -448,6 +464,7 @@ export class LivingDocEditor extends EditorPane {
 				break;
 			case 'applyRaw':
 				void this._applyRaw(typeof message.text === 'string' ? message.text : '');
+				this._pinOnEdit();
 				break;
 		}
 	}

@@ -978,12 +978,18 @@ class LivingDocsTabRestoreContribution extends Disposable implements IWorkbenchC
 				for (const id of persisted.ids) {
 					const resource = this._safeParse(id);
 					if (!resource) { continue; }
-					// Skip a tab native restore already brought back (avoid duplicating the active editor).
+					// Skip a tab native restore already brought back (avoid duplicating the active editor). A tab
+					// restored that way keeps whatever pin state core serialised for it; we do not second-guess it
+					// (and could not - `IEditorGroup` exposes `pinEditor` but no unpin).
 					if (group.editors.some(e => e.resource?.toString() === resource.toString())) { continue; }
+					// Restore the ONE tab that was the group's preview tab as a preview tab again (plan 52 WP-F),
+					// so a peek comes back italic and is still reused by the next peek - the same thing VS Code
+					// does for its own tabs. Every other tab restores pinned, as before.
+					const pinned = id !== persisted.previewId;
 					if (resource.path.toLowerCase().endsWith('.md')) {
-						await this._editorService.openEditor({ resource, options: { pinned: true, inactive: true } }, group);
+						await this._editorService.openEditor({ resource, options: { pinned, inactive: true } }, group);
 					} else {
-						await this._editorService.openEditor(new LivingDocSourceInput(resource), { pinned: true, inactive: true }, group);
+						await this._editorService.openEditor(new LivingDocSourceInput(resource), { pinned, inactive: true }, group);
 					}
 				}
 				// Re-activate the persisted active tab (last so it wins over the restore order).
@@ -999,7 +1005,10 @@ class LivingDocsTabRestoreContribution extends Disposable implements IWorkbenchC
 			for (const group of this._editorGroups.groups) {
 				const ids = group.editors.map(e => e.resource?.toString()).filter((s): s is string => !!s);
 				if (ids.length > 0) {
-					this._storageService.store(tabStripStorageKey(group.id), JSON.stringify({ ids, activeId: group.activeEditor?.resource?.toString() }), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+					// Write back what the group ACTUALLY holds, preview slot included, so this catch-up write does
+					// not silently promote a just-restored preview tab to a pinned one (plan 52 WP-F).
+					const previewId = group.editors.find(e => !group.isPinned(e))?.resource?.toString();
+					this._storageService.store(tabStripStorageKey(group.id), JSON.stringify({ ids, activeId: group.activeEditor?.resource?.toString(), previewId }), StorageScope.WORKSPACE, StorageTarget.MACHINE);
 				}
 			}
 		}

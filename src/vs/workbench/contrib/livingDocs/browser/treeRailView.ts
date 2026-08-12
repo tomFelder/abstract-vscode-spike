@@ -5,9 +5,8 @@
 
 import { $, addDisposableListener, append, clearNode, isHTMLElement } from '../../../../base/browser/dom.js';
 import { localize } from '../../../../nls.js';
-import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
-import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
+import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IAnchor } from '../../../../base/browser/ui/contextview/contextview.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
@@ -32,6 +31,7 @@ import { buildContextGroups, keyNamespace, sourceNamespace } from '../common/con
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
 import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
+import { createDocumentMenuActions, createDocumentMenuStyle, createSourceMenuActions, DOCUMENT_MENU_CLASS_NAME, IDocumentMenuServices } from './documentContextMenu.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 import { ScreenEditor } from './screenEditor.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
@@ -82,8 +82,6 @@ export class TreeRailView extends ViewPane {
 	// Inline rename (P6.3): the resource string of the doc row currently in edit-in-place mode, or undefined.
 	// While set, that row's leaf renderer mounts an input into the label instead of the static text.
 	private _renaming: string | undefined;
-	// Document-scoped stylesheet for the restyled native context menu (P6.7), injected once and kept for disposal.
-	private _menuStylesInjected = false;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -153,9 +151,19 @@ export class TreeRailView extends ViewPane {
 		this._body.style.height = '100%';
 		this._body.style.display = 'flex';
 		this._body.style.flexDirection = 'column';
+		// The restyled native context-menu skin (P6.7). Owned per-view and mounted on the document head, because
+		// the menu overlay renders OUTSIDE this view's DOM subtree so a view-scoped sheet could never reach it.
+		const menuStyle = createDocumentMenuStyle();
+		this.element.ownerDocument.head.appendChild(menuStyle);
+		this._register(toDisposable(() => menuStyle.remove()));
 		// Context/Outline track the active document; Files/Search track the document set.
 		this._register(this._editors.onDidActiveEditorChange(() => void this._render()));
 		this._register(this._livingDocs.onDidChange(() => void this._render()));
+		// The two document-menu items whose UI only THIS rail can mount (pin 6 / P6.3, P6.5). They arrive as
+		// service requests so the same menu item works whether it was raised on a tree row or on a product tab
+		// (plan 52 WP-F) - the tab strip holds no reference to this view.
+		this._register(this._livingDocs.onDidRequestRenameDocument(e => this._startInlineRename(URI.parse(e.docId))));
+		this._register(this._livingDocs.onDidRequestBindSources(e => void this._bindSources(URI.parse(e.docId))));
 		void this._render();
 	}
 
@@ -419,8 +427,20 @@ export class TreeRailView extends ViewPane {
 			const el = e.element;
 			if (el?.type !== 'leaf' || !el.item.resource) { return; }
 			if (el.item.kind === 'doc') {
-				void this._editors.openEditor({ resource: el.item.resource, options: { pinned: true, preserveFocus: e.browserEvent?.type === 'keydown' ? false : true } });
+				// Preview tabs (plan 52 WP-F) come free from core: the tree widget's own `ResourceNavigator`
+				// (`platform/list/browser/listService.ts`) already decides pinned-ness the VS Code way and hands it
+				// to us on the open event - a single click gives `pinned: false` (open as the group's PREVIEW tab,
+				// which the next single click REUSES), a double click gives `pinned: true`. This is exactly what the
+				// built-in Explorer does with `e.editorOptions.pinned`; before WP-F this site hard-coded
+				// `pinned: true`, which is why no tab was ever a preview. Focus is the one place the fork's own
+				// behaviour is kept: a keyboard open moves focus into the document, a mouse open leaves it here.
+				void this._editors.openEditor({
+					resource: el.item.resource,
+					options: { pinned: e.editorOptions.pinned, preserveFocus: e.browserEvent?.type === 'keydown' ? false : e.editorOptions.preserveFocus },
+				});
 			} else if (el.item.kind === 'source') {
+				// A source row stays PINNED: opening a data file is a deliberate "work with this" gesture, and a
+				// previewing source would evict the document being peeked (a group owns exactly one preview slot).
 				void this._livingDocs.openSourceTab(el.item.resource);
 			}
 		}));
@@ -599,113 +619,38 @@ export class TreeRailView extends ViewPane {
 		return store;
 	}
 
-	// The full right-click menu on a document (pin 6 / P6.1): four groups in order - Open / Open to the right \u00b7
-	// Rename\u2026 / Duplicate / Move to\u2026 \u00b7 Bind sources\u2026 / View history / Present \u00b7 Delete. Rendered by the RESTYLED
-	// native ContextMenuService (P6.7 - no parallel menu): the 208px/radius-12/30px-rows skin is injected as a
-	// document-scoped stylesheet keyed to the menu class this delegate names (getMenuClassName), so it reaches the
-	// menu overlay (which renders outside this view's DOM) without touching studio.css. Every item routes to an
-	// EXISTING flow or the additive service methods; nothing here re-implements a file op.
+	// The right-click menu on a document row (pin 6 / P6.1): four groups - Open / Open to the right \u00b7 Rename\u2026 /
+	// Duplicate / Move to\u2026 \u00b7 Bind sources\u2026 / View history / Present \u00b7 Delete. The action list itself now lives in
+	// `documentContextMenu.ts`, shared VERBATIM with the product-tab strip's right-click menu (plan 52 WP-F), so
+	// the two menus can never drift apart. Rendered by the RESTYLED native ContextMenuService (P6.7 - no parallel
+	// menu): the 208px/radius-12/30px-rows skin is a document-scoped stylesheet keyed to the class named here.
 	private _showDocMenu(anchor: HTMLElement | IAnchor, resource: URI, label: string): void {
-		this._ensureMenuStyles();
-		const actions: IAction[] = [
-			toAction({ id: 'livingDocs.file.open', label: localize('livingDocs.menu.open', "Open"), run: () => void this._editors.openEditor({ resource, options: { pinned: true } }) }),
-			toAction({ id: 'livingDocs.file.openRight', label: localize('livingDocs.menu.openRight', "Open to the Right"), run: () => void this._livingDocs.openToTheRight(resource) }),
-			new Separator(),
-			toAction({ id: 'livingDocs.file.rename', label: localize('livingDocs.menu.rename', "Rename\u2026"), run: () => this._startInlineRename(resource) }),
-			toAction({ id: 'livingDocs.file.duplicate', label: localize('livingDocs.menu.duplicate', "Duplicate"), run: () => void this._livingDocs.duplicateFile(resource) }),
-			toAction({ id: 'livingDocs.file.move', label: localize('livingDocs.menu.move', "Move to\u2026"), run: () => void this._moveFile(resource, label) }),
-			new Separator(),
-			toAction({ id: 'livingDocs.file.bind', label: localize('livingDocs.menu.bind', "Bind Sources\u2026"), run: () => void this._bindSources(resource) }),
-			toAction({ id: 'livingDocs.file.history', label: localize('livingDocs.menu.history', "View History"), run: () => void this._viewHistory(resource) }),
-			toAction({ id: 'livingDocs.file.present', label: localize('livingDocs.menu.present', "Present"), run: () => void this._livingDocs.requestPresent(resource) }),
-			new Separator(),
-			// Delete is the LAST entry (P6.6): the injected stylesheet paints the menu's last action-item row
-			// removed-ink `#B5514B` with a `#FBEEEE` hover. It routes to the confirming, dependents-warning service delete.
-			toAction({ id: 'livingDocs.file.delete', label: localize('livingDocs.menu.delete', "Delete\u2026"), run: () => void this._deleteFile(resource, label) }),
-		];
-		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions, getMenuClassName: () => 'livingDocs-doc-menu' });
+		const actions = createDocumentMenuActions(this._menuServices(), resource, label);
+		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions, getMenuClassName: () => DOCUMENT_MENU_CLASS_NAME });
 	}
 
 	// A source / non-document leaf row keeps the lighter provenance-safe menu (it has no living-doc affordances):
 	// Add to chat, plus rename/delete on a real file. Delete stays the LAST entry so the removed-ink skin lands.
 	private _showSourceMenu(anchor: HTMLElement | IAnchor, resource: URI, label: string): void {
-		this._ensureMenuStyles();
-		const actions: IAction[] = [
-			toAction({ id: 'livingDocs.file.rename', label: localize('livingDocs.menu.rename', "Rename\u2026"), run: () => this._startInlineRename(resource) }),
-			toAction({ id: 'livingDocs.file.addToChat', label: localize('livingDocs.menu.addToChat', "Add to Chat"), run: () => this._livingDocs.attachToChat(resource) }),
-			new Separator(),
-			toAction({ id: 'livingDocs.file.delete', label: localize('livingDocs.menu.delete', "Delete\u2026"), run: () => void this._deleteFile(resource, label) }),
-		];
-		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions, getMenuClassName: () => 'livingDocs-doc-menu' });
+		const actions = createSourceMenuActions(this._menuServices(), resource, label);
+		this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions, getMenuClassName: () => DOCUMENT_MENU_CLASS_NAME });
 	}
 
-	// "Bind sources\u2026" (P6.5): open the document, then reveal the Context tab's Add-source flow - the SAME door the
-	// PN.1 nudge uses. Opening switches this rail to Context (which tracks the active document) and expands its
-	// "+ Add source" picker so the user lands directly on the bind affordance, no extra click.
+	// The services the shared document menu needs, gathered from this view's constructor-injected ones.
+	private _menuServices(): IDocumentMenuServices {
+		return { editorService: this._editors, livingDocs: this._livingDocs, dialogService: this._dialogService, quickInputService: this._quickInput };
+	}
+
+	// "Bind sources\u2026" (P6.5): reveal the Context tab's Add-source flow for a document - the SAME door the PN.1
+	// nudge uses, and the door the menu item reaches through `requestBindSources` (which opens the document and
+	// reveals this rail first, so a tab right-click lands here too). Switching to Context and expanding the
+	// "+ Add source" picker puts the user on the bind affordance with no extra click.
 	private async _bindSources(resource: URI): Promise<void> {
 		await this._editors.openEditor({ resource, options: { pinned: true } });
 		this._tab = 'context';
 		this._srcCandidates = await this._livingDocs.getSourceCandidates(resource);
 		this._srcAdding = true;
 		await this._render();
-	}
-
-	// "View history" (P6.5): open the document, then reveal the right rail's History tab (the existing flow).
-	private async _viewHistory(resource: URI): Promise<void> {
-		await this._editors.openEditor({ resource, options: { pinned: true } });
-		this._livingDocs.focusPanel('history');
-	}
-
-	// "Move to\u2026" (P6.4): pick a destination folder, then move the document + its sidecar and re-point dependents
-	// through the additive service `moveFile`. The picker offers the project's folders (existing + convention),
-	// so the user chooses a real destination without hand-typing a path.
-	private async _moveFile(resource: URI, label: string): Promise<void> {
-		const targets = await this._moveTargets(resource);
-		if (!targets.length) {
-			await this._dialogService.info(localize('livingDocs.move.noFolders', "No other folders"), localize('livingDocs.move.noFoldersDetail', "There is nowhere to move \"{0}\" to yet. Create a folder first.", label));
-			return;
-		}
-		const pick = await this._quickInput.pick(
-			targets.map(t => ({ label: t.label, folder: t.folder })),
-			{ placeHolder: localize('livingDocs.move.pick', "Move \"{0}\" to which folder?", label) },
-		);
-		if (!pick) { return; } // cancelled
-		await this._livingDocs.moveFile(resource, pick.folder);
-	}
-
-	// The destination folders offered by "Move to\u2026": the project's existing subfolders (from the discovered doc
-	// set) plus the soft convention folders, minus the file's own current folder. Each carries its target URI.
-	// The project root is derived from the discovered documents (a doc's dir minus its relative `folder`), so no
-	// new service seam is needed - the summaries already carry every doc's resource and its folder-relative path.
-	private async _moveTargets(resource: URI): Promise<readonly { label: string; folder: URI }[]> {
-		const documents = await this._livingDocs.listDocuments();
-		const root = this._deriveProjectRoot(documents);
-		if (!root) { return []; }
-		const currentDir = dirname(resource).toString();
-		const rels = new Set<string>(['', 'data', 'assets', 'templates', 'archive', 'working-files']);
-		for (const d of documents) {
-			if (d.folder) { rels.add(d.folder); }
-		}
-		const out: { label: string; folder: URI }[] = [];
-		for (const rel of [...rels].sort((a, b) => a.localeCompare(b))) {
-			const folder = rel ? joinPath(root, ...rel.split('/')) : root;
-			if (folder.toString() === currentDir) { continue; } // never offer the file's own folder
-			out.push({ label: rel ? rel : localize('livingDocs.move.projectRoot', "Project root"), folder });
-		}
-		return out;
-	}
-
-	// Derive the project root from the discovered documents without a new service seam: a document's directory
-	// minus its `folder`-relative segments is the workspace root. Any document resolves it (they all share one
-	// root); a root-level document's directory IS the root. Undefined when no document is discovered.
-	private _deriveProjectRoot(documents: readonly ILivingDocSummary[]): URI | undefined {
-		for (const d of documents) {
-			let dir = dirname(d.resource);
-			const segments = (d.folder ?? '').split('/').filter(s => s.length > 0);
-			for (let i = 0; i < segments.length; i++) { dir = dirname(dir); }
-			return dir;
-		}
-		return undefined;
 	}
 
 	// "Use as source" on a workbook / PDF row (issue #131). Resolves the file name to its URI, then routes to
@@ -783,21 +728,6 @@ export class TreeRailView extends ViewPane {
 		// Focus + select the stem after the row paints (the tree mounts the template synchronously).
 		queueMicrotask(() => { if (!done) { input.focus(); input.setSelectionRange(0, stem.length); } });
 		return store;
-	}
-
-	// map-D6: delete warns and LISTS the dependent documents; on proceed the service orphans them
-	// gracefully (their cached values survive, flagged stale) and offers Undo - the delete never blocks.
-	private async _deleteFile(resource: URI, label: string): Promise<void> {
-		const dependents = await this._livingDocs.getFileDependents(resource);
-		const message = dependents.length
-			? `Delete "${label}"? ${dependents.length} document${dependents.length === 1 ? '' : 's'} depend on it.`
-			: `Delete "${label}"?`;
-		const detail = dependents.length
-			? `These documents will keep their last cached values, flagged as stale (not broken):\n${dependents.map(d => `\u2022 ${d.title}`).join('\n')}\n\nYou can undo this.`
-			: 'You can undo this.';
-		const { confirmed } = await this._dialogService.confirm({ type: 'warning', message, detail, primaryButton: 'Delete' });
-		if (!confirmed) { return; }
-		await this._livingDocs.deleteFile(resource);
 	}
 
 	private _renderContext(panel: HTMLElement): void {
@@ -980,41 +910,6 @@ export class TreeRailView extends ViewPane {
 				if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); reveal(); }
 			}));
 		}
-	}
-
-	// The restyled native context menu (P6.7 / P6.1 / P6.6): a document-scoped stylesheet keyed to this loop's
-	// menu class (`getMenuClassName` -> the `.monaco-menu-container.livingDocs-doc-menu` overlay, which renders
-	// OUTSIDE this view's DOM subtree, so a view-scoped sheet cannot reach it). This restyles the EXISTING native
-	// menu - no parallel menu implementation - to the mock's 208px popover / radius 12 / 30px rows / hairline
-	// dividers / popover shadow, and paints the Delete row `#B5514B` with a `#FBEEEE` hover. Scoped to our menu
-	// class so no other menu is affected, and injected once (disposed with the view) - `studio.css` is untouched.
-	private _ensureMenuStyles(): void {
-		if (this._menuStylesInjected) { return; }
-		this._menuStylesInjected = true;
-		const style = document.createElement('style');
-		const SCOPE = '.monaco-menu-container.livingDocs-doc-menu';
-		style.textContent = `
-		/* radius pinned !important to beat roundedCorners.css's cornerRadius-large tier on the menu surfaces. */
-		${SCOPE}{border-radius:12px !important;box-shadow:0 12px 32px -8px rgba(20,22,28,.24),0 0 0 1px #E9EAEE;overflow:hidden}
-		${SCOPE} .monaco-menu{border-radius:12px !important;background:#FBFCFD;overflow:hidden}
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical{padding:6px;width:208px;box-sizing:border-box;border-radius:12px !important}
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item{margin:0}
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-menu-item{height:30px;border-radius:8px;padding:0 10px}
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-label{font:400 13px/30px system-ui;color:#26292F}
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item.focused .action-menu-item,
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-menu-item:hover{background:#F1F2F6}
-		/* Hairline dividers between the four groups (a separator row is a thin rule, not a tall gap). */
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item.disabled.action-label.separator,
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-label.separator{margin:5px 8px;padding:0;border-bottom:1px solid #EEF0F3}
-		/* Delete (P6.6): removed-ink #B5514B, hover bg #FBEEEE. The native context menu only applies an action's
-		 * class to icon items, so the Delete row is targeted structurally instead - it is always the last
-		 * action-item in this menu (see _showDocMenu / _showSourceMenu, where Delete is the final entry). */
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item:last-child .action-label{color:#B5514B}
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item:last-child.focused .action-menu-item,
-		${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item:last-child .action-menu-item:hover{background:#FBEEEE}
-		`;
-		this.element.ownerDocument.head.appendChild(style);
-		this._register(toDisposable(() => style.remove()));
 	}
 
 	private _injectStyles(container: HTMLElement): void {

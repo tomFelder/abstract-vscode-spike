@@ -10,7 +10,9 @@ import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -49,6 +51,8 @@ export class LivingDocSourceEditor extends EditorPane {
 		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
 		@IContextMenuService private readonly _contextMenuService: IContextMenuService,
 		@IEditorService private readonly _editorService: IEditorService,
+		@IDialogService private readonly _dialogService: IDialogService,
+		@IQuickInputService private readonly _quickInputService: IQuickInputService,
 	) {
 		super(LivingDocSourceEditor.ID, group, telemetryService, themeService, _storageService);
 	}
@@ -59,7 +63,7 @@ export class LivingDocSourceEditor extends EditorPane {
 		this._container.style.width = '100%';
 		// The shared product-tab strip sits in the pane host DOM, above the source viewer (mirrors the document
 		// editor's layout so the strip reads as one continuous row across a document<->source tab switch).
-		this._tabStrip = this._register(new AbstractTabStrip(this.group, this._livingDocs, this._storageService, this._contextMenuService, this._editorService));
+		this._tabStrip = this._register(new AbstractTabStrip(this.group, this._livingDocs, this._storageService, this._contextMenuService, this._editorService, this._dialogService, this._quickInputService));
 		this._container.appendChild(this._tabStrip.element);
 		this._viewerHost = append(this._container, $('.lwd-source-viewer'));
 		parent.appendChild(this._container);
