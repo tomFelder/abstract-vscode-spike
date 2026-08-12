@@ -107,6 +107,9 @@ function startBroker(cfg) {
 		LWD_PROXY_HOST: '127.0.0.1',
 		LWD_PROXY_PORT: String(cfg.port),
 		OPENROUTER_URL: cfg.openrouterUrl || 'http://127.0.0.1:1/none',
+		// No startup entitlement probe: these tests assert catalogue SHAPE, and a probe would reach for a
+		// Responses upstream they do not stub (see the entitlement suite for its wire behaviour).
+		LWD_ENTITLEMENT_PROBE: '0',
 	}, cfg.env || {});
 	// A metered-fallback test needs NO oauth bundle so openrouter is the serving door; unset LWD_BACKEND for dynamic.
 	delete env.LWD_BACKEND;

@@ -164,29 +164,204 @@ function readModelsConfig() {
 	return (out.models || out.default) ? out : null;
 }
 
+// --- entitlement: what THIS subscription may actually call (plan 51 founder smoke, 12 Aug 2026) ---------
+// The catalogue above answers "which ids exist"; it cannot answer "which ids may this account call". The
+// 12 Aug founder smoke proved the gap is real and load-bearing: OpenAI's Codex docs name `gpt-5.6-sol` the
+// default, but the Codex Responses backend rejects it outright for a ChatGPT-account token -
+//   HTTP 400 {"detail":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}
+// - while `gpt-5.6-terra` and `gpt-5.6-luna` serve normally. A catalogue that advertises sol as available is
+// a catalogue that lies, which the wave's UX bar forbids. So entitlement is established at the WIRE and
+// cached, never inferred from docs.
+//
+// Three rules keep this honest:
+//   1. Only a DEFINITIVE upstream rejection marks a model unentitled. A network failure, a 5xx, or a
+//      not-signed-in state leaves the verdict `null` (= unverified) - we never downgrade a model because our
+//      own probe could not reach upstream.
+//   2. The probe aborts the moment upstream accepts the stream, so proving entitlement costs an input token
+//      and never a completion.
+//   3. A live serve that hits the same rejection calls markUnentitled(), so the catalogue self-heals against
+//      drift between probe refreshes without waiting for the TTL.
+const ENTITLEMENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function entitlementPath() {
+	return path.join(storeDir(), 'models-entitlement.json');
+}
+
+/** The whole on-disk entitlement cache, or an empty object. Never throws. */
+function readEntitlementCache() {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(entitlementPath(), 'utf8'));
+		return (parsed && typeof parsed === 'object') ? parsed : {};
+	} catch { return {}; }
+}
+
+/** The cache slice for the signed-in account (entitlement is per-account, so switching accounts re-probes). */
+function entitlementSlice() {
+	let accountId = '';
+	try { accountId = (readStore() || {}).account_id || ''; } catch { /* signed out -> the anonymous slice */ }
+	const cache = readEntitlementCache();
+	const slice = cache[accountId || 'anonymous'];
+	return (slice && typeof slice === 'object' && slice.models && typeof slice.models === 'object') ? slice : null;
+}
+
+function writeEntitlementSlice(models) {
+	let accountId = '';
+	try { accountId = (readStore() || {}).account_id || ''; } catch { /* keep the anonymous slice */ }
+	const cache = readEntitlementCache();
+	cache[accountId || 'anonymous'] = { checkedAt: Date.now(), models };
+	try {
+		fs.mkdirSync(storeDir(), { recursive: true });
+		fs.writeFileSync(entitlementPath(), JSON.stringify(cache, null, 2), { mode: 0o600 });
+	} catch { /* a cache we cannot persist is a cache we re-probe next start - never fatal */ }
+}
+
+/**
+ * The subscription bearer + Codex headers. Lives here because this module owns the bundle and the refresh;
+ * the broker's openAiAuthHeaders() delegates so the header shape exists exactly once.
+ */
+async function authHeaders() {
+	const bundle = await validBundle();
+	const headers = {
+		'authorization': `Bearer ${bundle.access_token}`,
+		'content-type': 'application/json',
+		'originator': 'codex_cli_rs',
+		'OpenAI-Beta': 'responses=v1',
+	};
+	if (bundle.account_id) { headers['chatgpt-account-id'] = bundle.account_id; }
+	return headers;
+}
+
+/**
+ * Ask upstream whether this account may call `modelId`, at the wire. Resolves `{ entitled, reason }` where
+ * `entitled` is true (upstream opened the stream), false (upstream definitively refused the model), or null
+ * (we could not tell - never cached as a refusal).
+ */
+async function probeModelEntitlement(modelId) {
+	let headers;
+	try { headers = await authHeaders(); }
+	catch { return { entitled: null, reason: 'not signed in' }; }
+	const controller = new AbortController();
+	let res;
+	try {
+		res = await fetch(RESPONSES_URL, {
+			method: 'POST',
+			headers: Object.assign({}, headers, { 'accept': 'text/event-stream' }),
+			// The minimum request this backend accepts (founder smoke): `store:false` and `stream:true` are
+			// mandatory and `max_output_tokens` is refused outright - see toResponsesRequest in the broker.
+			body: JSON.stringify({
+				model: modelId,
+				input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+				store: false,
+				stream: true,
+			}),
+			signal: controller.signal,
+		});
+	} catch (e) {
+		return { entitled: null, reason: `probe could not reach upstream: ${(e && e.message) || e}` };
+	}
+	if (res.ok) {
+		// Upstream accepted: entitlement is proven. Abort before the model generates a completion (rule 2).
+		try { controller.abort(); } catch { /* the stream is already ours to drop */ }
+		return { entitled: true };
+	}
+	const body = await res.text().catch(() => '');
+	let detail = '';
+	try { const j = JSON.parse(body); detail = (j && (j.detail || (j.error && j.error.message))) || ''; } catch { /* keep the raw body */ }
+	// A 4xx naming the model is a real refusal; anything else (5xx, auth, gateway) is inconclusive (rule 1).
+	const definitive = res.status >= 400 && res.status < 500 && res.status !== 401 && res.status !== 403;
+	return definitive
+		? { entitled: false, reason: detail || `upstream ${res.status}` }
+		: { entitled: null, reason: detail || `upstream ${res.status}` };
+}
+
+/**
+ * Probe every id in the effective catalogue and cache the verdicts. Fired (not awaited) at broker start so
+ * the picker tells the truth without blocking the cold-start floor plan 51 §3 box 1 proved (~0.5s to healthy).
+ */
+async function refreshEntitlements() {
+	if (!canServe()) { return null; }
+	const models = await listModels({ entitlement: false });
+	const verdicts = {};
+	for (const m of models) {
+		const { entitled, reason } = await probeModelEntitlement(m.id);
+		// Only record a decided verdict; an inconclusive probe leaves the id unverified rather than guessing.
+		if (entitled === true) { verdicts[m.id] = { entitled: true }; }
+		else if (entitled === false) { verdicts[m.id] = { entitled: false, reason }; }
+	}
+	if (Object.keys(verdicts).length) { writeEntitlementSlice(verdicts); }
+	return verdicts;
+}
+
+/**
+ * Record a definitive upstream refusal seen during a real serve, so the catalogue self-heals immediately
+ * rather than waiting for the next probe refresh (rule 3).
+ */
+function markUnentitled(modelId, reason) {
+	if (typeof modelId !== 'string' || !modelId) { return; }
+	const slice = entitlementSlice();
+	const models = Object.assign({}, slice ? slice.models : {});
+	models[modelId] = { entitled: false, reason: reason || 'upstream refused this model' };
+	writeEntitlementSlice(models);
+}
+
+/** True when the cached verdicts are missing or older than the TTL, i.e. a refresh is due. */
+function entitlementStale() {
+	const slice = entitlementSlice();
+	return !slice || typeof slice.checkedAt !== 'number' || (Date.now() - slice.checkedAt) > ENTITLEMENT_TTL_MS;
+}
+
 /**
  * The models the signed-in subscription can drive (issue #179), as DATA (plan 51 WP-D). Starts from the
  * built-in gpt-5.6 Codex family (OPENAI_MODELS) and overlays ~/.abstract/models.json when present + valid, so
  * a new/renamed id never needs a broker edit. There is no live-list query for this door (see the overlay
  * comment above / upstream-notes §10); this method stays async + Promise-returning so a future live source
  * drops in here without changing the broker's call site. Returns fresh objects so a caller can never mutate
- * the module's list. Exactly one entry carries `default:true`.
+ * the module's list.
+ *
+ * Each entry carries its wire-established `entitled` verdict (true / false / null = unverified) from the
+ * entitlement cache above. Exactly one entry carries `default:true`, and the default is only ever placed on a
+ * model this account is NOT known to be refused - a default the subscription cannot call is the exact lie the
+ * 12 Aug founder smoke caught.
+ * @param {{ entitlement?: boolean }} [opts] - pass `{ entitlement: false }` to read the raw catalogue without
+ * folding verdicts in (used by refreshEntitlements, which is the thing that produces them).
  */
-async function listModels() {
+async function listModels(opts) {
 	const config = readModelsConfig();
 	const base = (config && config.models)
 		? config.models.map(m => ({ id: m.id, label: m.label, default: false }))
 		: OPENAI_MODELS.map(m => ({ id: m.id, label: m.label, default: m.default }));
+	if (opts && opts.entitlement === false) {
+		return base.map(m => ({ id: m.id, label: m.label, default: m.default === true }));
+	}
+	const cached = entitlementSlice();
+	const verdicts = cached ? cached.models : {};
+	const withEntitlement = base.map(m => {
+		const v = verdicts[m.id];
+		const entitled = (v && typeof v.entitled === 'boolean') ? v.entitled : null;
+		const entry = { id: m.id, label: m.label, default: m.default === true, entitled };
+		if (entitled === false && v.reason) { entry.reason = v.reason; }
+		return entry;
+	});
 	// Resolve the single default: an operator-named default that IS in the effective list wins; otherwise keep
 	// the list's own default (from the built-ins) or fall back to its first entry - never leave zero defaults.
-	const named = config && config.default && base.some(m => m.id === config.default) ? config.default : undefined;
+	// A refused model is skipped at every step, so the default lands on something callable whenever one exists.
+	const callable = m => m.entitled !== false;
+	const named = config && config.default && withEntitlement.some(m => m.id === config.default && callable(m))
+		? config.default
+		: undefined;
 	let defaulted = false;
-	const withDefault = base.map(m => {
-		const isDefault = named ? m.id === named : (m.default === true && !defaulted);
+	const withDefault = withEntitlement.map(m => {
+		const isDefault = named ? m.id === named : (m.default === true && callable(m) && !defaulted);
 		if (isDefault) { defaulted = true; }
-		return { id: m.id, label: m.label, default: isDefault };
+		return Object.assign({}, m, { default: isDefault });
 	});
-	if (!defaulted && withDefault.length) { withDefault[0].default = true; }
+	if (!defaulted) {
+		// The declared default is refused (or there was none): promote the first callable entry instead. If
+		// every entry is refused there is nothing honest to promote, so the list goes out with no default and
+		// the caller's own fallback decides - it must not silently pick a model upstream will reject.
+		const first = withDefault.find(callable);
+		if (first) { first.default = true; }
+	}
 	return withDefault;
 }
 
@@ -646,6 +821,13 @@ module.exports = {
 	// the subscription's model catalogue for the picker (issue #179; overlaid by models.json, plan 51 WP-D)
 	listModels,
 	readModelsConfig,
+	// entitlement: which catalogue ids THIS account may actually call, established at the wire
+	authHeaders,
+	probeModelEntitlement,
+	refreshEntitlements,
+	markUnentitled,
+	entitlementStale,
+	get ENTITLEMENT_PATH() { return entitlementPath(); },
 	// lifecycle
 	isSignedIn,
 	canServe,
