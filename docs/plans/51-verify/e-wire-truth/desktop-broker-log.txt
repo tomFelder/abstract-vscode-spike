@@ -1,0 +1,5 @@
+[main 2026-08-12T08:11:56.096Z] [livingDocsBroker] [lwd-proxy] listening on localhost (dual-stack ::):8090 (backend selection dynamic, serving openai-oauth now)
+[lwd-proxy] fallback door: OPENROUTER_API_KEY / OPENROUTER_API_KEY_FILE; daily included usage cap US$1/user
+[lwd-proxy] subscription door: "Sign in with ChatGPT"; model gpt-5.6-sol; token store /Users/tommy/.abstract/openai-oauth.json (0600)
+[main 2026-08-12T08:14:13.427Z] [livingDocsBroker] [lwd-proxy] /v1/messages backend=openai-oauth requested="gpt-5.6-terra" resolved=gpt-5.6-terra
+[main 2026-08-12T08:14:14.940Z] [livingDocsBroker] [lwd-proxy] /v1/messages backend=openai-oauth requested="gpt-5.6-terra" resolved=gpt-5.6-terra
