@@ -16,6 +16,7 @@ import { basename, dirname, isEqual, isEqualOrParent, joinPath, relativePath } f
 import { localize } from '../../../../nls.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
+import { IInlineWidgetReport } from '../common/changePointer.js';
 import { attachToSession, closeSession as closeSessionInList, createSession, deserialiseSessions, IChatSession, serialiseSessions, sessionsMentioning, titleSession } from '../common/chatSessions.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
@@ -134,6 +135,11 @@ interface IDocState {
 
 const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
 const pct = (a: number, b: number) => `${b >= a ? '+' : ''}${Math.round(((b - a) / a) * 100)}%`;
+
+// Set equality for the inline-widget report's id sets, so an unchanged report raises no event.
+function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+	return a.size === b.size && [...a].every(id => b.has(id));
+}
 
 // A tiny, order-independent string hash (FNV-1a) for cheap source-change detection. Not crypto.
 function hashString(s: string): string {
@@ -395,6 +401,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	private readonly _onDidRequestFocusChange = this._register(new Emitter<{ docId: string; changeId: string }>());
 	readonly onDidRequestFocusChange: Event<{ docId: string; changeId: string }> = this._onDidRequestFocusChange.event;
+
+	// The live surface's report of which pending changes really have an inline widget (plan 52 WP-A1 fix 1).
+	private readonly _onDidReportInlineWidgets = this._register(new Emitter<{ docId: string }>());
+	readonly onDidReportInlineWidgets: Event<{ docId: string }> = this._onDidReportInlineWidgets.event;
+
+	// Keyed by the DOCUMENT key (`resource.toString()`) - the editor pane's own resource. Deliberately its own
+	// map rather than a field on the `_docs` entries, whose identity is the PARSED document and whose lifetime
+	// is the load/unload cycle: a report outlives an unload (the same widgets mount again when the document
+	// reopens), and conflating those two identities in this file has broken things before.
+	private readonly _inlineWidgetsByDocKey = new Map<string, IInlineWidgetReport>();
 
 	private readonly _onDidRequestRevealHeading = this._register(new Emitter<{ docId: string; headingIndex: number }>());
 	readonly onDidRequestRevealHeading: Event<{ docId: string; headingIndex: number }> = this._onDidRequestRevealHeading.event;
@@ -1100,6 +1116,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (change) {
 			this._onDidRequestFocusChange.fire({ docId: change.docId, changeId });
 		}
+	}
+
+	reportInlineWidgets(resource: URI, requested: readonly string[], mounted: readonly string[]): void {
+		// The editor pane's webview answered "I was asked to decorate these, and these are the ones that really
+		// mounted". Recorded verbatim - a change in `requested` but not in `mounted` is a real answer ("the
+		// surface tried and there is nothing there"), which is exactly the case a chat pointer must not walk
+		// the reader into. No event when the answer has not changed, so the steady stream of reports from
+		// ordinary re-renders never churns the rail.
+		const docKey = resource.toString();
+		const next: IInlineWidgetReport = { requested: new Set(requested), mounted: new Set(mounted) };
+		const prev = this._inlineWidgetsByDocKey.get(docKey);
+		if (prev && sameIdSet(prev.requested, next.requested) && sameIdSet(prev.mounted, next.mounted)) { return; }
+		this._inlineWidgetsByDocKey.set(docKey, next);
+		this._onDidReportInlineWidgets.fire({ docId: docKey });
+	}
+
+	getInlineWidgets(resource: URI): IInlineWidgetReport | undefined {
+		return this._inlineWidgetsByDocKey.get(resource.toString());
 	}
 
 	revealHeading(resource: URI, headingIndex: number): void {

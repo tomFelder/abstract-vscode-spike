@@ -27,7 +27,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
-import { buildTurnPointers, changePointerRoute, IChangePointer } from '../common/changePointer.js';
+import { buildTurnPointers, IChangePointer, IInlineWidgetReport } from '../common/changePointer.js';
 import { IChatSession, splitTabs } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
@@ -37,6 +37,13 @@ import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenId } from './screenRender.js';
 
 type PanelTab = 'chat' | 'review' | 'history';
+
+// How long a transcript pointer click waits for a freshly-opened document to report which inline widgets it
+// mounted (plan 52 WP-A1 fix 1). Generous, because it is only ever spent on the first click into a document
+// this session - a document that has already reported answers from the recorded report with no wait at all -
+// and because the alternative to waiting is guessing, which is the defect this fix removes. A surface that
+// has still said nothing by then is treated as showing nothing, and the click lands in Review.
+const POINTER_WIDGET_REPORT_TIMEOUT = 1500;
 
 // The History body and the Document-Agents disclosure are built as pure HTML strings (historyHtml /
 // checksDisclosureHtml) whose entire visual language is inline `style=` on `<button>`/`<span>`/`<div>`,
@@ -281,6 +288,12 @@ export class ReviewRailView extends ViewPane {
 		}));
 		this._register(this._livingDocs.onDidRequestChatAttach(file => this._attachToChatDraft(file)));
 		this._register(this._editors.onDidActiveEditorChange(() => { if (this._activeTab === 'review' || this._activeTab === 'chat') { this._render(); } }));
+		// A document reported which inline widgets it really mounted (plan 52 WP-A1 fix 1), which is what decides
+		// whether a transcript pointer wears its "REVIEW" marker. Re-render so the marker reflects the answer the
+		// moment it arrives - a pointer drawn before its document had ever been looked at wears nothing, and
+		// gains the marker when the document says there is no widget. The service only fires when the answer
+		// actually changed, so an ordinary re-render storm never reaches here.
+		this._register(this._livingDocs.onDidReportInlineWidgets(() => { if (this._activeTab === 'chat') { this._render(); } }));
 		void this._refreshSignedIn();
 		// Replay a panel request made before this rail mounted: "View history" (and other deep links) on a
 		// not-yet-open document fires focusPanel BEFORE the rail exists, so its synchronous event is lost.
@@ -1223,7 +1236,12 @@ export class ReviewRailView extends ViewPane {
 	// what is still open. Shared by the plain assistant turn and the F14 partial-failure turn.
 	private _appendProposalPointers(col: HTMLElement, m: IChatMessage): void {
 		if (!m.proposedIds || !m.proposedIds.length) { return; }
-		const pointers = buildTurnPointers(m.proposedIds, this._livingDocs.getAllPending(), docId => this._livingDocs.getDoc(URI.parse(docId)));
+		const pointers = buildTurnPointers(
+			m.proposedIds,
+			this._livingDocs.getAllPending(),
+			docId => this._livingDocs.getDoc(URI.parse(docId)),
+			docId => this._livingDocs.getInlineWidgets(URI.parse(docId)),
+		);
 		if (!pointers.length) { return; }
 		const list = append(col, $('div'));
 		list.style.cssText = 'display:flex;flex-direction:column;gap:5px';
@@ -1232,9 +1250,13 @@ export class ReviewRailView extends ViewPane {
 			// the Review card carries) would be invalid inside it and would re-introduce a second thing to aim at.
 			const row = append(list, $('button')) as HTMLButtonElement;
 			row.style.cssText = 'display:flex;flex-direction:column;align-items:stretch;gap:3px;width:100%;box-sizing:border-box;text-align:left;border:1px solid #e4e7ee;border-radius:9px;padding:7px 10px;background:#fbfcff;cursor:pointer';
+			// The tooltip says only what is KNOWN. A document that has never been opened has never reported, so the
+			// honest promise is "take me there" - the click opens it, reads the report and picks the surface then.
 			row.title = pointer.route === 'review'
 				? localize('livingDocs.pointer.tip.review', "This change has no inline preview in the document. Open it in Review, where it can be read and approved.")
-				: localize('livingDocs.pointer.tip.document', "Go to this change in the document, where it can be read and approved.");
+				: pointer.route === 'document'
+					? localize('livingDocs.pointer.tip.document', "Go to this change in the document, where it can be read and approved.")
+					: localize('livingDocs.pointer.tip.unknown', "Go to this change - in the document if it previews there, otherwise in Review.");
 
 			// Row one names the change: what kind it is and which section it lands in. The section gets the whole
 			// line because it is the part the reader navigates by - the rail is ~300px, and sharing that line with
@@ -1272,6 +1294,8 @@ export class ReviewRailView extends ViewPane {
 				stat.textContent = localize('livingDocs.pointer.stat', "+{0} -{1}", pointer.added, pointer.removed);
 			}
 			// Say plainly where a review-routed pointer goes, rather than surprising the reader with a tab switch.
+			// Only shown for an OBSERVED `review` - the document was asked to decorate this change and mounted
+			// nothing. A pointer whose document has never been looked at wears no marker and promises nothing.
 			if (pointer.route === 'review') {
 				const hint = append(meta, $('span'));
 				hint.style.cssText = 'font-weight:600;font-size:9px;letter-spacing:.04em;color:#868b95;background:#eef1f6;border-radius:999px;padding:3px 6px';
@@ -1284,10 +1308,19 @@ export class ReviewRailView extends ViewPane {
 
 	// Follow a transcript pointer to its change (plan 52 WP-A1). Navigate-only: this never approves anything.
 	//
-	// The route is re-resolved HERE rather than trusted from render time, because a pointer whose document was
-	// closed had no parsed blocks to reason about when it was drawn - the click is what loads them. Loading
-	// first therefore fixes the "pointer clicked with its document closed" path, which would otherwise always
-	// fall back to Review.
+	// The invariant this method exists to hold is "a pointer can never land on nothing". The first cut tried to
+	// hold it by PREDICTING, from the change's Markdown, whether the document would mount an inline widget for
+	// it - and the prediction was wrong for whole block classes, which is precisely how a reader ends up staring
+	// at a paragraph with no change on it. So nothing is predicted here any more. The document is asked, and
+	// only its answer is acted on:
+	//
+	//   1. go to the document (which is where the change lives, and what mounts the surface that answers);
+	//   2. read that document's widget report, waiting briefly when the click is what opened it;
+	//   3. if the report does NOT name this change, reveal it in the Review tab, which always renders the full
+	//      diff and Approve & apply / Reject.
+	//
+	// Step 3 is the fallback, and it fires on the evidence rather than on a rule about Markdown - so a block
+	// class nobody has thought of yet still lands the reader somewhere readable.
 	private async _openPointer(pointer: IChangePointer): Promise<void> {
 		const resource = URI.parse(pointer.docId);
 		// The change may have been approved or rejected between this pointer being drawn and being clicked. Open
@@ -1297,27 +1330,46 @@ export class ReviewRailView extends ViewPane {
 			await this._editors.openEditor({ resource });
 			return;
 		}
-		// Load only when the document is not already parsed. A redundant load fires `onDidChange`, which re-renders
-		// the editor's webview and rebuilds its decorations - and that rebuild wiped the reveal flash that had
-		// just been applied, so a second click on the same pointer landed silently. Caught in the live walk.
-		let doc = this._livingDocs.getDoc(resource);
-		if (!doc) {
-			await this._livingDocs.loadDocument(resource);
-			doc = this._livingDocs.getDoc(resource);
-		}
-		if (changePointerRoute(doc, change) === 'review') {
-			// No inline widget to land on (#300 - a list, table or any block whose Markdown carries syntax). Send
-			// the reader to the Review tab, which renders the full red/green diff and Approve & apply / Reject for
-			// exactly this change. `reviewBlock` also scrolls the document to the block and flashes it, so the
-			// reader still sees WHERE the change is even though the document cannot show them WHAT it is.
-			await this._livingDocs.reviewBlock(resource, pointer.blockId);
-			return;
-		}
-		// The document route is the plan-19 navigate-to-inline path the Review card's diff click already uses:
-		// open the document and flash its widget. Reused rather than reimplemented, and it addresses the WIDGET
-		// (not the block), which is the only thing that can land an insertion - an insertion has no block of its
-		// own to scroll to.
+		// The plan-19 navigate-to-inline path the Review card's diff click already uses: open the document and
+		// flash its widget. Reused rather than reimplemented, and it addresses the WIDGET (not the block), which
+		// is the only thing that can land an insertion - an insertion has no block of its own to scroll to. When
+		// the widget is there this is the whole interaction; when it is not, the scroll is harmless and the
+		// reveal below carries the reader on to a surface that can actually show them the change.
 		await this._navigateToChange(change);
+		if (await this._landedOnInlineWidget(resource, change.id)) { return; }
+		// The document says this change has no inline widget (#300 - a list, a table cell, or any block whose
+		// Markdown carries syntax mounts nothing), or it never answered. Either way there is nothing here for the
+		// reader to read, so reveal the change in the Review tab, which renders the full red/green diff and
+		// Approve & apply / Reject for exactly this change.
+		await this._livingDocs.reviewBlock(resource, pointer.blockId);
+	}
+
+	// The document's own answer to "did the reader just land on a real widget?" (plan 52 WP-A1 fix 1).
+	//
+	// A document that has already reported on THIS change answers instantly - the common case, because every
+	// render reports. Otherwise the answer is waited for: either the click is what opened the document (so its
+	// first report is still in flight), or the change was proposed after the last decoration pass and the
+	// surface has not been asked about it yet. Both are "nobody has looked", and neither is grounds to guess.
+	//
+	// The wait is bounded, and running out is answered `false`: a surface that has still said nothing is one the
+	// reader is staring at without seeing their change, which is exactly the case Review exists to catch. So the
+	// only way to stay in the document is a positive, observed "yes, it is mounted".
+	private _landedOnInlineWidget(resource: URI, changeId: string): Promise<boolean> {
+		const covers = (report: IInlineWidgetReport | undefined) => !!report && (report.mounted.has(changeId) || report.requested.has(changeId));
+		const known = this._livingDocs.getInlineWidgets(resource);
+		if (covers(known)) { return Promise.resolve(!!known?.mounted.has(changeId)); }
+		return new Promise(resolve => {
+			// A local store, not `this._renderDisposables` and not `this._register`: this runs once per click, so
+			// hanging it off the view would leak a listener and a timer per click for the view's whole lifetime.
+			const store = new DisposableStore();
+			const settle = (answer: boolean) => { store.dispose(); resolve(answer); };
+			store.add(this._livingDocs.onDidReportInlineWidgets(e => {
+				if (e.docId !== resource.toString()) { return; }
+				const report = this._livingDocs.getInlineWidgets(resource);
+				if (covers(report)) { settle(!!report?.mounted.has(changeId)); }
+			}));
+			store.add(disposableTimeout(() => settle(false), POINTER_WIDGET_REPORT_TIMEOUT));
+		});
 	}
 
 	// Reject one proposal, first offering an optional plain-words reason (1f frame-3: "the optional reason

@@ -8,6 +8,7 @@ import { Event } from '../../../../base/common/event.js';
 import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { IInlineWidgetReport } from './changePointer.js';
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
 import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ILedgerInputs } from './livingDocLedger.js';
@@ -754,6 +755,33 @@ export interface ILivingDocsService {
 
 	/** Ask the editor showing a change's document to scroll to and highlight that change's inline diff. */
 	focusChange(changeId: string): void;
+
+	/**
+	 * The editor's report of what its live ProseMirror surface did with this document's pending changes (plan
+	 * 52 WP-A1 fix 1, #301): `requested` is every change the last decoration pass asked it to decorate,
+	 * `mounted` the subset that produced a real, reachable inline widget.
+	 *
+	 * This exists because the document is an out-of-process webview and the rule that places a widget lives in
+	 * the vendored ProseMirror bundle. Nothing on the host can work out from a change's text whether it will
+	 * decorate - a block class whose Markdown carries syntax (a list, a table cell) mounts nothing (#300), and
+	 * an earlier host-side PREDICTION of that got whole block classes wrong, stranding readers who followed a
+	 * chat pointer to a block that showed them no change at all. Fires `onDidReportInlineWidgets`.
+	 */
+	reportInlineWidgets(resource: URI, requested: readonly string[], mounted: readonly string[]): void;
+
+	/**
+	 * This document's last inline-widget report, or `undefined` when it has never reported (it has not been
+	 * opened this session). `undefined` is deliberately distinct from a report naming nothing: "nobody has
+	 * looked" is not "there is nothing there", and only the second is safe to act on.
+	 */
+	getInlineWidgets(resource: URI): IInlineWidgetReport | undefined;
+
+	/**
+	 * Fires when a document's inline-widget report changes (including its first report). The review rail waits
+	 * on this after opening a document it has no report for, so a pointer click can be resolved against what
+	 * the surface really mounted rather than a guess.
+	 */
+	readonly onDidReportInlineWidgets: Event<{ readonly docId: string }>;
 
 	/** Ask the editor showing this document to scroll to the heading at `headingIndex` (Outline tab, #181). */
 	revealHeading(resource: URI, headingIndex: number): void;

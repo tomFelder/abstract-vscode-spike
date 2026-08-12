@@ -248,11 +248,23 @@ export class LivingDocEditor extends EditorPane {
 		if (this.input) { this.group.pinEditor(this.input); }
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean; html?: string }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean; html?: string; requested?: string[]; mounted?: string[] }): void {
 		switch (message?.type) {
 			case 'lwdReady':
 				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
 				this._runProto(applyReady(this._proto));
+				break;
+			case 'pmWidgets':
+				// The live surface reported which pending changes it ACTUALLY mounted an inline widget for (plan 52
+				// WP-A1 fix 1, #301). The host cannot see inside the webview, so without this report the chat
+				// transcript's change pointers had to PREDICT whether a widget would appear - and a wrong prediction
+				// sent the reader to a block showing nothing at all. Recorded on the service so the review rail can
+				// read it. Safe to attribute to `this._resource`: the webview is created fresh per input (see
+				// `_createWebview`) with `_resource` already set, and the previous webview's message listener is
+				// disposed with the previous input, so a report can never arrive from another document.
+				if (this._resource && Array.isArray(message.requested) && Array.isArray(message.mounted)) {
+					this._livingDocs.reportInlineWidgets(this._resource, message.requested, message.mounted);
+				}
 				break;
 			case 'pmEdit':
 				// The ProseMirror editing surface serialized its current state back to Markdown. Persist it

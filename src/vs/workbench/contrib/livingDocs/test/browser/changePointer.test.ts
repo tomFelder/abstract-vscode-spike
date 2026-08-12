@@ -5,14 +5,12 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { buildChangePointer, buildTurnPointers, changeRendersInline } from '../../common/changePointer.js';
+import { buildChangePointer, buildTurnPointers, IInlineWidgetReport } from '../../common/changePointer.js';
 import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
-import { buildPmDecorationSpec } from '../../common/livingDocPmDecorations.js';
 import { ILivingDoc, IProposedChange } from '../../common/livingDocsModel.js';
 
-// A document with the block shapes the routing rule has to tell apart: plain prose (decorates), prose
-// carrying a bound figure (decorates - bind links bake down to their values before anchoring), a bullet
-// list (does NOT decorate, issue #300) and a table (does not decorate either, same mechanism).
+// A document with the block shapes a proposal can land on: plain prose, prose carrying a bound figure, a
+// bullet list and a table.
 const DOC_MD = [
 	'---',
 	'title: Weekly Operating Summary',
@@ -49,6 +47,11 @@ function blockStartingWith(doc: ILivingDoc, prefix: string) {
 	return doc.blocks.find(b => b.text.startsWith(prefix))!;
 }
 
+/** A document's report: it was asked to decorate `requested` and actually mounted `mounted`. */
+function report(requested: readonly string[], mounted: readonly string[]): IInlineWidgetReport {
+	return { requested: new Set(requested), mounted: new Set(mounted) };
+}
+
 suite('livingDocs - the chat transcript change pointer (plan 52 WP-A1)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -79,38 +82,47 @@ suite('livingDocs - the chat transcript change pointer (plan 52 WP-A1)', () => {
 		oldText: '', newText: 'A new paragraph the model wrote.', kind: 'meaning',
 	});
 
-	test('the route follows whether the document will actually mount an inline widget', () => {
-		// The mechanism, asserted against the REAL decoration spec rather than a hand-written list. A widget is
-		// placed by matching its anchor against a live ProseMirror node's rendered `textContent`, so an anchor
-		// that still carries Markdown syntax can never match: `- Neutral ink \`#14161A\`` versus the node's
-		// `Neutral ink #14161A`. The anchors below are what the decoration layer really ships for this set, and
-		// the routes must agree with them block type for block type - that agreement is the point of the pointer.
+	test('the route is read off the document\'s report, never inferred from the change itself', () => {
+		// This is the whole fix (round 1 of WP-A1). The route used to be PREDICTED from the change's Markdown -
+		// "an anchor with list markers or table pipes in it cannot match a rendered node, so route to Review" -
+		// and the prediction was wrong for block classes nobody had walked, which stranded readers on a document
+		// showing them nothing. So the routes below are asserted against a report that deliberately CONTRADICTS
+		// what any such rule would say: the document reports that it mounted nothing for the plain paragraph and
+		// a widget for the bullet list. The pointer must follow the document, not the text.
 		const pending = [proseEdit, boundEdit, listEdit, tableEdit, insertion];
-		const spec = buildPmDecorationSpec(doc, pending, new Set());
+		const contrary = report(['p1', 'p2', 'p3', 'p4', 'p5'], ['p3', 'p5']);
 
+		assert.deepStrictEqual(pending.map(c => `${c.id}:${buildChangePointer(c, doc, contrary).route}`), [
+			// Asked for and not mounted: nothing to land on, so Review - even though it is ordinary prose.
+			'p1:review',
+			'p2:review',
+			// Mounted: the reader can be landed on the widget - even though it is a list (#300's block class).
+			'p3:document',
+			'p4:review',
+			'p5:document',
+		]);
+	});
+
+	test('a change the report does not cover is unknown, not "review"', () => {
+		// The report is a snapshot of one decoration pass. A change proposed AFTER it is missing from `mounted`
+		// simply because it did not exist yet, so absence there is not evidence. Only a change the surface was
+		// asked to decorate and did not mount is. Getting this wrong flashed a wrong "REVIEW" marker onto every
+		// brand-new proposal for the moment between the transcript rendering and the document re-decorating.
 		assert.deepStrictEqual({
-			routes: pending.map(c => `${c.id}:${buildChangePointer(c, doc).route}`),
-			anchors: spec.edits.map(e => `${e.id}:${e.anchorText}`),
-			// An insertion mounts its own all-additions widget after a heading, so it is always a document route.
-			insertRendersInline: changeRendersInline(doc, insertion),
+			neverReported: buildChangePointer(proseEdit, doc, undefined).route,
+			reportPredatesTheChange: buildChangePointer(proseEdit, doc, report(['older'], ['older'])).route,
+			askedAndMounted: buildChangePointer(proseEdit, doc, report(['p1'], ['p1'])).route,
+			askedAndNotMounted: buildChangePointer(proseEdit, doc, report(['p1'], [])).route,
 		}, {
-			routes: ['p1:document', 'p2:document', 'p3:review', 'p4:review', 'p5:document'],
-			anchors: [
-				// Plain prose: the anchor is the sentence the reader sees, so it matches its node.
-				'p1:Growth remained steady this week, continuing the gradual climb seen since early Q2.',
-				// A bound figure bakes down to its value before anchoring, so this one matches its node too.
-				'p2:Margins held 40% steady through the quarter.',
-				// The list keeps its `-` marker and its backticks; no rendered node ever reads like this (#300).
-				'p3:- Neutral ink `#14161A`',
-				// The table keeps its pipes, for the same reason.
-				'p4:| Metric | Value | | --- | --- | | Churn | 3.1% |',
-			],
-			insertRendersInline: true,
+			neverReported: 'unknown',
+			reportPredatesTheChange: 'unknown',
+			askedAndMounted: 'document',
+			askedAndNotMounted: 'review',
 		});
 	});
 
 	test('a pointer carries identity, address and size - and never the proposed prose', () => {
-		const pointer = buildChangePointer(proseEdit, doc);
+		const pointer = buildChangePointer(proseEdit, doc, report(['p1'], ['p1']));
 		assert.deepStrictEqual({
 			pointer,
 			// The whole reason the model is structural: nothing on it repeats the proposal's words. A pointer
@@ -135,30 +147,34 @@ suite('livingDocs - the chat transcript change pointer (plan 52 WP-A1)', () => {
 		});
 	});
 
-	test('an unloaded document, a deleted block and an insertion each degrade to a legible surface', () => {
-		// A block the document no longer has: no widget to scroll to and no line to cite, so the pointer routes
-		// to Review (which still renders the change) rather than stranding the reader on a missing block.
+	test('an unloaded document, a deleted block and an insertion each degrade without inventing a route', () => {
 		const orphan = change({ id: 'p6', blockId: 'gone', blockLabel: 'Commentary', oldText: 'x', newText: 'y' });
 		assert.deepStrictEqual({
-			unloadedDoc: buildChangePointer(proseEdit, undefined),
-			orphan: { line: buildChangePointer(orphan, doc).line, route: buildChangePointer(orphan, doc).route },
+			// A document that is not loaded has no blocks to address, so the pointer carries no line - exactly as
+			// the Review card's address citation already degrades. It has not reported either, so: unknown.
+			unloadedDoc: buildChangePointer(proseEdit, undefined, undefined),
+			// A block the document no longer has: no line to cite. The route still comes from the report, which
+			// here says the surface was asked and mounted nothing.
+			orphan: { line: buildChangePointer(orphan, doc, report(['p6'], [])).line, route: buildChangePointer(orphan, doc, report(['p6'], [])).route },
 			// An insertion has no oldText to diff, so it reports no counts at all rather than a hollow "+1 -0".
-			insertion: { added: buildChangePointer(insertion, doc).added, removed: buildChangePointer(insertion, doc).removed, insert: true },
+			insertion: { added: buildChangePointer(insertion, doc, undefined).added, removed: buildChangePointer(insertion, doc, undefined).removed, insert: true },
 		}, {
 			unloadedDoc: {
 				changeId: 'p1', docId: 'file:///weekly.md', blockId: prose.id, insert: false, attention: true,
-				blockLabel: 'Commentary', added: 3, removed: 3, route: 'review',
+				blockLabel: 'Commentary', added: 3, removed: 3, route: 'unknown',
 			},
 			orphan: { line: undefined, route: 'review' },
 			insertion: { added: undefined, removed: undefined, insert: true },
 		});
 	});
 
-	test('a turn shows pointers only for the changes still pending, in live order', () => {
+	test('a turn shows pointers only for the changes still pending, each routed by its own document', () => {
 		// The turn proposed three changes; one has since been approved (so it left the pending set) and one id
-		// belongs to a different turn. The transcript must show exactly the two that are still open.
+		// belongs to a different turn. The transcript must show exactly the two that are still open - and each
+		// takes its route from ITS OWN document's report, because one turn can propose across documents.
 		const stillPending = [listEdit, proseEdit, boundEdit];
-		const pointers = buildTurnPointers(['p1', 'p3', 'p9-approved'], stillPending, () => doc);
+		const reports = new Map<string, IInlineWidgetReport>([['file:///weekly.md', report(['p1', 'p3'], ['p1'])]]);
+		const pointers = buildTurnPointers(['p1', 'p3', 'p9-approved'], stillPending, () => doc, docId => reports.get(docId));
 		assert.deepStrictEqual(pointers.map(p => ({ id: p.changeId, route: p.route, label: p.blockLabel })), [
 			{ id: 'p3', route: 'review', label: 'Colour tokens' },
 			{ id: 'p1', route: 'document', label: 'Commentary' },

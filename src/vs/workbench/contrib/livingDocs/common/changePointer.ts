@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { resolveBlockLine } from './livingDocAddress.js';
-import { anchorNormalize, editAnchorSource, wordDiffSegments } from './livingDocPmDecorations.js';
+import { editAnchorSource, wordDiffSegments } from './livingDocPmDecorations.js';
 import { ILivingDoc, IProposedChange } from './livingDocsModel.js';
 
 // The chat transcript's CHANGE POINTER (plan 52 WP-A1, issue #301).
@@ -21,17 +21,40 @@ import { ILivingDoc, IProposedChange } from './livingDocsModel.js';
 // ROUTE, which is the interesting part. See `changePointerRoute` below.
 
 /**
- * Where clicking a pointer takes the reader.
+ * Where clicking a pointer takes the reader, and - just as importantly - how sure we are.
  *
- * - `document`: the change has an inline widget, so the pointer scrolls the document to it and flashes it.
- *   The widget is then the single place the change is read and approved.
- * - `review`: the change has NO inline widget (issue #300 - a proposal whose target block is a bullet list,
- *   a table, a heading or any block whose Markdown carries syntax renders no diff in the document). Sending
- *   the reader to a block that shows them nothing would trade a trust problem for a correctness one, so the
- *   pointer reveals the change in the Review tab instead, which already renders the full red/green diff and
- *   Approve & apply / Reject. The document still scrolls and flashes underneath.
+ * - `document`: the document's live surface has REPORTED an inline widget for this change, so the pointer
+ *   scrolls to it and flashes it. The widget is then the single place the change is read and approved.
+ * - `review`: the surface reported and this change was NOT among the widgets it mounted (issue #300 - a
+ *   proposal whose target block is a list, a table cell, a heading or any block whose Markdown carries
+ *   syntax mounts nothing at all). Sending the reader to a block that shows them nothing would trade a
+ *   trust problem for a correctness one, so the pointer reveals the change in the Review tab instead,
+ *   which renders the full red/green diff and Approve & apply / Reject.
+ * - `unknown`: the document has never reported - it has not been opened in this session, so nothing has
+ *   looked. The pointer says nothing about where it will land; the click opens the document, waits for the
+ *   report, and only then chooses between the two routes above.
  */
-export type ChangePointerRoute = 'document' | 'review';
+export type ChangePointerRoute = 'document' | 'review' | 'unknown';
+
+/**
+ * What one document's live editing surface last OBSERVED about its own inline widgets.
+ *
+ * This replaces a host-side prediction. The first cut of this package guessed, from the change's Markdown,
+ * whether the webview would mount a widget - and argued the guess was safely one-sided. It was not: a
+ * validator found whole block classes the guess called `document` that mount nothing, and those pointers
+ * landed the reader on empty space. The document is an out-of-process iframe and the anchoring rule lives in
+ * a vendored ProseMirror bundle, so the only honest answer comes from asking the surface what it did.
+ *
+ * Both halves are needed, and this is the subtle part. A change id missing from `mounted` alone proves
+ * nothing: the report is a snapshot, and a proposal that arrived after it was taken is missing simply because
+ * it did not exist yet. Only a change the surface was ASKED to decorate and did not is evidence of anything.
+ */
+export interface IInlineWidgetReport {
+	/** The change ids the surface was asked to decorate on its last pass (the decoration spec's own ids). */
+	readonly requested: ReadonlySet<string>;
+	/** The subset of those it actually mounted a live, reachable widget for. */
+	readonly mounted: ReadonlySet<string>;
+}
 
 /**
  * Everything the transcript needs to draw one pointer and act on a click. Deliberately structural: the labels
@@ -57,57 +80,32 @@ export interface IChangePointer {
 	readonly route: ChangePointerRoute;
 }
 
-// A block's raw Markdown carries syntax the reader never sees: list markers, blockquote and heading marks,
-// table pipes, code fences, emphasis runs, link brackets, raw HTML. The ProseMirror node the decoration must
-// match reports the RENDERED text, with all of that stripped. So an anchor built from raw Markdown can only
-// ever match when the block's Markdown has no syntax left in it once bind links are baked down.
-const MARKDOWN_SYNTAX = /^\s*([-*+]|\d+[.)]|>|#{1,6})\s|[`*_~[\]|]|<[a-z/]/i;
-
 /**
- * Will the document actually mount an inline diff widget for this change?
+ * Where a pointer's click should land, read straight off the observation. Pure, and separated from
+ * `buildChangePointer` so the view can re-read it at CLICK time - a pointer drawn while its document was
+ * closed carries `unknown`, and the click is what opens the document and produces the report.
  *
- * The decoration layer places a widget by matching its anchor - the block's raw Markdown, whitespace
- * collapsed - against a live ProseMirror node's `textContent`. That match succeeds for plain prose and fails
- * for every block whose Markdown carries syntax, because the rendered node text no longer contains it. This
- * is the mechanism behind issue #300: a bullet-list target anchors on `- Ink \`#14161A\`` while the node
- * reports `Ink #14161A`, so nothing mounts and the document shows only a gutter marker.
- *
- * Rather than model Markdown rendering (which would be a second, drifting implementation of the parser), this
- * asks the narrower question the anchor actually turns on: is the anchor free of Markdown syntax? The error is
- * deliberately one-sided. A false `false` - prose containing a stray `_` or `*` that markdown-it would leave
- * alone - routes the reader to Review, where the change is fully readable and actionable; nothing is lost. A
- * false `true` would strand them on a block showing nothing, so the predicate never guesses in that direction.
- *
- * An insertion is always `true`: it anchors after a heading block (or the document end) and mounts its own
- * all-additions widget, which the pre-build walk confirmed renders.
+ * There is deliberately no fallback rule here, and no reasoning about the change's text. An absent report is
+ * reported as absent (`unknown`) rather than being resolved to a guess, because a guess is exactly what this
+ * function used to be and exactly what stranded readers.
  */
-export function changeRendersInline(doc: ILivingDoc, change: IProposedChange): boolean {
-	if (change.insert) { return true; }
-	// A change whose target block is gone has nothing to decorate (and nothing to scroll to).
-	if (!doc.blocks.some(block => block.id === change.blockId)) { return false; }
-	const anchor = anchorNormalize(editAnchorSource(change));
-	return anchor.length > 0 && !MARKDOWN_SYNTAX.test(anchor);
-}
-
-/**
- * Where a pointer's click should land. Pure, and separated from `buildChangePointer` so the view can
- * re-resolve the route at CLICK time against a document that may only have been loaded by the click itself -
- * a pointer rendered while its document was closed still lands on the right surface.
- *
- * A document that is not loaded resolves to `review`, the surface that is legible no matter what the
- * renderer does with the block. Better to over-serve the review card than to strand the reader.
- */
-export function changePointerRoute(doc: ILivingDoc | undefined, change: IProposedChange): ChangePointerRoute {
-	if (!doc) { return 'review'; }
-	return changeRendersInline(doc, change) ? 'document' : 'review';
+export function changePointerRoute(report: IInlineWidgetReport | undefined, changeId: string): ChangePointerRoute {
+	if (!report) { return 'unknown'; }
+	if (report.mounted.has(changeId)) { return 'document'; }
+	// Asked for and not mounted: the surface tried and there is nothing there. This is the #300 case.
+	if (report.requested.has(changeId)) { return 'review'; }
+	// Neither: the report predates this change (it was proposed after the last decoration pass). Nobody has
+	// looked at it yet, and saying "review" here would flash a wrong badge onto every brand-new proposal.
+	return 'unknown';
 }
 
 /**
  * Build the pointer for one pending change. `doc` is the change's own document (not the active one), which
  * may be undefined when that document is not loaded - the address then has no line, exactly as the Review
- * card's address citation already degrades.
+ * card's address citation already degrades. `report` is that document's last widget report, or undefined
+ * when it has never reported.
  */
-export function buildChangePointer(change: IProposedChange, doc: ILivingDoc | undefined): IChangePointer {
+export function buildChangePointer(change: IProposedChange, doc: ILivingDoc | undefined, report: IInlineWidgetReport | undefined): IChangePointer {
 	const line = doc ? resolveBlockLine(doc, change.blockId) : undefined;
 	const insert = !!change.insert;
 	// The same word-run counts the inline widget prints, so the pointer and the widget never disagree about
@@ -123,7 +121,7 @@ export function buildChangePointer(change: IProposedChange, doc: ILivingDoc | un
 		blockLabel: change.blockLabel,
 		...(typeof line === 'number' ? { line } : {}),
 		...(diff ? { added: diff.added, removed: diff.removed } : {}),
-		route: changePointerRoute(doc, change),
+		route: changePointerRoute(report, change.id),
 	};
 }
 
@@ -132,8 +130,11 @@ export function buildChangePointer(change: IProposedChange, doc: ILivingDoc | un
  * STILL pending, in the order the live pending set holds them. A change approved or rejected anywhere - the
  * inline widget, the Review tab, Accept all - drops out of `pending` and so drops out of the transcript,
  * which is what keeps the turn honest about what is still open.
+ *
+ * `docFor` and `widgetsFor` are both looked up per change because one turn can propose across documents, and
+ * each document reports for itself.
  */
-export function buildTurnPointers(proposedIds: readonly string[], pending: readonly IProposedChange[], docFor: (docId: string) => ILivingDoc | undefined): IChangePointer[] {
+export function buildTurnPointers(proposedIds: readonly string[], pending: readonly IProposedChange[], docFor: (docId: string) => ILivingDoc | undefined, reportFor: (docId: string) => IInlineWidgetReport | undefined): IChangePointer[] {
 	const wanted = new Set(proposedIds);
-	return pending.filter(change => wanted.has(change.id)).map(change => buildChangePointer(change, docFor(change.docId)));
+	return pending.filter(change => wanted.has(change.id)).map(change => buildChangePointer(change, docFor(change.docId), reportFor(change.docId)));
 }

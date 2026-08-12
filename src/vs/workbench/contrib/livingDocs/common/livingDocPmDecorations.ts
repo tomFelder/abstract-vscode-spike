@@ -178,12 +178,8 @@ export interface IPmDecorationSpec {
 
 const BIND_LINK_RE = /\[([^\]]*)\]\(bind:([^)\s]+)\)/g;
 
-/**
- * Replace every bind link with its baked value, so the anchor reads as the prose the reader sees. Exported
- * so the pointer model (`changePointer.ts`) can reproduce this decoration's anchor byte-for-byte rather
- * than guessing at it - one anchoring rule, two readers.
- */
-export function bindToValue(text: string): string {
+/** Replace every bind link with its baked value, so the anchor reads as the prose the reader sees. */
+function bindToValue(text: string): string {
 	return text.replace(BIND_LINK_RE, '$1');
 }
 
@@ -193,7 +189,7 @@ export function bindToValue(text: string): string {
 // anchor's internal whitespace to match - otherwise a wrapped paragraph never decorates and the change
 // shows only in the review rail (the plan-19 baseline bug). Kept here, next to where anchors are built, so
 // the host stays the single source of anchor truth (no offline PM-bundle rebuild needed).
-export function anchorNormalize(text: string): string {
+function anchorNormalize(text: string): string {
 	return text.replace(/\s+/g, ' ').trim();
 }
 
@@ -202,8 +198,8 @@ export function anchorNormalize(text: string): string {
  * scoped to the single list item the edit targets when the block is a multi-item list. Newlines are kept
  * (the caller normalises them) because the multi-line test that drives the gutter bar reads them.
  *
- * Exported so `changePointer.ts` can ask "will this anchor actually match a node?" against the SAME string
- * the decoration ships, instead of re-deriving a near-copy that could drift out of step with this one.
+ * Exported so the pointer model (`changePointer.ts`) sizes a change off the SAME string the decoration
+ * diffs, and the transcript's "+N -M" can never disagree with the widget's own counts.
  */
 export function editAnchorSource(change: Pick<IProposedChange, 'oldText' | 'newText'>): string {
 	return scopeBlockEdit(bindToValue(change.oldText), bindToValue(change.newText)).oldText;
