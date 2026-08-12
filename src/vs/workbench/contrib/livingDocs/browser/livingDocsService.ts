@@ -13,8 +13,10 @@ import { Schemas } from '../../../../base/common/network.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { basename, dirname, isEqual, isEqualOrParent, joinPath, relativePath } from '../../../../base/common/resources.js';
+import { localize } from '../../../../nls.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
+import { attachToSession, closeSession as closeSessionInList, createSession, deserialiseSessions, IChatSession, serialiseSessions, sessionsMentioning, titleSession } from '../common/chatSessions.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHostService } from '../../../services/host/browser/host.js';
@@ -252,6 +254,9 @@ const DOC_LAST_VIEWED_KEY = 'livingDocs.docLastViewed';
 // than dead-selecting - a single WORKSPACE key is safe. MACHINE target: not synced across machines (a different
 // machine may run a different broker/subscription). The value is a model id validated against /models on use.
 const SELECTED_MODEL_KEY = 'livingDocs.v2.model';
+// The workspace's chat session list (plan 52 WP-B): tab metadata only - titles, attach sets, which tab was
+// active - so a relaunch restores the strip. Message bodies stay in memory, as they always have.
+const CHAT_SESSIONS_KEY = 'livingDocs.chatSessions';
 // Per-workspace set of source ids whose staleness the user marked "as expected" (K3.1, plan 49-a). Stored as
 // a JSON string array so a marked source is calmed to context-grey in the registry across reloads without
 // ever auto-fixing it. Workspace-scoped: the acknowledgement is about THIS project's sources.
@@ -481,9 +486,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _modelCatalogueFetch: Promise<IModelCatalogue> | undefined;
 	// The latest model-backed Strategy verdict per document, surfaced in the Skills rail after a Run.
 	private readonly _strategyGrades = new Map<string, IGradeResult>();
-	// The Chat conversation per document (the right-panel Chat tab) and the in-flight set for the
-	// "working" indicator. Kept in the service so the rail survives re-renders and tab switches.
+	// The Chat conversation per SESSION (plan 52 WP-B, decision 178) and the in-flight set for the "working"
+	// indicator. Chat used to be keyed by document, so opening another file silently swapped the conversation
+	// out from under the user; chats now belong to the workspace and documents join them via @-mention/attach.
+	// Kept in the service so the rail survives re-renders and tab switches; the key is the session id.
 	private readonly _chats = new Map<string, IChatMessage[]>();
+	// The workspace's chat sessions and which one the rail is showing (plan 52 WP-B). The list metadata is
+	// persisted to workspace storage so a relaunch restores the tab strip; the message bodies above are not.
+	private _chatSessions: IChatSession[] = [];
+	private _activeChatSession: string | undefined;
+	private _chatSessionsLoaded = false;
 	private readonly _chatBusy = new Set<string>();
 	// The cancellation source for each document's in-flight streaming reply (plan 27), keyed like _chats.
 	// Present only while a reply streams; cancelChat cancels it, sendChatMessage disposes it in its finally.
@@ -1874,8 +1886,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._docs.delete(from.toString());
 			const moved: IDocState = { ...state, uri: to };
 			this._docs.set(to.toString(), moved);
-			const chat = this._chats.get(from.toString());
-			if (chat) { this._chats.delete(from.toString()); this._chats.set(to.toString(), chat); }
+			// Chats are no longer keyed by document (plan 52 WP-B), so nothing moves here - but any session
+			// that ATTACHED this document must follow the rename, or its chip would point at a dead path.
+			this._repointChatAttachments(from, to);
 			this._watchers.get(from.toString())?.dispose();
 			this._watchers.delete(from.toString());
 			this._watchSources(moved);
@@ -2013,7 +2026,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._watchers.delete(id);
 		this._docWatchers.deleteAndDispose(id);
 		this._docs.delete(id);
-		this._chats.delete(id);
+		// The document is gone; drop it from every session's attach set. The conversations themselves survive -
+		// they belong to the workspace, and a chat that once mentioned a deleted file is still worth reading.
+		this._repointChatAttachments(URI.parse(id), undefined);
 	}
 
 	// The editor closes gracefully when its document is deleted.
@@ -5196,8 +5211,135 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// --- Chat agent (the right-panel Chat tab) ---
 
-	getChatMessages(resource: URI): readonly IChatMessage[] {
-		return this._chats.get(resource.toString()) ?? [];
+	// --- workspace chat sessions (plan 52 WP-B, decision 178) ---
+	// Chat belongs to the workspace, not the open document. The session id is the key every chat map above
+	// uses, so "which conversation am I in" is answered in exactly one place: `_chatKey()`.
+
+	/** Load the persisted strip once per service life. A corrupt value degrades to no sessions, never a throw. */
+	private _loadChatSessions(): void {
+		if (this._chatSessionsLoaded) { return; }
+		this._chatSessionsLoaded = true;
+		const restored = deserialiseSessions(this._storage.get(CHAT_SESSIONS_KEY, StorageScope.WORKSPACE));
+		this._chatSessions = restored.sessions;
+		this._activeChatSession = restored.activeId;
+	}
+
+	private _saveChatSessions(): void {
+		this._storage.store(CHAT_SESSIONS_KEY, serialiseSessions(this._chatSessions, this._activeChatSession), StorageScope.WORKSPACE, StorageTarget.USER);
+	}
+
+	/**
+	 * The key every chat map is stored under: the active session, created on demand. Chat is never keyed by
+	 * document again, so opening another file leaves the conversation exactly where it was.
+	 */
+	private _chatKey(): string {
+		this._loadChatSessions();
+		if (this._activeChatSession && this._chatSessions.some(s => s.id === this._activeChatSession)) {
+			return this._activeChatSession;
+		}
+		if (this._chatSessions.length) {
+			this._activeChatSession = this._chatSessions[0].id;
+			return this._activeChatSession;
+		}
+		return this.newChatSession();
+	}
+
+	getChatSessions(): readonly IChatSession[] {
+		this._loadChatSessions();
+		return this._chatSessions;
+	}
+
+	getActiveChatSession(): string {
+		return this._chatKey();
+	}
+
+	/** Open a fresh chat (Cmd+T) and make it active. The previous conversation is kept, not replaced. */
+	newChatSession(): string {
+		this._loadChatSessions();
+		const session = createSession(generateUuid(), Date.now(), localize('livingDocs.chat.newChat', "New chat"));
+		this._chatSessions = [...this._chatSessions, session];
+		this._activeChatSession = session.id;
+		this._saveChatSessions();
+		this._onDidChange.fire();
+		return session.id;
+	}
+
+	activateChatSession(id: string): void {
+		this._loadChatSessions();
+		if (!this._chatSessions.some(s => s.id === id) || this._activeChatSession === id) { return; }
+		this._activeChatSession = id;
+		this._saveChatSessions();
+		this._onDidChange.fire();
+	}
+
+	/**
+	 * Close a tab. Its messages go with it (they are the conversation), and the neighbour rule picks the next
+	 * active tab. Closing the last tab immediately opens a fresh one, so the strip is never empty.
+	 */
+	closeChatSession(id: string): void {
+		this._loadChatSessions();
+		const next = closeSessionInList(this._chatSessions, this._activeChatSession, id);
+		this._chatSessions = next.sessions;
+		this._activeChatSession = next.activeId;
+		this._chats.delete(id);
+		this._chatBusy.delete(id);
+		this._chatCancellers.get(id)?.dispose();
+		this._chatCancellers.delete(id);
+		this._chatStreaming.delete(id);
+		if (!this._chatSessions.length) { this.newChatSession(); return; }
+		this._saveChatSessions();
+		this._onDidChange.fire();
+	}
+
+	/**
+	 * Follow a document through a rename, or drop it on a delete, across every session's attach set. The
+	 * conversations themselves are untouched: they belong to the workspace, so a chat that discussed a file
+	 * survives that file being renamed or removed - only the chip that points at it has to stay truthful.
+	 */
+	private _repointChatAttachments(from: URI, to: URI | undefined): void {
+		this._loadChatSessions();
+		const fromKey = from.toString();
+		let changed = false;
+		this._chatSessions = this._chatSessions.map(session => {
+			if (!session.attached.includes(fromKey)) { return session; }
+			changed = true;
+			const attached = session.attached.filter(r => r !== fromKey);
+			if (to) { attached.push(to.toString()); }
+			return { ...session, attached };
+		});
+		if (changed) { this._saveChatSessions(); }
+	}
+
+	/** The sessions that attached this document - "chats mentioning this doc" (plan 52 WP-B acceptance). */
+	getChatSessionsMentioning(resource: URI): readonly IChatSession[] {
+		this._loadChatSessions();
+		return sessionsMentioning(this._chatSessions, resource.toString());
+	}
+
+	/** Record a document on the active session's attach set, so two chats can hold different sets at once. */
+	private _attachToActiveSession(resource: URI): void {
+		const key = this._chatKey();
+		const index = this._chatSessions.findIndex(s => s.id === key);
+		if (index < 0) { return; }
+		const updated = attachToSession(this._chatSessions[index], resource.toString());
+		if (updated === this._chatSessions[index]) { return; }
+		this._chatSessions = this._chatSessions.map((s, i) => (i === index ? updated : s));
+		this._saveChatSessions();
+	}
+
+	/** Give the active session its tab title from the first user message it carries. */
+	private _titleActiveSession(firstMessage: string): void {
+		const key = this._chatKey();
+		const index = this._chatSessions.findIndex(s => s.id === key);
+		if (index < 0) { return; }
+		const updated = titleSession(this._chatSessions[index], firstMessage);
+		if (updated === this._chatSessions[index]) { return; }
+		this._chatSessions = this._chatSessions.map((s, i) => (i === index ? updated : s));
+		this._saveChatSessions();
+	}
+
+	getChatMessages(_resource: URI): readonly IChatMessage[] {
+		return this._chats.get(this._chatKey()) ?? [];
 	}
 
 	// --- working set (plan 18): the documents a chat instruction edits across ---
@@ -5255,8 +5397,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return [...out].sort((a, b) => a.localeCompare(b));
 	}
 
-	isChatBusy(resource: URI): boolean {
-		return this._chatBusy.has(resource.toString());
+	isChatBusy(_resource: URI): boolean {
+		return this._chatBusy.has(this._chatKey());
 	}
 
 	// `displayText`, when given, is the plain-words progress shown to the user in the rail while the model
@@ -5266,9 +5408,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	async sendChatMessage(resource: URI, text: string, displayText?: string): Promise<void> {
 		const trimmed = text.trim();
 		if (!trimmed) { return; }
-		const id = resource.toString();
+		const id = this._chatKey();
 		const history = this._chats.get(id) ?? [];
 		this._chats.set(id, history);
+		// The document the user is chatting about joins this session's attach set, and the first message
+		// gives the tab its title - so the strip reads as topics, not a row of "New chat" chips.
+		this._attachToActiveSession(resource);
+		if (!history.length) { this._titleActiveSession((displayText ?? '').trim() || trimmed); }
 
 		const mentions = this._parseMentions(resource, trimmed);
 		const shown = (displayText ?? '').trim();
@@ -5436,8 +5582,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return { answer: answer || 'I do not have enough in the project to answer that.', citations, via: 'model' };
 	}
 
-	getStreamingChat(resource: URI): { readonly text: string; readonly steps: readonly IChatStep[] } | undefined {
-		return this._chatStreaming.get(resource.toString());
+	getStreamingChat(_resource: URI): { readonly text: string; readonly steps: readonly IChatStep[] } | undefined {
+		return this._chatStreaming.get(this._chatKey());
 	}
 
 	getFanoutProgress(resource: URI): IFanoutProgress | undefined {
@@ -5445,7 +5591,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	retryChat(resource: URI): void {
-		const id = resource.toString();
+		const id = this._chatKey();
 		const history = this._chats.get(id);
 		// Never retry while a reply is in flight, or when there is nothing to retry.
 		if (!history || !history.length || this._chatBusy.has(id)) { return; }
@@ -5463,7 +5609,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	retryFailedDocs(resource: URI): void {
-		const id = resource.toString();
+		const id = this._chatKey();
 		const history = this._chats.get(id);
 		// Never retry while a reply is in flight, or when there is nothing to retry.
 		if (!history || !history.length || this._chatBusy.has(id)) { return; }
@@ -5488,18 +5634,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// (D27-B); a genuine failure pushes a "failed" turn the rail offers Retry on. The user turn is already the
 	// last history entry (pushed by sendChatMessage, or kept by retryChat), so the transcript reads correctly.
 	private async _deliverChatReply(resource: URI, trimmed: string, mentions: string[], restrictToDocIds?: readonly string[]): Promise<void> {
+		// Two identities, deliberately separate (plan 52 WP-B): `id` is the DOCUMENT the reply edits (doc state,
+		// fan-out progress), `chatKey` is the SESSION the conversation belongs to. Conflating them is what made
+		// chat vanish when you opened another file.
 		const id = resource.toString();
-		const history = this._chats.get(id) ?? [];
-		this._chats.set(id, history);
-		this._chatBusy.add(id);
+		const chatKey = this._chatKey();
+		const history = this._chats.get(chatKey) ?? [];
+		this._chats.set(chatKey, history);
+		this._chatBusy.add(chatKey);
 		// One cancellation source per in-flight reply (plan 27); cancelChat cancels it, this method disposes it.
 		const cancellers = this._chatCancellers;
-		cancellers.get(id)?.dispose();
+		cancellers.get(chatKey)?.dispose();
 		const cts = new CancellationTokenSource();
-		cancellers.set(id, cts);
+		cancellers.set(chatKey, cts);
 		// The live turn the rail renders while the reply streams; the salvage on cancel reads its `text`.
 		const streaming = { text: '', steps: [] as IChatStep[] };
-		this._chatStreaming.set(id, streaming);
+		this._chatStreaming.set(chatKey, streaming);
 		// Accumulate the raw model text but SHOW the human `reply` prose, so the live turn reads as words
 		// rather than the raw `{"reply":"..."}` envelope (plan 27 iter 3). The end-of-stream parse still runs
 		// over the complete raw text (returned by _callModelStream), so the proposal contract is unchanged.
@@ -5578,15 +5728,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		} finally {
 			cts.dispose();
-			if (cancellers.get(id) === cts) { cancellers.delete(id); }
-			this._chatStreaming.delete(id);
-			this._chatBusy.delete(id);
+			if (cancellers.get(chatKey) === cts) { cancellers.delete(chatKey); }
+			this._chatStreaming.delete(chatKey);
+			this._chatBusy.delete(chatKey);
 			this._onDidChange.fire();
 		}
 	}
 
-	cancelChat(resource: URI): void {
-		this._chatCancellers.get(resource.toString())?.cancel();
+	cancelChat(_resource: URI): void {
+		this._chatCancellers.get(this._chatKey())?.cancel();
 	}
 
 	// Build the model prompt from the document (figures resolved) + the @mentioned and context sources,
@@ -5817,7 +5967,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Render the last few turns for the model so a follow-up ("change a couple of them") resolves against
 	// what was already said. The caller has already pushed the current user turn, so drop the last entry.
 	private _chatTranscript(resource: URI): string {
-		const prior = (this._chats.get(resource.toString()) ?? []).slice(0, -1).slice(-6);
+		const prior = (this._chats.get(this._chatKey()) ?? []).slice(0, -1).slice(-6);
 		if (!prior.length) { return ''; }
 		const lines = prior.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
 		return `Conversation so far:\n${lines.join('\n')}\n\n`;

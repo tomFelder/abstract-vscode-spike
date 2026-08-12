@@ -15,6 +15,7 @@ import { DocAutonomyLevel } from './docPolicy.js';
 import { ISourceGrid } from './sourceGrid.js';
 import { ITemplateSkeletonRow } from './livingDocMarkdown.js';
 import { IFeedbackReport, OnboardingStep } from './onboarding.js';
+import { IChatSession } from './chatSessions.js';
 
 export const ILivingDocsService = createDecorator<ILivingDocsService>('livingDocsService');
 
@@ -1320,6 +1321,19 @@ export interface ILivingDocsService {
 
 	// --- Chat agent (the right-panel Chat tab) ---
 	/** The conversation so far for a document (empty until the first message). */
+	// --- workspace chat sessions (plan 52 WP-B, decision 178) ---
+	/** The workspace's chat sessions, in creation order - the tab strip's model. */
+	getChatSessions(): readonly IChatSession[];
+	/** The session the rail is showing; creates one on demand so there is always somewhere to be. */
+	getActiveChatSession(): string;
+	/** Open a fresh chat and make it active, keeping the previous conversation (Cmd+T). Returns its id. */
+	newChatSession(): string;
+	activateChatSession(id: string): void;
+	/** Close a tab; the neighbour becomes active, and closing the last one opens a fresh chat. */
+	closeChatSession(id: string): void;
+	/** The sessions that attached this document - the "chats mentioning this doc" reading. */
+	getChatSessionsMentioning(resource: URI): readonly IChatSession[];
+
 	getChatMessages(resource: URI): readonly IChatMessage[];
 	/** The files a `@mention` can attach for a document: its linked sources + context files. */
 	getMentionableFiles(resource: URI): readonly string[];

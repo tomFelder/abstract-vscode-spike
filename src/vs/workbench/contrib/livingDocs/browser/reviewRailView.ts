@@ -26,6 +26,8 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
+import { IChatSession, splitTabs } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
@@ -865,14 +867,18 @@ export class ReviewRailView extends ViewPane {
 		this._streamDoc = undefined;
 		content.style.cssText = 'display:flex;flex-direction:column;height:100%;padding:0';
 
+		this._renderChatTabs(content);
+
 		const scroll = append(content, $('div'));
 		scroll.style.cssText = 'flex:1;min-height:0;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:16px';
 
-		const messages = doc ? this._livingDocs.getChatMessages(doc) : [];
-		if (!doc) {
-			this._renderChatEmpty(scroll, 'Open a document in the editor to chat with its agent.');
-		} else if (messages.length === 0) {
-			this._renderChatEmpty(scroll, 'Ask the agent about this document, or @mention a source to pull it in.');
+		// Chat belongs to the workspace now (plan 52 WP-B), so a conversation reads with or without a document
+		// open - only SENDING needs a document to act on, which the composer already gates.
+		const messages = this._livingDocs.getChatMessages(doc ?? URI.from({ scheme: 'untitled', path: 'chat' }));
+		if (messages.length === 0) {
+			this._renderChatEmpty(scroll, doc
+				? 'Ask the agent about this document, or @mention a source to pull it in.'
+				: 'Ask anything about this workspace. Open a document, or @mention one, to make changes.');
 		} else {
 			for (const m of messages) { this._renderChatMessage(scroll, m); }
 		}
@@ -935,6 +941,74 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		this._renderChatComposer(content, doc);
+	}
+
+	/**
+	 * The workspace chat tab strip (plan 52 WP-B, decision 178). Chats belong to the workspace, so this is
+	 * the only place that says which conversation you are in. Tabs are capped and the rest fold into an
+	 * overflow menu; the active tab is always on screen (`splitTabs` guarantees it). The trailing + opens a
+	 * fresh chat, the same thing Cmd+T does, so the affordance and the chord agree.
+	 */
+	private _renderChatTabs(content: HTMLElement): void {
+		const sessions = this._livingDocs.getChatSessions();
+		const activeId = this._livingDocs.getActiveChatSession();
+		// One chat is not a tab strip - it is just "the chat". The row only earns its height once a second
+		// conversation exists, so the calm single-chat case looks exactly as it always has.
+		if (sessions.length < 2) { return; }
+		const { visible, overflow } = splitTabs(sessions, activeId);
+
+		const strip = append(content, $('div'));
+		// `overflow:hidden` + shrinkable tabs keep the strip inside the rail's width: a tab that ran past the
+		// panel edge (as the first cut did) reads as a broken layout, not as "there are more chats".
+		strip.style.cssText = 'display:flex;align-items:center;gap:4px;padding:6px 8px 0;border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);flex:0 0 auto;overflow:hidden';
+
+		for (const session of visible) {
+			const isActive = session.id === activeId;
+			const tab = append(strip, $('div'));
+			tab.style.cssText = `display:flex;align-items:center;gap:4px;flex:0 1 auto;min-width:0;max-width:132px;padding:5px 8px;border-radius:6px 6px 0 0;cursor:pointer;font:${isActive ? '600' : '400'} 12px/1.2 var(--vscode-font-family);`
+				+ `background:${isActive ? 'var(--vscode-editor-background,#fff)' : 'transparent'};border:1px solid ${isActive ? 'var(--vscode-widget-border,#e6e8ec)' : 'transparent'};border-bottom:none`;
+			const label = append(tab, $('span'));
+			label.textContent = session.title;
+			label.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+			this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), tab, session.title));
+			this._renderDisposables.add(addDisposableListener(tab, 'click', () => this._livingDocs.activateChatSession(session.id)));
+
+			const close = append(tab, $('span'));
+			close.textContent = '×';
+			close.style.cssText = 'opacity:.55;padding:0 2px;border-radius:3px';
+			close.setAttribute('role', 'button');
+			close.setAttribute('aria-label', localize('livingDocs.chat.closeTab', "Close Chat"));
+			this._renderDisposables.add(addDisposableListener(close, 'click', e => {
+				// The close box must not also activate the tab it is closing.
+				e.stopPropagation();
+				this._livingDocs.closeChatSession(session.id);
+			}));
+		}
+
+		if (overflow.length) {
+			const more = append(strip, $('div'));
+			more.textContent = localize('livingDocs.chat.moreTabs', "{0} more", overflow.length);
+			more.style.cssText = 'flex:0 0 auto;padding:5px 8px;font:400 12px/1.2 var(--vscode-font-family);opacity:.7;cursor:pointer;white-space:nowrap';
+			more.setAttribute('role', 'button');
+			this._renderDisposables.add(addDisposableListener(more, 'click', e => {
+				this.contextMenuService.showContextMenu({
+					getAnchor: () => ({ x: e.clientX, y: e.clientY }),
+					getActions: () => overflow.map((session: IChatSession) => toAction({
+						id: `livingDocs.chat.session.${session.id}`,
+						label: session.title,
+						run: () => this._livingDocs.activateChatSession(session.id),
+					})),
+				});
+			}));
+		}
+
+		const add = append(strip, $('div'));
+		add.textContent = '+';
+		add.style.cssText = 'flex:0 0 auto;margin-left:auto;padding:4px 8px;border-radius:6px;cursor:pointer;font:600 13px/1 var(--vscode-font-family);opacity:.75';
+		add.setAttribute('role', 'button');
+		add.setAttribute('aria-label', localize('livingDocs.chat.newTab', "New Chat"));
+		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), add, localize('livingDocs.chat.newTabHint', "New Chat (Cmd+T)")));
+		this._renderDisposables.add(addDisposableListener(add, 'click', () => this._livingDocs.newChatSession()));
 	}
 
 	private _renderChatEmpty(scroll: HTMLElement, text: string): void {
