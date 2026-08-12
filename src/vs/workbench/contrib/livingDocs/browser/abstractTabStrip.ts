@@ -5,12 +5,14 @@
 
 import { $, append, clearNode, EventHelper, EventType, addDisposableListener } from '../../../../base/browser/dom.js';
 import { StandardMouseEvent } from '../../../../base/browser/mouseEvent.js';
-import { toAction } from '../../../../base/common/actions.js';
+import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
@@ -18,6 +20,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { documentDisplayTitle } from '../common/livingDocMarkdown.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
 import { ITabModel, ITabStripModel, TAB_OVERFLOW_THRESHOLD, tabsOverflow, toPersistedTabStrip } from '../common/livingDocTabs.js';
+import { createDocumentMenuActions, createSourceMenuActions, DOCUMENT_MENU_CLASS_NAME, IDocumentMenuServices } from './documentContextMenu.js';
 import { LivingDocEditorInput } from './livingDocEditorInput.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
 
@@ -44,6 +47,11 @@ export function setTabRestoreInProgress(value: boolean): void {
  * editor in the group, the × / middle-click closes it (native group behaviour then activates the neighbour and
  * closes the group when the last tab goes). VS Code's own tab strip stays `showTabs:'none'`, so this is the
  * only tab row the user sees.
+ *
+ * Preview tabs (plan 52 WP-F) are likewise a PROJECTION, not state this class owns: the group already has a
+ * preview slot (`IEditorGroup.isPinned`, core's `EditorGroupModel.preview`), so the strip only reads it and
+ * paints the preview tab italic. Double-clicking a tab pins it through `IEditorGroup.pinEditor`; the group
+ * fires `EDITOR_PIN` on `onDidModelChange`, which is already wired to re-render, so the italic clears itself.
  */
 export class AbstractTabStrip extends Disposable {
 
@@ -56,6 +64,8 @@ export class AbstractTabStrip extends Disposable {
 		private readonly _storageService: IStorageService,
 		private readonly _contextMenuService: IContextMenuService,
 		private readonly _editorService: IEditorService,
+		private readonly _dialogService: IDialogService,
+		private readonly _quickInputService: IQuickInputService,
 	) {
 		super();
 		this.element = $('.lwd-tabstrip');
@@ -90,8 +100,12 @@ export class AbstractTabStrip extends Disposable {
 	private _tabFor(editor: EditorInput): ITabModel | undefined {
 		const resource = editor.resource;
 		if (!resource) { return undefined; }
+		// The preview flag is READ from the group, never owned here: core's group model holds one preview slot
+		// and `isPinned` reports it. An editor opened with `{ pinned: false }` (the tree's single click) is the
+		// preview; anything opened deliberately, or pinned by an edit / a double click, is not.
+		const preview = !this._group.isPinned(editor);
 		if (editor instanceof LivingDocSourceInput) {
-			return { id: resource.toString(), label: basename(resource), kind: 'source', dot: 'none' };
+			return { id: resource.toString(), label: basename(resource), kind: 'source', dot: 'none', preview };
 		}
 		if (editor instanceof LivingDocEditorInput) {
 			const doc = this._livingDocs.getDoc(resource);
@@ -103,7 +117,7 @@ export class AbstractTabStrip extends Disposable {
 				if (this._livingDocs.getPendingForDoc(resource).length > 0) { dot = 'attention'; }
 				else if (doc.isLiving) { dot = 'ok'; }
 			}
-			return { id: resource.toString(), label, kind: 'document', dot };
+			return { id: resource.toString(), label, kind: 'document', dot, preview };
 		}
 		return undefined;
 	}
@@ -127,7 +141,7 @@ export class AbstractTabStrip extends Disposable {
 	}
 
 	private _renderTab(parent: HTMLElement, tab: ITabModel, active: boolean): void {
-		const el = append(parent, $(`.lwd-tab${active ? '.active' : ''}${tab.kind === 'source' ? '.source' : ''}`));
+		const el = append(parent, $(`.lwd-tab${active ? '.active' : ''}${tab.kind === 'source' ? '.source' : ''}${tab.preview ? '.preview' : ''}`));
 		el.setAttribute('role', 'tab');
 		el.setAttribute('aria-selected', String(active));
 		el.title = tab.label;
@@ -160,7 +174,9 @@ export class AbstractTabStrip extends Disposable {
 				this._close(tab.id);
 			}));
 		}
-		// Left-click activates (P7.3); middle-click closes (P7.5).
+		// Left-click activates (P7.3); middle-click closes (P7.5). A RIGHT-click deliberately falls through: the
+		// menu is raised from the `contextmenu` event below, and swallowing mousedown would also mean activating
+		// the tab, which VS Code does not do - the menu must act on the right-clicked tab, not on the active one.
 		this._renderDisposables.add(addDisposableListener(el, EventType.MOUSE_DOWN, e => {
 			const mouse = new StandardMouseEvent(el.ownerDocument.defaultView!, e);
 			if (mouse.middleButton) {
@@ -171,6 +187,50 @@ export class AbstractTabStrip extends Disposable {
 				this._activate(tab.id);
 			}
 		}));
+		// Double-click PINS a preview tab (plan 52 WP-F), matching VS Code. `pinEditor` is core's own API; the
+		// group fires EDITOR_PIN on onDidModelChange, so the re-render that drops the italic is already wired.
+		this._renderDisposables.add(addDisposableListener(el, EventType.DBLCLICK, e => {
+			EventHelper.stop(e, true);
+			this._pin(tab.id);
+		}));
+		// Right-click raises THE document context menu (pin 6's menu, shared with the Files rail) for this tab's
+		// document, plus Close / Close Others.
+		this._renderDisposables.add(addDisposableListener(el, EventType.CONTEXT_MENU, e => {
+			EventHelper.stop(e, true);
+			this._showTabMenu(el, tab);
+		}));
+	}
+
+	/**
+	 * The tab context menu (plan 52 WP-F): the SAME action list the Files rail builds for a right-clicked row
+	 * (`documentContextMenu.ts` - one list, two callers), raised on the RIGHT-CLICKED tab's resource so every
+	 * action operates on that document rather than the active one. Close / Close Others lead, as they do on
+	 * VS Code's own tab menu; "Open" is dropped (a tab is open by definition) and Delete stays last so the
+	 * menu skin's removed-ink row still lands on it.
+	 */
+	private _showTabMenu(anchor: HTMLElement, tab: ITabModel): void {
+		const resource = this._safeParse(tab.id);
+		if (!resource) { return; }
+		const services: IDocumentMenuServices = {
+			editorService: this._editorService,
+			livingDocs: this._livingDocs,
+			dialogService: this._dialogService,
+			quickInputService: this._quickInputService,
+		};
+		const actions: IAction[] = [
+			toAction({ id: 'livingDocs.tab.close', label: localize('livingDocs.tab.menuClose', "Close"), run: () => this._close(tab.id) }),
+			toAction({
+				id: 'livingDocs.tab.closeOthers',
+				label: localize('livingDocs.tab.menuCloseOthers', "Close Others"),
+				enabled: this._group.count > 1,
+				run: () => this._closeOthers(tab.id),
+			}),
+			new Separator(),
+			...(tab.kind === 'source'
+				? createSourceMenuActions(services, resource, tab.label)
+				: createDocumentMenuActions(services, resource, tab.label, { includeOpen: false })),
+		];
+		this._contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions, getMenuClassName: () => DOCUMENT_MENU_CLASS_NAME });
 	}
 
 	private _renderOverflow(model: ITabStripModel): void {
@@ -190,7 +250,11 @@ export class AbstractTabStrip extends Disposable {
 		}));
 	}
 
-	/** Persist the open-tab set (ids + active) for this group (P7.7, spec section 3.5). */
+	/**
+	 * Persist the open-tab set (ids + active + which one was the preview tab) for this group (P7.7, spec section
+	 * 3.5). The preview id rides along so a relaunch restores an italic tab as italic rather than silently
+	 * promoting a peek to a permanent tab (plan 52 WP-F); `toPersistedTabStrip` derives it from the model.
+	 */
 	private _persist(model: ITabStripModel): void {
 		// Never clobber the persisted set while restore is re-opening it (see setTabRestoreInProgress).
 		if (tabRestoreInProgress) { return; }
@@ -222,9 +286,30 @@ export class AbstractTabStrip extends Disposable {
 		if (editor) { void this._group.closeEditor(editor); }
 	}
 
+	/** "Close Others" (plan 52 WP-F): close every editor in the group EXCEPT this tab's, through core's filter. */
+	private _closeOthers(id: string): void {
+		const editor = this._editorFor(id);
+		if (editor) { void this._group.closeEditors({ except: editor }); }
+	}
+
+	/**
+	 * Pin a preview tab (plan 52 WP-F). Straight through to core's `pinEditor`: the group owns the preview slot,
+	 * so pinning is its business, and a tab that is already pinned is a no-op there.
+	 */
+	private _pin(id: string): void {
+		const editor = this._editorFor(id);
+		if (editor) { this._group.pinEditor(editor); }
+	}
+
 	private _editorFor(id: string): EditorInput | undefined {
-		const uri = URI.parse(id);
+		const uri = this._safeParse(id);
+		if (!uri) { return undefined; }
 		return this._group.editors.find(e => this._isOurs(e) && e.resource?.toString() === uri.toString());
+	}
+
+	/** Parse a tab id back to its resource, degrading to undefined rather than throwing on a malformed one. */
+	private _safeParse(id: string): URI | undefined {
+		try { return URI.parse(id); } catch { return undefined; }
 	}
 }
 
@@ -244,6 +329,8 @@ export function createTabStripStyle(): HTMLStyleElement {
 .lwd-tabstrip-scroll::-webkit-scrollbar{display:none}
 .lwd-tab{display:flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:9px 9px 0 0;font:500 12.5px/1 system-ui;color:#868B95;white-space:nowrap;cursor:pointer;user-select:none;box-sizing:border-box;flex:none;max-width:200px}
 .lwd-tab:hover{background:#ECEDF1}
+/* The preview tab (plan 52 WP-F): italic, exactly as VS Code marks the tab it will reuse for the next peek. */
+.lwd-tab.preview{font-style:italic}
 .lwd-tab.active{height:34px;background:#fff;color:#1A1C20;font-weight:600;border:1px solid #E9EAEE;border-bottom:1px solid #fff;margin-bottom:-1px}
 .lwd-tab.active:hover{background:#fff}
 .lwd-tab-label{overflow:hidden;text-overflow:ellipsis}

@@ -1156,6 +1156,40 @@ export interface ILivingDocsService {
 	 */
 	moveFile(resource: URI, targetFolder: URI): Promise<void>;
 
+	/**
+	 * Ask the Files rail to put a file into edit-in-place RENAME mode (pin 6 / P6.3). The rename UI is the tree
+	 * row's own inline input, which only the rail can mount, so the document context menu - now raised from BOTH
+	 * the tree row and a product tab (plan 52 WP-F) - routes here rather than each caller re-implementing rename.
+	 * Fires `onDidRequestRenameDocument` SYNCHRONOUSLY - the rail is already mounted whenever a document surface is
+	 * on screen, and deferring the request by a turn lets the closing context menu restore focus and blur the
+	 * freshly-mounted input, cancelling the rename before the user can type. The Workspace rail is revealed
+	 * alongside (fire-and-forget) for the collapsed-sidebar case. Navigate-only: it never touches the file.
+	 * `renameFile` does the actual work once the user commits.
+	 */
+	requestRenameDocument(resource: URI): void;
+
+	/**
+	 * Ask the Files rail to reveal the Context tab's "Add source" picker for a document (pin 6 / P6.5, the same
+	 * door the PN.1 "Bind sources" nudge uses). Opens the document, reveals the Workspace rail, then fires
+	 * `onDidRequestBindSources`; the rail switches to Context and expands the picker so the user lands directly
+	 * on the bind affordance. Like `requestRenameDocument`, this exists so the tree row and a product tab share
+	 * one implementation of the menu item.
+	 */
+	requestBindSources(resource: URI): Promise<void>;
+
+	/**
+	 * Fires when the document context menu's "Rename…" is chosen (from the tree row or a product tab). `docId`
+	 * is the file; the Files rail listens and mounts its edit-in-place input on that row. Navigate-only.
+	 */
+	readonly onDidRequestRenameDocument: Event<{ readonly docId: string }>;
+
+	/**
+	 * Fires when the document context menu's "Bind Sources…" is chosen (from the tree row or a product tab).
+	 * `docId` is the document, already opened by `requestBindSources`; the Files rail listens, switches to its
+	 * Context tab and expands the Add-source picker. Navigate-only.
+	 */
+	readonly onDidRequestBindSources: Event<{ readonly docId: string }>;
+
 	// --- the Tidy verb (doc 22 section 5): propose folder-convention moves through the review grammar ---
 
 	/**
