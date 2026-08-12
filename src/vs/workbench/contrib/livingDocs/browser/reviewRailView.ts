@@ -1297,9 +1297,15 @@ export class ReviewRailView extends ViewPane {
 			await this._editors.openEditor({ resource });
 			return;
 		}
-		await this._livingDocs.loadDocument(resource);
-		const route = changePointerRoute(this._livingDocs.getDoc(resource), change);
-		if (route === 'review') {
+		// Load only when the document is not already parsed. A redundant load fires `onDidChange`, which re-renders
+		// the editor's webview and rebuilds its decorations - and that rebuild wiped the reveal flash that had
+		// just been applied, so a second click on the same pointer landed silently. Caught in the live walk.
+		let doc = this._livingDocs.getDoc(resource);
+		if (!doc) {
+			await this._livingDocs.loadDocument(resource);
+			doc = this._livingDocs.getDoc(resource);
+		}
+		if (changePointerRoute(doc, change) === 'review') {
 			// No inline widget to land on (#300 - a list, table or any block whose Markdown carries syntax). Send
 			// the reader to the Review tab, which renders the full red/green diff and Approve & apply / Reject for
 			// exactly this change. `reviewBlock` also scrolls the document to the block and flashes it, so the
@@ -1307,13 +1313,11 @@ export class ReviewRailView extends ViewPane {
 			await this._livingDocs.reviewBlock(resource, pointer.blockId);
 			return;
 		}
-		// Both reveal seams are used deliberately. `revealBlockAddress` scrolls to and flashes the BLOCK, which
-		// works for any block at all; `focusChange` scrolls to and flashes the WIDGET, which is the change itself
-		// and is the only thing that can land an insertion (it has no block of its own to address). Firing both
-		// means the click is never dead: if the widget is there it wins the scroll, and if the prediction was
-		// wrong the block flash still shows the reader where they were taken.
-		await this._livingDocs.revealBlockAddress(resource, pointer.blockId);
-		this._livingDocs.focusChange(pointer.changeId);
+		// The document route is the plan-19 navigate-to-inline path the Review card's diff click already uses:
+		// open the document and flash its widget. Reused rather than reimplemented, and it addresses the WIDGET
+		// (not the block), which is the only thing that can land an insertion - an insertion has no block of its
+		// own to scroll to.
+		await this._navigateToChange(change);
 	}
 
 	// Reject one proposal, first offering an optional plain-words reason (1f frame-3: "the optional reason
