@@ -272,6 +272,28 @@ for (const chord of NEUTRALISED_IDE_CHORDS) {
 	KeybindingsRegistry.registerKeybindingRule({ id: 'noop', weight: 1000, when: undefined, ...chord });
 }
 
+// --- Cmd+T opens a new workspace chat (plan 52 WP-B, decision 178) ---
+// Stock Cmd+T is "Go to Symbol in Workspace" - a code-navigation chord in a document tool, and one the
+// de-IDE work would otherwise have to neutralise anyway. Here it earns a better job: it opens a fresh chat,
+// the same thing the strip's + does, so the affordance and the chord agree. Weight 1000 for the same reason
+// the swallows above use it - it must beat the stock binding without a core patch.
+registerAction2(class NewChatSessionAction extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.chat.newSession',
+			title: localize2('livingDocs.chat.newSession', "New Chat"),
+			f1: true,
+			keybinding: { weight: 1000, primary: KeyMod.CtrlCmd | KeyCode.KeyT },
+		});
+	}
+	run(accessor: ServicesAccessor): void {
+		const livingDocs = accessor.get(ILivingDocsService);
+		livingDocs.newChatSession();
+		// Opening a chat you cannot see would be a lie; bring the rail's Chat tab forward with it.
+		livingDocs.focusPanel('chat');
+	}
+});
+
 // --- v2 header rail-toggle chords (plan 44-b, P2.2) ---
 // The 48px header's two rail toggles also carry keyboard chords: Cmd+\ collapses the tree rail, Cmd+Shift+\
 // collapses the right rail. These re-use the stock part-toggle commands, so a keyboard toggle and a header
