@@ -89,9 +89,14 @@ export interface IPersistedTabStrip {
 	readonly activeId: string | undefined;
 	/**
 	 * The id of the tab that was the group's PREVIEW tab, or undefined when every tab was pinned (plan 52 WP-F).
-	 * A group has at most one preview tab, so this is a single id rather than a set. Restoring it keeps the
-	 * relaunch honest: a tab the user only peeked at comes back italic and is still reused by the next peek,
-	 * matching what VS Code does for its own tabs (`EditorGroupModel` serialises its preview index too).
+	 * A group has at most one preview tab, so this is a single id rather than a set.
+	 *
+	 * RECORDED, NOT REPLAYED. Restore deliberately re-opens every tab PINNED - see the tab-restore contribution
+	 * for why: native editor restoration brings the active editor back by itself, pinned, and `IEditorGroup`
+	 * exposes `pinEditor` but no unpin, so the preview slot cannot be re-filled consistently without a core
+	 * patch. The field is still written because it is the truthful projection of the strip (it says what the
+	 * group actually held), and because it is exactly what a faithful replay would need if core ever grows an
+	 * unpin seam. A relaunch therefore shows every tab roman, which is what the user sees.
 	 */
 	readonly previewId: string | undefined;
 }

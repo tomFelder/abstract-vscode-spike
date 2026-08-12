@@ -978,18 +978,21 @@ class LivingDocsTabRestoreContribution extends Disposable implements IWorkbenchC
 				for (const id of persisted.ids) {
 					const resource = this._safeParse(id);
 					if (!resource) { continue; }
-					// Skip a tab native restore already brought back (avoid duplicating the active editor). A tab
-					// restored that way keeps whatever pin state core serialised for it; we do not second-guess it
-					// (and could not - `IEditorGroup` exposes `pinEditor` but no unpin).
+					// Skip a tab native restore already brought back (avoid duplicating the active editor).
 					if (group.editors.some(e => e.resource?.toString() === resource.toString())) { continue; }
-					// Restore the ONE tab that was the group's preview tab as a preview tab again (plan 52 WP-F),
-					// so a peek comes back italic and is still reused by the next peek - the same thing VS Code
-					// does for its own tabs. Every other tab restores pinned, as before.
-					const pinned = id !== persisted.previewId;
+					// EVERY restored tab is PINNED, including the one that was the preview tab when the window
+					// closed (plan 52 WP-F). The persisted `previewId` records what the preview slot held, but it is
+					// deliberately NOT replayed, because it cannot be replayed CONSISTENTLY: native editor
+					// restoration brings the group's active editor back by itself, pinned, and `IEditorGroup`
+					// exposes `pinEditor` with no unpin - so a preview tab that happened to also be the active tab
+					// can never be put back in the preview slot without a core patch (budget: 0). Honouring the id
+					// only in the other case would make the same gesture restore differently depending on which tab
+					// was focused at exit. Uniformly pinned is the honest, predictable answer: a peek is a
+					// within-session state, and nothing the user was looking at is ever silently dropped.
 					if (resource.path.toLowerCase().endsWith('.md')) {
-						await this._editorService.openEditor({ resource, options: { pinned, inactive: true } }, group);
+						await this._editorService.openEditor({ resource, options: { pinned: true, inactive: true } }, group);
 					} else {
-						await this._editorService.openEditor(new LivingDocSourceInput(resource), { pinned, inactive: true }, group);
+						await this._editorService.openEditor(new LivingDocSourceInput(resource), { pinned: true, inactive: true }, group);
 					}
 				}
 				// Re-activate the persisted active tab (last so it wins over the restore order).

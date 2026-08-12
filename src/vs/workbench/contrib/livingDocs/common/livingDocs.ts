@@ -1160,11 +1160,13 @@ export interface ILivingDocsService {
 	 * Ask the Files rail to put a file into edit-in-place RENAME mode (pin 6 / P6.3). The rename UI is the tree
 	 * row's own inline input, which only the rail can mount, so the document context menu - now raised from BOTH
 	 * the tree row and a product tab (plan 52 WP-F) - routes here rather than each caller re-implementing rename.
-	 * Reveals the Workspace rail (so a tab right-click still lands somewhere visible), then fires
-	 * `onDidRequestRenameDocument`. Navigate-only: it never touches the file. `renameFile` does the actual work
-	 * once the user commits.
+	 * Fires `onDidRequestRenameDocument` SYNCHRONOUSLY - the rail is already mounted whenever a document surface is
+	 * on screen, and deferring the request by a turn lets the closing context menu restore focus and blur the
+	 * freshly-mounted input, cancelling the rename before the user can type. The Workspace rail is revealed
+	 * alongside (fire-and-forget) for the collapsed-sidebar case. Navigate-only: it never touches the file.
+	 * `renameFile` does the actual work once the user commits.
 	 */
-	requestRenameDocument(resource: URI): Promise<void>;
+	requestRenameDocument(resource: URI): void;
 
 	/**
 	 * Ask the Files rail to reveal the Context tab's "Add source" picker for a document (pin 6 / P6.5, the same

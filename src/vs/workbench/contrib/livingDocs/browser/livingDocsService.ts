@@ -1116,22 +1116,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidRequestPresent.fire({ docId: resource.toString() });
 	}
 
-	async requestRenameDocument(resource: URI): Promise<void> {
-		// Pin 6 "Rename…": the rename UI is the Files tree row's edit-in-place input, so this reveals the Workspace
-		// rail (the tab-strip caller of plan 52 WP-F may raise the menu while the sidebar is collapsed) and asks the
-		// rail to mount it. `false` keeps focus where it is, so the rail's own input can take it. Never renames here
-		// - `renameFile` does the work once the user commits.
-		await this._views.openView(DOCUMENTS_VIEW_ID, false);
+	requestRenameDocument(resource: URI): void {
+		// Pin 6 "Rename…": the rename UI is the Files tree row's edit-in-place input, so this asks the rail to mount
+		// it. Fired SYNCHRONOUSLY, exactly like `focusPanel` above: the rail is already mounted whenever a document
+		// surface is on screen, and awaiting the reveal first pushed the request a turn late, after the closing
+		// context menu had restored focus - which blurred the freshly-mounted input and cancelled the rename before
+		// the user could type. The reveal rides alongside as fire-and-forget for the collapsed-sidebar case.
 		this._onDidRequestRenameDocument.fire({ docId: resource.toString() });
+		this._views.openView(DOCUMENTS_VIEW_ID, false).catch(e => this._log.warn('[livingDocs] requestRenameDocument reveal failed', e));
 	}
 
 	async requestBindSources(resource: URI): Promise<void> {
-		// Pin 6 "Bind Sources…": open the document (the Context tab tracks the ACTIVE document), reveal the
-		// Workspace rail, then ask it to switch to Context and expand the Add-source picker - the same door the
-		// PN.1 nudge uses. Pinned, because choosing a menu item is a deliberate "work on this" gesture.
+		// Pin 6 "Bind Sources…": open the document (the Context tab tracks the ACTIVE document), then ask the rail
+		// to switch to Context and expand the Add-source picker - the same door the PN.1 nudge uses. Pinned,
+		// because choosing a menu item is a deliberate "work on this" gesture. The reveal is fire-and-forget for
+		// the same reason as `requestRenameDocument`.
 		await this._editors.openEditor({ resource, options: { pinned: true } });
-		await this._views.openView(DOCUMENTS_VIEW_ID, false);
 		this._onDidRequestBindSources.fire({ docId: resource.toString() });
+		this._views.openView(DOCUMENTS_VIEW_ID, false).catch(e => this._log.warn('[livingDocs] requestBindSources reveal failed', e));
 	}
 
 	// Deep-link a Home NEEDS-YOU card into its document (plan 48 H2.3u): open the document, open the Review
