@@ -63,7 +63,7 @@ export interface ILivingDoc {
 	// editing view. Reconstructable from `blocks`.
 	readonly body: string;
 	// True when the file's frontmatter declares `template: true` (plan 28, D28-A): a `*.template.md` file
-	// that seeds new documents rather than being a report itself. Templates are excluded from the Reports
+	// that seeds new documents rather than being a report itself. Templates are excluded from the document
 	// list and shown only on the Templates screen. Optional so hand-built test docs default to a non-template.
 	readonly isTemplate?: boolean;
 	// A template's human `name:` (falls back to the derived title), shown as the template card title.

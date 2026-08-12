@@ -2818,7 +2818,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	// A document is any `.md` file; generated `.export.md` / `.source.md` views are skipped, and template
-	// files (`*.template.md`, plan 28 D28-A) are excluded so they never appear in the Reports list, the
+	// files (`*.template.md`, plan 28 D28-A) are excluded so they never appear in the document list, the
 	// tree-rail or the Home documents grid - they show only on the Templates screen (but stay on disk).
 	// Whether a document is "living" (declares sources/context or carries bind links) is resolved
 	// per-summary for the badge.

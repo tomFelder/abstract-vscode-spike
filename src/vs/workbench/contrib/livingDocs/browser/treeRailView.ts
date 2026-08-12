@@ -470,8 +470,8 @@ export class TreeRailView extends ViewPane {
 		let ancestors: ITreeRailNode[] = [];
 		const walk = (node: ITreeRailNode, path: ITreeRailNode[]): void => {
 			if (match) { return; }
-			// The Recent group (issue #212) mirrors documents that live canonically under Reports; skip its subtree
-			// so the highlight lands on the real Reports row, not its Recent shortcut (which shares the resource).
+			// The Recent group (issue #212) mirrors documents that live canonically in the file tree; skip its subtree
+			// so the highlight lands on the real tree row, not its Recent shortcut (which shares the resource).
 			if (node.type === 'folder' && node.id === RECENT_FOLDER_ID) { return; }
 			if (node.type === 'leaf') {
 				if (node.item.resource?.toString() === resource.toString()) { match = node; ancestors = path; }
