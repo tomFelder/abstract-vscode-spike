@@ -407,9 +407,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	readonly onDidReportInlineWidgets: Event<{ docId: string }> = this._onDidReportInlineWidgets.event;
 
 	// Keyed by the DOCUMENT key (`resource.toString()`) - the editor pane's own resource. Deliberately its own
-	// map rather than a field on the `_docs` entries, whose identity is the PARSED document and whose lifetime
-	// is the load/unload cycle: a report outlives an unload (the same widgets mount again when the document
-	// reopens), and conflating those two identities in this file has broken things before.
+	// map rather than a field on the `_docs` entries, whose identity is the PARSED document: conflating the
+	// document key with any other identity in this file has broken things before, so the two stay separate.
+	//
+	// An entry is a LIVE OBSERVATION, not a fact about the document, and it is only kept while the surface that
+	// made it is still watching the content it described (plan 52 WP-A1 fix 2, #301). The first cut let a report
+	// outlive an unload, on the premise that "the same widgets mount again when the document reopens" - false the
+	// moment the file changes while it is closed, and readers were stranded on the memory. `clearInlineWidgets`
+	// retires an entry; nothing else removes one.
 	private readonly _inlineWidgetsByDocKey = new Map<string, IInlineWidgetReport>();
 
 	private readonly _onDidRequestRevealHeading = this._register(new Emitter<{ docId: string; headingIndex: number }>());
@@ -1134,6 +1139,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getInlineWidgets(resource: URI): IInlineWidgetReport | undefined {
 		return this._inlineWidgetsByDocKey.get(resource.toString());
+	}
+
+	clearInlineWidgets(resource: URI): void {
+		// The surface that made this document's report has stopped watching the content it described - its editor
+		// closed or swapped to another document, or the document was reloaded from disk under it. A report that
+		// outlives that is a memory being passed off as an observation, and acting on one strands readers (#301).
+		// Silent when there is nothing recorded, so a load on a document nobody has looked at never churns the rail.
+		const docKey = resource.toString();
+		if (!this._inlineWidgetsByDocKey.delete(docKey)) { return; }
+		this._onDidReportInlineWidgets.fire({ docId: docKey });
 	}
 
 	revealHeading(resource: URI, headingIndex: number): void {
@@ -3017,6 +3032,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// --- loading ---
 
 	async loadDocument(resource: URI): Promise<void> {
+		// A load REPLACES the content any earlier inline-widget report described (this is the path a reopen, a
+		// "Reload from disk" and every import/convert take), so that report is about a document that no longer
+		// exists and must not be answered with (plan 52 WP-A1 fix 2, #301). The fresh surface reports for itself
+		// a moment later; until it does, a pointer click waits for that truth rather than trusting the memory.
+		this.clearInlineWidgets(resource);
 		const state = await this._loadState(resource);
 		if (state) {
 			// First open with no lock yet: bootstrap it from the sources (the initial sync). Otherwise

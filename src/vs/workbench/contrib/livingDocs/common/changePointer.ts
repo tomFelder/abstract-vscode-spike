@@ -90,13 +90,23 @@ export interface IChangePointer {
  * function used to be and exactly what stranded readers.
  */
 export function changePointerRoute(report: IInlineWidgetReport | undefined, changeId: string): ChangePointerRoute {
-	if (!report) { return 'unknown'; }
-	if (report.mounted.has(changeId)) { return 'document'; }
+	if (!coversChange(report, changeId)) {
+		// No report, or one that predates this change (it was proposed after the last decoration pass). Nobody has
+		// looked at it yet, and saying "review" here would flash a wrong badge onto every brand-new proposal.
+		return 'unknown';
+	}
 	// Asked for and not mounted: the surface tried and there is nothing there. This is the #300 case.
-	if (report.requested.has(changeId)) { return 'review'; }
-	// Neither: the report predates this change (it was proposed after the last decoration pass). Nobody has
-	// looked at it yet, and saying "review" here would flash a wrong badge onto every brand-new proposal.
-	return 'unknown';
+	return report!.mounted.has(changeId) ? 'document' : 'review';
+}
+
+/**
+ * Whether this report says anything at all about this change - i.e. whether the surface was ASKED to decorate it
+ * (and so either mounted a widget or demonstrably did not). A report that does not cover a change is not a "no":
+ * it is silence, and the caller must wait rather than act on it. Shared by the route above and by the pointer
+ * click, so "the report answers this question" means one thing in both places.
+ */
+export function coversChange(report: IInlineWidgetReport | undefined, changeId: string): boolean {
+	return !!report && (report.mounted.has(changeId) || report.requested.has(changeId));
 }
 
 /**

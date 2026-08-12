@@ -770,16 +770,32 @@ export interface ILivingDocsService {
 	reportInlineWidgets(resource: URI, requested: readonly string[], mounted: readonly string[]): void;
 
 	/**
-	 * This document's last inline-widget report, or `undefined` when it has never reported (it has not been
-	 * opened this session). `undefined` is deliberately distinct from a report naming nothing: "nobody has
+	 * This document's CURRENT inline-widget report, or `undefined` when there is no live observation to act on -
+	 * either nothing has ever looked at this document, or what looked at it has since gone (see
+	 * `clearInlineWidgets`). `undefined` is deliberately distinct from a report naming nothing: "nobody has
 	 * looked" is not "there is nothing there", and only the second is safe to act on.
 	 */
 	getInlineWidgets(resource: URI): IInlineWidgetReport | undefined;
 
 	/**
-	 * Fires when a document's inline-widget report changes (including its first report). The review rail waits
-	 * on this after opening a document it has no report for, so a pointer click can be resolved against what
-	 * the surface really mounted rather than a guess.
+	 * Forget this document's inline-widget report, because the surface that made it is no longer observing the
+	 * content it described (plan 52 WP-A1 fix 2, #301). Called when a document's editor stops showing it (its
+	 * webview is torn down) and when the document is reloaded from disk.
+	 *
+	 * This exists because a REMEMBERED answer is not a CURRENT one, and the difference stranded readers. A
+	 * document that mounted a widget, was then closed, and whose file then changed underneath it kept reporting
+	 * "mounted" - so a pointer click short-circuited on that memory, skipped the Review fallback, and put the
+	 * reader in front of a document with no change on it and nowhere to go. Forgetting is one-sided and always
+	 * safe: it can only move a route from `document` back to `unknown`, which makes the next click ask the live
+	 * surface again instead of trusting a memory.
+	 */
+	clearInlineWidgets(resource: URI): void;
+
+	/**
+	 * Fires when a document's inline-widget report changes - its first report, a later report that says something
+	 * different, and the report being forgotten by `clearInlineWidgets`. The review rail waits on this after
+	 * opening a document it has no report for, so a pointer click can be resolved against what the surface really
+	 * mounted rather than a guess, and re-renders the transcript so a pointer's route marker follows the truth.
 	 */
 	readonly onDidReportInlineWidgets: Event<{ readonly docId: string }>;
 

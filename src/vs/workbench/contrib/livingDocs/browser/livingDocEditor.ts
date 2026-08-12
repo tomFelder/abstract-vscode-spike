@@ -6,7 +6,7 @@
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { isWeb } from '../../../../base/common/platform.js';
 import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -127,6 +127,14 @@ export class LivingDocEditor extends EditorPane {
 		this._inputDisposables.clear();
 		this._proto = initialEditorWebviewState();
 		this._createWebview();
+		// This webview is the only thing that can see whether a pending change really mounted an inline widget, and
+		// what it reports is true only while it is alive and showing THIS document. So the report is retired with it
+		// (plan 52 WP-A1 fix 2, #301): registered on `_inputDisposables`, which is cleared by `clearInput` - the
+		// workbench calls that when the pane stops showing an input, and again before every `setInput` - and disposed
+		// with the pane. The resource is captured rather than read from `this._resource` at teardown time, because by
+		// then `_resource` may already name the document that replaced this one.
+		const reportedResource = input.resource;
+		this._inputDisposables.add(toDisposable(() => this._livingDocs.clearInlineWidgets(reportedResource)));
 		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
 		// Rail-to-editor navigation: when a change for THIS document is asked to be focused, scroll to it.
 		this._inputDisposables.add(this._livingDocs.onDidRequestFocusChange(e => {
@@ -158,6 +166,22 @@ export class LivingDocEditor extends EditorPane {
 		// The created/updated times come from the file stat (async); fetch after the first render and re-render
 		// when they arrive so the panel shows truthful dates without blocking the editor's first paint.
 		void this._refreshDocTimes(input.resource);
+	}
+
+	// The pane has stopped showing a document (its tab was closed, its group emptied, or another input is about to
+	// take the pane). Tear the input's surface down here rather than waiting for the next `setInput`, so the moment
+	// there is nobody observing this document is the moment its inline-widget report is retired (plan 52 WP-A1 fix
+	// 2, #301). Leaving the webview mounted-but-unwatched is what let a closed document keep answering "the widget
+	// is there" for a file that had since changed on disk, which stranded the reader who followed a chat pointer.
+	//
+	// `_webview` and `_resource` are dropped with it: both are guarded at every use (`_render`, `_runProto` and each
+	// `_onMessage` branch all return early without them), so a late message from the dying webview is ignored rather
+	// than attributed to a document this pane no longer shows.
+	override clearInput(): void {
+		this._inputDisposables.clear();
+		this._webview = undefined;
+		this._resource = undefined;
+		super.clearInput();
 	}
 
 	// The per-doc storage key for the Properties panel's open state (spec 43 section 3.5, WORKSPACE scope).

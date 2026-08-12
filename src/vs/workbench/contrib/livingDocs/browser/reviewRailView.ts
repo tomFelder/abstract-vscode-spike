@@ -27,7 +27,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
-import { buildTurnPointers, IChangePointer, IInlineWidgetReport } from '../common/changePointer.js';
+import { buildTurnPointers, coversChange, IChangePointer } from '../common/changePointer.js';
 import { IChatSession, splitTabs } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
@@ -44,6 +44,13 @@ type PanelTab = 'chat' | 'review' | 'history';
 // and because the alternative to waiting is guessing, which is the defect this fix removes. A surface that
 // has still said nothing by then is treated as showing nothing, and the click lands in Review.
 const POINTER_WIDGET_REPORT_TIMEOUT = 1500;
+
+// How long a click holds a REMEMBERED "the widget is mounted" open before acting on it (plan 52 WP-A1 fix 2,
+// #301). A recorded report was true when it was taken, and the surface re-reports on every render - so this is
+// simply long enough for a render already in flight to overrule a memory that has just gone out of date. Short,
+// because it is spent on the healthy path too; invisible, because the scroll-and-flash was already asked for
+// before the wait began, so all this delays is the decision to ALSO fall back to Review.
+const POINTER_WIDGET_RECHECK_WINDOW = 250;
 
 // The History body and the Document-Agents disclosure are built as pure HTML strings (historyHtml /
 // checksDisclosureHtml) whose entire visual language is inline `style=` on `<button>`/`<span>`/`<div>`,
@@ -1344,7 +1351,7 @@ export class ReviewRailView extends ViewPane {
 		await this._livingDocs.reviewBlock(resource, pointer.blockId);
 	}
 
-	// The document's own answer to "did the reader just land on a real widget?" (plan 52 WP-A1 fix 1).
+	// The document's own answer to "did the reader just land on a real widget?" (plan 52 WP-A1 fix 1, fix 2).
 	//
 	// A document that has already reported on THIS change answers instantly - the common case, because every
 	// render reports. Otherwise the answer is waited for: either the click is what opened the document (so its
@@ -1354,10 +1361,33 @@ export class ReviewRailView extends ViewPane {
 	// The wait is bounded, and running out is answered `false`: a surface that has still said nothing is one the
 	// reader is staring at without seeing their change, which is exactly the case Review exists to catch. So the
 	// only way to stay in the document is a positive, observed "yes, it is mounted".
+	//
+	// Fix 2 (#301) closes the hole this method used to have: a recorded "mounted" was treated as a fact, and a
+	// validator stranded a reader by closing a document, changing the file underneath it, and clicking - the
+	// memory said "mounted", so nothing was revealed and nothing was on screen. Two things answer that. The
+	// service now retires a report when the surface that made it stops watching that content (a closed editor, a
+	// reload from disk), so a memory of a document nobody is looking at is never consulted at all. And a
+	// remembered "mounted" is held open for one short beat below, long enough for a re-render already in flight
+	// to correct it. Both only ever move the answer towards Review, which can render any change; neither can
+	// keep a reader in a document that has nothing to show them.
 	private _landedOnInlineWidget(resource: URI, changeId: string): Promise<boolean> {
-		const covers = (report: IInlineWidgetReport | undefined) => !!report && (report.mounted.has(changeId) || report.requested.has(changeId));
 		const known = this._livingDocs.getInlineWidgets(resource);
-		if (covers(known)) { return Promise.resolve(!!known?.mounted.has(changeId)); }
+		if (!coversChange(known, changeId)) {
+			// Nobody has looked at this change yet. Wait for the observation - there is nothing else honest to do.
+			return this._nextInlineWidgetReport(resource, changeId, POINTER_WIDGET_REPORT_TIMEOUT, false);
+		}
+		// Observed and NOT mounted: the surface tried and there is nothing there. Settled, and Review is the answer.
+		if (!known?.mounted.has(changeId)) { return Promise.resolve(false); }
+		// Observed and mounted - but observed BEFORE this click, and a render may be in flight right now (the reader
+		// typed over the anchor, a source refresh landed, the file was reloaded). Give a fresher observation a beat
+		// to overrule this one. It costs the reader nothing: the scroll-and-flash has already been asked for, so
+		// this beat only delays the decision to ALSO open Review, which on a healthy widget is a decision to do
+		// nothing at all.
+		return this._nextInlineWidgetReport(resource, changeId, POINTER_WIDGET_RECHECK_WINDOW, true);
+	}
+
+	// Resolve on this document's next report that covers `changeId`, or `fallback` if none arrives within `ms`.
+	private _nextInlineWidgetReport(resource: URI, changeId: string, ms: number, fallback: boolean): Promise<boolean> {
 		return new Promise(resolve => {
 			// A local store, not `this._renderDisposables` and not `this._register`: this runs once per click, so
 			// hanging it off the view would leak a listener and a timer per click for the view's whole lifetime.
@@ -1366,9 +1396,11 @@ export class ReviewRailView extends ViewPane {
 			store.add(this._livingDocs.onDidReportInlineWidgets(e => {
 				if (e.docId !== resource.toString()) { return; }
 				const report = this._livingDocs.getInlineWidgets(resource);
-				if (covers(report)) { settle(!!report?.mounted.has(changeId)); }
+				// Only a report that COVERS this change is an answer about it. A report that has simply not been asked
+				// about it (or the report being retired) says nothing, so it must not cut the wait short.
+				if (coversChange(report, changeId)) { settle(!!report?.mounted.has(changeId)); }
 			}));
-			store.add(disposableTimeout(() => settle(false), POINTER_WIDGET_REPORT_TIMEOUT));
+			store.add(disposableTimeout(() => settle(fallback), ms));
 		});
 	}
 
