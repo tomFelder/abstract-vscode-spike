@@ -10,7 +10,8 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
 import { TreeRailLeafRenderer } from '../../browser/treeRailFilesTree.js';
-import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, sourceKindGlyph } from '../../common/treeRail.js';
+import { ClickGestureGuard, GestureScheduler } from '../../common/clickGesture.js';
+import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, isMissingSource, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_CAP, RECENT_STRIP_MIN, searchTreeRail, sourceKindGlyph, sourceMeta, touchRecentDoc } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -95,13 +96,15 @@ suite('treeRail', () => {
 			renderRenameInput: () => undefined,
 		});
 
-		// Real leaf nodes from the real builder: a living doc (chip), a living doc with pending approvals (pill wins),
-		// a plain doc (neither), plus a bound source (a non-doc leaf never carries a doc marker).
-		const nodes = buildTreeRailNodes([
+		// Real leaf nodes from the real builders: a living doc (chip), a living doc with pending approvals (pill
+		// wins), a plain doc (neither) from the file tree, plus a bound source from the Context tab's workspace
+		// sources (a non-doc leaf never carries a doc marker) - the renderer draws rows from both surfaces.
+		const docInputs = [
 			{ title: 'Live', resource: URI.file('/ws/Live.md'), pendingCount: 0, sources: ['metrics.csv'], isLiving: true },
 			{ title: 'Pending', resource: URI.file('/ws/Pending.md'), pendingCount: 2, sources: ['metrics.csv'], isLiving: true },
 			{ title: 'Plain', resource: URI.file('/ws/Plain.md'), pendingCount: 0, sources: [], isLiving: false },
-		]);
+		];
+		const nodes = [...buildTreeRailNodes(docInputs), ...buildWorkspaceSourceNodes(docInputs)];
 		const leaves = new Map<string, ITreeRailLeafNode>();
 		const collect = (n: ITreeRailNode): void => n.type === 'leaf' ? void leaves.set(n.item.label, n) : n.children.forEach(collect);
 		nodes.forEach(collect);
@@ -141,35 +144,206 @@ suite('treeRail', () => {
 		);
 	});
 
-	test('buildTreeRailNodes adds a capped, MRU-ordered Recent group above the file tree with distinct collision-free ids, hidden below two (livingDocs #212)', () => {
+	test('buildRecentDocItems returns the MRU strip rows - capped, de-duplicated, foreign history entries dropped - and the tree carries no Recent group at all (livingDocs #212, plan 52 WP-D2)', () => {
 		const docInputs = ['A', 'B', 'C', 'D', 'E', 'F'].map(t => ({ title: t, resource: URI.file(`/ws/${t}.md`), pendingCount: 0, sources: [] }));
-		// Six MRU resources (newest first); the group caps at five and drops the rest, in MRU order.
-		const recent = ['F', 'E', 'D', 'C', 'B', 'A'].map(t => URI.file(`/ws/${t}.md`));
-		const nodes = buildTreeRailNodes(docInputs, [], recent);
-		const recentNode = nodes.find(n => n.type === 'folder' && n.id === RECENT_FOLDER_ID);
-		assert.ok(recentNode && recentNode.type === 'folder', 'Recent is the first group above the file tree');
+		// Seven MRU entries newest-first: one repeat (F), one document from a folder that is not open (/other/X.md),
+		// and more than the cap. The strip keeps MRU order, drops the repeat and the foreigner, and stops at the cap.
+		const recent = [...['F', 'E', 'F', 'D', 'C', 'B'].map(t => URI.file(`/ws/${t}.md`)), URI.file('/other/X.md'), URI.file('/ws/A.md')];
 		assert.deepStrictEqual(
 			{
-				firstGroupIsRecent: nodes[0].type === 'folder' && nodes[0].id === RECENT_FOLDER_ID,
-				recentLeaves: recentNode.children.map(c => c.type === 'leaf' ? { label: c.item.label, id: c.id } : { folder: c.label }),
-				// A Recent leaf carries the distinct RECENT_FOLDER_ID prefix, never colliding with its file-tree twin.
-				idsAllDistinctFromTree: recentNode.children.every(c => c.id.startsWith(`${RECENT_FOLDER_ID}/leaf:`)),
-				// One recent doc is not worth a group.
-				hiddenBelowTwo: buildTreeRailNodes(docInputs, [], [URI.file('/ws/A.md')]).some(n => n.type === 'folder' && n.id === RECENT_FOLDER_ID),
+				cap: RECENT_STRIP_CAP,
+				min: RECENT_STRIP_MIN,
+				strip: buildRecentDocItems(docInputs, recent).map(i => i.label),
+				// Two entries is where a jump-list starts being one: it needs somewhere to jump BACK to.
+				pair: buildRecentDocItems(docInputs, [URI.file('/ws/A.md'), URI.file('/ws/B.md')]).map(i => i.label),
+				// A single recent can only be the document you are already in - the active tab, the highlighted tree
+				// row and the strip's own active marker all say it first - so the strip stays away (fix round 1, R-2).
+				single: buildRecentDocItems(docInputs, [URI.file('/ws/A.md')]).map(i => i.label),
+				none: buildRecentDocItems(docInputs, []).map(i => i.label),
+				// Nothing recent-shaped is left in the file tree - the whole point of D2.
+				treeHasNoRecentGroup: buildTreeRailNodes(docInputs).some(n => n.type === 'folder' && /recent/i.test(n.label)),
+			},
+			{ cap: 5, min: 2, strip: ['F', 'E', 'D', 'C', 'B'], pair: ['A', 'B'], single: [], none: [], treeHasNoRecentGroup: false },
+		);
+	});
+
+	test('touchRecentDoc builds the MRU from documents OPENED, so a single-click preview journey fills the strip (plan 52 WP-D2, fix round 1 R-2)', () => {
+		const A = URI.file('/ws/A.md');
+		const B = URI.file('/ws/B.md');
+		const C = URI.file('/ws/C.md');
+		const docInputs = ['A', 'B', 'C'].map(t => ({ title: t, resource: URI.file(`/ws/${t}.md`), pendingCount: 0, sources: [] }));
+		// The journey that used to leave the strip stuck at one row: three single clicks, each opening a PREVIEW
+		// tab that replaces (and disposes) the last one. Reading surviving editors gave one entry every time;
+		// remembering what was OPENED gives a real MRU, newest first.
+		let mru: readonly URI[] = [];
+		for (const opened of [A, B, C]) { mru = touchRecentDoc(mru, opened); }
+		// Re-opening a document already in the list moves it to the front rather than duplicating it.
+		const revisited = touchRecentDoc(mru, A);
+		assert.deepStrictEqual(
+			{
+				afterThreeSingleClicks: mru.map(r => r.path),
+				revisited: revisited.map(r => r.path),
+				strip: buildRecentDocItems(docInputs, revisited).map(i => i.label),
+				// The memory is bounded: an unbounded list would grow for the whole session.
+				bounded: [A, B, C, A, B].reduce<readonly URI[]>((acc, r) => touchRecentDoc(acc, r, 2), []).map(r => r.path),
 			},
 			{
-				firstGroupIsRecent: true,
-				recentLeaves: [
-					{ label: 'F', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/F.md').toString()}` },
-					{ label: 'E', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/E.md').toString()}` },
-					{ label: 'D', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/D.md').toString()}` },
-					{ label: 'C', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/C.md').toString()}` },
-					{ label: 'B', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/B.md').toString()}` },
-				],
-				idsAllDistinctFromTree: true,
-				hiddenBelowTwo: false,
+				afterThreeSingleClicks: ['/ws/C.md', '/ws/B.md', '/ws/A.md'],
+				revisited: ['/ws/A.md', '/ws/C.md', '/ws/B.md'],
+				strip: ['A', 'C', 'B'],
+				bounded: ['/ws/B.md', '/ws/A.md'],
 			},
 		);
+	});
+
+	test('sourceMeta puts a bound source that is gone from disk in the STALE family, never "synced" (fix round 1, C-2)', () => {
+		// The phantom the app's own `Delete…` leaves: it removes the file but not the `sources:` frontmatter that
+		// names it, so the row survives. It used to read "synced" - asserted purely from a path having been
+		// computed - while the delete dialog had just promised dependents would be "flagged as stale".
+		const present = new Set(['metrics.csv', 'notes.txt']);
+		const nodes = buildWorkspaceSourceNodes(
+			[{ title: 'Weekly Summary', resource: WEEKLY, pendingCount: 0, sources: ['metrics.csv', 'chart.png'] }],
+			[],
+			new Map([['metrics.csv', 'fresh' as const], ['chart.png', 'missing' as const]]),
+		);
+		assert.deepStrictEqual(
+			{
+				rows: nodes.map(n => n.type === 'leaf' ? { leaf: n.item.label, meta: sourceMeta(n.item) } : { folder: n.label }),
+				// The existence test is conservative in both directions: it compares basenames (frontmatter may
+				// write a path), and it stays silent about a file the extras scan would never have listed anyway.
+				deletedImage: isMissingSource('chart.png', present),
+				unknownFormatNeverAccused: isMissingSource('warehouse.parquet', present),
+			},
+			{
+				rows: [
+					// allow-any-unicode-next-line
+					{ leaf: 'chart.png', meta: { text: 'stale · missing', tone: 'stale' } },
+					{ leaf: 'metrics.csv', meta: { text: 'synced', tone: 'synced' } },
+				],
+				deletedImage: true,
+				unknownFormatNeverAccused: false,
+			},
+		);
+	});
+
+	test('isMissingSource never accuses a source that is not meant to be a local file, or one the folder scan cannot answer for (fix round 2, C-2b)', () => {
+		// `presentFiles` is the workspace-extras scan: BASENAMES, from a walk bounded at four directory levels
+		// that skips dot-directories, `out/` and `node_modules/`. Every case below is a source that is absent
+		// from that set for a reason other than having been deleted - the set simply cannot see it.
+		const present = new Set(['metrics.csv', 'notes.txt']);
+		assert.deepStrictEqual(
+			{
+				// The real target: a plain filename beside a document, of a kind the scan collects, that the scan
+				// did not see. This is the phantom the app's own `Delete…` leaves behind.
+				deletedNeighbour: isMissingSource('chart.png', present),
+				stillOnDisk: isMissingSource('metrics.csv', present),
+				// A remote feed is an `api` source with NO local file by design. Reading the tail of its URL as a
+				// filename accused every remote source whose URL ends in a data extension of having been deleted.
+				remoteFeed: isMissingSource('https://example.com/live/data.csv', present),
+				remoteFeedNoExtension: isMissingSource('https://example.com/live', present),
+				// A source written as a path cannot be judged against a set of basenames: these three directories
+				// are never walked, so "absent" means "not scanned", not "not there".
+				underOut: isMissingSource('out/build-report.json', present),
+				underNodeModules: isMissingSource('node_modules/pkg/data.csv', present),
+				deeperThanTheScanWalks: isMissingSource('a/b/c/d/e/deep.csv', present),
+				pathWrittenSource: isMissingSource('data/chart.png', present),
+				windowsPathWrittenSource: isMissingSource('data\\chart.png', present),
+				// A file type the scan never collects is absent for a reason that has nothing to do with existence.
+				unknownFormat: isMissingSource('warehouse.parquet', present),
+				boundMarkdown: isMissingSource('board-transcript.md', present),
+			},
+			{
+				deletedNeighbour: true,
+				stillOnDisk: false,
+				remoteFeed: false,
+				remoteFeedNoExtension: false,
+				underOut: false,
+				underNodeModules: false,
+				deeperThanTheScanWalks: false,
+				pathWrittenSource: false,
+				windowsPathWrittenSource: false,
+				unknownFormat: false,
+				boundMarkdown: false,
+			},
+		);
+	});
+
+	test('the click-gesture guard holds a redraw for the whole click sequence, so nothing moves between the two clicks of a double-click (fix round 2, R-1)', () => {
+		// The defect this exists to close: click 1 opens a document, the rail redraws, the geometry under the
+		// cursor changes, and click 2 lands on something the user never aimed at. The guard holds every
+		// event-driven redraw from mousedown until the double-click window has elapsed after mouseup.
+		const disposables = new DisposableStore();
+		// The scheduler is injected rather than stubbed onto a global, so the test drives time itself.
+		let pending: { handler: () => void; delayMs: number; cancelled: boolean } | undefined;
+		const schedule: GestureScheduler = (handler, delayMs) => {
+			const entry = { handler, delayMs, cancelled: false };
+			pending = entry;
+			return { dispose: () => { entry.cancelled = true; } };
+		};
+		const elapse = (): void => {
+			const entry = pending;
+			pending = undefined;
+			if (entry && !entry.cancelled) { entry.handler(); }
+		};
+		let redraws = 0;
+		const guard = disposables.add(new ClickGestureGuard(() => { redraws++; }, 500, 5000, schedule));
+
+		const trace: unknown[] = [];
+		const step = (what: string, held?: boolean) => trace.push({ what, held: held ?? null, inFlight: guard.inFlight, redraws });
+
+		step('idle');
+		// A redraw with no gesture to protect happens immediately - the caller is told to proceed.
+		step('quiet redraw', guard.hold());
+		guard.begin();
+		step('mousedown 1');
+		guard.end();
+		// Click 1 opened a document: the redraw it caused is HELD, so the second click still has its target.
+		step('opened a document', guard.hold());
+		guard.begin();
+		step('mousedown 2 (within the window)');
+		guard.end();
+		step('mouseup 2');
+		elapse();
+		step('window elapsed');
+		// A press held down does not release on a timer - the window only starts when the button comes back up.
+		guard.begin();
+		step('mousedown, held', guard.hold());
+		guard.end();
+		elapse();
+		step('released and elapsed');
+
+		assert.deepStrictEqual(trace, [
+			{ what: 'idle', held: null, inFlight: false, redraws: 0 },
+			{ what: 'quiet redraw', held: false, inFlight: false, redraws: 0 },
+			{ what: 'mousedown 1', held: null, inFlight: true, redraws: 0 },
+			{ what: 'opened a document', held: true, inFlight: true, redraws: 0 },
+			// The second mousedown cancels the pending release, so the held redraw survives the whole gesture.
+			{ what: 'mousedown 2 (within the window)', held: null, inFlight: true, redraws: 0 },
+			{ what: 'mouseup 2', held: null, inFlight: true, redraws: 0 },
+			// One deferred redraw is replayed - not one per event that asked for it.
+			{ what: 'window elapsed', held: null, inFlight: false, redraws: 1 },
+			{ what: 'mousedown, held', held: true, inFlight: true, redraws: 1 },
+			{ what: 'released and elapsed', held: null, inFlight: false, redraws: 2 },
+		]);
+		disposables.dispose();
+	});
+
+	test('buildTreeRailNodes shows EXACTLY the folder hierarchy - no Recent group, no Sources group, no synthetic wrapper (plan 52 WP-D)', () => {
+		// The pre-build state this replaces: a synthetic "Recent" group of second copies above the tree, and a
+		// synthetic "Sources" group below it. Both are gone; documents and directories are all that is left. The
+		// standing "Not yet imported" affordance stays - a file we saw and could not convert is never a silent drop.
+		const nodes = buildTreeRailNodes(
+			[
+				{ title: 'Root Doc', resource: URI.file('/ws/root.md'), pendingCount: 0, sources: ['metrics.csv'], folder: '' },
+				{ title: 'Q1', resource: URI.file('/ws/brief/q1.md'), pendingCount: 0, sources: [], folder: 'brief' },
+			],
+			['data.csv', 'shot.png', 'old.doc'],
+		);
+		assert.deepStrictEqual(project(nodes), [
+			{ folder: 'brief', children: [{ leaf: 'Q1', kind: 'doc' }] },
+			{ leaf: 'Root Doc', kind: 'doc' },
+			{ folder: 'Not yet imported', children: [{ leaf: 'old.doc', kind: 'unsupported' }] },
+		]);
 	});
 
 	test('buildFileTree resolves a file source to a URI in the referencing document\'s folder (for the Files-tab menu), but not an api (URL) source', () => {
@@ -267,19 +441,18 @@ suite('treeRail', () => {
 		);
 	});
 
-	test('buildTreeRailNodes shapes the grouped tree into collapsible folder + leaf nodes (issue #171)', () => {
+	test('buildTreeRailNodes shapes the on-disk hierarchy into collapsible folder + leaf nodes (issue #171)', () => {
 		const A = URI.file('/ws/root.md');
 		const B = URI.file('/ws/reports/2025/q1.md');
 		const nodes = buildTreeRailNodes([
 			{ title: 'Root Doc', resource: A, pendingCount: 0, sources: ['metrics.csv'], folder: '' },
 			{ title: 'Q1', resource: B, pendingCount: 0, sources: [], folder: 'reports/2025' },
 		]);
-		// The on-disk hierarchy IS the top level - real directories first, then root documents, with no
-		// synthetic wrapper above them (plan 52 WP-D). Sources trails as its own group.
+		// The on-disk hierarchy IS the top level - real directories first (nested verbatim), then root documents,
+		// with nothing synthetic above or below them (plan 52 WP-D).
 		assert.deepStrictEqual(project(nodes), [
 			{ folder: 'reports', children: [{ folder: '2025', children: [{ leaf: 'Q1', kind: 'doc' }] }] },
 			{ leaf: 'Root Doc', kind: 'doc' },
-			{ folder: 'Sources', children: [{ leaf: 'metrics.csv', kind: 'source' }] },
 		]);
 	});
 
@@ -297,41 +470,65 @@ suite('treeRail', () => {
 		assert.ok(leafIds.every(id => id.includes('Status')), 'each leaf id carries its own resource');
 	});
 
-	test('buildTreeRailNodes buckets un-bound image assets behind one collapsed Assets node, keeping bound sources visible (issue #171)', () => {
+	test('buildWorkspaceSourceNodes buckets un-bound image assets behind one collapsed Assets node, keeping bound sources visible (issue #171, plan 52 WP-D3)', () => {
 		const A = URI.file('/ws/report.md');
-		const nodes = buildTreeRailNodes(
+		const nodes = buildWorkspaceSourceNodes(
 			// chart.png is a BOUND source (referenced by the doc) and stays visible; the loose screenshots are assets.
 			[{ title: 'Report', resource: A, pendingCount: 0, sources: ['chart.png', 'metrics.csv'], folder: '' }],
 			['shot-1.png', 'shot-2.png', 'shot-3.jpg', 'data.csv'],
 		);
-		const sources = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'Sources')!;
-		assert.deepStrictEqual(project([sources]), [{
-			folder: 'Sources', children: [
-				// Non-image sources (bound + discovered), then a single collapsed Assets bucket for the images.
-				{ leaf: 'chart.png', kind: 'source' },
-				{ leaf: 'data.csv', kind: 'source' },
-				{ leaf: 'metrics.csv', kind: 'source' },
-				{
-					folder: 'Assets (3)', children: [
-						{ leaf: 'shot-1.png', kind: 'source' },
-						{ leaf: 'shot-2.png', kind: 'source' },
-						{ leaf: 'shot-3.jpg', kind: 'source' },
-					]
-				},
-			],
-		}]);
-		// Ids are stable + path-based so selection + persisted collapse state survive re-renders/restart.
-		const assetsNode = sources.children.find(c => c.type === 'folder')!;
-		assert.strictEqual(assetsNode.id, 'folder:Sources/Assets');
+		assert.deepStrictEqual(project(nodes), [
+			// Non-image sources (bound + discovered), then a single collapsed Assets bucket for the images.
+			{ leaf: 'chart.png', kind: 'source' },
+			{ leaf: 'data.csv', kind: 'source' },
+			{ leaf: 'metrics.csv', kind: 'source' },
+			{
+				folder: 'Assets (3)', children: [
+					{ leaf: 'shot-1.png', kind: 'source' },
+					{ leaf: 'shot-2.png', kind: 'source' },
+					{ leaf: 'shot-3.jpg', kind: 'source' },
+				]
+			},
+		]);
+		// The bucket's id is unchanged from when Sources lived in the tree, so a workspace that already persisted
+		// its collapse state keeps it after the move.
+		assert.strictEqual(nodes.find(c => c.type === 'folder')!.id, 'folder:Sources/Assets');
+	});
+
+	test('buildWorkspaceSourceNodes is workspace-level: it lists the folder\'s sources with no document open, and keeps each row\'s freshness (plan 52 WP-D3)', () => {
+		// The Context tab must show the folder's sources whichever document is active - including none at all -
+		// so the builder takes an empty document set and still returns the discovered files. Freshness rides on
+		// the row (the ONE vocabulary, #122 F12) so nothing is lost by leaving the tree.
+		const bound = [{ title: 'Report', resource: URI.file('/ws/report.md'), pendingCount: 0, sources: ['metrics.csv', 'notes.txt'], folder: '' }];
+		const freshness = new Map<string, 'fresh' | 'stale' | 'context-only'>([['metrics.csv', 'stale'], ['notes.txt', 'context-only']]);
+		const meta = (nodes: readonly ITreeRailNode[]) => nodes.map(n => n.type === 'leaf' ? { leaf: n.item.label, meta: sourceMeta(n.item) } : { folder: n.label });
+		assert.deepStrictEqual(
+			{
+				noDocuments: project(buildWorkspaceSourceNodes([], ['data.csv', 'legacy.doc'])),
+				withFreshness: meta(buildWorkspaceSourceNodes(bound, ['loose.csv'], freshness)),
+				emptyFolder: buildWorkspaceSourceNodes([], []),
+			},
+			{
+				// A folder with no documents still has data files; an unsupported file is not a source.
+				noDocuments: [{ leaf: 'data.csv', kind: 'source' }],
+				withFreshness: [
+					// A bare discovered file has no owning document, so no freshness and no local URI - no meta.
+					{ leaf: 'loose.csv', meta: undefined },
+					{ leaf: 'metrics.csv', meta: { text: 'stale', tone: 'stale' } },
+					{ leaf: 'notes.txt', meta: { text: 'context only', tone: 'context-only' } },
+				],
+				emptyFolder: [],
+			},
+		);
 	});
 
 	test('collectAssetsFolderIds finds the Assets bucket id so the view can seed it collapsed on first open (issue #171)', () => {
 		const A = URI.file('/ws/report.md');
-		const withAssets = buildTreeRailNodes(
+		const withAssets = buildWorkspaceSourceNodes(
 			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
 			['shot-1.png', 'shot-2.png', 'data.csv'],
 		);
-		const noAssets = buildTreeRailNodes(
+		const noAssets = buildWorkspaceSourceNodes(
 			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
 			['data.csv'],
 		);
@@ -449,13 +646,13 @@ suite('treeRail', () => {
 	});
 
 	test('filterTreeRailNodes narrows to matching rows, keeps ancestor folders, and passes a blank query through', () => {
-		// Two docs in nested folders + one loose source, so the filter must prune folders that hold no match.
+		// Two docs in nested folders + one file we cannot import, so the filter must prune folders holding no match.
 		const nodes = buildTreeRailNodes(
 			[
 				{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), pendingCount: 0, sources: [], folder: 'reports/2025' },
 				{ title: 'Board Note', resource: URI.file('/ws/reports/Board Note.md'), pendingCount: 0, sources: [], folder: 'reports' },
 			],
-			['metrics.csv'],
+			['legacy.doc'],
 		);
 		// Collect every leaf label reachable under a filtered tree, so one deepStrictEqual reads the whole shape.
 		const labels = (roots: readonly ITreeRailNode[]): string[] => {
@@ -467,17 +664,20 @@ suite('treeRail', () => {
 		assert.deepStrictEqual(
 			{
 				weekly: labels(filterTreeRailNodes(nodes, 'weekly')),
-				metrics: labels(filterTreeRailNodes(nodes, 'metrics')),
+				// A folder whose own name matches is kept whole, so its rows stay reachable.
+				folderName: labels(filterTreeRailNodes(nodes, '2025')),
+				legacy: labels(filterTreeRailNodes(nodes, 'legacy')),
 				noMatch: filterTreeRailNodes(nodes, 'zzz').length,
 				blankUnchanged: labels(filterTreeRailNodes(nodes, '   ')),
 				original: labels(nodes),
 			},
 			{
 				weekly: ['Weekly Summary'],
-				metrics: ['metrics.csv'],
+				folderName: ['Weekly Summary'],
+				legacy: ['legacy.doc'],
 				noMatch: 0,
-				blankUnchanged: ['Board Note', 'Weekly Summary', 'metrics.csv'],
-				original: ['Board Note', 'Weekly Summary', 'metrics.csv'],
+				blankUnchanged: ['Board Note', 'Weekly Summary', 'legacy.doc'],
+				original: ['Board Note', 'Weekly Summary', 'legacy.doc'],
 			},
 		);
 	});
