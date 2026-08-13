@@ -30,7 +30,7 @@ import { IHistoryService } from '../../../services/history/common/history.js';
 import { buildContextGroups, keyNamespace, sourceNamespace } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_ID, searchTreeRail, sourceKindGlyph, sourceMeta, TreeRailAction } from '../common/treeRail.js';
+import { buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, collectAssetsFolderIds, filterTreeRailNodes, isMissingSource, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_ID, searchTreeRail, sourceKindGlyph, sourceMeta, touchRecentDoc, TreeRailAction, TreeRailFreshness } from '../common/treeRail.js';
 import { createDocumentMenuActions, createDocumentMenuStyle, createSourceMenuActions, DOCUMENT_MENU_CLASS_NAME, IDocumentMenuServices } from './documentContextMenu.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 import { ScreenEditor } from './screenEditor.js';
@@ -79,9 +79,17 @@ export class TreeRailView extends ViewPane {
 	private _suppressCollapsePersist = false;
 	// The hover service, backing the status-dot tooltips the Files-tree leaf renderer attaches (issue #212).
 	private readonly _hoverService: IHoverService;
-	// Inline rename (P6.3): the resource string of the doc row currently in edit-in-place mode, or undefined.
-	// While set, that row's leaf renderer mounts an input into the label instead of the static text.
+	// Inline rename (P6.3): the resource string of the row currently in edit-in-place mode, or undefined. While
+	// set, that row mounts an input into its label instead of the static text - on the Files tree for a document
+	// row, or on the Context tab's workspace-source row, whichever surface actually holds the file.
 	private _renaming: string | undefined;
+	// The documents OPENED in this window, most-recent first (plan 52 WP-D2, fix round 1 / R-2). This is the
+	// Recent strip's source of truth: the editor history alone cannot serve, because a preview tab is disposed
+	// when the next preview replaces it, taking its document out of history with it. Bounded by
+	// `touchRecentDoc` to `RECENT_STRIP_MEMORY`. Window-lifetime only - a jump-list is about this sitting.
+	private _openedDocs: readonly URI[] = [];
+	// The strip's rows, frozen while the pointer is over the band so it cannot re-order under the cursor.
+	private _recentFrozen: readonly URI[] | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -158,8 +166,16 @@ export class TreeRailView extends ViewPane {
 		const menuStyle = createDocumentMenuStyle();
 		this.element.ownerDocument.head.appendChild(menuStyle);
 		this._register(toDisposable(() => menuStyle.remove()));
-		// Context/Outline track the active document; Files/Search track the document set.
-		this._register(this._editors.onDidActiveEditorChange(() => void this._render()));
+		// Context/Outline track the active document; Files/Search track the document set. Every activation is also
+		// what the Recent strip remembers (fix round 1 / R-2): the MRU is recorded HERE, when a document is
+		// opened, rather than read back later off the editors that happen to have survived. Non-document editors
+		// (a source tab, a screen) are recorded too and filtered out when the strip is built, so this stays a
+		// dumb "what became active, in order" tape with no knowledge of what counts as a document.
+		this._register(this._editors.onDidActiveEditorChange(() => {
+			const resource = this._editors.activeEditor?.resource;
+			if (resource) { this._openedDocs = touchRecentDoc(this._openedDocs, resource); }
+			void this._render();
+		}));
 		this._register(this._livingDocs.onDidChange(() => void this._render()));
 		// The two document-menu items whose UI only THIS rail can mount (pin 6 / P6.3, P6.5). They arrive as
 		// service requests so the same menu item works whether it was raised on a tree row or on a product tab
@@ -249,10 +265,6 @@ export class TreeRailView extends ViewPane {
 		}
 		panel.classList.add('rail-panel-files');
 
-		// Recents live ABOVE the filter box, in their own compact strip (plan 52 WP-D2): they are a jump-list,
-		// not a branch of the folder, so they no longer occupy tree rows that duplicate rows in the tree below.
-		this._renderRecentStrip(panel, documents);
-
 		// The type-to-filter field (P4.2, the folded-in Search): a quiet input that narrows the tree rows live.
 		// It captures keystrokes only when it holds focus, so typing in the editor never triggers it (plan-42
 		// quiet-shell focus discipline). Rendered above the tree so the filter reads as part of the Files pane.
@@ -274,22 +286,31 @@ export class TreeRailView extends ViewPane {
 		// keeps those doc rows even when their label does not match, so a body-only phrase still finds the document.
 		const bodyMatches = this._bodyMatchResources(documents);
 		const visible = filterTreeRailNodes(nodes, this._filter, bodyMatches);
-		if (!visible.length) {
+		if (visible.length) {
+			// Per-leaf action listeners (import / use-as-source) are owned by the renderer's per-row template store,
+			// cleared when a row is recycled or disposed - so a rebuild never leaks the previous generation.
+			tree.setChildren(null, visible.map(n => this._toTreeElement(n)));
+		} else {
 			// The filter matched nothing: keep the tree mounted but empty and say so, so the input stays live.
 			tree.setChildren(null, []);
 			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.treeRail.noMatches', "No documents match '{0}'.", this._filter.trim());
-			return;
 		}
-		// Per-leaf action listeners (import / use-as-source) are owned by the renderer's per-row template store,
-		// cleared when a row is recycled or disposed - so a rebuild never leaks the previous generation.
-		tree.setChildren(null, visible.map(n => this._toTreeElement(n)));
+
+		// Recents sit at the FOOT of the pane, BELOW the tree (plan 52 WP-D2, fix round 1 / R-1). Above the tree
+		// they were a click-targeting bug: the strip is content-sized, so opening a document grew it by 24px and
+		// pushed the whole tree down - between click 1 and click 2 of a double-click the row under the cursor
+		// changed, and the gesture pinned a document the user never aimed at. Below the tree, growth eats from the
+		// tree's flex HEIGHT instead of moving its ORIGIN, so no rendered row ever shifts under the pointer. It is
+		// rendered before the tree is laid out so `_layoutFilesTree` measures the height the tree actually gets.
+		this._renderRecentStrip(panel, documents);
+		if (!visible.length) { return; }
 		this._layoutFilesTree();
 		this._highlightActiveDoc();
 	}
 
 	/**
-	 * The Recent strip (plan 52 WP-D2): the documents you had open, most-recent first, capped at five, sitting
-	 * ABOVE the filter box as its own compact band - not as rows inside the tree.
+	 * The Recent strip (plan 52 WP-D2): the documents you have opened, most-recent first, capped at five, as its
+	 * own compact band at the FOOT of the Files pane - not as rows inside the tree.
 	 *
 	 * Why a vertical strip rather than a row of horizontal chips: the rail is ~248px wide and document titles
 	 * here run long ("Project Brief - Northwind Migration", "Appendix - Design Tokens"). Five chips across that
@@ -298,15 +319,30 @@ export class TreeRailView extends ViewPane {
 	 * 24px rows shows five full titles in ~140px, reads at a glance, and folds away to a single caption line
 	 * when it is not wanted (the fold persists, sharing the same collapse set the tree's folders use).
 	 *
-	 * Why it is still worth showing at ONE entry, where the old in-tree group hid below two: as a group inside
-	 * the tree, one row cost a whole collapsible level of indent for a single document; as a strip it costs one
-	 * 24px line. The strip deliberately keeps the document a row too - the active document is marked, not
-	 * hidden, so the strip reads as "where you are, and where you just were" rather than as a second tree.
+	 * Why BELOW the tree rather than above the filter box (fix round 1 / R-1): a content-sized band above a list
+	 * moves the list every time it gains a row, and a list that moves between the two clicks of a double-click
+	 * pins whatever slid under the cursor. Below the tree the same growth shrinks the tree's viewport instead of
+	 * moving its origin, so nothing the user is pointing at can move.
+	 *
+	 * Why it hides below two entries: see `RECENT_STRIP_MIN`. The strip deliberately keeps the ACTIVE document a
+	 * row too - marked, not hidden - so the band reads as "where you are, and where you just were".
 	 */
 	private _renderRecentStrip(panel: HTMLElement, documents: readonly ILivingDocSummary[]): void {
 		const items = buildRecentDocItems(documents.map(d => this._toDocInput(d)), this._recentDocResources(documents));
-		if (!items.length) { return; } // nothing opened yet in this window: the strip is absent, not an empty box
+		if (!items.length) { return; } // nothing worth a jump-list yet: the strip is absent, not an empty box
 		const strip = append(panel, $('div.rail-recent'));
+		// A jump-list must not re-order under the pointer. Opening a document moves it to the front of the MRU, so
+		// without this the strip had the SAME defect R-1 fixes in the tree: click 1 of a double-click on row 3
+		// promotes that document to row 1, and click 2 lands on whatever slid down into row 3. While the pointer
+		// is over the band its rows are frozen exactly as drawn; leaving re-renders and lets the MRU catch up.
+		this._renderDisposables.add(addDisposableListener(strip, 'mouseenter', () => {
+			this._recentFrozen = items.map(i => i.resource!);
+		}));
+		this._renderDisposables.add(addDisposableListener(strip, 'mouseleave', () => {
+			if (!this._recentFrozen) { return; }
+			this._recentFrozen = undefined;
+			void this._render();
+		}));
 		const collapsed = this._collapsedFolders.has(RECENT_STRIP_ID);
 		const head = append(strip, $('button.rail-recent-head')) as HTMLButtonElement;
 		head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
@@ -334,13 +370,13 @@ export class TreeRailView extends ViewPane {
 			// here would leak one hover per render.
 			this._renderDisposables.add(this._hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), row, item.label));
 			// Preview semantics match the tree (plan 52 WP-F): a single click opens the group's preview tab, a
-			// double click pins it. Focus follows the jump - unlike browsing the tree, picking a recent document
-			// is a "take me back there" gesture, so the document takes the keyboard.
+			// double click pins it. Focus is left to the editor's own default - the document surface is a webview
+			// and takes the keyboard on activation either way, so a `preserveFocus` argument here decides nothing.
 			this._renderDisposables.add(addDisposableListener(row, 'click', () => {
-				void this._editors.openEditor({ resource, options: { pinned: false, preserveFocus: false } });
+				void this._editors.openEditor({ resource, options: { pinned: false } });
 			}));
 			this._renderDisposables.add(addDisposableListener(row, 'dblclick', () => {
-				void this._editors.openEditor({ resource, options: { pinned: true, preserveFocus: false } });
+				void this._editors.openEditor({ resource, options: { pinned: true } });
 			}));
 			this._renderDisposables.add(addDisposableListener(row, 'contextmenu', e => {
 				e.preventDefault();
@@ -402,37 +438,52 @@ export class TreeRailView extends ViewPane {
 	// a stale binding key in that source's namespace (the engine's real hash-drift set, read synchronously via
 	// getFreshness); otherwise 'fresh'. Discovered extras (no owning document) are left absent - a bare file has
 	// no freshness. Pure read - no mutation, warn-never-auto-fix intact.
-	private _sourceFreshnessByLabel(documents: readonly ILivingDocSummary[]): Map<string, 'fresh' | 'stale' | 'context-only'> {
-		const out = new Map<string, 'fresh' | 'stale' | 'context-only'>();
+	private _sourceFreshnessByLabel(documents: readonly ILivingDocSummary[], extras: readonly string[]): Map<string, TreeRailFreshness> {
+		const out = new Map<string, TreeRailFreshness>();
+		// The folder's actual files, from the same extras scan the sources section is built from. A bound source
+		// whose file is not among them is GONE - the phantom the app's own `Delete…` leaves behind, because it
+		// removes the file but not the `sources:` frontmatter naming it (fix round 1 / C-2).
+		const present = new Set(extras);
 		for (const d of documents) {
 			if (!d.sources.length) { continue; }
 			const freshness = this._livingDocs.getFreshness(d.resource);
 			const staleNamespaces = new Set(freshness.staleBindings.map(keyNamespace));
 			for (const source of d.sources) {
 				const stale = staleNamespaces.has(sourceNamespace(source)) || freshness.staleContext.includes(source);
-				const state: 'fresh' | 'stale' = stale ? 'stale' : 'fresh';
-				// A source stale for ANY document is stale in the rail (worst-case wins, like the Knowledge table).
-				if (state === 'stale' || !out.has(source)) { out.set(source, state); }
+				const state: TreeRailFreshness = isMissingSource(source, present) ? 'missing' : stale ? 'stale' : 'fresh';
+				// A source stale (or gone) for ANY document reads that way in the rail - worst-case wins, like the
+				// Knowledge table. `missing` is the strongest statement of the three, so it is never overwritten.
+				if (out.get(source) === 'missing') { continue; }
+				if (state !== 'fresh' || !out.has(source)) { out.set(source, state); }
 			}
 		}
 		return out;
 	}
 
-	// The MRU document resources for the Recent strip (issue #212, plan 52 WP-D2): walk the editor history
-	// newest-first and keep the entries that are documents in the current folder set, de-duplicated. The pure
-	// module caps the list, so this only supplies the ordered candidate list.
+	// The MRU document resources for the Recent strip (issue #212, plan 52 WP-D2, fix round 1 / R-2), newest
+	// first and de-duplicated. Two sources, in this order:
+	//  1. `_openedDocs` - what this window actually OPENED, recorded on each activation. This is the real answer,
+	//     and the only one that survives the default single-click journey: a preview tab is closed and disposed
+	//     when the next preview replaces it, and the editor history drops a disposed input with it, so history
+	//     alone reported exactly one recent no matter how many documents had been visited;
+	//  2. the editor history - the fallback for documents opened BEFORE this rail was created (the rail is a lazy
+	//     view, so a session can be under way by the time it first renders) and for restored editors.
+	// Entries that are not documents in the current folder set are left for the pure module to drop. While the
+	// pointer rests on the strip the frozen order is returned instead, so the band cannot move under the cursor.
 	private _recentDocResources(documents: readonly ILivingDocSummary[]): URI[] {
+		if (this._recentFrozen) { return [...this._recentFrozen]; }
 		const docKeys = new Set(documents.map(d => d.resource.toString()));
 		const out: URI[] = [];
 		const seen = new Set<string>();
-		for (const entry of this._history.getHistory()) {
-			const resource = entry.resource;
-			if (!resource) { continue; }
+		const add = (resource: URI | undefined): void => {
+			if (!resource) { return; }
 			const key = resource.toString();
-			if (seen.has(key) || !docKeys.has(key)) { continue; }
+			if (seen.has(key) || !docKeys.has(key)) { return; }
 			seen.add(key);
 			out.push(resource);
-		}
+		};
+		for (const resource of this._openedDocs) { add(resource); }
+		for (const entry of this._history.getHistory()) { add(entry.resource); }
 		return out;
 	}
 
@@ -745,18 +796,34 @@ export class TreeRailView extends ViewPane {
 		await this._livingDocs.usePdfAsSource(resource, active);
 	}
 
-	// Inline rename (P6.3): put the doc row into edit-in-place mode. Sets the renaming resource, re-renders so
-	// the leaf renderer mounts the input on that row, then Enter commits / Esc cancels through the silent-rename
-	// service (plan 42 L5: no modal, no toast on success). Switches to the Files tab so the row is visible.
+	// Inline rename (P6.3): put the row into edit-in-place mode. Sets the renaming resource, re-renders so the
+	// owning surface mounts the input on that row, then Enter commits / Esc cancels through the silent-rename
+	// service (plan 42 L5: no modal, no toast on success).
+	//
+	// It has to reveal the tab the row is actually ON (fix round 1 / C-1). This used to switch to Files
+	// unconditionally and ask the TREE to find the row - which was right while sources were tree rows, and
+	// silently dead the moment D3 moved them to the Context tab: nothing matched, no editor appeared, the file
+	// was untouched, and the user was thrown out of the tab they were working in with no explanation.
 	private _startInlineRename(resource: URI): void {
-		if (this._tab !== 'files') { this._tab = 'files'; }
+		const tab: TreeRailTab = this._isDocumentResource(resource) ? 'files' : 'context';
+		if (this._tab !== tab) { this._tab = tab; }
 		this._renaming = resource.toString();
 		void this._render();
 	}
 
-	// Mount the edit-in-place input for the row being renamed (P6.3), returning its disposable so the row
-	// renderer scopes its lifetime. Enter commits the trimmed stem through the service's silent renameFile (the
-	// title frontmatter follows + the lock sidecar moves, plan 42 L5); Esc or a blur cancels. The extension is
+	// Is this file one of the workspace's DOCUMENTS (a Files-tree row), or a SOURCE (a Context-tab row)? Markdown
+	// is the document format - `buildFileTree` puts every `.md` in the tree and never in the sources set - so the
+	// file's own extension answers it, the same test `_useAsSource` already uses for "is a document open". A
+	// loaded model is accepted first so a document is never mis-routed on an unusual extension.
+	private _isDocumentResource(resource: URI): boolean {
+		return !!this._livingDocs.getDoc(resource) || resource.path.toLowerCase().endsWith('.md');
+	}
+
+	// Mount the edit-in-place input for the row being renamed (P6.3), returning its disposable so the row's own
+	// renderer scopes its lifetime. Called by BOTH surfaces that draw a renamable row - the Files tree's leaf
+	// renderer for a document, `_renderSourceRow` for a workspace source - so the two cannot grow different
+	// rename behaviours. Enter commits the trimmed stem through the service's silent renameFile (the title
+	// frontmatter follows + the lock sidecar moves, plan 42 L5); Esc or a blur cancels. The extension is
 	// preserved automatically by renameFile, so the input edits only the visible stem.
 	private _renderRenameInput(node: ITreeRailLeafNode, label: HTMLElement): IDisposable | undefined {
 		const item = node.item;
@@ -769,7 +836,9 @@ export class TreeRailView extends ViewPane {
 		const input = append(label, $('input.rail-rename-input')) as HTMLInputElement;
 		input.type = 'text';
 		input.value = stem;
-		input.setAttribute('aria-label', localize('livingDocs.treeRail.renameLabel', "Rename document"));
+		input.setAttribute('aria-label', item.kind === 'doc'
+			? localize('livingDocs.treeRail.renameLabel', "Rename document")
+			: localize('livingDocs.treeRail.renameSourceLabel', "Rename source"));
 		let done = false;
 		const finish = (commit: boolean): void => {
 			if (done) { return; }
@@ -862,20 +931,26 @@ export class TreeRailView extends ViewPane {
 	 *    first open and persisted under the same `ASSETS_FOLDER_ID` key, so a folder of ~200 screenshots never
 	 *    floods the pane (issue #171);
 	 *  - each row still opens as a product tab on click and still raises the LIGHTER provenance-safe source
-	 *    menu on right-click (Rename / Add to Chat / Delete), never the document menu.
+	 *    menu on right-click (Rename / Add to Chat / Delete), never the document menu - and `Rename…` now mounts
+	 *    its edit-in-place input on THIS row (fix round 1 / C-1), which is where the source lives after D3.
+	 *
+	 * A folder with no data files renders nothing here at all - no caption, no empty-state line (fix round 1 /
+	 * C-3), the same rule the Recent strip follows.
 	 */
 	private _renderWorkspaceSources(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
-		const nodes = buildWorkspaceSourceNodes(documents.map(d => this._toDocInput(d)), extras, this._sourceFreshnessByLabel(documents));
+		const nodes = buildWorkspaceSourceNodes(documents.map(d => this._toDocInput(d)), extras, this._sourceFreshnessByLabel(documents, extras));
+		// A folder with no data files says nothing at all (fix round 1 / C-3): a caption reading "\u00B7 0" over an
+		// empty-state sentence is two rows of furniture for something that does not exist, and the Recent strip in
+		// this same pane already follows the opposite rule. Absence is the calmest way to say "there is nothing".
+		if (!nodes.length) { return; }
 		// First sight of this workspace's assets: seed the bucket collapsed so the screenshot flood never renders.
 		// One-time only - after this the bucket persists whatever the user chooses, like every other folder.
 		this._seedAssetsCollapsed(nodes);
 		const count = nodes.reduce((n, node) => n + (node.type === 'folder' ? node.children.length : 1), 0);
-		const header = append(panel, $('div.rail-folder'));
-		header.textContent = `${localize('livingDocs.context.workspaceSources', "Workspace sources")} \u00B7 ${count}`;
-		if (!nodes.length) {
-			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.context.noWorkspaceSources', "No data files in this folder yet.");
-			return;
-		}
+		// One localised sentence with a placeholder, never a localised fragment concatenated to a separator and a
+		// number: a translation may need the count somewhere else entirely, and the separator is part of the
+		// phrase, not punctuation the code owns.
+		append(panel, $('div.rail-folder')).textContent = localize('livingDocs.context.workspaceSources', "Workspace sources \u00B7 {0}", count);
 		for (const node of nodes) {
 			if (node.type === 'leaf') { this._renderSourceRow(panel, node); continue; }
 			// The Assets bucket: one collapsible row standing in for every un-bound screenshot (issue #171).
@@ -903,7 +978,16 @@ export class TreeRailView extends ViewPane {
 		const item = node.item;
 		const row = append(panel, $(`div.rail-item.rail-item-src${nested ? '.rail-item-nested' : ''}`));
 		append(row, $('span.rail-item-glyph')).textContent = sourceKindGlyph(item.label);
-		append(row, $('span.rail-item-label')).textContent = item.label;
+		const label = append(row, $('span.rail-item-label'));
+		// `Rename…` on a source lands HERE (fix round 1 / C-1) - the same edit-in-place input the tree mounts on a
+		// document row, mounted by the SAME method, on the surface that now owns source rows. While the row is an
+		// editor it is only an editor: no freshness meta, no "Use as source" door, no click-to-open underneath it.
+		const rename = this._renderRenameInput(node, label);
+		if (rename) {
+			this._renderDisposables.add(rename);
+			return;
+		}
+		label.textContent = item.label;
 		const meta = sourceMeta(item);
 		if (meta) {
 			append(row, $(`span.rail-item-detail.rail-meta-${meta.tone}`)).textContent = meta.text;
@@ -1081,10 +1165,12 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-tab.active{font-weight:600;color:#1A1C20;background:#fff;box-shadow:0 1px 2px rgba(20,22,28,.05)}
 		.living-docs-rail .rail-new-doc{flex:none;border:none;background:none;cursor:pointer;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:7px;font:400 15px/1 system-ui;color:#868B95}
 		.living-docs-rail .rail-new-doc:hover{background:#EEF0F3;color:#52575F}
-		/* The Recent strip (plan 52 WP-D2): a compact band above the filter box - a caption row that folds it
-		   away, then up to five 24px rows. Deliberately quieter and denser than a tree row (24px vs 30px, 12.5px
-		   vs 13px type) so it reads as a jump-list beside the tree, never as a second copy of it. */
-		.living-docs-rail .rail-recent{flex:none;display:flex;flex-direction:column;padding:2px 4px 6px;border-bottom:1px solid #F1F2F6;margin-bottom:6px}
+		/* The Recent strip (plan 52 WP-D2): a compact band at the FOOT of the Files pane - a caption row that folds
+		   it away, then up to five 24px rows. Deliberately quieter and denser than a tree row (24px vs 30px, 12.5px
+		   vs 13px type) so it reads as a jump-list beside the tree, never as a second copy of it. It sits BELOW the
+		   tree (fix round 1 / R-1) so that gaining a row shrinks the tree's viewport instead of pushing the tree's
+		   origin down - a list that moves between the two clicks of a double-click pins the wrong document. */
+		.living-docs-rail .rail-recent{flex:none;display:flex;flex-direction:column;padding:6px 4px 2px;border-top:1px solid #F1F2F6;margin-top:6px}
 		.living-docs-rail .rail-recent-head{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;height:22px;padding:0 4px;border:none;background:none;cursor:pointer;border-radius:6px;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;text-align:left}
 		.living-docs-rail .rail-recent-head:hover{background:#F1F2F6;color:#868B95}
 		.living-docs-rail .rail-recent-twistie{flex:none;width:10px;font-size:10px;line-height:1;color:#A3A8B2}
@@ -1143,8 +1229,10 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-files-tree .monaco-list-row.selected{box-shadow:inset 0 0 0 1px #E0E5FB}
 		.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-item-label,.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-tree-leaf{color:#2A2F60}
 		.living-docs-rail .rail-files-tree .rail-tree-actions{flex:none;display:flex;align-items:center;gap:6px}
-		/* Inline rename (P6.3): the edit-in-place input filling the label slot; Enter commits, Esc cancels. */
-		.living-docs-rail .rail-files-tree .rail-rename-input{width:100%;box-sizing:border-box;border:1px solid #9AA2E0;background:#fff;color:#26292F;border-radius:6px;padding:1px 5px;font:400 13px/1.3 system-ui;outline:none}
+		/* Inline rename (P6.3): the edit-in-place input filling the label slot; Enter commits, Esc cancels. Stated
+		   once for BOTH surfaces that can host it - a document row in the tree, and a workspace-source row in the
+		   Context tab (fix round 1 / C-1) - so a rename looks the same wherever the file lives. */
+		.living-docs-rail .rail-rename-input{width:100%;box-sizing:border-box;border:1px solid #9AA2E0;background:#fff;color:#26292F;border-radius:6px;padding:1px 5px;font:400 13px/1.3 system-ui;outline:none}
 		/* The "bind sources" nudge (PN.1): a quiet accent chip on a template-born row with no source bound. */
 		.living-docs-rail .rail-files-tree .rail-nudge{flex:none;border:1px solid #E0E5FB;background:#F4F5FD;color:#4650B8;border-radius:5px;padding:2px 6px;font:600 9.5px/1 system-ui;cursor:pointer;white-space:nowrap}
 		.living-docs-rail .rail-files-tree .rail-nudge:hover{background:#E0E5FB}
