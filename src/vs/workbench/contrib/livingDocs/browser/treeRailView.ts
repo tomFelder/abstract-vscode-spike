@@ -27,6 +27,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHistoryService } from '../../../services/history/common/history.js';
+import { ClickGestureGuard } from '../common/clickGesture.js';
 import { buildContextGroups, keyNamespace, sourceNamespace } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
@@ -88,8 +89,14 @@ export class TreeRailView extends ViewPane {
 	// when the next preview replaces it, taking its document out of history with it. Bounded by
 	// `touchRecentDoc` to `RECENT_STRIP_MEMORY`. Window-lifetime only - a jump-list is about this sitting.
 	private _openedDocs: readonly URI[] = [];
-	// The strip's rows, frozen while the pointer is over the band so it cannot re-order under the cursor.
-	private _recentFrozen: readonly URI[] | undefined;
+	// The one thing that keeps a double-click honest (fix round 2 / R-1): while a click sequence is in flight,
+	// every redraw an event asks for is HELD, so nothing under the pointer can move as a consequence of the
+	// first click. One deferred redraw is replayed when the gesture releases.
+	private readonly _gesture = this._register(new ClickGestureGuard(() => void this._render()));
+	// The document the FILES TREE itself just opened, so `_highlightActiveDoc` does not scroll the tree to a row
+	// the user picked in that very tree (fix round 2 / R-1). A reveal is for navigation the user did NOT initiate
+	// in this list; on a self-caused activation it only throws away the place they had scrolled to.
+	private _treeOpened: string | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -157,15 +164,29 @@ export class TreeRailView extends ViewPane {
 	protected override renderBody(container: HTMLElement): void {
 		super.renderBody(container);
 		this._injectStyles(container);
-		this._body = append(container, $('.living-docs-rail'));
-		this._body.style.height = '100%';
-		this._body.style.display = 'flex';
-		this._body.style.flexDirection = 'column';
+		const body = append(container, $('.living-docs-rail'));
+		this._body = body;
+		body.style.height = '100%';
+		body.style.display = 'flex';
+		body.style.flexDirection = 'column';
 		// The restyled native context-menu skin (P6.7). Owned per-view and mounted on the document head, because
 		// the menu overlay renders OUTSIDE this view's DOM subtree so a view-scoped sheet could never reach it.
 		const menuStyle = createDocumentMenuStyle();
 		this.element.ownerDocument.head.appendChild(menuStyle);
 		this._register(toDisposable(() => menuStyle.remove()));
+		// The click-gesture guard (fix round 2 / R-1). A click in this rail opens a document, and opening a
+		// document changes what the rail draws - so the redraw lands BETWEEN the two clicks of a double-click and
+		// moves whatever the second click was aimed at. The primary button starts a gesture here and releases it
+		// a double-click window after it comes back up; every event-driven redraw in between is held (see
+		// `_scheduleRender`). Only the primary button: a right-click has no double-click semantics, and its menu
+		// may swallow the release. The release is watched on the document, so dragging out of the rail and letting
+		// go still ends the gesture.
+		this._register(addDisposableListener(body, 'mousedown', (e: MouseEvent) => {
+			if (e.button === 0) { this._gesture.begin(); }
+		}));
+		this._register(addDisposableListener(this.element.ownerDocument, 'mouseup', (e: MouseEvent) => {
+			if (e.button === 0) { this._gesture.end(); }
+		}));
 		// Context/Outline track the active document; Files/Search track the document set. Every activation is also
 		// what the Recent strip remembers (fix round 1 / R-2): the MRU is recorded HERE, when a document is
 		// opened, rather than read back later off the editors that happen to have survived. Non-document editors
@@ -174,9 +195,9 @@ export class TreeRailView extends ViewPane {
 		this._register(this._editors.onDidActiveEditorChange(() => {
 			const resource = this._editors.activeEditor?.resource;
 			if (resource) { this._openedDocs = touchRecentDoc(this._openedDocs, resource); }
-			void this._render();
+			this._scheduleRender();
 		}));
-		this._register(this._livingDocs.onDidChange(() => void this._render()));
+		this._register(this._livingDocs.onDidChange(() => this._scheduleRender()));
 		// The two document-menu items whose UI only THIS rail can mount (pin 6 / P6.3, P6.5). They arrive as
 		// service requests so the same menu item works whether it was raised on a tree row or on a product tab
 		// (plan 52 WP-F) - the tab strip holds no reference to this view.
@@ -195,6 +216,21 @@ export class TreeRailView extends ViewPane {
 	private _activeSurfaceResource(): URI | undefined {
 		const resource = this._editors.activeEditor?.resource;
 		return resource && this._livingDocs.getDoc(resource) ? resource : undefined;
+	}
+
+	/**
+	 * Redraw because something CHANGED underneath us - a document was opened, the folder's set moved, an agent
+	 * applied an edit. Every one of those is a consequence, and a consequence that lands between the two clicks
+	 * of a double-click moves the thing the second click was aimed at. So while a click sequence is in flight the
+	 * redraw is held and replayed once the gesture is over (`ClickGestureGuard`).
+	 *
+	 * Redraws the user ASKS for go straight to `_render` instead: switching tab, typing in the filter, folding the
+	 * strip. Those are the direct effect of the control that was just clicked, on the control that was clicked -
+	 * holding them would only make the rail feel broken.
+	 */
+	private _scheduleRender(): void {
+		if (this._gesture.hold()) { return; }
+		void this._render();
 	}
 
 	private async _render(): Promise<void> {
@@ -265,6 +301,14 @@ export class TreeRailView extends ViewPane {
 		}
 		panel.classList.add('rail-panel-files');
 
+		// Recents sits at the HEAD of the pane, above the filter box (fix round 2 / R-1). Position is not what
+		// made a double-click pin the wrong document - a band that changes size is, wherever it sits, because the
+		// second click can land anywhere the first one could. That is held by the gesture guard now, which frees
+		// this to be decided on merit: "get me back to what I was doing" is the highest-traffic control in the
+		// pane, so it belongs where the hand starts and the eye lands, not below the scroll of a long tree. The
+		// pane then reads top-down as "where you were" -> "find one" -> "the folder itself".
+		this._renderRecentStrip(panel, documents);
+
 		// The type-to-filter field (P4.2, the folded-in Search): a quiet input that narrows the tree rows live.
 		// It captures keystrokes only when it holds focus, so typing in the editor never triggers it (plan-42
 		// quiet-shell focus discipline). Rendered above the tree so the filter reads as part of the Files pane.
@@ -296,13 +340,6 @@ export class TreeRailView extends ViewPane {
 			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.treeRail.noMatches', "No documents match '{0}'.", this._filter.trim());
 		}
 
-		// Recents sit at the FOOT of the pane, BELOW the tree (plan 52 WP-D2, fix round 1 / R-1). Above the tree
-		// they were a click-targeting bug: the strip is content-sized, so opening a document grew it by 24px and
-		// pushed the whole tree down - between click 1 and click 2 of a double-click the row under the cursor
-		// changed, and the gesture pinned a document the user never aimed at. Below the tree, growth eats from the
-		// tree's flex HEIGHT instead of moving its ORIGIN, so no rendered row ever shifts under the pointer. It is
-		// rendered before the tree is laid out so `_layoutFilesTree` measures the height the tree actually gets.
-		this._renderRecentStrip(panel, documents);
 		if (!visible.length) { return; }
 		this._layoutFilesTree();
 		this._highlightActiveDoc();
@@ -319,10 +356,12 @@ export class TreeRailView extends ViewPane {
 	 * 24px rows shows five full titles in ~140px, reads at a glance, and folds away to a single caption line
 	 * when it is not wanted (the fold persists, sharing the same collapse set the tree's folders use).
 	 *
-	 * Why BELOW the tree rather than above the filter box (fix round 1 / R-1): a content-sized band above a list
-	 * moves the list every time it gains a row, and a list that moves between the two clicks of a double-click
-	 * pins whatever slid under the cursor. Below the tree the same growth shrinks the tree's viewport instead of
-	 * moving its origin, so nothing the user is pointing at can move.
+	 * Where it sits, and why that is NOT what keeps a double-click honest (fix round 2 / R-1): a band that changes
+	 * size moves click targets wherever it is put. Above the tree it moved the tree's rows; below the tree it moved
+	 * its OWN rows into the space the tree gave up - and every strip row opens a different document, so that was
+	 * the worse of the two. What actually protects the gesture is `ClickGestureGuard`: no redraw at all lands
+	 * between the two clicks. With that held separately, the strip sits where it belongs - at the head of the pane,
+	 * where the hand starts - rather than where the geometry hurt least.
 	 *
 	 * Why it hides below two entries: see `RECENT_STRIP_MIN`. The strip deliberately keeps the ACTIVE document a
 	 * row too - marked, not hidden - so the band reads as "where you are, and where you just were".
@@ -331,18 +370,6 @@ export class TreeRailView extends ViewPane {
 		const items = buildRecentDocItems(documents.map(d => this._toDocInput(d)), this._recentDocResources(documents));
 		if (!items.length) { return; } // nothing worth a jump-list yet: the strip is absent, not an empty box
 		const strip = append(panel, $('div.rail-recent'));
-		// A jump-list must not re-order under the pointer. Opening a document moves it to the front of the MRU, so
-		// without this the strip had the SAME defect R-1 fixes in the tree: click 1 of a double-click on row 3
-		// promotes that document to row 1, and click 2 lands on whatever slid down into row 3. While the pointer
-		// is over the band its rows are frozen exactly as drawn; leaving re-renders and lets the MRU catch up.
-		this._renderDisposables.add(addDisposableListener(strip, 'mouseenter', () => {
-			this._recentFrozen = items.map(i => i.resource!);
-		}));
-		this._renderDisposables.add(addDisposableListener(strip, 'mouseleave', () => {
-			if (!this._recentFrozen) { return; }
-			this._recentFrozen = undefined;
-			void this._render();
-		}));
 		const collapsed = this._collapsedFolders.has(RECENT_STRIP_ID);
 		const head = append(strip, $('button.rail-recent-head')) as HTMLButtonElement;
 		head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
@@ -468,10 +495,10 @@ export class TreeRailView extends ViewPane {
 	//     alone reported exactly one recent no matter how many documents had been visited;
 	//  2. the editor history - the fallback for documents opened BEFORE this rail was created (the rail is a lazy
 	//     view, so a session can be under way by the time it first renders) and for restored editors.
-	// Entries that are not documents in the current folder set are left for the pure module to drop. While the
-	// pointer rests on the strip the frozen order is returned instead, so the band cannot move under the cursor.
+	// Entries that are not documents in the current folder set are left for the pure module to drop. Nothing is
+	// frozen here any more (fix round 1 froze the band while the pointer hovered it): a hover-scoped freeze is
+	// defeated by any excursion between the two clicks, and the gesture-scoped guard holds the whole redraw.
 	private _recentDocResources(documents: readonly ILivingDocSummary[]): URI[] {
-		if (this._recentFrozen) { return [...this._recentFrozen]; }
 		const docKeys = new Set(documents.map(d => d.resource.toString()));
 		const out: URI[] = [];
 		const seen = new Set<string>();
@@ -554,6 +581,10 @@ export class TreeRailView extends ViewPane {
 				// built-in Explorer does with `e.editorOptions.pinned`; before WP-F this site hard-coded
 				// `pinned: true`, which is why no tab was ever a preview. Focus is the one place the fork's own
 				// behaviour is kept: a keyboard open moves focus into the document, a mouse open leaves it here.
+				//
+				// Remember that THIS TREE opened it, so the highlight that follows does not scroll the tree to a
+				// row the user just picked out of it (fix round 2 / R-1).
+				this._treeOpened = el.item.resource.toString();
 				void this._editors.openEditor({
 					resource: el.item.resource,
 					options: { pinned: e.editorOptions.pinned, preserveFocus: e.browserEvent?.type === 'keydown' ? false : e.editorOptions.preserveFocus },
@@ -601,10 +632,17 @@ export class TreeRailView extends ViewPane {
 
 	// Reveal + select the active document's node so the open document is highlighted in the tree (issue #171).
 	// Ancestor folders are expanded (transiently, without persisting) so the highlighted row is actually visible.
+	//
+	// The SCROLL is skipped when this tree is what opened the document (fix round 2 / R-1). A reveal exists for
+	// navigation the user did not initiate in this list - a jump from the strip, a tab, the quick switcher, an
+	// agent. When they clicked the row themselves it was already in front of them, and scrolling it "into view"
+	// only throws away the place they had scrolled to: on a 30-document tree a click on the last row pulled the
+	// tree ~690px back to the top. Selection and focus still move, so the row is still marked.
 	private _highlightActiveDoc(): void {
 		const tree = this._filesTree;
 		if (!tree) { return; }
 		const resource = this._editors.activeEditor?.resource;
+		if (this._treeOpened && this._treeOpened !== resource?.toString()) { this._treeOpened = undefined; }
 		if (!resource) { tree.setSelection([]); return; }
 		let match: ITreeRailLeafNode | undefined;
 		let ancestors: ITreeRailNode[] = [];
@@ -624,7 +662,7 @@ export class TreeRailView extends ViewPane {
 		} finally {
 			this._suppressCollapsePersist = false;
 		}
-		tree.reveal(match);
+		if (this._treeOpened !== resource.toString()) { tree.reveal(match); }
 		tree.setSelection([match]);
 		tree.setFocus([match]);
 	}
@@ -1165,12 +1203,13 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-tab.active{font-weight:600;color:#1A1C20;background:#fff;box-shadow:0 1px 2px rgba(20,22,28,.05)}
 		.living-docs-rail .rail-new-doc{flex:none;border:none;background:none;cursor:pointer;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:7px;font:400 15px/1 system-ui;color:#868B95}
 		.living-docs-rail .rail-new-doc:hover{background:#EEF0F3;color:#52575F}
-		/* The Recent strip (plan 52 WP-D2): a compact band at the FOOT of the Files pane - a caption row that folds
+		/* The Recent strip (plan 52 WP-D2): a compact band at the HEAD of the Files pane - a caption row that folds
 		   it away, then up to five 24px rows. Deliberately quieter and denser than a tree row (24px vs 30px, 12.5px
-		   vs 13px type) so it reads as a jump-list beside the tree, never as a second copy of it. It sits BELOW the
-		   tree (fix round 1 / R-1) so that gaining a row shrinks the tree's viewport instead of pushing the tree's
-		   origin down - a list that moves between the two clicks of a double-click pins the wrong document. */
-		.living-docs-rail .rail-recent{flex:none;display:flex;flex-direction:column;padding:6px 4px 2px;border-top:1px solid #F1F2F6;margin-top:6px}
+		   vs 13px type) so it reads as a jump-list above the tree, never as a second copy of it. A hairline below
+		   it separates "where you were" from the filter + the folder itself. Its size still changes as the MRU
+		   fills, and that is safe now for a reason that has nothing to do with CSS: no redraw lands between the two
+		   clicks of a double-click (fix round 2 / R-1, the ClickGestureGuard). */
+		.living-docs-rail .rail-recent{flex:none;display:flex;flex-direction:column;padding:2px 4px 6px;border-bottom:1px solid #F1F2F6;margin-bottom:6px}
 		.living-docs-rail .rail-recent-head{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;height:22px;padding:0 4px;border:none;background:none;cursor:pointer;border-radius:6px;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;text-align:left}
 		.living-docs-rail .rail-recent-head:hover{background:#F1F2F6;color:#868B95}
 		.living-docs-rail .rail-recent-twistie{flex:none;width:10px;font-size:10px;line-height:1;color:#A3A8B2}

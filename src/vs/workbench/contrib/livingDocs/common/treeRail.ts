@@ -521,17 +521,30 @@ export function sourceMeta(item: ITreeRailItem): ISourceMeta | undefined {
  * True when a source a document BINDS is no longer in the folder - the phantom row the app's own `Delete…`
  * leaves behind (it removes the file but not the `sources:` frontmatter that names it).
  *
- * `presentFiles` is the workspace-extras scan (`listWorkspaceExtras`): every non-Markdown file the folder
- * holds, at any depth, as a basename. The check is deliberately conservative in BOTH directions - it compares
- * basenames (a source may be written `data/metrics.csv` in frontmatter while the scan lists `metrics.csv`),
- * and it only claims "missing" for a file the scan WOULD have collected had it been there (`classifyWorkspaceExtra`
- * accepts its extension). A `.parquet` or a bound `.md`, which the scan never lists, is therefore never
- * accused of being gone - an unknown answer stays silent rather than becoming a wrong one.
+ * `presentFiles` is the workspace-extras scan (`listWorkspaceExtras`): the non-Markdown files the folder holds,
+ * as BASENAMES, from a walk bounded at four directory levels that skips dot-directories, `out/` and
+ * `node_modules/`. That set can only answer one question honestly - "is there a file of this name in the part
+ * of the folder we walk?" - so "missing" is claimed for exactly the sources it can answer for, and for no
+ * others. Three gates, each closing a way of accusing a source that is not meant to be a local file at all:
+ *
+ *  - a source whose kind is not `file` has no local file BY DESIGN. A remote `https://…/data.csv` feed is an
+ *    `api` source (`sourceKindOf`); reading its URL's tail as a filename and looking for it on disk accused
+ *    every remote source of having been deleted;
+ *  - a source written as a PATH (`data/metrics.csv`, `out/build.json`) cannot be judged against a set of
+ *    basenames: the scan never collects `out/` or `node_modules/`, and stops at four levels, so an absent
+ *    basename there means "not walked", not "not there";
+ *  - a source whose extension the scan would not have collected anyway (`.parquet`, a bound `.md`) is absent
+ *    from the set for a reason that has nothing to do with the file existing.
+ *
+ * What is left is the case the set does answer: a plain filename beside a document the same bounded walk found,
+ * of a kind the walk collects, that the walk did not see. An unknown answer stays silent rather than becoming a
+ * wrong one - a source that is not meant to be a local file must never be reported missing.
  */
 export function isMissingSource(label: string, presentFiles: ReadonlySet<string>): boolean {
-	const name = label.slice(label.lastIndexOf('/') + 1);
-	if (presentFiles.has(name)) { return false; }
-	return classifyWorkspaceExtra(name) !== undefined;
+	if (sourceKindOf(label) !== 'file') { return false; }
+	if (/[\\/]/.test(label)) { return false; }
+	if (presentFiles.has(label)) { return false; }
+	return classifyWorkspaceExtra(label) !== undefined;
 }
 
 /**
