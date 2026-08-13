@@ -601,6 +601,17 @@ export interface IChatMessage {
 	// is the plain-words cap message, proposals already queued stay reviewable, and the run screen marks the
 	// not-yet-run documents skipped (they never ran) - NOT failed, and NOT a "no change" all-clear (F14 item 3).
 	readonly paused?: boolean;
+	// --- read back from workspace storage on a relaunch (plan 52 WP-B residuals, issue #312) ---
+	// True for a turn RESTORED from storage rather than produced in this session. A restored turn is a record,
+	// never a replay: nothing re-runs, and the rail reads this to stay honest about what it can no longer show.
+	readonly restored?: boolean;
+	// How many changes a restored assistant turn proposed. Pending changes are in-memory only, so a restart
+	// clears them and their ids would be dead pointers - the count is stored instead, and the rail prints an
+	// honest line in the pointers' place (see `chatTranscripts.ts`).
+	readonly proposedCount?: number;
+	// True when the stored body was clipped by the per-message character cap, so the rail can say the answer
+	// is shortened rather than present a truncated reply as the whole of it.
+	readonly clipped?: boolean;
 }
 
 /** The in-flight streaming turn for a document: the prose accumulated so far + the tool steps as they settle. */
@@ -1413,6 +1424,12 @@ export interface ILivingDocsService {
 	getChatSessionsMentioning(resource: URI): readonly IChatSession[];
 
 	getChatMessages(resource: URI): readonly IChatMessage[];
+	/**
+	 * How many earlier messages of the ACTIVE chat the workspace-storage caps dropped (0 when none were).
+	 * The rail opens a restored conversation with an honest line naming this count rather than presenting a
+	 * trimmed transcript as the whole of it. See `chatTranscripts.ts` for the caps themselves.
+	 */
+	getDroppedChatMessages(): number;
 	/** The files a `@mention` can attach for a document: its linked sources + context files. */
 	getMentionableFiles(resource: URI): readonly string[];
 	/** True while a chat reply is in flight for a document (renders the "working" indicator). */

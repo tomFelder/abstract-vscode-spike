@@ -18,6 +18,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IInlineWidgetReport } from '../common/changePointer.js';
 import { attachToSession, closeSession as closeSessionInList, createSession, deserialiseSessions, IChatSession, serialiseSessions, sessionsMentioning, titleSession } from '../common/chatSessions.js';
+import { deserialiseTranscripts, serialiseTranscripts } from '../common/chatTranscripts.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHostService } from '../../../services/host/browser/host.js';
@@ -261,8 +262,12 @@ const DOC_LAST_VIEWED_KEY = 'livingDocs.docLastViewed';
 // machine may run a different broker/subscription). The value is a model id validated against /models on use.
 const SELECTED_MODEL_KEY = 'livingDocs.v2.model';
 // The workspace's chat session list (plan 52 WP-B): tab metadata only - titles, attach sets, which tab was
-// active - so a relaunch restores the strip. Message bodies stay in memory, as they always have.
+// active - so a relaunch restores the strip.
 const CHAT_SESSIONS_KEY = 'livingDocs.chatSessions';
+// The message bodies for those sessions (plan 52 WP-B residuals, issue #312), kept under their own key so
+// the strip - a few hundred bytes that must always survive - is never at the mercy of a large transcript.
+// Bounded by the caps in `chatTranscripts.ts`, which also count whatever they drop so the rail can say so.
+const CHAT_TRANSCRIPTS_KEY = 'livingDocs.chatTranscripts';
 // Per-workspace set of source ids whose staleness the user marked "as expected" (K3.1, plan 49-a). Stored as
 // a JSON string array so a marked source is calmed to context-grey in the registry across reloads without
 // ever auto-fixing it. Workspace-scoped: the acknowledgement is about THIS project's sources.
@@ -521,11 +526,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// out from under the user; chats now belong to the workspace and documents join them via @-mention/attach.
 	// Kept in the service so the rail survives re-renders and tab switches; the key is the session id.
 	private readonly _chats = new Map<string, IChatMessage[]>();
-	// The workspace's chat sessions and which one the rail is showing (plan 52 WP-B). The list metadata is
-	// persisted to workspace storage so a relaunch restores the tab strip; the message bodies above are not.
+	// The workspace's chat sessions and which one the rail is showing (plan 52 WP-B). Both the list metadata
+	// and (since issue #312) the message bodies above are persisted to workspace storage, so a relaunch
+	// restores the tab strip AND the conversations under it - never a correct title over an empty transcript.
 	private _chatSessions: IChatSession[] = [];
 	private _activeChatSession: string | undefined;
 	private _chatSessionsLoaded = false;
+	// How many earlier messages each session has lost to the transcript caps, per session id. Restored from
+	// storage and updated on every save, so a trimmed conversation opens with an honest count of what is gone.
+	private readonly _chatDropped = new Map<string, number>();
 	private readonly _chatBusy = new Set<string>();
 	// The cancellation source for each document's in-flight streaming reply (plan 27), keyed like _chats.
 	// Present only while a reply streams; cancelChat cancels it, sendChatMessage disposes it in its finally.
@@ -5305,10 +5314,51 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const restored = deserialiseSessions(this._storage.get(CHAT_SESSIONS_KEY, StorageScope.WORKSPACE));
 		this._chatSessions = restored.sessions;
 		this._activeChatSession = restored.activeId;
+		this._loadChatTranscripts();
+	}
+
+	/**
+	 * Fill the in-memory conversations from workspace storage, in the SAME breath as the strip - the two are
+	 * halves of one restore, and separating them is what produced three correctly-titled tabs over three empty
+	 * chats (issue #312). This is a read and nothing else: no model is called, no proposal is queued and no
+	 * audit row is written, so reopening a workspace replays nothing. A transcript whose session did not
+	 * survive (a chat closed before the app was) is simply dropped on the floor here.
+	 */
+	private _loadChatTranscripts(): void {
+		const stored = deserialiseTranscripts(this._storage.get(CHAT_TRANSCRIPTS_KEY, StorageScope.WORKSPACE));
+		for (const session of this._chatSessions) {
+			const messages = stored.transcripts.get(session.id);
+			if (messages && messages.length) { this._chats.set(session.id, messages); }
+			const dropped = stored.dropped.get(session.id) ?? 0;
+			if (dropped) { this._chatDropped.set(session.id, dropped); }
+		}
 	}
 
 	private _saveChatSessions(): void {
 		this._storage.store(CHAT_SESSIONS_KEY, serialiseSessions(this._chatSessions, this._activeChatSession), StorageScope.WORKSPACE, StorageTarget.USER);
+	}
+
+	/**
+	 * Persist the conversations, bounded by the caps in `chatTranscripts.ts`. The ORDER handed to the writer is
+	 * the design decision: the chat you are in first, then the newest chats, because the shared budget is filled
+	 * in that order - the same rule the tab strip follows when it guarantees the active tab is on screen. What
+	 * the caps drop is counted per session and kept here, so the count survives the next save/restore cycle.
+	 */
+	private _saveChatTranscripts(): void {
+		const activeId = this._activeChatSession;
+		const ordered = [...this._chatSessions].sort((a, b) => {
+			if (a.id === activeId) { return -1; }
+			if (b.id === activeId) { return 1; }
+			return b.createdAt - a.createdAt;
+		});
+		const { raw, dropped } = serialiseTranscripts(ordered.map(session => ({
+			id: session.id,
+			messages: this._chats.get(session.id) ?? [],
+			dropped: this._chatDropped.get(session.id) ?? 0,
+		})));
+		this._chatDropped.clear();
+		for (const [id, count] of dropped) { this._chatDropped.set(id, count); }
+		this._storage.store(CHAT_TRANSCRIPTS_KEY, raw, StorageScope.WORKSPACE, StorageTarget.USER);
 	}
 
 	/**
@@ -5369,6 +5419,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chatCancellers.get(id)?.dispose();
 		this._chatCancellers.delete(id);
 		this._chatStreaming.delete(id);
+		this._chatDropped.delete(id);
+		// The closed chat's stored transcript goes with it, before any early return below - closing a tab and
+		// reopening the workspace must not resurrect the conversation the user just got rid of.
+		this._saveChatTranscripts();
 		if (!this._chatSessions.length) { this.newChatSession(); return; }
 		this._saveChatSessions();
 		this._onDidChange.fire();
@@ -5423,6 +5477,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	getChatMessages(_resource: URI): readonly IChatMessage[] {
 		return this._chats.get(this._chatKey()) ?? [];
+	}
+
+	/** How many earlier messages the storage caps dropped from the ACTIVE chat (0 when nothing was lost). */
+	getDroppedChatMessages(): number {
+		return this._chatDropped.get(this._chatKey()) ?? 0;
 	}
 
 	// --- working set (plan 18): the documents a chat instruction edits across ---
@@ -5502,6 +5561,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const mentions = this._parseMentions(resource, trimmed);
 		const shown = (displayText ?? '').trim();
 		history.push({ role: 'user', content: shown || trimmed, prompt: shown ? trimmed : undefined, mentions: mentions.length ? mentions : undefined });
+		// Persist the question the moment it is asked (issue #312). If the app is closed while the reply is
+		// still streaming, the workspace reopens showing what was asked - and the rail says plainly that the
+		// answer never landed - rather than losing the turn as though it was never typed.
+		this._saveChatTranscripts();
 
 		// Plan 42 slice L2 - model access moves to first AI use. When no backend is configured yet, this is the
 		// first-AI-use moment: rather than answering with the honest "model unavailable" line, HOLD the prompt and
@@ -5814,6 +5877,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (cancellers.get(chatKey) === cts) { cancellers.delete(chatKey); }
 			this._chatStreaming.delete(chatKey);
 			this._chatBusy.delete(chatKey);
+			// One save per settled turn, whatever the outcome (an answer, an honest fallback, a stop, a failure):
+			// every branch above pushes its turn before landing here, so the stored transcript matches the rail.
+			this._saveChatTranscripts();
 			this._onDidChange.fire();
 		}
 	}

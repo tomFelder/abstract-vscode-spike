@@ -30,11 +30,54 @@ export interface IChatSession {
 }
 
 /**
- * The default number of tabs the strip shows before the rest fold into the overflow menu. Three, not four:
- * the chat rail is ~300px wide, and a fourth tab left nothing legible per tab once the + and the overflow
- * chip took their room (caught in the live walk - the fourth tab clipped past the panel edge).
+ * The number of tabs the strip shows when nobody has told us how wide the rail is (the first render, before
+ * the pane has laid out). Once a real width is known, `visibleTabCap` below decides instead - a fixed count
+ * is a guess, and this one guessed wrong: at three tabs in the default rail width the third collapsed to a
+ * single letter and an ellipsis, which is a tab you cannot choose deliberately.
  */
 export const VISIBLE_TAB_CAP = 3;
+
+/**
+ * The narrowest a chat tab may be drawn and still be CHOOSABLE: enough room for the first word or two of the
+ * title plus its close box. This is the number the many-tab design turns on - rather than squeezing N tabs
+ * into whatever space exists, the strip works out how many tabs of at least this width fit and folds the
+ * rest into the overflow menu, where they keep their full titles.
+ */
+export const MIN_TAB_WIDTH = 96;
+
+/**
+ * The most tabs shown at any width. Past this a strip stops being a glance and becomes a list, and the
+ * overflow menu - which shows full, untruncated titles - is the better reading of "I have a lot of chats".
+ */
+export const MAX_VISIBLE_TABS = 5;
+
+/** Room the strip's own padding, the trailing "+" and (when there is overflow) the "N more" chip take. */
+const STRIP_PADDING = 16;
+const NEW_CHAT_WIDTH = 30;
+const OVERFLOW_WIDTH = 62;
+
+/**
+ * How many tabs fit in a strip `stripWidth` px wide, given how many chats there are. Pure arithmetic so the
+ * rule is unit-tested rather than eyeballed in a running app:
+ *
+ * - every visible tab is at least `MIN_TAB_WIDTH` wide, so no tab is ever drawn as one letter + an ellipsis;
+ * - the trailing "+" always keeps its room, so "new chat" never disappears at a narrow width;
+ * - the "N more" chip is only paid for when something actually overflows;
+ * - at least one tab is always shown, even in a rail too narrow for it - the alternative is a strip that
+ *   hides the conversation you are in, and `splitTabs` guarantees that one tab is the active one.
+ */
+export function visibleTabCap(stripWidth: number, sessionCount: number): number {
+	if (sessionCount <= 0) { return 0; }
+	// No measurement yet (the first render, or a hidden pane): fall back to the fixed count rather than
+	// computing a cap of 1 from a width of 0 and flashing a one-tab strip before the first layout.
+	if (!Number.isFinite(stripWidth) || stripWidth <= 0) { return Math.min(sessionCount, VISIBLE_TAB_CAP); }
+	const usable = Math.max(0, stripWidth - STRIP_PADDING - NEW_CHAT_WIDTH);
+	const fitsEverything = Math.floor(usable / MIN_TAB_WIDTH);
+	if (fitsEverything >= sessionCount) { return Math.min(sessionCount, MAX_VISIBLE_TABS); }
+	// Something has to overflow, so the "N more" chip is real and takes its room out of the tabs' share.
+	const withOverflow = Math.floor(Math.max(0, usable - OVERFLOW_WIDTH) / MIN_TAB_WIDTH);
+	return Math.max(1, Math.min(withOverflow, MAX_VISIBLE_TABS));
+}
 
 /** The longest a derived tab title gets before it is elided (the strip is narrow; a tab is a glance). */
 const TITLE_MAX = 28;
