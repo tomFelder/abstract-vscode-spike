@@ -1087,7 +1087,7 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-recent{flex:none;display:flex;flex-direction:column;padding:2px 4px 6px;border-bottom:1px solid #F1F2F6;margin-bottom:6px}
 		.living-docs-rail .rail-recent-head{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;height:22px;padding:0 4px;border:none;background:none;cursor:pointer;border-radius:6px;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;text-align:left}
 		.living-docs-rail .rail-recent-head:hover{background:#F1F2F6;color:#868B95}
-		.living-docs-rail .rail-recent-twistie{flex:none;width:9px;font-size:8px;line-height:1;color:#A3A8B2}
+		.living-docs-rail .rail-recent-twistie{flex:none;width:10px;font-size:10px;line-height:1;color:#A3A8B2}
 		.living-docs-rail .rail-recent-count{margin-left:auto;flex:none;letter-spacing:0;color:#C2C6CE}
 		.living-docs-rail .rail-recent-item{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:24px;padding:0 8px;border:none;background:none;cursor:pointer;border-radius:6px;font:400 12.5px/1 system-ui;color:#52575F;text-align:left}
 		.living-docs-rail .rail-recent-item:hover{background:#F1F2F6;color:#26292F}
@@ -1157,7 +1157,11 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-item-glyph{color:oklch(0.55 0.13 255);flex:none}
 		.living-docs-rail .rail-item-source .rail-item-glyph{color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-		.living-docs-rail .rail-item-detail{margin-left:auto;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
+		/* The row's trailing detail is a single quiet line, never a wrapping block: without flex:none + nowrap a
+		   long detail ("live - feeds 2 blocks") wrapped to two lines and crushed the source name beside it to
+		   "metrics....". The name takes the slack instead and ellipsises if it must. */
+		.living-docs-rail .rail-item .rail-item-label{flex:1}
+		.living-docs-rail .rail-item-detail{margin-left:auto;flex:none;white-space:nowrap;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
 		/* The ONE freshness vocabulary's tones (#122 F12), written once for BOTH surfaces that draw a source row:
 		   the Files tree's leaf renderer and the Context tab's workspace sources. The tree's own meta rule is one
 		   class deeper (.rail-files-tree), so each tone is stated at both depths rather than fought with !important. */
@@ -1173,7 +1177,7 @@ export class TreeRailView extends ViewPane {
 		/* The Assets bucket (issue #171): one collapsible row standing in for every un-bound screenshot. */
 		.living-docs-rail .rail-bucket{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;height:26px;padding:0 8px;border:none;background:none;cursor:pointer;border-radius:6px;font:600 12px/1 system-ui;color:#52575F;text-align:left}
 		.living-docs-rail .rail-bucket:hover{background:#F1F2F6}
-		.living-docs-rail .rail-bucket-twistie{flex:none;width:9px;font-size:8px;line-height:1;color:#A3A8B2}
+		.living-docs-rail .rail-bucket-twistie{flex:none;width:10px;font-size:10px;line-height:1;color:#A3A8B2}
 		.living-docs-rail .rail-item-snippet{width:100%;padding-left:0;font:400 11.5px/1.5 system-ui;color:var(--vscode-descriptionForeground)}
 			.living-docs-rail .rail-item-unsupported{align-items:flex-start;flex-wrap:wrap;cursor:default}
 			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:var(--vscode-descriptionForeground)}
