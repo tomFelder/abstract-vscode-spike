@@ -1026,9 +1026,11 @@ export class ReviewRailView extends ViewPane {
 		const { visible, overflow } = splitTabs(sessions, activeId, this._chatTabCap());
 
 		const strip = append(content, $('div'));
-		// `overflow:hidden` is the belt to the cap's braces: a tab that ran past the panel edge (as the first
-		// cut did) reads as a broken layout, not as "there are more chats".
-		strip.style.cssText = 'display:flex;align-items:center;gap:4px;padding:6px 8px 0;border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);flex:0 0 auto;overflow:hidden';
+		// The strip carries a faint ground of its own so the active tab - which is the rail's own background -
+		// reads as a TAB lifted out of it. Without it, a single white tab on a white rail reads as a text field
+		// (caught in the live walk of the one-chat state). `overflow:hidden` is the belt to the cap's braces: a
+		// tab that ran past the panel edge (as the first cut did) reads as a broken layout, not as "more chats".
+		strip.style.cssText = 'display:flex;align-items:center;gap:4px;padding:6px 8px 0;background:var(--vscode-editorGroupHeader-tabsBackground,#f4f5f8);border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);flex:0 0 auto;overflow:hidden';
 
 		const soleTab = sessions.length === 1;
 		for (const session of visible) {
