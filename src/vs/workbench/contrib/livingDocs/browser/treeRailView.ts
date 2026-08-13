@@ -1247,11 +1247,14 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		/* The row's trailing detail is a single quiet line, never a wrapping block: without nowrap a long detail
 		   ("live - feeds 2 blocks") wrapped to two lines and crushed the source name beside it to "metrics....".
-		   When the row still cannot fit both, the DETAIL yields (shrink 20 against the name's 1) and ellipsises -
-		   its freshness word leads, so "stale - feeds..." keeps the part that matters while the file's own name,
-		   which is the row's identity, stays whole. */
+		   When the row still cannot fit both, the DETAIL yields and ellipsises - its freshness word leads, so
+		   "stale - feeds..." keeps the part that matters while the file's own name, which is the row's identity,
+		   stays whole. Flexbox distributes shrink in proportion to (factor x basis), so a factor of 20 still left
+		   the NAME absorbing about 2.5% of the overflow - which is exactly why "metrics.csv" still ellipsised, by
+		   half a pixel (label box 68.9px against 69.4px needed). At 200 the name's share of any realistic overflow
+		   is sub-pixel and rounds away, which is what "the detail yields FIRST" was always meant to say. */
 		.living-docs-rail .rail-item .rail-item-label{flex:1 1 auto}
-		.living-docs-rail .rail-item-detail{margin-left:auto;flex:0 20 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
+		.living-docs-rail .rail-item-detail{margin-left:auto;flex:0 200 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
 		/* The ONE freshness vocabulary's tones (#122 F12), written once for BOTH surfaces that draw a source row:
 		   the Files tree's leaf renderer and the Context tab's workspace sources. The tree's own meta rule is one
 		   class deeper (.rail-files-tree), so each tone is stated at both depths rather than fought with !important. */
