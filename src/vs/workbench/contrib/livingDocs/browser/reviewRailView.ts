@@ -1018,8 +1018,10 @@ export class ReviewRailView extends ViewPane {
 	 * empty), so an × there would promise something it cannot do. Start a new chat with "+" instead.
 	 */
 	private _renderChatTabs(content: HTMLElement): void {
-		const sessions = this._livingDocs.getChatSessions();
+		// The active session is asked for FIRST because asking is what creates one in a workspace that has never
+		// chatted - read the list first and this render would draw an empty strip and wait for an event to fix it.
 		const activeId = this._livingDocs.getActiveChatSession();
+		const sessions = this._livingDocs.getChatSessions();
 		if (!sessions.length) { return; }
 		const { visible, overflow } = splitTabs(sessions, activeId, this._chatTabCap());
 

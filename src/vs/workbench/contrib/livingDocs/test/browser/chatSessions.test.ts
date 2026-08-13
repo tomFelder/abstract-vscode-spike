@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { attachToSession, closeSession, createSession, deserialiseSessions, detachFromSession, IChatSession, serialiseSessions, sessionsMentioning, splitTabs, titleFromMessage, titleSession, VISIBLE_TAB_CAP } from '../../common/chatSessions.js';
+import { attachToSession, closeSession, createSession, deserialiseSessions, detachFromSession, IChatSession, MAX_VISIBLE_TABS, MIN_TAB_WIDTH, serialiseSessions, sessionsMentioning, splitTabs, titleFromMessage, titleSession, visibleTabCap, VISIBLE_TAB_CAP } from '../../common/chatSessions.js';
 
 suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -103,6 +103,48 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 			buriedHoldsActive: true,
 			buriedOverflowExcludesActive: true,
 			underCap: 0,
+		});
+	});
+
+	test('how many tabs the strip shows is derived from its real width, so no tab is ever unchoosable', () => {
+		// The residual this rule exists to fix (#312): a fixed cap of three squeezed the third tab in the default
+		// rail down to one letter and an ellipsis. A tab is only shown if it can be at least MIN_TAB_WIDTH wide.
+		const cap = (width: number, count: number) => visibleTabCap(width, count);
+		assert.deepStrictEqual({
+			// The default rail (~300px): two readable tabs and a "1 more" chip, never three unreadable ones.
+			defaultRailThreeChats: cap(300, 3),
+			defaultRailTwoChats: cap(300, 2),
+			// A wide rail earns more tabs, up to the point where a strip stops being a glance.
+			wideRail: cap(900, 8),
+			// A rail too narrow for even one full-width tab still shows one - `splitTabs` makes it the active one.
+			veryNarrow: cap(120, 4),
+			// Nothing measured yet (before the first layout) falls back to the fixed count rather than to 1.
+			unmeasured: cap(0, 4),
+			noChats: cap(300, 0),
+		}, {
+			defaultRailThreeChats: 2,
+			defaultRailTwoChats: 2,
+			wideRail: MAX_VISIBLE_TABS,
+			veryNarrow: 1,
+			unmeasured: VISIBLE_TAB_CAP,
+			noChats: 0,
+		});
+	});
+
+	test('every tab the width-derived cap shows has room to be read, and the rest keep full titles in overflow', () => {
+		const many = Array.from({ length: 6 }, (_, i) => session(`s${i}`, i));
+		const width = 300;
+		const { visible, overflow } = splitTabs(many, 's4', visibleTabCap(width, many.length));
+		assert.deepStrictEqual({
+			visible: visible.map(s => s.id),
+			overflow: overflow.map(s => s.id),
+			// The room each visible tab gets, once the strip's padding, the "+" and the "N more" chip are paid for.
+			roomPerTab: Math.floor((width - 16 - 30 - 62) / visible.length) >= MIN_TAB_WIDTH,
+		}, {
+			// The active tab is pulled into the visible run; the rest keep their full titles in the menu.
+			visible: ['s0', 's4'],
+			overflow: ['s1', 's2', 's3', 's5'],
+			roomPerTab: true,
 		});
 	});
 

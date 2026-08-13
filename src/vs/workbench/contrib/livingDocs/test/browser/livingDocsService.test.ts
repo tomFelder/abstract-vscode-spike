@@ -250,7 +250,7 @@ suite('livingDocs Service', () => {
 	// notice racing ahead and deduping it.
 	let writeExternalNoWatcher: ((resource: URI, content: string) => void) | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		// Correlated watchers registered per resource (issue #133), so `simulateExternalEdit` can fire the same
 		// change event the real file service delivers for an edit made outside Abstract.
@@ -429,7 +429,11 @@ suite('livingDocs Service', () => {
 			},
 		} as unknown as ICommandService;
 
-		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), store.add(new InMemoryStorageService()), commandService, clipboardService, { isVisible: () => false } as unknown as IWorkbenchLayoutService);
+		// A caller can hand in its OWN storage so two services can be built over the same workspace state - which
+		// is what a relaunch is (the process is new; `User/workspaceStorage/` is not). Otherwise each service gets
+		// a fresh, empty store exactly as before.
+		const storage = opts.storage ?? store.add(new InMemoryStorageService());
+		const service = new LivingDocsService(fileService, editorService, viewsService, configurationService, notificationService, new NullLogService(), requestService, workspaceService, fileDialogService, hostService, new NullAnalyticsService(), storage, commandService, clipboardService, { isVisible: () => false } as unknown as IWorkbenchLayoutService);
 		store.add(service);
 		return service;
 	}
@@ -1193,6 +1197,63 @@ suite('livingDocs Service', () => {
 		assert.ok(!user.content.includes('Template brief'), 'the internal template brief never leaks into the rail');
 		assert.ok((user.prompt ?? '').includes('Template brief'), 'the full instruction is kept on the turn for retry');
 		assert.ok((lastModelBody ?? '').includes('Template brief'), 'the model is still driven with the full instruction');
+	});
+
+	test('a chat survives a relaunch: the same workspace storage restores the transcript, and restoring re-runs nothing', async () => {
+		// The residual this proves (issue #312): the strip used to come back without the conversation under it.
+		// A "relaunch" here is exactly what it is in the real app - a new service (new process) over the SAME
+		// workspace storage, since the slim profile clone is the only thing that ever loses `workspaceStorage`.
+		const storage = store.add(new InMemoryStorageService());
+		const before = createService([], { model: chatReply('Highlights, Commentary, What to watch.'), storage });
+		await before.loadDocument(WEEKLY);
+		await before.sendChatMessage(WEEKLY, 'Headings @metrics.csv');
+		const callsWhileChatting = lastModelCalls;
+
+		// createService resets lastModelCalls, so ANY model call made while restoring would show below as
+		// non-zero - the "a restored transcript is a record, not a replay" guarantee, asserted rather than hoped.
+		const after = createService([], { model: chatReply('never asked for'), storage });
+		const restored = after.getChatMessages(WEEKLY);
+
+		assert.deepStrictEqual({
+			callsWhileChatting,
+			transcript: restored.map(m => ({ role: m.role, content: m.content, mentions: m.mentions, restored: m.restored })),
+			// The strip and the conversation are restored together, from one load.
+			tabs: after.getChatSessions().map(s => s.title),
+			callsWhileRestoring: lastModelCalls,
+			proposalsQueuedByRestoring: after.getAllPending().length,
+			droppedMessages: after.getDroppedChatMessages(),
+		}, {
+			callsWhileChatting: 1,
+			transcript: [
+				{ role: 'user', content: 'Headings @metrics.csv', mentions: ['metrics.csv'], restored: true },
+				{ role: 'assistant', content: 'Highlights, Commentary, What to watch.', mentions: undefined, restored: true },
+			],
+			tabs: ['Headings @metrics.csv'],
+			callsWhileRestoring: 0,
+			proposalsQueuedByRestoring: 0,
+			droppedMessages: 0,
+		});
+	});
+
+	test('closing a chat takes its stored transcript with it, so a relaunch never resurrects it', async () => {
+		const storage = store.add(new InMemoryStorageService());
+		const before = createService([], { model: chatReply('Kept for now.'), storage });
+		await before.loadDocument(WEEKLY);
+		await before.sendChatMessage(WEEKLY, 'Headings');
+		const closed = before.getActiveChatSession();
+		before.closeChatSession(closed);
+
+		const after = createService([], { model: chatReply('never asked for'), storage });
+		assert.deepStrictEqual({
+			// Closing the last chat opens a fresh one, so there is exactly one tab - and it is not the closed one.
+			tabs: after.getChatSessions().map(s => s.title),
+			transcript: after.getChatMessages(WEEKLY).length,
+			reopenedTheClosedOne: after.getChatSessions().some(s => s.id === closed),
+		}, {
+			tabs: ['New chat'],
+			transcript: 0,
+			reopenedTheClosedOne: false,
+		});
 	});
 
 	test('getSourcePeek surfaces then-vs-now once the source drifts since last sync (F13)', async () => {
