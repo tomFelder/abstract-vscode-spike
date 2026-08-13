@@ -598,7 +598,35 @@ function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance
 // suffix when a snapshot exists (plan 26 iter 4).
 function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
 function pmOnChange(){ if (_pmEchoSuppressed) { return; } setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
-function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } enrichBoundFigures(); }
+function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } enrichBoundFigures(); reportWidgets(specChangeIds(spec)); }
+// The change ids this decoration pass ASKED for - every pending edit and insertion in the spec.
+function specChangeIds(spec){ const ids = []; if (spec) { const lists = [spec.edits, spec.inserts]; for (let l = 0; l < lists.length; l++) { const arr = lists[l] || []; for (let i = 0; i < arr.length; i++) { if (arr[i] && arr[i].id) { ids.push(arr[i].id); } } } } return ids; }
+// Ground truth for the chat transcript's change pointers (plan 52 WP-A1 fix 1, #301/#300): tell the host
+// which pending changes ACTUALLY have a live inline widget in this document, by looking at the DOM rather
+// than predicting it. The host cannot see inside this iframe, and the rule that places a widget (match the
+// decoration's text anchor against a rendered ProseMirror node) lives in the vendored PM bundle - so a
+// host-side guess at "will this decorate?" was wrong for whole block classes (a list, a table cell), and a
+// pointer built on that guess landed the reader on a block showing nothing at all.
+//
+// Every mounted widget - edit and insert alike - carries the data-approve="changeId" button, which is the
+// very element focusChange scrolls to. So "did a widget mount?" and "can the reader be landed on it?" are
+// literally the same question, asked of the same element. Scoped to pmView.dom so the review bar's own
+// cards (which live in the surrounding chrome and carry the same attribute) are never counted.
+//
+// The requested list rides along because "absent from mounted" on its own is not evidence: a proposal made
+// after this pass simply was not asked for yet, and the host must tell those two states apart.
+// Deferred a tick so a decoration pass that renders its widgets during the view update has finished, and
+// wrapped so a torn-down view can never break a render.
+function reportWidgets(requested){ setTimeout(function(){
+	try {
+		const mounted = [];
+		if (pmView && pmView.dom) {
+			const els = pmView.dom.querySelectorAll('[data-approve]');
+			for (let i = 0; i < els.length; i++) { const id = els[i].getAttribute('data-approve'); if (id) { mounted.push(id); } }
+		}
+		vscode.postMessage({ type: 'pmWidgets', requested: requested || [], mounted: mounted });
+	} catch (e) {}
+}, 0); }
 // Make every bound figure a real, reachable provenance door (#254). The bundle renders it as a plain
 // span.bound atom with no affordance beyond colour; here we give each one a keyboard tab-stop, a button role,
 // and an accessible name/title built from the live provenance so a screen-reader user (and a hover) both learn
@@ -721,7 +749,7 @@ function applyUpdate(htmlStr, pmMd, spec, pmReset){
 			revalidateCellEditor();
 			resolveRelativeImages();
 		} else if (r && window.LWDPM) { teardownCellInput(); mountPm(pmMd, spec); }
-	} else if (pmView) { teardownCellInput(); window.LWDPM.destroy(pmView); pmView = null; }
+	} else if (pmView) { teardownCellInput(); window.LWDPM.destroy(pmView); pmView = null; reportWidgets(specChangeIds(spec)); }
 }
 // The calm formatting toolbar drives the live ProseMirror view through LWDPM.cmd (plan 15 iter 5) - NOT
 // document.execCommand, which PM does not honour. The B/I/list/quote buttons fire on mousedown with

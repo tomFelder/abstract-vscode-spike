@@ -177,6 +177,8 @@ export interface IPmDecorationSpec {
 }
 
 const BIND_LINK_RE = /\[([^\]]*)\]\(bind:([^)\s]+)\)/g;
+
+/** Replace every bind link with its baked value, so the anchor reads as the prose the reader sees. */
 function bindToValue(text: string): string {
 	return text.replace(BIND_LINK_RE, '$1');
 }
@@ -189,6 +191,18 @@ function bindToValue(text: string): string {
 // the host stays the single source of anchor truth (no offline PM-bundle rebuild needed).
 function anchorNormalize(text: string): string {
 	return text.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The exact source text a pending in-place edit anchors on: bind links baked down to their values, then
+ * scoped to the single list item the edit targets when the block is a multi-item list. Newlines are kept
+ * (the caller normalises them) because the multi-line test that drives the gutter bar reads them.
+ *
+ * Exported so the pointer model (`changePointer.ts`) sizes a change off the SAME string the decoration
+ * diffs, and the transcript's "+N -M" can never disagree with the widget's own counts.
+ */
+export function editAnchorSource(change: Pick<IProposedChange, 'oldText' | 'newText'>): string {
+	return scopeBlockEdit(bindToValue(change.oldText), bindToValue(change.newText)).oldText;
 }
 
 /** Word-level diff of `oldText` -> `newText` merged into eq/del/ins runs, with the run counts. */
@@ -257,9 +271,8 @@ export function buildPmDecorationSpec(doc: ILivingDoc, pending: readonly IPropos
 		// When the change targets one item of a list block, scope the anchor + diff to that single `<li>` so
 		// the widget places over the changed item and the word diff never shows the sibling items being
 		// deleted (decision-68 fix, plan 31 iter 1). A scoped `oldText` (already one item) is returned as-is.
-		const oldSource = bindToValue(change.oldText);
 		const newSource = bindToValue(change.newText);
-		const anchorSource = scopeBlockEdit(oldSource, newSource).oldText;
+		const anchorSource = editAnchorSource(change);
 		const anchorText = anchorNormalize(anchorSource);
 		const diff = wordDiffSegments(anchorSource, newSource);
 		// The block's display address (spec 43 section 3.1): resolve the change's durable block id to its current
