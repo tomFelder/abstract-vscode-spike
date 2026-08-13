@@ -10,6 +10,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
 import { TreeRailLeafRenderer } from '../../browser/treeRailFilesTree.js';
+import { ClickGestureGuard, GestureScheduler } from '../../common/clickGesture.js';
 import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, isMissingSource, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_CAP, RECENT_STRIP_MIN, searchTreeRail, sourceKindGlyph, sourceMeta, touchRecentDoc } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
@@ -211,7 +212,6 @@ suite('treeRail', () => {
 				// The existence test is conservative in both directions: it compares basenames (frontmatter may
 				// write a path), and it stays silent about a file the extras scan would never have listed anyway.
 				deletedImage: isMissingSource('chart.png', present),
-				pathWrittenSource: isMissingSource('data/metrics.csv', present),
 				unknownFormatNeverAccused: isMissingSource('warehouse.parquet', present),
 			},
 			{
@@ -221,10 +221,111 @@ suite('treeRail', () => {
 					{ leaf: 'metrics.csv', meta: { text: 'synced', tone: 'synced' } },
 				],
 				deletedImage: true,
-				pathWrittenSource: false,
 				unknownFormatNeverAccused: false,
 			},
 		);
+	});
+
+	test('isMissingSource never accuses a source that is not meant to be a local file, or one the folder scan cannot answer for (fix round 2, C-2b)', () => {
+		// `presentFiles` is the workspace-extras scan: BASENAMES, from a walk bounded at four directory levels
+		// that skips dot-directories, `out/` and `node_modules/`. Every case below is a source that is absent
+		// from that set for a reason other than having been deleted - the set simply cannot see it.
+		const present = new Set(['metrics.csv', 'notes.txt']);
+		assert.deepStrictEqual(
+			{
+				// The real target: a plain filename beside a document, of a kind the scan collects, that the scan
+				// did not see. This is the phantom the app's own `Delete…` leaves behind.
+				deletedNeighbour: isMissingSource('chart.png', present),
+				stillOnDisk: isMissingSource('metrics.csv', present),
+				// A remote feed is an `api` source with NO local file by design. Reading the tail of its URL as a
+				// filename accused every remote source whose URL ends in a data extension of having been deleted.
+				remoteFeed: isMissingSource('https://example.com/live/data.csv', present),
+				remoteFeedNoExtension: isMissingSource('https://example.com/live', present),
+				// A source written as a path cannot be judged against a set of basenames: these three directories
+				// are never walked, so "absent" means "not scanned", not "not there".
+				underOut: isMissingSource('out/build-report.json', present),
+				underNodeModules: isMissingSource('node_modules/pkg/data.csv', present),
+				deeperThanTheScanWalks: isMissingSource('a/b/c/d/e/deep.csv', present),
+				pathWrittenSource: isMissingSource('data/chart.png', present),
+				windowsPathWrittenSource: isMissingSource('data\\chart.png', present),
+				// A file type the scan never collects is absent for a reason that has nothing to do with existence.
+				unknownFormat: isMissingSource('warehouse.parquet', present),
+				boundMarkdown: isMissingSource('board-transcript.md', present),
+			},
+			{
+				deletedNeighbour: true,
+				stillOnDisk: false,
+				remoteFeed: false,
+				remoteFeedNoExtension: false,
+				underOut: false,
+				underNodeModules: false,
+				deeperThanTheScanWalks: false,
+				pathWrittenSource: false,
+				windowsPathWrittenSource: false,
+				unknownFormat: false,
+				boundMarkdown: false,
+			},
+		);
+	});
+
+	test('the click-gesture guard holds a redraw for the whole click sequence, so nothing moves between the two clicks of a double-click (fix round 2, R-1)', () => {
+		// The defect this exists to close: click 1 opens a document, the rail redraws, the geometry under the
+		// cursor changes, and click 2 lands on something the user never aimed at. The guard holds every
+		// event-driven redraw from mousedown until the double-click window has elapsed after mouseup.
+		const disposables = new DisposableStore();
+		// The scheduler is injected rather than stubbed onto a global, so the test drives time itself.
+		let pending: { handler: () => void; delayMs: number; cancelled: boolean } | undefined;
+		const schedule: GestureScheduler = (handler, delayMs) => {
+			const entry = { handler, delayMs, cancelled: false };
+			pending = entry;
+			return { dispose: () => { entry.cancelled = true; } };
+		};
+		const elapse = (): void => {
+			const entry = pending;
+			pending = undefined;
+			if (entry && !entry.cancelled) { entry.handler(); }
+		};
+		let redraws = 0;
+		const guard = disposables.add(new ClickGestureGuard(() => { redraws++; }, 500, 5000, schedule));
+
+		const trace: unknown[] = [];
+		const step = (what: string, held?: boolean) => trace.push({ what, held: held ?? null, inFlight: guard.inFlight, redraws });
+
+		step('idle');
+		// A redraw with no gesture to protect happens immediately - the caller is told to proceed.
+		step('quiet redraw', guard.hold());
+		guard.begin();
+		step('mousedown 1');
+		guard.end();
+		// Click 1 opened a document: the redraw it caused is HELD, so the second click still has its target.
+		step('opened a document', guard.hold());
+		guard.begin();
+		step('mousedown 2 (within the window)');
+		guard.end();
+		step('mouseup 2');
+		elapse();
+		step('window elapsed');
+		// A press held down does not release on a timer - the window only starts when the button comes back up.
+		guard.begin();
+		step('mousedown, held', guard.hold());
+		guard.end();
+		elapse();
+		step('released and elapsed');
+
+		assert.deepStrictEqual(trace, [
+			{ what: 'idle', held: null, inFlight: false, redraws: 0 },
+			{ what: 'quiet redraw', held: false, inFlight: false, redraws: 0 },
+			{ what: 'mousedown 1', held: null, inFlight: true, redraws: 0 },
+			{ what: 'opened a document', held: true, inFlight: true, redraws: 0 },
+			// The second mousedown cancels the pending release, so the held redraw survives the whole gesture.
+			{ what: 'mousedown 2 (within the window)', held: null, inFlight: true, redraws: 0 },
+			{ what: 'mouseup 2', held: null, inFlight: true, redraws: 0 },
+			// One deferred redraw is replayed - not one per event that asked for it.
+			{ what: 'window elapsed', held: null, inFlight: false, redraws: 1 },
+			{ what: 'mousedown, held', held: true, inFlight: true, redraws: 1 },
+			{ what: 'released and elapsed', held: null, inFlight: false, redraws: 2 },
+		]);
+		disposables.dispose();
 	});
 
 	test('buildTreeRailNodes shows EXACTLY the folder hierarchy - no Recent group, no Sources group, no synthetic wrapper (plan 52 WP-D)', () => {
