@@ -10,7 +10,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
 import { TreeRailLeafRenderer } from '../../browser/treeRailFilesTree.js';
-import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_CAP, searchTreeRail, sourceKindGlyph, sourceMeta } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, isMissingSource, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_CAP, RECENT_STRIP_MIN, searchTreeRail, sourceKindGlyph, sourceMeta, touchRecentDoc } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -151,15 +151,79 @@ suite('treeRail', () => {
 		assert.deepStrictEqual(
 			{
 				cap: RECENT_STRIP_CAP,
+				min: RECENT_STRIP_MIN,
 				strip: buildRecentDocItems(docInputs, recent).map(i => i.label),
-				// One recent document is worth a row now: the strip costs one line, where the old in-tree group cost
-				// a whole collapsible level of indent (which is why it used to hide below two).
+				// Two entries is where a jump-list starts being one: it needs somewhere to jump BACK to.
+				pair: buildRecentDocItems(docInputs, [URI.file('/ws/A.md'), URI.file('/ws/B.md')]).map(i => i.label),
+				// A single recent can only be the document you are already in - the active tab, the highlighted tree
+				// row and the strip's own active marker all say it first - so the strip stays away (fix round 1, R-2).
 				single: buildRecentDocItems(docInputs, [URI.file('/ws/A.md')]).map(i => i.label),
 				none: buildRecentDocItems(docInputs, []).map(i => i.label),
 				// Nothing recent-shaped is left in the file tree - the whole point of D2.
 				treeHasNoRecentGroup: buildTreeRailNodes(docInputs).some(n => n.type === 'folder' && /recent/i.test(n.label)),
 			},
-			{ cap: 5, strip: ['F', 'E', 'D', 'C', 'B'], single: ['A'], none: [], treeHasNoRecentGroup: false },
+			{ cap: 5, min: 2, strip: ['F', 'E', 'D', 'C', 'B'], pair: ['A', 'B'], single: [], none: [], treeHasNoRecentGroup: false },
+		);
+	});
+
+	test('touchRecentDoc builds the MRU from documents OPENED, so a single-click preview journey fills the strip (plan 52 WP-D2, fix round 1 R-2)', () => {
+		const A = URI.file('/ws/A.md');
+		const B = URI.file('/ws/B.md');
+		const C = URI.file('/ws/C.md');
+		const docInputs = ['A', 'B', 'C'].map(t => ({ title: t, resource: URI.file(`/ws/${t}.md`), pendingCount: 0, sources: [] }));
+		// The journey that used to leave the strip stuck at one row: three single clicks, each opening a PREVIEW
+		// tab that replaces (and disposes) the last one. Reading surviving editors gave one entry every time;
+		// remembering what was OPENED gives a real MRU, newest first.
+		let mru: readonly URI[] = [];
+		for (const opened of [A, B, C]) { mru = touchRecentDoc(mru, opened); }
+		// Re-opening a document already in the list moves it to the front rather than duplicating it.
+		const revisited = touchRecentDoc(mru, A);
+		assert.deepStrictEqual(
+			{
+				afterThreeSingleClicks: mru.map(r => r.path),
+				revisited: revisited.map(r => r.path),
+				strip: buildRecentDocItems(docInputs, revisited).map(i => i.label),
+				// The memory is bounded: an unbounded list would grow for the whole session.
+				bounded: [A, B, C, A, B].reduce<readonly URI[]>((acc, r) => touchRecentDoc(acc, r, 2), []).map(r => r.path),
+			},
+			{
+				afterThreeSingleClicks: ['/ws/C.md', '/ws/B.md', '/ws/A.md'],
+				revisited: ['/ws/A.md', '/ws/C.md', '/ws/B.md'],
+				strip: ['A', 'C', 'B'],
+				bounded: ['/ws/B.md', '/ws/A.md'],
+			},
+		);
+	});
+
+	test('sourceMeta puts a bound source that is gone from disk in the STALE family, never "synced" (fix round 1, C-2)', () => {
+		// The phantom the app's own `Delete…` leaves: it removes the file but not the `sources:` frontmatter that
+		// names it, so the row survives. It used to read "synced" - asserted purely from a path having been
+		// computed - while the delete dialog had just promised dependents would be "flagged as stale".
+		const present = new Set(['metrics.csv', 'notes.txt']);
+		const nodes = buildWorkspaceSourceNodes(
+			[{ title: 'Weekly Summary', resource: WEEKLY, pendingCount: 0, sources: ['metrics.csv', 'chart.png'] }],
+			[],
+			new Map([['metrics.csv', 'fresh' as const], ['chart.png', 'missing' as const]]),
+		);
+		assert.deepStrictEqual(
+			{
+				rows: nodes.map(n => n.type === 'leaf' ? { leaf: n.item.label, meta: sourceMeta(n.item) } : { folder: n.label }),
+				// The existence test is conservative in both directions: it compares basenames (frontmatter may
+				// write a path), and it stays silent about a file the extras scan would never have listed anyway.
+				deletedImage: isMissingSource('chart.png', present),
+				pathWrittenSource: isMissingSource('data/metrics.csv', present),
+				unknownFormatNeverAccused: isMissingSource('warehouse.parquet', present),
+			},
+			{
+				rows: [
+					// allow-any-unicode-next-line
+					{ leaf: 'chart.png', meta: { text: 'stale · missing', tone: 'stale' } },
+					{ leaf: 'metrics.csv', meta: { text: 'synced', tone: 'synced' } },
+				],
+				deletedImage: true,
+				pathWrittenSource: false,
+				unknownFormatNeverAccused: false,
+			},
 		);
 	});
 

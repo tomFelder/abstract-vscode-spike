@@ -19,6 +19,16 @@ import { docRailDot, IRailDot, sourceRailDot } from './railStatus.js';
 // extracts the PDF's text as read-only context. Absent on rows that are already sources or cannot be used.
 export type TreeRailAction = 'use-xlsx' | 'use-pdf';
 
+/**
+ * The freshness a source row carries into `sourceMeta`. The first three are the product's ONE freshness
+ * vocabulary (`common/sourceFreshness.ts`). `missing` - the file a document binds is no longer on disk - is
+ * NOT a fourth display state: `sourceMeta` presents it in the STALE family with plain words, exactly as
+ * `UNREACHABLE_SOURCE_MARKER` does for a remote source that could not be read. That discipline is what stops
+ * a deleted source from reporting "synced" (which is what it did before), and it keeps the row agreeing with
+ * the delete dialog's own promise that dependents are "flagged as stale (not broken)".
+ */
+export type TreeRailFreshness = 'fresh' | 'stale' | 'context-only' | 'missing';
+
 export interface ITreeRailItem {
 	readonly label: string;
 	/** Present for document rows (clicking opens the editor); absent for non-openable source rows. */
@@ -37,12 +47,13 @@ export interface ITreeRailItem {
 	/** For source rows, the binding kind (file | api | mcp) - drives the row glyph. */
 	readonly sourceKind?: SourceKind;
 	/**
-	 * For source rows, the ONE freshness vocabulary state (#122 F12): 'stale' when a dependent binding drifted
-	 * (amber "stale"), 'context-only' when nothing binds it (grey "context only"), else 'fresh' (a quiet
-	 * synced token). Absent = a bare discovered file with no freshness context. Agrees with the Knowledge
-	 * table + drawer + hover-peek so the SOURCES meta never reads "synced" for a source that has actually drifted.
+	 * For source rows, the ONE freshness vocabulary state (#122 F12): 'missing' when the file a document binds
+	 * is no longer on disk, 'stale' when a dependent binding drifted (amber "stale"), 'context-only' when
+	 * nothing binds it (grey "context only"), else 'fresh' (a quiet synced token). Absent = a bare discovered
+	 * file with no freshness context. Agrees with the Knowledge table + drawer + hover-peek so the SOURCES meta
+	 * never reads "synced" for a source that has actually drifted - or that is not there at all.
 	 */
-	readonly freshness?: 'fresh' | 'stale' | 'context-only';
+	readonly freshness?: TreeRailFreshness;
 	/** For an `unsupported` (not-yet-imported) row, the plain-words reason; unset otherwise (plan 37 F10). */
 	readonly note?: string;
 	/** For a workbook/PDF SOURCES row, the "Use as source" action it offers (issue #131). */
@@ -217,7 +228,7 @@ function toDocItem(d: ITreeRailDocInput): ITreeRailItem {
  * made a document tool look like a reporting tool and cost every row a level of indent for nothing. A folder
  * of Markdown files should read as that folder, so the rail now shows exactly the workspace's own shape.
  */
-export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): IFileTree {
+export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], sourceFreshness: ReadonlyMap<string, TreeRailFreshness> = new Map()): IFileTree {
 	// --- the document tree, on-disk hierarchy preserved (F7) ---
 	const rootItems: ITreeRailItem[] = [];
 	const roots = new Map<string, IMutableFolder>();
@@ -317,6 +328,39 @@ export const RECENT_STRIP_ID = 'strip:Recent';
 /** The largest number of documents the Recent strip ever shows (issue #212); older MRU entries are dropped. */
 export const RECENT_STRIP_CAP = 5;
 
+/**
+ * The fewest documents worth a strip. At ONE the strip is guaranteed furniture: the single row can only ever
+ * be the document you are already in, which the active tab names, the tree highlights and the strip itself
+ * marks - three other places say it first. The old in-tree Recent group hid below two for a different reason
+ * (a whole collapsible level of indent for one row) and the first cut of the strip dropped the rule on a cost
+ * argument that never asked what the single row was WORTH. It is worth nothing, so the rule is back.
+ */
+export const RECENT_STRIP_MIN = 2;
+
+/**
+ * How many documents the MRU remembers behind the strip. Deeper than the cap on purpose: entries that are not
+ * current folder documents are dropped when the strip is built (a renamed, moved or deleted document, or a
+ * source tab), so a memory the size of the cap would leave the strip short. Bounded so a long session cannot
+ * grow it without limit.
+ */
+export const RECENT_STRIP_MEMORY = 20;
+
+/**
+ * Move `opened` to the front of the most-recently-opened list, de-duplicated, keeping at most `limit` entries.
+ *
+ * This is the strip's source of truth, and the reason it is a list the rail MAINTAINS rather than one it reads
+ * back off the editor history: a single click opens a document as a PREVIEW tab (plan 52 WP-F), and the next
+ * preview open replaces it - which closes and disposes the previous editor, taking it out of the history the
+ * strip used to read. In the default single-click journey that left the strip holding exactly one row forever,
+ * always the document already open. "Documents opened" is what a recents list means; "editors that happen to
+ * have survived" is not.
+ */
+export function touchRecentDoc(recents: readonly URI[], opened: URI, limit: number = RECENT_STRIP_MEMORY): URI[] {
+	const key = opened.toString();
+	const out = [opened, ...recents.filter(r => r.toString() !== key)];
+	return out.length > limit ? out.slice(0, limit) : out;
+}
+
 /** Every Assets bucket id present in a node tree, so the view can seed them collapsed on first build (issue #171). */
 export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[] {
 	const ids: string[] = [];
@@ -395,7 +439,7 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
  * section caption, the way it already does for "Linked sources" and "Referenced files". Empty when the folder
  * holds no sources. Pure - the DOM rendering and the persisted collapse live in the view.
  */
-export function buildWorkspaceSourceNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): ITreeRailNode[] {
+export function buildWorkspaceSourceNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], sourceFreshness: ReadonlyMap<string, TreeRailFreshness> = new Map()): ITreeRailNode[] {
 	const { sources } = buildFileTree(docs, extras, sourceFreshness);
 	if (!sources.length) { return []; }
 	const boundLabels = new Set<string>();
@@ -421,10 +465,12 @@ export function buildWorkspaceSourceNodes(docs: readonly ITreeRailDocInput[], ex
  * are skipped (a closed project's files must not haunt the strip).
  *
  * Recents used to be a collapsible group INSIDE the file tree, which made every recent row a second copy of a
- * row the tree already showed. As its own strip it is a jump-list rather than a branch of the hierarchy, so
- * one entry is worth showing (the old "hide below two" rule existed only because a whole tree group for a
- * single row was not worth the indent). Each row reuses the SAME `toDocItem` mapping the tree uses, so a
- * document's status dot reads identically in both places.
+ * row the tree already showed. As its own strip it is a jump-list rather than a branch of the hierarchy. Each
+ * row reuses the SAME `toDocItem` mapping the tree uses, so a document's status dot reads identically in both
+ * places.
+ *
+ * Below `RECENT_STRIP_MIN` the strip is not worth its ink and nothing is returned: a jump-list needs somewhere
+ * to jump BACK to, and one entry can only ever be where you already are.
  */
 export function buildRecentDocItems(docs: readonly ITreeRailDocInput[], recentResources: readonly URI[]): ITreeRailItem[] {
 	const byResource = new Map<string, ITreeRailDocInput>();
@@ -440,7 +486,7 @@ export function buildRecentDocItems(docs: readonly ITreeRailDocInput[], recentRe
 		items.push(toDocItem(d));
 		if (items.length >= RECENT_STRIP_CAP) { break; }
 	}
-	return items;
+	return items.length >= RECENT_STRIP_MIN ? items : [];
 }
 
 /** The trailing freshness meta a source row shows: the word, and the tone that colours it. */
@@ -450,18 +496,42 @@ export interface ISourceMeta {
 }
 
 /**
- * The ONE freshness vocabulary a source row states (#122 F12), in one place: a drifted source reads "stale",
- * a source nothing binds reads "context only", and a fresh folder-resolved source reads the quiet "synced".
- * An api/mcp/unresolved source with no freshness context and no local file states nothing.
+ * The ONE freshness vocabulary a source row states (#122 F12), in one place: a bound file that is no longer
+ * on disk reads "stale - missing", a drifted source reads "stale", a source nothing binds reads "context
+ * only", and a fresh folder-resolved source reads the quiet "synced". An api/mcp/unresolved source with no
+ * freshness context and no local file states nothing.
  *
  * Shared by both surfaces that draw a source row - the Files tree's leaf renderer and the Context tab's
  * workspace sources - so the two can never drift into saying different words about the same file.
+ *
+ * A missing file stays in the STALE family rather than inventing a fourth tone (see `TreeRailFreshness`).
+ * Before this, "synced" was asserted from a resource path having been COMPUTED - so deleting a source through
+ * the app's own menu left a row claiming the file was in sync while the delete dialog had just promised its
+ * dependents would be flagged stale.
  */
 export function sourceMeta(item: ITreeRailItem): ISourceMeta | undefined {
 	if (item.kind !== 'source') { return undefined; }
+	if (item.freshness === 'missing') { return { text: localize('livingDocs.source.missing', "stale \u00B7 missing"), tone: 'stale' }; }
 	if (item.freshness === 'stale') { return { text: localize('livingDocs.source.stale', "stale"), tone: 'stale' }; }
 	if (item.freshness === 'context-only') { return { text: localize('livingDocs.source.contextOnly', "context only"), tone: 'context-only' }; }
 	return item.resource ? { text: localize('livingDocs.source.synced', "synced"), tone: 'synced' } : undefined;
+}
+
+/**
+ * True when a source a document BINDS is no longer in the folder - the phantom row the app's own `Delete…`
+ * leaves behind (it removes the file but not the `sources:` frontmatter that names it).
+ *
+ * `presentFiles` is the workspace-extras scan (`listWorkspaceExtras`): every non-Markdown file the folder
+ * holds, at any depth, as a basename. The check is deliberately conservative in BOTH directions - it compares
+ * basenames (a source may be written `data/metrics.csv` in frontmatter while the scan lists `metrics.csv`),
+ * and it only claims "missing" for a file the scan WOULD have collected had it been there (`classifyWorkspaceExtra`
+ * accepts its extension). A `.parquet` or a bound `.md`, which the scan never lists, is therefore never
+ * accused of being gone - an unknown answer stays silent rather than becoming a wrong one.
+ */
+export function isMissingSource(label: string, presentFiles: ReadonlySet<string>): boolean {
+	const name = label.slice(label.lastIndexOf('/') + 1);
+	if (presentFiles.has(name)) { return false; }
+	return classifyWorkspaceExtra(name) !== undefined;
 }
 
 /**
