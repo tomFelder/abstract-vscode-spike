@@ -5,6 +5,7 @@
 
 import { URI } from '../../../../base/common/uri.js';
 import { dirname, joinPath } from '../../../../base/common/resources.js';
+import { localize } from '../../../../nls.js';
 import { ILivingDoc, SourceKind } from './livingDocsModel.js';
 import { sourceKindOf } from './contextGroups.js';
 import { docRailDot, IRailDot, sourceRailDot } from './railStatus.js';
@@ -189,6 +190,23 @@ interface IMutableFolder {
 }
 
 /**
+ * The row a document contributes, wherever it is shown: in the folder hierarchy (`buildFileTree`) or in the
+ * Files tab's Recent strip (`buildRecentDocItems`). ONE mapping, so the two surfaces can never disagree about
+ * a document's status dot, its LWD chip or its pending count - they render the same item, not two copies of
+ * the same derivation.
+ */
+function toDocItem(d: ITreeRailDocInput): ITreeRailItem {
+	const dot = docRailDot({
+		pendingCount: d.pendingCount,
+		unseenAgentEdits: d.unseenAgentEdits ?? 0,
+		relinkCount: d.relinkCount ?? 0,
+		stale: d.stale ?? false,
+		fanoutFailed: d.fanoutFailed ?? false,
+	});
+	return { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot, needsSourceBinding: d.needsSourceBinding ?? false };
+}
+
+/**
  * The Files-tab folder tree. Living documents ARE the tree: a root-level document is a root-level row and an
  * on-disk subfolder is a folder row, verbatim (F7 - nested folders are not flattened), with no synthetic
  * grouping above them. The distinct sources the documents bind to, plus any data/source files (CSV/txt/image)
@@ -204,14 +222,7 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	const rootItems: ITreeRailItem[] = [];
 	const roots = new Map<string, IMutableFolder>();
 	for (const d of [...docs].sort((a, b) => a.title.localeCompare(b.title))) {
-		const dot = docRailDot({
-			pendingCount: d.pendingCount,
-			unseenAgentEdits: d.unseenAgentEdits ?? 0,
-			relinkCount: d.relinkCount ?? 0,
-			stale: d.stale ?? false,
-			fanoutFailed: d.fanoutFailed ?? false,
-		});
-		const item: ITreeRailItem = { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot, needsSourceBinding: d.needsSourceBinding ?? false };
+		const item = toDocItem(d);
 		const segments = (d.folder ?? '').split('/').filter(s => s.length > 0);
 		if (!segments.length) { rootItems.push(item); continue; }
 		let level = roots;
@@ -266,15 +277,17 @@ export function buildFileTree(docs: readonly ITreeRailDocInput[], extras: readon
 	return { items: rootItems, folders: docFolders, sources, unsupported };
 }
 
-// --- The Files-tab tree model (issue #171) ---
+// --- The rail's node model (issue #171) ---
 // `buildFileTree` above finds what is in the folder (documents + on-disk hierarchy, sources, not-yet-imported).
-// `buildTreeRailNodes` below turns that into the node model the `WorkbenchObjectTree` renders: a `folder`
-// node (a group header or a real on-disk directory, collapsible) or a `leaf` node (a document / source /
-// unsupported row, carrying the underlying `ITreeRailItem`). Every node has a stable `id` so the tree can
-// keep identity (selection, focus, and persisted collapse state) across re-renders. Kept pure and unit-
-// tested; the DOM view (`treeRailView.ts`) owns only widget wiring.
+// The builders below turn that into the node model the surfaces render: a `folder` node (a real on-disk
+// directory or a collapsible bucket, collapsible) or a `leaf` node (a document / source / unsupported row,
+// carrying the underlying `ITreeRailItem`). Every node has a stable `id` so a surface can keep identity
+// (selection, focus, and persisted collapse state) across re-renders. Three builders, three homes (plan 52
+// WP-D): `buildTreeRailNodes` -> the Files tab's tree, `buildRecentDocItems` -> the Files tab's Recent strip,
+// `buildWorkspaceSourceNodes` -> the Context tab's workspace sources. Kept pure and unit-tested; the DOM
+// views (`treeRailView.ts`) own only widget wiring.
 
-/** A collapsible folder in the Files tree: a real disk directory, or one of the trailing groups (Sources / Not yet imported). */
+/** A collapsible folder node: a real disk directory, the "Not yet imported" group, or the Assets bucket. */
 export interface ITreeRailFolderNode {
 	readonly type: 'folder';
 	/** Stable identity for tree selection + persisted collapse state (e.g. "folder:brief/2025"). */
@@ -283,7 +296,7 @@ export interface ITreeRailFolderNode {
 	readonly children: readonly ITreeRailNode[];
 }
 
-/** A leaf row in the Files tree: a document, a source, or a not-yet-imported file. Carries the raw item. */
+/** A leaf row: a document, a source, or a not-yet-imported file. Carries the raw item. */
 export interface ITreeRailLeafNode {
 	readonly type: 'leaf';
 	readonly id: string;
@@ -292,15 +305,17 @@ export interface ITreeRailLeafNode {
 
 export type ITreeRailNode = ITreeRailFolderNode | ITreeRailLeafNode;
 
-/** Id of the collapsed screenshot bucket under Sources; the view seeds this collapsed on first open (issue #171). */
+/** Id of the collapsed screenshot bucket under the workspace sources; the view seeds it collapsed on first
+ * open (issue #171). The id is unchanged from when Sources lived in the Files tree (plan 52 WP-D3), so a
+ * workspace that already persisted the bucket's collapse state keeps it after the move. */
 export const ASSETS_FOLDER_ID = 'folder:Sources/Assets';
 
-/** Id of the MRU "Recent" group above the file tree (issue #212). Its leaf ids carry a distinct prefix so a
- * document appearing BOTH in Recent and in the tree keeps two collision-free ids (identityProvider stays unique). */
-export const RECENT_FOLDER_ID = 'folder:Recent';
+/** Id of the Files tab's Recent strip, used as its persisted collapse key (plan 52 WP-D2). It shares the view's
+ * folder-collapse set, so folding the strip away survives restart exactly as folding a folder does. */
+export const RECENT_STRIP_ID = 'strip:Recent';
 
-/** The largest number of documents the Recent group ever shows (issue #212); older MRU entries are dropped. */
-export const RECENT_GROUP_CAP = 5;
+/** The largest number of documents the Recent strip ever shows (issue #212); older MRU entries are dropped. */
+export const RECENT_STRIP_CAP = 5;
 
 /** Every Assets bucket id present in a node tree, so the view can seed them collapsed on first build (issue #171). */
 export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[] {
@@ -314,26 +329,30 @@ export function collectAssetsFolderIds(nodes: readonly ITreeRailNode[]): string[
 	return ids;
 }
 
+// A leaf's stable identity for the tree's identityProvider (selection reconcile + persisted state). Two
+// documents in the same folder can share a title, so a label-based id would collide and let the tree
+// select/reconcile the wrong row. The on-disk resource is unique, so use it when present; only rows with
+// no backing file (e.g. an api/mcp source) fall back to `kind:label`, which is unique among those rows.
+function leafId(idPrefix: string, item: ITreeRailItem): string {
+	return `${idPrefix}/leaf:${item.resource ? item.resource.toString() : `${item.kind}:${item.label}`}`;
+}
+
 /**
- * The node tree the Files tab renders on the VS Code tree widget (issue #171). Reuses `buildFileTree` for
- * the grouping + on-disk hierarchy, then:
- *  - buckets un-bound image/screenshot assets behind one collapsed "Assets" node so ~200 screenshots never
- *    flood the default view (sources that ARE bound to a document stay visible in Sources);
- *  - assigns every node a stable id (path-based for folders) for selection + persisted collapse state.
- * Empty groups are omitted. Pure - the widget wiring lives in the view.
+ * The node tree the Files tab renders on the VS Code tree widget (issue #171): EXACTLY the folder's own
+ * hierarchy - real directories, then root-level documents - plus the standing "Not yet imported" affordance
+ * for files we saw and could not convert (F10), which is never a silent drop.
+ *
+ * Nothing synthetic sits above that any more (plan 52 WP-D, decision 180). The "Reports" wrapper went in D1;
+ * D2 moved the MRU "Recent" group out to its own compact strip (`buildRecentDocItems`) because every Recent
+ * row was a SECOND COPY of a row already in the tree - at three recents the pane showed nine document rows
+ * for six documents - and D3 moved the "Sources" group into the Context tab (`buildWorkspaceSourceNodes`),
+ * where a source's provenance lives. What is left is a plain file explorer of the folder.
+ *
+ * Every node carries a stable id (path-based for folders) for selection + persisted collapse state. Empty
+ * groups are omitted. Pure - the widget wiring lives in the view.
  */
-export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], recentResources: readonly URI[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): ITreeRailNode[] {
-	const tree = buildFileTree(docs, extras, sourceFreshness);
-	// Sources a document actually binds to stay visible even when they are images (a bound chart PNG is data,
-	// not noise); only un-bound loose screenshots are bucketed into the collapsed Assets node (issue #171).
-	const boundLabels = new Set<string>();
-	for (const d of docs) { for (const s of d.sources) { boundLabels.add(s); } }
-	// A leaf's stable identity for the tree's identityProvider (selection reconcile + persisted state). Two
-	// documents in the same folder can share a title, so a label-based id would collide and let the tree
-	// select/reconcile the wrong row. The on-disk resource is unique, so use it when present; only rows with
-	// no backing file (e.g. an api/mcp source) fall back to `kind:label`, which is unique among those rows.
-	const leafId = (idPrefix: string, item: ITreeRailItem): string =>
-		`${idPrefix}/leaf:${item.resource ? item.resource.toString() : `${item.kind}:${item.label}`}`;
+export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = []): ITreeRailNode[] {
+	const tree = buildFileTree(docs, extras);
 	const toNodes = (group: ITreeRailFolder, idPrefix: string): ITreeRailNode[] => {
 		const nodes: ITreeRailNode[] = [];
 		for (const sub of group.folders) {
@@ -346,8 +365,7 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 		return nodes;
 	};
 	const result: ITreeRailNode[] = [];
-	// The workspace's own shape, at the top level: real directories first, then root-level documents. No
-	// synthetic wrapper - the rail reads as a plain file explorer of the folder (plan 52 WP-D, decision 180).
+	// The workspace's own shape, at the top level: real directories first, then root-level documents.
 	for (const sub of tree.folders) {
 		const id = `folder:${sub.name}`;
 		result.push({ type: 'folder', id, label: sub.name, children: toNodes(sub, id) });
@@ -355,55 +373,95 @@ export function buildTreeRailNodes(docs: readonly ITreeRailDocInput[], extras: r
 	for (const item of tree.items) {
 		result.push({ type: 'leaf', id: leafId('folder:', item), item });
 	}
-	if (tree.sources.length) {
-		// Split the flat Sources list: un-bound image assets go behind one collapsed child so the default
-		// view is calm; bound sources + all data files (csv/json/txt) stay directly visible.
-		const id = 'folder:Sources';
-		const isAsset = (label: string) => isAssetName(label) && !boundLabels.has(label);
-		const visible = tree.sources.filter(i => !isAsset(i.label));
-		const assets = tree.sources.filter(i => isAsset(i.label));
-		const children: ITreeRailNode[] = visible.map(item => ({ type: 'leaf', id: leafId(id, item), item }));
-		if (assets.length) {
-			const assetsId = ASSETS_FOLDER_ID;
-			children.push({
-				type: 'folder',
-				id: assetsId,
-				label: `Assets (${assets.length})`,
-				children: assets.map(item => ({ type: 'leaf', id: leafId(assetsId, item), item })),
-			});
-		}
-		if (children.length) { result.push({ type: 'folder', id, label: 'Sources', children }); }
-	}
 	if (tree.unsupported.length) {
 		const id = 'folder:Not yet imported';
 		result.push({ type: 'folder', id, label: 'Not yet imported', children: tree.unsupported.map(item => ({ type: 'leaf', id: leafId(id, item), item })) });
 	}
+	return result;
+}
 
-	// --- Recent: an MRU shortcut group above the file tree (issue #212) ---
-	// A collapsible "Recent" group of the most-recently-opened documents, capped at RECENT_GROUP_CAP and shown
-	// only when it holds at least two (one recent doc is not worth a whole group). Each row reuses the SAME doc
-	// item (so it carries the same status dot) but under the distinct RECENT_FOLDER_ID prefix, so a document that
-	// also appears in the tree below keeps two collision-free ids. The on-disk hierarchy below is untouched.
-	const docItemByResource = new Map<string, ITreeRailItem>();
-	for (const d of docs) {
-		docItemByResource.set(d.resource.toString(), { label: d.title, resource: d.resource, kind: 'doc', pending: d.pendingCount > 0, pendingCount: d.pendingCount, living: d.isLiving ?? false, dot: docRailDot({ pendingCount: d.pendingCount, unseenAgentEdits: d.unseenAgentEdits ?? 0, relinkCount: d.relinkCount ?? 0, stale: d.stale ?? false, fanoutFailed: d.fanoutFailed ?? false }), needsSourceBinding: d.needsSourceBinding ?? false });
+/**
+ * The Context tab's workspace-level sources section (plan 52 WP-D3): every source the folder holds, whichever
+ * document is active - or none at all. This is the same set the Files tree used to carry as a synthetic
+ * "Sources" group, moved whole so nothing is lost with it:
+ *  - un-bound image/screenshot sources stay bucketed behind ONE collapsed `Assets` node, so a folder with
+ *    ~200 screenshots never floods the pane (issue #171). A source a document actually BINDS stays visible
+ *    even when it is an image - a bound chart PNG is data, not noise;
+ *  - every row keeps its freshness state (`sourceFreshness` -> `item.freshness` -> `sourceMeta`);
+ *  - every row keeps its stable id, so the Assets bucket's collapse state persists under `ASSETS_FOLDER_ID`
+ *    exactly as it did in the tree.
+ *
+ * Returned as the section's ROWS (there is no wrapping "Sources" folder node): the Context tab draws its own
+ * section caption, the way it already does for "Linked sources" and "Referenced files". Empty when the folder
+ * holds no sources. Pure - the DOM rendering and the persisted collapse live in the view.
+ */
+export function buildWorkspaceSourceNodes(docs: readonly ITreeRailDocInput[], extras: readonly string[] = [], sourceFreshness: ReadonlyMap<string, 'fresh' | 'stale' | 'context-only'> = new Map()): ITreeRailNode[] {
+	const { sources } = buildFileTree(docs, extras, sourceFreshness);
+	if (!sources.length) { return []; }
+	const boundLabels = new Set<string>();
+	for (const d of docs) { for (const s of d.sources) { boundLabels.add(s); } }
+	const isAsset = (label: string) => isAssetName(label) && !boundLabels.has(label);
+	const id = 'folder:Sources';
+	const nodes: ITreeRailNode[] = sources.filter(i => !isAsset(i.label)).map(item => ({ type: 'leaf', id: leafId(id, item), item }));
+	const assets = sources.filter(i => isAsset(i.label));
+	if (assets.length) {
+		nodes.push({
+			type: 'folder',
+			id: ASSETS_FOLDER_ID,
+			label: localize('livingDocs.sources.assets', "Assets ({0})", assets.length),
+			children: assets.map(item => ({ type: 'leaf', id: leafId(ASSETS_FOLDER_ID, item), item })),
+		});
 	}
-	const recentItems: ITreeRailItem[] = [];
-	const seenRecent = new Set<string>();
+	return nodes;
+}
+
+/**
+ * The rows the Files tab's Recent strip shows (plan 52 WP-D2): the most-recently-opened documents in MRU
+ * order, de-duplicated, capped at `RECENT_STRIP_CAP`. History entries that are not current folder documents
+ * are skipped (a closed project's files must not haunt the strip).
+ *
+ * Recents used to be a collapsible group INSIDE the file tree, which made every recent row a second copy of a
+ * row the tree already showed. As its own strip it is a jump-list rather than a branch of the hierarchy, so
+ * one entry is worth showing (the old "hide below two" rule existed only because a whole tree group for a
+ * single row was not worth the indent). Each row reuses the SAME `toDocItem` mapping the tree uses, so a
+ * document's status dot reads identically in both places.
+ */
+export function buildRecentDocItems(docs: readonly ITreeRailDocInput[], recentResources: readonly URI[]): ITreeRailItem[] {
+	const byResource = new Map<string, ITreeRailDocInput>();
+	for (const d of docs) { byResource.set(d.resource.toString(), d); }
+	const items: ITreeRailItem[] = [];
+	const seen = new Set<string>();
 	for (const resource of recentResources) {
 		const key = resource.toString();
-		if (seenRecent.has(key)) { continue; }
-		const item = docItemByResource.get(key);
-		if (!item) { continue; } // a history entry that is not a current folder document is skipped
-		seenRecent.add(key);
-		recentItems.push(item);
-		if (recentItems.length >= RECENT_GROUP_CAP) { break; }
+		if (seen.has(key)) { continue; }
+		const d = byResource.get(key);
+		if (!d) { continue; } // a history entry that is not a current folder document is skipped
+		seen.add(key);
+		items.push(toDocItem(d));
+		if (items.length >= RECENT_STRIP_CAP) { break; }
 	}
-	if (recentItems.length >= 2) {
-		const recentChildren: ITreeRailNode[] = recentItems.map(item => ({ type: 'leaf', id: `${RECENT_FOLDER_ID}/leaf:${item.resource!.toString()}`, item }));
-		result.unshift({ type: 'folder', id: RECENT_FOLDER_ID, label: 'Recent', children: recentChildren });
-	}
-	return result;
+	return items;
+}
+
+/** The trailing freshness meta a source row shows: the word, and the tone that colours it. */
+export interface ISourceMeta {
+	readonly text: string;
+	readonly tone: 'stale' | 'context-only' | 'synced';
+}
+
+/**
+ * The ONE freshness vocabulary a source row states (#122 F12), in one place: a drifted source reads "stale",
+ * a source nothing binds reads "context only", and a fresh folder-resolved source reads the quiet "synced".
+ * An api/mcp/unresolved source with no freshness context and no local file states nothing.
+ *
+ * Shared by both surfaces that draw a source row - the Files tree's leaf renderer and the Context tab's
+ * workspace sources - so the two can never drift into saying different words about the same file.
+ */
+export function sourceMeta(item: ITreeRailItem): ISourceMeta | undefined {
+	if (item.kind !== 'source') { return undefined; }
+	if (item.freshness === 'stale') { return { text: localize('livingDocs.source.stale', "stale"), tone: 'stale' }; }
+	if (item.freshness === 'context-only') { return { text: localize('livingDocs.source.contextOnly', "context only"), tone: 'context-only' }; }
+	return item.resource ? { text: localize('livingDocs.source.synced', "synced"), tone: 'synced' } : undefined;
 }
 
 /**

@@ -10,7 +10,7 @@ import { ITreeNode, ITreeRenderer } from '../../../../base/browser/ui/tree/tree.
 import { DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
 import { IRailDot } from '../common/railStatus.js';
-import { ITreeRailFolderNode, ITreeRailLeafNode, ITreeRailNode, sourceKindGlyph } from '../common/treeRail.js';
+import { ITreeRailFolderNode, ITreeRailLeafNode, ITreeRailNode, sourceKindGlyph, sourceMeta } from '../common/treeRail.js';
 
 // The list/tree plumbing for the Files tab (issue #171): the virtual delegate that sizes rows and picks a
 // template, and one renderer per node kind (folder header vs. leaf row). These sit beside the view so the
@@ -127,8 +127,7 @@ export class TreeRailLeafRenderer implements ITreeRenderer<ITreeRailLeafNode, vo
 		template.marker.replaceChildren();
 		template.marker.className = 'rail-tree-marker';
 		template.meta.textContent = '';
-		template.meta.className = 'rail-tree-meta';
-		template.meta.style.color = ''; // clear any inline freshness colour (#122 F12) so a recycled row is clean
+		template.meta.className = 'rail-tree-meta'; // drops any freshness tone class so a recycled row is clean
 		const item = node.element.item;
 		const isDoc = item.kind === 'doc';
 		template.row.classList.toggle('rail-tree-leaf-source', !isDoc);
@@ -165,22 +164,17 @@ export class TreeRailLeafRenderer implements ITreeRenderer<ITreeRailLeafNode, vo
 				const chip = append(template.marker, $('span.rail-tree-lwd'));
 				chip.textContent = 'LWD';
 			}
-		} else if (item.kind === 'source') {
-			// The source's right meta (P5.6) reads the ONE freshness vocabulary (#122 F12) so the rail agrees
-			// with the Knowledge table: a drifted source reads "stale" (amber), a context-only source "context
-			// only" (grey), a fresh folder-resolved source the quiet "synced". An api/mcp/unresolved source with
-			// no freshness context and no local file carries no meta.
-			if (item.freshness === 'stale') {
-				template.meta.textContent = localize("livingDocs.source.stale", "stale");
-				// Amber, matching the Knowledge table's stale text (#8A6D1A). Inline so the wave's shared studio.css
-				// (plan-44 owned) stays untouched; the reset to className='rail-tree-meta' clears it on recycle.
-				template.meta.style.color = '#8A6D1A';
-			} else if (item.freshness === 'context-only') {
-				template.meta.textContent = localize("livingDocs.source.contextOnly", "context only");
-				template.meta.style.color = '#868B95';
-			} else if (item.resource) {
-				template.meta.textContent = localize("livingDocs.source.synced", "synced");
-				template.meta.classList.add('rail-tree-meta-synced');
+		} else {
+			// The source's right meta (P5.6) reads the ONE freshness vocabulary (#122 F12) so the rail agrees with
+			// the Knowledge table: a drifted source reads "stale" (amber), a context-only source "context only"
+			// (grey), a fresh folder-resolved source the quiet "synced". `sourceMeta` is the single home of that
+			// wording, shared with the Context tab's workspace sources (plan 52 WP-D3), so the two can never say
+			// different words about the same file. It returns nothing for a non-source row or a source with no
+			// freshness context and no local file - the reset above already left the slot empty.
+			const meta = sourceMeta(item);
+			if (meta) {
+				template.meta.textContent = meta.text;
+				template.meta.classList.add(`rail-meta-${meta.tone}`);
 			}
 		}
 		template.disposables.add(this._actions.renderLeafActions(node.element, template.actions));

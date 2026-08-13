@@ -30,7 +30,7 @@ import { IHistoryService } from '../../../services/history/common/history.js';
 import { buildContextGroups, keyNamespace, sourceNamespace } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
-import { buildOutline, buildTreeRailNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, TreeRailAction } from '../common/treeRail.js';
+import { buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, collectAssetsFolderIds, filterTreeRailNodes, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_ID, searchTreeRail, sourceKindGlyph, sourceMeta, TreeRailAction } from '../common/treeRail.js';
 import { createDocumentMenuActions, createDocumentMenuStyle, createSourceMenuActions, DOCUMENT_MENU_CLASS_NAME, IDocumentMenuServices } from './documentContextMenu.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
 import { ScreenEditor } from './screenEditor.js';
@@ -106,11 +106,13 @@ export class TreeRailView extends ViewPane {
 		this._collapsedFolders = this._readCollapsedFolders();
 	}
 
-	// Persisted (workspace-scoped) collapse state for the Files tree, keyed by folder node id so expansion
-	// survives restart (issue #171). Owned by this view - no reaching into another component's storage keys.
+	// Persisted (workspace-scoped) collapse state for everything the rail can fold, keyed by node id so
+	// expansion survives restart (issue #171): the Files tree's folders, the Context tab's Assets bucket, and
+	// the Files tab's Recent strip (`RECENT_STRIP_ID`, plan 52 WP-D2 - one set, one key, one idiom). Owned by
+	// this view - no reaching into another component's storage keys.
 	private static readonly COLLAPSED_STORAGE_KEY = 'livingDocs.treeRail.filesCollapsed';
 	// One-time flag: the Assets bucket defaults to collapsed on first open (so ~400 screenshots never flood the
-	// tree, issue #171), but after that it behaves like any other folder - user expand/collapse persists. The
+	// pane, issue #171), but after that it behaves like any other folder - user expand/collapse persists. The
 	// collapsed set stores COLLAPSED ids, so we cannot tell "never seeded" from "user expanded Assets" without
 	// this marker; once set we never re-seed, so the user's choice always wins from then on.
 	private static readonly ASSETS_SEEDED_STORAGE_KEY = 'livingDocs.treeRail.assetsSeeded';
@@ -130,9 +132,9 @@ export class TreeRailView extends ViewPane {
 		this._storageService.store(TreeRailView.COLLAPSED_STORAGE_KEY, JSON.stringify([...this._collapsedFolders]), StorageScope.WORKSPACE, StorageTarget.USER);
 	}
 
-	// The one-time default: on the first Files render for a workspace, mark every Assets bucket collapsed so the
-	// screenshot flood never appears (issue #171 acceptance). Guarded by a persisted seed flag so it fires once;
-	// thereafter the user's expand/collapse of Assets persists like any other folder via onDidChangeCollapseState.
+	// The one-time default: the first time a workspace's sources are rendered, mark every Assets bucket collapsed
+	// so the screenshot flood never appears (issue #171 acceptance). Guarded by a persisted seed flag so it fires
+	// once; thereafter the user's expand/collapse of Assets persists like any other folder.
 	private _seedAssetsCollapsed(nodes: readonly ITreeRailNode[]): void {
 		if (this._storageService.getBoolean(TreeRailView.ASSETS_SEEDED_STORAGE_KEY, StorageScope.WORKSPACE, false)) { return; }
 		const assetsIds = collectAssetsFolderIds(nodes);
@@ -184,8 +186,9 @@ export class TreeRailView extends ViewPane {
 		if (!root) { return; }
 		const token = ++this._renderToken;
 		const documents = await this._livingDocs.listDocuments();
-		// The Files tab also lists non-Markdown files (SOURCES + "Not yet imported"); other tabs skip the scan.
-		const extras = this._tab === 'files' ? await this._livingDocs.listWorkspaceExtras() : [];
+		// Both Files ("Not yet imported") and Context (the workspace sources section, plan 52 WP-D3) read the
+		// folder's non-Markdown files; Outline is purely per-document, so it skips the scan.
+		const extras = this._tab === 'outline' ? [] : await this._livingDocs.listWorkspaceExtras();
 		if (token !== this._renderToken || !this._body) { return; }
 		this._renderDisposables.clear();
 		clearNode(root);
@@ -213,7 +216,7 @@ export class TreeRailView extends ViewPane {
 		const panel = append(root, $('div.rail-panel'));
 		switch (this._tab) {
 			case 'files': this._renderFiles(panel, documents, extras); break;
-			case 'context': this._renderContext(panel); break;
+			case 'context': this._renderContext(panel, documents, extras); break;
 			case 'outline': this._renderOutline(panel); break;
 		}
 	}
@@ -239,27 +242,16 @@ export class TreeRailView extends ViewPane {
 	// created once and re-parented into the freshly-rendered panel on every re-render, so its focus, keyboard
 	// state and selection survive the onDidChange/onDidActiveEditorChange re-renders that drive this rail.
 	private _renderFiles(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
-		const nodes = buildTreeRailNodes(
-			documents.map(d => ({
-				title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder, isLiving: d.isLiving,
-				// The Files-rail status dot inputs (issue #212): passed straight through from the summary so the pure
-				// tree module computes each doc's leading dot via the shared precedence ladder.
-				unseenAgentEdits: d.unseenAgentEdits, relinkCount: d.relinkCount, stale: d.stale, fanoutFailed: d.fanoutFailed,
-				// PN.1 (routed from 48-c/#233): a template-born doc with no source bound carries the "bind sources" nudge.
-				needsSourceBinding: d.needsSourceBinding,
-			})),
-			extras,
-			this._recentDocResources(documents),
-			this._sourceFreshnessByLabel(documents),
-		);
+		const nodes = buildTreeRailNodes(documents.map(d => this._toDocInput(d)), extras);
 		if (!nodes.length) {
-			append(panel, $('div.rail-empty')).textContent = 'No documents yet.';
+			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.treeRail.noDocuments', "No documents yet.");
 			return;
 		}
-		// First open of this workspace: seed the Assets bucket(s) collapsed so the screenshot flood never renders.
-		// One-time only - after this the bucket persists whatever the user chooses, like every other folder.
-		this._seedAssetsCollapsed(nodes);
 		panel.classList.add('rail-panel-files');
+
+		// Recents live ABOVE the filter box, in their own compact strip (plan 52 WP-D2): they are a jump-list,
+		// not a branch of the folder, so they no longer occupy tree rows that duplicate rows in the tree below.
+		this._renderRecentStrip(panel, documents);
 
 		// The type-to-filter field (P4.2, the folded-in Search): a quiet input that narrows the tree rows live.
 		// It captures keystrokes only when it holds focus, so typing in the editor never triggers it (plan-42
@@ -295,6 +287,69 @@ export class TreeRailView extends ViewPane {
 		this._highlightActiveDoc();
 	}
 
+	/**
+	 * The Recent strip (plan 52 WP-D2): the documents you had open, most-recent first, capped at five, sitting
+	 * ABOVE the filter box as its own compact band - not as rows inside the tree.
+	 *
+	 * Why a vertical strip rather than a row of horizontal chips: the rail is ~248px wide and document titles
+	 * here run long ("Project Brief - Northwind Migration", "Appendix - Design Tokens"). Five chips across that
+	 * width give each about 40px, so every chip would be an ellipsis; chips that size to their content need a
+	 * horizontal scroller, which hides the very entries the affordance exists to expose. A stacked band of
+	 * 24px rows shows five full titles in ~140px, reads at a glance, and folds away to a single caption line
+	 * when it is not wanted (the fold persists, sharing the same collapse set the tree's folders use).
+	 *
+	 * Why it is still worth showing at ONE entry, where the old in-tree group hid below two: as a group inside
+	 * the tree, one row cost a whole collapsible level of indent for a single document; as a strip it costs one
+	 * 24px line. The strip deliberately keeps the document a row too - the active document is marked, not
+	 * hidden, so the strip reads as "where you are, and where you just were" rather than as a second tree.
+	 */
+	private _renderRecentStrip(panel: HTMLElement, documents: readonly ILivingDocSummary[]): void {
+		const items = buildRecentDocItems(documents.map(d => this._toDocInput(d)), this._recentDocResources(documents));
+		if (!items.length) { return; } // nothing opened yet in this window: the strip is absent, not an empty box
+		const strip = append(panel, $('div.rail-recent'));
+		const collapsed = this._collapsedFolders.has(RECENT_STRIP_ID);
+		const head = append(strip, $('button.rail-recent-head')) as HTMLButtonElement;
+		head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+		// The twistie mirrors the tree's: pointing right when folded, down when open. Kept as escapes so the
+		// source stays ASCII-only (the hygiene rule); textContent renders them directly.
+		append(head, $('span.rail-recent-twistie')).textContent = collapsed ? '\u25B8' : '\u25BE';
+		append(head, $('span.rail-recent-title')).textContent = localize('livingDocs.treeRail.recent', "Recent");
+		append(head, $('span.rail-recent-count')).textContent = `${items.length}`;
+		this._renderDisposables.add(addDisposableListener(head, 'click', () => {
+			if (collapsed) { this._collapsedFolders.delete(RECENT_STRIP_ID); } else { this._collapsedFolders.add(RECENT_STRIP_ID); }
+			this._persistCollapsedFolders();
+			void this._render();
+		}));
+		if (collapsed) { return; }
+		const active = this._editors.activeEditor?.resource?.toString();
+		for (const item of items) {
+			const resource = item.resource!; // every recent row is a document resolved from the folder's document set
+			const row = append(strip, $(`button.rail-recent-item${resource.toString() === active ? '.active' : ''}`)) as HTMLButtonElement;
+			// The same leading status dot the tree row carries (issue #212), from the same `item.dot` - one
+			// document, one status vocabulary, wherever it is drawn.
+			append(row, $(`span.rail-status.rail-status-${item.dot.shape === 'dash' ? 'dash' : 'dot'}.rail-status-${item.dot.color}`));
+			append(row, $('span.rail-item-label')).textContent = item.label;
+			// Long titles ellipsise in a 248px rail, so the full title lives in a managed hover (IHoverService),
+			// registered on the per-render store - this method runs on every onDidChange, so `this._register`
+			// here would leak one hover per render.
+			this._renderDisposables.add(this._hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), row, item.label));
+			// Preview semantics match the tree (plan 52 WP-F): a single click opens the group's preview tab, a
+			// double click pins it. Focus follows the jump - unlike browsing the tree, picking a recent document
+			// is a "take me back there" gesture, so the document takes the keyboard.
+			this._renderDisposables.add(addDisposableListener(row, 'click', () => {
+				void this._editors.openEditor({ resource, options: { pinned: false, preserveFocus: false } });
+			}));
+			this._renderDisposables.add(addDisposableListener(row, 'dblclick', () => {
+				void this._editors.openEditor({ resource, options: { pinned: true, preserveFocus: false } });
+			}));
+			this._renderDisposables.add(addDisposableListener(row, 'contextmenu', e => {
+				e.preventDefault();
+				e.stopPropagation();
+				this._showDocMenu({ x: e.clientX, y: e.clientY }, resource, item.label);
+			}));
+		}
+	}
+
 	// The Files type-to-filter (P4.2): a quiet input that narrows the tree live. Focus discipline (plan-42
 	// quiet-shell): it only reacts to its own `input` events, so typing while the editor is focused never
 	// reaches it - the criterion "filter must not steal keyboard focus from the editor". Focus is restored to
@@ -328,9 +383,20 @@ export class TreeRailView extends ViewPane {
 		return new Set(searchTreeRail(docs, this._filter).map(hit => hit.resource.toString()));
 	}
 
-	// The MRU document resources for the "Recent" group (issue #212): walk the editor history newest-first and
-	// keep the entries that are documents in the current folder set, de-duplicated. The pure tree module caps the
-	// list and hides the group when it holds fewer than two, so this only supplies the ordered candidate list.
+	// One document summary, in the shape the pure tree module consumes. Shared by every surface that draws
+	// document rows (the Files tree, the Recent strip, the Context tab's workspace sources), so the status-dot
+	// inputs are threaded through in exactly one place.
+	private _toDocInput(d: ILivingDocSummary): { title: string; resource: URI; pendingCount: number; sources: readonly string[]; folder?: string; isLiving?: boolean; unseenAgentEdits?: number; relinkCount?: number; stale?: boolean; fanoutFailed?: boolean; needsSourceBinding?: boolean } {
+		return {
+			title: d.title, resource: d.resource, pendingCount: d.pendingCount, sources: d.sources, folder: d.folder, isLiving: d.isLiving,
+			// The Files-rail status dot inputs (issue #212): passed straight through from the summary so the pure
+			// tree module computes each doc's leading dot via the shared precedence ladder.
+			unseenAgentEdits: d.unseenAgentEdits, relinkCount: d.relinkCount, stale: d.stale, fanoutFailed: d.fanoutFailed,
+			// PN.1 (routed from 48-c/#233): a template-born doc with no source bound carries the "bind sources" nudge.
+			needsSourceBinding: d.needsSourceBinding,
+		};
+	}
+
 	// The ONE freshness vocabulary for the SOURCES meta (#122 F12): map each bound source LABEL to its state so
 	// the tree agrees with the Knowledge table. A value source is 'stale' when any document that binds it reports
 	// a stale binding key in that source's namespace (the engine's real hash-drift set, read synchronously via
@@ -352,6 +418,9 @@ export class TreeRailView extends ViewPane {
 		return out;
 	}
 
+	// The MRU document resources for the Recent strip (issue #212, plan 52 WP-D2): walk the editor history
+	// newest-first and keep the entries that are documents in the current folder set, de-duplicated. The pure
+	// module caps the list, so this only supplies the ordered candidate list.
 	private _recentDocResources(documents: readonly ILivingDocSummary[]): URI[] {
 		const docKeys = new Set(documents.map(d => d.resource.toString()));
 		const out: URI[] = [];
@@ -490,9 +559,6 @@ export class TreeRailView extends ViewPane {
 		let ancestors: ITreeRailNode[] = [];
 		const walk = (node: ITreeRailNode, path: ITreeRailNode[]): void => {
 			if (match) { return; }
-			// The Recent group (issue #212) mirrors documents that live canonically in the file tree; skip its subtree
-			// so the highlight lands on the real tree row, not its Recent shortcut (which shares the resource).
-			if (node.type === 'folder' && node.id === RECENT_FOLDER_ID) { return; }
 			if (node.type === 'leaf') {
 				if (node.item.resource?.toString() === resource.toString()) { match = node; ancestors = path; }
 			} else {
@@ -730,7 +796,20 @@ export class TreeRailView extends ViewPane {
 		return store;
 	}
 
-	private _renderContext(panel: HTMLElement): void {
+	// The Context tab: what the agent can see. Two halves, in this order:
+	//  1. the ACTIVE DOCUMENT's context - its linked sources, referenced files, images, pasted text and company
+	//     knowledge, with the "+ Add source" / "+ Add context" doors. Absent (with a plain-words invitation to
+	//     open a document) when nothing is open;
+	//  2. the WORKSPACE's sources - every data file the folder holds, whichever document is active, moved here
+	//     from the Files tree by plan 52 WP-D3 so the tree can be exactly the folder's hierarchy.
+	// The two answer different questions - "what feeds THIS document" versus "what does this project have to
+	// work with" - so they are separate captioned sections rather than one merged list.
+	private _renderContext(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
+		this._renderDocumentContext(panel);
+		this._renderWorkspaceSources(panel, documents, extras);
+	}
+
+	private _renderDocumentContext(panel: HTMLElement): void {
 		const resource = this._activeSurfaceResource();
 		const doc = resource ? this._livingDocs.getDoc(resource) : undefined;
 		if (!resource || !doc) {
@@ -771,6 +850,84 @@ export class TreeRailView extends ViewPane {
 		}
 		if (!groups.some(g => g.label === 'Linked sources')) { this._renderAddSource(panel, resource); }
 		this._renderAddContext(panel, resource);
+	}
+
+	/**
+	 * The workspace sources section (plan 52 WP-D3): every source the folder holds - bound sources, discovered
+	 * data files, workbooks and PDFs offering "Use as source" - shown whichever document is active, and with
+	 * none open at all. This is the Files tree's old synthetic "Sources" group, moved whole:
+	 *  - each row still states its freshness ("synced" / "stale" / "context only") through `sourceMeta`, the
+	 *    single home of that vocabulary, shared with the tree's leaf renderer;
+	 *  - un-bound image/screenshot sources still sit behind ONE collapsed Assets bucket, seeded collapsed on
+	 *    first open and persisted under the same `ASSETS_FOLDER_ID` key, so a folder of ~200 screenshots never
+	 *    floods the pane (issue #171);
+	 *  - each row still opens as a product tab on click and still raises the LIGHTER provenance-safe source
+	 *    menu on right-click (Rename / Add to Chat / Delete), never the document menu.
+	 */
+	private _renderWorkspaceSources(panel: HTMLElement, documents: readonly ILivingDocSummary[], extras: readonly string[]): void {
+		const nodes = buildWorkspaceSourceNodes(documents.map(d => this._toDocInput(d)), extras, this._sourceFreshnessByLabel(documents));
+		// First sight of this workspace's assets: seed the bucket collapsed so the screenshot flood never renders.
+		// One-time only - after this the bucket persists whatever the user chooses, like every other folder.
+		this._seedAssetsCollapsed(nodes);
+		const count = nodes.reduce((n, node) => n + (node.type === 'folder' ? node.children.length : 1), 0);
+		const header = append(panel, $('div.rail-folder'));
+		header.textContent = `${localize('livingDocs.context.workspaceSources', "Workspace sources")} \u00B7 ${count}`;
+		if (!nodes.length) {
+			append(panel, $('div.rail-empty')).textContent = localize('livingDocs.context.noWorkspaceSources', "No data files in this folder yet.");
+			return;
+		}
+		for (const node of nodes) {
+			if (node.type === 'leaf') { this._renderSourceRow(panel, node); continue; }
+			// The Assets bucket: one collapsible row standing in for every un-bound screenshot (issue #171).
+			const collapsed = this._collapsedFolders.has(node.id);
+			const bucket = append(panel, $('button.rail-bucket')) as HTMLButtonElement;
+			bucket.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+			append(bucket, $('span.rail-bucket-twistie')).textContent = collapsed ? '\u25B8' : '\u25BE';
+			append(bucket, $('span')).textContent = node.label;
+			this._renderDisposables.add(addDisposableListener(bucket, 'click', () => {
+				if (collapsed) { this._collapsedFolders.delete(node.id); } else { this._collapsedFolders.add(node.id); }
+				this._persistCollapsedFolders();
+				void this._render();
+			}));
+			if (collapsed) { continue; }
+			for (const child of node.children) {
+				if (child.type === 'leaf') { this._renderSourceRow(panel, child, true); }
+			}
+		}
+	}
+
+	// One source row in the Context tab's workspace sources. The row's inline doors ("Use as source" for a
+	// workbook / PDF, issue #131) are drawn by the SAME `_renderLeafActions` the Files tree uses, so the two
+	// surfaces cannot offer different actions on the same file. `nested` insets rows inside the Assets bucket.
+	private _renderSourceRow(panel: HTMLElement, node: ITreeRailLeafNode, nested = false): void {
+		const item = node.item;
+		const row = append(panel, $(`div.rail-item.rail-item-src${nested ? '.rail-item-nested' : ''}`));
+		append(row, $('span.rail-item-glyph')).textContent = sourceKindGlyph(item.label);
+		append(row, $('span.rail-item-label')).textContent = item.label;
+		const meta = sourceMeta(item);
+		if (meta) {
+			append(row, $(`span.rail-item-detail.rail-meta-${meta.tone}`)).textContent = meta.text;
+		}
+		this._renderDisposables.add(this._renderLeafActions(node, append(row, $('span.rail-tree-actions'))));
+		// An api/mcp source, or a data file discovered on disk that no document binds, has no resource to act
+		// on: it is listed (it is real) but it opens nothing and raises no menu - exactly as in the old tree.
+		const resource = item.resource;
+		if (!resource) { return; }
+		row.setAttribute('role', 'button');
+		row.tabIndex = 0;
+		this._renderDisposables.add(this._hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), row, item.label));
+		// A source opens as a product tab on the same strip (pin 7 / P7.4), never a plain text editor, and stays
+		// PINNED: opening a data file is a deliberate "work with this" gesture, so it never evicts a preview.
+		const open = () => void this._livingDocs.openSourceTab(resource);
+		this._renderDisposables.add(addDisposableListener(row, 'click', open));
+		this._renderDisposables.add(addDisposableListener(row, 'keydown', e => {
+			if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+		}));
+		this._renderDisposables.add(addDisposableListener(row, 'contextmenu', e => {
+			e.preventDefault();
+			e.stopPropagation();
+			this._showSourceMenu({ x: e.clientX, y: e.clientY }, resource, item.label);
+		}));
 	}
 
 	// The "+ Add source" affordance (R5): a button that, when opened, lists the folder's data files (csv/json)
@@ -924,6 +1081,26 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-tab.active{font-weight:600;color:#1A1C20;background:#fff;box-shadow:0 1px 2px rgba(20,22,28,.05)}
 		.living-docs-rail .rail-new-doc{flex:none;border:none;background:none;cursor:pointer;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:7px;font:400 15px/1 system-ui;color:#868B95}
 		.living-docs-rail .rail-new-doc:hover{background:#EEF0F3;color:#52575F}
+		/* The Recent strip (plan 52 WP-D2): a compact band above the filter box - a caption row that folds it
+		   away, then up to five 24px rows. Deliberately quieter and denser than a tree row (24px vs 30px, 12.5px
+		   vs 13px type) so it reads as a jump-list beside the tree, never as a second copy of it. */
+		.living-docs-rail .rail-recent{flex:none;display:flex;flex-direction:column;padding:2px 4px 6px;border-bottom:1px solid #F1F2F6;margin-bottom:6px}
+		.living-docs-rail .rail-recent-head{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;height:22px;padding:0 4px;border:none;background:none;cursor:pointer;border-radius:6px;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;text-align:left}
+		.living-docs-rail .rail-recent-head:hover{background:#F1F2F6;color:#868B95}
+		.living-docs-rail .rail-recent-twistie{flex:none;width:9px;font-size:8px;line-height:1;color:#A3A8B2}
+		.living-docs-rail .rail-recent-count{margin-left:auto;flex:none;letter-spacing:0;color:#C2C6CE}
+		.living-docs-rail .rail-recent-item{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:24px;padding:0 8px;border:none;background:none;cursor:pointer;border-radius:6px;font:400 12.5px/1 system-ui;color:#52575F;text-align:left}
+		.living-docs-rail .rail-recent-item:hover{background:#F1F2F6;color:#26292F}
+		/* The document you are in stays IN the strip, marked with the tree's selected-row treatment, so the strip
+		   reads as "where you are, and where you just were" rather than as a duplicate list. */
+		.living-docs-rail .rail-recent-item.active{background:#F4F5FD;color:#2A2F60;box-shadow:inset 0 0 0 1px #E0E5FB}
+		.living-docs-rail .rail-recent-item .rail-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:7px;height:7px}
+		.living-docs-rail .rail-recent-item .rail-status-dot{width:7px;height:7px;border-radius:999px}
+		.living-docs-rail .rail-recent-item .rail-status-dash{width:8px;height:2px;border-radius:1px;background:#D5D8DE}
+		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-grey{background:#D5D8DE}
+		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-green{background:#2C8159}
+		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-yellow{background:#C99A2E}
+		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-red{background:#B5514B}
 		.living-docs-rail .rail-filter{flex:none;padding:2px 4px 8px}
 		.living-docs-rail .rail-filter-input{width:100%;box-sizing:border-box;border:1px solid #E9EAEE;background:#FBFCFD;color:var(--vscode-input-foreground);border-radius:9px;padding:7px 10px;font:400 12.5px/1 system-ui;outline:none}
 		.living-docs-rail .rail-filter-input:focus{border-color:#9AA2E0}
@@ -961,7 +1138,6 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-files-tree .rail-tree-pending{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#8A6D1A;background:#FDFAF2;border:1px solid #E4DCCB;border-radius:999px;padding:2px 6px}
 		/* The source row's right meta (P5.6): synced (green) / relative time. */
 		.living-docs-rail .rail-files-tree .rail-tree-meta{margin-left:auto;flex:none;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2}
-		.living-docs-rail .rail-files-tree .rail-tree-meta-synced{color:#5D8A66}
 		/* Selected row (P5.4): accent-tint bg + accent border, accent-ink text. The live list paints selection through its own per-instance rules (the focused .monaco-list.list_id_N:focus .monaco-list-row.selected and the inactive .monaco-list .monaco-list-row.selected), which read the --vscode-list-*Selection* CSS variables (defaultStyles maps them via asCssVariable). A row-level background here loses to those generated rules, so we override the VARIABLES scoped to the rail instead - the widget's own rules then render the spec colour. The spec says "Selected row = accent-tint #F4F5FD bg" with no focus distinction, so BOTH the focused (active) and blurred (inactive) selection backgrounds are pinned to #F4F5FD, and both selection foregrounds to the accent ink #2A2F60. The focus outlines are neutralised so the widget's blue focus ring never fights the #E0E5FB spec border (the inset box-shadow below). */
 		.living-docs-rail .rail-files-tree{--vscode-list-activeSelectionBackground:#F4F5FD;--vscode-list-inactiveSelectionBackground:#F4F5FD;--vscode-list-activeSelectionForeground:#2A2F60;--vscode-list-inactiveSelectionForeground:#2A2F60;--vscode-list-hoverBackground:#F1F2F6;--vscode-list-focusOutline:transparent;--vscode-list-focusAndSelectionOutline:transparent;--vscode-list-inactiveFocusOutline:transparent}
 		.living-docs-rail .rail-files-tree .monaco-list-row.selected{box-shadow:inset 0 0 0 1px #E0E5FB}
@@ -982,6 +1158,22 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-item-source .rail-item-glyph{color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		.living-docs-rail .rail-item-detail{margin-left:auto;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
+		/* The ONE freshness vocabulary's tones (#122 F12), written once for BOTH surfaces that draw a source row:
+		   the Files tree's leaf renderer and the Context tab's workspace sources. The tree's own meta rule is one
+		   class deeper (.rail-files-tree), so each tone is stated at both depths rather than fought with !important. */
+		.living-docs-rail .rail-meta-stale,.living-docs-rail .rail-files-tree .rail-meta-stale{color:#8A6D1A}
+		.living-docs-rail .rail-meta-context-only,.living-docs-rail .rail-files-tree .rail-meta-context-only{color:#868B95}
+		.living-docs-rail .rail-meta-synced,.living-docs-rail .rail-files-tree .rail-meta-synced{color:#5D8A66}
+		/* A workspace-source row in the Context tab (plan 52 WP-D3): the tab's own row idiom, so it sits with the
+		   Linked sources / Referenced files rows rather than importing the tree's row shell into a non-tree pane. */
+		.living-docs-rail .rail-item-src{padding-left:8px}
+		.living-docs-rail .rail-item-src .rail-item-label{flex:1}
+		.living-docs-rail .rail-item-src .rail-item-glyph{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#5B6DC4;width:11px;text-align:center}
+		.living-docs-rail .rail-item-nested{padding-left:24px}
+		/* The Assets bucket (issue #171): one collapsible row standing in for every un-bound screenshot. */
+		.living-docs-rail .rail-bucket{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;height:26px;padding:0 8px;border:none;background:none;cursor:pointer;border-radius:6px;font:600 12px/1 system-ui;color:#52575F;text-align:left}
+		.living-docs-rail .rail-bucket:hover{background:#F1F2F6}
+		.living-docs-rail .rail-bucket-twistie{flex:none;width:9px;font-size:8px;line-height:1;color:#A3A8B2}
 		.living-docs-rail .rail-item-snippet{width:100%;padding-left:0;font:400 11.5px/1.5 system-ui;color:var(--vscode-descriptionForeground)}
 			.living-docs-rail .rail-item-unsupported{align-items:flex-start;flex-wrap:wrap;cursor:default}
 			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:var(--vscode-descriptionForeground)}

@@ -10,7 +10,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
 import { TreeRailLeafRenderer } from '../../browser/treeRailFilesTree.js';
-import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildTreeRailNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailLeafNode, ITreeRailNode, RECENT_FOLDER_ID, searchTreeRail, sourceKindGlyph } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_CAP, searchTreeRail, sourceKindGlyph, sourceMeta } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -95,13 +95,15 @@ suite('treeRail', () => {
 			renderRenameInput: () => undefined,
 		});
 
-		// Real leaf nodes from the real builder: a living doc (chip), a living doc with pending approvals (pill wins),
-		// a plain doc (neither), plus a bound source (a non-doc leaf never carries a doc marker).
-		const nodes = buildTreeRailNodes([
+		// Real leaf nodes from the real builders: a living doc (chip), a living doc with pending approvals (pill
+		// wins), a plain doc (neither) from the file tree, plus a bound source from the Context tab's workspace
+		// sources (a non-doc leaf never carries a doc marker) - the renderer draws rows from both surfaces.
+		const docInputs = [
 			{ title: 'Live', resource: URI.file('/ws/Live.md'), pendingCount: 0, sources: ['metrics.csv'], isLiving: true },
 			{ title: 'Pending', resource: URI.file('/ws/Pending.md'), pendingCount: 2, sources: ['metrics.csv'], isLiving: true },
 			{ title: 'Plain', resource: URI.file('/ws/Plain.md'), pendingCount: 0, sources: [], isLiving: false },
-		]);
+		];
+		const nodes = [...buildTreeRailNodes(docInputs), ...buildWorkspaceSourceNodes(docInputs)];
 		const leaves = new Map<string, ITreeRailLeafNode>();
 		const collect = (n: ITreeRailNode): void => n.type === 'leaf' ? void leaves.set(n.item.label, n) : n.children.forEach(collect);
 		nodes.forEach(collect);
@@ -141,35 +143,42 @@ suite('treeRail', () => {
 		);
 	});
 
-	test('buildTreeRailNodes adds a capped, MRU-ordered Recent group above the file tree with distinct collision-free ids, hidden below two (livingDocs #212)', () => {
+	test('buildRecentDocItems returns the MRU strip rows - capped, de-duplicated, foreign history entries dropped - and the tree carries no Recent group at all (livingDocs #212, plan 52 WP-D2)', () => {
 		const docInputs = ['A', 'B', 'C', 'D', 'E', 'F'].map(t => ({ title: t, resource: URI.file(`/ws/${t}.md`), pendingCount: 0, sources: [] }));
-		// Six MRU resources (newest first); the group caps at five and drops the rest, in MRU order.
-		const recent = ['F', 'E', 'D', 'C', 'B', 'A'].map(t => URI.file(`/ws/${t}.md`));
-		const nodes = buildTreeRailNodes(docInputs, [], recent);
-		const recentNode = nodes.find(n => n.type === 'folder' && n.id === RECENT_FOLDER_ID);
-		assert.ok(recentNode && recentNode.type === 'folder', 'Recent is the first group above the file tree');
+		// Seven MRU entries newest-first: one repeat (F), one document from a folder that is not open (/other/X.md),
+		// and more than the cap. The strip keeps MRU order, drops the repeat and the foreigner, and stops at the cap.
+		const recent = [...['F', 'E', 'F', 'D', 'C', 'B'].map(t => URI.file(`/ws/${t}.md`)), URI.file('/other/X.md'), URI.file('/ws/A.md')];
 		assert.deepStrictEqual(
 			{
-				firstGroupIsRecent: nodes[0].type === 'folder' && nodes[0].id === RECENT_FOLDER_ID,
-				recentLeaves: recentNode.children.map(c => c.type === 'leaf' ? { label: c.item.label, id: c.id } : { folder: c.label }),
-				// A Recent leaf carries the distinct RECENT_FOLDER_ID prefix, never colliding with its file-tree twin.
-				idsAllDistinctFromTree: recentNode.children.every(c => c.id.startsWith(`${RECENT_FOLDER_ID}/leaf:`)),
-				// One recent doc is not worth a group.
-				hiddenBelowTwo: buildTreeRailNodes(docInputs, [], [URI.file('/ws/A.md')]).some(n => n.type === 'folder' && n.id === RECENT_FOLDER_ID),
+				cap: RECENT_STRIP_CAP,
+				strip: buildRecentDocItems(docInputs, recent).map(i => i.label),
+				// One recent document is worth a row now: the strip costs one line, where the old in-tree group cost
+				// a whole collapsible level of indent (which is why it used to hide below two).
+				single: buildRecentDocItems(docInputs, [URI.file('/ws/A.md')]).map(i => i.label),
+				none: buildRecentDocItems(docInputs, []).map(i => i.label),
+				// Nothing recent-shaped is left in the file tree - the whole point of D2.
+				treeHasNoRecentGroup: buildTreeRailNodes(docInputs).some(n => n.type === 'folder' && /recent/i.test(n.label)),
 			},
-			{
-				firstGroupIsRecent: true,
-				recentLeaves: [
-					{ label: 'F', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/F.md').toString()}` },
-					{ label: 'E', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/E.md').toString()}` },
-					{ label: 'D', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/D.md').toString()}` },
-					{ label: 'C', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/C.md').toString()}` },
-					{ label: 'B', id: `${RECENT_FOLDER_ID}/leaf:${URI.file('/ws/B.md').toString()}` },
-				],
-				idsAllDistinctFromTree: true,
-				hiddenBelowTwo: false,
-			},
+			{ cap: 5, strip: ['F', 'E', 'D', 'C', 'B'], single: ['A'], none: [], treeHasNoRecentGroup: false },
 		);
+	});
+
+	test('buildTreeRailNodes shows EXACTLY the folder hierarchy - no Recent group, no Sources group, no synthetic wrapper (plan 52 WP-D)', () => {
+		// The pre-build state this replaces: a synthetic "Recent" group of second copies above the tree, and a
+		// synthetic "Sources" group below it. Both are gone; documents and directories are all that is left. The
+		// standing "Not yet imported" affordance stays - a file we saw and could not convert is never a silent drop.
+		const nodes = buildTreeRailNodes(
+			[
+				{ title: 'Root Doc', resource: URI.file('/ws/root.md'), pendingCount: 0, sources: ['metrics.csv'], folder: '' },
+				{ title: 'Q1', resource: URI.file('/ws/brief/q1.md'), pendingCount: 0, sources: [], folder: 'brief' },
+			],
+			['data.csv', 'shot.png', 'old.doc'],
+		);
+		assert.deepStrictEqual(project(nodes), [
+			{ folder: 'brief', children: [{ leaf: 'Q1', kind: 'doc' }] },
+			{ leaf: 'Root Doc', kind: 'doc' },
+			{ folder: 'Not yet imported', children: [{ leaf: 'old.doc', kind: 'unsupported' }] },
+		]);
 	});
 
 	test('buildFileTree resolves a file source to a URI in the referencing document\'s folder (for the Files-tab menu), but not an api (URL) source', () => {
@@ -267,19 +276,18 @@ suite('treeRail', () => {
 		);
 	});
 
-	test('buildTreeRailNodes shapes the grouped tree into collapsible folder + leaf nodes (issue #171)', () => {
+	test('buildTreeRailNodes shapes the on-disk hierarchy into collapsible folder + leaf nodes (issue #171)', () => {
 		const A = URI.file('/ws/root.md');
 		const B = URI.file('/ws/reports/2025/q1.md');
 		const nodes = buildTreeRailNodes([
 			{ title: 'Root Doc', resource: A, pendingCount: 0, sources: ['metrics.csv'], folder: '' },
 			{ title: 'Q1', resource: B, pendingCount: 0, sources: [], folder: 'reports/2025' },
 		]);
-		// The on-disk hierarchy IS the top level - real directories first, then root documents, with no
-		// synthetic wrapper above them (plan 52 WP-D). Sources trails as its own group.
+		// The on-disk hierarchy IS the top level - real directories first (nested verbatim), then root documents,
+		// with nothing synthetic above or below them (plan 52 WP-D).
 		assert.deepStrictEqual(project(nodes), [
 			{ folder: 'reports', children: [{ folder: '2025', children: [{ leaf: 'Q1', kind: 'doc' }] }] },
 			{ leaf: 'Root Doc', kind: 'doc' },
-			{ folder: 'Sources', children: [{ leaf: 'metrics.csv', kind: 'source' }] },
 		]);
 	});
 
@@ -297,41 +305,65 @@ suite('treeRail', () => {
 		assert.ok(leafIds.every(id => id.includes('Status')), 'each leaf id carries its own resource');
 	});
 
-	test('buildTreeRailNodes buckets un-bound image assets behind one collapsed Assets node, keeping bound sources visible (issue #171)', () => {
+	test('buildWorkspaceSourceNodes buckets un-bound image assets behind one collapsed Assets node, keeping bound sources visible (issue #171, plan 52 WP-D3)', () => {
 		const A = URI.file('/ws/report.md');
-		const nodes = buildTreeRailNodes(
+		const nodes = buildWorkspaceSourceNodes(
 			// chart.png is a BOUND source (referenced by the doc) and stays visible; the loose screenshots are assets.
 			[{ title: 'Report', resource: A, pendingCount: 0, sources: ['chart.png', 'metrics.csv'], folder: '' }],
 			['shot-1.png', 'shot-2.png', 'shot-3.jpg', 'data.csv'],
 		);
-		const sources = nodes.find((n): n is Extract<ITreeRailNode, { type: 'folder' }> => n.type === 'folder' && n.label === 'Sources')!;
-		assert.deepStrictEqual(project([sources]), [{
-			folder: 'Sources', children: [
-				// Non-image sources (bound + discovered), then a single collapsed Assets bucket for the images.
-				{ leaf: 'chart.png', kind: 'source' },
-				{ leaf: 'data.csv', kind: 'source' },
-				{ leaf: 'metrics.csv', kind: 'source' },
-				{
-					folder: 'Assets (3)', children: [
-						{ leaf: 'shot-1.png', kind: 'source' },
-						{ leaf: 'shot-2.png', kind: 'source' },
-						{ leaf: 'shot-3.jpg', kind: 'source' },
-					]
-				},
-			],
-		}]);
-		// Ids are stable + path-based so selection + persisted collapse state survive re-renders/restart.
-		const assetsNode = sources.children.find(c => c.type === 'folder')!;
-		assert.strictEqual(assetsNode.id, 'folder:Sources/Assets');
+		assert.deepStrictEqual(project(nodes), [
+			// Non-image sources (bound + discovered), then a single collapsed Assets bucket for the images.
+			{ leaf: 'chart.png', kind: 'source' },
+			{ leaf: 'data.csv', kind: 'source' },
+			{ leaf: 'metrics.csv', kind: 'source' },
+			{
+				folder: 'Assets (3)', children: [
+					{ leaf: 'shot-1.png', kind: 'source' },
+					{ leaf: 'shot-2.png', kind: 'source' },
+					{ leaf: 'shot-3.jpg', kind: 'source' },
+				]
+			},
+		]);
+		// The bucket's id is unchanged from when Sources lived in the tree, so a workspace that already persisted
+		// its collapse state keeps it after the move.
+		assert.strictEqual(nodes.find(c => c.type === 'folder')!.id, 'folder:Sources/Assets');
+	});
+
+	test('buildWorkspaceSourceNodes is workspace-level: it lists the folder\'s sources with no document open, and keeps each row\'s freshness (plan 52 WP-D3)', () => {
+		// The Context tab must show the folder's sources whichever document is active - including none at all -
+		// so the builder takes an empty document set and still returns the discovered files. Freshness rides on
+		// the row (the ONE vocabulary, #122 F12) so nothing is lost by leaving the tree.
+		const bound = [{ title: 'Report', resource: URI.file('/ws/report.md'), pendingCount: 0, sources: ['metrics.csv', 'notes.txt'], folder: '' }];
+		const freshness = new Map<string, 'fresh' | 'stale' | 'context-only'>([['metrics.csv', 'stale'], ['notes.txt', 'context-only']]);
+		const meta = (nodes: readonly ITreeRailNode[]) => nodes.map(n => n.type === 'leaf' ? { leaf: n.item.label, meta: sourceMeta(n.item) } : { folder: n.label });
+		assert.deepStrictEqual(
+			{
+				noDocuments: project(buildWorkspaceSourceNodes([], ['data.csv', 'legacy.doc'])),
+				withFreshness: meta(buildWorkspaceSourceNodes(bound, ['loose.csv'], freshness)),
+				emptyFolder: buildWorkspaceSourceNodes([], []),
+			},
+			{
+				// A folder with no documents still has data files; an unsupported file is not a source.
+				noDocuments: [{ leaf: 'data.csv', kind: 'source' }],
+				withFreshness: [
+					// A bare discovered file has no owning document, so no freshness and no local URI - no meta.
+					{ leaf: 'loose.csv', meta: undefined },
+					{ leaf: 'metrics.csv', meta: { text: 'stale', tone: 'stale' } },
+					{ leaf: 'notes.txt', meta: { text: 'context only', tone: 'context-only' } },
+				],
+				emptyFolder: [],
+			},
+		);
 	});
 
 	test('collectAssetsFolderIds finds the Assets bucket id so the view can seed it collapsed on first open (issue #171)', () => {
 		const A = URI.file('/ws/report.md');
-		const withAssets = buildTreeRailNodes(
+		const withAssets = buildWorkspaceSourceNodes(
 			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
 			['shot-1.png', 'shot-2.png', 'data.csv'],
 		);
-		const noAssets = buildTreeRailNodes(
+		const noAssets = buildWorkspaceSourceNodes(
 			[{ title: 'Report', resource: A, pendingCount: 0, sources: [], folder: '' }],
 			['data.csv'],
 		);
@@ -449,13 +481,13 @@ suite('treeRail', () => {
 	});
 
 	test('filterTreeRailNodes narrows to matching rows, keeps ancestor folders, and passes a blank query through', () => {
-		// Two docs in nested folders + one loose source, so the filter must prune folders that hold no match.
+		// Two docs in nested folders + one file we cannot import, so the filter must prune folders holding no match.
 		const nodes = buildTreeRailNodes(
 			[
 				{ title: 'Weekly Summary', resource: URI.file('/ws/reports/2025/Weekly Summary.md'), pendingCount: 0, sources: [], folder: 'reports/2025' },
 				{ title: 'Board Note', resource: URI.file('/ws/reports/Board Note.md'), pendingCount: 0, sources: [], folder: 'reports' },
 			],
-			['metrics.csv'],
+			['legacy.doc'],
 		);
 		// Collect every leaf label reachable under a filtered tree, so one deepStrictEqual reads the whole shape.
 		const labels = (roots: readonly ITreeRailNode[]): string[] => {
@@ -467,17 +499,20 @@ suite('treeRail', () => {
 		assert.deepStrictEqual(
 			{
 				weekly: labels(filterTreeRailNodes(nodes, 'weekly')),
-				metrics: labels(filterTreeRailNodes(nodes, 'metrics')),
+				// A folder whose own name matches is kept whole, so its rows stay reachable.
+				folderName: labels(filterTreeRailNodes(nodes, '2025')),
+				legacy: labels(filterTreeRailNodes(nodes, 'legacy')),
 				noMatch: filterTreeRailNodes(nodes, 'zzz').length,
 				blankUnchanged: labels(filterTreeRailNodes(nodes, '   ')),
 				original: labels(nodes),
 			},
 			{
 				weekly: ['Weekly Summary'],
-				metrics: ['metrics.csv'],
+				folderName: ['Weekly Summary'],
+				legacy: ['legacy.doc'],
 				noMatch: 0,
-				blankUnchanged: ['Board Note', 'Weekly Summary', 'metrics.csv'],
-				original: ['Board Note', 'Weekly Summary', 'metrics.csv'],
+				blankUnchanged: ['Board Note', 'Weekly Summary', 'legacy.doc'],
+				original: ['Board Note', 'Weekly Summary', 'legacy.doc'],
 			},
 		);
 	});
