@@ -1157,11 +1157,13 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-item-glyph{color:oklch(0.55 0.13 255);flex:none}
 		.living-docs-rail .rail-item-source .rail-item-glyph{color:var(--vscode-descriptionForeground)}
 		.living-docs-rail .rail-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-		/* The row's trailing detail is a single quiet line, never a wrapping block: without flex:none + nowrap a
-		   long detail ("live - feeds 2 blocks") wrapped to two lines and crushed the source name beside it to
-		   "metrics....". The name takes the slack instead and ellipsises if it must. */
-		.living-docs-rail .rail-item .rail-item-label{flex:1}
-		.living-docs-rail .rail-item-detail{margin-left:auto;flex:none;white-space:nowrap;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
+		/* The row's trailing detail is a single quiet line, never a wrapping block: without nowrap a long detail
+		   ("live - feeds 2 blocks") wrapped to two lines and crushed the source name beside it to "metrics....".
+		   When the row still cannot fit both, the DETAIL yields (shrink 20 against the name's 1) and ellipsises -
+		   its freshness word leads, so "stale - feeds..." keeps the part that matters while the file's own name,
+		   which is the row's identity, stays whole. */
+		.living-docs-rail .rail-item .rail-item-label{flex:1 1 auto}
+		.living-docs-rail .rail-item-detail{margin-left:auto;flex:0 20 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
 		/* The ONE freshness vocabulary's tones (#122 F12), written once for BOTH surfaces that draw a source row:
 		   the Files tree's leaf renderer and the Context tab's workspace sources. The tree's own meta rule is one
 		   class deeper (.rail-files-tree), so each tone is stated at both depths rather than fought with !important. */
