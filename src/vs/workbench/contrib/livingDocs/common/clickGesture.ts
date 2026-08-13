@@ -7,11 +7,17 @@ import { disposableTimeout } from '../../../../base/common/async.js';
 import { Disposable, IDisposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
 
 /**
- * How long after a button is released a second click still belongs to the same gesture. 500ms is the
- * platform double-click threshold Chromium uses, and no browser exposes the user's own system setting, so
- * this is the widest window a double-click can occupy.
+ * How long after a button is released a second click still belongs to the same gesture.
+ *
+ * Chromium decides what a double-click IS: it counts a second press as `detail: 2` - and fires the `dblclick`
+ * that pins a document - only within its own 500ms threshold, and no browser exposes the user's real system
+ * setting. 500ms is therefore the widest window a double-click can occupy; the margin on top covers timer
+ * jitter and a slow first paint, so every sequence the platform would call a double-click is held whole.
+ *
+ * It is a hold, not a delay the user waits on: the pane settles this long after the LAST button release, and
+ * only the rail's own furniture is held - the document opens the instant it is clicked, as it always did.
  */
-export const CLICK_GESTURE_WINDOW_MS = 500;
+export const CLICK_GESTURE_WINDOW_MS = 600;
 
 /**
  * The longest a gesture is allowed to stay in flight without its release ever arriving. A `mouseup` that
