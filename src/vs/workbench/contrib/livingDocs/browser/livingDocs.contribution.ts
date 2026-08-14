@@ -30,6 +30,7 @@ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js'
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { registerWorkbenchContribution2, WorkbenchPhase, IWorkbenchContribution } from '../../../common/contributions.js';
+import { ActiveEditorContext } from '../../../common/contextkeys.js';
 import { EditorExtensions, IEditorFactoryRegistry } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
@@ -499,6 +500,37 @@ registerAction2(class ApproveAllChangesAction extends Action2 {
 			if (!confirmed) { return; }
 		}
 		await livingDocs.approveAll(input.resource.toString());
+	}
+});
+
+// --- Cmd+F finds inside the document (plan 52 WP-E) ---
+// Stock Cmd+F is the code editor's find, which never fires on an Abstract surface (there is no text editor
+// there - the pre-build walk found Cmd+F doing nothing at all). It is taken the same additive way Cmd+T is
+// above: an action at weight 1000, which beats the stock binding without touching core's keybinding tables.
+//
+// The widget itself lives INSIDE the document webview, and when the caret is in the document that frame
+// answers the chord directly (no round trip). This action covers the OTHER focus positions the pane can be
+// in - the tab strip, a rail, the header - where the chord reaches the workbench instead. Scoped to
+// ActiveEditorContext so it only claims Cmd+F while a living document is the active editor; every other
+// surface keeps whatever Cmd+F meant there, and the Files-tab filter (project-wide search) is untouched.
+registerAction2(class FindInDocumentAction extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.editor.find',
+			title: localize2('livingDocs.editor.find', "Find in Document"),
+			f1: true,
+			keybinding: {
+				weight: 1000,
+				primary: KeyMod.CtrlCmd | KeyCode.KeyF,
+				when: ActiveEditorContext.isEqualTo(LivingDocEditor.ID),
+			},
+		});
+	}
+	run(accessor: ServicesAccessor): void {
+		const pane = accessor.get(IEditorService).activeEditorPane;
+		if (pane instanceof LivingDocEditor) {
+			pane.openFind();
+		}
 	}
 });
 
