@@ -34,6 +34,12 @@ import { IChatMessage } from './livingDocs.js';
 // assistant turn carries `proposedCount` (how many changes it proposed) rather than the live `proposedIds`
 // it had at the time - pending changes are in-memory only and do not survive a restart, so persisting their
 // ids would guarantee a pointer that leads nowhere. A count can be spoken honestly; a dead id cannot.
+//
+// A count alone, though, is honest about HOW MANY and silent about WHAT HAPPENED - and a record that is
+// silent about what happened ends up guessing. It guessed, and it guessed wrong: every restored proposal was
+// told it had been "cleared when the workspace closed", including one the user had APPROVED, which was on
+// disk and in the History tab at the time (#312 fix round 2). So the outcome is stored beside the count, and
+// it is written the moment the user acts, because that is the only moment it exists.
 
 /** The most recent messages one chat keeps in workspace storage. Older turns are dropped, and counted. */
 export const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -76,6 +82,9 @@ interface IPersistedMessage {
 	readonly paused?: boolean;
 	/** How many changes this assistant turn proposed, so a restored turn can say so without a dead pointer. */
 	readonly proposed?: number;
+	/** How many of them the user approved / rejected, so a restored turn can say what actually HAPPENED. */
+	readonly approved?: number;
+	readonly rejected?: number;
 	/** True when `content` was clipped at TRANSCRIPT_CONTENT_CAP, so the rail can mark it honestly. */
 	readonly clipped?: boolean;
 }
@@ -109,6 +118,11 @@ function persistMessage(message: IChatMessage): IPersistedMessage {
 	// A live turn knows its proposals by id; a restored one knows only how many there were. Take whichever is
 	// larger so neither reading can silently zero the other out.
 	const proposed = Math.max(message.proposedIds?.length ?? 0, message.proposedCount ?? 0);
+	// What became of them. Both counts are written onto the turn as the user acts and are clamped here rather
+	// than trusted, so a stored turn can never claim more outcomes than it had proposals - the sentence the rail
+	// builds from them ("N approved, M rejected, the rest never reviewed") has to add up whatever it is handed.
+	const approved = Math.min(proposed, Math.max(0, Math.floor(message.approvedCount ?? 0)));
+	const rejected = Math.min(proposed - approved, Math.max(0, Math.floor(message.rejectedCount ?? 0)));
 	// The underlying instruction is kept (clipped the same way) because Retry re-runs it, not the shown
 	// words - a restored generation turn must retry the brief it really sent, never the plain-words progress.
 	const prompt = message.prompt ? String(message.prompt).slice(0, TRANSCRIPT_CONTENT_CAP) : undefined;
@@ -122,6 +136,8 @@ function persistMessage(message: IChatMessage): IPersistedMessage {
 		...(message.failed ? { failed: true } : {}),
 		...(message.paused ? { paused: true } : {}),
 		...(proposed > 0 ? { proposed } : {}),
+		...(approved > 0 ? { approved } : {}),
+		...(rejected > 0 ? { rejected } : {}),
 		...(clipped ? { clipped: true } : {}),
 	};
 }
@@ -207,6 +223,8 @@ export function deserialiseTranscripts(raw: string | undefined): ITranscriptStor
 				...(m.failed === true ? { failed: true } : {}),
 				...(m.paused === true ? { paused: true } : {}),
 				...(typeof m.proposed === 'number' && m.proposed > 0 ? { proposedCount: m.proposed } : {}),
+				...(typeof m.approved === 'number' && m.approved > 0 ? { approvedCount: m.approved } : {}),
+				...(typeof m.rejected === 'number' && m.rejected > 0 ? { rejectedCount: m.rejected } : {}),
 				...(m.clipped === true ? { clipped: true } : {}),
 			});
 		}

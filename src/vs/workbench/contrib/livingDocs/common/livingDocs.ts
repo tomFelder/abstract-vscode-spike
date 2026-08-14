@@ -609,6 +609,14 @@ export interface IChatMessage {
 	// clears them and their ids would be dead pointers - the count is stored instead, and the rail prints an
 	// honest line in the pointers' place (see `chatTranscripts.ts`).
 	readonly proposedCount?: number;
+	// How many of this turn's proposals the user APPROVED / REJECTED. Written onto the turn the moment the user
+	// acts, because that is the only moment the fact exists: the change leaves the pending set immediately, and
+	// a restart takes what is left of it. Without these a restored turn could only say that changes had been
+	// proposed - so it told an APPROVED change, sitting on disk and in the History tab, that it had been thrown
+	// away when the workspace closed (#312 fix round 2). The count is honest about how many; only these are
+	// honest about what happened. What was proposed and neither approved nor rejected really was cleared.
+	readonly approvedCount?: number;
+	readonly rejectedCount?: number;
 	// True when the stored body was clipped by the per-message character cap, so the rail can say the answer
 	// is shortened rather than present a truncated reply as the whole of it.
 	readonly clipped?: boolean;

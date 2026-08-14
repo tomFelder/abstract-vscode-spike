@@ -27,7 +27,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
-import { buildTurnPointers, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
+import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
@@ -1459,17 +1459,24 @@ export class ReviewRailView extends ViewPane {
 		// id would be a pointer that leads nowhere - the one thing a pointer must never be. The count is said
 		// plainly instead, so a restored turn that proposed work still reads as having proposed work.
 		if (m.restored) {
-			if (!m.proposedCount) { return; }
+			// ...and it names what BECAME of them. It used to say one thing about every restored proposal -
+			// "changes waiting for review are cleared when the workspace closes" - which is true of a change nobody
+			// reviewed and false of one the user approved, which is on disk and in the History tab three inches
+			// away (#312 fix round 2). The outcome is recorded as the user acts, so it is read off the record here
+			// rather than assumed. The sentences themselves live in `describeRestoredProposals`, where they are
+			// unit-tested; this branch only draws the one it is given.
+			const note = describeRestoredProposals(m.proposedCount, m.approvedCount, m.rejectedCount);
+			if (!note) { return; }
 			const gone = append(col, $('div'));
-			gone.style.cssText = 'display:flex;align-items:center;gap:7px;border:1px dashed #e4e7ee;border-radius:9px;padding:7px 10px;font:400 11.5px/1.4 system-ui;color:#868b95';
+			gone.style.cssText = `display:flex;align-items:center;gap:7px;border:1px dashed ${note.applied ? '#d3e5da' : '#e4e7ee'};border-radius:9px;padding:7px 10px;font:400 11.5px/1.4 system-ui;color:#868b95`;
 			const kind = append(gone, $('span'));
-			kind.style.cssText = 'flex:none;font:600 10px/1 ui-monospace,monospace;letter-spacing:.04em;color:#a3a8b2';
-			kind.textContent = localize('livingDocs.chat.restoredProposalsTag', "PAST");
+			// An approved turn is the one outcome that LANDED, so its marker carries the same applied-green the
+			// rest of the app uses for a change that is in the document. Everything else stays a muted record.
+			kind.style.cssText = `flex:none;font:600 10px/1 ui-monospace,monospace;letter-spacing:.04em;color:${note.applied ? '#1f7a44' : '#a3a8b2'}`;
+			kind.textContent = note.tag;
 			const line = append(gone, $('span'));
 			line.style.cssText = 'flex:1;min-width:0';
-			line.textContent = m.proposedCount === 1
-				? localize('livingDocs.chat.restoredProposalOne', "Proposed 1 change. Changes waiting for review are cleared when the workspace closes, so it is not open any more.")
-				: localize('livingDocs.chat.restoredProposalMany', "Proposed {0} changes. Changes waiting for review are cleared when the workspace closes, so they are not open any more.", m.proposedCount);
+			line.textContent = note.text;
 			return;
 		}
 		if (!m.proposedIds || !m.proposedIds.length) { return; }

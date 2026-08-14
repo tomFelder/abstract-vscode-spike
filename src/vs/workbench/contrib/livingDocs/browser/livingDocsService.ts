@@ -5376,6 +5376,35 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
+	 * Write an approve/reject back onto the turn that proposed it, and save (#312 fix round 2).
+	 *
+	 * This is the same discipline the rest of this package runs on: **a fact only the first write knows must be
+	 * recorded when it is known.** The outcome exists for exactly one instant - the change leaves `_pending` the
+	 * moment the user acts, and a restart takes what is left of it - so a transcript that does not capture it
+	 * here can never recover it. It did not, and the consequence was a restored turn telling a user their
+	 * APPROVED change had been "cleared when the workspace closes" while it sat on disk and in the History tab.
+	 *
+	 * A change belongs to at most one turn, so the first turn holding the id is the only one to touch; the scan
+	 * is over the in-memory conversations, which the transcript caps hold to a few dozen turns each. `approve`
+	 * and `reject` both early-return for a change that is no longer pending, so no outcome is ever counted twice.
+	 */
+	private _recordProposalOutcome(changeId: string, outcome: 'approved' | 'rejected'): void {
+		for (const messages of this._chats.values()) {
+			for (let i = 0; i < messages.length; i++) {
+				const message = messages[i];
+				if (!message.proposedIds?.includes(changeId)) { continue; }
+				messages[i] = outcome === 'approved'
+					? { ...message, approvedCount: (message.approvedCount ?? 0) + 1 }
+					: { ...message, rejectedCount: (message.rejectedCount ?? 0) + 1 };
+				// Straight to storage: an outcome the user acted on a second before closing the workspace is
+				// exactly the one a transcript must not lose.
+				this._saveChatTranscripts();
+				return;
+			}
+		}
+	}
+
+	/**
 	 * The key every chat map is stored under: the active session, created on demand. Chat is never keyed by
 	 * document again, so opening another file leaves the conversation exactly where it was.
 	 */
@@ -6315,6 +6344,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			};
 		}
 		this._pending = this._pending.filter(c => c.id !== changeId);
+		this._recordProposalOutcome(changeId, 'approved');
 		// A tweaked change records `via: 'tweaked'` so the trail shows the human amended the agent's words
 		// (plan 31 iter 3, D31-B); otherwise the change's own provenance (model/heuristic) stands.
 		state.lock.audit.push(this._entry(state, change.blockId, 'approved', change.oldText, change.newText, change.tweaked ? 'tweaked' : (change.via ?? 'model')));
@@ -6364,6 +6394,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const change = this._pending.find(c => c.id === changeId);
 		if (!change) { return; }
 		this._pending = this._pending.filter(c => c.id !== changeId);
+		this._recordProposalOutcome(changeId, 'rejected');
 		const state = this._docs.get(change.docId);
 		if (state) {
 			state.lock.audit.push(this._entry(state, change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model', reason));
