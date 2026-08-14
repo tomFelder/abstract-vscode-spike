@@ -76,6 +76,74 @@ export function activeWikilink(text: string, caret: number): { start: number; qu
 }
 
 /**
+ * Split a picker query at the first `|` into the target being searched for and the alias being authored.
+ *
+ * The picker searches document names, but Obsidian's grammar lets a link SHOW different words than it
+ * targets - `[[Q3 Plan|the plan]]`. Without this split the whole `Q3 Plan|the plan` run is matched against
+ * the document list, which finds nothing and then offers to CREATE a document literally named
+ * `Q3 Plan|the plan` - a name no filesystem will take. Splitting means the target half still finds "Q3 Plan"
+ * while the alias half is carried through to the inserted node, so the picker can author an alias at all.
+ *
+ * The first `|` wins and later ones stay in the alias, exactly as the Markdown parser splits `[[a|b|c]]`
+ * into target `a` and alias `b|c` - the picker and the parser must agree or a link would change meaning
+ * between being typed and being reloaded.
+ *
+ * Self-contained (injected into the webview RUNTIME via `String(fn)`).
+ */
+export function splitWikilinkQuery(query: string): { target: string; alias: string; hasAlias: boolean } {
+	const raw = String(query || '');
+	const bar = raw.indexOf('|');
+	if (bar < 0) { return { target: raw, alias: '', hasAlias: false }; }
+	return { target: raw.slice(0, bar).trim(), alias: raw.slice(bar + 1).trim(), hasAlias: true };
+}
+
+/**
+ * The wikilink a user has just FINISHED TYPING, given the text of their paragraph up to and including the
+ * keystroke - or undefined when the keystroke did not complete one. `length` is how many characters of that
+ * text the link occupies, so the caller knows where to start replacing.
+ *
+ * Why this exists at all: prosemirror-markdown's text serializer escapes `[` and `]`, so a wikilink that is
+ * merely TEXT in the document is written to disk as `\[\[Doc Name\]\]` and is corrupt from the first save.
+ * Links parsed from disk and links inserted by the picker are real `wikilink` nodes and so survive; a
+ * hand-typed one had nothing to convert it, which also made `[[Target|Alias]]` - only reachable by hand,
+ * since the picker could not author one - the one syntax guaranteed to corrupt. The caller turns this match
+ * into a real node at the moment the closing `]]` lands.
+ *
+ * The rule mirrors the bundle's markdown-it inline rule EXACTLY, which is the invariant that matters: this
+ * fires precisely where a reload would have produced a link, so typing and reloading can never disagree.
+ * Verified against the real artifact - `arr[[0]]` in prose is a link to "0" on both paths, `[[a|b|c]]`
+ * targets "a" with alias "b|c" on both, and `[[]]`, `[[   ]]` and an escaped `\[[x]]` are links on neither.
+ *
+ * Deliberately NOT handled here, because it is not knowable from a string: code. A fenced block and an
+ * inline code span must stay literal, and the caller (which can see the ProseMirror node and marks around
+ * the caret) is the only party that can tell. U+FFFC (the object-replacement placeholder an inline leaf
+ * contributes) is excluded so a link can never be claimed to straddle a bound figure or an existing chip.
+ *
+ * Self-contained (injected into the webview RUNTIME via `String(fn)`).
+ */
+export function matchTypedWikilink(textBefore: string): { target: string; alias: string; length: number } | undefined {
+	const text = String(textBefore || '');
+	const close = text.length - 2;
+	if (close < 0 || text.charCodeAt(close) !== 93 /* ] */ || text.charCodeAt(close + 1) !== 93) { return undefined; }
+	const open = text.lastIndexOf('[[', close - 2);
+	if (open < 0) { return undefined; }
+	const inner = text.slice(open + 2, close);
+	// A bracket or a line break inside means this was never one link; U+FFFC means an inline leaf is in the way.
+	if (!inner.length || /[\n\[\]\ufffc]/.test(inner)) { return undefined; }
+	// An escaped `\[[` is the user saying "literally", and the parser's escape rule agrees - it claims the
+	// bracket before the wikilink rule is ever reached. An EVEN run of backslashes is escaped backslashes,
+	// which leaves the bracket itself unescaped.
+	let slashes = 0;
+	for (let i = open - 1; i >= 0 && text.charCodeAt(i) === 92 /* \ */; i--) { slashes++; }
+	if (slashes % 2 === 1) { return undefined; }
+	const bar = inner.indexOf('|');
+	const target = (bar < 0 ? inner : inner.slice(0, bar)).trim();
+	const alias = bar < 0 ? '' : inner.slice(bar + 1).trim();
+	if (!target) { return undefined; }
+	return { target, alias, length: close + 2 - open };
+}
+
+/**
  * The on-disk form of a wikilink: `[[Target]]`, or `[[Target|Alias]]` when an alias is shown. This is
  * the exact text that must reach the Markdown file, which is what keeps it Obsidian-compatible.
  *
