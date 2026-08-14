@@ -64,8 +64,23 @@ const STRIP_PADDING = 16;
 const TAB_GAP = 4;
 /** The trailing "+", including the 4px margin that separates it from whatever precedes it. */
 const NEW_CHAT_WIDTH = 34;
-/** The bordered "N more ▾" chip. */
-const OVERFLOW_WIDTH = 62;
+
+/**
+ * How wide the bordered "N more ▾" chip really draws with `hidden` chats behind it.
+ *
+ * This used to be a single constant, 62. But the chip is laid out from its own TEXT, so it grows with the
+ * number in it: measured in the running app, "4 more ▾" is 63.6px and "14 more ▾" is 69.2px. The tab beside it
+ * takes the shortfall (`flex:1 1 0`), so from ten hidden chats on, a strip promising tabs of at least
+ * `MIN_TAB_WIDTH` was drawing 91.3px ones. That is the same defect fix round 1 removed for the 4px flex gaps -
+ * a budget written from what the layout was assumed to cost rather than from what it costs - and this is the
+ * rest of it. Both numbers are measured and rounded UP, because a budget a pixel light is how this happens.
+ */
+const OVERFLOW_BASE_WIDTH = 64;
+const OVERFLOW_DIGIT_WIDTH = 6;
+export function overflowWidth(hidden: number): number {
+	const digits = String(Math.max(1, Math.floor(hidden))).length;
+	return OVERFLOW_BASE_WIDTH + (digits - 1) * OVERFLOW_DIGIT_WIDTH;
+}
 
 /**
  * How many tabs fit in a strip `stripWidth` px wide, given how many chats there are. Pure arithmetic so the
@@ -73,7 +88,8 @@ const OVERFLOW_WIDTH = 62;
  *
  * - every visible tab is at least `MIN_TAB_WIDTH` wide, so no tab is ever drawn as one letter + an ellipsis;
  * - the trailing "+" always keeps its room, so "new chat" never disappears at a narrow width;
- * - the "N more" chip is only paid for when something actually overflows;
+ * - the "N more" chip is only paid for when something actually overflows, and is paid for at the width its
+ *   own text really draws (`overflowWidth`), which grows once the hidden count reaches two digits;
  * - the 4px gap between every adjacent child is paid for too.
  *
  * **Zero is a real answer**, and it is the fix for the residual's own defect landing on the active tab: below
@@ -91,7 +107,7 @@ export function visibleTabCap(stripWidth: number, sessionCount: number): number 
 	const room = stripWidth - STRIP_PADDING - NEW_CHAT_WIDTH;
 	// What `n` tabs really cost: their own minimum widths, the gaps between them, and - only when `n` leaves
 	// something behind - the overflow chip plus the gap before it.
-	const costOf = (n: number) => n * MIN_TAB_WIDTH + (n - 1) * TAB_GAP + (n < sessionCount ? OVERFLOW_WIDTH + TAB_GAP : 0);
+	const costOf = (n: number) => n * MIN_TAB_WIDTH + (n - 1) * TAB_GAP + (n < sessionCount ? overflowWidth(sessionCount - n) + TAB_GAP : 0);
 	let cap = 0;
 	for (let n = 1; n <= Math.min(sessionCount, MAX_VISIBLE_TABS); n++) {
 		if (costOf(n) > room) { break; }

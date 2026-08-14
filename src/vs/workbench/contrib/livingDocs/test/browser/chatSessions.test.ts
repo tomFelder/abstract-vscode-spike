@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { attachToSession, closeSession, createSession, deserialiseSessions, detachFromSession, IChatSession, MAX_VISIBLE_TABS, MIN_TAB_WIDTH, serialiseSessions, sessionsMentioning, splitTabs, titleFromMessage, titleSession, visibleTabCap, VISIBLE_TAB_CAP } from '../../common/chatSessions.js';
+import { attachToSession, closeSession, createSession, deserialiseSessions, detachFromSession, IChatSession, MAX_VISIBLE_TABS, MIN_TAB_WIDTH, overflowWidth, serialiseSessions, sessionsMentioning, splitTabs, titleFromMessage, titleSession, visibleTabCap, VISIBLE_TAB_CAP } from '../../common/chatSessions.js';
 
 suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -151,8 +151,8 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 			// Below 212px a crowded rail fits nothing at MIN_TAB_WIDTH, so the answer is ZERO and the rail draws
 			// a chat picker. The old floor of one handed the active tab 32px at 151px: a bare close box, no title.
 			tooNarrowForAnyTab: cap(151, 4),
-			tooNarrowBoundary: cap(211, 4),
-			justWideEnough: cap(212, 4),
+			tooNarrowBoundary: cap(213, 4),
+			justWideEnough: cap(214, 4),
 			// Nothing measured yet (before the first layout) falls back to the fixed count rather than to 1.
 			unmeasured: cap(0, 4),
 			noChats: cap(300, 0),
@@ -178,12 +178,47 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 			overflow: overflow.map(s => s.id),
 			// The room each visible tab really gets, once the strip's padding, the "+" (and its margin), the
 			// "N more" chip and every 4px gap between them are paid for. This is the sum that used to be short.
-			roomPerTab: Math.floor((width - 16 - 34 - 62 - visible.length * 4) / visible.length) >= MIN_TAB_WIDTH,
+			roomPerTab: Math.floor((width - 16 - 34 - overflowWidth(overflow.length) - visible.length * 4) / visible.length) >= MIN_TAB_WIDTH,
 		}, {
 			// The active tab is pulled into the visible run; the rest are reachable through the menu.
 			visible: ['s0', 's1', 's4'],
 			overflow: ['s2', 's3', 's5'],
 			roomPerTab: true,
+		});
+	});
+
+	test('the "N more" chip is budgeted from its own text, so a two-digit count cannot squeeze the tabs', () => {
+		// #312 fix round 2 (V3): the chip's width was one flat constant, 62, but it is laid out from its own TEXT.
+		// Measured in the running app, "4 more ▾" draws 63.6px and "14 more ▾" draws 69.2px - so past ten hidden
+		// chats the tab beside it absorbed the shortfall and a strip promising 96px tabs drew 91.3px ones. Same
+		// class as the unbudgeted flex gaps of round 1: a budget written from an assumed cost, not a real one.
+		//
+		// Swept rather than sampled, because the defect only appears at widths where the chip is being paid for.
+		const roomPerTab = (width: number, count: number) => {
+			const cap = visibleTabCap(width, count);
+			// Zero is the picker, which draws no tabs at all and so cannot draw an unreadable one.
+			if (!cap) { return Number.POSITIVE_INFINITY; }
+			const hidden = count - cap;
+			return (width - 16 - 34 - (hidden ? overflowWidth(hidden) + 4 : 0) - (cap - 1) * 4) / cap;
+		};
+		let narrowest = Number.POSITIVE_INFINITY;
+		for (let count = 1; count <= 15; count++) {
+			for (let width = 120; width <= 900; width++) { narrowest = Math.min(narrowest, roomPerTab(width, count)); }
+		}
+		assert.deepStrictEqual({
+			budgetCoversFourMore: overflowWidth(4) >= 63.6,
+			budgetCoversFourteenMore: overflowWidth(14) >= 69.2,
+			// The whole point, swept over every width and chat count a rail can hold: no tab is ever drawn under
+			// the minimum the strip promises.
+			everyTabClearsTheMinimum: narrowest >= MIN_TAB_WIDTH,
+			// The width the 91.3px tab was measured at, with the same 15 chats: too narrow for a tab now, so the
+			// picker takes the strip instead of a tab that breaks its own rule.
+			fifteenChatsAt216: visibleTabCap(216, 15),
+		}, {
+			budgetCoversFourMore: true,
+			budgetCoversFourteenMore: true,
+			everyTabClearsTheMinimum: true,
+			fifteenChatsAt216: 0,
 		});
 	});
 

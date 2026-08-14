@@ -1251,9 +1251,17 @@ export class ReviewRailView extends ViewPane {
 	}
 
 	/**
-	 * The honest header of a RESTORED conversation (plan 52 WP-B residuals): what the storage caps dropped.
+	 * The honest header of a trimmed conversation (plan 52 WP-B residuals): what the storage caps left out.
 	 * A trimmed transcript must never be presented as the whole of it - the count is stored alongside the
-	 * messages exactly so this line can be true. Nothing is drawn when nothing was lost.
+	 * messages exactly so this line can be true. Nothing is drawn when nothing was left out.
+	 *
+	 * The tense is PRESENT, and that is the fix of round 2 (#312). It read "N earlier messages were not kept",
+	 * which is exactly right after a restore - those messages really are gone - and wrong during a live
+	 * session, where every one of them is still on screen above the notice and the number can go DOWN: a chat
+	 * starved by a neighbour's fill reports 15, and is rescued back to 0 the moment you send a message in it,
+	 * because the budget is spent on the active chat first. Past tense announces a loss that has not happened
+	 * to the reader and may never happen at all. "Are not being kept" is true in both readings - it describes
+	 * what storage holds right now - and the hover says which reading you are looking at.
 	 */
 	private _renderChatTrimNotice(scroll: HTMLElement): void {
 		const dropped = this._livingDocs.getDroppedChatMessages();
@@ -1261,8 +1269,10 @@ export class ReviewRailView extends ViewPane {
 		const note = append(scroll, $('div'));
 		note.style.cssText = 'align-self:center;font:400 11px/1.4 system-ui;color:#a3a8b2;background:#f4f5f7;border-radius:999px;padding:5px 11px';
 		note.textContent = dropped === 1
-			? localize('livingDocs.chat.trimmedOne', "1 earlier message in this chat was not kept")
-			: localize('livingDocs.chat.trimmedMany', "{0} earlier messages in this chat were not kept", dropped);
+			? localize('livingDocs.chat.trimmedOne', "1 earlier message in this chat is not being kept")
+			: localize('livingDocs.chat.trimmedMany', "{0} earlier messages in this chat are not being kept", dropped);
+		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), note,
+			localize('livingDocs.chat.trimmedHint', "This workspace keeps only the most recent part of each conversation. Messages still on screen are kept in memory, but will not be there after a restart.")));
 	}
 
 	// The live assistant turn while a reply streams (plan 27 iter 3). Before the first delta there is no

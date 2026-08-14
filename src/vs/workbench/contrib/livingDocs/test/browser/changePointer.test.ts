@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { buildChangePointer, buildTurnPointers, IInlineWidgetReport } from '../../common/changePointer.js';
+import { buildChangePointer, buildTurnPointers, describeRestoredProposals, IInlineWidgetReport } from '../../common/changePointer.js';
 import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange } from '../../common/livingDocsModel.js';
 
@@ -179,5 +179,43 @@ suite('livingDocs - the chat transcript change pointer (plan 52 WP-A1)', () => {
 			{ id: 'p3', route: 'review', label: 'Colour tokens' },
 			{ id: 'p1', route: 'document', label: 'Commentary' },
 		]);
+	});
+
+	test('a restored turn says what BECAME of its proposals - approved, rejected, or never reviewed', () => {
+		// The defect (#312 fix round 2): every restored proposal printed the same sentence, "changes waiting for
+		// review are cleared when the workspace closes". True of a change nobody reviewed; false of one the user
+		// APPROVED, which is on disk and in the History tab. The app knew and said the wrong thing anyway.
+		const say = (proposed: number, approved?: number, rejected?: number) => {
+			const note = describeRestoredProposals(proposed, approved, rejected);
+			return note ? `${note.tag}${note.applied ? '*' : ''} ${note.text}` : undefined;
+		};
+		assert.deepStrictEqual({
+			approvedOne: say(1, 1, 0),
+			approvedAll: say(3, 3, 0),
+			rejectedOne: say(1, 0, 1),
+			neverReviewed: say(2, 0, 0),
+			mixed: say(3, 1, 2),
+			partlyApproved: say(3, 1, 0),
+			partlyRejected: say(3, 0, 1),
+			allThree: say(4, 1, 2),
+			// A turn that proposed nothing draws nothing at all - the chip is not a permanent fixture.
+			none: say(0),
+			// Nonsense counts (a hand-edited or future-versioned storage value) are clamped, never spoken: more
+			// outcomes than proposals would print a sentence whose own numbers do not add up.
+			overClaimed: say(1, 5, 5),
+		}, {
+			// The one outcome that LANDED, and the only one marked as applied.
+			approvedOne: 'APPROVED* Proposed 1 change. You approved it, so it is in the document - the History tab has the record.',
+			approvedAll: 'APPROVED* Proposed 3 changes. You approved them all, so they are in the document - the History tab has the record.',
+			rejectedOne: 'REJECTED Proposed 1 change. You rejected it, so the document was left unchanged.',
+			// The only case the original sentence was ever right about.
+			neverReviewed: 'PAST Proposed 2 changes. They were never approved or rejected, and changes waiting for review are cleared when the workspace closes.',
+			mixed: 'PAST Proposed 3 changes - 1 approved, 2 rejected.',
+			partlyApproved: 'PAST Proposed 3 changes - 1 approved, 2 never reviewed before the workspace closed.',
+			partlyRejected: 'PAST Proposed 3 changes - 1 rejected, 2 never reviewed before the workspace closed.',
+			allThree: 'PAST Proposed 4 changes - 1 approved, 2 rejected, 1 never reviewed before the workspace closed.',
+			none: undefined,
+			overClaimed: 'APPROVED* Proposed 1 change. You approved it, so it is in the document - the History tab has the record.',
+		});
 	});
 });

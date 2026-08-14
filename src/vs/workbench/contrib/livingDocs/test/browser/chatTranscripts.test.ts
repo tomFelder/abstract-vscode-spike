@@ -134,6 +134,38 @@ suite('livingDocs - chat transcripts in workspace storage (plan 52 WP-B residual
 		]);
 	});
 
+	test('what became of a turn\'s proposals survives every later save, and can never out-count them', () => {
+		// #312 fix round 2: `proposedCount` is honest about HOW MANY and silent about WHAT HAPPENED, so the rail
+		// filled the silence with a guess - it told an APPROVED change it had been thrown away when the workspace
+		// closed. The outcome is recorded on the turn as the user acts, and has to survive the same two round
+		// trips the other honesty markers do, because a fact that lasts exactly one relaunch is not a record.
+		const turn = (approved?: number, rejected?: number): IChatMessage => ({
+			role: 'assistant', content: 'Rewrote it.', via: 'model', proposedIds: ['c1', 'c2', 'c3'],
+			...(approved ? { approvedCount: approved } : {}), ...(rejected ? { rejectedCount: rejected } : {}),
+		});
+		const twice = (m: IChatMessage) => {
+			const first = roundTrip([entry('s1', [m])]).transcripts.get('s1') ?? [];
+			return (roundTrip([entry('s1', first)]).transcripts.get('s1') ?? [])[0];
+		};
+		const counts = (m: IChatMessage | undefined) => [m?.proposedCount, m?.approvedCount, m?.rejectedCount];
+		assert.deepStrictEqual({
+			approvedAndRejected: counts(twice(turn(1, 2))),
+			approvedOnly: counts(twice(turn(1))),
+			untouched: counts(twice(turn())),
+			// A restored turn has no `proposedIds` left, so these counts are all it has - and they must not decay.
+			restoredAgain: counts(twice({ role: 'assistant', content: 'x', restored: true, proposedCount: 2, approvedCount: 2 })),
+			// More outcomes than proposals cannot be stored: the rail builds one sentence out of these numbers and
+			// it has to add up. The overflow is clamped away rather than carried.
+			overClaimed: counts(twice({ role: 'assistant', content: 'x', proposedIds: ['c1'], approvedCount: 4, rejectedCount: 4 })),
+		}, {
+			approvedAndRejected: [3, 1, 2],
+			approvedOnly: [3, 1, undefined],
+			untouched: [3, undefined, undefined],
+			restoredAgain: [2, 2, undefined],
+			overClaimed: [1, 1, undefined],
+		});
+	});
+
 	test('a corrupt or stale stored value degrades honestly - never a throw, never a half-built transcript', () => {
 		const partial = deserialiseTranscripts(JSON.stringify({
 			version: 1,

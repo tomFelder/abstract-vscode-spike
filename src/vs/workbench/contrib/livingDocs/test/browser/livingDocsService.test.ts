@@ -1256,6 +1256,52 @@ suite('livingDocs Service', () => {
 		});
 	});
 
+	test('a restored turn remembers that a change was approved, and that another was rejected', async () => {
+		// #312 fix round 2 (V1): a restored turn could say only that changes had been proposed, so the rail said
+		// the same thing about all of them - "cleared when the workspace closes". For an APPROVED change that is
+		// simply untrue: it is in the document and in the audit trail, both of which this test also checks, so
+		// the transcript was contradicting the two records sitting next to it. The outcome is now written onto
+		// the turn as the user acts, which is the only moment it exists - the change leaves the pending set
+		// immediately, and a restart takes the rest of it.
+		const commentary = 'Growth accelerated sharply this week.';
+		const watch = 'Activation rate is climbing on the new onboarding flow.';
+		const storage = store.add(new InMemoryStorageService());
+		const before = createService([], {
+			model: chatReply('Sharpened two lines for your approval.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: commentary, rationale: 'The +18% MRR delta crosses the accelerating threshold.' },
+				{ heading: 'What to watch', oldText: 'Activation rate on the new onboarding flow.', newText: watch, rationale: 'Activation is the leading watch item this week.' },
+			]),
+			storage,
+		});
+		await before.loadDocument(WEEKLY);
+		await before.sendChatMessage(WEEKLY, 'Sharpen the commentary and the watch item');
+		const pending = before.getPendingForDoc(WEEKLY);
+		await before.approve(pending.find(c => c.newText === commentary)!.id);
+		await before.reject(pending.find(c => c.newText === watch)!.id);
+
+		const after = createService([], { model: chatReply('never asked for'), storage });
+		await after.loadDocument(WEEKLY);
+		const restored = after.getChatMessages(WEEKLY).at(-1)!;
+		assert.deepStrictEqual({
+			restored: restored.restored,
+			proposed: restored.proposedCount,
+			approved: restored.approvedCount,
+			rejected: restored.rejectedCount,
+			// The two records the old sentence contradicted: the approved text really is in the document, and the
+			// rejected one really is not.
+			commentaryOnDisk: blockText(after, WEEKLY, 'h-commentary'),
+			// Nothing is re-queued by restoring, so the restored counts are the ONLY surviving account of it.
+			stillPending: after.getAllPending().length,
+		}, {
+			restored: true,
+			proposed: 2,
+			approved: 1,
+			rejected: 1,
+			commentaryOnDisk: commentary,
+			stillPending: 0,
+		});
+	});
+
 	test('getSourcePeek surfaces then-vs-now once the source drifts since last sync (F13)', async () => {
 		const service = createService();
 		await service.loadDocument(WEEKLY);
