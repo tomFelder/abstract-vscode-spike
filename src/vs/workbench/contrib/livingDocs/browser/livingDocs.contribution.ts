@@ -294,6 +294,31 @@ registerAction2(class NewChatSessionAction extends Action2 {
 	}
 });
 
+// --- "Close Chat" in the command palette (#312 fix round 2) ---
+// The counterpart to New Chat above, and the fallback behind the "Close Chat" rows the strip's menus now
+// carry. Closing a chat used to be reachable ONLY from the × on a visible tab: a rail too narrow for tabs
+// could close nothing at all, while New Chat had a chord AND a palette entry. An action reachable only by
+// aiming at one specific pixel is not a route.
+//
+// No keybinding - Cmd+W belongs to the editor, and a chord that discards a conversation is not one to guess
+// at. With a single chat this still closes it and the workspace opens a fresh one, because the strip is never
+// empty; the sole tab omits its × for the same reason, since a control there could not promise otherwise.
+registerAction2(class CloseChatSessionAction extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.chat.closeSession',
+			title: localize2('livingDocs.chat.closeSession', "Close Chat"),
+			f1: true,
+		});
+	}
+	run(accessor: ServicesAccessor): void {
+		const livingDocs = accessor.get(ILivingDocsService);
+		livingDocs.closeChatSession(livingDocs.getActiveChatSession());
+		// Closing a chat you cannot see is as confusing as opening one you cannot see.
+		livingDocs.focusPanel('chat');
+	}
+});
+
 // --- v2 header rail-toggle chords (plan 44-b, P2.2) ---
 // The 48px header's two rail toggles also carry keyboard chords: Cmd+\ collapses the tree rail, Cmd+Shift+\
 // collapses the right rail. These re-use the stock part-toggle commands, so a keyboard toggle and a header

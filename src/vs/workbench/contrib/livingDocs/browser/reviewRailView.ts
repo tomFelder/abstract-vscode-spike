@@ -5,7 +5,7 @@
 
 import { $, addDisposableListener, append, clearNode, getWindow } from '../../../../base/browser/dom.js';
 import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
-import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
+import { IAction, Separator, SubmenuAction, toAction } from '../../../../base/common/actions.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -1099,11 +1099,7 @@ export class ReviewRailView extends ViewPane {
 			this._renderDisposables.add(addDisposableListener(more, 'click', e => {
 				this.contextMenuService.showContextMenu({
 					getAnchor: () => ({ x: e.clientX, y: e.clientY }),
-					getActions: () => overflow.map((session: IChatSession) => toAction({
-						id: `livingDocs.chat.session.${session.id}`,
-						label: session.title,
-						run: () => this._livingDocs.activateChatSession(session.id),
-					})),
+					getActions: () => this._chatMenuActions(overflow, sessions, activeId),
 				});
 			}));
 		}
@@ -1150,14 +1146,42 @@ export class ReviewRailView extends ViewPane {
 		this._renderDisposables.add(addDisposableListener(picker, 'click', e => {
 			this.contextMenuService.showContextMenu({
 				getAnchor: () => ({ x: e.clientX, y: e.clientY }),
-				getActions: () => sessions.map((session: IChatSession) => toAction({
-					id: `livingDocs.chat.session.${session.id}`,
-					label: session.title,
-					checked: session.id === active.id,
-					run: () => this._livingDocs.activateChatSession(session.id),
-				})),
+				getActions: () => this._chatMenuActions(sessions, sessions, active.id),
 			});
 		}));
+	}
+
+	/**
+	 * The rows behind the overflow chip and the narrow-rail picker: the chats you can switch to, and - since
+	 * fix round 2 (#312) - the chats you can close.
+	 *
+	 * `closeChatSession` had exactly ONE caller: the × on a visible tab. So closing a chat was only ever
+	 * reachable from the tab you were already standing on. Below the width where the strip becomes a picker
+	 * nothing could be closed at all, and at the default rail width with several chats only the active one
+	 * could, because only the active one has a tab. Both holes are the same hole, and a "Close Chat" submenu in
+	 * the menus that already exist closes it at every width for no pixels - which is why the picker still has
+	 * no × of its own: it does not need one.
+	 *
+	 * The submenu lists EVERY chat, not just the hidden ones, so the menu is a complete close route rather than
+	 * half of one. It is absent for a sole chat, matching the sole tab's missing × - closing the only chat
+	 * immediately opens another, so offering it there would promise something it cannot do.
+	 */
+	private _chatMenuActions(rows: readonly IChatSession[], all: readonly IChatSession[], activeId: string | undefined): IAction[] {
+		const actions: IAction[] = rows.map((session: IChatSession) => toAction({
+			id: `livingDocs.chat.session.${session.id}`,
+			label: session.title,
+			checked: session.id === activeId,
+			run: () => this._livingDocs.activateChatSession(session.id),
+		}));
+		if (all.length > 1) {
+			actions.push(new Separator());
+			actions.push(new SubmenuAction('livingDocs.chat.closeSubmenu', localize('livingDocs.chat.closeMenu', "Close Chat"), all.map((session: IChatSession) => toAction({
+				id: `livingDocs.chat.close.${session.id}`,
+				label: session.title,
+				run: () => this._livingDocs.closeChatSession(session.id),
+			}))));
+		}
+		return actions;
 	}
 
 	/**
