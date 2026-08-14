@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { FIND_WIDGET_HTML, FIND_WIDGET_RUNTIME, FIND_WIDGET_STYLE } from '../../browser/livingDocFindWidget.js';
 import { findInText, findMatches, findStatusLabel, replaceInText, stepMatchIndex } from '../../common/livingDocFind.js';
 
 // The document as the webview runtime hands it to the pure layer: one segment per searchable unit, in
@@ -122,6 +123,25 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 			assert.ok(!/\bimport\b/.test(src), `${fn.name} must not reference import`);
 			assert.ok(!/__[a-zA-Z]/.test(src), `${fn.name} must not reference a transpiler helper (__x)`);
 		}
+	});
+
+	// The widget is three strings spliced into the webview shell, and the runtime is a template literal holding
+	// JavaScript. A stray backtick inside it silently TRUNCATES the string (it closes the literal early), which
+	// typechecks in some shapes and ships a half-written runtime - the widget would simply never open. Assert
+	// each entry point the shell calls is actually present in what we hand it.
+	test('the injected widget strings are complete and carry their entry points', () => {
+		assert.deepStrictEqual(
+			{
+				openFind: FIND_WIDGET_RUNTIME.includes('function openFind()'),
+				refresh: FIND_WIDGET_RUNTIME.includes('function findRefresh()'),
+				matcher: FIND_WIDGET_RUNTIME.includes('function findInText('),
+				chord: FIND_WIDGET_RUNTIME.includes('e.metaKey || e.ctrlKey'),
+				host: FIND_WIDGET_HTML.includes('id="lwd-find"'),
+				inputs: FIND_WIDGET_HTML.includes('data-find-input') && FIND_WIDGET_HTML.includes('data-find-replace-input'),
+				highlights: FIND_WIDGET_STYLE.includes('::highlight(lwd-find)') && FIND_WIDGET_STYLE.includes('::highlight(lwd-find-current)'),
+			},
+			{ openFind: true, refresh: true, matcher: true, chord: true, host: true, inputs: true, highlights: true }
+		);
 	});
 
 	test('the count reads honestly at zero, before a first step, and while stepping', () => {

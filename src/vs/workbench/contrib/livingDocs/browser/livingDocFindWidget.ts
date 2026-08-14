@@ -178,8 +178,8 @@ function findElementText(el){
 // mapping, so decoration widgets are skipped by construction. A table-cell match is placed over the cell's
 // own text nodes when the cell's RENDERED text equals its GFM source (the ordinary case, so the highlight is
 // character-exact); when the cell carries inline markdown the two differ by the syntax characters, there is no
-// exact mapping, and marking the whole cell is the honest thing to show rather than a highlight off by the
-// width of a `**`.
+// exact mapping, and marking the whole cell is the honest thing to show rather than a highlight sitting off
+// by the width of a bold marker.
 function findRangeFor(hit){
 	const seg = findSegs[hit.segment];
 	if (!seg || !pmView){ return null; }
