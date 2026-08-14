@@ -15,6 +15,7 @@ import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
@@ -30,7 +31,7 @@ import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hover
 import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
-import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
+import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
@@ -261,6 +262,7 @@ export class ReviewRailView extends ViewPane {
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IQuickInputService private readonly _quickInput: IQuickInputService,
 		@IClipboardService private readonly _clipboardService: IClipboardService,
+		@ICommandService private readonly _commands: ICommandService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -1079,7 +1081,10 @@ export class ReviewRailView extends ViewPane {
 			this._renderDisposables.add(addDisposableListener(close, 'click', e => {
 				// The close box must not also activate the tab it is closing.
 				e.stopPropagation();
-				this._livingDocs.closeChatSession(session.id);
+				// Through the command, never through the service: closing deletes the conversation from workspace
+				// storage with no undo, and the command is where the "close X? its N messages cannot be brought
+				// back" question lives (#312 fix round 3). Calling the service here would be a route around it.
+				void this._commands.executeCommand(CLOSE_CHAT_COMMAND_ID, session.id);
 			}));
 		}
 
@@ -1165,6 +1170,11 @@ export class ReviewRailView extends ViewPane {
 	 * The submenu lists EVERY chat, not just the hidden ones, so the menu is a complete close route rather than
 	 * half of one. It is absent for a sole chat, matching the sole tab's missing × - closing the only chat
 	 * immediately opens another, so offering it there would promise something it cannot do.
+	 *
+	 * Every close row runs the `Close Chat` COMMAND rather than the service (#312 fix round 3). This submenu is
+	 * precisely where the destruction is cheapest to trigger by accident - a vertical list of similar, elided
+	 * titles, where the row above the one you meant costs a whole conversation - so it must not be able to
+	 * reach the primitive directly. The command names the chat it is about to close and asks.
 	 */
 	private _chatMenuActions(rows: readonly IChatSession[], all: readonly IChatSession[], activeId: string | undefined): IAction[] {
 		const actions: IAction[] = rows.map((session: IChatSession) => toAction({
@@ -1178,7 +1188,7 @@ export class ReviewRailView extends ViewPane {
 			actions.push(new SubmenuAction('livingDocs.chat.closeSubmenu', localize('livingDocs.chat.closeMenu', "Close Chat"), all.map((session: IChatSession) => toAction({
 				id: `livingDocs.chat.close.${session.id}`,
 				label: session.title,
-				run: () => this._livingDocs.closeChatSession(session.id),
+				run: () => void this._commands.executeCommand(CLOSE_CHAT_COMMAND_ID, session.id),
 			}))));
 		}
 		return actions;

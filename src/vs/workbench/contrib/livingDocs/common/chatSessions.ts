@@ -12,6 +12,7 @@
 // ordering, titling and next-active rules are unit-tested without a rail, a service or a DOM. The service
 // owns the message bodies (keyed by session id) and the rail owns the tab strip.
 
+import { localize } from '../../../../nls.js';
 import { GraphemeIterator, isFullWidthCharacter } from '../../../../base/common/strings.js';
 
 /** One chat session's metadata. The message bodies live in the service, keyed by `id`. */
@@ -74,9 +75,16 @@ const NEW_CHAT_WIDTH = 34;
  * `MIN_TAB_WIDTH` was drawing 91.3px ones. That is the same defect fix round 1 removed for the 4px flex gaps -
  * a budget written from what the layout was assumed to cost rather than from what it costs - and this is the
  * rest of it. Both numbers are measured and rounded UP, because a budget a pixel light is how this happens.
+ *
+ * The per-digit figure was 6 for one round and that was a pixel light (#312 fix round 3): measured at a
+ * hundred hidden chats, "100 more ▾" really draws 76.6px against a budgeted 76. It did not produce an
+ * under-minimum tab, but only because `NEW_CHAT_WIDTH` over-estimates the "+" by about 5.5px and absorbed the
+ * error - a floor held up by another line item's slack is not held up by its own arithmetic. The real growth
+ * measured across one to three digits is 13.0px, i.e. 6.5 a digit, so 7 is that rounded up the way the rest of
+ * this budget is. `NEW_CHAT_WIDTH`'s slack is deliberately left alone: it is a margin, not a second bug.
  */
 const OVERFLOW_BASE_WIDTH = 64;
-const OVERFLOW_DIGIT_WIDTH = 6;
+const OVERFLOW_DIGIT_WIDTH = 7;
 export function overflowWidth(hidden: number): number {
 	const digits = String(Math.max(1, Math.floor(hidden))).length;
 	return OVERFLOW_BASE_WIDTH + (digits - 1) * OVERFLOW_DIGIT_WIDTH;
@@ -217,6 +225,59 @@ export function closeSession(sessions: readonly IChatSession[], activeId: string
 	if (activeId !== closeId) { return { sessions: remaining, activeId }; }
 	const next = remaining[index] ?? remaining[index - 1];
 	return { sessions: remaining, activeId: next ? next.id : undefined };
+}
+
+/** What to ask before a chat is closed, or `needed: false` when there is nothing to lose by closing it. */
+export interface ICloseChatConfirm {
+	/** False when the chat holds no messages: an empty tab closes on the click, with no question asked. */
+	readonly needed: boolean;
+	/** The question, naming the chat by its title - which is the whole point when the route is a menu. */
+	readonly message: string;
+	/** One complete sentence saying what goes and that it does not come back. */
+	readonly detail: string;
+	/** The confirming button's label, so the destructive choice is named rather than being a bare "OK". */
+	readonly primaryButton: string;
+}
+
+/**
+ * The question to ask before closing a chat (#312 fix round 3).
+ *
+ * Closing a chat deletes its conversation from workspace storage the moment it happens - there is no undo
+ * anywhere in the app, and the transcript is gone from disk, not just from the strip. Until this round that
+ * was instant and silent from every route, and fix round 2's own work is what made it reachable: the "Close
+ * Chat" submenu is a vertical list of similar titles, where a mis-aimed click costs a whole conversation, and
+ * the palette entry made the SOLE chat closable for the first time (before it, the tab had no × and there was
+ * no command, so the only conversation in a workspace simply could not be destroyed).
+ *
+ * So the rule is: **a chat that holds messages is never closed without being named first.** Naming it is what
+ * turns a mis-aim into a mis-aim rather than a loss - the reader sees which title they actually hit, and how
+ * much of it is about to go. An EMPTY chat asks nothing, because there is nothing to lose and a question there
+ * would be the confirm-fatigue that teaches people to click through the ones that matter.
+ *
+ * The sole chat gets its own detail sentence because its outcome genuinely differs: the strip is never empty,
+ * so closing the only chat opens a fresh one in its place. Without that sentence "close" reads as "the rail
+ * goes away", and what really happens - your conversation is deleted and replaced by an empty one - is exactly
+ * the surprise this guard exists to prevent.
+ *
+ * Pure, so every sentence is unit-tested rather than read off a screenshot, and the caller (the Close Chat
+ * command, which every route now runs) only has to show it.
+ */
+export function closeChatConfirm(title: string, messageCount: number, sole: boolean): ICloseChatConfirm {
+	const held = Math.max(0, Math.floor(messageCount));
+	if (!held) { return { needed: false, message: '', detail: '', primaryButton: '' }; }
+	const detail = sole
+		? (held === 1
+			? localize('livingDocs.chat.close.detailSoleOne', "This is your only chat, so an empty one opens in its place. Its 1 message is deleted from this workspace and cannot be brought back.")
+			: localize('livingDocs.chat.close.detailSoleMany', "This is your only chat, so an empty one opens in its place. Its {0} messages are deleted from this workspace and cannot be brought back.", held))
+		: (held === 1
+			? localize('livingDocs.chat.close.detailOne', "Its 1 message is deleted from this workspace and cannot be brought back.")
+			: localize('livingDocs.chat.close.detailMany', "Its {0} messages are deleted from this workspace and cannot be brought back.", held));
+	return {
+		needed: true,
+		message: localize('livingDocs.chat.close.message', "Close the chat \"{0}\"?", title),
+		detail,
+		primaryButton: localize('livingDocs.chat.close.button', "Close Chat"),
+	};
 }
 
 /**

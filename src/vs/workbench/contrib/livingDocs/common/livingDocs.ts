@@ -29,6 +29,14 @@ export const DOCUMENTS_CONTAINER_ID = 'workbench.viewContainer.livingDocs.docume
 export const CONTEXT_VIEW_ID = 'workbench.view.livingDocs.context';
 export const CONTEXT_CONTAINER_ID = 'workbench.viewContainer.livingDocs.context';
 
+/**
+ * The command every route to closing a chat runs (#312 fix round 3) - the tab's ×, both menus' "Close Chat"
+ * rows, and the palette entry. Shared as a constant so the two sides cannot drift apart on a string, and
+ * declared here rather than in the contribution so a view can reach it without importing the contribution.
+ * The command carries the confirm; `ILivingDocsService.closeChatSession` is the primitive underneath it.
+ */
+export const CLOSE_CHAT_COMMAND_ID = 'livingDocs.chat.closeSession';
+
 /** The tabs of the Studio right panel. */
 export type LivingDocsPanelTab = 'chat' | 'review' | 'history';
 
@@ -1426,8 +1434,19 @@ export interface ILivingDocsService {
 	/** Open a fresh chat and make it active, keeping the previous conversation (Cmd+T). Returns its id. */
 	newChatSession(): string;
 	activateChatSession(id: string): void;
-	/** Close a tab; the neighbour becomes active, and closing the last one opens a fresh chat. */
+	/**
+	 * Close a tab; the neighbour becomes active, and closing the last one opens a fresh chat.
+	 *
+	 * This DELETES the conversation, from workspace storage as well as from memory, and nothing in the app
+	 * brings it back. It is the primitive, not the route: every user-facing way to close a chat runs the
+	 * `Close Chat` command, which asks first when there is a conversation to lose (`closeChatConfirm`).
+	 */
 	closeChatSession(id: string): void;
+	/**
+	 * How many messages a chat is holding right now - 0 for one nobody has typed in, and for an id that names
+	 * no chat. What the close guard weighs: the size of the conversation closing that tab would delete.
+	 */
+	getChatMessageCount(id: string): number;
 	/** The sessions that attached this document - the "chats mentioning this doc" reading. */
 	getChatSessionsMentioning(resource: URI): readonly IChatSession[];
 

@@ -5449,8 +5449,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
+	 * How many messages a chat is holding - the size of what closing it would delete (#312 fix round 3).
+	 *
+	 * Deliberately NOT `getChatMessages`, which answers for the ACTIVE session only: the close guard has to
+	 * weigh a chat the user is not standing in, because the submenu closes those and that is exactly where a
+	 * mis-aim happens. Read-only, and unlike `_chatKey` it creates nothing - asking how big a chat is must not
+	 * bring one into existence.
+	 */
+	getChatMessageCount(id: string): number {
+		return this._chats.get(id)?.length ?? 0;
+	}
+
+	/**
 	 * Close a tab. Its messages go with it (they are the conversation), and the neighbour rule picks the next
 	 * active tab. Closing the last tab immediately opens a fresh one, so the strip is never empty.
+	 *
+	 * This is the PRIMITIVE and it does not ask: the model deletes what it is told to delete. The question -
+	 * "close the chat X? its N messages cannot be brought back" - belongs to the route, and every user-facing
+	 * route is now the `Close Chat` command, which asks before it reaches here (#312 fix round 3).
 	 */
 	closeChatSession(id: string): void {
 		this._loadChatSessions();

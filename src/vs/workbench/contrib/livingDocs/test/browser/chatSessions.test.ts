@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { attachToSession, closeSession, createSession, deserialiseSessions, detachFromSession, IChatSession, MAX_VISIBLE_TABS, MIN_TAB_WIDTH, overflowWidth, serialiseSessions, sessionsMentioning, splitTabs, titleFromMessage, titleSession, visibleTabCap, VISIBLE_TAB_CAP } from '../../common/chatSessions.js';
+import { attachToSession, closeChatConfirm, closeSession, createSession, deserialiseSessions, detachFromSession, IChatSession, MAX_VISIBLE_TABS, MIN_TAB_WIDTH, overflowWidth, serialiseSessions, sessionsMentioning, splitTabs, titleFromMessage, titleSession, visibleTabCap, VISIBLE_TAB_CAP } from '../../common/chatSessions.js';
 
 suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -107,6 +107,45 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 		});
 	});
 
+	test('a chat holding messages is never closed without being named, and an empty one asks nothing', () => {
+		// #312 fix round 3. Closing deletes the conversation from workspace storage with no undo anywhere in the
+		// app, and round 2 is what made that reachable: a submenu of similar titles where the row above the one
+		// you meant costs a whole conversation, and - for the SOLE chat - the first route that could destroy it
+		// at all. So the question names the chat that was actually hit and the size of what goes.
+		assert.deepStrictEqual({
+			// Nothing typed in it: no question, because a question with nothing behind it is the confirm-fatigue
+			// that teaches people to click through the ones that matter.
+			empty: closeChatConfirm('New chat', 0, false).needed,
+			one: closeChatConfirm('Rewrite the intro', 1, false),
+			many: closeChatConfirm('Rewrite the intro', 6, false),
+			// The sole chat's outcome genuinely differs: the strip is never empty, so an empty chat opens in its
+			// place. Without that sentence "close" reads as "the rail goes away" rather than as "this is deleted".
+			sole: closeChatConfirm('Rewrite the intro', 4, true).detail,
+			soleOne: closeChatConfirm('Rewrite the intro', 1, true).detail,
+			// A count from a caller is floored and clamped, never trusted into a sentence that cannot be true.
+			fractional: closeChatConfirm('x', 2.7, false).detail,
+			negative: closeChatConfirm('x', -3, false).needed,
+		}, {
+			empty: false,
+			one: {
+				needed: true,
+				message: 'Close the chat "Rewrite the intro"?',
+				detail: 'Its 1 message is deleted from this workspace and cannot be brought back.',
+				primaryButton: 'Close Chat',
+			},
+			many: {
+				needed: true,
+				message: 'Close the chat "Rewrite the intro"?',
+				detail: 'Its 6 messages are deleted from this workspace and cannot be brought back.',
+				primaryButton: 'Close Chat',
+			},
+			sole: 'This is your only chat, so an empty one opens in its place. Its 4 messages are deleted from this workspace and cannot be brought back.',
+			soleOne: 'This is your only chat, so an empty one opens in its place. Its 1 message is deleted from this workspace and cannot be brought back.',
+			fractional: 'Its 2 messages are deleted from this workspace and cannot be brought back.',
+			negative: false,
+		});
+	});
+
 	test('the strip caps visible tabs and always keeps the active one on screen', () => {
 		const many = Array.from({ length: VISIBLE_TAB_CAP + 3 }, (_, i) => session(`s${i}`, i));
 		const early = splitTabs(many, 's0');
@@ -202,12 +241,19 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 			return (width - 16 - 34 - (hidden ? overflowWidth(hidden) + 4 : 0) - (cap - 1) * 4) / cap;
 		};
 		let narrowest = Number.POSITIVE_INFINITY;
-		for (let count = 1; count <= 15; count++) {
+		// Swept to a hundred chats, not fifteen: the three-digit chip is where round 2's per-digit figure was
+		// itself a pixel light (#312 fix round 3), and a sweep that stops at two digits could not see it.
+		for (let count = 1; count <= 101; count++) {
 			for (let width = 120; width <= 900; width++) { narrowest = Math.min(narrowest, roomPerTab(width, count)); }
 		}
 		assert.deepStrictEqual({
 			budgetCoversFourMore: overflowWidth(4) >= 63.6,
 			budgetCoversFourteenMore: overflowWidth(14) >= 69.2,
+			// "100 more ▾" really draws 76.6px, measured live at a hundred hidden chats. Six pixels a digit
+			// budgeted 76 for it, and the 96px tab floor survived only because NEW_CHAT_WIDTH over-estimates the
+			// "+" by ~5.5px and absorbed the shortfall - a floor held up by another line item's slack rather than
+			// by its own arithmetic. Seven is the real growth (13.0px across two digits) rounded up.
+			budgetCoversHundredMore: overflowWidth(100) >= 76.6,
 			// The whole point, swept over every width and chat count a rail can hold: no tab is ever drawn under
 			// the minimum the strip promises.
 			everyTabClearsTheMinimum: narrowest >= MIN_TAB_WIDTH,
@@ -217,6 +263,7 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 		}, {
 			budgetCoversFourMore: true,
 			budgetCoversFourteenMore: true,
+			budgetCoversHundredMore: true,
 			everyTabClearsTheMinimum: true,
 			fifteenChatsAt216: 0,
 		});

@@ -1256,6 +1256,32 @@ suite('livingDocs Service', () => {
 		});
 	});
 
+	test('the close guard can weigh a chat the user is not standing in, and creates nothing by asking', async () => {
+		// #312 fix round 3: the confirm has to say how big the conversation it is about to delete is, and the
+		// route where a mis-aim is cheapest - the "Close Chat" submenu - closes chats the user is NOT in. So the
+		// count cannot come from `getChatMessages`, which answers for the active session only. Asking must also
+		// not CREATE a session the way `_chatKey` does, or the question itself would change the tab strip.
+		const service = createService([], { model: chatReply('Two headings.') });
+		await service.loadDocument(WEEKLY);
+		await service.sendChatMessage(WEEKLY, 'Headings');
+		const first = service.getActiveChatSession();
+		const second = service.newChatSession();
+
+		assert.deepStrictEqual({
+			// One question, one answer, about the chat that is no longer active.
+			inactiveChat: service.getChatMessageCount(first),
+			// A fresh tab nobody has typed in: nothing to lose, so the guard will ask nothing.
+			freshChat: service.getChatMessageCount(second),
+			unknownId: service.getChatMessageCount('no-such-chat'),
+			tabsAfterAsking: service.getChatSessions().length,
+		}, {
+			inactiveChat: 2,
+			freshChat: 0,
+			unknownId: 0,
+			tabsAfterAsking: 2,
+		});
+	});
+
 	test('a restored turn remembers that a change was approved, and that another was rejected', async () => {
 		// #312 fix round 2 (V1): a restored turn could say only that changes had been proposed, so the rail said
 		// the same thing about all of them - "cleared when the workspace closes". For an APPROVED change that is
