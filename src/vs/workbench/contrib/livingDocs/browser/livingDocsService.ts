@@ -380,6 +380,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _onDidChange = this._register(new Emitter<void>());
 	readonly onDidChange: Event<void> = this._onDidChange.event;
 
+	// The typing-only counterpart to `onDidChange` (plan 52 WP-G / G1) - see the interface for why it exists.
+	private readonly _onDidChangeDocumentBody = this._register(new Emitter<{ readonly docId: string }>());
+	readonly onDidChangeDocumentBody: Event<{ readonly docId: string }> = this._onDidChangeDocumentBody.event;
+
 	private readonly _onDidRequestPanel = this._register(new Emitter<ILivingDocsPanelRequest>());
 	readonly onDidRequestPanel: Event<ILivingDocsPanelRequest> = this._onDidRequestPanel.event;
 
@@ -3875,8 +3879,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._watchDoc(state);
 		// Silent saves (live ProseMirror typing) persist to disk + refresh state but do NOT fire the
 		// change event, so the editor does not re-render the webview and remount the editor mid-keystroke.
+		//
+		// `state.doc` above is already the freshly parsed body, so `getDoc` is correct the instant this returns.
+		// What was missing (plan 52 WP-G / G1) is anyone being TOLD: surfaces that read the parsed document redraw
+		// on `onDidChange`, so with it suppressed the Outline sat on the headings the document had when its tab was
+		// last activated - a heading typed a moment ago was absent from it until the document was reopened. The
+		// narrow event says only "this body was re-parsed" and the editor pane does not listen to it, so the caret
+		// this whole silent path exists to protect stays exactly where it was.
 		if (!options?.silent) {
 			this._onDidChange.fire();
+		} else {
+			this._onDidChangeDocumentBody.fire({ docId: id });
 		}
 	}
 

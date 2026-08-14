@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $, addDisposableListener, append, clearNode, isHTMLElement } from '../../../../base/browser/dom.js';
+import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { localize } from '../../../../nls.js';
 import { DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -55,6 +56,12 @@ export class TreeRailView extends ViewPane {
 	private _stylesInjected = false;
 	private _renderToken = 0;
 	private _tab: TreeRailTab = 'files';
+	// Coalesces the Outline's follow-the-typing redraw (plan 52 WP-G / G1). A silent save lands per keystroke, and
+	// re-rendering the pane on each one would be both wasteful and visibly restless; ~200ms is under the pause
+	// between words, so in practice the outline updates as the writer finishes the heading, not as they type it.
+	private readonly _outlineRedraw = this._register(new RunOnceScheduler(() => {
+		if (this._tab === 'outline') { void this._render(); }
+	}, 200));
 	// The Files-tab type-to-filter (P4.2): narrows the tree rows live. Kept across re-renders so an
 	// onDidChange/onDidActiveEditorChange re-render never drops what the user has typed. Only the rail's own
 	// filter input writes it - typing in the editor never reaches here (plan-42 quiet-shell focus discipline).
@@ -198,6 +205,20 @@ export class TreeRailView extends ViewPane {
 			this._scheduleRender();
 		}));
 		this._register(this._livingDocs.onDidChange(() => this._scheduleRender()));
+		// The Outline follows the words as they are written (plan 52 WP-G / G1). A live-typed save is silent by
+		// design - firing the general change event would remount the ProseMirror surface and take the caret with it
+		// - so the Outline used to sit on whatever headings the document had when its tab was last activated. Rename
+		// a heading and the rail kept the old name; write a new section and it never appeared. The reader's word for
+		// that is "the outline doesn't load", and reopening the document was the only cure.
+		//
+		// Scoped as tightly as the problem: only the Outline tab reads the parsed body directly, only the ACTIVE
+		// document can be the one being typed into, and the redraw is coalesced so a burst of keystrokes costs one
+		// render rather than one per character.
+		this._register(this._livingDocs.onDidChangeDocumentBody(e => {
+			if (this._tab !== 'outline') { return; }
+			if (this._activeSurfaceResource()?.toString() !== e.docId) { return; }
+			this._outlineRedraw.schedule();
+		}));
 		// The two document-menu items whose UI only THIS rail can mount (pin 6 / P6.3, P6.5). They arrive as
 		// service requests so the same menu item works whether it was raised on a tree row or on a product tab
 		// (plan 52 WP-F) - the tab strip holds no reference to this view.
