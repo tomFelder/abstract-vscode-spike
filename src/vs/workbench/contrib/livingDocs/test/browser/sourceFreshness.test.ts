@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { freshnessLabel, relativeSyncedShort, sourceFreshness, SourceFreshness, unreachableSourceLabel } from '../../common/sourceFreshness.js';
+import { AMBER, GREEN, INK, PAPER } from '../../common/abstractTokens.js';
 
 // The ONE freshness vocabulary (#122 F12, plan 49-a): pure classification + labels under an injectable clock,
 // so every surface (Knowledge table, drawer, tree meta, hover-peek, Context tab) speaks the same words and the
@@ -40,16 +41,19 @@ suite('sourceFreshness (F12 vocabulary)', () => {
 		);
 	});
 
-	test('labels + colours match the mock: fresh green relative, stale amber "stale · Nd" + cream, context grey', () => {
+	test('labels + colours match the design system: fresh green relative, stale amber "stale · Nd", context neutral', () => {
 		const fresh = freshnessLabel(SourceFreshness.Fresh, '2026-07-09T22:00:00Z', NOW);
 		const stale = freshnessLabel(SourceFreshness.Stale, '2026-07-01T00:00:00Z', NOW);
 		const context = freshnessLabel(SourceFreshness.ContextOnly, undefined, NOW);
+		// The colours are asserted against the tokens, not literals: the rule being protected is that a
+		// freshness dot means the same thing, in the same hue, as every other state in the product. Pinning
+		// hexes here would let the freshness vocabulary drift away from the system while the test still passed.
 		assert.deepStrictEqual(
 			{ fresh, stale, context },
 			{
-				fresh: { label: '2h ago', dot: '#2C8159', text: '#2C8159' },
-				stale: { label: 'stale · 9d', dot: '#C99A2E', text: '#8A6D1A' },
-				context: { label: 'context only', dot: '#D5D8DE', text: '#868B95' },
+				fresh: { label: '2h ago', dot: GREEN.base, text: GREEN.base },
+				stale: { label: 'stale · 9d', dot: AMBER.base, text: AMBER.label },
+				context: { label: 'context only', dot: PAPER.control, text: INK.secondary },
 			},
 		);
 	});

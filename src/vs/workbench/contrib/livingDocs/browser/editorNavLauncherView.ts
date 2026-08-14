@@ -7,6 +7,7 @@ import { $, addDisposableListener, append, clearNode } from '../../../../base/br
 import { disposableTimeout } from '../../../../base/common/async.js';
 import { isEqual } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
+import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -20,6 +21,7 @@ import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHistoryService } from '../../../services/history/common/history.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
+import { FONT, INDIGO, INK, PAPER, RADIUS, TYPE } from '../common/abstractTokens.js';
 import { DOCUMENTS_CONTAINER_ID, ILivingDocsService } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 
@@ -113,11 +115,11 @@ export class EditorNavLauncherView extends ViewPane {
 		if (!body) { return; }
 		clearNode(body);
 		const title = append(body, $('div.ldl-title'));
-		title.textContent = 'Editor';
+		title.textContent = localize('livingDocs.editorNav.title', "Editor");
 		const blurb = append(body, $('div.ldl-blurb'));
-		blurb.textContent = 'Open the document you were working on, or the first document in this folder.';
+		blurb.textContent = localize('livingDocs.editorNav.blurb', "Open the document you were working on, or the first document in this folder.");
 		const open = append(body, $('button.ldl-open')) as HTMLButtonElement;
-		open.textContent = 'Open Editor';
+		open.textContent = localize('livingDocs.editorNav.open', "Open editor");
 		this._register(addDisposableListener(open, 'click', () => this._open(true)));
 	}
 
@@ -130,11 +132,12 @@ export class EditorNavLauncherView extends ViewPane {
 		this._stylesInjected = true;
 		const style = document.createElement('style');
 		style.textContent = `
-		.living-docs-launcher{padding:14px 12px;display:flex;flex-direction:column;gap:10px}
-		.living-docs-launcher .ldl-title{font:600 14px/1.2 system-ui;color:var(--vscode-foreground)}
-		.living-docs-launcher .ldl-blurb{font:400 12px/1.55 system-ui;color:var(--vscode-descriptionForeground)}
-		.living-docs-launcher .ldl-open{margin-top:2px;border:none;border-radius:8px;padding:9px 11px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer}
-		.living-docs-launcher .ldl-open:hover{background:oklch(0.5 0.13 255)}
+		.living-docs-launcher{padding:14px 12px;display:flex;flex-direction:column;gap:10px;background:${PAPER.rail};font-family:${FONT.sans}}
+		.living-docs-launcher .ldl-title{font:${TYPE.uiBodyStrong};color:${INK.heading}}
+		.living-docs-launcher .ldl-blurb{font:${TYPE.secondary};color:${INK.secondary}}
+		/* The one indigo primary - this view exists to be clicked, so the button is the DS's single filled verb. */
+		.living-docs-launcher .ldl-open{margin-top:2px;border:none;border-radius:${RADIUS.control};padding:9px 11px;background:${INDIGO.base};color:${PAPER.card};font:${TYPE.uiBodyStrong};cursor:pointer}
+		.living-docs-launcher .ldl-open:hover{background:${INDIGO.hover}}
 		`;
 		container.appendChild(style);
 	}

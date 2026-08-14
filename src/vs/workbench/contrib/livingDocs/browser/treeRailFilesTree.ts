@@ -70,7 +70,7 @@ export class TreeRailFolderRenderer implements ITreeRenderer<ITreeRailFolderNode
 	renderTemplate(container: HTMLElement): IFolderTemplate {
 		container.classList.add('rail-tree-folder');
 		const label = append(container, $('span.rail-tree-folder-label'));
-		// The right-aligned mono doc-count (P5.1): the number of documents/sources this group holds, `#A3A8B2`.
+		// The right-aligned mono doc-count (P5.1): the number of documents/sources this group holds, in meta ink.
 		const count = append(container, $('span.rail-tree-folder-count'));
 		return { label, count };
 	}

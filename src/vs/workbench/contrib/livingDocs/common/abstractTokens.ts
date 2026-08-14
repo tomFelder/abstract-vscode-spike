@@ -183,26 +183,46 @@ export const FONT = {
 export const TYPE = {
 	/** Greeting and page title - 34/600. */
 	greeting: `600 34px/1.2 ${FONT.sans}`,
-	/** Screen title - 28/600. */
+	/** Screen title - 28/600. Knowledge, Templates, Agent detail. */
 	screenTitle: `600 28px/1.25 ${FONT.sans}`,
-	/** Document heading - 21/600. */
+	/** Document heading - 21/600. An `h3` inside a document. */
 	docHeading: `600 21px/1.3 ${FONT.sans}`,
+	/** Dialog title - 19/600. The New-document sheet and its siblings. */
+	dialogTitle: `600 19px/1.25 ${FONT.sans}`,
 	/** Banner headline - 18/600, always in a state ink. */
 	bannerHeadline: `600 18px/1.35 ${FONT.sans}`,
 	/** Document body - 16/400/1.65. Reads like paper, never highlighted at rest. */
 	docBody: `400 16px/1.65 ${FONT.sans}`,
+	/** Card title - 15.5/600. A document tile, a template card. */
+	cardTitle: `600 15.5px/1.3 ${FONT.sans}`,
+	/** Card value - 15/600. The answer inside an agent question card. */
+	cardValue: `600 15px/1.35 ${FONT.sans}`,
+	/** Field text - 14.5/400. Input values, table cells, source names. */
+	field: `400 14.5px/1.3 ${FONT.sans}`,
+	/** Row title - 14/600. A picker row, a birth option. */
+	rowTitle: `600 14px/1.3 ${FONT.sans}`,
+	/** Banner body - 14/400/1.6. The sentence under a state headline. */
+	bannerBody: `400 14px/1.6 ${FONT.sans}`,
 	/** UI body - 13.5/400. Buttons, rows, rail text. */
 	uiBody: `400 13.5px/1.45 ${FONT.sans}`,
 	/** UI body, emphasised - 13.5/600. */
 	uiBodyStrong: `600 13.5px/1.45 ${FONT.sans}`,
+	/** Body small - 13/400/1.55. Card description lines, helper paragraphs. */
+	bodySmall: `400 13px/1.55 ${FONT.sans}`,
 	/** Secondary - 12.5/400. Receipts, captions, helper lines. */
 	secondary: `400 12.5px/1.5 ${FONT.sans}`,
+	/** Meta - 12/400. The quietest sans step: provenance prose, confidence, counts. */
+	meta: `400 12px/1.5 ${FONT.sans}`,
 	/** Section label - mono 11, tracked 0.14em. Always uppercase. */
 	sectionLabel: `400 11px/1 ${FONT.mono}`,
 	/** Kind badge - mono 10.5, tracked 0.1em. Always uppercase. */
 	kindBadge: `400 10.5px/1 ${FONT.mono}`,
 	/** Provenance facts - mono 12. File names, cells, synced-when, line numbers. */
 	provenance: `400 12px/1.4 ${FONT.mono}`,
+	/** Provenance, inline - mono 11.5. The same facts when they sit inside running prose. */
+	provenanceInline: `400 11.5px/1.4 ${FONT.mono}`,
+	/** Table header - mono 10, tracked 0.12em. Always uppercase. */
+	tableHeader: `400 10px/1 ${FONT.mono}`,
 } as const;
 
 /** Letter-spacing for the two tracked mono steps, plus the negative tracking on large titles. */

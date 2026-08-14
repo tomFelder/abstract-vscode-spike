@@ -5,6 +5,7 @@
 
 import { $, addDisposableListener, append, clearNode } from '../../../../base/browser/dom.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
+import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -17,6 +18,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
+import { FONT, INDIGO, INK, PAPER, RADIUS, TYPE } from '../common/abstractTokens.js';
 import { DOCUMENTS_CONTAINER_ID } from '../common/livingDocs.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenId } from './screenRender.js';
@@ -24,10 +26,10 @@ import { ScreenId } from './screenRender.js';
 // Maps each activity-bar launcher view id to the screen it opens. Selecting the icon reveals this
 // slim launcher and opens the full-width screen in the editor area (the comp's icon-nav behaviour).
 const VIEW_TO_SCREEN: Record<string, { screen: ScreenId; title: string; blurb: string }> = {
-	'workbench.view.livingDocs.home': { screen: 'home', title: 'Home', blurb: 'Your projects, quick-start actions, and what changed since your last visit.' },
-	'workbench.view.livingDocs.templates': { screen: 'templates', title: 'Templates', blurb: 'Reusable starting points for new documents - use one, edit it, or create your own.' },
-	'workbench.view.livingDocs.knowledge': { screen: 'knowledge', title: 'Knowledge', blurb: 'Every source your documents depend on - where it comes from, how fresh it is, and what relies on it.' },
-	'workbench.view.livingDocs.agents': { screen: 'agents', title: 'Agents', blurb: 'Background agents that keep documents in sync with their sources. Open one to see its flow.' },
+	'workbench.view.livingDocs.home': { screen: 'home', title: localize('livingDocs.nav.home', "Home"), blurb: localize('livingDocs.nav.homeBlurb', "Your projects, quick-start actions, and what changed since your last visit.") },
+	'workbench.view.livingDocs.templates': { screen: 'templates', title: localize('livingDocs.nav.templates', "Templates"), blurb: localize('livingDocs.nav.templatesBlurb', "Reusable starting points for new documents - use one, edit it, or create your own.") },
+	'workbench.view.livingDocs.knowledge': { screen: 'knowledge', title: localize('livingDocs.nav.knowledge', "Knowledge"), blurb: localize('livingDocs.nav.knowledgeBlurb', "Every source your documents depend on - where it comes from, how fresh it is, and what relies on it.") },
+	'workbench.view.livingDocs.agents': { screen: 'agents', title: localize('livingDocs.nav.agents', "Agents"), blurb: localize('livingDocs.nav.agentsBlurb', "Background agents that keep documents in sync with their sources. Open one to see its flow.") },
 };
 
 // A slim launcher in the activity-bar sidebar that opens its screen in the main editor area. The
@@ -87,7 +89,9 @@ export class ScreenLauncherView extends ViewPane {
 		const blurb = append(body, $('div.ldl-blurb'));
 		blurb.textContent = meta.blurb;
 		const open = append(body, $('button.ldl-open')) as HTMLButtonElement;
-		open.textContent = `Open ${meta.title}`;
+		// One localised sentence with the screen name as a placeholder - never "Open " + a title, which a
+		// translation cannot reorder.
+		open.textContent = localize('livingDocs.nav.openScreen', "Open {0}", meta.title);
 		this._register(addDisposableListener(open, 'click', () => this._open(true)));
 	}
 
@@ -101,11 +105,12 @@ export class ScreenLauncherView extends ViewPane {
 		this._stylesInjected = true;
 		const style = document.createElement('style');
 		style.textContent = `
-		.living-docs-launcher{padding:14px 12px;display:flex;flex-direction:column;gap:10px}
-		.living-docs-launcher .ldl-title{font:600 14px/1.2 system-ui;color:var(--vscode-foreground)}
-		.living-docs-launcher .ldl-blurb{font:400 12px/1.55 system-ui;color:var(--vscode-descriptionForeground)}
-		.living-docs-launcher .ldl-open{margin-top:2px;border:none;border-radius:8px;padding:9px 11px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer}
-		.living-docs-launcher .ldl-open:hover{background:oklch(0.5 0.13 255)}
+		.living-docs-launcher{padding:14px 12px;display:flex;flex-direction:column;gap:10px;background:${PAPER.rail};font-family:${FONT.sans}}
+		.living-docs-launcher .ldl-title{font:${TYPE.uiBodyStrong};color:${INK.heading}}
+		.living-docs-launcher .ldl-blurb{font:${TYPE.secondary};color:${INK.secondary}}
+		/* The one indigo primary - this view exists to be clicked, so the button is the DS's single filled verb. */
+		.living-docs-launcher .ldl-open{margin-top:2px;border:none;border-radius:${RADIUS.control};padding:9px 11px;background:${INDIGO.base};color:${PAPER.card};font:${TYPE.uiBodyStrong};cursor:pointer}
+		.living-docs-launcher .ldl-open:hover{background:${INDIGO.hover}}
 		`;
 		container.appendChild(style);
 	}

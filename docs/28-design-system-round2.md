@@ -39,18 +39,30 @@ The product previously used a **cool blue-grey** neutral ramp. Round 2 is a **wa
 
 Two families, two weights. Sans is the system stack; mono is **IBM Plex Mono** (round 1 used JetBrains Mono - it is gone). Weights are **400 and 600 only**; there is no 500.
 
-| Step | Value | Used for |
+| Token | Step | Used for |
 |---|---|---|
-| Greeting / page title | 34 / 600 / -0.015em | Home greeting |
-| Screen title | 28 / 600 / -0.01em | Knowledge, Templates, Agent detail |
-| Document heading | 21 / 600 | `h3` inside a document |
-| Banner headline | 18 / 600 | the state banner, in a state ink |
-| Document body | 16 / 400 / 1.65 | the paragraph the user is judging |
-| UI body | 13.5 / 400 | buttons, rows, rail text |
-| Secondary | 12.5 / 400 | receipts, captions, helper lines |
-| Section label | mono 11 / 0.14em | `COLOR`, `DOCUMENTS · MOST RECENT FIRST` |
-| Kind badge | mono 10.5 / 0.1em | `MEANING · NEEDS YOUR CALL`, `FIGURE` |
-| Provenance | mono 12 | `metrics.csv · week 25 · synced 15 min ago` |
+| `greeting` | 34 / 600 / -0.015em | Home greeting |
+| `screenTitle` | 28 / 600 / -0.01em | Knowledge, Templates, Agent detail |
+| `docHeading` | 21 / 600 | `h3` inside a document |
+| `dialogTitle` | 19 / 600 | the New-document sheet and its siblings |
+| `bannerHeadline` | 18 / 600 | the state banner, in a state ink |
+| `docBody` | 16 / 400 / 1.65 | the paragraph the user is judging |
+| `cardTitle` | 15.5 / 600 | a document tile, a template card |
+| `cardValue` | 15 / 600 | the answer inside an agent question card |
+| `field` | 14.5 / 400 | input values, table cells, source names |
+| `rowTitle` | 14 / 600 | a picker row, a birth option |
+| `bannerBody` | 14 / 400 / 1.6 | the sentence under a state headline |
+| `uiBody` / `uiBodyStrong` | 13.5 / 400 · 600 | buttons, rows, rail text |
+| `bodySmall` | 13 / 400 / 1.55 | card descriptions, helper paragraphs |
+| `secondary` | 12.5 / 400 | receipts, captions, helper lines |
+| `meta` | 12 / 400 | provenance prose, confidence, counts |
+| `sectionLabel` | mono 11 / 0.14em | `DOCUMENTS · NEEDS YOU FIRST` |
+| `kindBadge` | mono 10.5 / 0.1em | `MEANING · NEEDS YOUR CALL`, `FIGURE` |
+| `provenance` | mono 12 | `metrics.csv · week 25 · synced 15 min ago` |
+| `provenanceInline` | mono 11.5 | the same facts inside running prose |
+| `tableHeader` | mono 10 / 0.12em | `SOURCE · KIND · SYNCED · FEEDS · FIGURES` |
+
+The ladder is dense because the comp is dense, and **the comp's own pixel value wins**. Rounding a comp value onto a coarser step is how a redesign quietly loses its proportions: if a panel says 15.5, use `cardTitle`, not `uiBodyStrong`.
 
 **Mono is reserved** for section labels, kind badges, and provenance facts (file names, cells, synced-when, line numbers, version chips). Never for metadata values or model ids.
 
@@ -150,7 +162,18 @@ The bulk of the repaint is mechanical: the round-1 palette maps onto the round-2
 
 ## Screen-level corrections
 
-Beyond the repaint, the comp calls out specific behaviours per screen. These are listed in the round-2 plan (`docs/plans/55-design-round2-loop.md`).
+Beyond the repaint, the comp calls out a specific correction per screen. Each is stated in the comp itself, on the caption line above the panel:
+
+| Panel | Correction |
+|---|---|
+| 1a/1b Home | receipts, **one** state banner, demo demoted to a card; the amber banner *becomes* the queue |
+| 2a Editor | one canonical decision point; the rail narrates and points; no bulk verbs at n=1 |
+| 2b Editor | bulk verbs earn their place at 2+; the rail becomes a ledger; the document stays readable |
+| 3a Agent detail | three questions instead of a pipeline: when it runs · what it may touch · what it may do without asking |
+| 4a Knowledge | user units ("feeds N figures"), consistent freshness words, no template tokens |
+| 4b Templates | outcome copy instead of "1 slot · 0 sources"; a grow-from-examples on-ramp; no rainbow avatars |
+| 4c New document | name-first birth, three births, outcome copy on templates, Enter creates blank |
+| 4d Provenance | the wedge: click a figure, land on its exact cell; freshness words identical everywhere |
 
 ## How "pixel perfect" is judged
 

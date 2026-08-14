@@ -24,6 +24,7 @@ import { IViewsService } from '../../../../services/views/common/viewsService.js
 import { NullAnalyticsService } from '../../common/analytics.js';
 import { modelHealthDotColour, modelStateWords } from '../../browser/reviewRailView.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
+import { AMBER, GREEN, PAPER, RED } from '../../common/abstractTokens.js';
 
 // Plan 47 bundle 47-b (issue #236): the composer model selector. These pin the two behaviours the loop's
 // validator cares about but a live broker can only demonstrate flakily: the honest health-state settling that
@@ -199,11 +200,11 @@ suite('livingDocs model selector (plan 47 47-b, issue #236)', () => {
 			downWords: modelStateWords('broker-down'),
 			unconfiguredWords: modelStateWords('unconfigured'),
 		}, {
-			readyDot: '#2c8159',
-			pausedDot: '#c99a2e',
-			downDot: '#b5514b',
-			unconfiguredDot: '#b5514b',
-			unknownDot: '#c6cad2',
+			readyDot: GREEN.base,
+			pausedDot: AMBER.base,
+			downDot: RED.base,
+			unconfiguredDot: RED.base,
+			unknownDot: PAPER.frameBorder,
 			pausedWords: 'Daily limit reached',
 			downWords: 'Model unavailable',
 			unconfiguredWords: 'Model unavailable',

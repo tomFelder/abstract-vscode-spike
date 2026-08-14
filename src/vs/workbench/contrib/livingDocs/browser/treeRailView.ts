@@ -27,10 +27,12 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHistoryService } from '../../../services/history/common/history.js';
+import { AMBER, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, RED, TRACKING, TYPE } from '../common/abstractTokens.js';
 import { ClickGestureGuard } from '../common/clickGesture.js';
 import { buildContextGroups, keyNamespace, sourceNamespace } from '../common/contextGroups.js';
 import { AddedContextKind } from '../common/livingDocsModel.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
+import { FRESHNESS_COLOURS } from '../common/sourceFreshness.js';
 import { buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, collectAssetsFolderIds, filterTreeRailNodes, isMissingSource, ITreeRailItem, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_ID, searchTreeRail, sourceKindGlyph, sourceMeta, touchRecentDoc, TreeRailAction, TreeRailFreshness } from '../common/treeRail.js';
 import { createDocumentMenuActions, createDocumentMenuStyle, createSourceMenuActions, DOCUMENT_MENU_CLASS_NAME, IDocumentMenuServices } from './documentContextMenu.js';
 import { TreeRailAccessibilityProvider, TreeRailDelegate, TreeRailFolderRenderer, TreeRailLeafRenderer } from './treeRailFilesTree.js';
@@ -223,7 +225,7 @@ export class TreeRailView extends ViewPane {
 	 * applied an edit. Every one of those is a consequence, and a consequence that lands between the two clicks
 	 * of a double-click moves the thing the second click was aimed at. So while a click sequence is in flight the
 	 * redraw is held and replayed once the gesture is over (`ClickGestureGuard`).
-	 *
+	*
 	 * Redraws the user ASKS for go straight to `_render` instead: switching tab, typing in the filter, folding the
 	 * strip. Those are the direct effect of the control that was just clicked, on the control that was clicked -
 	 * holding them would only make the rail feel broken.
@@ -261,7 +263,7 @@ export class TreeRailView extends ViewPane {
 		const plus = append(tabs, $('button.rail-new-doc')) as HTMLButtonElement;
 		// allow-any-unicode-next-line
 		plus.textContent = '＋'; // fullwidth plus, matching the mock's quiet new-document glyph
-		plus.title = localize('livingDocs.treeRail.newDocument', "New Document");
+		plus.title = localize('livingDocs.treeRail.newDocument', "New document");
 		plus.setAttribute('aria-label', plus.title);
 		this._renderDisposables.add(addDisposableListener(plus, 'click', () => void this._newDocument()));
 
@@ -348,21 +350,21 @@ export class TreeRailView extends ViewPane {
 	/**
 	 * The Recent strip (plan 52 WP-D2): the documents you have opened, most-recent first, capped at five, as its
 	 * own compact band at the FOOT of the Files pane - not as rows inside the tree.
-	 *
+	*
 	 * Why a vertical strip rather than a row of horizontal chips: the rail is ~248px wide and document titles
 	 * here run long ("Project Brief - Northwind Migration", "Appendix - Design Tokens"). Five chips across that
 	 * width give each about 40px, so every chip would be an ellipsis; chips that size to their content need a
 	 * horizontal scroller, which hides the very entries the affordance exists to expose. A stacked band of
 	 * 24px rows shows five full titles in ~140px, reads at a glance, and folds away to a single caption line
 	 * when it is not wanted (the fold persists, sharing the same collapse set the tree's folders use).
-	 *
+	*
 	 * Where it sits, and why that is NOT what keeps a double-click honest (fix round 2 / R-1): a band that changes
 	 * size moves click targets wherever it is put. Above the tree it moved the tree's rows; below the tree it moved
 	 * its OWN rows into the space the tree gave up - and every strip row opens a different document, so that was
 	 * the worse of the two. What actually protects the gesture is `ClickGestureGuard`: no redraw at all lands
 	 * between the two clicks. With that held separately, the strip sits where it belongs - at the head of the pane,
 	 * where the hand starts - rather than where the geometry hurt least.
-	 *
+	*
 	 * Why it hides below two entries: see `RECENT_STRIP_MIN`. The strip deliberately keeps the ACTIVE document a
 	 * row too - marked, not hidden - so the band reads as "where you are, and where you just were".
 	 */
@@ -685,12 +687,13 @@ export class TreeRailView extends ViewPane {
 	// `.docx` in turn through the same single-file path, so the tree refreshes as each becomes a document.
 	private _renderBulkImport(panel: HTMLElement, importable: readonly ITreeRailItem[]): void {
 		const btn = append(panel, $('button.rail-import.rail-import-bulk')) as HTMLButtonElement;
-		btn.textContent = `Import All ${importable.length} Word Documents`;
-		const idleLabel = `Import All ${importable.length} Word Documents`;
+		// One localised sentence with the count as a placeholder, never a fragment concatenated to a number.
+		const idleLabel = localize('livingDocs.treeRail.importAll', "Import all {0} Word documents", importable.length);
+		btn.textContent = idleLabel;
 		this._renderDisposables.add(addDisposableListener(btn, 'click', async () => {
 			if (btn.disabled) { return; }
 			btn.disabled = true;
-			btn.textContent = 'Importing…';
+			btn.textContent = localize('livingDocs.treeRail.importing', "Importing…");
 			// Each successful import fires onDidChange and re-renders this rail; a refusal/error does not, so
 			// restore the button in a finally or a refused file leaves it stuck disabled with no retry. The
 			// per-file plain-words reason is surfaced by the service's own notification. Keep going through the
@@ -731,12 +734,12 @@ export class TreeRailView extends ViewPane {
 		if (item.kind === 'unsupported' && item.importable) {
 			const name = item.label;
 			const importBtn = append(host, $('button.rail-import')) as HTMLButtonElement;
-			importBtn.textContent = 'Import as Document';
+			importBtn.textContent = localize('livingDocs.treeRail.importOne', "Import as document");
 			store.add(addDisposableListener(importBtn, 'click', async e => {
 				e.stopPropagation();
 				if (importBtn.disabled) { return; }
 				importBtn.disabled = true;
-				importBtn.textContent = 'Importing\u2026';
+				importBtn.textContent = localize('livingDocs.treeRail.importing', "Importing…");
 				// On success the service fires onDidChange and this rail re-renders (the row becomes a document,
 				// so this button is gone). On any refusal or error it does NOT fire, so without this restore the
 				// row is left permanently stuck on a disabled "Importing\u2026" with no retry. The specific plain-words
@@ -749,12 +752,13 @@ export class TreeRailView extends ViewPane {
 					// A rejected promise falls through to the same restore as an ok:false refusal.
 				}
 				importBtn.disabled = false;
-				importBtn.textContent = 'Import as Document';
+				importBtn.textContent = localize('livingDocs.treeRail.importOne', "Import as document");
 			}));
 		} else if (item.note) {
-			// A file we still cannot import is shown, never dropped, with its plain-words reason (F10).
+			// A file we still cannot import is shown, never dropped, with its plain-words reason (F10). One
+			// localised sentence carrying the reason as a placeholder - the separator is part of the phrase.
 			const note = append(host, $('span.rail-item-note'));
-			note.textContent = `not yet imported \u2014 ${item.note}`;
+			note.textContent = localize('livingDocs.treeRail.notImported', "Not yet imported - {0}", item.note);
 			note.title = item.note;
 		}
 		// A workbook / PDF SOURCES row offers "Use as source" (issue #131): extract sheets to CSVs, or a PDF's
@@ -763,7 +767,7 @@ export class TreeRailView extends ViewPane {
 			const action = item.action;
 			const label = item.label;
 			const button = append(host, $('button.rail-srcaction')) as HTMLButtonElement;
-			button.textContent = 'Use as source';
+			button.textContent = localize('livingDocs.treeRail.useAsSource', "Use as source");
 			store.add(addDisposableListener(button, 'click', e => {
 				e.stopPropagation();
 				void this._useAsSource(action, label);
@@ -818,7 +822,10 @@ export class TreeRailView extends ViewPane {
 			// The classifier listed this row from disk, but the file may have been moved or renamed
 			// since the tree rendered (the one classifier->click race). Name that plainly rather than
 			// swallow the click - the button stays clickable, so the row remains actionable.
-			await this._dialogService.info('That file could not be found', `"${name}" may have been moved or renamed since this list was built. Refresh the sources and try again.`);
+			await this._dialogService.info(
+				localize('livingDocs.treeRail.fileGone', "That file could not be found"),
+				localize('livingDocs.treeRail.fileGoneDetail', "\"{0}\" may have been moved or renamed since this list was built. Refresh the sources and try again.", name),
+			);
 			return;
 		}
 		if (action === 'use-xlsx') {
@@ -828,7 +835,10 @@ export class TreeRailView extends ViewPane {
 		// A PDF is read-only CONTEXT for a document, so it needs an active document to attach to.
 		const active = this._editors.activeEditor?.resource;
 		if (!active || !active.path.endsWith('.md')) {
-			await this._dialogService.info('Open a document first', `Open the document that ${name} should inform, then use it as a source.`);
+			await this._dialogService.info(
+				localize('livingDocs.treeRail.openDocFirst', "Open a document first"),
+				localize('livingDocs.treeRail.openDocFirstDetail', "Open the document that {0} should inform, then use it as a source.", name),
+			);
 			return;
 		}
 		await this._livingDocs.usePdfAsSource(resource, active);
@@ -945,7 +955,9 @@ export class TreeRailView extends ViewPane {
 					const name = ci.name;
 					const remove = append(row, $('button.rail-srcremove')) as HTMLButtonElement;
 					remove.textContent = '\u00D7';
-					remove.title = unbind === 'source' ? 'Remove source' : 'Remove reference';
+					remove.title = unbind === 'source'
+						? localize('livingDocs.context.removeSource', "Remove source")
+						: localize('livingDocs.context.removeReference', "Remove reference");
 					this._renderDisposables.add(addDisposableListener(remove, 'click', e => {
 						e.stopPropagation();
 						void (unbind === 'source' ? this._livingDocs.removeSource(resource, name) : this._livingDocs.removeContextFile(resource, name));
@@ -971,7 +983,7 @@ export class TreeRailView extends ViewPane {
 	 *  - each row still opens as a product tab on click and still raises the LIGHTER provenance-safe source
 	 *    menu on right-click (Rename / Add to Chat / Delete), never the document menu - and `Rename…` now mounts
 	 *    its edit-in-place input on THIS row (fix round 1 / C-1), which is where the source lives after D3.
-	 *
+	*
 	 * A folder with no data files renders nothing here at all - no caption, no empty-state line (fix round 1 /
 	 * C-3), the same rule the Recent strip follows.
 	 */
@@ -1029,6 +1041,10 @@ export class TreeRailView extends ViewPane {
 		const meta = sourceMeta(item);
 		if (meta) {
 			append(row, $(`span.rail-item-detail.rail-meta-${meta.tone}`)).textContent = meta.text;
+			// The comp's 6px freshness dot at the right of a SOURCES row (comp 676). It restates the word beside it
+			// in colour, so the section scans as a column of states before any of it is read; it is decorative for
+			// that reason, so it is aria-hidden and the words remain the accessible answer.
+			append(row, $(`span.rail-src-dot.rail-src-dot-${meta.tone}`)).setAttribute('aria-hidden', 'true');
 		}
 		this._renderDisposables.add(this._renderLeafActions(node, append(row, $('span.rail-tree-actions'))));
 		// An api/mcp source, or a data file discovered on disk that no document binds, has no resource to act
@@ -1057,7 +1073,8 @@ export class TreeRailView extends ViewPane {
 	private _renderAddSource(panel: HTMLElement, resource: URI): void {
 		if (!this._srcAdding) {
 			const add = append(panel, $('button.rail-addctx.rail-addsrc')) as HTMLButtonElement;
-			add.textContent = '\uFF0B Add source';
+			// allow-any-unicode-next-line
+			add.textContent = localize('livingDocs.context.addSource', "\uFF0B Add source");
 			this._renderDisposables.add(addDisposableListener(add, 'click', async () => {
 				this._srcCandidates = await this._livingDocs.getSourceCandidates(resource);
 				this._srcAdding = true;
@@ -1067,7 +1084,7 @@ export class TreeRailView extends ViewPane {
 		}
 		const form = append(panel, $('div.rail-addctx-form'));
 		if (!this._srcCandidates.length) {
-			append(form, $('div.rail-empty')).textContent = 'No more data files in this folder.';
+			append(form, $('div.rail-empty')).textContent = localize('livingDocs.context.noMoreData', "No more data files in this folder.");
 		}
 		for (const cand of this._srcCandidates) {
 			const chip = append(form, $('button.rail-srccand')) as HTMLButtonElement;
@@ -1079,7 +1096,7 @@ export class TreeRailView extends ViewPane {
 			}));
 		}
 		const cancel = append(form, $('button.rail-addctx-cancel')) as HTMLButtonElement;
-		cancel.textContent = 'Cancel';
+		cancel.textContent = localize('livingDocs.context.cancel', "Cancel");
 		cancel.style.marginTop = '8px';
 		this._renderDisposables.add(addDisposableListener(cancel, 'click', () => { this._srcAdding = false; void this._render(); }));
 	}
@@ -1091,7 +1108,8 @@ export class TreeRailView extends ViewPane {
 	private _renderAddContext(panel: HTMLElement, resource: URI): void {
 		if (!this._ctxAdding) {
 			const add = append(panel, $('button.rail-addctx')) as HTMLButtonElement;
-			add.textContent = '\uFF0B Add context';
+			// allow-any-unicode-next-line
+			add.textContent = localize('livingDocs.context.addContext', "\uFF0B Add context");
 			this._renderDisposables.add(addDisposableListener(add, 'click', async () => {
 				this._ctxAdding = true;
 				this._ctxFileCandidates = await this._livingDocs.getContextCandidates(resource);
@@ -1102,10 +1120,10 @@ export class TreeRailView extends ViewPane {
 
 		const form = append(panel, $('div.rail-addctx-form'));
 		const kinds: { kind: 'file' | AddedContextKind; label: string }[] = [
-			{ kind: 'file', label: 'File' },
-			{ kind: 'pasted', label: 'Pasted text' },
-			{ kind: 'image', label: 'Image' },
-			{ kind: 'knowledge', label: 'Company knowledge' },
+			{ kind: 'file', label: localize('livingDocs.context.kindFile', "File") },
+			{ kind: 'pasted', label: localize('livingDocs.context.kindPasted', "Pasted text") },
+			{ kind: 'image', label: localize('livingDocs.context.kindImage', "Image") },
+			{ kind: 'knowledge', label: localize('livingDocs.context.kindKnowledge', "Company knowledge") },
 		];
 		const chips = append(form, $('div.rail-addctx-kinds'));
 		for (const k of kinds) {
@@ -1121,7 +1139,7 @@ export class TreeRailView extends ViewPane {
 		// File kind (R6): reference a real folder file - a picker of candidates writes the context frontmatter.
 		if (this._ctxKind === 'file') {
 			if (!this._ctxFileCandidates.length) {
-				append(form, $('div.rail-empty')).textContent = 'No more files in this folder to reference.';
+				append(form, $('div.rail-empty')).textContent = localize('livingDocs.context.noMoreFiles', "No more files in this folder to reference.");
 			}
 			for (const cand of this._ctxFileCandidates) {
 				const pick = append(form, $('button.rail-srccand')) as HTMLButtonElement;
@@ -1133,20 +1151,24 @@ export class TreeRailView extends ViewPane {
 				}));
 			}
 			const cancelFile = append(form, $('button.rail-addctx-cancel')) as HTMLButtonElement;
-			cancelFile.textContent = 'Cancel';
+			cancelFile.textContent = localize('livingDocs.context.cancel', "Cancel");
 			cancelFile.style.marginTop = '8px';
 			this._renderDisposables.add(addDisposableListener(cancelFile, 'click', () => { this._ctxAdding = false; void this._render(); }));
 			return;
 		}
 
 		const input = append(form, $('textarea.rail-addctx-input')) as HTMLTextAreaElement;
-		input.placeholder = this._ctxKind === 'image' ? 'Image path or URL\u2026' : this._ctxKind === 'knowledge' ? 'A company fact the agent should know\u2026' : 'Paste a note for the agent\u2026';
+		input.placeholder = this._ctxKind === 'image'
+			? localize('livingDocs.context.imagePlaceholder', "Image path or URL\u2026")
+			: this._ctxKind === 'knowledge'
+				? localize('livingDocs.context.knowledgePlaceholder', "A company fact the agent should know\u2026")
+				: localize('livingDocs.context.pastedPlaceholder', "Paste a note for the agent\u2026");
 		input.value = this._ctxDraft;
 		this._renderDisposables.add(addDisposableListener(input, 'input', () => { this._ctxDraft = input.value; }));
 
 		const actions = append(form, $('div.rail-addctx-actions'));
 		const submit = append(actions, $('button.rail-addctx-add')) as HTMLButtonElement;
-		submit.textContent = 'Add';
+		submit.textContent = localize('livingDocs.context.add', "Add");
 		const doAdd = async () => {
 			const text = this._ctxDraft.trim();
 			if (!text || this._ctxKind === 'file') { return; }
@@ -1157,7 +1179,7 @@ export class TreeRailView extends ViewPane {
 		};
 		this._renderDisposables.add(addDisposableListener(submit, 'click', () => void doAdd()));
 		const cancel = append(actions, $('button.rail-addctx-cancel')) as HTMLButtonElement;
-		cancel.textContent = 'Cancel';
+		cancel.textContent = localize('livingDocs.context.cancel', "Cancel");
 		this._renderDisposables.add(addDisposableListener(cancel, 'click', () => { this._ctxAdding = false; this._ctxDraft = ''; void this._render(); }));
 
 		// Keep focus on the input so a background re-render does not interrupt typing.
@@ -1196,154 +1218,192 @@ export class TreeRailView extends ViewPane {
 		this._stylesInjected = true;
 		const style = document.createElement('style');
 		style.textContent = `
-		.living-docs-rail .rail-tabs{flex:none;height:38px;display:flex;align-items:center;gap:2px;padding:0 10px;border-bottom:1px solid #EEF0F3}
+		/* The rail's own surface (comp 662-677): warm paper, one hairline on each edge that meets the app frame,
+		and the 14px radius on the corner where the rail meets the nav rail - the comp rounds exactly that one
+		corner. box-sizing keeps the 1px edges inside the height layoutBody sets, so nothing overflows the pane. */
+		.living-docs-rail{box-sizing:border-box;background:${PAPER.rail};border:1px solid ${HAIRLINE.strong};border-bottom:none;border-top-left-radius:${RADIUS.cardLarge}}
+		/* The tab row follows the review rail's rule (comp 663): 12.5 in meta ink at rest, and the ACTIVE tab is
+		heading ink at 600 over a 2px indigo underline. No pill and no shadow - indigo means "Abstract acting",
+		and the underline is the only mark that carries the selection. */
+		.living-docs-rail .rail-tabs{flex:none;height:38px;display:flex;align-items:center;gap:14px;padding:0 12px;border-bottom:1px solid ${HAIRLINE.medium}}
 		.living-docs-rail .rail-tabs-spacer{flex:1}
-		.living-docs-rail .rail-tab{border:none;background:none;cursor:pointer;height:26px;padding:0 10px;display:flex;align-items:center;border-radius:8px;font:500 12px/1 system-ui;color:#868B95}
-		.living-docs-rail .rail-tab:hover{color:#52575F}
-		.living-docs-rail .rail-tab.active{font-weight:600;color:#1A1C20;background:#fff;box-shadow:0 1px 2px rgba(20,22,28,.05)}
-		.living-docs-rail .rail-new-doc{flex:none;border:none;background:none;cursor:pointer;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:7px;font:400 15px/1 system-ui;color:#868B95}
-		.living-docs-rail .rail-new-doc:hover{background:#EEF0F3;color:#52575F}
+		.living-docs-rail .rail-tab{border:none;background:none;cursor:pointer;padding:0 0 4px;display:flex;align-items:center;border-bottom:2px solid transparent;font:${TYPE.secondary};color:${INK.meta}}
+		.living-docs-rail .rail-tab:hover{color:${INK.secondary}}
+		.living-docs-rail .rail-tab.active{font-weight:600;color:${INK.heading};border-bottom-color:${INDIGO.base}}
+		.living-docs-rail .rail-new-doc{flex:none;border:none;background:none;cursor:pointer;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:${RADIUS.control};font:400 15px/1 ${FONT.sans};color:${INK.meta}}
+		.living-docs-rail .rail-new-doc:hover{background:${PAPER.chip};color:${INK.secondary}}
 		/* The Recent strip (plan 52 WP-D2): a compact band at the HEAD of the Files pane - a caption row that folds
-		   it away, then up to five 24px rows. Deliberately quieter and denser than a tree row (24px vs 30px, 12.5px
-		   vs 13px type) so it reads as a jump-list above the tree, never as a second copy of it. A hairline below
-		   it separates "where you were" from the filter + the folder itself. Its size still changes as the MRU
-		   fills, and that is safe now for a reason that has nothing to do with CSS: no redraw lands between the two
-		   clicks of a double-click (fix round 2 / R-1, the ClickGestureGuard). */
-		.living-docs-rail .rail-recent{flex:none;display:flex;flex-direction:column;padding:2px 4px 6px;border-bottom:1px solid #F1F2F6;margin-bottom:6px}
-		.living-docs-rail .rail-recent-head{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;height:22px;padding:0 4px;border:none;background:none;cursor:pointer;border-radius:6px;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;text-align:left}
-		.living-docs-rail .rail-recent-head:hover{background:#F1F2F6;color:#868B95}
-		.living-docs-rail .rail-recent-twistie{flex:none;width:10px;font-size:10px;line-height:1;color:#A3A8B2}
-		.living-docs-rail .rail-recent-count{margin-left:auto;flex:none;letter-spacing:0;color:#C2C6CE}
-		.living-docs-rail .rail-recent-item{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:24px;padding:0 8px;border:none;background:none;cursor:pointer;border-radius:6px;font:400 12.5px/1 system-ui;color:#52575F;text-align:left}
-		.living-docs-rail .rail-recent-item:hover{background:#F1F2F6;color:#26292F}
+		it away, then up to five 24px rows. Deliberately quieter and denser than a tree row (24px vs 30px, 12.5px
+		vs 13px type) so it reads as a jump-list above the tree, never as a second copy of it. A hairline below
+		it separates "where you were" from the filter + the folder itself. Its size still changes as the MRU
+		fills, and that is safe now for a reason that has nothing to do with CSS: no redraw lands between the two
+		clicks of a double-click (fix round 2 / R-1, the ClickGestureGuard). */
+		.living-docs-rail .rail-recent{flex:none;display:flex;flex-direction:column;padding:2px 4px 6px;border-bottom:1px solid ${HAIRLINE.soft};margin-bottom:6px}
+		.living-docs-rail .rail-recent-head{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;height:22px;padding:0 4px;border:none;background:none;cursor:pointer;border-radius:7px;font:400 10px/1 ${FONT.mono};letter-spacing:.12em;color:${INK.meta};text-transform:uppercase;text-align:left}
+		.living-docs-rail .rail-recent-head:hover{background:${PAPER.chip};color:${INK.secondary}}
+		.living-docs-rail .rail-recent-twistie{flex:none;width:10px;font-size:10px;line-height:1;color:${INK.meta}}
+		.living-docs-rail .rail-recent-count{margin-left:auto;flex:none;letter-spacing:0;color:${PAPER.frameBorder}}
+		.living-docs-rail .rail-recent-item{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:24px;padding:0 8px;border:none;background:none;cursor:pointer;border-radius:7px;font:${TYPE.secondary};color:${INK.bodySoft};text-align:left}
+		.living-docs-rail .rail-recent-item:hover{background:${PAPER.chip};color:${INK.heading}}
 		/* The document you are in stays IN the strip, marked with the tree's selected-row treatment, so the strip
-		   reads as "where you are, and where you just were" rather than as a duplicate list. */
-		.living-docs-rail .rail-recent-item.active{background:#F4F5FD;color:#2A2F60;box-shadow:inset 0 0 0 1px #E0E5FB}
+		reads as "where you are, and where you just were" rather than as a duplicate list. That treatment is the
+		comp's, wherever it is drawn: a white card on the rail's paper, a strong hairline, and the label promoted
+		to heading ink at 600 - never a tint, because a fill only ever means "this span is changing". */
+		.living-docs-rail .rail-recent-item.active{background:${PAPER.card};color:${INK.heading};font-weight:600;box-shadow:inset 0 0 0 1px ${HAIRLINE.strong}}
 		.living-docs-rail .rail-recent-item .rail-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:7px;height:7px}
-		.living-docs-rail .rail-recent-item .rail-status-dot{width:7px;height:7px;border-radius:999px}
-		.living-docs-rail .rail-recent-item .rail-status-dash{width:8px;height:2px;border-radius:1px;background:#D5D8DE}
-		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-grey{background:#D5D8DE}
-		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-green{background:#2C8159}
-		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-yellow{background:#C99A2E}
-		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-red{background:#B5514B}
+		.living-docs-rail .rail-recent-item .rail-status-dot{width:7px;height:7px;border-radius:${RADIUS.pill}}
+		.living-docs-rail .rail-recent-item .rail-status-dash{width:8px;height:2px;border-radius:1px;background:${PAPER.control}}
+		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-grey{background:${PAPER.control}}
+		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-green{background:${GREEN.base}}
+		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-yellow{background:${AMBER.base}}
+		.living-docs-rail .rail-recent-item .rail-status-dot.rail-status-red{background:${RED.base}}
 		.living-docs-rail .rail-filter{flex:none;padding:2px 4px 8px}
-		.living-docs-rail .rail-filter-input{width:100%;box-sizing:border-box;border:1px solid #E9EAEE;background:#FBFCFD;color:var(--vscode-input-foreground);border-radius:9px;padding:7px 10px;font:400 12.5px/1 system-ui;outline:none}
-		.living-docs-rail .rail-filter-input:focus{border-color:#9AA2E0}
-		.living-docs-rail .rail-filter-input::placeholder{color:#A3A8B2}
+		.living-docs-rail .rail-filter-input{width:100%;box-sizing:border-box;border:1px solid ${HAIRLINE.strong};background:${PAPER.card};color:${INK.body};border-radius:${RADIUS.input};padding:7px 10px;font:${TYPE.secondary};outline:none}
+		.living-docs-rail .rail-filter-input:focus{border-color:${INDIGO.base};box-shadow:0 0 0 3px ${INDIGO.tint}}
+		.living-docs-rail .rail-filter-input::placeholder{color:${INK.meta}}
 		.living-docs-rail .rail-panel{flex:1;overflow-y:auto;padding:10px 8px}
 		.living-docs-rail .rail-panel.rail-panel-files{display:flex;flex-direction:column;overflow:hidden;padding:6px 4px}
 		.living-docs-rail .rail-files-tree{flex:1;min-height:0}
-		/* Row shells (pin 5): folder rows 28px, doc/source rows 30px radius 8. Hover + selection paint the whole tree-widget row so the full 264px width lights up. */
-		/* The workbench controls-tier clamp (styleOverrides roundedCorners.css) sets the list-row radius to var(--vscode-cornerRadius-small) = 4px at the !important tier, so a bare 8px declaration is overruled. This rule is more specific (the .rail-files-tree scope) AND !important, so equal-importance specificity resolves in the rail's favour and the 8px radius reaches the screen. */
-		.living-docs-rail .rail-files-tree .monaco-list-row{border-radius:8px !important}
-		/* Hover #F1F2F6 (P5.5): the widget paints hover through its own generated rule (the .monaco-list.list_id_N :hover:not(.selected):not(.focused) variant) reading --vscode-list-hoverBackground, more specific than a plain row-level rule here - so, as with selection, we pin the VARIABLE (below) rather than fight the widget rule. */
+		/* Row shells (pin 5): folder rows 28px, doc/source rows 30px, radius 7 - the comp's row radius (662-677). Hover + selection paint the whole tree-widget row so the full 264px width lights up. */
+		/* The workbench controls-tier clamp (styleOverrides roundedCorners.css) sets the list-row radius to var(--vscode-cornerRadius-small) = 4px at the !important tier, so a bare 7px declaration is overruled. This rule is more specific (the .rail-files-tree scope) AND !important, so equal-importance specificity resolves in the rail's favour and the comp's radius reaches the screen. */
+		.living-docs-rail .rail-files-tree .monaco-list-row{border-radius:7px !important}
+		/* Hover (P5.5): the widget paints hover through its own generated rule (the .monaco-list.list_id_N :hover:not(.selected):not(.focused) variant) reading --vscode-list-hoverBackground, more specific than a plain row-level rule here - so, as with selection, we pin the VARIABLE (below) rather than fight the widget rule. */
 		/* Row inset (mock: padding 0 8px). The right pad applies to every row; the left pad applies only to leaf rows, whose content starts at the indent (folders keep the twistie flush left). */
 		.living-docs-rail .rail-files-tree .monaco-tl-contents{padding-right:8px}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf{padding-left:8px}
 		.living-docs-rail .rail-files-tree .rail-tree-folder{display:flex;align-items:center;height:100%;min-width:0;gap:6px}
-		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 12.5px/1 system-ui;color:#52575F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-		.living-docs-rail .rail-files-tree .rail-tree-folder-count{margin-left:auto;flex:none;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2}
-		/* The chevron (P5.1): the widget's own twistie, restyled to a 9px glyph #A3A8B2 with a 150ms rotation. The widget toggles .collapsed (points right); expanded points down. */
+		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 12.5px/1 ${FONT.sans};color:${INK.bodySoft};overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-rail .rail-files-tree .rail-tree-folder-count{margin-left:auto;flex:none;font:400 10px/1 ${FONT.mono};color:${INK.meta}}
+		/* The chevron (P5.1): the widget's own twistie, restyled to a 9px glyph in meta ink with a 150ms rotation. The widget toggles .collapsed (points right); expanded points down. */
 		.living-docs-rail .rail-files-tree .monaco-tl-twistie{width:14px;transform:none}
-		.living-docs-rail .rail-files-tree .monaco-tl-twistie::before{font-size:9px;color:#A3A8B2;transition:transform 150ms ease}
-		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:8px;height:100%;min-width:0;font:400 13px/1.3 system-ui;color:#26292F}
-		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:#26292F;font-family:system-ui;font-size:12.5px}
-		.living-docs-rail .rail-files-tree .rail-tree-glyph{flex:none;display:none;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#5B6DC4;width:11px;text-align:center}
+		.living-docs-rail .rail-files-tree .monaco-tl-twistie::before{font-size:9px;color:${INK.meta};transition:transform 150ms ease}
+		/* The comp's row (662-677): 13 in body ink, 6px 8px of padding, radius 7. */
+		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:8px;height:100%;min-width:0;font:400 13px/1.3 ${FONT.sans};color:${INK.body}}
+		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:${INK.body};font-family:${FONT.sans};font-size:13px}
+		.living-docs-rail .rail-files-tree .rail-tree-glyph{flex:none;display:none;font-family:${FONT.mono};font-size:11px;color:${INDIGO.base};width:11px;text-align:center}
 		.living-docs-rail .rail-files-tree .rail-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:7px;height:7px}
-		.living-docs-rail .rail-files-tree .rail-status-dot{width:7px;height:7px;border-radius:999px}
-		.living-docs-rail .rail-files-tree .rail-status-dash{width:8px;height:2px;border-radius:1px;background:#D5D8DE}
-		/* Dot colours (P5.2): synced (ok) green, attention (pending) amber, plain #D5D8DE. The PR-212 red precedence ladder still wins in railStatus.ts, so a red-band doc keeps its treatment on top. */
-		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-grey{background:#D5D8DE}
-		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-green{background:#2C8159}
-		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-yellow{background:#C99A2E}
-		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-red{background:#B5514B}
-		/* The trailing markers (P5.3): the LWD chip and the amber pending pill (never both, pending wins). */
+		.living-docs-rail .rail-files-tree .rail-status-dot{width:7px;height:7px;border-radius:${RADIUS.pill}}
+		.living-docs-rail .rail-files-tree .rail-status-dash{width:8px;height:2px;border-radius:1px;background:${PAPER.control}}
+		/* Dot colours (P5.2), each the one hue that carries that meaning: green = all clear, amber = waiting on you,
+		red = failed, and the neutral control grey for "nothing to say". The PR-212 red precedence ladder still
+		wins in railStatus.ts, so a red-band doc keeps its treatment on top. */
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-grey{background:${PAPER.control}}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-green{background:${GREEN.base}}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-yellow{background:${AMBER.base}}
+		.living-docs-rail .rail-files-tree .rail-status-dot.rail-status-red{background:${RED.base}}
+		/* The trailing markers (P5.3): the LWD chip and the amber pending pill (never both, pending wins). The pill is
+		the comp's own (comp 668): a solid amber fill, white 10px text, radius 999, 1px 7px of padding. */
 		.living-docs-rail .rail-files-tree .rail-tree-marker{margin-left:auto;flex:none;display:inline-flex;align-items:center}
-		.living-docs-rail .rail-files-tree .rail-tree-lwd{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5B6DC4;background:#fff;border:1px solid #E0E5FB;border-radius:5px;padding:2px 5px}
-		.living-docs-rail .rail-files-tree .rail-tree-pending{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#8A6D1A;background:#FDFAF2;border:1px solid #E4DCCB;border-radius:999px;padding:2px 6px}
+		.living-docs-rail .rail-files-tree .rail-tree-lwd{font:${TYPE.kindBadge};letter-spacing:${TRACKING.kindBadge};color:${INDIGO.base};background:${PAPER.card};border:1px solid ${INDIGO.tintBorder};border-radius:${RADIUS.pill};padding:2px 6px}
+		.living-docs-rail .rail-files-tree .rail-tree-pending{font:400 10px/1.4 ${FONT.sans};color:${PAPER.card};background:${AMBER.base};border-radius:${RADIUS.pill};padding:1px 7px}
 		/* The source row's right meta (P5.6): synced (green) / relative time. */
-		.living-docs-rail .rail-files-tree .rail-tree-meta{margin-left:auto;flex:none;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2}
-		/* Selected row (P5.4): accent-tint bg + accent border, accent-ink text. The live list paints selection through its own per-instance rules (the focused .monaco-list.list_id_N:focus .monaco-list-row.selected and the inactive .monaco-list .monaco-list-row.selected), which read the --vscode-list-*Selection* CSS variables (defaultStyles maps them via asCssVariable). A row-level background here loses to those generated rules, so we override the VARIABLES scoped to the rail instead - the widget's own rules then render the spec colour. The spec says "Selected row = accent-tint #F4F5FD bg" with no focus distinction, so BOTH the focused (active) and blurred (inactive) selection backgrounds are pinned to #F4F5FD, and both selection foregrounds to the accent ink #2A2F60. The focus outlines are neutralised so the widget's blue focus ring never fights the #E0E5FB spec border (the inset box-shadow below). */
-		.living-docs-rail .rail-files-tree{--vscode-list-activeSelectionBackground:#F4F5FD;--vscode-list-inactiveSelectionBackground:#F4F5FD;--vscode-list-activeSelectionForeground:#2A2F60;--vscode-list-inactiveSelectionForeground:#2A2F60;--vscode-list-hoverBackground:#F1F2F6;--vscode-list-focusOutline:transparent;--vscode-list-focusAndSelectionOutline:transparent;--vscode-list-inactiveFocusOutline:transparent}
-		.living-docs-rail .rail-files-tree .monaco-list-row.selected{box-shadow:inset 0 0 0 1px #E0E5FB}
-		.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-item-label,.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-tree-leaf{color:#2A2F60}
+		.living-docs-rail .rail-files-tree .rail-tree-meta{margin-left:auto;flex:none;font:400 10px/1 ${FONT.mono};color:${INK.meta}}
+		/* Selected row (P5.4, comp 668): a WHITE card on the rail's paper with a strong hairline and the label in
+		heading ink at 600 - not a tint, because a fill only ever means "this span is changing". The live list
+		paints selection through its own per-instance rules (the focused .monaco-list.list_id_N:focus
+		.monaco-list-row.selected and the inactive .monaco-list .monaco-list-row.selected), which read the
+		--vscode-list-*Selection* CSS variables (defaultStyles maps them via asCssVariable). A row-level background
+		here loses to those generated rules, so we override the VARIABLES scoped to the rail instead - the widget's
+		own rules then render the comp's colour. The comp draws no focus distinction, so BOTH the focused (active)
+		and blurred (inactive) selection backgrounds are pinned to the card white and both foregrounds to heading
+		ink. The focus outlines are neutralised so the widget's blue focus ring never fights the hairline border
+		(the inset box-shadow below). */
+		.living-docs-rail .rail-files-tree{--vscode-list-activeSelectionBackground:${PAPER.card};--vscode-list-inactiveSelectionBackground:${PAPER.card};--vscode-list-activeSelectionForeground:${INK.heading};--vscode-list-inactiveSelectionForeground:${INK.heading};--vscode-list-hoverBackground:${PAPER.chip};--vscode-list-focusOutline:transparent;--vscode-list-focusAndSelectionOutline:transparent;--vscode-list-inactiveFocusOutline:transparent}
+		.living-docs-rail .rail-files-tree .monaco-list-row.selected{box-shadow:inset 0 0 0 1px ${HAIRLINE.strong}}
+		.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-item-label,.living-docs-rail .rail-files-tree .monaco-list-row.selected .rail-tree-leaf{color:${INK.heading};font-weight:600}
 		.living-docs-rail .rail-files-tree .rail-tree-actions{flex:none;display:flex;align-items:center;gap:6px}
 		/* Inline rename (P6.3): the edit-in-place input filling the label slot; Enter commits, Esc cancels. Stated
-		   once for BOTH surfaces that can host it - a document row in the tree, and a workspace-source row in the
-		   Context tab (fix round 1 / C-1) - so a rename looks the same wherever the file lives. */
-		.living-docs-rail .rail-rename-input{width:100%;box-sizing:border-box;border:1px solid #9AA2E0;background:#fff;color:#26292F;border-radius:6px;padding:1px 5px;font:400 13px/1.3 system-ui;outline:none}
-		/* The "bind sources" nudge (PN.1): a quiet accent chip on a template-born row with no source bound. */
-		.living-docs-rail .rail-files-tree .rail-nudge{flex:none;border:1px solid #E0E5FB;background:#F4F5FD;color:#4650B8;border-radius:5px;padding:2px 6px;font:600 9.5px/1 system-ui;cursor:pointer;white-space:nowrap}
-		.living-docs-rail .rail-files-tree .rail-nudge:hover{background:#E0E5FB}
-		.living-docs-rail .rail-empty{font:400 12px/1.5 system-ui;color:var(--vscode-descriptionForeground);padding:8px 6px}
-		.living-docs-rail .rail-folder{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;color:#A3A8B2;text-transform:uppercase;padding:10px 6px 6px}
-		.living-docs-rail .rail-item{display:flex;align-items:center;gap:7px;padding:6px 8px 6px 18px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:default}
+		once for BOTH surfaces that can host it - a document row in the tree, and a workspace-source row in the
+		Context tab (fix round 1 / C-1) - so a rename looks the same wherever the file lives. */
+		.living-docs-rail .rail-rename-input{width:100%;box-sizing:border-box;border:1px solid ${INDIGO.base};background:${PAPER.card};color:${INK.heading};border-radius:7px;padding:1px 5px;font:400 13px/1.3 ${FONT.sans};outline:none}
+		/* The "bind sources" nudge (PN.1): a quiet indigo chip on a template-born row with no source bound. */
+		.living-docs-rail .rail-files-tree .rail-nudge{flex:none;border:1px solid ${INDIGO.tintBorder};background:${INDIGO.tint};color:${INDIGO.hover};border-radius:${RADIUS.control};padding:2px 6px;font:600 10px/1 ${FONT.sans};cursor:pointer;white-space:nowrap}
+		.living-docs-rail .rail-files-tree .rail-nudge:hover{background:${INDIGO.tintBorder}}
+		.living-docs-rail .rail-empty{font:${TYPE.secondary};color:${INK.secondary};padding:8px 6px}
+		/* Section labels (comp 664/674): mono 10 tracked .12em in meta ink - "REPORTS", "SOURCES". */
+		.living-docs-rail .rail-folder{font:400 10px/1 ${FONT.mono};letter-spacing:.12em;color:${INK.meta};text-transform:uppercase;padding:10px 6px 6px}
+		.living-docs-rail .rail-item{display:flex;align-items:center;gap:7px;padding:6px 8px 6px 18px;border-radius:7px;font:400 13px/1.3 ${FONT.sans};color:${INK.body};cursor:default}
 		.living-docs-rail .rail-item[role=button]{cursor:pointer}
-		.living-docs-rail .rail-item[role=button]:hover{background:var(--vscode-list-hoverBackground)}
-		.living-docs-rail .rail-item-source{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:var(--vscode-descriptionForeground)}
-		.living-docs-rail .rail-item-glyph{color:oklch(0.55 0.13 255);flex:none}
-		.living-docs-rail .rail-item-source .rail-item-glyph{color:var(--vscode-descriptionForeground)}
+		.living-docs-rail .rail-item[role=button]:hover{background:${PAPER.chip}}
+		.living-docs-rail .rail-item-source{font-family:${FONT.mono};font-size:12px;color:${INK.meta}}
+		.living-docs-rail .rail-item-glyph{color:${INDIGO.base};flex:none}
+		.living-docs-rail .rail-item-source .rail-item-glyph{color:${INK.meta}}
 		.living-docs-rail .rail-item-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		/* The row's trailing detail is a single quiet line, never a wrapping block: without nowrap a long detail
-		   ("live - feeds 2 blocks") wrapped to two lines and crushed the source name beside it to "metrics....".
-		   When the row still cannot fit both, the DETAIL yields and ellipsises - its freshness word leads, so
-		   "stale - feeds..." keeps the part that matters while the file's own name, which is the row's identity,
-		   stays whole. Flexbox distributes shrink in proportion to (factor x basis), so a factor of 20 still left
-		   the NAME absorbing about 2.5% of the overflow - which is exactly why "metrics.csv" still ellipsised, by
-		   half a pixel (label box 68.9px against 69.4px needed). At 200 the name's share of any realistic overflow
-		   is sub-pixel and rounds away, which is what "the detail yields FIRST" was always meant to say. */
+		("live - feeds 2 blocks") wrapped to two lines and crushed the source name beside it to "metrics....".
+		When the row still cannot fit both, the DETAIL yields and ellipsises - its freshness word leads, so
+		"stale - feeds..." keeps the part that matters while the file's own name, which is the row's identity,
+		stays whole. Flexbox distributes shrink in proportion to (factor x basis), so a factor of 20 still left
+		the NAME absorbing about 2.5% of the overflow - which is exactly why "metrics.csv" still ellipsised, by
+		half a pixel (label box 68.9px against 69.4px needed). At 200 the name's share of any realistic overflow
+		is sub-pixel and rounds away, which is what "the detail yields FIRST" was always meant to say. */
 		.living-docs-rail .rail-item .rail-item-label{flex:1 1 auto}
-		.living-docs-rail .rail-item-detail{margin-left:auto;flex:0 200 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 10px/1 'JetBrains Mono',ui-monospace,monospace;color:var(--vscode-descriptionForeground)}
+		.living-docs-rail .rail-item-detail{margin-left:auto;flex:0 200 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 10px/1 ${FONT.mono};color:${INK.meta}}
 		/* The ONE freshness vocabulary's tones (#122 F12), written once for BOTH surfaces that draw a source row:
-		   the Files tree's leaf renderer and the Context tab's workspace sources. The tree's own meta rule is one
-		   class deeper (.rail-files-tree), so each tone is stated at both depths rather than fought with !important. */
-		.living-docs-rail .rail-meta-stale,.living-docs-rail .rail-files-tree .rail-meta-stale{color:#8A6D1A}
-		.living-docs-rail .rail-meta-context-only,.living-docs-rail .rail-files-tree .rail-meta-context-only{color:#868B95}
-		.living-docs-rail .rail-meta-synced,.living-docs-rail .rail-files-tree .rail-meta-synced{color:#5D8A66}
+		the Files tree's leaf renderer and the Context tab's workspace sources. The colours are READ from
+		sourceFreshness.ts rather than restated here, so the rail can never drift from the Knowledge table or the
+		hover peek. The tree's own meta rule is one class deeper (.rail-files-tree), so each tone is stated at both
+		depths rather than fought with !important. */
+		.living-docs-rail .rail-meta-stale,.living-docs-rail .rail-files-tree .rail-meta-stale{color:${FRESHNESS_COLOURS.staleText}}
+		.living-docs-rail .rail-meta-context-only,.living-docs-rail .rail-files-tree .rail-meta-context-only{color:${FRESHNESS_COLOURS.contextText}}
+		.living-docs-rail .rail-meta-synced,.living-docs-rail .rail-files-tree .rail-meta-synced{color:${FRESHNESS_COLOURS.freshText}}
 		/* A workspace-source row in the Context tab (plan 52 WP-D3): the tab's own row idiom, so it sits with the
-		   Linked sources / Referenced files rows rather than importing the tree's row shell into a non-tree pane. */
+		Linked sources / Referenced files rows rather than importing the tree's row shell into a non-tree pane. */
 		.living-docs-rail .rail-item-src{padding-left:8px}
 		.living-docs-rail .rail-item-src .rail-item-label{flex:1}
-		.living-docs-rail .rail-item-src .rail-item-glyph{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#5B6DC4;width:11px;text-align:center}
+		.living-docs-rail .rail-item-src .rail-item-glyph{font-family:${FONT.mono};font-size:11px;color:${INDIGO.base};width:11px;text-align:center}
+		/* The 6px freshness dot the comp puts at the right of a SOURCES row (comp 676), in the same three colours
+		the words beside it already use - one vocabulary, read from sourceFreshness.ts, never restated. */
+		.living-docs-rail .rail-src-dot{flex:none;width:6px;height:6px;margin-left:6px;border-radius:${RADIUS.pill}}
+		.living-docs-rail .rail-src-dot-stale{background:${FRESHNESS_COLOURS.staleDot}}
+		.living-docs-rail .rail-src-dot-context-only{background:${FRESHNESS_COLOURS.contextDot}}
+		.living-docs-rail .rail-src-dot-synced{background:${FRESHNESS_COLOURS.freshDot}}
 		.living-docs-rail .rail-item-nested{padding-left:24px}
 		/* The Assets bucket (issue #171): one collapsible row standing in for every un-bound screenshot. */
-		.living-docs-rail .rail-bucket{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;height:26px;padding:0 8px;border:none;background:none;cursor:pointer;border-radius:6px;font:600 12px/1 system-ui;color:#52575F;text-align:left}
-		.living-docs-rail .rail-bucket:hover{background:#F1F2F6}
-		.living-docs-rail .rail-bucket-twistie{flex:none;width:10px;font-size:10px;line-height:1;color:#A3A8B2}
-		.living-docs-rail .rail-item-snippet{width:100%;padding-left:0;font:400 11.5px/1.5 system-ui;color:var(--vscode-descriptionForeground)}
+		.living-docs-rail .rail-bucket{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;height:26px;padding:0 8px;border:none;background:none;cursor:pointer;border-radius:7px;font:600 12.5px/1 ${FONT.sans};color:${INK.bodySoft};text-align:left}
+		.living-docs-rail .rail-bucket:hover{background:${PAPER.chip}}
+		.living-docs-rail .rail-bucket-twistie{flex:none;width:10px;font-size:10px;line-height:1;color:${INK.meta}}
+		.living-docs-rail .rail-item-snippet{width:100%;padding-left:0;font:${TYPE.secondary};color:${INK.meta}}
 			.living-docs-rail .rail-item-unsupported{align-items:flex-start;flex-wrap:wrap;cursor:default}
-			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:var(--vscode-descriptionForeground)}
-			.living-docs-rail .rail-item-note{width:100%;padding-left:25px;font:400 11px/1.4 system-ui;color:var(--vscode-descriptionForeground);opacity:.85}
-			.living-docs-rail .rail-srcaction{margin-left:auto;flex:none;border:1px solid var(--vscode-button-border,transparent);background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);font:500 11px/1 system-ui;cursor:pointer;padding:3px 7px;border-radius:4px;opacity:0}
+			.living-docs-rail .rail-item-unsupported .rail-item-glyph{color:${INK.meta}}
+			.living-docs-rail .rail-item-note{width:100%;padding-left:25px;font:${TYPE.secondary};color:${INK.meta}}
+			/* Both inline row doors are the DS secondary button: a control hairline on white, never a second fill.
+			Only the bulk-import banner below earns the one indigo primary. */
+			.living-docs-rail .rail-srcaction{margin-left:auto;flex:none;border:1px solid ${PAPER.control};background:${PAPER.card};color:${INK.body};font:${TYPE.secondary};cursor:pointer;padding:3px 7px;border-radius:${RADIUS.control};opacity:0}
 			.living-docs-rail .rail-item:hover .rail-srcaction,.living-docs-rail .rail-item:focus-within .rail-srcaction{opacity:1}
-			.living-docs-rail .rail-srcaction:hover{background:var(--vscode-button-secondaryHoverBackground)}
-			.living-docs-rail .rail-import{margin-left:auto;flex:none;border:1px solid oklch(0.55 0.13 255);background:none;color:oklch(0.5 0.13 255);border-radius:6px;padding:4px 9px;font:600 11px/1 system-ui;cursor:pointer;white-space:nowrap}
-			.living-docs-rail .rail-import:hover{background:oklch(0.55 0.13 255);color:#fff}
-			.living-docs-rail .rail-import:disabled{opacity:.6;cursor:default;background:none;color:var(--vscode-descriptionForeground);border-color:var(--vscode-input-border,#d3d8e0)}
-			.living-docs-rail .rail-import-bulk{display:block;width:100%;box-sizing:border-box;margin:2px 0 8px;padding:8px;text-align:center}
+			.living-docs-rail .rail-srcaction:hover{background:${PAPER.sunken}}
+			.living-docs-rail .rail-import{margin-left:auto;flex:none;border:1px solid ${PAPER.control};background:${PAPER.card};color:${INK.body};border-radius:${RADIUS.control};padding:4px 9px;font:${TYPE.secondary};cursor:pointer;white-space:nowrap}
+			.living-docs-rail .rail-import:hover{background:${PAPER.sunken}}
+			.living-docs-rail .rail-import:disabled{opacity:.6;cursor:default;color:${INK.meta};border-color:${PAPER.control}}
+			.living-docs-rail .rail-import-bulk{display:block;width:100%;box-sizing:border-box;margin:2px 0 8px;padding:8px;text-align:center;border:none;background:${INDIGO.base};color:${PAPER.card};font:${TYPE.uiBodyStrong}}
+			.living-docs-rail .rail-import-bulk:hover{background:${INDIGO.hover}}
+			.living-docs-rail .rail-import-bulk:disabled{background:${INDIGO.base};color:${PAPER.card}}
 			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-item-note{width:auto;padding:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 			.living-docs-rail .rail-files-tree .rail-tree-actions .rail-srcaction,.living-docs-rail .rail-files-tree .rail-tree-actions .rail-import{margin-left:0}
 			.living-docs-rail .rail-files-tree .rail-tree-leaf:hover .rail-srcaction,.living-docs-rail .rail-files-tree .rail-tree-leaf:focus-within .rail-srcaction,.living-docs-rail .rail-files-tree .monaco-list-row:hover .rail-srcaction,.living-docs-rail .rail-files-tree .monaco-list-row:focus-within .rail-srcaction{opacity:1}
-		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:6px;font:400 13px/1.3 system-ui;color:var(--vscode-foreground);cursor:pointer}
-		.living-docs-rail .rail-outline:hover{background:var(--vscode-list-hoverBackground)}
+		.living-docs-rail .rail-outline{padding:6px 8px;border-radius:7px;font:400 13px/1.3 ${FONT.sans};color:${INK.body};cursor:pointer}
+		.living-docs-rail .rail-outline:hover{background:${PAPER.chip}}
 		.living-docs-rail .rail-outline.lvl-1{font-weight:600}
-		.living-docs-rail .rail-outline.lvl-2{padding-left:18px;color:var(--vscode-descriptionForeground)}
-		.living-docs-rail .rail-outline.lvl-3{padding-left:30px;color:var(--vscode-descriptionForeground)}
-		.living-docs-rail .rail-addctx{display:block;width:100%;box-sizing:border-box;margin:12px 0 4px;border:1px dashed var(--vscode-input-border,#d3d8e0);background:none;color:oklch(0.55 0.13 255);border-radius:8px;padding:9px;font:500 12px/1 system-ui;cursor:pointer;text-align:left}
-		.living-docs-rail .rail-addctx:hover{background:var(--vscode-list-hoverBackground);border-style:solid}
-		.living-docs-rail .rail-addctx-form{margin:12px 0 4px;border:1px solid var(--vscode-input-border,#e0e6ff);background:var(--vscode-editorWidget-background,#fff);border-radius:9px;padding:9px}
+		.living-docs-rail .rail-outline.lvl-2{padding-left:18px;color:${INK.secondary}}
+		.living-docs-rail .rail-outline.lvl-3{padding-left:30px;color:${INK.secondary}}
+		.living-docs-rail .rail-addctx{display:block;width:100%;box-sizing:border-box;margin:12px 0 4px;border:1px dashed ${PAPER.frameBorder};background:none;color:${INDIGO.base};border-radius:${RADIUS.control};padding:9px;font:${TYPE.secondary};cursor:pointer;text-align:left}
+		.living-docs-rail .rail-addctx:hover{background:${PAPER.chip};border-style:solid}
+		.living-docs-rail .rail-addctx-form{margin:12px 0 4px;border:1px solid ${HAIRLINE.strong};background:${PAPER.card};border-radius:${RADIUS.input};padding:9px}
 		.living-docs-rail .rail-addctx-kinds{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
-		.living-docs-rail .rail-addctx-chip{border:1px solid var(--vscode-input-border,#e0e6ff);background:none;color:var(--vscode-descriptionForeground);border-radius:6px;padding:5px 8px;font:500 11px/1 system-ui;cursor:pointer}
-		.living-docs-rail .rail-addctx-chip.active{background:#eef2fb;border-color:oklch(0.55 0.13 255);color:oklch(0.45 0.13 255)}
-		.living-docs-rail .rail-addctx-input{width:100%;box-sizing:border-box;resize:vertical;min-height:48px;border:1px solid var(--vscode-input-border,#d8e0fb);background:var(--vscode-input-background,#fff);color:var(--vscode-input-foreground);border-radius:7px;padding:7px 9px;font:400 12px/1.45 system-ui;outline:none}
+		.living-docs-rail .rail-addctx-chip{border:1px solid ${PAPER.control};background:${PAPER.card};color:${INK.secondary};border-radius:${RADIUS.control};padding:5px 8px;font:${TYPE.secondary};cursor:pointer}
+		.living-docs-rail .rail-addctx-chip.active{background:${INDIGO.tint};border-color:${INDIGO.base};color:${INDIGO.hover}}
+		.living-docs-rail .rail-addctx-input{width:100%;box-sizing:border-box;resize:vertical;min-height:48px;border:1px solid ${HAIRLINE.strong};background:${PAPER.card};color:${INK.body};border-radius:${RADIUS.control};padding:7px 9px;font:${TYPE.secondary};outline:none}
+		.living-docs-rail .rail-addctx-input:focus{border-color:${INDIGO.base};box-shadow:0 0 0 3px ${INDIGO.tint}}
 		.living-docs-rail .rail-addctx-actions{display:flex;gap:6px;margin-top:8px}
-		.living-docs-rail .rail-addctx-add{flex:1;border:none;border-radius:7px;padding:7px;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/1 system-ui;cursor:pointer}
-		.living-docs-rail .rail-addctx-cancel{border:1px solid var(--vscode-input-border,#e0e2e8);border-radius:7px;padding:7px 12px;background:none;color:var(--vscode-descriptionForeground);font:500 12px/1 system-ui;cursor:pointer}
-		.living-docs-rail .rail-srcremove{margin-left:6px;flex:none;border:none;background:none;color:var(--vscode-descriptionForeground);font:500 14px/1 system-ui;cursor:pointer;padding:0 3px;border-radius:4px;opacity:.5}
+		.living-docs-rail .rail-addctx-add{flex:1;border:none;border-radius:${RADIUS.control};padding:7px;background:${INDIGO.base};color:${PAPER.card};font:600 12.5px/1 ${FONT.sans};cursor:pointer}
+		.living-docs-rail .rail-addctx-add:hover{background:${INDIGO.hover}}
+		.living-docs-rail .rail-addctx-cancel{border:1px solid ${PAPER.control};border-radius:${RADIUS.control};padding:7px 12px;background:${PAPER.card};color:${INK.body};font:400 12.5px/1 ${FONT.sans};cursor:pointer}
+		.living-docs-rail .rail-addctx-cancel:hover{background:${PAPER.sunken}}
+		.living-docs-rail .rail-srcremove{margin-left:6px;flex:none;border:none;background:none;color:${INK.meta};font:400 14px/1 ${FONT.sans};cursor:pointer;padding:0 3px;border-radius:4px;opacity:.5}
 		.living-docs-rail .rail-item:hover .rail-srcremove{opacity:1}
-		.living-docs-rail .rail-srcremove:hover{color:oklch(0.55 0.2 25);background:var(--vscode-list-hoverBackground)}
-		.living-docs-rail .rail-srccand{display:flex;align-items:center;gap:7px;width:100%;box-sizing:border-box;border:1px solid var(--vscode-input-border,#e0e6ff);background:var(--vscode-input-background,#fff);color:var(--vscode-foreground);border-radius:7px;padding:7px 9px;margin-bottom:5px;font:500 12.5px/1 system-ui;cursor:pointer;text-align:left}
-		.living-docs-rail .rail-srccand:hover{background:#eef2fb;border-color:oklch(0.55 0.13 255)}
+		.living-docs-rail .rail-srcremove:hover{color:${RED.base};background:${PAPER.chip}}
+		.living-docs-rail .rail-srccand{display:flex;align-items:center;gap:7px;width:100%;box-sizing:border-box;border:1px solid ${PAPER.control};background:${PAPER.card};color:${INK.body};border-radius:${RADIUS.control};padding:7px 9px;margin-bottom:5px;font:400 12.5px/1 ${FONT.sans};cursor:pointer;text-align:left}
+		.living-docs-rail .rail-srccand:hover{background:${INDIGO.tint};border-color:${INDIGO.tintBorder}}
 		`;
 		container.appendChild(style);
 	}

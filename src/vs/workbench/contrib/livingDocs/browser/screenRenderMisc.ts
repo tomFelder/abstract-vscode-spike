@@ -12,7 +12,22 @@ import { localize } from '../../../../nls.js';
 import { groupPendingByDoc, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { ChatGptSignInStage } from '../common/livingDocs.js';
 import { ONBOARDING_STEPS, onboardingStepIndex, OnboardingStep } from '../common/onboarding.js';
-import { ACCENT, avatar, esc, IScreenState } from './screenRenderShell.js';
+import { AMBER, AVATAR_NAVY, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, RED, TRACKING, TYPE } from '../common/abstractTokens.js';
+import { avatar, esc, IScreenState } from './screenRenderShell.js';
+
+// Two shared button styles, so a screen can never invent a third. The system has exactly one filled
+// button - the indigo primary - and one hairline secondary on white; a bulk verb that could undo a lot of
+// work is quiet text (see `quietVerb`), never a filled or coloured button.
+const BTN_PRIMARY = `border:none;border-radius:${RADIUS.control};padding:11px 20px;background:${INDIGO.base};color:${PAPER.card};font:${TYPE.uiBodyStrong};cursor:pointer`;
+const BTN_SECONDARY = `border:1px solid ${PAPER.control};background:${PAPER.card};border-radius:${RADIUS.control};padding:10px 16px;font:${TYPE.uiBody};color:${INK.body};cursor:pointer`;
+// A quiet (text) bulk verb: "Approve all 4…" is a lot of work in one click, so it reads as a sentence the
+// user chooses, not a button that invites the click. Never green, never red, never filled.
+const BTN_QUIET = `border:none;background:none;padding:6px 10px;font:${TYPE.secondary};color:${INK.secondary};cursor:pointer`;
+// The one card: white paper, a `strong` hairline, the 12px card radius.
+const CARD = `background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:${RADIUS.cardLarge}`;
+// A kind badge: mono, uppercase, tracked - coloured by risk (amber = a call is waiting on you, green =
+// figures, already settled). The label string itself is never rewritten, only cased by CSS.
+const kindBadge = (attention: boolean) => `font:${TYPE.kindBadge};letter-spacing:${TRACKING.kindBadge};text-transform:uppercase;color:${attention ? AMBER.label : GREEN.base}`;
 
 // ---- Model access: the provider picker + onboarding survey (plan 35 iter 4; doc 18 sections 2.1 + 2.4).
 // The first-run/Settings step where the user chooses how their model calls are paid for: "Sign in with
@@ -29,12 +44,14 @@ function usageRing(fraction: number): string {
 	const r = 15;
 	const c = 2 * Math.PI * r;
 	const dash = (pct * c).toFixed(2);
-	const colour = pct >= 0.9 ? '#b4332f' : (pct >= 0.75 ? '#9a6b16' : ACCENT);
+	// The ring changes hue only when it means something: amber once the day's usage is nearly spent (a
+	// decision is coming), red once it is effectively gone. Below that it is simply Abstract working.
+	const colour = pct >= 0.9 ? RED.base : (pct >= 0.75 ? AMBER.base : INDIGO.base);
 	return `<svg width="40" height="40" viewBox="0 0 40 40" style="flex:none">
-		<circle cx="20" cy="20" r="${r}" fill="none" stroke="#eceef2" stroke-width="4"></circle>
+		<circle cx="20" cy="20" r="${r}" fill="none" stroke="${HAIRLINE.strong}" stroke-width="4"></circle>
 		<circle cx="20" cy="20" r="${r}" fill="none" stroke="${colour}" stroke-width="4" stroke-linecap="round"
 			stroke-dasharray="${dash} ${(c - Number(dash)).toFixed(2)}" transform="rotate(-90 20 20)"></circle>
-		<text x="20" y="24" text-anchor="middle" style="font:600 11px/1 system-ui;fill:#52575f">${Math.round(pct * 100)}%</text>
+		<text x="20" y="24" text-anchor="middle" style="font:600 11px/1 ${FONT.sans};fill:${INK.bodySoft}">${Math.round(pct * 100)}%</text>
 	</svg>`;
 }
 
@@ -46,17 +63,18 @@ function usageRing(fraction: number): string {
 // link" fallback covers blocked environments, and the URL is selectable text so it can always be pasted by hand.
 // Plain words throughout (P5); no "OAuth"/"device code" jargon in the copy.
 function pendingSignInBlock(userCode: string | undefined, verificationUri: string | undefined): string {
-	const waiting = `<div style="display:inline-flex;align-items:center;gap:9px;font:600 13px/1 system-ui;color:#52575f;margin-bottom:14px"><span style="width:13px;height:13px;border:2px solid #d3d6dd;border-top-color:${ACCENT};border-radius:50%;animation:lwdSpin .8s linear infinite"></span>Waiting for you to finish signing in&hellip;</div>`;
+	const waiting = `<div style="display:inline-flex;align-items:center;gap:9px;font:${TYPE.uiBodyStrong};color:${INK.bodySoft};margin-bottom:14px"><span style="width:13px;height:13px;border:2px solid ${PAPER.control};border-top-color:${INDIGO.base};border-radius:50%;animation:lwdSpin .8s linear infinite"></span>Waiting for you to finish signing in&hellip;</div>`;
 	// The device code the user confirms on the sign-in page: shown large, copyable in one click (reuses the
 	// generic data-copy-link handler by carrying the code in data-link). Absent only if the broker omitted it.
+	// The code itself is mono - it is a fact to be typed character for character, which is what mono is for.
 	const codeBlock = userCode
 		? `<div style="margin:0 0 16px">
-			<div style="font:600 11.5px/1 system-ui;color:#868b95;text-transform:uppercase;letter-spacing:.04em;margin:0 0 8px">Your code</div>
+			<div style="font:${TYPE.sectionLabel};letter-spacing:${TRACKING.sectionLabel};color:${INK.meta};text-transform:uppercase;margin:0 0 8px">Your code</div>
 			<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-				<span style="font:700 22px/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:.12em;color:#15171c;background:#f4f5f8;border:1px solid #e4e6eb;border-radius:10px;padding:12px 16px;user-select:all">${esc(userCode)}</span>
-				<button data-copy-link data-link="${esc(userCode)}" style="border:1px solid #d4d7dd;background:#fff;border-radius:10px;padding:11px 16px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Copy code</button>
+				<span style="font:600 22px/1 ${FONT.mono};letter-spacing:.12em;color:${INK.heading};background:${PAPER.sunken};border:1px solid ${PAPER.sunkenBorder};border-radius:${RADIUS.input};padding:12px 16px;user-select:all">${esc(userCode)}</span>
+				<button data-copy-link data-link="${esc(userCode)}" style="${BTN_SECONDARY}">Copy code</button>
 			</div>
-			<p style="margin:9px 0 0;font:400 12px/1.5 system-ui;color:#868b95">Enter this on the sign-in page if it asks for it.</p>
+			<p style="margin:9px 0 0;font:${TYPE.secondary};color:${INK.meta}">Enter this on the sign-in page if it asks for it.</p>
 		</div>`
 		: '';
 	if (!verificationUri) {
@@ -66,12 +84,12 @@ function pendingSignInBlock(userCode: string | undefined, verificationUri: strin
 	return `<div>
 		${waiting}
 		${codeBlock}
-		<p style="margin:0 0 12px;font:400 12.5px/1.55 system-ui;color:#696e78">If your browser didn&#39;t open, open the sign-in page yourself:</p>
+		<p style="margin:0 0 12px;font:${TYPE.secondary};color:${INK.secondary}">If your browser didn&#39;t open, open the sign-in page yourself:</p>
 		<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:12px">
-			<a data-open-external href="${url}" style="display:inline-flex;align-items:center;gap:8px;border:none;border-radius:10px;padding:12px 20px;background:${ACCENT};color:#fff;font:600 13.5px/1 system-ui;text-decoration:none;cursor:pointer">Open the sign-in page &#8599;</a>
-			<button data-copy-link data-link="${url}" style="border:1px solid #d4d7dd;background:#fff;border-radius:10px;padding:11px 16px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Copy link</button>
+			<a data-open-external href="${url}" style="display:inline-flex;align-items:center;gap:8px;${BTN_PRIMARY};text-decoration:none">Open the sign-in page &#8599;</a>
+			<button data-copy-link data-link="${url}" style="${BTN_SECONDARY}">Copy link</button>
 		</div>
-		<div style="font:400 11px/1.5 ui-monospace,SFMono-Regular,monospace;color:#9aa0ac;background:#f7f8fa;border:1px solid #eceef2;border-radius:8px;padding:9px 11px;word-break:break-all;user-select:all">${url}</div>
+		<div style="font:${TYPE.provenance};color:${INK.meta};background:${PAPER.sunken};border:1px solid ${PAPER.sunkenBorder};border-radius:${RADIUS.control};padding:9px 11px;word-break:break-all;user-select:all">${url}</div>
 	</div>`;
 }
 
@@ -93,7 +111,9 @@ export function renderSettings(state: IScreenState): string {
 			: status.readiness === 'broker-down'
 				? localize('livingDocs.settings.door.connecting', "Connecting to the model service…")
 				: localize('livingDocs.settings.door.none', "The built-in fallback (no model connected)");
-	const dot = status.provider === 'none' ? '#cdd1d8' : 'oklch(0.6 0.13 150)';
+	// Green means "all clear" - a door is genuinely serving. With no door, the dot carries no meaning, so it
+	// takes the frame's own border colour rather than borrowing a hue.
+	const dot = status.provider === 'none' ? PAPER.frameBorder : GREEN.base;
 
 	// The honesty seam for issue #259: a user can be signed in to ChatGPT while their calls are actually
 	// served by the included model (the #120 subscription-call failure falls back to OpenRouter). The
@@ -113,10 +133,10 @@ export function renderSettings(state: IScreenState): string {
 		const frac = status.dailyTotalUsd / status.dailyBudgetUsd;
 		const spent = status.dailyTotalUsd.toFixed(2);
 		const budget = status.dailyBudgetUsd.toFixed(2);
-		usageBlock = `<div style="display:flex;align-items:center;gap:14px;margin-top:18px;padding-top:18px;border-top:1px solid #f1f2f5">
+		usageBlock = `<div style="display:flex;align-items:center;gap:14px;margin-top:18px;padding-top:18px;border-top:1px solid ${HAIRLINE.soft}">
 			${usageRing(frac)}
-			<div><div style="font:600 13px/1.3 system-ui;color:#1a1c20">Today&#39;s included usage</div>
-			<div style="font:400 12px/1.4 system-ui;color:#696e78">US$${spent} of US$${budget} used today &middot; picks up again tomorrow</div></div>
+			<div><div style="font:${TYPE.uiBodyStrong};color:${INK.heading}">Today&#39;s included usage</div>
+			<div style="font:${TYPE.secondary};color:${INK.secondary}">US$${spent} of US$${budget} used today &middot; picks up again tomorrow</div></div>
 		</div>`;
 	}
 
@@ -126,81 +146,85 @@ export function renderSettings(state: IScreenState): string {
 	const signedInBadge = signedInButFallenBack
 		? `<div style="display:flex;flex-direction:column;gap:8px">
 				<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-					<span style="font:600 13px/1.3 system-ui;color:#9a6b16;display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#e0a63a;flex:none"></span>${esc(localize('livingDocs.settings.signedInFallback', "Signed in to ChatGPT, but calls are currently served by {0}", fallbackDoorName))}</span>
-					<button data-msg="signOutChatGpt" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${esc(localize('livingDocs.settings.signOut', "Sign Out"))}</button>
+					<span style="font:${TYPE.uiBodyStrong};color:${AMBER.label};display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:${RADIUS.pill};background:${AMBER.base};flex:none"></span>${esc(localize('livingDocs.settings.signedInFallback', "Signed in to ChatGPT, but calls are currently served by {0}", fallbackDoorName))}</span>
+					<button data-msg="signOutChatGpt" style="${BTN_SECONDARY}">${esc(localize('livingDocs.settings.signOut', "Sign out"))}</button>
 				</div>
 				<details data-signin-why style="margin-top:2px">
-					<summary style="list-style:none;cursor:pointer;font:600 12px/1 system-ui;color:${ACCENT};display:inline-flex;align-items:center;gap:6px">${esc(localize('livingDocs.settings.seeWhy', "See why"))}<span style="font-size:11px">&#9662;</span></summary>
-					<p style="margin:9px 0 0;font:400 12.5px/1.6 system-ui;color:#696e78;background:#fbf7ee;border:1px solid #f0e5cf;border-radius:9px;padding:11px 13px">${esc(localize('livingDocs.settings.fallbackWhy', "Your ChatGPT sign-in worked, but Abstract can't yet complete model calls through your ChatGPT plan, so it's falling back to the included model for now. Your work still gets done; we're fixing the ChatGPT path. You stay signed in."))}</p>
+					<summary style="list-style:none;cursor:pointer;font:600 12.5px/1 ${FONT.sans};color:${INDIGO.base};display:inline-flex;align-items:center;gap:6px">${esc(localize('livingDocs.settings.seeWhy', "See why"))}<span style="font-size:11px">&#9662;</span></summary>
+					<p style="margin:9px 0 0;font:${TYPE.secondary};color:${INK.secondary};background:${AMBER.subtleBg};border:1px solid ${AMBER.border};border-radius:${RADIUS.control};padding:11px 13px">${esc(localize('livingDocs.settings.fallbackWhy', "Your ChatGPT sign-in worked, but Abstract can't yet complete model calls through your ChatGPT plan, so it's falling back to the included model for now. Your work still gets done; we're fixing the ChatGPT path. You stay signed in."))}</p>
 				</details>
 			</div>`
 		: `<div style="display:flex;align-items:center;gap:12px">
-				<span style="font:600 13px/1 system-ui;color:oklch(0.5 0.13 150);display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>${esc(localize('livingDocs.settings.signedIn', "Signed in to ChatGPT"))}</span>
-				<button data-msg="signOutChatGpt" style="border:1px solid #e0e2e8;background:#fff;border-radius:9px;padding:9px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${esc(localize('livingDocs.settings.signOut', "Sign Out"))}</button>
+				<span style="font:${TYPE.uiBodyStrong};color:${GREEN.base};display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:${RADIUS.pill};background:${GREEN.base}"></span>${esc(localize('livingDocs.settings.signedIn', "Signed in to ChatGPT"))}</span>
+				<button data-msg="signOutChatGpt" style="${BTN_SECONDARY}">${esc(localize('livingDocs.settings.signOut', "Sign out"))}</button>
 			</div>`;
 	// When the flow ended (error / expired), the button offers a fresh attempt with honest label copy: an
 	// expired code says "Start again", a failure says "Try again" - never a bare "Sign in" that hides that the
 	// last attempt failed. Signed-out shows the plain primary button; pending shows the device-code block.
 	const primaryLabel = stage === 'expired'
-		? localize('livingDocs.settings.signInAgain', "Start Again")
+		? localize('livingDocs.settings.signInAgain', "Start again")
 		: stage === 'error'
-			? localize('livingDocs.settings.signInRetry', "Try Again")
+			? localize('livingDocs.settings.signInRetry', "Try again")
 			: localize('livingDocs.settings.signInChatGpt', "Sign in with ChatGPT");
 	const signInBtn = stage === 'signed-in'
 		? signedInBadge
 		: stage === 'pending'
 			? pendingSignInBlock(state.signInUserCode, state.signInVerificationUri)
-			: `<button data-msg="signInChatGpt" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">${esc(primaryLabel)}</button>`;
+			: `<button data-msg="signInChatGpt" style="${BTN_PRIMARY}">${esc(primaryLabel)}</button>`;
 
-	// The honest failure state (plan 51, issue #283 §B): each cause reads distinctly. Expired uses a calm amber
+	// The honest failure state (plan 51, issue #283 section B): each cause reads distinctly. Expired uses a calm amber
 	// note (nothing broke - the code just timed out); a real error uses the red note and, when the broker
 	// forwarded an upstream rejection, appends the HTTP status + a short body snippet so the reason is the real
 	// one, never invented. Broker-unreachable / broker-error carry only the plain-words reason.
 	let signInError = '';
 	if (stage === 'expired' && state.signInError) {
-		signInError = `<p style="margin:12px 0 0;font:400 12.5px/1.5 system-ui;color:#9a6b16">${esc(state.signInError)}</p>`;
+		signInError = `<p style="margin:12px 0 0;font:${TYPE.secondary};color:${AMBER.label}">${esc(state.signInError)}</p>`;
 	} else if (stage === 'error' && state.signInError) {
+		// The upstream detail is a verbatim fact from the other end of the wire, so it is mono on the red
+		// block fill - the same "this failed" grammar the WAS block uses, and no border to shout with.
 		const upstreamLine = typeof state.signInUpstreamStatus === 'number'
-			? `<div style="margin:8px 0 0;font:400 11.5px/1.5 ui-monospace,SFMono-Regular,monospace;color:#9aa0ac;background:#faf7f7;border:1px solid #f0e0e0;border-radius:8px;padding:8px 10px;word-break:break-word">${esc(localize('livingDocs.settings.upstreamStatus', "OpenAI responded with {0}", String(state.signInUpstreamStatus)))}${state.signInUpstreamBody ? ` &middot; ${esc(state.signInUpstreamBody)}` : ''}</div>`
+			? `<div style="margin:8px 0 0;font:${TYPE.provenance};color:${RED.blockInk};background:${RED.blockBg};border-radius:${RADIUS.control};padding:8px 10px;word-break:break-word">${esc(localize('livingDocs.settings.upstreamStatus', "OpenAI responded with {0}", String(state.signInUpstreamStatus)))}${state.signInUpstreamBody ? ` &middot; ${esc(state.signInUpstreamBody)}` : ''}</div>`
 			: '';
-		signInError = `<div style="margin:12px 0 0"><p style="margin:0;font:400 12.5px/1.5 system-ui;color:#b4332f">${esc(state.signInError)}</p>${upstreamLine}</div>`;
+		signInError = `<div style="margin:12px 0 0"><p style="margin:0;font:${TYPE.secondary};color:${RED.base}">${esc(state.signInError)}</p>${upstreamLine}</div>`;
 	}
 
 	// The survey: three plain-words questions. Recorded once; a thank-you replaces the form after saving.
+	const field = `width:100%;border:1px solid ${PAPER.control};border-radius:${RADIUS.input};padding:11px 12px;font:${TYPE.uiBody};color:${INK.heading};background:${PAPER.card};outline:none`;
+	const fieldLabel = `display:block;font:600 12.5px/1 ${FONT.sans};color:${INK.bodySoft};margin:0 0 7px`;
 	const surveyBody = state.surveySaved
-		? `<div style="display:flex;align-items:center;gap:10px;font:500 13px/1.4 system-ui;color:oklch(0.5 0.13 150)"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.6 0.13 150)"></span>Thanks &mdash; that helps us build the right templates first.</div>`
+		? `<div style="display:flex;align-items:center;gap:10px;font:${TYPE.uiBody};color:${GREEN.base}"><span style="width:8px;height:8px;border-radius:${RADIUS.pill};background:${GREEN.base}"></span>Thanks &mdash; that helps us build the right templates first.</div>`
 		: `<div data-survey style="display:flex;flex-direction:column;gap:16px">
-				<div><label style="display:block;font:600 12px/1 system-ui;color:#52575f;margin:0 0 7px">Which frontier model is your daily driver?</label>
-					<input data-sfield="daily" placeholder="ChatGPT, Claude, Gemini&hellip;" style="width:100%;border:1px solid #dfe1e7;border-radius:9px;padding:11px 12px;font:400 13.5px/1.3 system-ui;color:#1a1c20;outline:none"></div>
-				<div><label style="display:block;font:600 12px/1 system-ui;color:#52575f;margin:0 0 7px">Which subscriptions do you own?</label>
-					<input data-sfield="subs" placeholder="ChatGPT Plus, Claude Pro&hellip;" style="width:100%;border:1px solid #dfe1e7;border-radius:9px;padding:11px 12px;font:400 13.5px/1.3 system-ui;color:#1a1c20;outline:none"></div>
-				<div><label style="display:block;font:600 12px/1 system-ui;color:#52575f;margin:0 0 7px">What do you make each week?</label>
-					<input data-sfield="weekly" placeholder="Reports, briefs, proposals&hellip;" style="width:100%;border:1px solid #dfe1e7;border-radius:9px;padding:11px 12px;font:400 13.5px/1.3 system-ui;color:#1a1c20;outline:none"></div>
-				<button data-survey-save style="align-self:flex-start;border:1px solid #d4d7dd;background:#fff;border-radius:9px;padding:10px 17px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">Save</button>
+				<div><label style="${fieldLabel}">Which frontier model is your daily driver?</label>
+					<input data-sfield="daily" placeholder="ChatGPT, Claude, Gemini&hellip;" style="${field}"></div>
+				<div><label style="${fieldLabel}">Which subscriptions do you own?</label>
+					<input data-sfield="subs" placeholder="ChatGPT Plus, Claude Pro&hellip;" style="${field}"></div>
+				<div><label style="${fieldLabel}">What do you make each week?</label>
+					<input data-sfield="weekly" placeholder="Reports, briefs, proposals&hellip;" style="${field}"></div>
+				<button data-survey-save style="align-self:flex-start;${BTN_SECONDARY}">Save</button>
 			</div>`;
 
 	return `<div class="screen">
 		<div class="scr-head"><div><h1 class="scr-title">Model access</h1><div class="scr-sub">how your work gets its intelligence</div></div></div>
 		<div class="scr-body"><div style="max-width:720px;margin:0 auto;padding:32px 28px 60px">
 
-			<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:24px 26px;margin-bottom:22px">
-				<div style="display:flex;align-items:center;gap:9px;margin-bottom:4px"><span style="width:8px;height:8px;border-radius:50%;background:${dot}"></span><span style="font:600 12px/1 system-ui;color:#696e78">Serving you now</span></div>
-				<div style="font:600 17px/1.3 system-ui;color:#15171c;margin:0 0 20px">${esc(doorLabel)}</div>
+			<div style="${CARD};padding:24px 26px;margin-bottom:22px">
+				<div style="display:flex;align-items:center;gap:9px;margin-bottom:4px"><span style="width:8px;height:8px;border-radius:${RADIUS.pill};background:${dot}"></span><span style="font:600 12.5px/1 ${FONT.sans};color:${INK.secondary}">Serving you now</span></div>
+				<div style="font:${TYPE.bannerHeadline};color:${INK.heading};margin:0 0 20px">${esc(doorLabel)}</div>
 
-				<div style="font:600 12px/1 system-ui;color:#52575f;margin:0 0 10px">Sign in with your own subscription</div>
-				<p style="margin:0 0 14px;font:400 13px/1.55 system-ui;color:#696e78">Use your own ChatGPT plan and every model call in Abstract draws on it &mdash; nothing to set up, no usage limit from us.</p>
+				<div style="font:600 12.5px/1 ${FONT.sans};color:${INK.bodySoft};margin:0 0 10px">Sign in with your own subscription</div>
+				<p style="margin:0 0 14px;font:${TYPE.uiBody};color:${INK.secondary}">Use your own ChatGPT plan and every model call in Abstract draws on it &mdash; nothing to set up, no usage limit from us.</p>
 				${signInBtn}
 				${signInError}
 
-				<div style="font:600 12px/1 system-ui;color:#52575f;margin:22px 0 10px;padding-top:18px;border-top:1px solid #f1f2f5">Or use the included model</div>
-				<p style="margin:0 0 14px;font:400 13px/1.55 system-ui;color:#696e78">A capable model we include for free, with a small amount of usage each day. It pauses politely when the day&#39;s usage is spent and picks up again tomorrow.</p>
-				<button data-msg="useIncludedModel" style="border:1px solid #d4d7dd;background:#fff;border-radius:10px;padding:11px 18px;font:600 13px/1 system-ui;color:#52575f;cursor:pointer">Use the included model</button>
+				<div style="font:600 12.5px/1 ${FONT.sans};color:${INK.bodySoft};margin:22px 0 10px;padding-top:18px;border-top:1px solid ${HAIRLINE.soft}">Or use the included model</div>
+				<p style="margin:0 0 14px;font:${TYPE.uiBody};color:${INK.secondary}">A capable model we include for free, with a small amount of usage each day. It pauses politely when the day&#39;s usage is spent and picks up again tomorrow.</p>
+				<button data-msg="useIncludedModel" style="${BTN_SECONDARY}">Use the included model</button>
 				${usageBlock}
 			</div>
 
-			<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:24px 26px;margin-bottom:22px">
-				<div style="font:600 16px/1.3 system-ui;color:#15171c;margin:0 0 5px">A few quick questions</div>
-				<p style="margin:0 0 20px;font:400 13px/1.55 system-ui;color:#696e78">This helps us build the right things first. Your answers stay on your computer.</p>
+			<div style="${CARD};padding:24px 26px;margin-bottom:22px">
+				<div style="font:${TYPE.bannerHeadline};color:${INK.heading};margin:0 0 5px">A few quick questions</div>
+				<p style="margin:0 0 20px;font:${TYPE.uiBody};color:${INK.secondary}">This helps us build the right things first. Your answers stay on your computer.</p>
 				${surveyBody}
 			</div>
 
@@ -221,16 +245,16 @@ export function renderSettings(state: IScreenState): string {
 // the sign-in + keys live only in the proxy). Plain words per P5: no "OAuth", no "token", no "rate
 // limit". The full page carries the provider-retention detail and the founder-review notes.
 function dataFlowCard(analyticsEnabled: boolean): string {
-	const line = (text: string) => `<li style="margin:0 0 9px;font:400 13px/1.55 system-ui;color:#52575f">${text}</li>`;
-	return `<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:6px 26px">
+	const line = (text: string) => `<li style="margin:0 0 9px;font:${TYPE.uiBody};color:${INK.bodySoft}">${text}</li>`;
+	return `<div style="${CARD};padding:6px 26px">
 		<details data-dataflow>
-			<summary style="list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:18px 0;font:600 14px/1.3 system-ui;color:#15171c">
-				<span style="width:22px;height:22px;flex:none;border-radius:7px;background:#f4f5fd;border:1px solid #e0e5fb;color:${ACCENT};display:flex;align-items:center;justify-content:center;font-size:12px">&#128274;</span>
+			<summary style="list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:18px 0;font:${TYPE.uiBodyStrong};color:${INK.heading}">
+				<span style="width:22px;height:22px;flex:none;border-radius:${RADIUS.control};background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};color:${INDIGO.base};display:flex;align-items:center;justify-content:center;font-size:12px">&#128274;</span>
 				<span style="flex:1">What does Abstract send?</span>
-				<span style="color:#a3a8b2;font-size:12px">&#9662;</span>
+				<span style="color:${INK.meta};font-size:12px">&#9662;</span>
 			</summary>
 			<div style="padding:2px 0 22px">
-				<p style="margin:0 0 14px;font:400 13px/1.6 system-ui;color:#696e78">Abstract sends content only when you ask it to work &mdash; or when an agent you have left running does its scheduled check. Here is exactly what is sent, and what never is.</p>
+				<p style="margin:0 0 14px;font:${TYPE.uiBody};color:${INK.secondary}">Abstract sends content only when you ask it to work &mdash; or when an agent you have left running does its scheduled check. Here is exactly what is sent, and what never is.</p>
 				<ul style="margin:0 0 14px;padding-left:20px">
 					${line('When you <strong>chat about a document</strong>, Abstract sends that one open document and the source files you attached to it &mdash; nothing else in your folder.')}
 					${line('When you <strong>run one instruction across your project</strong>, it sends only the documents you selected for that run and their shared sources.')}
@@ -240,7 +264,7 @@ function dataFlowCard(analyticsEnabled: boolean): string {
 					${line('<strong>Usage analytics is on by default and you can turn it off here any time</strong> &mdash; it stays on this computer, counts your actions, never your words, and forwarding it anywhere is not built yet.')}
 				</ul>
 				${analyticsConsentRow(analyticsEnabled)}
-				<p style="margin:0;font:400 12.5px/1.5 system-ui;color:#a3a8b2">The full plain-words page: <span style="font:500 12.5px/1.5 ui-monospace,monospace;color:#696e78">docs/27-data-flow-one-pager.md</span></p>
+				<p style="margin:0;font:${TYPE.secondary};color:${INK.meta}">The full plain-words page: <span style="font:${TYPE.provenance};color:${INK.secondary}">docs/27-data-flow-one-pager.md</span></p>
 			</div>
 		</details>
 	</div>`;
@@ -255,14 +279,16 @@ function analyticsConsentRow(enabled: boolean): string {
 	const state = on ? 'On &mdash; counting your actions locally' : 'Off &mdash; nothing is counted';
 	const btnLabel = on ? 'Turn off' : 'Turn on';
 	const btnArg = on ? 'off' : 'on';
-	const dot = on ? ACCENT : '#a3a8b2';
-	return `<div style="display:flex;align-items:center;gap:12px;margin:0 0 14px;padding:13px 15px;background:#f7f8fb;border:1px solid #eceef3;border-radius:12px">
-		<span style="width:8px;height:8px;flex:none;border-radius:50%;background:${dot}"></span>
+	// Indigo when it is counting (Abstract acting); the meta ink when it is not - "off" is not a state that
+	// needs a colour.
+	const dot = on ? INDIGO.base : INK.meta;
+	return `<div style="display:flex;align-items:center;gap:12px;margin:0 0 14px;padding:13px 15px;background:${PAPER.sunken};border:1px solid ${PAPER.sunkenBorder};border-radius:${RADIUS.card}">
+		<span style="width:8px;height:8px;flex:none;border-radius:${RADIUS.pill};background:${dot}"></span>
 		<div style="flex:1">
-			<div style="font:600 12.5px/1.3 system-ui;color:#15171c">Anonymous usage analytics</div>
-			<div style="font:400 12px/1.4 system-ui;color:#696e78">${state}. Change it any time.</div>
+			<div style="font:600 12.5px/1.3 ${FONT.sans};color:${INK.heading}">Anonymous usage analytics</div>
+			<div style="font:${TYPE.secondary};color:${INK.secondary}">${state}. Change it any time.</div>
 		</div>
-		<button data-msg="setAnalyticsConsent" data-arg="${btnArg}" style="flex:none;border:1px solid #d4d7dd;background:#fff;border-radius:9px;padding:8px 15px;font:600 12.5px/1 system-ui;color:#52575f;cursor:pointer">${btnLabel}</button>
+		<button data-msg="setAnalyticsConsent" data-arg="${btnArg}" style="flex:none;${BTN_SECONDARY}">${btnLabel}</button>
 	</div>`;
 }
 
@@ -279,34 +305,37 @@ export function renderOnboarding(state: IScreenState): string {
 	// The funnel progress rail: a labelled dot per step, the current one filled, past ones ticked.
 	const railLabels: Record<OnboardingStep, string> = {
 		'open': localize('livingDocs.onboarding.rail.start', "Start"), 'demo-report': localize('livingDocs.onboarding.rail.demo', "Demo"), 'provenance-peek': localize('livingDocs.onboarding.rail.wowOne', "Wow 1"), 'first-diff': localize('livingDocs.onboarding.rail.wowTwo', "Wow 2"),
-		'first-approve-sample': localize('livingDocs.onboarding.rail.approve', "Approve"), 'first-folder': localize('livingDocs.onboarding.rail.folder', "Your Folder"), 'first-approve-own': localize('livingDocs.onboarding.rail.aha', "Aha"),
+		'first-approve-sample': localize('livingDocs.onboarding.rail.approve', "Approve"), 'first-folder': localize('livingDocs.onboarding.rail.folder', "Your folder"), 'first-approve-own': localize('livingDocs.onboarding.rail.aha', "Aha"),
 	};
 	const rail = ONBOARDING_STEPS.map((s, i) => {
 		const done = i < idx;
 		const cur = i === idx;
-		const bg = done ? 'oklch(0.6 0.13 150)' : cur ? ACCENT : '#e4e6ea';
-		const fg = (done || cur) ? '#fff' : '#9aa0aa';
+		// Green for a step already done (settled), indigo for the step Abstract is on, and the paper's own
+		// hairline for the steps still ahead - a step you have not reached yet is not a state.
+		const bg = done ? GREEN.base : cur ? INDIGO.base : HAIRLINE.strong;
+		const fg = (done || cur) ? PAPER.card : INK.meta;
 		const mark = done ? '&#10003;' : String(i + 1);
 		return `<div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1;min-width:0">
-			<span style="width:26px;height:26px;border-radius:50%;background:${bg};color:${fg};display:flex;align-items:center;justify-content:center;font:600 12px/1 system-ui">${mark}</span>
-			<span style="font:${cur ? '600' : '500'} 10.5px/1.2 system-ui;color:${cur ? '#1a1c20' : '#9aa0aa'};text-align:center">${railLabels[s]}</span>
+			<span style="width:26px;height:26px;border-radius:${RADIUS.pill};background:${bg};color:${fg};display:flex;align-items:center;justify-content:center;font:600 12px/1 ${FONT.sans}">${mark}</span>
+			<span style="font:${cur ? '600' : '400'} 10.5px/1.2 ${FONT.sans};color:${cur ? INK.heading : INK.meta};text-align:center">${railLabels[s]}</span>
 		</div>`;
-	}).join('<div style="height:1px;background:#e4e6ea;flex:none;width:14px;margin-top:13px"></div>');
+	}).join(`<div style="height:1px;background:${HAIRLINE.strong};flex:none;width:14px;margin-top:13px"></div>`);
 
 	const btn = (label: string, msg: string, primary: boolean) => primary
-		? `<button data-msg="${msg}" style="border:none;border-radius:10px;padding:13px 22px;background:${ACCENT};color:#fff;font:600 14px/1 system-ui;cursor:pointer">${esc(label)}</button>`
-		: `<button data-msg="${msg}" style="border:1px solid #d4d7dd;background:#fff;border-radius:10px;padding:12px 18px;font:600 13px/1 system-ui;color:#52575f;cursor:pointer">${esc(label)}</button>`;
+		? `<button data-msg="${msg}" style="${BTN_PRIMARY}">${esc(label)}</button>`
+		: `<button data-msg="${msg}" style="${BTN_SECONDARY}">${esc(label)}</button>`;
 
-	const wowBadge = (n: number) => `<span style="display:inline-flex;align-items:center;gap:6px;background:#fdf2dc;border:1px solid #f0dcae;border-radius:999px;padding:4px 11px;font:700 11px/1 system-ui;color:#9a6b16;margin-bottom:14px">&#10022; ${localize('livingDocs.onboarding.wowBadge', "Wow moment {0}", n)}</span>`;
+	const wowBadge = (n: number) => `<span style="display:inline-flex;align-items:center;gap:6px;background:${AMBER.bg};border:1px solid ${AMBER.border};border-radius:${RADIUS.pill};padding:4px 11px;font:600 11px/1 ${FONT.sans};color:${AMBER.label};margin-bottom:14px">&#10022; ${localize('livingDocs.onboarding.wowBadge', "Wow moment {0}", n)}</span>`;
 
 	// The consent line, reflecting the choice already made at the consent moment (reused, not rebuilt).
 	const consentLine = ob.consentEnabled
-		? `<span style="color:oklch(0.5 0.13 150)"><span style="width:7px;height:7px;border-radius:50%;background:oklch(0.6 0.13 150);display:inline-block;margin-right:7px"></span>${localize('livingDocs.onboarding.analyticsOn', "Analytics on - we count actions, never your words. Document content never leaves your machine.")}</span>`
-		: `<span style="color:#868b95"><span style="width:7px;height:7px;border-radius:50%;background:#cdd1d8;display:inline-block;margin-right:7px"></span>${localize('livingDocs.onboarding.analyticsOff', "Analytics off - onboarding still works, it just isn't measured. Turn it on any time in Model Access.")}</span>`;
-	const consentCard = `<div style="margin-top:22px;padding-top:18px;border-top:1px solid #f1f2f5;font:400 12.5px/1.6 system-ui">${consentLine}</div>`;
+		? `<span style="color:${GREEN.base}"><span style="width:7px;height:7px;border-radius:${RADIUS.pill};background:${GREEN.base};display:inline-block;margin-right:7px"></span>${localize('livingDocs.onboarding.analyticsOn', "Analytics on - we count actions, never your words. Document content never leaves your machine.")}</span>`
+		: `<span style="color:${INK.secondary}"><span style="width:7px;height:7px;border-radius:${RADIUS.pill};background:${PAPER.frameBorder};display:inline-block;margin-right:7px"></span>${localize('livingDocs.onboarding.analyticsOff', "Analytics off - onboarding still works, it just isn't measured. Turn it on any time in Model access.")}</span>`;
+	const consentCard = `<div style="margin-top:22px;padding-top:18px;border-top:1px solid ${HAIRLINE.soft};font:${TYPE.secondary}">${consentLine}</div>`;
 
+	// Amber, because this is the one line on the screen that is waiting on a decision from the reader.
 	const noModel = !ob.hasModel
-		? `<p style="margin:14px 0 0;font:400 12.5px/1.5 system-ui;color:#9a6b16;background:#fdf2dc;border:1px solid #f0dcae;border-radius:9px;padding:10px 13px">${localize('livingDocs.onboarding.noModel.prefix', "No model is connected yet.")} <a data-msg="onbModelAccess" style="color:${ACCENT};cursor:pointer;text-decoration:underline">${localize('livingDocs.onboarding.noModel.link', "Connect One in Model Access")}</a> ${localize('livingDocs.onboarding.noModel.suffix', "so the prompted edit can run - the demo report and its provenance still work without it.")}</p>`
+		? `<p style="margin:14px 0 0;font:${TYPE.secondary};color:${AMBER.label};background:${AMBER.bg};border:1px solid ${AMBER.border};border-radius:${RADIUS.control};padding:10px 13px">${localize('livingDocs.onboarding.noModel.prefix', "No model is connected yet.")} <a data-msg="onbModelAccess" style="color:${INDIGO.base};cursor:pointer;text-decoration:underline">${localize('livingDocs.onboarding.noModel.link', "Connect one in Model access")}</a> ${localize('livingDocs.onboarding.noModel.suffix', "so the prompted edit can run - the demo report and its provenance still work without it.")}</p>`
 		: '';
 
 	// Per-step card content. Each primary action drives the real engine + records the funnel step.
@@ -316,40 +345,40 @@ export function renderOnboarding(state: IScreenState): string {
 	let badge = '';
 	switch (ob.step) {
 		case 'open':
-			head = localize('livingDocs.onboarding.open.head', "Two Wows, Ten Minutes, No Setup");
+			head = localize('livingDocs.onboarding.open.head', "Two wows, ten minutes, no setup");
 			body = localize('livingDocs.onboarding.open.body', "Abstract keeps your documents bound to their sources, so numbers stay true and edits are reviewed. In the next few minutes we'll show you the magic twice - with nothing to set up. We start from a demo report generated from a bundled dataset.");
-			actions = btn(localize('livingDocs.onboarding.open.primary', "See It Work"), 'onbSeeItWork', true) + btn(localize('livingDocs.onboarding.open.secondary', "Model Access & a Few Questions"), 'onbModelAccess', false);
+			actions = btn(localize('livingDocs.onboarding.open.primary', "See it work"), 'onbSeeItWork', true) + btn(localize('livingDocs.onboarding.open.secondary', "Model access & a few questions"), 'onbModelAccess', false);
 			break;
 		case 'demo-report':
-			head = localize('livingDocs.onboarding.demo.head', "Your Demo Report Is Ready");
+			head = localize('livingDocs.onboarding.demo.head', "Your demo report is ready");
 			body = localize('livingDocs.onboarding.demo.body', "We generated a <strong>Demo Report</strong> from a bundled dataset in your open folder. Its figures are bound to that data. Let's see the first wow.");
-			actions = btn(localize('livingDocs.onboarding.demo.primary', "Show Me the First Wow"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the Demo Report"), 'onbOpenDemo', false);
+			actions = btn(localize('livingDocs.onboarding.demo.primary', "Show me the first wow"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the demo report"), 'onbOpenDemo', false);
 			break;
 		case 'provenance-peek':
 			badge = wowBadge(1);
-			head = localize('livingDocs.onboarding.peek.head', "See Where Every Number Comes From");
+			head = localize('livingDocs.onboarding.peek.head', "See where every number comes from");
 			body = localize('livingDocs.onboarding.peek.body', "In the Demo Report, hover the <strong>$48.6k</strong> figure (or any bound number). Abstract shows a peek: its <strong>source</strong>, its <strong>value</strong>, and <strong>when it synced</strong> - so you never wonder where a figure came from or whether it's stale.");
-			actions = btn(localize('livingDocs.onboarding.peek.primary', "I Saw Where It Came From"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the Demo Report"), 'onbOpenDemo', false);
+			actions = btn(localize('livingDocs.onboarding.peek.primary', "I saw where it came from"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the demo report"), 'onbOpenDemo', false);
 			break;
 		case 'first-diff':
 			badge = wowBadge(2);
-			head = localize('livingDocs.onboarding.diff.head', "Ask for One Change, Get One Clean Diff");
-			body = localize('livingDocs.onboarding.diff.body', "Now ask Abstract to improve a paragraph. We'll ask it to <strong>tighten the note to the board</strong>. A single inline <span style=\"color:#b4332f\">red</span>/<span style=\"color:#1f7a44\">green</span> diff streams into that exact paragraph - nothing else moves, and nothing changes until you approve.");
-			actions = btn(localize('livingDocs.onboarding.diff.primary', "Prompt One Edit"), 'onbPromptEdit', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the Demo Report"), 'onbOpenDemo', false);
+			head = localize('livingDocs.onboarding.diff.head', "Ask for one change, get one clean diff");
+			body = localize('livingDocs.onboarding.diff.body', "Now ask Abstract to improve a paragraph. We'll ask it to <strong>tighten the note to the board</strong>. A single inline <span style=\"color:{0}\">red</span>/<span style=\"color:{1}\">green</span> diff streams into that exact paragraph - nothing else moves, and nothing changes until you approve.", RED.base, GREEN.base);
+			actions = btn(localize('livingDocs.onboarding.diff.primary', "Prompt one edit"), 'onbPromptEdit', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the demo report"), 'onbOpenDemo', false);
 			body += noModel;
 			break;
 		case 'first-approve-sample':
-			head = localize('livingDocs.onboarding.approveSample.head', "Approve It - and It's Saved");
+			head = localize('livingDocs.onboarding.approveSample.head', "Approve it - and it's saved");
 			body = localize('livingDocs.onboarding.approveSample.body', "Open the <strong>Review</strong> panel on the right and approve the single proposal. It applies to the paragraph and is recorded as a version in <strong>History</strong> you can restore. On the web build a reload is ephemeral; on desktop the approved version persists (the X1 cure).");
-			actions = btn(localize('livingDocs.onboarding.approveSample.primary', "I Approved It"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the Demo Report"), 'onbOpenDemo', false);
+			actions = btn(localize('livingDocs.onboarding.approveSample.primary', "I approved it"), 'onbAdvance', true) + btn(localize('livingDocs.onboarding.openDemo', "Open the demo report"), 'onbOpenDemo', false);
 			break;
 		case 'first-folder':
-			head = localize('livingDocs.onboarding.folder.head', "Now Bring Your Own Work");
+			head = localize('livingDocs.onboarding.folder.head', "Now bring your own work");
 			body = localize('livingDocs.onboarding.folder.body', "That was the sample. The moment Abstract is built for is the first change you approve on <strong>your own file</strong>. Open a real folder to make it live - you keep everything you just learned.");
-			actions = btn(localize('livingDocs.onboarding.folder.primary', "Bring a Real Folder"), 'onbOpenFolder', true);
+			actions = btn(localize('livingDocs.onboarding.folder.primary', "Bring a real folder"), 'onbOpenFolder', true);
 			break;
 		case 'first-approve-own':
-			head = localize('livingDocs.onboarding.done.head', "You're All Set");
+			head = localize('livingDocs.onboarding.done.head', "You're all set");
 			body = localize('livingDocs.onboarding.done.body', "Open one of your documents, ask for a change, and approve it - that first approved change on your own file is the aha this whole flow was for. You can revisit this walkthrough any time from the command palette.");
 			actions = btn(localize('livingDocs.onboarding.done.primary', "Go to Home"), 'onbDone', true);
 			break;
@@ -359,14 +388,14 @@ export function renderOnboarding(state: IScreenState): string {
 		<div class="scr-head"><div><h1 class="scr-title">${localize('livingDocs.onboarding.title', "Welcome to Abstract")}</h1><div class="scr-sub">${localize('livingDocs.onboarding.subtitle', "the two-wow, ten-minute path")}</div></div></div>
 		<div class="scr-body"><div style="max-width:720px;margin:0 auto;padding:30px 28px 60px">
 			<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:30px">${rail}</div>
-			<div style="background:#fff;border:1px solid #e9eaee;border-radius:16px;padding:28px 30px">
+			<div style="${CARD};padding:28px 30px">
 				${badge}
-				<h2 style="margin:0 0 12px;font:600 21px/1.3 system-ui;color:#15171c">${head}</h2>
-				<p style="margin:0 0 22px;font:400 14.5px/1.65 system-ui;color:#4a4f57">${body}</p>
+				<h2 style="margin:0 0 12px;font:${TYPE.docHeading};color:${INK.heading}">${head}</h2>
+				<p style="margin:0 0 22px;font:${TYPE.docBody};color:${INK.bodySoft}">${body}</p>
 				<div style="display:flex;gap:12px;flex-wrap:wrap">${actions}</div>
 				${ob.step === 'open' ? consentCard : ''}
 			</div>
-			<p style="margin:18px 2px 0;font:400 12px/1.5 system-ui;color:#a3a8b2">${localize('livingDocs.onboarding.progress', "Step {0} of {1} - you can leave and come back - onboarding remembers where you were.", idx + 1, total)}</p>
+			<p style="margin:18px 2px 0;font:${TYPE.secondary};color:${INK.meta}">${localize('livingDocs.onboarding.progress', "Step {0} of {1} - you can leave and come back - onboarding remembers where you were.", idx + 1, total)}</p>
 		</div></div>
 	</div>`;
 }
@@ -379,34 +408,39 @@ export function renderProjectRun(state: IScreenState): string {
 	// The 48px run topbar: navy project avatar + name crumb + `Agent run` label + a Live pulse pill
 	// only while the fan-out is genuinely in flight (isChatBusy). A stopped run shows a calm "Stopped" pill
 	// (plan 27 iter 4) instead; no live/stopped run => no pill.
+	const pill = (bg: string, border: string, ink: string) => `display:inline-flex;align-items:center;gap:6px;background:${bg};border:1px solid ${border};border-radius:${RADIUS.pill};padding:3px 10px;font:600 12.5px/1 ${FONT.sans};color:${ink}`;
 	const livePill = run?.inFlight
-		? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#4650b8"><span style="width:6px;height:6px;border-radius:50%;background:${ACCENT};animation:lwdPulse 1.6s ease-in-out infinite"></span>Live</span>`
+		? `<span style="${pill(INDIGO.tint, INDIGO.tintBorder, INDIGO.base)}"><span style="width:6px;height:6px;border-radius:${RADIUS.pill};background:${INDIGO.base};animation:lwdPulse 1.6s ease-in-out infinite"></span>Live</span>`
 		: run?.paused
-			? `<span style="display:inline-flex;align-items:center;gap:6px;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#9a6b16"><span style="width:6px;height:6px;border-radius:50%;background:#d9a62b"></span>Paused</span>`
+			? `<span style="${pill(AMBER.bg, AMBER.border, AMBER.label)}"><span style="width:6px;height:6px;border-radius:${RADIUS.pill};background:${AMBER.base}"></span>Paused</span>`
 			: run?.stopped
-				? `<span style="display:inline-flex;align-items:center;gap:6px;background:#f6f7f9;border:1px solid #e6e8ec;border-radius:999px;padding:3px 10px;font:600 11.5px/1 system-ui;color:#868b95"><span style="width:6px;height:6px;border-radius:50%;background:#b4332f"></span>Stopped</span>`
+				? `<span style="${pill(PAPER.sunken, PAPER.sunkenBorder, INK.secondary)}"><span style="width:6px;height:6px;border-radius:${RADIUS.pill};background:${RED.base}"></span>Stopped</span>`
 				: '';
-	const runTopBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
-		<span style="width:20px;height:20px;border-radius:6px;background:#3b4d8f;display:flex;align-items:center;justify-content:center;color:#fff;font:600 10px/1 system-ui">${projectAv.text}</span>
-		<span style="font:600 13px/1 system-ui;color:#1a1c20">${esc(folderName)}</span><span style="color:#cfd3da">/</span>
-		<span style="display:inline-flex;align-items:center;gap:7px;font:500 13px/1 system-ui;color:#5661c9">&#10022; Agent run</span>
+	const runTopBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid ${HAIRLINE.strong};background:${PAPER.rail}">
+		<span style="width:20px;height:20px;border-radius:6px;background:${AVATAR_NAVY};display:flex;align-items:center;justify-content:center;color:${PAPER.card};font:600 10px/1 ${FONT.sans}">${projectAv.text}</span>
+		<span style="font:${TYPE.uiBodyStrong};color:${INK.heading}">${esc(folderName)}</span><span style="color:${INK.meta}">/</span>
+		<span style="display:inline-flex;align-items:center;gap:7px;font:${TYPE.uiBody};color:${INDIGO.base}">&#10022; Agent run</span>
 		${livePill}
 	</div>`;
 
 	// The command strip (C4): 32px accent avatar + the instruction in reading type + the attached
 	// source chip + a `Whole project` pill. When there is a live/last run, show its REAL instruction
 	// + source; otherwise the strip reflects the idle state with a calm prompt (no fabricated ISMS copy).
+	// The source name is a provenance fact, so it is mono on the indigo tint - the same chip the rest of the
+	// product uses for "this is the file it came from".
 	const sourceChip = run?.source
-		? `<span style="font:500 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:6px;padding:2px 8px">${esc(run.source)}</span>`
+		? `<span style="font:${TYPE.provenance};color:${INDIGO.base};background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};border-radius:6px;padding:2px 8px">${esc(run.source)}</span>`
 		: '';
 	const instruction = run?.instruction
 		? `${sourceChip ? 'From ' + sourceChip + ', ' : ''}&ldquo;${esc(run.instruction)}&rdquo;`
 		: 'No project run in progress. Start one from Agents or ask across the whole project in Chat.';
-	const instructionColor = run?.instruction ? '#26292f' : '#868b95';
+	const instructionColor = run?.instruction ? INK.heading : INK.meta;
 	// A Stop run control while the fan-out is in flight (plan 27 iter 4): cancels the whole-project model
 	// call; docs that never settled a change are marked skipped honestly. Only shown while genuinely live.
+	// A plain secondary, not a red button: red means "removed / failed" and is never a button colour. The
+	// red square glyph carries the stop; the button itself stays quiet.
 	const stopRun = run?.inFlight
-		? `<button data-msg="stopProjectRun" style="flex:none;display:inline-flex;align-items:center;gap:7px;font:600 12.5px/1 system-ui;color:#b4332f;background:#fff;border:1px solid #e7c9c6;border-radius:8px;padding:8px 14px;cursor:pointer"><span style="width:9px;height:9px;border-radius:2px;background:#b4332f"></span>Stop run</button>`
+		? `<button data-msg="stopProjectRun" style="flex:none;display:inline-flex;align-items:center;gap:7px;${BTN_SECONDARY}"><span style="width:9px;height:9px;border-radius:2px;background:${RED.base}"></span>Stop run</button>`
 		: '';
 	// The batch chip (plan 30, track 3, D30-B): the fan-out packs the working set into context-bounded
 	// batches; when a run spans more than one batch the strip reports `Batch K of M` so the user sees the
@@ -414,27 +448,29 @@ export function renderProjectRun(state: IScreenState): string {
 	// run (index > 0, count > 1); a single-batch run shows nothing extra (the common small-scale case).
 	const batch = run?.batch;
 	const batchChip = batch && batch.count > 1 && batch.index > 0
-		? `<span style="flex:none;font:600 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:8px;padding:7px 12px">Batch ${batch.index} of ${batch.count}</span>`
+		? `<span style="flex:none;font:${TYPE.provenance};color:${INDIGO.base};background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};border-radius:${RADIUS.control};padding:7px 12px">Batch ${batch.index} of ${batch.count}</span>`
 		: '';
-	const commandStrip = `<div style="flex:none;padding:18px 28px;border-bottom:1px solid #eef0f3;display:flex;align-items:center;gap:16px">
-		<span style="width:32px;height:32px;border-radius:50%;background:${ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;font:600 12px/1 system-ui;flex:none">TS</span>
-		<div style="flex:1;font:400 18px/1.4 system-ui;color:${instructionColor}">${instruction}</div>
+	// "Whole project" states the scope of the run - it is a chip, not a button, so it takes the indigo tint
+	// rather than the indigo fill the one primary button owns.
+	const commandStrip = `<div style="flex:none;padding:18px 28px;border-bottom:1px solid ${HAIRLINE.medium};display:flex;align-items:center;gap:16px">
+		<span style="width:32px;height:32px;border-radius:${RADIUS.pill};background:${AVATAR_NAVY};color:${PAPER.card};display:flex;align-items:center;justify-content:center;font:600 12px/1 ${FONT.sans};flex:none">TS</span>
+		<div style="flex:1;font:${TYPE.docBody};color:${instructionColor}">${instruction}</div>
 		${batchChip}
 		${stopRun}
-		<span style="flex:none;font:600 12.5px/1 system-ui;color:#fff;background:${ACCENT};border-radius:8px;padding:8px 14px">Whole Project</span>
+		<span style="flex:none;font:600 12.5px/1 ${FONT.sans};color:${INDIGO.base};background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};border-radius:${RADIUS.pill};padding:5px 14px">Whole project</span>
 	</div>`;
 
 	// Truthful idle body (guardrail): no fabricated numbers, shown only when no run has started. The primary
 	// "Run Across the Project" button is the ONE explicit action that launches the fan-out (#265 CR-1): opening
 	// this surface never auto-starts a run, so the user deliberately kicks it here (or from the Chat composer).
-	const idleBody = `<div style="flex:1;overflow:auto;background:#f8f9fb;display:flex;align-items:center;justify-content:center;padding:40px">
+	const idleBody = `<div style="flex:1;overflow:auto;background:${PAPER.page};display:flex;align-items:center;justify-content:center;padding:40px">
 		<div style="text-align:center;max-width:460px">
-			<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:12px;background:#f4f5fd;border:1px solid #e0e5fb;display:flex;align-items:center;justify-content:center;font-size:20px;color:${ACCENT}">&#10022;</div>
-			<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">Ready to run across the project</h2>
-			<p style="margin:0 0 22px;font:400 14px/1.6 system-ui;color:#696e78">Nothing has started yet. Launch a whole-project run below, or ask across the whole project in Chat. The sub-agent swarm and the decisions the agent understands will appear here as the run proceeds.</p>
+			<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:${RADIUS.card};background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};display:flex;align-items:center;justify-content:center;font-size:20px;color:${INDIGO.base}">&#10022;</div>
+			<h2 style="margin:0 0 10px;font:${TYPE.bannerHeadline};color:${INK.heading}">Ready to run across the project</h2>
+			<p style="margin:0 0 22px;font:${TYPE.uiBody};color:${INK.secondary}">Nothing has started yet. Launch a whole-project run below, or ask across the whole project in Chat. The sub-agent swarm and the decisions the agent understands will appear here as the run proceeds.</p>
 			<div style="display:flex;gap:10px;align-items:center;justify-content:center">
-				<button data-msg="launchProjectRun" style="border:none;border-radius:10px;padding:11px 20px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer">Run Across the Project</button>
-				<button data-msg="goAgents" style="border:1px solid #d7dae2;border-radius:10px;padding:11px 20px;background:#fff;color:#3a3f49;font:600 13px/1 system-ui;cursor:pointer">Go to Agents</button>
+				<button data-msg="launchProjectRun" style="${BTN_PRIMARY}">Run across the project</button>
+				<button data-msg="goAgents" style="${BTN_SECONDARY}">Go to Agents</button>
 			</div>
 		</div>
 	</div>`;
@@ -470,22 +506,22 @@ export function renderProjectRun(state: IScreenState): string {
 	// Documents left alone by "Never change this doc" (issue #257) are their own honest bucket - NEVER folded into
 	// "unchanged", so the run bar shows the dial was honoured rather than reading a false all-clear over them.
 	const policyDocs = summary?.policyDocs ?? 0;
-	const numeral = (n: number) => `<strong style="font:500 20px/1 system-ui;color:#14161a">${n}</strong>`;
+	const numeral = (n: number) => `<strong style="font:${TYPE.uiBodyStrong};color:${INK.heading}">${n}</strong>`;
 	const tailParts = [`&middot; ${workingCount} working`, `&middot; ${unchangedDocs} unchanged`];
 	if (skippedDocs) { tailParts.push(`&middot; ${skippedDocs} skipped`); }
 	if (oversizeDocs) { tailParts.push(`&middot; ${oversizeDocs} too large`); }
-	if (failedDocs) { tailParts.push(`&middot; <span style="color:#9a6b16">${failedDocs} failed</span>`); }
-	if (policyDocs) { tailParts.push(`&middot; <span style="color:#8a8f98">${policyDocs} left alone</span>`); }
+	if (failedDocs) { tailParts.push(`&middot; <span style="color:${AMBER.label}">${failedDocs} failed</span>`); }
+	if (policyDocs) { tailParts.push(`&middot; <span style="color:${INK.secondary}">${policyDocs} left alone</span>`); }
 	const tail = tailParts.join(' ');
 	// The lead line stays honest under a model outage: when documents failed and nothing was proposed, it names
 	// the model as unreachable (F14) instead of the false "0 changes proposed in 0 documents" all-clear.
 	const lead = failedDocs > 0 && changed === 0
-		? `<span style="font:400 14px/1 system-ui;color:#9a6b16">The agent model is not reachable &mdash; ${numeral(failedDocs)} documents could not be processed</span>`
-		: `<span style="font:400 14px/1 system-ui;color:#3a3f49">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>`;
-	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid #eef0f3;background:#fbfbfc;display:flex;align-items:center;padding:0 28px;gap:18px">
+		? `<span style="font:${TYPE.uiBody};color:${AMBER.label}">The agent model is not reachable &mdash; ${numeral(failedDocs)} documents could not be processed</span>`
+		: `<span style="font:${TYPE.uiBody};color:${INK.body}">${numeral(changed)} changes proposed in ${numeral(changedDocs)} documents</span>`;
+	const bottomBar = `<div style="flex:none;height:66px;border-top:1px solid ${HAIRLINE.medium};background:${PAPER.rail};display:flex;align-items:center;padding:0 28px;gap:18px">
 		${lead}
-		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${tail}</span>
-		<button data-msg="reviewProject" style="margin-left:auto;font:600 14px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:10px;padding:12px 22px;cursor:pointer">Review Across the Project &#8594;</button>
+		<span style="font:${TYPE.secondary};color:${INK.meta}">${tail}</span>
+		<button data-msg="reviewProject" style="margin-left:auto;${BTN_PRIMARY}">Review across the project &#8594;</button>
 	</div>`;
 
 	return `<div class="screen">${runTopBar}${commandStrip}${runBody}${bottomBar}</div>`;
@@ -506,15 +542,15 @@ function decisionsRail(decisions: readonly IDecisionGroup[], source: string | un
 	// "N decisions understood"; the idle/empty state keeps the bare label.
 	const count = decisions.length;
 	const headerLabel = count ? `${count} ${count === 1 ? 'decision' : 'decisions'} understood` : 'Decisions understood';
-	const header = `<div style="font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#5661c9;margin-bottom:16px">${headerLabel}</div>`;
-	const shell = (body: string) => `<div style="width:360px;flex:none;border-right:1px solid #eef0f3;background:#fafbfc;padding:22px;overflow:hidden;display:flex;flex-direction:column">${header}${body}</div>`;
+	const header = `<div style="font:${TYPE.sectionLabel};letter-spacing:${TRACKING.sectionLabel};text-transform:uppercase;color:${INDIGO.base};margin-bottom:16px">${headerLabel}</div>`;
+	const shell = (body: string) => `<div style="width:360px;flex:none;border-right:1px solid ${HAIRLINE.strong};background:${PAPER.rail};padding:22px;overflow:hidden;display:flex;flex-direction:column">${header}${body}</div>`;
 
 	if (!decisions.length) {
 		const message = inFlight
 			? 'Reading the source and extracting the decisions across the project&hellip;'
 			: 'No decisions were grounded in the source for this run.';
-		return shell(`<div style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#a3a8b2">
-			<p style="margin:0;font:400 13px/1.6 system-ui;max-width:240px">${message}</p>
+		return shell(`<div style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:${INK.meta}">
+			<p style="margin:0;font:${TYPE.uiBody};max-width:240px">${message}</p>
 		</div>`);
 	}
 
@@ -525,13 +561,13 @@ function decisionsRail(decisions: readonly IDecisionGroup[], source: string | un
 	// (decision 4b: the handoff wins over the comp's Newsreader serif - a deliberate, logged departure).
 	const cards = decisions.map(d => {
 		const chip = d.grounded
-			? `<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;margin-bottom:7px">${sourceName}${typeof d.sourceLine === 'number' ? ` &middot; line ${d.sourceLine}` : ''}</div>`
+			? `<div style="font:${TYPE.provenance};color:${INDIGO.base};margin-bottom:7px">${sourceName}${typeof d.sourceLine === 'number' ? ` &middot; line ${d.sourceLine}` : ''}</div>`
 			: '';
 		const docs = d.docsAffected;
-		return `<div style="background:#fff;border:1px solid #e6e8ec;border-radius:13px;padding:15px 16px">
+		return `<div style="background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:${RADIUS.card};padding:15px 16px">
 			${chip}
-			<div style="font:400 15.5px/1.4 system-ui;color:#1a1c20;margin-bottom:10px">${esc(d.quote)}</div>
-			<div style="font:600 12px/1 system-ui;color:#4650b8">&#8594; ${docs} ${docs === 1 ? 'document' : 'documents'} affected</div>
+			<div style="font:${TYPE.docBody};color:${INK.heading};margin-bottom:10px">${esc(d.quote)}</div>
+			<div style="font:600 12.5px/1 ${FONT.sans};color:${INDIGO.base}">&#8594; ${docs} ${docs === 1 ? 'document' : 'documents'} affected</div>
 		</div>`;
 	}).join('');
 	return shell(`<div style="flex:1;overflow:auto;min-height:0;display:flex;flex-direction:column;gap:12px">${cards}</div>`);
@@ -555,17 +591,20 @@ function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, st
 	// A settled run where the model was unreachable for some documents (F14, issue #123) must NOT read
 	// "every document read across the project" (a false all-clear); it names the outage honestly instead.
 	const failedCount = summary.failedDocs;
+	// The comp sets a card/section title at 15.5/600; the sentence under it is the secondary step.
+	const title = `font:600 15.5px/1 ${FONT.sans};color:${INK.heading}`;
+	const sub = `font:${TYPE.secondary};color:${INK.meta}`;
 	const heading = busy
-		? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Orchestrating ${total} sub-agents</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">reading every document in parallel</span>`
+		? `<span style="${title}">Orchestrating ${total} sub-agents</span><span style="${sub}">reading every document in parallel</span>`
 		: paused
-			? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run paused &mdash; today's included usage is spent</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed &middot; the rest resume tomorrow &middot; finished proposals are ready to review</span>`
+			? `<span style="${title}">Run paused &mdash; today's included usage is spent</span><span style="${sub}">${summary.changedDocs} of ${total} documents changed &middot; the rest resume tomorrow &middot; finished proposals are ready to review</span>`
 			: stopped
-				? `<span style="font:600 15px/1 system-ui;color:#1a1c20">Run stopped</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} of ${total} documents changed before you stopped &middot; ${summary.skippedDocs} skipped</span>`
+				? `<span style="${title}">Run stopped</span><span style="${sub}">${summary.changedDocs} of ${total} documents changed before you stopped &middot; ${summary.skippedDocs} skipped</span>`
 				: failedCount > 0
-					? `<span style="font:600 15px/1 system-ui;color:#9a6b16">Model unreachable for ${failedCount} of ${total} documents</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">${summary.changedDocs} changed &middot; ${failedCount} failed &mdash; retry the failed documents from Chat</span>`
-					: `<span style="font:600 15px/1 system-ui;color:#1a1c20">${total} sub-agents finished</span><span style="font:400 13px/1 system-ui;color:#a3a8b2">every document read across the project</span>`;
-	const progress = `<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">${heading}<span style="margin-left:auto;font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#52575f">${done} / ${total} done</span></div>
-		<div style="height:5px;background:#e9eaee;border-radius:3px;margin-bottom:18px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${ACCENT};border-radius:3px"></div></div>`;
+					? `<span style="font:600 15.5px/1 ${FONT.sans};color:${AMBER.label}">Model unreachable for ${failedCount} of ${total} documents</span><span style="${sub}">${summary.changedDocs} changed &middot; ${failedCount} failed &mdash; retry the failed documents from Chat</span>`
+					: `<span style="${title}">${total} sub-agents finished</span><span style="${sub}">every document read across the project</span>`;
+	const progress = `<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">${heading}<span style="margin-left:auto;font:${TYPE.provenance};color:${INK.bodySoft}">${done} / ${total} done</span></div>
+		<div style="height:5px;background:${HAIRLINE.strong};border-radius:3px;margin-bottom:18px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${INDIGO.base};border-radius:3px"></div></div>`;
 	const tiles = summary.tiles.map(t => swarmTile(t.docId, t.docTitle, t.status, t.changeCount, working.has(t.docId))).join('');
 	return `<div style="flex:1;overflow:hidden;padding:22px 28px;display:flex;flex-direction:column">
 		${progress}
@@ -577,57 +616,61 @@ function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, st
 // an in-flight document reads as a spinning sub-agent even before its edits (if any) have landed.
 function swarmTile(_docId: string, title: string, status: ProjectRunDocStatus, count: number, isWorking: boolean): string {
 	const name = esc(title);
-	const nameStyle = 'font:500 11.5px/1.2 system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+	const nameStyle = `font:${TYPE.secondary};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
+	// Every tile's status word is a fact about the run, so it is mono at the kind-badge step.
+	const statusWord = `font:${TYPE.kindBadge}`;
+	const tile = `border-radius:${RADIUS.input};padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between`;
 	if (isWorking || status === 'working') {
-		return `<div style="background:#fff;border:1.5px solid #c9cff5;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
-			<div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border:2px solid #c9cff5;border-top-color:${ACCENT};border-radius:50%;animation:lwdSpin .8s linear infinite;flex:none"></span><span style="${nameStyle};color:#26292f">${name}</span></div>
-			<span style="font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2;font-style:italic">reviewing&hellip;</span>
+		return `<div style="background:${PAPER.card};border:1px solid ${INDIGO.tintBorder};${tile}">
+			<div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border:2px solid ${INDIGO.tintBorder};border-top-color:${INDIGO.base};border-radius:50%;animation:lwdSpin .8s linear infinite;flex:none"></span><span style="${nameStyle};color:${INK.body}">${name}</span></div>
+			<span style="${statusWord};color:${INK.meta};font-style:italic">reviewing&hellip;</span>
 		</div>`;
 	}
 	if (status === 'changed') {
-		return `<div style="background:#f4f5fd;border:1px solid #e0e5fb;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
-			<div style="display:flex;align-items:center;gap:6px"><span style="color:#2c8159;font-size:11px">&#10003;</span><span style="${nameStyle};color:#26292f">${name}</span></div>
-			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8">${count} ${count === 1 ? 'change' : 'changes'}</span>
+		return `<div style="background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};${tile}">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:${GREEN.base};font-size:11px">&#10003;</span><span style="${nameStyle};color:${INK.body}">${name}</span></div>
+			<span style="${statusWord};color:${INDIGO.base}">${count} ${count === 1 ? 'change' : 'changes'}</span>
 		</div>`;
 	}
 	// A skipped tile (plan 27 iter 4): the run stopped before this document ran. A dashed border + honest
-	// "skipped" label distinguishes it from a document that ran and settled with no change.
+	// "skipped" label distinguishes it from a document that ran and settled with no change. Skipped is not
+	// failure - nothing went wrong here - so it borrows no state hue.
 	if (status === 'skipped') {
-		return `<div style="background:#fafbfc;border:1px dashed #dcdfe6;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
-			<div style="display:flex;align-items:center;gap:6px"><span style="color:#b4332f;font-size:11px">&#9723;</span><span style="${nameStyle};color:#9a9ea7">${name}</span></div>
-			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#b0b4bc">skipped</span>
+		return `<div style="background:${PAPER.rail};border:1px dashed ${PAPER.frameBorder};${tile}">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:${INK.meta};font-size:11px">&#9723;</span><span style="${nameStyle};color:${INK.meta}">${name}</span></div>
+			<span style="${statusWord};color:${INK.meta}">skipped</span>
 		</div>`;
 	}
 	// An oversize tile (plan 30, track 3, D30-B): the document is too large for the fan-out's context budget,
 	// so it was NEVER sent - an amber border + a warning glyph + the honest "too large for this run" label
 	// tells the user why it produced nothing, rather than a silent drop or a false "no change".
 	if (status === 'oversize') {
-		return `<div style="background:#fdf6ec;border:1px solid #f0d9a8;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
-			<div style="display:flex;align-items:center;gap:6px"><span style="color:#9a6b16;font-size:11px">&#9888;</span><span style="${nameStyle};color:#7a5a13">${name}</span></div>
-			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16">too large for this run</span>
+		return `<div style="background:${AMBER.bg};border:1px solid ${AMBER.border};${tile}">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:${AMBER.base};font-size:11px">&#9888;</span><span style="${nameStyle};color:${AMBER.label}">${name}</span></div>
+			<span style="${statusWord};color:${AMBER.label}">too large for this run</span>
 		</div>`;
 	}
-	// A failed tile (F14, issue #123): the model could not be reached for this document during the run. A red
-	// border + a warning glyph + the honest "model unreachable" label tells the user WHY it produced nothing,
+	// A failed tile (F14, issue #123): the model could not be reached for this document during the run. The red
+	// block fill + a warning glyph + the honest "model unreachable" label tells the user WHY it produced nothing,
 	// so a model outage never reads as a silent "no change" all-clear. Retry from Chat re-runs just the failed docs.
 	if (status === 'failed') {
-		return `<div style="background:#fdf2f1;border:1px solid #ecc9c6;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
-			<div style="display:flex;align-items:center;gap:6px"><span style="color:#b4332f;font-size:11px">&#9888;</span><span style="${nameStyle};color:#8a2f2b">${name}</span></div>
-			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#b4332f">model unreachable</span>
+		return `<div style="background:${RED.blockBg};border:1px solid ${RED.diffBg};${tile}">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:${RED.base};font-size:11px">&#9888;</span><span style="${nameStyle};color:${RED.blockInk}">${name}</span></div>
+			<span style="${statusWord};color:${RED.base}">model unreachable</span>
 		</div>`;
 	}
 	// A policy tile (issue #257): the document is dialled "Never change this doc", so the run left it alone by the
-	// human's own choice. A muted grey border + a "no-entry" glyph + the honest "left alone (policy: never)" label
+	// human's own choice. A recessed tile + a "no-entry" glyph + the honest "left alone (policy: never)" label
 	// tells the user WHY it produced nothing - the dial was honoured, never a silent "no change" that would hide it.
 	if (status === 'policy') {
-		return `<div style="background:#f7f8fa;border:1px solid #dfe2e8;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
-			<div style="display:flex;align-items:center;gap:6px"><span style="color:#8a8f98;font-size:11px">&#8856;</span><span style="${nameStyle};color:#71767f">${name}</span></div>
-			<span style="font:600 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#8a8f98">left alone (policy: never)</span>
+		return `<div style="background:${PAPER.sunken};border:1px solid ${PAPER.sunkenBorder};${tile}">
+			<div style="display:flex;align-items:center;gap:6px"><span style="color:${INK.secondary};font-size:11px">&#8856;</span><span style="${nameStyle};color:${INK.secondary}">${name}</span></div>
+			<span style="${statusWord};color:${INK.secondary}">left alone (policy: never)</span>
 		</div>`;
 	}
-	return `<div style="background:#fafbfc;border:1px solid #eceef2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;justify-content:space-between">
-		<div style="display:flex;align-items:center;gap:6px"><span style="color:#cfd3da;font-size:12px">&middot;</span><span style="${nameStyle};color:#a3a8b2">${name}</span></div>
-		<span style="font:400 10.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#cfd3da">no change</span>
+	return `<div style="background:${PAPER.rail};border:1px solid ${HAIRLINE.medium};${tile}">
+		<div style="display:flex;align-items:center;gap:6px"><span style="color:${PAPER.frameBorder};font-size:12px">&middot;</span><span style="${nameStyle};color:${INK.meta}">${name}</span></div>
+		<span style="${statusWord};color:${INK.meta}">no change</span>
 	</div>`;
 }
 
@@ -653,17 +696,20 @@ export function renderReviewProject(state: IScreenState): string {
 	// reviewed yet. `Accept All Remaining` -> approveAllPending() (posts `reviewAcceptAllRemaining`); shown
 	// only while something is still pending.
 	const sourcePill = rp?.source
-		? `<span style="font:500 11.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:4px 10px">${esc(rp.source)}</span>`
+		? `<span style="font:${TYPE.provenance};color:${INDIGO.base};background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};border-radius:${RADIUS.pill};padding:4px 10px">${esc(rp.source)}</span>`
 		: '';
 	const totalRemaining = pending.length;
+	// The bulk verb is quiet text (comp 2b): approving everything at once is the single click that can move
+	// the most work, so it must not look like the thing to press. It is never green and never red - a bulk
+	// approve is not a state, and the trailing ellipsis promises the confirm that follows.
 	const acceptRemaining = totalRemaining
-		? `<button data-msg="reviewAcceptAllRemaining" style="font:600 12.5px/1 system-ui;color:#5661c9;background:#fff;border:1px solid #d9d7fb;border-radius:9px;padding:7px 13px;cursor:pointer">Accept All Remaining (${totalRemaining})</button>`
+		? `<button data-msg="reviewAcceptAllRemaining" style="${BTN_QUIET}">Approve all ${totalRemaining}&hellip;</button>`
 		: '';
-	const topBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #e9eaee;background:#fbfbfc">
-		<span style="width:20px;height:20px;border-radius:6px;background:#3b4d8f;display:flex;align-items:center;justify-content:center;color:#fff;font:600 10px/1 system-ui">${projectAv.text}</span>
-		<span style="font:600 13px/1 system-ui;color:#1a1c20">${esc(folderName)}</span><span style="color:#cfd3da">/</span><span style="font:500 13px/1 system-ui;color:#868b95">Review project update</span>
+	const topBar = `<div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid ${HAIRLINE.strong};background:${PAPER.rail}">
+		<span style="width:20px;height:20px;border-radius:6px;background:${AVATAR_NAVY};display:flex;align-items:center;justify-content:center;color:${PAPER.card};font:600 10px/1 ${FONT.sans}">${projectAv.text}</span>
+		<span style="font:${TYPE.uiBodyStrong};color:${INK.heading}">${esc(folderName)}</span><span style="color:${INK.meta}">/</span><span style="font:${TYPE.uiBody};color:${INK.meta}">Review project update</span>
 		${sourcePill}
-		<div style="margin-left:auto;display:flex;align-items:center;gap:12px"><span style="font:400 13px/1 system-ui;color:#a3a8b2">${reviewed.length} reviewed</span>${acceptRemaining}</div>
+		<div style="margin-left:auto;display:flex;align-items:center;gap:12px"><span style="font:${TYPE.secondary};color:${INK.secondary}">${reviewed.length} reviewed</span>${acceptRemaining}</div>
 	</div>`;
 
 	// The end-state: nothing pending. Honest copy - the celebratory "All changes reviewed" only when a
@@ -675,11 +721,11 @@ export function renderReviewProject(state: IScreenState): string {
 		const body = didReview
 			? `Every proposed change across ${reviewed.length} document${reviewed.length === 1 ? '' : 's'} has been actioned. Nothing is left to review.`
 			: 'No changes are waiting across the project. Run an agent across the project to propose updates.';
-		return `<div class="screen">${topBar}<div style="flex:1;display:flex;align-items:center;justify-content:center;background:#f8f9fb;padding:40px">
+		return `<div class="screen">${topBar}<div style="flex:1;display:flex;align-items:center;justify-content:center;background:${PAPER.page};padding:40px">
 			<div style="text-align:center;max-width:420px">
-				<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:12px;background:#eef7f0;border:1px solid #d7ecdc;display:flex;align-items:center;justify-content:center;font-size:20px;color:#2c8159">${glyph}</div>
-				<h2 style="margin:0 0 10px;font:600 18px/1.3 system-ui;color:#1a1c20">${heading}</h2>
-				<p style="margin:0;font:400 14px/1.6 system-ui;color:#696e78">${body}</p>
+				<div style="width:44px;height:44px;margin:0 auto 16px;border-radius:${RADIUS.card};background:${GREEN.bg};border:1px solid ${GREEN.border};display:flex;align-items:center;justify-content:center;font-size:20px;color:${GREEN.base}">${glyph}</div>
+				<h2 style="margin:0 0 10px;font:${TYPE.bannerHeadline};color:${INK.heading}">${heading}</h2>
+				<p style="margin:0;font:${TYPE.uiBody};color:${INK.secondary}">${body}</p>
 			</div>
 		</div></div>`;
 	}
@@ -703,55 +749,58 @@ function reviewRail(groups: readonly { docId: string; docTitle: string; changes:
 	const docTotal = groups.length + reviewed.length;
 	const reviewedCount = reviewed.length;
 	const pct = docTotal > 0 ? Math.round((reviewedCount / docTotal) * 100) : 0;
-	const header = `<div style="padding:17px 18px;border-bottom:1px solid #eef0f3">
-		<div style="font:600 13px/1 system-ui;color:#1a1c20;margin-bottom:10px">${docTotal} document${docTotal === 1 ? '' : 's'} &middot; ${changeTotal} change${changeTotal === 1 ? '' : 's'}</div>
-		<div style="height:5px;background:#e9eaee;border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:oklch(0.6 0.13 150);border-radius:3px"></div></div>
-		<div style="font:400 11.5px/1 system-ui;color:#a3a8b2;margin-top:7px">${reviewedCount} of ${docTotal} reviewed</div>
+	// Green on the bar because it reports work already settled, and the progress line under it is the plain
+	// "N of M reviewed" sentence the ledger reads by (comp 2b).
+	const header = `<div style="padding:17px 18px;border-bottom:1px solid ${HAIRLINE.medium}">
+		<div style="font:${TYPE.uiBodyStrong};color:${INK.heading};margin-bottom:10px">${docTotal} document${docTotal === 1 ? '' : 's'} &middot; ${changeTotal} change${changeTotal === 1 ? '' : 's'}</div>
+		<div style="height:5px;background:${HAIRLINE.strong};border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${GREEN.base};border-radius:3px"></div></div>
+		<div style="font:${TYPE.secondary};color:${INK.secondary};margin-top:7px">${reviewedCount} of ${docTotal} reviewed</div>
 	</div>`;
 
 	// Reviewed docs (0 pending) come first as muted check rows showing the HUMAN title (not the docId URI),
 	// then the still-pending docs. A reviewed doc has no changes left, so it is not in `groups` - it shows
 	// here once the editor derives it (a seen doc, now zero pending) via `reviewedDocsFromSeen`.
+	const rowText = `flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
 	const reviewedRows = reviewed.map(r => `<div style="display:flex;align-items:center;gap:9px;padding:8px 10px">
-		<span style="color:#2c8159;font-size:12px;width:13px;text-align:center">&#10003;</span>
-		<span style="font:500 12px/1 system-ui;color:#a3a8b2;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.title)}</span>
+		<span style="color:${GREEN.base};font-size:12px;width:13px;text-align:center">&#10003;</span>
+		<span style="font:${TYPE.meta};color:${INK.meta};${rowText}">${esc(r.title)}</span>
 	</div>`).join('');
 
+	// The count on each row is a fact about the document, so it is mono; the current row takes the indigo
+	// tint and a 3px indigo edge - indigo is Abstract acting, and this is the row it is acting on.
 	const rows = groups.map(g => {
 		const isCurrent = g.docId === currentDocId;
 		const count = g.changes.length;
 		if (isCurrent) {
-			return `<div data-msg="reviewDoc" data-arg="${esc(g.docId)}" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;background:#eef0fb;border:1px solid #e0e5fb;position:relative;cursor:pointer">
-				<span style="position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:3px;background:${ACCENT}"></span>
-				<span style="width:13px;display:flex;justify-content:center"><span style="width:7px;height:7px;border-radius:50%;background:${ACCENT}"></span></span>
-				<span style="font:600 12px/1 system-ui;color:#2a2f60;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(g.docTitle)}</span>
-				<span style="font:600 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#4650b8">${count}</span>
+			return `<div data-msg="reviewDoc" data-arg="${esc(g.docId)}" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:${RADIUS.control};background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};position:relative;cursor:pointer">
+				<span style="position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:3px;background:${INDIGO.base}"></span>
+				<span style="width:13px;display:flex;justify-content:center"><span style="width:7px;height:7px;border-radius:${RADIUS.pill};background:${INDIGO.base}"></span></span>
+				<span style="font:600 12px/1.5 ${FONT.sans};color:${INK.heading};${rowText}">${esc(g.docTitle)}</span>
+				<span style="font:${TYPE.provenanceInline};color:${INDIGO.base}">${count}</span>
 			</div>`;
 		}
 		return `<div data-msg="reviewDoc" data-arg="${esc(g.docId)}" style="display:flex;align-items:center;gap:9px;padding:8px 10px;cursor:pointer">
-			<span style="color:#cfd3da;font-size:12px;width:13px;text-align:center">&#9675;</span>
-			<span style="font:500 12px/1 system-ui;color:#3a3f49;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(g.docTitle)}</span>
-			<span style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95">${count}</span>
+			<span style="color:${PAPER.frameBorder};font-size:12px;width:13px;text-align:center">&#9675;</span>
+			<span style="font:${TYPE.meta};color:${INK.body};${rowText}">${esc(g.docTitle)}</span>
+			<span style="font:${TYPE.provenanceInline};color:${INK.meta}">${count}</span>
 		</div>`;
 	}).join('');
 
-	return `<div style="width:292px;flex:none;background:#fafbfc;border-right:1px solid #e9eaee;display:flex;flex-direction:column;overflow:hidden">
+	return `<div style="width:292px;flex:none;background:${PAPER.rail};border-right:1px solid ${HAIRLINE.strong};display:flex;flex-direction:column;overflow:hidden">
 		${header}
 		<div style="flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:1px">${reviewedRows}${rows}</div>
 	</div>`;
 }
 
-// The centre review column (C5): the current document's title + a per-change card list. Each card shows
-// the change IN CONTEXT (old struck through -> new added, reusing the addition/removal tokens the rail +
-// editor use; an insertion has no oldText so it renders as pure additions), a `decision . line NN` source
-// chip (from sourceQuote/sourceLine, plan 23.4 - the line is OMITTED when unknown so nothing is
-// fabricated), and a filled-dot "High" / half-dot "Inferred" confidence chip per D24-A. The bottom bar
-// reports the still-attention count + the batch controls. All actions drive the EXISTING engine (24.2):
-// `Accept All N Here` -> approveAll(docId), `Next` -> advance the current doc (nextPendingDocId), the
-// per-card Accept/Reject/Tweak -> approve/reject/focusChange.
+// The centre review column (C5), on comp 2b's ledger grammar: the current document's title + a per-change
+// card list. Each card states its kind in a mono badge, shows WAS/NOW blocks, and names its provenance and
+// confidence in words. The bottom bar carries the still-attention count, the QUIET bulk verb, and the one
+// indigo primary - `Next`, the only thing on the bar that moves you forward rather than deciding for you.
+// All actions drive the EXISTING engine (24.2): the bulk verb -> approveAll(docId), `Next` -> advance the
+// current doc (nextPendingDocId), the per-card Approve/Reject/Edit -> approve/reject/focusChange.
 function reviewColumn(changes: readonly IProposedChange[], docId: string, docTitle: string, currentIndex: number, groups: readonly { docId: string; docTitle: string }[]): string {
 	const total = groups.length;
-	const eyebrow = `<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:#a3a8b2;margin-bottom:7px">Document ${currentIndex + 1} of ${total}</div>`;
+	const eyebrow = `<div style="font:${TYPE.sectionLabel};letter-spacing:${TRACKING.sectionLabel};text-transform:uppercase;color:${INK.meta};margin-bottom:7px">Document ${currentIndex + 1} of ${total}</div>`;
 	const cards = changes.map(reviewCard).join('');
 	const inferredCount = changes.filter(c => reviewConfidence(c) === 'inferred').length;
 
@@ -759,25 +808,25 @@ function reviewColumn(changes: readonly IProposedChange[], docId: string, docTit
 	// document still has changes (the editor computes the real target via nextPendingDocId when clicked).
 	const next = groups[currentIndex + 1] ?? groups[0];
 	const nextBtn = total > 1
-		? `<button data-msg="reviewNext" data-arg="${esc(docId)}" style="font:600 13px/1 system-ui;color:#fff;background:#1a1c20;border:none;border-radius:9px;padding:10px 18px;cursor:pointer">Next: ${esc(next.docTitle)} &#8594;</button>`
+		? `<button data-msg="reviewNext" data-arg="${esc(docId)}" style="${BTN_PRIMARY}">Next: ${esc(next.docTitle)} &#8594;</button>`
 		: '';
 	const attention = inferredCount
 		? `${inferredCount} change${inferredCount === 1 ? '' : 's'} need${inferredCount === 1 ? 's' : ''} your eyes`
 		: 'All changes look confident';
-	const bottomBar = `<div style="flex:none;height:64px;border-top:1px solid #eef0f3;background:#fafbfc;display:flex;align-items:center;padding:0 40px;gap:14px">
-		<span style="font:400 13px/1 system-ui;color:#a3a8b2">${attention}</span>
-		<div style="margin-left:auto;display:flex;gap:10px">
-			<button data-msg="reviewAcceptAllHere" data-arg="${esc(docId)}" style="font:600 13px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:9px;padding:10px 16px;cursor:pointer">Accept All ${changes.length} Here</button>
+	const bottomBar = `<div style="flex:none;height:64px;border-top:1px solid ${HAIRLINE.medium};background:${PAPER.rail};display:flex;align-items:center;padding:0 40px;gap:14px">
+		<span style="font:${TYPE.secondary};color:${INK.secondary}">${attention}</span>
+		<div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+			<button data-msg="reviewAcceptAllHere" data-arg="${esc(docId)}" style="${BTN_QUIET}">Approve all ${changes.length} here&hellip;</button>
 			${nextBtn}
 		</div>
 	</div>`;
 
-	return `<div style="flex:1;overflow:hidden;background:#fff;display:flex;flex-direction:column">
+	return `<div style="flex:1;overflow:hidden;background:${PAPER.page};display:flex;flex-direction:column">
 		<div style="flex:1;overflow:auto;padding:30px 40px 30px">
 			<div style="max-width:720px">
 				${eyebrow}
-				<h1 style="font:600 28px/1.12 system-ui;letter-spacing:-.02em;color:#14161a;margin:0 0 3px">${esc(docTitle)}</h1>
-				<p style="font:400 13.5px/1 system-ui;color:#868b95;margin:0 0 24px">${changes.length} change${changes.length === 1 ? '' : 's'} proposed &middot; review each in context</p>
+				<h1 style="font:${TYPE.screenTitle};letter-spacing:${TRACKING.screenTitle};color:${INK.heading};margin:0 0 3px">${esc(docTitle)}</h1>
+				<p style="font:${TYPE.secondary};color:${INK.secondary};margin:0 0 24px">${changes.length} change${changes.length === 1 ? '' : 's'} proposed &middot; review each in context</p>
 				${cards}
 			</div>
 		</div>
@@ -785,49 +834,49 @@ function reviewColumn(changes: readonly IProposedChange[], docId: string, docTit
 	</div>`;
 }
 
-// One change card. The prose renders the change in context: `newText` with the addition tokens, then
-// `oldText` struck through with the removal tokens (an insertion has no oldText -> pure additions). Below,
-// the source chip + confidence chip + Accept / Tweak / Reject wired to the engine (24.2). An `inferred`
-// change gets the attention-tinted card (bg #fffdf8, border #e4dccb) + the amber half-dot chip.
+// One change card, on the round-2 ledger grammar (comp 2b). The kind is a mono badge coloured by risk, not a
+// filled pill; the change reads as word-grain diff spans; the provenance and the confidence WORD share one
+// quiet meta line; and Accept / Edit / Reject sit at the foot. A change the model only inferred paints the
+// card amber, because "inferred" is exactly the state that is waiting on a human.
 function reviewCard(change: IProposedChange): string {
 	const level = reviewConfidence(change);
 	const inferred = level === 'inferred';
 	const cardStyle = inferred
-		? 'border:1px solid #e4dccb;border-radius:13px;padding:16px 18px;margin-bottom:13px;background:#fffdf8'
-		: 'border:1px solid #e6e8ec;border-radius:13px;padding:16px 18px;margin-bottom:13px';
+		? `border:1px solid ${AMBER.border};border-radius:${RADIUS.card};padding:16px 18px;margin-bottom:13px;background:${AMBER.subtleBg}`
+		: `border:1px solid ${HAIRLINE.strong};border-radius:${RADIUS.card};padding:16px 18px;margin-bottom:13px;background:${PAPER.card}`;
 
-	// The change in context: removal (struck) then addition. Additions use the `ok` tokens (#e9f6ee /
-	// #2c8159); removals the `removed` tokens (#fbeeee / #b5514b strike). An insertion (`insert`) has no
-	// oldText, so only the addition renders. Text is escaped - this is prose, not markup.
+	// The change in context: the addition, then the removal struck through. A fill behind running text means
+	// exactly one thing in this design system - "this span is changing" - so these are the only fills here.
+	// An insertion (`insert`) has no oldText, so only the addition renders. Text is escaped: this is prose.
 	const removal = !change.insert && change.oldText.trim()
-		? ` <span style="background:#fbeeee;color:#b5514b;text-decoration:line-through;text-decoration-color:#cf5a53;border-radius:3px;padding:0 3px">${esc(change.oldText)}</span>`
+		? ` <span style="background:${RED.diffBg};color:${RED.diffInk};text-decoration:line-through;border-radius:3px;padding:0 2px">${esc(change.oldText)}</span>`
 		: '';
 	const addition = change.newText.trim()
-		? `<span style="background:#e9f6ee;color:#2c8159;border-radius:3px;padding:0 3px">${esc(change.newText)}</span>`
+		? `<span style="background:${GREEN.diffBg};color:${GREEN.diffInk};border-radius:3px;padding:0 2px">${esc(change.newText)}</span>`
 		: '';
-	const prose = `<p style="font:400 16px/1.7 system-ui;color:#26292f;margin:0 0 12px">${addition}${removal}</p>`;
+	const prose = `<p style="font:${TYPE.docBody};color:${INK.body};margin:0 0 12px">${addition}${removal}</p>`;
 
-	// The self-explaining framing (plan 31 iter 2): the kind tag + the model's rationale, so the cross-doc
-	// card reads with the same kind / confidence / rationale / source order the inline widget and rail do.
+	// The self-explaining framing (plan 31 iter 2): the kind badge + the model's rationale, so the cross-doc
+	// card reads with the same kind / rationale / source / confidence order the inline widget and the rail do.
+	// Round 2 makes the kind a mono badge coloured by risk (amber = needs your call, green = low risk) rather
+	// than a bordered pill - the colour alone carries the risk, so the chrome around it is noise.
 	const framing = reviewFraming(change, '');
-	const kindChip = framing.kindAttention
-		? `<span style="font:600 10.5px/1 system-ui;letter-spacing:.04em;text-transform:uppercase;color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:999px;padding:4px 9px">${esc(framing.kindLabel)}</span>`
-		: `<span style="font:600 10.5px/1 system-ui;letter-spacing:.04em;text-transform:uppercase;color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:4px 9px">${esc(framing.kindLabel)}</span>`;
+	const kindChip = `<span style="${kindBadge(framing.kindAttention)}">${esc(framing.kindLabel)}</span>`;
 	// Rationale only when the model supplied one (no filler, plan 31 iter 2).
 	const why = framing.rationale
-		? `<p style="font:400 12.5px/1.5 system-ui;color:#5b616b;margin:0 0 12px">${esc(framing.rationale)}</p>`
+		? `<p style="font:${TYPE.secondary};color:${INK.secondary};margin:0 0 12px">${esc(framing.rationale)}</p>`
 		: '';
 
-	// The source chip: `decision . line NN` when a real line is known, else just `decision` (never a
-	// fabricated line). The verbatim decision quote (sourceQuote), when present, is the chip's hover title.
+	// The provenance atom + the confidence WORD on one meta line (never a percentage, per the design system).
+	// The source reads `decision . line NN` when a real line is known, else just `decision` - never a
+	// fabricated line. The verbatim decision quote (sourceQuote), when present, is its hover title.
 	const hasLine = typeof change.sourceLine === 'number';
 	const chipTitle = change.sourceQuote ? ` title="${esc(change.sourceQuote)}"` : '';
-	const sourceChip = `<span${chipTitle} style="display:inline-flex;align-items:center;gap:5px;font:500 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#5661c9;background:#f4f5fd;border:1px solid #e0e5fb;border-radius:999px;padding:4px 10px"><span style="width:5px;height:5px;border-radius:50%;background:${ACCENT}"></span>decision${hasLine ? ` &middot; line ${change.sourceLine}` : ''}</span>`;
-
-	// The confidence chip (D24-A): filled-dot "High" (ok/accent) or half-dot "Inferred . needs your eyes" (attention).
-	const confChip = inferred
-		? `<span style="font:600 11px/1 system-ui;color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb;border-radius:999px;padding:5px 10px">&#9680; Inferred &middot; needs your eyes</span>`
-		: `<span style="font:600 11px/1 system-ui;color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc;border-radius:999px;padding:5px 10px">&#9679; High</span>`;
+	const source = `<span${chipTitle} style="font:${TYPE.provenanceInline};color:${INK.secondary}">decision${hasLine ? ` &middot; line ${change.sourceLine}` : ''}</span>`;
+	const confidence = inferred
+		? localize("livingDocs.review.confidence.inferred", "confidence: inferred - needs your eyes")
+		: localize("livingDocs.review.confidence.high", "confidence: high");
+	const meta = `<div style="display:flex;align-items:center;gap:8px;font:${TYPE.meta};color:${INK.meta}">${source}<span>&middot;</span><span>${esc(confidence)}</span></div>`;
 
 	// Tweak (amend-before-approve, plan 31 iter 3, D31-A): the same in-place editor the inline widget offers.
 	// Edit opens a contenteditable over the proposed text; Save & Approve amends the pending change then
@@ -835,31 +884,34 @@ function reviewCard(change: IProposedChange): string {
 	// come from sources). The secondary "Open in document" navigate-through is kept as a card link (D31-A).
 	const canTweak = change.kind !== 'figure';
 	const editor = canTweak
-		? `<div class="rv-tweakwrap" style="display:none;margin:0 0 12px"><div class="rv-tweakedit" contenteditable="true" data-orig="${esc(change.newText)}" style="border:1px solid #d9b98e;border-radius:9px;padding:10px 13px;font:400 16px/1.6 system-ui;color:#26292f;background:#fffdf8;outline:none">${esc(change.newText)}</div></div>`
+		? `<div class="rv-tweakwrap" style="display:none;margin:0 0 12px"><div class="rv-tweakedit" contenteditable="true" data-orig="${esc(change.newText)}" style="border:1px solid ${AMBER.border};border-radius:${RADIUS.input};padding:10px 13px;font:${TYPE.docBody};color:${INK.body};background:${AMBER.subtleBg};outline:none">${esc(change.newText)}</div></div>`
 		: '';
+	const secondary = `font:${TYPE.uiBodyStrong};color:${INK.body};background:${PAPER.card};border:1px solid ${PAPER.control};border-radius:${RADIUS.control};padding:7px 16px;cursor:pointer`;
+	const primary = `font:${TYPE.uiBodyStrong};color:#fff;background:${INDIGO.base};border:none;border-radius:${RADIUS.control};padding:7px 20px;cursor:pointer`;
+	const quiet = `font:${TYPE.secondary};color:${INK.secondary};background:none;border:none;padding:7px 6px;cursor:pointer`;
 	const tweakBtn = canTweak
-		? `<button data-tweak-open style="font:600 12px/1 system-ui;color:#52575f;background:#fff;border:1px solid #e0e2e8;border-radius:8px;padding:8px 12px;cursor:pointer">Edit</button>`
+		? `<button data-tweak-open style="${secondary}">${esc(localize("livingDocs.review.edit", "Edit"))}</button>`
 		: '';
 	// Actions wired to the EXISTING engine (24.2): Accept -> approve(id), Reject -> reject(id).
-	const normalActs = `<span class="rv-normacts" style="display:flex;gap:7px">
+	const normalActs = `<span class="rv-normacts" style="display:flex;gap:8px">
+		<button data-msg="reviewAccept" data-arg="${esc(change.id)}" style="${primary}">${esc(localize("livingDocs.review.approve", "Approve"))}</button>
 		${tweakBtn}
-		<button data-msg="reviewAccept" data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:8px;padding:8px 14px;cursor:pointer">Accept</button>
-		<button data-msg="reviewReject" data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#a3a8b2;background:none;border:none;padding:8px 4px;cursor:pointer">Reject</button>
+		<button data-msg="reviewReject" data-arg="${esc(change.id)}" style="${secondary}">${esc(localize("livingDocs.review.reject", "Reject"))}</button>
 	</span>`;
 	const tweakActs = canTweak
-		? `<span class="rv-tweakacts" style="display:none;gap:7px">
-		<button data-tweak-save data-arg="${esc(change.id)}" style="font:600 12px/1 system-ui;color:#fff;background:${ACCENT};border:none;border-radius:8px;padding:8px 14px;cursor:pointer">Save &amp; Approve</button>
-		<button data-tweak-cancel style="font:600 12px/1 system-ui;color:#a3a8b2;background:none;border:none;padding:8px 4px;cursor:pointer">Cancel</button>
+		? `<span class="rv-tweakacts" style="display:none;gap:8px">
+		<button data-tweak-save data-arg="${esc(change.id)}" style="${primary}">${esc(localize("livingDocs.review.saveApprove", "Save and approve"))}</button>
+		<button data-tweak-cancel style="${quiet}">${esc(localize("livingDocs.review.cancel", "Cancel"))}</button>
 	</span>`
 		: '';
-	const openLink = `<button data-msg="reviewTweak" data-arg="${esc(change.id)}" style="font:500 11.5px/1 system-ui;color:#8a8f99;background:none;border:none;padding:8px 4px;cursor:pointer" title="Open in the document">Open in document &#8599;</button>`;
-	const actions = `<div style="margin-left:auto;display:flex;align-items:center;gap:7px">${openLink}${normalActs}${tweakActs}</div>`;
+	const openLink = `<button data-msg="reviewTweak" data-arg="${esc(change.id)}" style="${quiet}" title="${esc(localize("livingDocs.review.openInDoc.title", "Open in the document"))}">${esc(localize("livingDocs.review.openInDoc", "Open in document"))} &#8599;</button>`;
+	const actions = `<div style="margin-left:auto;display:flex;align-items:center;gap:8px">${openLink}${normalActs}${tweakActs}</div>`;
 
 	return `<div class="rv-card" style="${cardStyle}">
 		<div style="display:flex;align-items:center;gap:8px;margin:0 0 10px">${kindChip}</div>
 		${prose}
 		${why}
 		${editor}
-		<div style="display:flex;align-items:center;gap:8px">${sourceChip}${confChip}${actions}</div>
+		<div style="display:flex;align-items:center;gap:12px">${meta}${actions}</div>
 	</div>`;
 }

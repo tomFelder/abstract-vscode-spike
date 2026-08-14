@@ -21,17 +21,17 @@
  * the `floating-*-outer-*` classes toggled in core) already match the spec's 12px
  * gaps + 12px frame insets; we only change colours, radius and the shadows.
  *
- * The new v2 tokens (plan 43 section 1) are declared once here as CSS custom properties
- * so the rules below (and later v2 lanes) read from a single source of truth.
+ * The design-system tokens are declared once here as CSS custom properties so every
+ * other chrome module (studio, tabs, pane headers, ...) reads from a single source of
+ * truth and never restates a literal. This block is the workbench-chrome transcription
+ * of `livingDocs/common/abstractTokens.ts` - the same round-2 sheet the two webview
+ * universes inline (docs/28-design-system-round2.md). A colour that is not here is a
+ * defect; when a value moves, it moves once, here.
  *
- *   - chrome        #EDEFF3 (window/frame bg the cards float on)
- *   - card-border   #E9EAEE (floating panel borders)
- *   - rail bg       #FBFCFD (tree rail + right rail)
- *   - paper bg      #FFFFFF (editor card)
- *   - shadow-rail   0 8px 28px -14px rgba(20,22,28,.22)  (+ e1)
- *   - shadow-editor 0 12px 36px -16px rgba(20,22,28,.26) (+ e1)
- *   - tabwell       #F3F4F7 (product tab-strip bg, consumed by plan 45)
- *   - gutter-idle   #C6CAD2 (idle line numbers, consumed by plan 45)
+ * Round 2 replaced the round-1 cool blue-grey neutrals with the warm paper ramp, which
+ * is why every surface value below changed at once. The surfaces nest outward-in -
+ * canvas -> frame -> rail -> page -> card - each a step lighter, so depth reads without
+ * a shadow doing the work.
  *
  * All rules are gated behind the `.style-override` class, which the
  * StyleOverridesContribution toggles onto the workbench container(s) when the
@@ -40,25 +40,91 @@
  */
 
 .style-override {
-	/* Plan 43 section 1 - the v2 elevation tokens. */
-	--abstract-chrome: #EDEFF3;
-	--abstract-chrome-border: #DDE0E7;
-	--abstract-tabwell: #F3F4F7;
-	--abstract-gutter-idle: #C6CAD2;
-	--abstract-card-border: #E9EAEE;
-	--abstract-rail-bg: #FBFCFD;
+	/* --- Paper. The warm neutral ramp, outward-in. --- */
+	/* The canvas behind the app window. */
+	--abstract-canvas: #E4E2DC;
+	/* The app frame - the window chrome the rails and the paper float on. */
+	--abstract-chrome: #EFEEE9;
+	/* The frame's own outer border, and every dashed on-ramp edge. */
+	--abstract-chrome-border: #CFCDC4;
+	/* Rails and table headers. The tab well is the same rail paper. */
+	--abstract-rail-bg: #F9F8F5;
+	--abstract-tabwell: #F9F8F5;
+	/* The page surface a screen's body scrolls on. */
+	--abstract-page-bg: #FCFBF9;
+	/* Cards, inputs, and anything that must read as "on top". */
 	--abstract-paper-bg: #FFFFFF;
-	/* e1 (plan 20 Part B): the base card lift, layered under every card shadow. */
-	--abstract-shadow-e1: 0 1px 2px rgba(20, 22, 28, .05);
-	--abstract-shadow-rail: 0 8px 28px -14px rgba(20, 22, 28, .22);
-	--abstract-shadow-editor: 0 12px 36px -16px rgba(20, 22, 28, .26);
-	/* The v2 card corner radius (the floating cards; wins over the 8px large tier). */
+	/* A recessed fill for helper boxes and quiet tiles, and its own border. */
+	--abstract-sunken: #F6F5F1;
+	--abstract-sunken-border: #E9E7E0;
+	/* Chip fill. */
+	--abstract-chip: #F1F0EB;
+	/* Secondary-button and control borders. */
+	--abstract-control: #DEDCD5;
+	/* Idle line numbers - the quietest ink the paper carries. */
+	--abstract-gutter-idle: #CFCDC4;
+
+	/* --- The one stroke: a 1px hairline in three weights. `card-border` is `strong`,
+	 * the weight that separates two surfaces; `line-med` separates rows inside a card;
+	 * `line-soft` separates lines inside a row. --- */
+	--abstract-card-border: #E3E1DA;
+	--abstract-line-med: #ECEAE3;
+	--abstract-line-soft: #F1F0EB;
+
+	/* --- Ink. Four steps, and only four, plus the on-dark step. --- */
+	--abstract-ink: #1B1B20;
+	--abstract-ink-body: #33322E;
+	--abstract-ink-soft: #55534C;
+	--abstract-ink-2: #6E6C64;
+	--abstract-ink-3: #9B998F;
+
+	/* --- Indigo: Abstract acting. The only colour a button may be filled with. --- */
+	--abstract-indigo: #4353C9;
+	--abstract-indigo-hover: #333FA3;
+	--abstract-indigo-tint: #EEEFFA;
+	--abstract-indigo-tint-border: #C8CBE8;
+
+	/* --- The state hues. Green = applied/fresh/all clear, amber = waiting on you,
+	 * red = removed/failed. None of them is ever a button fill or decoration. --- */
+	--abstract-green: #1F7A4D;
+	--abstract-green-bg: #F0F6F1;
+	--abstract-green-border: #CFE3D4;
+	--abstract-amber: #C77E1F;
+	--abstract-amber-bg: #FDF6EC;
+	--abstract-amber-border: #EAD9BC;
+	--abstract-amber-label: #8A5A12;
+	--abstract-red: #B3261E;
+
+	/* Identity, not state, so it sits outside the meaning palette: the person chip's navy. */
+	--abstract-avatar-navy: #23408F;
+
+	/* Mono is IBM Plex Mono, reserved for section labels, kind badges and provenance
+	 * facts (file names, cells, synced-when, line numbers, version chips). */
+	--abstract-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+	/* --- Elevation. Five shadows, each with exactly one job. --- */
+	/* A screen or app frame floating on the canvas. */
+	--abstract-shadow-frame: 0 2px 12px rgba(27, 27, 32, .08);
+	/* A card lifted off the page. */
+	--abstract-shadow-card: 0 1px 5px rgba(27, 27, 32, .08);
+	/* A modal dialog. */
+	--abstract-shadow-dialog: 0 12px 40px rgba(27, 27, 32, .28);
+	/* The hover-peek tooltip on its dark surface. */
+	--abstract-shadow-tooltip: 0 8px 24px rgba(27, 27, 32, .3);
+	/* A drawer lifting upward from the bottom edge. */
+	--abstract-shadow-drawer: 0 -6px 24px rgba(27, 27, 32, .07);
+
+	/* Radii: 8 controls · 10 inputs · 12-14 cards · 999 pills and dots. */
+	--abstract-r-control: 8px;
+	--abstract-r-input: 10px;
+	--abstract-r-card: 12px;
 	--abstract-card-radius: 14px;
+	--abstract-r-pill: 999px;
 }
 
 /* =============================================================================
- * Chrome - the darker window background the cards float on (plan 44 P1.1).
- * The workbench root paints #EDEFF3 so it reads on every surface. The floating
+ * Chrome - the frame paper the cards float on (plan 44 P1.1).
+ * The workbench root paints the frame so it reads on every surface. The floating
  * grid backdrop is set to the editor background (white) by core
  * floatingPanels.css; repaint it to the chrome so the gaps + frame inset around
  * every card read as the darker frame, not white.
@@ -93,10 +159,10 @@
 
 /* =============================================================================
  * The three floating cards (plan 44 P1.3 / P1.4).
- * Re-skin the core floating cards: radius 14, border #E9EAEE, per-part bg and
- * shadow. `!important` on border/bg mirrors floatingPanels.css, which sets those
- * with `!important` (we must match to win); radius is raised over the 8px large
- * tier the core feature uses.
+ * Re-skin the core floating cards: radius 14, the `strong` hairline, per-part bg
+ * and shadow. `!important` on border/bg mirrors floatingPanels.css, which sets
+ * those with `!important` (we must match to win); radius is raised over the 8px
+ * large tier the core feature uses.
  * ========================================================================== */
 
 /* Shared card treatment: radius + border for all three work cards. */
@@ -107,20 +173,23 @@
 	border-radius: var(--abstract-card-radius) !important;
 }
 
-/* --- Tree rail (side bar) + right rail (auxiliary bar): #FBFCFD, shadow-rail + e1. */
+/* --- Tree rail (side bar) + right rail (auxiliary bar): the rail paper, card lift.
+ * Round 2 retires the round-1 bespoke rail/editor shadows: the system has exactly five
+ * shadows, so a rail takes the card lift and nothing deeper. */
 .style-override.monaco-workbench.floating-panels .part.sidebar,
 .style-override.monaco-workbench.floating-panels .part.auxiliarybar {
 	background-color: var(--abstract-rail-bg) !important;
-	box-shadow: var(--abstract-shadow-rail), var(--abstract-shadow-e1);
+	box-shadow: var(--abstract-shadow-card);
 }
 
-/* --- Editor (the paper): #FFFFFF, shadow-editor + e1 (top of the stack). ----
+/* --- Editor (the paper): white, the frame lift (top of the stack). ----
  * The editor part is transparent (its webview / Monaco paints the surface); pin
  * the card bg to white so the paper is opaque even before content mounts, and
- * layer the deeper editor shadow so the paper reads as the top of the stack. */
+ * take the frame shadow - the one step deeper than a card - so the paper still
+ * reads as the top of the stack without inventing a sixth shadow. */
 .style-override.monaco-workbench.floating-panels > .monaco-grid-view .part.editor:not(.modal-editor-part) {
 	background-color: var(--abstract-paper-bg) !important;
-	box-shadow: var(--abstract-shadow-editor), var(--abstract-shadow-e1);
+	box-shadow: var(--abstract-shadow-frame);
 }
 
 /* The editor part paints a leading-edge separator shadow (via its `::after`

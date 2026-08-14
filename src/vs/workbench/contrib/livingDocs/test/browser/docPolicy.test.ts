@@ -7,6 +7,7 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { coerceDocPolicy, defaultDocPolicy, DOC_AUTONOMY_LEVELS, docPolicyOption, docPolicyToneHex } from '../../common/docPolicy.js';
 import { renderPolicyEditor } from '../../browser/policyEditorRender.js';
+import { AMBER, GREEN, RED } from '../../common/abstractTokens.js';
 
 // The shared plain-language policy grammar + its browser renderer (plan 45 pin 12 / #122 F11, spec 43 section
 // 3.4). These are the ONE source of truth reused verbatim by plan 49's agent cards, so the tests pin the
@@ -36,10 +37,13 @@ suite('Shared doc policy (plan 45 pin 12 / #122 F11)', () => {
 			['auto-apply', 'ask-first', 'never', 'ask-first', 'ask-first', 'ask-first']);
 	});
 
-	test('docPolicyToneHex maps each tone to its exact spec colour', () => {
+	test('docPolicyToneHex maps each tone to its design-system colour', () => {
+		// Asserted against the tokens rather than literals: the point of the rule is that a policy tier
+		// speaks the SAME colour language as the rest of the product, so pinning a hex here would let the
+		// two drift while the test still passed.
 		assert.deepStrictEqual(
 			DOC_AUTONOMY_LEVELS.map(o => docPolicyToneHex(o.tone)),
-			['#2C8159', '#8A6D1A', '#B5514B']);
+			[GREEN.base, AMBER.label, RED.diffInk]);
 	});
 
 	test('docPolicyOption never returns undefined', () => {
@@ -53,7 +57,7 @@ suite('Shared doc policy (plan 45 pin 12 / #122 F11)', () => {
 		assert.strictEqual((html.match(/class="pol-opt on"/g) ?? []).length, 1);
 		assert.strictEqual((html.match(/data-policy="/g) ?? []).length, DOC_AUTONOMY_LEVELS.length);
 		// The selected option is the one whose data-policy is `never`, tinted with its removed tone.
-		assert.ok(html.includes('data-policy="never" style="--pol-tone:#B5514B"'));
+		assert.ok(html.includes(`data-policy="never" style="--pol-tone:${RED.diffInk}"`));
 		assert.strictEqual(renderPolicyEditor.CLICK_SELECTOR, '[data-policy]');
 	});
 

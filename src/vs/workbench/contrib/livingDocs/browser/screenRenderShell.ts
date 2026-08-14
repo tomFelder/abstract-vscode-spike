@@ -419,7 +419,7 @@ export function sheet(id: string, opts: { title: string; sub?: string; nameLabel
 export function pickRow(value: string, label: string, sub?: string): string {
 	return `<label class="sheet-row" style="cursor:pointer;margin-top:6px">
 		<input type="checkbox" data-pick="${esc(value)}" style="width:16px;height:16px;flex:none;accent-color:${ACCENT}">
-		<span style="flex:1;min-width:0"><span style="display:block;font:600 12.5px/1.3 system-ui;color:#1a1c20;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</span>${sub ? `<span style="display:block;font:400 11px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">${esc(sub)}</span>` : ''}</span>
+		<span style="flex:1;min-width:0"><span style="display:block;font:600 12.5px/1.3 ${FONT.sans};color:${INK.heading};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</span>${sub ? `<span style="display:block;font:400 11px/1.4 ${FONT.mono};color:${INK.meta}">${esc(sub)}</span>` : ''}</span>
 	</label>`;
 }
 
@@ -435,7 +435,7 @@ export function pickerSheet(id: string, opts: { title: string; sub?: string; nam
 	const hasRows = opts.rows.length > 0;
 	const list = hasRows
 		? `<div style="max-height:230px;overflow-y:auto;margin:2px -2px 0;padding:0 2px">${opts.rows}</div>`
-		: `<p style="margin:8px 0 0;font:400 12.5px/1.5 system-ui;color:#868b95">${esc(opts.empty)}</p>`;
+		: `<p style="margin:8px 0 0;font:${TYPE.secondary};color:${INK.secondary}">${esc(opts.empty)}</p>`;
 	const actions = `<div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
 			<button class="btn-ghost" data-sheet-close="${id}">Cancel</button>
 			${hasRows ? `<button class="btn-primary" data-sheet-submit data-pick-submit data-msg="${esc(opts.submitMsg)}">${esc(opts.submitLabel)}</button>` : ''}
@@ -449,7 +449,7 @@ export function pickerSheet(id: string, opts: { title: string; sub?: string; nam
 			${note}
 			<div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 0">
 				<label class="sheet-label" style="margin:0">${esc(opts.pickLabel)}</label>
-				<span data-pick-count style="font:500 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2">0 selected</span>
+				<span data-pick-count style="font:400 11px/1 ${FONT.mono};color:${INK.meta}">0 selected</span>
 			</div>
 			${list}
 			${actions}
@@ -463,7 +463,7 @@ const HEAD = `<meta charset="utf-8"><meta name="viewport" content="width=device-
 *{box-sizing:border-box}
 /* Reset the webview harness's body padding (0 20px, injected by src/vs/workbench/contrib/webview/browser/pre/index.html)
  * along with its margin, for the same edge-to-edge reason as the doc editor (issue #175). The screen surface runs
- * full width; the cards inside .scr-body float on the #f8f9fb canvas with their own internal padding, so zeroing the
+ * full width; the cards inside .scr-body float on the page paper with their own internal padding, so zeroing the
  * harness inset does not crowd them. The 48px brand/crumb top bar the screens used to draw is gone (plan 44-b): the
  * one global Abstract header (the repurposed title bar) now carries it. */
 ${abstractTokenCss()}
