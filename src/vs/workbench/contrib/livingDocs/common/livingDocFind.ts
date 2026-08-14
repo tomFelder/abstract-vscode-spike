@@ -30,29 +30,17 @@ export interface IFindMatch {
 }
 
 /**
- * Case-fold one UTF-16 code unit for comparison. Folding PER CHARACTER (rather than lowercasing the whole
- * haystack) is what keeps every offset exact: `'İ'.toLowerCase()` is TWO characters, so a whole-string
- * fold would silently shift every match offset after it and a replace would corrupt the document. Folding a
- * character at a time can only ever make such a character fail to match, which is predictable and harmless.
- */
-function fold(ch: string): string {
-	return ch.toLowerCase();
-}
-
-/** Whether `needle` occurs in `hay` at `at`, compared case-insensitively one character at a time. */
-function matchesAt(hay: string, needle: string, at: number): boolean {
-	for (let k = 0; k < needle.length; k++) {
-		if (fold(hay.charAt(at + k)) !== fold(needle.charAt(k))) {
-			return false;
-		}
-	}
-	return true;
-}
-
-/**
  * Every match of `query` in one segment, left to right and non-overlapping (a match advances the scan past
  * its own end, so "aa" in "aaaa" is two matches, not three). An empty query has no matches - the widget must
  * read "No results" while it is empty rather than claiming a match on every character.
+ *
+ * The comparison case-folds ONE CHARACTER AT A TIME rather than lowercasing the whole haystack, because
+ * `'İ'.toLowerCase()` is TWO characters: a whole-string fold would silently shift every offset after
+ * such a character, and a replace built on those offsets would corrupt the document. Per-character folding
+ * can only ever make such a character fail to match, which is predictable and harmless.
+ *
+ * Self-contained on purpose: this function's source is injected verbatim into the editor webview (the
+ * `String(fn)` seam the table helpers use), so the widget and these tests run the identical matcher.
  */
 export function findInText(text: string, query: string): readonly IFindMatch[] {
 	const out: IFindMatch[] = [];
@@ -61,7 +49,14 @@ export function findInText(text: string, query: string): readonly IFindMatch[] {
 	}
 	const limit = text.length - query.length;
 	for (let i = 0; i <= limit; i++) {
-		if (matchesAt(text, query, i)) {
+		let hit = true;
+		for (let k = 0; k < query.length; k++) {
+			if (text.charAt(i + k).toLowerCase() !== query.charAt(k).toLowerCase()) {
+				hit = false;
+				break;
+			}
+		}
+		if (hit) {
 			out.push({ segment: 0, start: i, end: i + query.length });
 			i += query.length - 1;
 		}
@@ -77,8 +72,9 @@ export function findInText(text: string, query: string): readonly IFindMatch[] {
 export function findMatches(segments: readonly string[], query: string): readonly IFindMatch[] {
 	const out: IFindMatch[] = [];
 	for (let s = 0; s < segments.length; s++) {
-		for (const m of findInText(segments[s], query)) {
-			out.push({ segment: s, start: m.start, end: m.end });
+		const inSegment = findInText(segments[s], query);
+		for (let i = 0; i < inSegment.length; i++) {
+			out.push({ segment: s, start: inSegment[i].start, end: inSegment[i].end });
 		}
 	}
 	return out;
