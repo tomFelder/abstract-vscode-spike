@@ -44,9 +44,13 @@ being Obsidian-compatible on the very first save. Three pieces:
 - a serializer node writing `[[Target]]` back **unescaped**.
 
 It also widens `heading`'s content expression. Upstream ships `heading` as `(text | image)*`, not
-`inline*`, so ANY inline atom in a heading made `createAndFill` return null, dropped the heading, and
-collapsed the whole document to one empty paragraph - which the 300ms autosave would then write to disk.
-That was already true on `main` for `## Heading with [x](bind:key)`.
+`inline*`, so ANY inline atom in a heading made `createAndFill` return null and **silently dropped that
+heading and all of its inline content**, which the 300ms autosave then wrote to disk - one keystroke in an
+unrelated paragraph is enough to lose the line. The rest of the document survives; it degenerates to an
+empty document only when the offending heading IS the whole document. (An earlier revision of this note
+said it "collapsed the whole document to one empty paragraph" in every case - that was overstated, and it
+would send anyone chasing the bug later looking for the wrong symptom.) That was already true on `main` for
+`## Heading with [x](bind:key)`.
 
 ### The keystone — bound figures (decision 46)
 
