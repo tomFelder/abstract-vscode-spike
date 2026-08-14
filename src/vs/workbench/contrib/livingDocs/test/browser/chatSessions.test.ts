@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { attachToSession, closeSession, createSession, deserialiseSessions, detachFromSession, IChatSession, serialiseSessions, sessionsMentioning, splitTabs, titleFromMessage, titleSession, VISIBLE_TAB_CAP } from '../../common/chatSessions.js';
+import { attachToSession, closeChatConfirm, closeSession, createSession, deserialiseSessions, detachFromSession, IChatSession, MAX_VISIBLE_TABS, MIN_TAB_WIDTH, overflowWidth, serialiseSessions, sessionsMentioning, splitTabs, titleFromMessage, titleSession, visibleTabCap, VISIBLE_TAB_CAP } from '../../common/chatSessions.js';
 
 suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -45,6 +45,33 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 		});
 	});
 
+	test('a title is cut between characters and measured in the columns it draws, never in code units', () => {
+		// Two pre-existing defects the residuals surfaced (#312 fix round 1). The first is broken DATA, not a
+		// broken pixel: a plain `slice` cut a surrogate pair in half, so a lone high surrogate reached the tab
+		// AND the workspace-storage record. The second is a cap that quietly means two different things - 28
+		// CJK characters draw about twice as wide as 28 Latin ones, so counting code units makes the strip's own
+		// promise depend on the language you write in.
+		const emoji = titleFromMessage('🎉'.repeat(40)) ?? '';
+		const cjk = titleFromMessage('文'.repeat(30)) ?? '';
+		// 'e' plus a COMBINING acute: two code points that draw as one letter, kept or dropped together.
+		const accented = titleFromMessage('e\u0301'.repeat(40)) ?? '';
+		// Iterating by code point pairs surrogates up, so a HALF of a pair is the only one left standing alone.
+		const lone = (s: string) => [...s].some(c => c.length === 1 && c.charCodeAt(0) >= 0xD800 && c.charCodeAt(0) <= 0xDFFF);
+		assert.deepStrictEqual({
+			emoji, emojiLoneSurrogate: lone(emoji),
+			cjkChars: [...cjk].length, cjkLoneSurrogate: lone(cjk),
+			// A combining accent belongs to the letter in front of it and must never be orphaned onto the ellipsis.
+			accentedEndsWhole: accented.endsWith('e\u0301…'),
+		}, {
+			// 27 whole emoji plus the ellipsis - never 27 and a half, and never a lone high surrogate.
+			emoji: `${'🎉'.repeat(27)}…`, emojiLoneSurrogate: false,
+			// 13 double-width characters plus the ellipsis is 27 columns: the same room the Latin cap gets, and
+			// half the number of characters, because that is what the same amount of strip actually holds.
+			cjkChars: 14, cjkLoneSurrogate: false,
+			accentedEndsWhole: true,
+		});
+	});
+
 	test('attach is idempotent and detach is forgiving, so two sessions hold different attach sets', () => {
 		const a = attachToSession(attachToSession(session('a', 1), 'file:///ws/A.md'), 'file:///ws/A.md');
 		const b = attachToSession(session('b', 2), 'file:///ws/B.md');
@@ -80,6 +107,45 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 		});
 	});
 
+	test('a chat holding messages is never closed without being named, and an empty one asks nothing', () => {
+		// #312 fix round 3. Closing deletes the conversation from workspace storage with no undo anywhere in the
+		// app, and round 2 is what made that reachable: a submenu of similar titles where the row above the one
+		// you meant costs a whole conversation, and - for the SOLE chat - the first route that could destroy it
+		// at all. So the question names the chat that was actually hit and the size of what goes.
+		assert.deepStrictEqual({
+			// Nothing typed in it: no question, because a question with nothing behind it is the confirm-fatigue
+			// that teaches people to click through the ones that matter.
+			empty: closeChatConfirm('New chat', 0, false).needed,
+			one: closeChatConfirm('Rewrite the intro', 1, false),
+			many: closeChatConfirm('Rewrite the intro', 6, false),
+			// The sole chat's outcome genuinely differs: the strip is never empty, so an empty chat opens in its
+			// place. Without that sentence "close" reads as "the rail goes away" rather than as "this is deleted".
+			sole: closeChatConfirm('Rewrite the intro', 4, true).detail,
+			soleOne: closeChatConfirm('Rewrite the intro', 1, true).detail,
+			// A count from a caller is floored and clamped, never trusted into a sentence that cannot be true.
+			fractional: closeChatConfirm('x', 2.7, false).detail,
+			negative: closeChatConfirm('x', -3, false).needed,
+		}, {
+			empty: false,
+			one: {
+				needed: true,
+				message: 'Close the chat "Rewrite the intro"?',
+				detail: 'Its 1 message is deleted from this workspace and cannot be brought back.',
+				primaryButton: 'Close Chat',
+			},
+			many: {
+				needed: true,
+				message: 'Close the chat "Rewrite the intro"?',
+				detail: 'Its 6 messages are deleted from this workspace and cannot be brought back.',
+				primaryButton: 'Close Chat',
+			},
+			sole: 'This is your only chat, so an empty one opens in its place. Its 4 messages are deleted from this workspace and cannot be brought back.',
+			soleOne: 'This is your only chat, so an empty one opens in its place. Its 1 message is deleted from this workspace and cannot be brought back.',
+			fractional: 'Its 2 messages are deleted from this workspace and cannot be brought back.',
+			negative: false,
+		});
+	});
+
 	test('the strip caps visible tabs and always keeps the active one on screen', () => {
 		const many = Array.from({ length: VISIBLE_TAB_CAP + 3 }, (_, i) => session(`s${i}`, i));
 		const early = splitTabs(many, 's0');
@@ -103,6 +169,103 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 			buriedHoldsActive: true,
 			buriedOverflowExcludesActive: true,
 			underCap: 0,
+		});
+	});
+
+	test('how many tabs the strip shows is derived from its real width, so no tab is ever unchoosable', () => {
+		// The residual this rule exists to fix (#312): a fixed cap of three squeezed the third tab in the default
+		// rail down to one letter and an ellipsis. A tab is only shown if it can be at least MIN_TAB_WIDTH wide.
+		const cap = (width: number, count: number) => visibleTabCap(width, count);
+		assert.deepStrictEqual({
+			// The default rail (~300px): ONE readable tab and a "2 more" chip. Two tabs would be 88px each once
+			// the padding, the "+", the chip and the gaps between them are paid for - under the minimum, which
+			// is the whole defect. The gaps used to go unbudgeted, so the rule quietly broke its own promise.
+			defaultRailThreeChats: cap(300, 3),
+			// Two chats need no overflow chip at all, so the same 300px comfortably holds both.
+			defaultRailTwoChats: cap(300, 2),
+			// A wide rail earns more tabs, up to the point where a strip stops being a glance.
+			wideRail: cap(900, 8),
+			// A single chat needs no chip either, so it keeps its tab far further down than a crowded rail does.
+			narrowSoleChat: cap(151, 1),
+			// Below 212px a crowded rail fits nothing at MIN_TAB_WIDTH, so the answer is ZERO and the rail draws
+			// a chat picker. The old floor of one handed the active tab 32px at 151px: a bare close box, no title.
+			tooNarrowForAnyTab: cap(151, 4),
+			tooNarrowBoundary: cap(213, 4),
+			justWideEnough: cap(214, 4),
+			// Nothing measured yet (before the first layout) falls back to the fixed count rather than to 1.
+			unmeasured: cap(0, 4),
+			noChats: cap(300, 0),
+		}, {
+			defaultRailThreeChats: 1,
+			defaultRailTwoChats: 2,
+			wideRail: MAX_VISIBLE_TABS,
+			narrowSoleChat: 1,
+			tooNarrowForAnyTab: 0,
+			tooNarrowBoundary: 0,
+			justWideEnough: 1,
+			unmeasured: VISIBLE_TAB_CAP,
+			noChats: 0,
+		});
+	});
+
+	test('every tab the width-derived cap shows has room to be read, and the rest go to the overflow menu', () => {
+		const many = Array.from({ length: 6 }, (_, i) => session(`s${i}`, i));
+		const width = 460;
+		const { visible, overflow } = splitTabs(many, 's4', visibleTabCap(width, many.length));
+		assert.deepStrictEqual({
+			visible: visible.map(s => s.id),
+			overflow: overflow.map(s => s.id),
+			// The room each visible tab really gets, once the strip's padding, the "+" (and its margin), the
+			// "N more" chip and every 4px gap between them are paid for. This is the sum that used to be short.
+			roomPerTab: Math.floor((width - 16 - 34 - overflowWidth(overflow.length) - visible.length * 4) / visible.length) >= MIN_TAB_WIDTH,
+		}, {
+			// The active tab is pulled into the visible run; the rest are reachable through the menu.
+			visible: ['s0', 's1', 's4'],
+			overflow: ['s2', 's3', 's5'],
+			roomPerTab: true,
+		});
+	});
+
+	test('the "N more" chip is budgeted from its own text, so a two-digit count cannot squeeze the tabs', () => {
+		// #312 fix round 2 (V3): the chip's width was one flat constant, 62, but it is laid out from its own TEXT.
+		// Measured in the running app, "4 more ▾" draws 63.6px and "14 more ▾" draws 69.2px - so past ten hidden
+		// chats the tab beside it absorbed the shortfall and a strip promising 96px tabs drew 91.3px ones. Same
+		// class as the unbudgeted flex gaps of round 1: a budget written from an assumed cost, not a real one.
+		//
+		// Swept rather than sampled, because the defect only appears at widths where the chip is being paid for.
+		const roomPerTab = (width: number, count: number) => {
+			const cap = visibleTabCap(width, count);
+			// Zero is the picker, which draws no tabs at all and so cannot draw an unreadable one.
+			if (!cap) { return Number.POSITIVE_INFINITY; }
+			const hidden = count - cap;
+			return (width - 16 - 34 - (hidden ? overflowWidth(hidden) + 4 : 0) - (cap - 1) * 4) / cap;
+		};
+		let narrowest = Number.POSITIVE_INFINITY;
+		// Swept to a hundred chats, not fifteen: the three-digit chip is where round 2's per-digit figure was
+		// itself a pixel light (#312 fix round 3), and a sweep that stops at two digits could not see it.
+		for (let count = 1; count <= 101; count++) {
+			for (let width = 120; width <= 900; width++) { narrowest = Math.min(narrowest, roomPerTab(width, count)); }
+		}
+		assert.deepStrictEqual({
+			budgetCoversFourMore: overflowWidth(4) >= 63.6,
+			budgetCoversFourteenMore: overflowWidth(14) >= 69.2,
+			// "100 more ▾" really draws 76.6px, measured live at a hundred hidden chats. Six pixels a digit
+			// budgeted 76 for it, and the 96px tab floor survived only because NEW_CHAT_WIDTH over-estimates the
+			// "+" by ~5.5px and absorbed the shortfall - a floor held up by another line item's slack rather than
+			// by its own arithmetic. Seven is the real growth (13.0px across two digits) rounded up.
+			budgetCoversHundredMore: overflowWidth(100) >= 76.6,
+			// The whole point, swept over every width and chat count a rail can hold: no tab is ever drawn under
+			// the minimum the strip promises.
+			everyTabClearsTheMinimum: narrowest >= MIN_TAB_WIDTH,
+			// The width the 91.3px tab was measured at, with the same 15 chats: too narrow for a tab now, so the
+			// picker takes the strip instead of a tab that breaks its own rule.
+			fifteenChatsAt216: visibleTabCap(216, 15),
+		}, {
+			budgetCoversFourMore: true,
+			budgetCoversFourteenMore: true,
+			budgetCoversHundredMore: true,
+			everyTabClearsTheMinimum: true,
+			fifteenChatsAt216: 0,
 		});
 	});
 

@@ -12,6 +12,9 @@
 // ordering, titling and next-active rules are unit-tested without a rail, a service or a DOM. The service
 // owns the message bodies (keyed by session id) and the rail owns the tab strip.
 
+import { localize } from '../../../../nls.js';
+import { GraphemeIterator, isFullWidthCharacter } from '../../../../base/common/strings.js';
+
 /** One chat session's metadata. The message bodies live in the service, keyed by `id`. */
 export interface IChatSession {
 	/** Stable identity: the key the service stores this session's messages and attach set under. */
@@ -30,14 +33,139 @@ export interface IChatSession {
 }
 
 /**
- * The default number of tabs the strip shows before the rest fold into the overflow menu. Three, not four:
- * the chat rail is ~300px wide, and a fourth tab left nothing legible per tab once the + and the overflow
- * chip took their room (caught in the live walk - the fourth tab clipped past the panel edge).
+ * The number of tabs the strip shows when nobody has told us how wide the rail is (the first render, before
+ * the pane has laid out). Once a real width is known, `visibleTabCap` below decides instead - a fixed count
+ * is a guess, and this one guessed wrong: at three tabs in the default rail width the third collapsed to a
+ * single letter and an ellipsis, which is a tab you cannot choose deliberately.
  */
 export const VISIBLE_TAB_CAP = 3;
 
-/** The longest a derived tab title gets before it is elided (the strip is narrow; a tab is a glance). */
+/**
+ * The narrowest a chat tab may be drawn and still be CHOOSABLE: enough room for the first word or two of the
+ * title plus its close box. This is the number the many-tab design turns on - rather than squeezing N tabs
+ * into whatever space exists, the strip works out how many tabs of at least this width fit and folds the
+ * rest into the overflow menu, where the whole derived title is readable rather than cut off by the strip.
+ */
+export const MIN_TAB_WIDTH = 96;
+
+/**
+ * The most tabs shown at any width. Past this a strip stops being a glance and becomes a list, and the
+ * overflow menu - a vertical list with room for the whole derived title - is the better reading of "I have
+ * a lot of chats". Note the derived title is itself capped at TITLE_MAX below: the menu shows all of THAT,
+ * not all of the original prompt, which no surface ever promises.
+ */
+export const MAX_VISIBLE_TABS = 5;
+
+/**
+ * Room the strip's own furniture takes before any tab gets a pixel. Every one of these is real laid-out
+ * chrome in `_renderChatTabs`, and the gap in particular used to be unbudgeted - which is how a strip that
+ * promises tabs of at least `MIN_TAB_WIDTH` drew two 95px ones.
+ */
+const STRIP_PADDING = 16;
+const TAB_GAP = 4;
+/** The trailing "+", including the 4px margin that separates it from whatever precedes it. */
+const NEW_CHAT_WIDTH = 34;
+
+/**
+ * How wide the bordered "N more ▾" chip really draws with `hidden` chats behind it.
+ *
+ * This used to be a single constant, 62. But the chip is laid out from its own TEXT, so it grows with the
+ * number in it: measured in the running app, "4 more ▾" is 63.6px and "14 more ▾" is 69.2px. The tab beside it
+ * takes the shortfall (`flex:1 1 0`), so from ten hidden chats on, a strip promising tabs of at least
+ * `MIN_TAB_WIDTH` was drawing 91.3px ones. That is the same defect fix round 1 removed for the 4px flex gaps -
+ * a budget written from what the layout was assumed to cost rather than from what it costs - and this is the
+ * rest of it. Both numbers are measured and rounded UP, because a budget a pixel light is how this happens.
+ *
+ * The per-digit figure was 6 for one round and that was a pixel light (#312 fix round 3): measured at a
+ * hundred hidden chats, "100 more ▾" really draws 76.6px against a budgeted 76. It did not produce an
+ * under-minimum tab, but only because `NEW_CHAT_WIDTH` over-estimates the "+" by about 5.5px and absorbed the
+ * error - a floor held up by another line item's slack is not held up by its own arithmetic. The real growth
+ * measured across one to three digits is 13.0px, i.e. 6.5 a digit, so 7 is that rounded up the way the rest of
+ * this budget is. `NEW_CHAT_WIDTH`'s slack is deliberately left alone: it is a margin, not a second bug.
+ */
+const OVERFLOW_BASE_WIDTH = 64;
+const OVERFLOW_DIGIT_WIDTH = 7;
+export function overflowWidth(hidden: number): number {
+	const digits = String(Math.max(1, Math.floor(hidden))).length;
+	return OVERFLOW_BASE_WIDTH + (digits - 1) * OVERFLOW_DIGIT_WIDTH;
+}
+
+/**
+ * How many tabs fit in a strip `stripWidth` px wide, given how many chats there are. Pure arithmetic so the
+ * rule is unit-tested rather than eyeballed in a running app:
+ *
+ * - every visible tab is at least `MIN_TAB_WIDTH` wide, so no tab is ever drawn as one letter + an ellipsis;
+ * - the trailing "+" always keeps its room, so "new chat" never disappears at a narrow width;
+ * - the "N more" chip is only paid for when something actually overflows, and is paid for at the width its
+ *   own text really draws (`overflowWidth`), which grows once the hidden count reaches two digits;
+ * - the 4px gap between every adjacent child is paid for too.
+ *
+ * **Zero is a real answer**, and it is the fix for the residual's own defect landing on the active tab: below
+ * roughly 200px nothing can be drawn at `MIN_TAB_WIDTH`, and the previous `Math.max(1, ...)` floor handed the
+ * one guaranteed-visible tab whatever was left - 32px at a 151px rail, which renders as a bare close box with
+ * no title at all. Forcing a tab into a rail too narrow for one is the same defect the minimum exists to
+ * prevent, so the strip stops pretending: at 0 the caller draws a chat PICKER instead of a strip (one
+ * full-width control naming the chat you are in, opening a menu of all of them). See `_renderChatTabs`.
+ */
+export function visibleTabCap(stripWidth: number, sessionCount: number): number {
+	if (sessionCount <= 0) { return 0; }
+	// No measurement yet (the first render, or a hidden pane): fall back to the fixed count rather than
+	// computing a cap of 1 from a width of 0 and flashing a one-tab strip before the first layout.
+	if (!Number.isFinite(stripWidth) || stripWidth <= 0) { return Math.min(sessionCount, VISIBLE_TAB_CAP); }
+	const room = stripWidth - STRIP_PADDING - NEW_CHAT_WIDTH;
+	// What `n` tabs really cost: their own minimum widths, the gaps between them, and - only when `n` leaves
+	// something behind - the overflow chip plus the gap before it.
+	const costOf = (n: number) => n * MIN_TAB_WIDTH + (n - 1) * TAB_GAP + (n < sessionCount ? overflowWidth(sessionCount - n) + TAB_GAP : 0);
+	let cap = 0;
+	for (let n = 1; n <= Math.min(sessionCount, MAX_VISIBLE_TABS); n++) {
+		if (costOf(n) > room) { break; }
+		cap = n;
+	}
+	return cap;
+}
+
+/**
+ * The longest a derived tab title gets before it is elided (the strip is narrow; a tab is a glance).
+ *
+ * Measured in DISPLAY COLUMNS, not UTF-16 code units. A full-width character - CJK, kana, the wide
+ * punctuation that travels with them - is two columns wide on screen, so 28 of them are about twice the
+ * strip room 28 Latin letters take. A cap counted in code units silently means two different things
+ * depending on the language, which is not what a reader assumes a character limit means.
+ */
 const TITLE_MAX = 28;
+
+/** How wide `text` draws, in columns: one per character, two for a full-width one. */
+function columnWidth(text: string): number {
+	let width = 0;
+	const iterator = new GraphemeIterator(text);
+	while (!iterator.eol()) {
+		const start = iterator.offset;
+		iterator.nextGraphemeLength();
+		width += isFullWidthCharacter(text.charCodeAt(start)) ? 2 : 1;
+	}
+	return width;
+}
+
+/**
+ * Cut `text` down to at most `columns`, never inside a character.
+ *
+ * A plain `slice` cuts by UTF-16 code unit, which splits a surrogate pair straight down the middle: an emoji
+ * becomes a lone high surrogate that renders as a replacement glyph AND is written to workspace storage as
+ * broken data, so it is not a pixel problem that ends at the tab. VS Code's own grapheme iterator walks whole
+ * clusters, so an emoji, a skin-tone sequence or a combining accent is kept or dropped as one thing.
+ */
+function truncateColumns(text: string, columns: number): string {
+	let width = 0;
+	const iterator = new GraphemeIterator(text);
+	while (!iterator.eol()) {
+		const start = iterator.offset;
+		iterator.nextGraphemeLength();
+		width += isFullWidthCharacter(text.charCodeAt(start)) ? 2 : 1;
+		// Cut BEFORE this cluster, never through it - `start` is a boundary the iterator found, not a guess.
+		if (width > columns) { return text.slice(0, start); }
+	}
+	return text;
+}
 
 /**
  * Shorten a user message into a tab title: one line, collapsed whitespace, trimmed of Markdown noise, and
@@ -49,7 +177,9 @@ export function titleFromMessage(text: string): string | undefined {
 	// Strip leading Markdown decoration so "## Rewrite the intro" titles as "Rewrite the intro".
 	const bare = oneLine.replace(/^[#>*\-\s]+/, '').trim();
 	if (!bare.length) { return undefined; }
-	return bare.length > TITLE_MAX ? `${bare.slice(0, TITLE_MAX - 1).trimEnd()}…` : bare;
+	if (columnWidth(bare) <= TITLE_MAX) { return bare; }
+	// One column is kept back for the ellipsis, so an elided title never draws wider than the cap it names.
+	return `${truncateColumns(bare, TITLE_MAX - 1).trimEnd()}…`;
 }
 
 /**
@@ -95,6 +225,59 @@ export function closeSession(sessions: readonly IChatSession[], activeId: string
 	if (activeId !== closeId) { return { sessions: remaining, activeId }; }
 	const next = remaining[index] ?? remaining[index - 1];
 	return { sessions: remaining, activeId: next ? next.id : undefined };
+}
+
+/** What to ask before a chat is closed, or `needed: false` when there is nothing to lose by closing it. */
+export interface ICloseChatConfirm {
+	/** False when the chat holds no messages: an empty tab closes on the click, with no question asked. */
+	readonly needed: boolean;
+	/** The question, naming the chat by its title - which is the whole point when the route is a menu. */
+	readonly message: string;
+	/** One complete sentence saying what goes and that it does not come back. */
+	readonly detail: string;
+	/** The confirming button's label, so the destructive choice is named rather than being a bare "OK". */
+	readonly primaryButton: string;
+}
+
+/**
+ * The question to ask before closing a chat (#312 fix round 3).
+ *
+ * Closing a chat deletes its conversation from workspace storage the moment it happens - there is no undo
+ * anywhere in the app, and the transcript is gone from disk, not just from the strip. Until this round that
+ * was instant and silent from every route, and fix round 2's own work is what made it reachable: the "Close
+ * Chat" submenu is a vertical list of similar titles, where a mis-aimed click costs a whole conversation, and
+ * the palette entry made the SOLE chat closable for the first time (before it, the tab had no × and there was
+ * no command, so the only conversation in a workspace simply could not be destroyed).
+ *
+ * So the rule is: **a chat that holds messages is never closed without being named first.** Naming it is what
+ * turns a mis-aim into a mis-aim rather than a loss - the reader sees which title they actually hit, and how
+ * much of it is about to go. An EMPTY chat asks nothing, because there is nothing to lose and a question there
+ * would be the confirm-fatigue that teaches people to click through the ones that matter.
+ *
+ * The sole chat gets its own detail sentence because its outcome genuinely differs: the strip is never empty,
+ * so closing the only chat opens a fresh one in its place. Without that sentence "close" reads as "the rail
+ * goes away", and what really happens - your conversation is deleted and replaced by an empty one - is exactly
+ * the surprise this guard exists to prevent.
+ *
+ * Pure, so every sentence is unit-tested rather than read off a screenshot, and the caller (the Close Chat
+ * command, which every route now runs) only has to show it.
+ */
+export function closeChatConfirm(title: string, messageCount: number, sole: boolean): ICloseChatConfirm {
+	const held = Math.max(0, Math.floor(messageCount));
+	if (!held) { return { needed: false, message: '', detail: '', primaryButton: '' }; }
+	const detail = sole
+		? (held === 1
+			? localize('livingDocs.chat.close.detailSoleOne', "This is your only chat, so an empty one opens in its place. Its 1 message is deleted from this workspace and cannot be brought back.")
+			: localize('livingDocs.chat.close.detailSoleMany', "This is your only chat, so an empty one opens in its place. Its {0} messages are deleted from this workspace and cannot be brought back.", held))
+		: (held === 1
+			? localize('livingDocs.chat.close.detailOne', "Its 1 message is deleted from this workspace and cannot be brought back.")
+			: localize('livingDocs.chat.close.detailMany', "Its {0} messages are deleted from this workspace and cannot be brought back.", held));
+	return {
+		needed: true,
+		message: localize('livingDocs.chat.close.message', "Close the chat \"{0}\"?", title),
+		detail,
+		primaryButton: localize('livingDocs.chat.close.button', "Close Chat"),
+	};
 }
 
 /**

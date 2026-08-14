@@ -29,6 +29,14 @@ export const DOCUMENTS_CONTAINER_ID = 'workbench.viewContainer.livingDocs.docume
 export const CONTEXT_VIEW_ID = 'workbench.view.livingDocs.context';
 export const CONTEXT_CONTAINER_ID = 'workbench.viewContainer.livingDocs.context';
 
+/**
+ * The command every route to closing a chat runs (#312 fix round 3) - the tab's ×, both menus' "Close Chat"
+ * rows, and the palette entry. Shared as a constant so the two sides cannot drift apart on a string, and
+ * declared here rather than in the contribution so a view can reach it without importing the contribution.
+ * The command carries the confirm; `ILivingDocsService.closeChatSession` is the primitive underneath it.
+ */
+export const CLOSE_CHAT_COMMAND_ID = 'livingDocs.chat.closeSession';
+
 /** The tabs of the Studio right panel. */
 export type LivingDocsPanelTab = 'chat' | 'review' | 'history';
 
@@ -601,6 +609,25 @@ export interface IChatMessage {
 	// is the plain-words cap message, proposals already queued stay reviewable, and the run screen marks the
 	// not-yet-run documents skipped (they never ran) - NOT failed, and NOT a "no change" all-clear (F14 item 3).
 	readonly paused?: boolean;
+	// --- read back from workspace storage on a relaunch (plan 52 WP-B residuals, issue #312) ---
+	// True for a turn RESTORED from storage rather than produced in this session. A restored turn is a record,
+	// never a replay: nothing re-runs, and the rail reads this to stay honest about what it can no longer show.
+	readonly restored?: boolean;
+	// How many changes a restored assistant turn proposed. Pending changes are in-memory only, so a restart
+	// clears them and their ids would be dead pointers - the count is stored instead, and the rail prints an
+	// honest line in the pointers' place (see `chatTranscripts.ts`).
+	readonly proposedCount?: number;
+	// How many of this turn's proposals the user APPROVED / REJECTED. Written onto the turn the moment the user
+	// acts, because that is the only moment the fact exists: the change leaves the pending set immediately, and
+	// a restart takes what is left of it. Without these a restored turn could only say that changes had been
+	// proposed - so it told an APPROVED change, sitting on disk and in the History tab, that it had been thrown
+	// away when the workspace closed (#312 fix round 2). The count is honest about how many; only these are
+	// honest about what happened. What was proposed and neither approved nor rejected really was cleared.
+	readonly approvedCount?: number;
+	readonly rejectedCount?: number;
+	// True when the stored body was clipped by the per-message character cap, so the rail can say the answer
+	// is shortened rather than present a truncated reply as the whole of it.
+	readonly clipped?: boolean;
 }
 
 /** The in-flight streaming turn for a document: the prose accumulated so far + the tool steps as they settle. */
@@ -1407,12 +1434,29 @@ export interface ILivingDocsService {
 	/** Open a fresh chat and make it active, keeping the previous conversation (Cmd+T). Returns its id. */
 	newChatSession(): string;
 	activateChatSession(id: string): void;
-	/** Close a tab; the neighbour becomes active, and closing the last one opens a fresh chat. */
+	/**
+	 * Close a tab; the neighbour becomes active, and closing the last one opens a fresh chat.
+	 *
+	 * This DELETES the conversation, from workspace storage as well as from memory, and nothing in the app
+	 * brings it back. It is the primitive, not the route: every user-facing way to close a chat runs the
+	 * `Close Chat` command, which asks first when there is a conversation to lose (`closeChatConfirm`).
+	 */
 	closeChatSession(id: string): void;
+	/**
+	 * How many messages a chat is holding right now - 0 for one nobody has typed in, and for an id that names
+	 * no chat. What the close guard weighs: the size of the conversation closing that tab would delete.
+	 */
+	getChatMessageCount(id: string): number;
 	/** The sessions that attached this document - the "chats mentioning this doc" reading. */
 	getChatSessionsMentioning(resource: URI): readonly IChatSession[];
 
 	getChatMessages(resource: URI): readonly IChatMessage[];
+	/**
+	 * How many earlier messages of the ACTIVE chat the workspace-storage caps dropped (0 when none were).
+	 * The rail opens a restored conversation with an honest line naming this count rather than presenting a
+	 * trimmed transcript as the whole of it. See `chatTranscripts.ts` for the caps themselves.
+	 */
+	getDroppedChatMessages(): number;
 	/** The files a `@mention` can attach for a document: its linked sources + context files. */
 	getMentionableFiles(resource: URI): readonly string[];
 	/** True while a chat reply is in flight for a document (renders the "working" indicator). */

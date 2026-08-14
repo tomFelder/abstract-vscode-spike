@@ -5,7 +5,7 @@
 
 import { $, addDisposableListener, append, clearNode, getWindow } from '../../../../base/browser/dom.js';
 import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
-import { IAction, Separator, toAction } from '../../../../base/common/actions.js';
+import { IAction, Separator, SubmenuAction, toAction } from '../../../../base/common/actions.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -15,6 +15,7 @@ import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
@@ -27,10 +28,10 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
-import { buildTurnPointers, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
-import { IChatSession, splitTabs } from '../common/chatSessions.js';
+import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
+import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
-import { IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
+import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
 import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
@@ -197,6 +198,9 @@ export class ReviewRailView extends ViewPane {
 	// Rebuilt each _renderChatComposer; the textarea input/keydown handlers reach it through this field.
 	private _composerPicker: MentionPicker | undefined;
 	private readonly _renderDisposables = this._register(new DisposableStore());
+	// The rail's last laid-out width, which decides how many chat tabs fit (plan 52 WP-B residuals). 0 until
+	// the first layout, which `visibleTabCap` reads as "not measured yet" and answers with its fixed fallback.
+	private _railWidth = 0;
 	// Plan 27 iter 3: the live streaming turn's DOM handles, so a delta event appends token-by-token
 	// WITHOUT a full re-render (which would reset the scroll position and the composer caret). Rebuilt each
 	// time _renderChat runs; the doc key guards against a stale delta from a document no longer in view.
@@ -258,6 +262,7 @@ export class ReviewRailView extends ViewPane {
 		@IDialogService private readonly _dialogService: IDialogService,
 		@IQuickInputService private readonly _quickInput: IQuickInputService,
 		@IClipboardService private readonly _clipboardService: IClipboardService,
+		@ICommandService private readonly _commands: ICommandService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -916,6 +921,9 @@ export class ReviewRailView extends ViewPane {
 		content.style.cssText = 'display:flex;flex-direction:column;height:100%;padding:0';
 
 		this._renderChatTabs(content);
+		// "Chats mentioning this document" sits directly under the strip: it is a way of CHANGING which chat you
+		// are in, so it belongs with the tabs rather than inside the conversation.
+		this._renderChatMentions(content, doc);
 
 		const scroll = append(content, $('div'));
 		scroll.style.cssText = 'flex:1;min-height:0;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:16px';
@@ -924,11 +932,11 @@ export class ReviewRailView extends ViewPane {
 		// open - only SENDING needs a document to act on, which the composer already gates.
 		const messages = this._livingDocs.getChatMessages(doc ?? URI.from({ scheme: 'untitled', path: 'chat' }));
 		if (messages.length === 0) {
-			this._renderChatEmpty(scroll, doc
-				? 'Ask the agent about this document, or @mention a source to pull it in.'
-				: 'Ask anything about this workspace. Open a document, or @mention one, to make changes.');
+			this._renderChatEmpty(scroll, doc);
 		} else {
-			for (const m of messages) { this._renderChatMessage(scroll, m); }
+			// Whatever the storage caps dropped is named once, above the oldest turn that survived.
+			this._renderChatTrimNotice(scroll);
+			messages.forEach((m, i) => this._renderChatMessage(scroll, m, i === messages.length - 1));
 		}
 
 		if (doc && this._livingDocs.isChatBusy(doc)) {
@@ -992,77 +1000,289 @@ export class ReviewRailView extends ViewPane {
 	}
 
 	/**
-	 * The workspace chat tab strip (plan 52 WP-B, decision 178). Chats belong to the workspace, so this is
-	 * the only place that says which conversation you are in. Tabs are capped and the rest fold into an
-	 * overflow menu; the active tab is always on screen (`splitTabs` guarantees it). The trailing + opens a
-	 * fresh chat, the same thing Cmd+T does, so the affordance and the chord agree.
+	 * The workspace chat tab strip (plan 52 WP-B, decision 178; redesigned for the residuals, issue #312).
+	 * Chats belong to the workspace, so this is the only place that says which conversation you are in.
+	 *
+	 * Three design decisions live here, and the first two changed in the residuals pass:
+	 *
+	 * 1. The strip is ALWAYS drawn, even for a single chat. It used to appear only once a second conversation
+	 *    existed - which meant the "+" that starts one was invisible until you had already found `Cmd+T`, and
+	 *    a brand-new workspace showed no evidence that chats were a plural thing at all. One chat now reads as
+	 *    one tab: the same shape, holding one.
+	 * 2. How many tabs are shown is derived from the rail's real width (`visibleTabCap`), not from a fixed
+	 *    count. The fixed count is what squeezed the third tab down to a single letter and an ellipsis - a tab
+	 *    nobody can choose deliberately. Every visible tab is now at least `MIN_TAB_WIDTH` wide, and anything
+	 *    that will not fit at that width goes to the overflow menu, where titles are shown in full.
+	 * 3. The active tab is always on screen (`splitTabs` guarantees it), because a strip that hides the
+	 *    conversation you are having is a strip that lies about where you are.
+	 *
+	 * The sole tab carries no close box: closing the only chat immediately opens another (the strip is never
+	 * empty), so an × there would promise something it cannot do. Start a new chat with "+" instead.
+	 *
+	 * And a fourth, added in fix round 1 (#312): **below the width where even ONE tab clears `MIN_TAB_WIDTH`,
+	 * the strip stops being a strip.** The first cut floored the cap at one, so the guaranteed-visible tab -
+	 * the active one, the conversation you are actually in - was handed whatever pixels were left: 32px at a
+	 * 151px rail, which draws as a bare close box with no title. That is the same "a tab nobody can choose"
+	 * defect this pass set out to fix, landing on the worst possible tab. So at that width the surface becomes
+	 * a PICKER: one full-width control naming the chat you are in, with a chevron opening every chat. It is
+	 * honest (it does not claim to be a row of tabs), the title is readable because it has the whole strip to
+	 * itself, and nothing becomes unreachable.
 	 */
 	private _renderChatTabs(content: HTMLElement): void {
-		const sessions = this._livingDocs.getChatSessions();
+		// The active session is asked for FIRST because asking is what creates one in a workspace that has never
+		// chatted - read the list first and this render would draw an empty strip and wait for an event to fix it.
 		const activeId = this._livingDocs.getActiveChatSession();
-		// One chat is not a tab strip - it is just "the chat". The row only earns its height once a second
-		// conversation exists, so the calm single-chat case looks exactly as it always has.
-		if (sessions.length < 2) { return; }
-		const { visible, overflow } = splitTabs(sessions, activeId);
+		const sessions = this._livingDocs.getChatSessions();
+		if (!sessions.length) { return; }
+		const cap = this._chatTabCap();
+		const { visible, overflow } = splitTabs(sessions, activeId, cap);
 
 		const strip = append(content, $('div'));
-		// `overflow:hidden` + shrinkable tabs keep the strip inside the rail's width: a tab that ran past the
-		// panel edge (as the first cut did) reads as a broken layout, not as "there are more chats".
-		strip.style.cssText = 'display:flex;align-items:center;gap:4px;padding:6px 8px 0;border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);flex:0 0 auto;overflow:hidden';
+		// The strip carries a faint ground of its own so the active tab - which is the rail's own background -
+		// reads as a TAB lifted out of it. Without it, a single white tab on a white rail reads as a text field
+		// (caught in the live walk of the one-chat state). `overflow:hidden` is the belt to the cap's braces: a
+		// tab that ran past the panel edge (as the first cut did) reads as a broken layout, not as "more chats".
+		strip.style.cssText = 'display:flex;align-items:center;gap:4px;padding:6px 8px 0;background:var(--vscode-editorGroupHeader-tabsBackground,#f4f5f8);border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);flex:0 0 auto;overflow:hidden';
 
+		// The rail is too narrow for a strip: draw the picker described above instead of a titleless stub.
+		if (cap === 0) {
+			this._renderChatPicker(strip, sessions, activeId);
+			this._appendNewChatButton(strip);
+			return;
+		}
+
+		const soleTab = sessions.length === 1;
 		for (const session of visible) {
 			const isActive = session.id === activeId;
 			const tab = append(strip, $('div'));
-			tab.style.cssText = `display:flex;align-items:center;gap:4px;flex:0 1 auto;min-width:0;max-width:132px;padding:5px 8px;border-radius:6px 6px 0 0;cursor:pointer;font:${isActive ? '600' : '400'} 12px/1.2 var(--vscode-font-family);`
+			// `flex:1 1 0` shares the strip's room evenly between the tabs that fit, so each one gets at least
+			// MIN_TAB_WIDTH (which is how the cap was computed) - the ellipsis then trims a long title inside a
+			// tab that is still wide enough to read, rather than trimming the tab itself out of existence.
+			//
+			// The font is written as LONGHANDS on purpose. It used to be a `font:` shorthand ending in
+			// `var(--vscode-font-family)`, which is not defined in this workbench - and one invalid component
+			// throws the WHOLE shorthand away, so the active tab's 600 weight never applied and the strip laid
+			// itself out at the inherited 13px against a 96px minimum tuned for 12px (#312 fix round 1).
+			tab.style.cssText = `display:flex;align-items:center;gap:4px;flex:1 1 0;min-width:0;max-width:180px;padding:5px 8px;border-radius:6px 6px 0 0;cursor:pointer;`
+				+ `font-family:system-ui;font-size:12px;line-height:1.2;font-weight:${isActive ? 600 : 400};`
 				+ `background:${isActive ? 'var(--vscode-editor-background,#fff)' : 'transparent'};border:1px solid ${isActive ? 'var(--vscode-widget-border,#e6e8ec)' : 'transparent'};border-bottom:none`;
 			const label = append(tab, $('span'));
 			label.textContent = session.title;
-			label.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+			label.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
 			this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), tab, session.title));
 			this._renderDisposables.add(addDisposableListener(tab, 'click', () => this._livingDocs.activateChatSession(session.id)));
 
+			if (soleTab) { continue; }
 			const close = append(tab, $('span'));
 			close.textContent = '×';
-			close.style.cssText = 'opacity:.55;padding:0 2px;border-radius:3px';
+			close.style.cssText = 'flex:none;opacity:.55;padding:0 2px;border-radius:3px';
 			close.setAttribute('role', 'button');
 			close.setAttribute('aria-label', localize('livingDocs.chat.closeTab', "Close Chat"));
 			this._renderDisposables.add(addDisposableListener(close, 'click', e => {
 				// The close box must not also activate the tab it is closing.
 				e.stopPropagation();
-				this._livingDocs.closeChatSession(session.id);
+				// Through the command, never through the service: closing deletes the conversation from workspace
+				// storage with no undo, and the command is where the "close X? its N messages cannot be brought
+				// back" question lives (#312 fix round 3). Calling the service here would be a route around it.
+				void this._commands.executeCommand(CLOSE_CHAT_COMMAND_ID, session.id);
 			}));
 		}
 
 		if (overflow.length) {
+			// The overflow route has to look like a control, not like a caption: a bordered chip with a chevron,
+			// which opens a menu listing every hidden chat. The menu is vertical, so it shows the whole derived
+			// title rather than the strip's cut-off version - the title itself is still capped at TITLE_MAX.
 			const more = append(strip, $('div'));
-			more.textContent = localize('livingDocs.chat.moreTabs', "{0} more", overflow.length);
-			more.style.cssText = 'flex:0 0 auto;padding:5px 8px;font:400 12px/1.2 var(--vscode-font-family);opacity:.7;cursor:pointer;white-space:nowrap';
+			more.style.cssText = 'display:flex;align-items:center;gap:4px;flex:0 0 auto;padding:4px 7px;margin-bottom:1px;border:1px solid var(--vscode-widget-border,#e6e8ec);border-radius:6px;background:transparent;font-family:system-ui;font-size:11.5px;line-height:1.2;font-weight:500;opacity:.85;cursor:pointer;white-space:nowrap';
+			const moreLabel = append(more, $('span'));
+			moreLabel.textContent = localize('livingDocs.chat.moreTabs', "{0} more", overflow.length);
+			const moreChevron = append(more, $('span'));
+			moreChevron.style.cssText = 'font-size:9px;opacity:.7';
+			moreChevron.textContent = '▾';
 			more.setAttribute('role', 'button');
+			this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), more, localize('livingDocs.chat.moreTabsHint', "Show the other chats")));
 			this._renderDisposables.add(addDisposableListener(more, 'click', e => {
 				this.contextMenuService.showContextMenu({
 					getAnchor: () => ({ x: e.clientX, y: e.clientY }),
-					getActions: () => overflow.map((session: IChatSession) => toAction({
-						id: `livingDocs.chat.session.${session.id}`,
-						label: session.title,
-						run: () => this._livingDocs.activateChatSession(session.id),
-					})),
+					getActions: () => this._chatMenuActions(overflow, sessions, activeId),
 				});
 			}));
 		}
 
+		this._appendNewChatButton(strip);
+	}
+
+	/**
+	 * The trailing "+". Shared by the strip and the narrow-rail picker, because "start another chat" is the one
+	 * control that must survive every width - it is how a user discovers chats are plural without finding Cmd+T.
+	 */
+	private _appendNewChatButton(strip: HTMLElement): void {
 		const add = append(strip, $('div'));
 		add.textContent = '+';
-		add.style.cssText = 'flex:0 0 auto;margin-left:auto;padding:4px 8px;border-radius:6px;cursor:pointer;font:600 13px/1 var(--vscode-font-family);opacity:.75';
+		add.style.cssText = 'flex:0 0 auto;margin-left:4px;padding:4px 8px;border-radius:6px;cursor:pointer;font-family:system-ui;font-size:13px;line-height:1;font-weight:600;opacity:.75';
 		add.setAttribute('role', 'button');
 		add.setAttribute('aria-label', localize('livingDocs.chat.newTab', "New Chat"));
 		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), add, localize('livingDocs.chat.newTabHint', "New Chat (Cmd+T)")));
 		this._renderDisposables.add(addDisposableListener(add, 'click', () => this._livingDocs.newChatSession()));
 	}
 
-	private _renderChatEmpty(scroll: HTMLElement, text: string): void {
+	/**
+	 * What the strip becomes when the rail is too narrow for a single tab at `MIN_TAB_WIDTH` (#312 fix round 1).
+	 *
+	 * One control, the whole width the "+" does not need, reading as the chat you are in plus a chevron. The
+	 * menu lists EVERY chat with the current one ticked, so nothing is less reachable than it was - it is the
+	 * overflow menu doing the whole job rather than half of it. No close box: at this width there is no room
+	 * for one, and a control that closes the only thing named on screen is not what a 150px rail is for.
+	 */
+	private _renderChatPicker(strip: HTMLElement, sessions: readonly IChatSession[], activeId: string): void {
+		const active = sessions.find(s => s.id === activeId) ?? sessions[0];
+		const picker = append(strip, $('div'));
+		picker.style.cssText = 'display:flex;align-items:center;gap:4px;flex:1 1 0;min-width:0;margin-bottom:1px;padding:4px 7px;border:1px solid var(--vscode-widget-border,#e6e8ec);border-radius:6px;'
+			+ 'background:var(--vscode-editor-background,#fff);font-family:system-ui;font-size:12px;line-height:1.2;font-weight:600;cursor:pointer';
+		const label = append(picker, $('span'));
+		label.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+		label.textContent = active.title;
+		const chevron = append(picker, $('span'));
+		chevron.style.cssText = 'flex:none;font-size:9px;opacity:.7';
+		chevron.textContent = '▾';
+		picker.setAttribute('role', 'button');
+		picker.setAttribute('aria-label', localize('livingDocs.chat.pickerLabel', "Chat: {0}. Choose another chat.", active.title));
+		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), picker, localize('livingDocs.chat.pickerHint', "Choose a chat - the rail is too narrow for tabs")));
+		this._renderDisposables.add(addDisposableListener(picker, 'click', e => {
+			this.contextMenuService.showContextMenu({
+				getAnchor: () => ({ x: e.clientX, y: e.clientY }),
+				getActions: () => this._chatMenuActions(sessions, sessions, active.id),
+			});
+		}));
+	}
+
+	/**
+	 * The rows behind the overflow chip and the narrow-rail picker: the chats you can switch to, and - since
+	 * fix round 2 (#312) - the chats you can close.
+	 *
+	 * `closeChatSession` had exactly ONE caller: the × on a visible tab. So closing a chat was only ever
+	 * reachable from the tab you were already standing on. Below the width where the strip becomes a picker
+	 * nothing could be closed at all, and at the default rail width with several chats only the active one
+	 * could, because only the active one has a tab. Both holes are the same hole, and a "Close Chat" submenu in
+	 * the menus that already exist closes it at every width for no pixels - which is why the picker still has
+	 * no × of its own: it does not need one.
+	 *
+	 * The submenu lists EVERY chat, not just the hidden ones, so the menu is a complete close route rather than
+	 * half of one. It is absent for a sole chat, matching the sole tab's missing × - closing the only chat
+	 * immediately opens another, so offering it there would promise something it cannot do.
+	 *
+	 * Every close row runs the `Close Chat` COMMAND rather than the service (#312 fix round 3). This submenu is
+	 * precisely where the destruction is cheapest to trigger by accident - a vertical list of similar, elided
+	 * titles, where the row above the one you meant costs a whole conversation - so it must not be able to
+	 * reach the primitive directly. The command names the chat it is about to close and asks.
+	 */
+	private _chatMenuActions(rows: readonly IChatSession[], all: readonly IChatSession[], activeId: string | undefined): IAction[] {
+		const actions: IAction[] = rows.map((session: IChatSession) => toAction({
+			id: `livingDocs.chat.session.${session.id}`,
+			label: session.title,
+			checked: session.id === activeId,
+			run: () => this._livingDocs.activateChatSession(session.id),
+		}));
+		if (all.length > 1) {
+			actions.push(new Separator());
+			actions.push(new SubmenuAction('livingDocs.chat.closeSubmenu', localize('livingDocs.chat.closeMenu', "Close Chat"), all.map((session: IChatSession) => toAction({
+				id: `livingDocs.chat.close.${session.id}`,
+				label: session.title,
+				run: () => void this._commands.executeCommand(CLOSE_CHAT_COMMAND_ID, session.id),
+			}))));
+		}
+		return actions;
+	}
+
+	/**
+	 * "Chats mentioning this document" (plan 52 WP-B residuals, issue #312) - the surface for the service's
+	 * `getChatSessionsMentioning`, which until now had no caller at all.
+	 *
+	 * The problem it answers: chat used to belong to the document, so opening a file showed you the thread you
+	 * had had about it. Chats belong to the WORKSPACE now, which is right - a conversation survives navigation -
+	 * but it took away the "what did I already say about this one?" reading. A document joins a chat's attach
+	 * set the moment you chat while it is open, so that reading is recoverable: this row names the OTHER chats
+	 * that have this document attached, and picking one activates it. Hidden entirely when there are none, so
+	 * the common single-chat case pays nothing for it.
+	 */
+	private _renderChatMentions(content: HTMLElement, doc: URI | undefined): void {
+		if (!doc) { return; }
+		const activeId = this._livingDocs.getActiveChatSession();
+		const others = this._livingDocs.getChatSessionsMentioning(doc).filter(session => session.id !== activeId);
+		if (!others.length) { return; }
+		const row = append(content, $('button')) as HTMLButtonElement;
+		row.style.cssText = 'display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;flex:0 0 auto;border:none;border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);background:transparent;padding:7px 12px;cursor:pointer;text-align:left';
+		const glyph = append(row, $('span'));
+		glyph.style.cssText = 'flex:none;font:400 11px/1 system-ui;color:#8a8f98';
+		glyph.textContent = '○';
+		const label = append(row, $('span'));
+		label.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 11.5px/1.3 system-ui;color:#5b6dc4';
+		label.textContent = others.length === 1
+			? localize('livingDocs.chat.mentionedOnce', "1 other chat mentions this document")
+			: localize('livingDocs.chat.mentionedMany', "{0} other chats mention this document", others.length);
+		const chevron = append(row, $('span'));
+		chevron.style.cssText = 'flex:none;font:400 10px/1 system-ui;color:#aab';
+		chevron.textContent = '▾';
+		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), row, localize('livingDocs.chat.mentionedHint', "Open a chat that mentions this document")));
+		this._renderDisposables.add(addDisposableListener(row, 'click', e => {
+			this.contextMenuService.showContextMenu({
+				getAnchor: () => ({ x: e.clientX, y: e.clientY }),
+				getActions: () => others.map((session: IChatSession) => toAction({
+					id: `livingDocs.chat.mentioning.${session.id}`,
+					label: session.title,
+					run: () => this._livingDocs.activateChatSession(session.id),
+				})),
+			});
+		}));
+	}
+
+	/**
+	 * The empty chat (plan 52 WP-B residuals): a fresh workspace's only conversation, or a new tab. It used to
+	 * be one grey sentence floating in the middle of the rail, which read as "nothing here" rather than as an
+	 * invitation. It now names the surface, says what it can do with the document in view, and - because the
+	 * strip above it is now always drawn - sits under a visible "+" rather than under nothing.
+	 */
+	private _renderChatEmpty(scroll: HTMLElement, doc: URI | undefined): void {
 		const empty = append(scroll, $('div'));
-		empty.style.cssText = 'margin:auto 0;text-align:center;font:400 12.5px/1.6 system-ui;color:#a3a8b2;padding:24px 8px';
-		empty.textContent = text;
+		empty.style.cssText = 'margin:auto 0;display:flex;flex-direction:column;align-items:center;gap:7px;text-align:center;padding:24px 14px';
+		const mark = append(empty, $('span'));
+		mark.style.cssText = 'width:30px;height:30px;border-radius:50%;background:#eef1ff;color:oklch(0.55 0.13 255);font:600 14px/30px system-ui';
+		mark.textContent = '✻';
+		const title = append(empty, $('div'));
+		title.style.cssText = 'font:600 13px/1.4 system-ui;color:#52575f';
+		title.textContent = doc
+			? localize('livingDocs.chat.emptyTitleDoc', "Ask about this document")
+			: localize('livingDocs.chat.emptyTitleWorkspace', "Ask about this workspace");
+		const hint = append(empty, $('div'));
+		hint.style.cssText = 'font:400 12px/1.6 system-ui;color:#a3a8b2;max-width:260px';
+		hint.textContent = doc
+			? localize('livingDocs.chat.emptyHintDoc', "Ask a question, or ask for a change - proposals land in the document for you to approve. @mention a source to pull it in.")
+			: localize('livingDocs.chat.emptyHintWorkspace', "Open a document, or @mention one, to make changes to it.");
+	}
+
+	/**
+	 * The honest header of a trimmed conversation (plan 52 WP-B residuals): what the storage caps left out.
+	 * A trimmed transcript must never be presented as the whole of it - the count is stored alongside the
+	 * messages exactly so this line can be true. Nothing is drawn when nothing was left out.
+	 *
+	 * The tense is PRESENT, and that is the fix of round 2 (#312). It read "N earlier messages were not kept",
+	 * which is exactly right after a restore - those messages really are gone - and wrong during a live
+	 * session, where every one of them is still on screen above the notice and the number can go DOWN: a chat
+	 * starved by a neighbour's fill reports 15, and is rescued back to 0 the moment you send a message in it,
+	 * because the budget is spent on the active chat first. Past tense announces a loss that has not happened
+	 * to the reader and may never happen at all. "Are not being kept" is true in both readings - it describes
+	 * what storage holds right now - and the hover says which reading you are looking at.
+	 */
+	private _renderChatTrimNotice(scroll: HTMLElement): void {
+		const dropped = this._livingDocs.getDroppedChatMessages();
+		if (!dropped) { return; }
+		const note = append(scroll, $('div'));
+		note.style.cssText = 'align-self:center;font:400 11px/1.4 system-ui;color:#a3a8b2;background:#f4f5f7;border-radius:999px;padding:5px 11px';
+		note.textContent = dropped === 1
+			? localize('livingDocs.chat.trimmedOne', "1 earlier message in this chat is not being kept")
+			: localize('livingDocs.chat.trimmedMany', "{0} earlier messages in this chat are not being kept", dropped);
+		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), note,
+			localize('livingDocs.chat.trimmedHint', "This workspace keeps only the most recent part of each conversation. Messages still on screen are kept in memory, but will not be there after a restart.")));
 	}
 
 	// The live assistant turn while a reply streams (plan 27 iter 3). Before the first delta there is no
@@ -1144,7 +1364,7 @@ export class ReviewRailView extends ViewPane {
 		});
 	}
 
-	private _renderChatMessage(scroll: HTMLElement, m: IChatMessage): void {
+	private _renderChatMessage(scroll: HTMLElement, m: IChatMessage, isLast: boolean): void {
 		if (m.role === 'user') {
 			const wrap = append(scroll, $('div'));
 			wrap.style.cssText = 'align-self:flex-end;max-width:88%;display:flex;flex-direction:column;align-items:flex-end;gap:6px';
@@ -1160,6 +1380,20 @@ export class ReviewRailView extends ViewPane {
 			const bubble = append(wrap, $('div'));
 			bubble.style.cssText = 'background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36;white-space:pre-wrap';
 			bubble.textContent = m.content;
+			// The user's OWN question can be clipped too, and it is the message a user can most easily make long
+			// enough to trigger it - a pasted brief runs to thousands of characters where a model reply rarely
+			// does. This branch used to return before reaching the marker, so a question came back cut mid-word
+			// and presented as the whole thing: the exact failure the marker exists to prevent, on the exact
+			// message type most likely to hit it (#312 fix round 1).
+			this._appendClippedNote(wrap, m);
+			// A RESTORED question with nothing under it (plan 52 WP-B residuals): the app was closed while the
+			// reply was still coming. The question is kept - it is what the user typed - and the missing answer is
+			// named rather than left as a silence the reader has to interpret. Restoring never re-runs the ask.
+			if (isLast && m.restored) {
+				const note = append(wrap, $('span'));
+				note.style.cssText = 'font:400 11px/1.4 system-ui;color:#a3a8b2';
+				note.textContent = localize('livingDocs.chat.closedBeforeReply', "The app closed before the agent replied. Ask again to re-run this.");
+			}
 			return;
 		}
 
@@ -1216,6 +1450,10 @@ export class ReviewRailView extends ViewPane {
 		body.style.cssText = `margin:0;font:400 13.5px/1.6 system-ui;white-space:pre-wrap;color:${fallback ? '#9a6b16' : '#2c2f36'}${fallback ? ';background:#fdf6e9;border:1px solid #f0e2c4;border-radius:9px;padding:9px 11px' : ''}`;
 		body.textContent = m.content || (m.stopped ? 'Stopped before the agent replied.' : '');
 
+		// A stored answer the per-message character cap shortened (plan 52 WP-B residuals): say so, rather than
+		// presenting the first few thousand characters as though they were the whole reply.
+		this._appendClippedNote(col, m);
+
 		// A stopped turn (D27-B) carries the salvaged prose plus a muted "stopped" tag, so it reads as a real
 		// but deliberately-interrupted answer (never a silent truncation).
 		if (m.stopped) {
@@ -1226,6 +1464,24 @@ export class ReviewRailView extends ViewPane {
 
 		// One compact pointer per proposal this turn produced (plan 52 WP-A1) - the document owns the controls.
 		this._appendProposalPointers(col, m);
+	}
+
+	/**
+	 * The "this was shortened when it was saved" line, for EITHER side of the conversation (#312 fix round 1).
+	 *
+	 * It lives in one place because both message types need it and only one of them had it. The wording differs
+	 * by role: calling the user's own pasted brief an "answer" would be wrong, and a reader who cannot tell
+	 * which end of the exchange was cut cannot tell what they are missing. Nothing is drawn for a whole message,
+	 * so an unclipped conversation pays nothing.
+	 */
+	private _appendClippedNote(parent: HTMLElement, m: IChatMessage): void {
+		if (!m.clipped) { return; }
+		const tag = append(parent, $('span'));
+		// Sits under its own bubble, so it follows the side that bubble is on rather than always the left.
+		tag.style.cssText = `align-self:${m.role === 'user' ? 'flex-end' : 'flex-start'};font:400 10.5px/1.4 system-ui;color:#a3a8b2`;
+		tag.textContent = m.role === 'user'
+			? localize('livingDocs.chat.clippedQuestion', "This message was shortened when it was saved.")
+			: localize('livingDocs.chat.clipped', "This answer was shortened when it was saved.");
 	}
 
 	// Plan 52 WP-A1 (issue #301): one POINTER per proposal this turn produced - never a second copy of it.
@@ -1242,6 +1498,31 @@ export class ReviewRailView extends ViewPane {
 	// rejected anywhere - the inline widget, the Review tab, Accept all. The transcript stays honest about
 	// what is still open. Shared by the plain assistant turn and the F14 partial-failure turn.
 	private _appendProposalPointers(col: HTMLElement, m: IChatMessage): void {
+		// A turn read back from storage (plan 52 WP-B residuals, issue #312) carries a COUNT of the changes it
+		// proposed, never their ids. Pending changes live in memory only, so a restart clears them and any stored
+		// id would be a pointer that leads nowhere - the one thing a pointer must never be. The count is said
+		// plainly instead, so a restored turn that proposed work still reads as having proposed work.
+		if (m.restored) {
+			// ...and it names what BECAME of them. It used to say one thing about every restored proposal -
+			// "changes waiting for review are cleared when the workspace closes" - which is true of a change nobody
+			// reviewed and false of one the user approved, which is on disk and in the History tab three inches
+			// away (#312 fix round 2). The outcome is recorded as the user acts, so it is read off the record here
+			// rather than assumed. The sentences themselves live in `describeRestoredProposals`, where they are
+			// unit-tested; this branch only draws the one it is given.
+			const note = describeRestoredProposals(m.proposedCount, m.approvedCount, m.rejectedCount);
+			if (!note) { return; }
+			const gone = append(col, $('div'));
+			gone.style.cssText = `display:flex;align-items:center;gap:7px;border:1px dashed ${note.applied ? '#d3e5da' : '#e4e7ee'};border-radius:9px;padding:7px 10px;font:400 11.5px/1.4 system-ui;color:#868b95`;
+			const kind = append(gone, $('span'));
+			// An approved turn is the one outcome that LANDED, so its marker carries the same applied-green the
+			// rest of the app uses for a change that is in the document. Everything else stays a muted record.
+			kind.style.cssText = `flex:none;font:600 10px/1 ui-monospace,monospace;letter-spacing:.04em;color:${note.applied ? '#1f7a44' : '#a3a8b2'}`;
+			kind.textContent = note.tag;
+			const line = append(gone, $('span'));
+			line.style.cssText = 'flex:1;min-width:0';
+			line.textContent = note.text;
+			return;
+		}
 		if (!m.proposedIds || !m.proposedIds.length) { return; }
 		const pointers = buildTurnPointers(
 			m.proposedIds,
@@ -1871,6 +2152,17 @@ export class ReviewRailView extends ViewPane {
 		if (this._root) {
 			this._root.style.height = `${height}px`;
 		}
+		// How many chat tabs the strip can show is a function of the rail's REAL width (plan 52 WP-B residuals):
+		// see `visibleTabCap`. A resize that changes the answer has to re-render the strip, but a drag that never
+		// crosses a boundary must cost nothing - so the cap, not the pixel width, is what is compared.
+		const before = this._chatTabCap();
+		this._railWidth = width;
+		if (this._activeTab === 'chat' && this._chatTabCap() !== before) { this._render(); }
+	}
+
+	/** How many chat tabs fit at the rail's current width - the strip's cap, and the resize trigger above. */
+	private _chatTabCap(): number {
+		return visibleTabCap(this._railWidth, this._livingDocs.getChatSessions().length);
 	}
 }
 

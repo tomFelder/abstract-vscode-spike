@@ -16,6 +16,7 @@ import { localize, localize2 } from '../../../../nls.js';
 import { Action2, IMenuItem, ISubmenuItem, isIMenuItem, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ContextKeyExpr, ContextKeyExpression, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IConfigurationRegistry, Extensions as ConfigurationExtensions } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
@@ -40,7 +41,7 @@ import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture,
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
-import { DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { CLOSE_CHAT_COMMAND_ID, DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
 import { IAbstractHeaderService } from '../common/abstractHeader.js';
 import { AbstractHeaderService } from './abstractHeaderService.js';
 import { AbstractHeaderContribution } from './abstractHeader.js';
@@ -50,6 +51,7 @@ import { LivingDocEditor } from './livingDocEditor.js';
 import { LivingDocEditorInput, LIVING_DOC_EDITOR_ID } from './livingDocEditorInput.js';
 import { LivingDocSourceEditor } from './livingDocSourceEditor.js';
 import { LivingDocSourceInput, LivingDocSourceInputSerializer } from './livingDocSourceInput.js';
+import { closeChatConfirm } from '../common/chatSessions.js';
 import { parsePersistedTabStrip } from '../common/livingDocTabs.js';
 import { setTabRestoreInProgress, tabStripStorageKey } from './abstractTabStrip.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -277,11 +279,19 @@ for (const chord of NEUTRALISED_IDE_CHORDS) {
 // de-IDE work would otherwise have to neutralise anyway. Here it earns a better job: it opens a fresh chat,
 // the same thing the strip's + does, so the affordance and the chord agree. Weight 1000 for the same reason
 // the swallows above use it - it must beat the stock binding without a core patch.
+//
+// The category is load-bearing, not decoration (#312 fix round 3). This shell curates the command palette by
+// exclusion-with-allowlist: `shouldShadowPaletteCommand` keeps an entry in the default view only when its
+// category is "Abstract" or its id is in the small writer keep-list, and demotes everything else behind the
+// "All Commands..." wall. These two chat commands were the only fork commands registered WITHOUT the category,
+// so the curation aimed at stock IDE noise was hiding our own: a validator found that a stock-palette search
+// for "New Chat" - shipped, and the one the PR text pointed at - answered "No matching commands".
 registerAction2(class NewChatSessionAction extends Action2 {
 	constructor() {
 		super({
 			id: 'livingDocs.chat.newSession',
 			title: localize2('livingDocs.chat.newSession', "New Chat"),
+			category: localize2('livingDocs.category', "Abstract"),
 			f1: true,
 			keybinding: { weight: 1000, primary: KeyMod.CtrlCmd | KeyCode.KeyT },
 		});
@@ -290,6 +300,57 @@ registerAction2(class NewChatSessionAction extends Action2 {
 		const livingDocs = accessor.get(ILivingDocsService);
 		livingDocs.newChatSession();
 		// Opening a chat you cannot see would be a lie; bring the rail's Chat tab forward with it.
+		livingDocs.focusPanel('chat');
+	}
+});
+
+// --- "Close Chat": the one route that closes a chat (#312 fix rounds 2 and 3) ---
+// The counterpart to New Chat above. Closing a chat used to be reachable ONLY from the × on a visible tab: a
+// rail too narrow for tabs could close nothing at all, while New Chat had a chord AND a palette entry. An
+// action reachable only by aiming at one specific pixel is not a route.
+//
+// Round 3 makes this the ONLY route rather than a third one. The tab's × and both menus' "Close Chat" rows now
+// run this command with the id they mean, so the guard below cannot be reached around and a route added later
+// inherits it by construction. `id` is optional: with none - which is how the palette invokes it - the active
+// chat is meant, the same chat the surface is showing.
+//
+// The guard: **a chat holding messages is never closed without being named first.** Closing deletes the
+// conversation from workspace storage, not just from the strip, and nothing in the app brings it back. Round 2
+// is what made that destruction reachable at all for the SOLE chat (before it, the sole tab had no × and there
+// was no command), and the "Close Chat" submenu is a vertical list of similar titles where a mis-aim costs a
+// whole conversation. So the confirm names the chat you actually hit and how much of it is about to go. An
+// empty chat asks nothing: a question with nothing behind it is the confirm-fatigue that teaches people to
+// click through the ones that matter.
+//
+// No keybinding - Cmd+W belongs to the editor, and a chord that discards a conversation is not one to guess at.
+registerAction2(class CloseChatSessionAction extends Action2 {
+	constructor() {
+		super({
+			id: CLOSE_CHAT_COMMAND_ID,
+			title: localize2('livingDocs.chat.closeSession', "Close Chat"),
+			category: localize2('livingDocs.category', "Abstract"),
+			f1: true,
+		});
+	}
+	async run(accessor: ServicesAccessor, id?: string): Promise<void> {
+		const livingDocs = accessor.get(ILivingDocsService);
+		const dialogService = accessor.get(IDialogService);
+		const sessions = livingDocs.getChatSessions();
+		// An id from a menu row can name a chat that a second click, or another window, already closed.
+		const target = sessions.find(session => session.id === (id ?? livingDocs.getActiveChatSession()));
+		if (!target) { return; }
+		const confirm = closeChatConfirm(target.title, livingDocs.getChatMessageCount(target.id), sessions.length === 1);
+		if (confirm.needed) {
+			const { confirmed } = await dialogService.confirm({
+				type: 'warning',
+				message: confirm.message,
+				detail: confirm.detail,
+				primaryButton: confirm.primaryButton,
+			});
+			if (!confirmed) { return; }
+		}
+		livingDocs.closeChatSession(target.id);
+		// Closing a chat you cannot see is as confusing as opening one you cannot see.
 		livingDocs.focusPanel('chat');
 	}
 });

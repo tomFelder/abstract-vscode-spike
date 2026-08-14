@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '../../../../nls.js';
 import { resolveBlockLine } from './livingDocAddress.js';
 import { editAnchorSource, wordDiffSegments } from './livingDocPmDecorations.js';
 import { ILivingDoc, IProposedChange } from './livingDocsModel.js';
@@ -159,4 +160,81 @@ export function buildChangePointer(change: IProposedChange, doc: ILivingDoc | un
 export function buildTurnPointers(proposedIds: readonly string[], pending: readonly IProposedChange[], docFor: (docId: string) => ILivingDoc | undefined, reportFor: (docId: string) => IInlineWidgetReport | undefined): IChangePointer[] {
 	const wanted = new Set(proposedIds);
 	return pending.filter(change => wanted.has(change.id)).map(change => buildChangePointer(change, docFor(change.docId), reportFor(change.docId)));
+}
+
+/** What a RESTORED turn's proposals became: the chip's short marker, and one sentence naming the outcome. */
+export interface IRestoredProposalNote {
+	/** The short marker: the outcome itself when the whole turn shares one, otherwise the neutral record mark. */
+	readonly tag: string;
+	/** One complete sentence. Never assembled from fragments - word order is not the same in every language. */
+	readonly text: string;
+	/** True only when every change was approved: the one outcome that reads as landed rather than as a record. */
+	readonly applied: boolean;
+}
+
+/**
+ * What a RESTORED assistant turn should say about the changes it proposed (#312 fix round 2).
+ *
+ * A restored turn has no live pointers - pending changes die with the process - so this is the whole of what
+ * the reader gets. The first cut printed ONE sentence for every restored proposal: *"Changes waiting for
+ * review are cleared when the workspace closes, so it is not open any more."* That sentence is true of a
+ * change nobody reviewed and FALSE of one the user approved - which is on disk, and in the History tab three
+ * inches away. Telling someone their approved edit evaporated is worse than saying nothing: a reader
+ * re-reading a restored chat to check what they agreed to is actively misdirected by it.
+ *
+ * So the outcome is recorded when it happens and spoken here. `approved` and `rejected` are clamped against
+ * `proposed` rather than trusted, and whatever is left over is the honest remainder: proposed, never reviewed,
+ * and therefore genuinely cleared when the workspace closed - the only case the original sentence described.
+ *
+ * Pure and DOM-free, like everything else in this module, so every one of these sentences is unit-tested
+ * rather than read off a screenshot.
+ */
+export function describeRestoredProposals(proposed: number | undefined, approved: number | undefined, rejected: number | undefined): IRestoredProposalNote | undefined {
+	const total = Math.max(0, Math.floor(proposed ?? 0));
+	if (!total) { return undefined; }
+	const yes = Math.min(total, Math.max(0, Math.floor(approved ?? 0)));
+	const no = Math.min(total - yes, Math.max(0, Math.floor(rejected ?? 0)));
+	const unreviewed = total - yes - no;
+	const past = localize('livingDocs.chat.restored.tag.past', "PAST");
+
+	if (yes === total) {
+		return {
+			tag: localize('livingDocs.chat.restored.tag.approved', "APPROVED"),
+			applied: true,
+			text: total === 1
+				? localize('livingDocs.chat.restored.approvedOne', "Proposed 1 change. You approved it, so it is in the document - the History tab has the record.")
+				: localize('livingDocs.chat.restored.approvedAll', "Proposed {0} changes. You approved them all, so they are in the document - the History tab has the record.", total),
+		};
+	}
+	if (no === total) {
+		return {
+			tag: localize('livingDocs.chat.restored.tag.rejected', "REJECTED"),
+			applied: false,
+			text: total === 1
+				? localize('livingDocs.chat.restored.rejectedOne', "Proposed 1 change. You rejected it, so the document was left unchanged.")
+				: localize('livingDocs.chat.restored.rejectedAll', "Proposed {0} changes. You rejected them all, so the document was left unchanged.", total),
+		};
+	}
+	if (unreviewed === total) {
+		// The only case the original sentence was ever right about, kept close to its wording.
+		return {
+			tag: past,
+			applied: false,
+			text: total === 1
+				? localize('livingDocs.chat.restored.openOne', "Proposed 1 change. It was never approved or rejected, and changes waiting for review are cleared when the workspace closes.")
+				: localize('livingDocs.chat.restored.openMany', "Proposed {0} changes. They were never approved or rejected, and changes waiting for review are cleared when the workspace closes.", total),
+		};
+	}
+	// A turn whose changes went different ways. The parts are named as counts rather than as clauses with verbs
+	// in them, so one sentence covers "1 approved" and "4 approved" without a plural form per number.
+	if (!unreviewed) {
+		return { tag: past, applied: false, text: localize('livingDocs.chat.restored.mixed', "Proposed {0} changes - {1} approved, {2} rejected.", total, yes, no) };
+	}
+	if (!no) {
+		return { tag: past, applied: false, text: localize('livingDocs.chat.restored.mixedApproved', "Proposed {0} changes - {1} approved, {2} never reviewed before the workspace closed.", total, yes, unreviewed) };
+	}
+	if (!yes) {
+		return { tag: past, applied: false, text: localize('livingDocs.chat.restored.mixedRejected', "Proposed {0} changes - {1} rejected, {2} never reviewed before the workspace closed.", total, no, unreviewed) };
+	}
+	return { tag: past, applied: false, text: localize('livingDocs.chat.restored.mixedAll', "Proposed {0} changes - {1} approved, {2} rejected, {3} never reviewed before the workspace closed.", total, yes, no, unreviewed) };
 }
