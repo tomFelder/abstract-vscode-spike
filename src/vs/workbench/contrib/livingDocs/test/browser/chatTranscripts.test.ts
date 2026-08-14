@@ -11,7 +11,7 @@ import { IChatMessage } from '../../common/livingDocs.js';
 suite('livingDocs - chat transcripts in workspace storage (plan 52 WP-B residuals)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	const entry = (id: string, messages: readonly IChatMessage[], dropped = 0): ITranscriptInput => ({ id, messages, dropped });
+	const entry = (id: string, messages: readonly IChatMessage[], droppedBefore = 0): ITranscriptInput => ({ id, messages, droppedBefore });
 	const user = (content: string): IChatMessage => ({ role: 'user', content });
 	const assistant = (content: string): IChatMessage => ({ role: 'assistant', content, via: 'model' });
 	const roundTrip = (entries: readonly ITranscriptInput[]) => deserialiseTranscripts(serialiseTranscripts(entries).raw);
@@ -78,6 +78,60 @@ suite('livingDocs - chat transcripts in workspace storage (plan 52 WP-B residual
 			olderKept: (TRANSCRIPT_TOTAL_CAP - perChat) / TRANSCRIPT_CONTENT_CAP,
 			olderDropped: TRANSCRIPT_MESSAGE_CAP - (TRANSCRIPT_TOTAL_CAP - perChat) / TRANSCRIPT_CONTENT_CAP,
 		});
+	});
+
+	test('saving the same conversation over and over reports the same loss, rather than inflating it', () => {
+		// The severe defect of fix round 1 (#312): the writer was fed its own previous ANSWER as its next input,
+		// while the in-memory array it measured against was never trimmed. Every save re-added the old total on
+		// top of a freshly recomputed one - twice per turn - so a chat that had only ever held 60 messages
+		// reported 230 of them lost. Driven here exactly as the service drives it: the same untrimmed array, the
+		// same fixed baseline, saved ten times over.
+		const messages = Array.from({ length: TRANSCRIPT_MESSAGE_CAP + 20 }, (_, i) => user(`m${i}`));
+		const starved = Array.from({ length: TRANSCRIPT_MESSAGE_CAP }, () => assistant('x'.repeat(TRANSCRIPT_CONTENT_CAP)));
+		const reports: number[] = [];
+		const starvedReports: number[] = [];
+		for (let save = 0; save < 10; save++) {
+			// Two chats at the per-chat maximum sit between them and eat the workspace budget, so the last chat
+			// is starved and stores nothing at all - the case that inflated fastest of the lot.
+			const written = serialiseTranscripts([
+				entry('trimmed', messages),
+				entry('a', starved), entry('b', starved),
+				entry('starved', starved),
+			]);
+			reports.push(written.dropped.get('trimmed') ?? 0);
+			starvedReports.push(written.dropped.get('starved') ?? 0);
+		}
+		assert.deepStrictEqual({
+			trimmed: [...new Set(reports)],
+			starved: [...new Set(starvedReports)],
+			// The baseline a restore read back IS carried - those messages really are gone from the array - it
+			// is only the writer's own answer that must never be fed back to it.
+			withBaseline: serialiseTranscripts([entry('trimmed', messages, 7)]).dropped.get('trimmed'),
+		}, {
+			// One value, ten saves: 60 live messages, 40 stored, 20 lost. Not 20, 40, 60, ...
+			trimmed: [20],
+			// Nothing of this chat fits, so all 40 are lost - and stay 40 however often it is re-starved.
+			starved: [TRANSCRIPT_MESSAGE_CAP],
+			withBaseline: 27,
+		});
+	});
+
+	test('a restored turn keeps the facts only its first write knew, however many times it is saved again', () => {
+		// D2/D3 of fix round 1 (#312): the writer re-derived both honesty markers from evidence a RESTORED turn
+		// no longer carries - a clipped body is now exactly the cap long (not `>` it), and the live proposal ids
+		// died with the process that made them. So one ordinary save in an unrelated chat erased the "this was
+		// shortened" warning and the record that the agent had proposed work at all. Two round trips is the
+		// smallest reproduction: the first was always fine, the second was where the truth quietly went.
+		const first = roundTrip([entry('s1', [
+			{ role: 'user', content: 'p'.repeat(TRANSCRIPT_CONTENT_CAP + 250) },
+			{ role: 'assistant', content: 'Rewrote it.', via: 'model', proposedIds: ['c1'] },
+		])]);
+		const second = roundTrip([entry('s1', first.transcripts.get('s1') ?? [])]);
+		const third = roundTrip([entry('s1', second.transcripts.get('s1') ?? [])]);
+		assert.deepStrictEqual(third.transcripts.get('s1'), [
+			{ role: 'user', content: 'p'.repeat(TRANSCRIPT_CONTENT_CAP), restored: true, clipped: true },
+			{ role: 'assistant', content: 'Rewrote it.', restored: true, via: 'model', proposedCount: 1 },
+		]);
 	});
 
 	test('a corrupt or stale stored value degrades honestly - never a throw, never a half-built transcript', () => {

@@ -1016,6 +1016,15 @@ export class ReviewRailView extends ViewPane {
 	 *
 	 * The sole tab carries no close box: closing the only chat immediately opens another (the strip is never
 	 * empty), so an × there would promise something it cannot do. Start a new chat with "+" instead.
+	 *
+	 * And a fourth, added in fix round 1 (#312): **below the width where even ONE tab clears `MIN_TAB_WIDTH`,
+	 * the strip stops being a strip.** The first cut floored the cap at one, so the guaranteed-visible tab -
+	 * the active one, the conversation you are actually in - was handed whatever pixels were left: 32px at a
+	 * 151px rail, which draws as a bare close box with no title. That is the same "a tab nobody can choose"
+	 * defect this pass set out to fix, landing on the worst possible tab. So at that width the surface becomes
+	 * a PICKER: one full-width control naming the chat you are in, with a chevron opening every chat. It is
+	 * honest (it does not claim to be a row of tabs), the title is readable because it has the whole strip to
+	 * itself, and nothing becomes unreachable.
 	 */
 	private _renderChatTabs(content: HTMLElement): void {
 		// The active session is asked for FIRST because asking is what creates one in a workspace that has never
@@ -1023,7 +1032,8 @@ export class ReviewRailView extends ViewPane {
 		const activeId = this._livingDocs.getActiveChatSession();
 		const sessions = this._livingDocs.getChatSessions();
 		if (!sessions.length) { return; }
-		const { visible, overflow } = splitTabs(sessions, activeId, this._chatTabCap());
+		const cap = this._chatTabCap();
+		const { visible, overflow } = splitTabs(sessions, activeId, cap);
 
 		const strip = append(content, $('div'));
 		// The strip carries a faint ground of its own so the active tab - which is the rail's own background -
@@ -1032,6 +1042,13 @@ export class ReviewRailView extends ViewPane {
 		// tab that ran past the panel edge (as the first cut did) reads as a broken layout, not as "more chats".
 		strip.style.cssText = 'display:flex;align-items:center;gap:4px;padding:6px 8px 0;background:var(--vscode-editorGroupHeader-tabsBackground,#f4f5f8);border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);flex:0 0 auto;overflow:hidden';
 
+		// The rail is too narrow for a strip: draw the picker described above instead of a titleless stub.
+		if (cap === 0) {
+			this._renderChatPicker(strip, sessions, activeId);
+			this._appendNewChatButton(strip);
+			return;
+		}
+
 		const soleTab = sessions.length === 1;
 		for (const session of visible) {
 			const isActive = session.id === activeId;
@@ -1039,7 +1056,13 @@ export class ReviewRailView extends ViewPane {
 			// `flex:1 1 0` shares the strip's room evenly between the tabs that fit, so each one gets at least
 			// MIN_TAB_WIDTH (which is how the cap was computed) - the ellipsis then trims a long title inside a
 			// tab that is still wide enough to read, rather than trimming the tab itself out of existence.
-			tab.style.cssText = `display:flex;align-items:center;gap:4px;flex:1 1 0;min-width:0;max-width:180px;padding:5px 8px;border-radius:6px 6px 0 0;cursor:pointer;font:${isActive ? '600' : '400'} 12px/1.2 var(--vscode-font-family);`
+			//
+			// The font is written as LONGHANDS on purpose. It used to be a `font:` shorthand ending in
+			// `var(--vscode-font-family)`, which is not defined in this workbench - and one invalid component
+			// throws the WHOLE shorthand away, so the active tab's 600 weight never applied and the strip laid
+			// itself out at the inherited 13px against a 96px minimum tuned for 12px (#312 fix round 1).
+			tab.style.cssText = `display:flex;align-items:center;gap:4px;flex:1 1 0;min-width:0;max-width:180px;padding:5px 8px;border-radius:6px 6px 0 0;cursor:pointer;`
+				+ `font-family:system-ui;font-size:12px;line-height:1.2;font-weight:${isActive ? 600 : 400};`
 				+ `background:${isActive ? 'var(--vscode-editor-background,#fff)' : 'transparent'};border:1px solid ${isActive ? 'var(--vscode-widget-border,#e6e8ec)' : 'transparent'};border-bottom:none`;
 			const label = append(tab, $('span'));
 			label.textContent = session.title;
@@ -1065,7 +1088,7 @@ export class ReviewRailView extends ViewPane {
 			// which opens a menu listing every hidden chat. The menu is vertical, so it shows the whole derived
 			// title rather than the strip's cut-off version - the title itself is still capped at TITLE_MAX.
 			const more = append(strip, $('div'));
-			more.style.cssText = 'display:flex;align-items:center;gap:4px;flex:0 0 auto;padding:4px 7px;margin-bottom:1px;border:1px solid var(--vscode-widget-border,#e6e8ec);border-radius:6px;background:transparent;font:500 11.5px/1.2 var(--vscode-font-family);opacity:.85;cursor:pointer;white-space:nowrap';
+			more.style.cssText = 'display:flex;align-items:center;gap:4px;flex:0 0 auto;padding:4px 7px;margin-bottom:1px;border:1px solid var(--vscode-widget-border,#e6e8ec);border-radius:6px;background:transparent;font-family:system-ui;font-size:11.5px;line-height:1.2;font-weight:500;opacity:.85;cursor:pointer;white-space:nowrap';
 			const moreLabel = append(more, $('span'));
 			moreLabel.textContent = localize('livingDocs.chat.moreTabs', "{0} more", overflow.length);
 			const moreChevron = append(more, $('span'));
@@ -1085,13 +1108,56 @@ export class ReviewRailView extends ViewPane {
 			}));
 		}
 
+		this._appendNewChatButton(strip);
+	}
+
+	/**
+	 * The trailing "+". Shared by the strip and the narrow-rail picker, because "start another chat" is the one
+	 * control that must survive every width - it is how a user discovers chats are plural without finding Cmd+T.
+	 */
+	private _appendNewChatButton(strip: HTMLElement): void {
 		const add = append(strip, $('div'));
 		add.textContent = '+';
-		add.style.cssText = 'flex:0 0 auto;margin-left:4px;padding:4px 8px;border-radius:6px;cursor:pointer;font:600 13px/1 var(--vscode-font-family);opacity:.75';
+		add.style.cssText = 'flex:0 0 auto;margin-left:4px;padding:4px 8px;border-radius:6px;cursor:pointer;font-family:system-ui;font-size:13px;line-height:1;font-weight:600;opacity:.75';
 		add.setAttribute('role', 'button');
 		add.setAttribute('aria-label', localize('livingDocs.chat.newTab', "New Chat"));
 		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), add, localize('livingDocs.chat.newTabHint', "New Chat (Cmd+T)")));
 		this._renderDisposables.add(addDisposableListener(add, 'click', () => this._livingDocs.newChatSession()));
+	}
+
+	/**
+	 * What the strip becomes when the rail is too narrow for a single tab at `MIN_TAB_WIDTH` (#312 fix round 1).
+	 *
+	 * One control, the whole width the "+" does not need, reading as the chat you are in plus a chevron. The
+	 * menu lists EVERY chat with the current one ticked, so nothing is less reachable than it was - it is the
+	 * overflow menu doing the whole job rather than half of it. No close box: at this width there is no room
+	 * for one, and a control that closes the only thing named on screen is not what a 150px rail is for.
+	 */
+	private _renderChatPicker(strip: HTMLElement, sessions: readonly IChatSession[], activeId: string): void {
+		const active = sessions.find(s => s.id === activeId) ?? sessions[0];
+		const picker = append(strip, $('div'));
+		picker.style.cssText = 'display:flex;align-items:center;gap:4px;flex:1 1 0;min-width:0;margin-bottom:1px;padding:4px 7px;border:1px solid var(--vscode-widget-border,#e6e8ec);border-radius:6px;'
+			+ 'background:var(--vscode-editor-background,#fff);font-family:system-ui;font-size:12px;line-height:1.2;font-weight:600;cursor:pointer';
+		const label = append(picker, $('span'));
+		label.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+		label.textContent = active.title;
+		const chevron = append(picker, $('span'));
+		chevron.style.cssText = 'flex:none;font-size:9px;opacity:.7';
+		chevron.textContent = '▾';
+		picker.setAttribute('role', 'button');
+		picker.setAttribute('aria-label', localize('livingDocs.chat.pickerLabel', "Chat: {0}. Choose another chat.", active.title));
+		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), picker, localize('livingDocs.chat.pickerHint', "Choose a chat - the rail is too narrow for tabs")));
+		this._renderDisposables.add(addDisposableListener(picker, 'click', e => {
+			this.contextMenuService.showContextMenu({
+				getAnchor: () => ({ x: e.clientX, y: e.clientY }),
+				getActions: () => sessions.map((session: IChatSession) => toAction({
+					id: `livingDocs.chat.session.${session.id}`,
+					label: session.title,
+					checked: session.id === active.id,
+					run: () => this._livingDocs.activateChatSession(session.id),
+				})),
+			});
+		}));
 	}
 
 	/**
@@ -1270,6 +1336,12 @@ export class ReviewRailView extends ViewPane {
 			const bubble = append(wrap, $('div'));
 			bubble.style.cssText = 'background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36;white-space:pre-wrap';
 			bubble.textContent = m.content;
+			// The user's OWN question can be clipped too, and it is the message a user can most easily make long
+			// enough to trigger it - a pasted brief runs to thousands of characters where a model reply rarely
+			// does. This branch used to return before reaching the marker, so a question came back cut mid-word
+			// and presented as the whole thing: the exact failure the marker exists to prevent, on the exact
+			// message type most likely to hit it (#312 fix round 1).
+			this._appendClippedNote(wrap, m);
 			// A RESTORED question with nothing under it (plan 52 WP-B residuals): the app was closed while the
 			// reply was still coming. The question is kept - it is what the user typed - and the missing answer is
 			// named rather than left as a silence the reader has to interpret. Restoring never re-runs the ask.
@@ -1336,11 +1408,7 @@ export class ReviewRailView extends ViewPane {
 
 		// A stored answer the per-message character cap shortened (plan 52 WP-B residuals): say so, rather than
 		// presenting the first few thousand characters as though they were the whole reply.
-		if (m.clipped) {
-			const tag = append(col, $('span'));
-			tag.style.cssText = 'align-self:flex-start;font:400 10.5px/1.4 system-ui;color:#a3a8b2';
-			tag.textContent = localize('livingDocs.chat.clipped', "This answer was shortened when it was saved.");
-		}
+		this._appendClippedNote(col, m);
 
 		// A stopped turn (D27-B) carries the salvaged prose plus a muted "stopped" tag, so it reads as a real
 		// but deliberately-interrupted answer (never a silent truncation).
@@ -1352,6 +1420,24 @@ export class ReviewRailView extends ViewPane {
 
 		// One compact pointer per proposal this turn produced (plan 52 WP-A1) - the document owns the controls.
 		this._appendProposalPointers(col, m);
+	}
+
+	/**
+	 * The "this was shortened when it was saved" line, for EITHER side of the conversation (#312 fix round 1).
+	 *
+	 * It lives in one place because both message types need it and only one of them had it. The wording differs
+	 * by role: calling the user's own pasted brief an "answer" would be wrong, and a reader who cannot tell
+	 * which end of the exchange was cut cannot tell what they are missing. Nothing is drawn for a whole message,
+	 * so an unclipped conversation pays nothing.
+	 */
+	private _appendClippedNote(parent: HTMLElement, m: IChatMessage): void {
+		if (!m.clipped) { return; }
+		const tag = append(parent, $('span'));
+		// Sits under its own bubble, so it follows the side that bubble is on rather than always the left.
+		tag.style.cssText = `align-self:${m.role === 'user' ? 'flex-end' : 'flex-start'};font:400 10.5px/1.4 system-ui;color:#a3a8b2`;
+		tag.textContent = m.role === 'user'
+			? localize('livingDocs.chat.clippedQuestion', "This message was shortened when it was saved.")
+			: localize('livingDocs.chat.clipped', "This answer was shortened when it was saved.");
 	}
 
 	// Plan 52 WP-A1 (issue #301): one POINTER per proposal this turn produced - never a second copy of it.

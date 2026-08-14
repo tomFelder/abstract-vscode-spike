@@ -44,12 +44,18 @@ export const TRANSCRIPT_CONTENT_CAP = 4000;
 /** The whole workspace's transcript budget, in characters of stored body. Roughly a quarter of a megabyte. */
 export const TRANSCRIPT_TOTAL_CAP = 256000;
 
-/** One chat handed to the writer: its id, its live messages, and what it has already lost to the caps. */
+/** One chat handed to the writer: its id, its live messages, and what it lost BEFORE those messages began. */
 export interface ITranscriptInput {
 	readonly id: string;
 	readonly messages: readonly IChatMessage[];
-	/** Messages this chat lost to the caps in EARLIER saves, so the running total never resets to zero. */
-	readonly dropped: number;
+	/**
+	 * Messages this chat lost before `messages` begins - i.e. what the RESTORE read back from storage, fixed
+	 * for the life of the session. It is emphatically NOT the previous save's reported total: `messages` is
+	 * the live in-memory array, which is never trimmed, so feeding a reported total back in re-adds it on top
+	 * of a freshly recomputed one and the number the user is shown inflates on every save. The count below is
+	 * DERIVED from this baseline plus what is actually stored, so saving twice cannot change it.
+	 */
+	readonly droppedBefore: number;
 }
 
 /** What the reader gives back: the restored conversations, and how much of each one was not kept. */
@@ -86,11 +92,23 @@ interface IPersistedTranscripts {
 	readonly sessions: readonly IPersistedTranscript[];
 }
 
-/** Clip one live turn down to the stored subset, marking a body the content cap shortened. */
+/**
+ * Clip one live turn down to the stored subset, marking a body the content cap shortened.
+ *
+ * The rule this function has to obey: **a fact only the FIRST write knew must survive every later write.** A
+ * turn read back from storage no longer carries the evidence it was derived from - its body is now exactly
+ * TRANSCRIPT_CONTENT_CAP long (which is not `>` the cap) and its live `proposedIds` died with the process
+ * that made them, leaving only a count. Re-deriving from what is left therefore ERASES both markers on the
+ * second save, and the app quietly goes back to presenting a shortened answer as the whole one and a turn
+ * that proposed work as one that never did. So the markers are carried forward, never recomputed away.
+ */
 function persistMessage(message: IChatMessage): IPersistedMessage {
 	const full = String(message.content ?? '');
-	const clipped = full.length > TRANSCRIPT_CONTENT_CAP;
-	const content = clipped ? full.slice(0, TRANSCRIPT_CONTENT_CAP) : full;
+	const clipped = message.clipped === true || full.length > TRANSCRIPT_CONTENT_CAP;
+	const content = full.length > TRANSCRIPT_CONTENT_CAP ? full.slice(0, TRANSCRIPT_CONTENT_CAP) : full;
+	// A live turn knows its proposals by id; a restored one knows only how many there were. Take whichever is
+	// larger so neither reading can silently zero the other out.
+	const proposed = Math.max(message.proposedIds?.length ?? 0, message.proposedCount ?? 0);
 	// The underlying instruction is kept (clipped the same way) because Retry re-runs it, not the shown
 	// words - a restored generation turn must retry the brief it really sent, never the plain-words progress.
 	const prompt = message.prompt ? String(message.prompt).slice(0, TRANSCRIPT_CONTENT_CAP) : undefined;
@@ -103,7 +121,7 @@ function persistMessage(message: IChatMessage): IPersistedMessage {
 		...(message.stopped ? { stopped: true } : {}),
 		...(message.failed ? { failed: true } : {}),
 		...(message.paused ? { paused: true } : {}),
-		...(message.proposedIds && message.proposedIds.length ? { proposed: message.proposedIds.length } : {}),
+		...(proposed > 0 ? { proposed } : {}),
 		...(clipped ? { clipped: true } : {}),
 	};
 }
@@ -116,8 +134,11 @@ function messageCost(message: IPersistedMessage): number {
 /**
  * Write the transcripts for workspace storage, applying all three caps. `entries` is in PRIORITY order - the
  * chat whose history matters most first - because the shared budget is filled in that order and a chat the
- * budget cannot reach stores nothing at all (and is honest about it). Returns the new per-chat dropped
- * totals so the caller can hold them and hand them back on the next save.
+ * budget cannot reach stores nothing at all (and is honest about it).
+ *
+ * Returns the per-chat totals for the caller to SHOW. They are not what the caller hands back next time: the
+ * input is a fixed baseline (`droppedBefore`), so handing a reported total back in would double-count. See
+ * the note on `ITranscriptInput.droppedBefore`.
  */
 export function serialiseTranscripts(entries: readonly ITranscriptInput[]): { raw: string; dropped: Map<string, number> } {
 	const dropped = new Map<string, number>();
@@ -126,17 +147,22 @@ export function serialiseTranscripts(entries: readonly ITranscriptInput[]): { ra
 	for (const entry of entries) {
 		// Rule 2 - only the most recent turns of this chat are even candidates.
 		const window = entry.messages.slice(-TRANSCRIPT_MESSAGE_CAP);
-		let lost = Math.max(0, entry.dropped) + (entry.messages.length - window.length);
 		// Rule 3 - fill from the NEWEST message backwards, so a chat that only partly fits keeps the end of
 		// the conversation (where the reader is), never a stale opening with the answer missing.
 		const kept: IPersistedMessage[] = [];
 		for (let i = window.length - 1; i >= 0; i--) {
 			const message = persistMessage(window[i]);
 			const cost = messageCost(message);
-			if (cost > budget) { lost += i + 1; break; }
+			if (cost > budget) { break; }
 			budget -= cost;
 			kept.unshift(message);
 		}
+		// The count is DERIVED, never accumulated: everything this chat has ever held (what it lost before this
+		// array began, plus the array) minus what is actually stored now. Adding up per-save losses instead is
+		// what made the one number this feature reports about its own losses grow without bound - it re-added
+		// the previous total on top of a freshly recomputed one, every save, twice per turn. Deriving it means
+		// saving the same conversation ten times reports the same number ten times.
+		const lost = Math.max(0, entry.droppedBefore) + (entry.messages.length - kept.length);
 		if (kept.length || lost) { sessions.push({ id: entry.id, dropped: lost, messages: kept }); }
 		if (lost) { dropped.set(entry.id, lost); }
 	}

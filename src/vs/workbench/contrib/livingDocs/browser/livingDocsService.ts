@@ -532,9 +532,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _chatSessions: IChatSession[] = [];
 	private _activeChatSession: string | undefined;
 	private _chatSessionsLoaded = false;
-	// How many earlier messages each session has lost to the transcript caps, per session id. Restored from
-	// storage and updated on every save, so a trimmed conversation opens with an honest count of what is gone.
+	// How many earlier messages each session has lost to the transcript caps, per session id - the number the
+	// rail SHOWS. Recomputed from scratch on every save, never added to.
 	private readonly _chatDropped = new Map<string, number>();
+	// What each session had already lost when this service loaded it, per session id. This is the writer's
+	// input and it is fixed for the life of the service: `_chats` below is never trimmed, so the losses are
+	// derived from (baseline + live array) each save. Feeding the previous SAVE's total back in instead is
+	// what made the count inflate on every turn (#312 fix round 1), which is why the two maps are separate
+	// rather than one map serving as both the input and the answer.
+	private readonly _chatDroppedBefore = new Map<string, number>();
 	private readonly _chatBusy = new Set<string>();
 	// The cancellation source for each document's in-flight streaming reply (plan 27), keyed like _chats.
 	// Present only while a reply streams; cancelChat cancels it, sendChatMessage disposes it in its finally.
@@ -5330,7 +5336,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const messages = stored.transcripts.get(session.id);
 			if (messages && messages.length) { this._chats.set(session.id, messages); }
 			const dropped = stored.dropped.get(session.id) ?? 0;
-			if (dropped) { this._chatDropped.set(session.id, dropped); }
+			if (dropped) {
+				this._chatDropped.set(session.id, dropped);
+				// The same number in its OTHER role: the fixed baseline the next save derives from. What the
+				// restore read back really is lost from the in-memory array, so it is the one figure that may be
+				// carried forward - and it must not move again for the life of this service.
+				this._chatDroppedBefore.set(session.id, dropped);
+			}
 		}
 	}
 
@@ -5341,8 +5353,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	/**
 	 * Persist the conversations, bounded by the caps in `chatTranscripts.ts`. The ORDER handed to the writer is
 	 * the design decision: the chat you are in first, then the newest chats, because the shared budget is filled
-	 * in that order - the same rule the tab strip follows when it guarantees the active tab is on screen. What
-	 * the caps drop is counted per session and kept here, so the count survives the next save/restore cycle.
+	 * in that order - the same rule the tab strip follows when it guarantees the active tab is on screen.
+	 *
+	 * What the caps drop is RE-DERIVED here every save from the fixed `_chatDroppedBefore` baseline, never added
+	 * to the previous answer, so saving the same conversation twice reports the same number twice.
 	 */
 	private _saveChatTranscripts(): void {
 		const activeId = this._activeChatSession;
@@ -5354,7 +5368,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const { raw, dropped } = serialiseTranscripts(ordered.map(session => ({
 			id: session.id,
 			messages: this._chats.get(session.id) ?? [],
-			dropped: this._chatDropped.get(session.id) ?? 0,
+			droppedBefore: this._chatDroppedBefore.get(session.id) ?? 0,
 		})));
 		this._chatDropped.clear();
 		for (const [id, count] of dropped) { this._chatDropped.set(id, count); }
@@ -5420,6 +5434,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chatCancellers.delete(id);
 		this._chatStreaming.delete(id);
 		this._chatDropped.delete(id);
+		this._chatDroppedBefore.delete(id);
 		// The closed chat's stored transcript goes with it, before any early return below - closing a tab and
 		// reopening the workspace must not resurrect the conversation the user just got rid of.
 		this._saveChatTranscripts();

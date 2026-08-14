@@ -12,6 +12,8 @@
 // ordering, titling and next-active rules are unit-tested without a rail, a service or a DOM. The service
 // owns the message bodies (keyed by session id) and the rail owns the tab strip.
 
+import { GraphemeIterator, isFullWidthCharacter } from '../../../../base/common/strings.js';
+
 /** One chat session's metadata. The message bodies live in the service, keyed by `id`. */
 export interface IChatSession {
 	/** Stable identity: the key the service stores this session's messages and attach set under. */
@@ -53,9 +55,16 @@ export const MIN_TAB_WIDTH = 96;
  */
 export const MAX_VISIBLE_TABS = 5;
 
-/** Room the strip's own padding, the trailing "+" and (when there is overflow) the "N more" chip take. */
+/**
+ * Room the strip's own furniture takes before any tab gets a pixel. Every one of these is real laid-out
+ * chrome in `_renderChatTabs`, and the gap in particular used to be unbudgeted - which is how a strip that
+ * promises tabs of at least `MIN_TAB_WIDTH` drew two 95px ones.
+ */
 const STRIP_PADDING = 16;
-const NEW_CHAT_WIDTH = 30;
+const TAB_GAP = 4;
+/** The trailing "+", including the 4px margin that separates it from whatever precedes it. */
+const NEW_CHAT_WIDTH = 34;
+/** The bordered "N more ▾" chip. */
 const OVERFLOW_WIDTH = 62;
 
 /**
@@ -65,24 +74,74 @@ const OVERFLOW_WIDTH = 62;
  * - every visible tab is at least `MIN_TAB_WIDTH` wide, so no tab is ever drawn as one letter + an ellipsis;
  * - the trailing "+" always keeps its room, so "new chat" never disappears at a narrow width;
  * - the "N more" chip is only paid for when something actually overflows;
- * - at least one tab is always shown, even in a rail too narrow for it - the alternative is a strip that
- *   hides the conversation you are in, and `splitTabs` guarantees that one tab is the active one.
+ * - the 4px gap between every adjacent child is paid for too.
+ *
+ * **Zero is a real answer**, and it is the fix for the residual's own defect landing on the active tab: below
+ * roughly 200px nothing can be drawn at `MIN_TAB_WIDTH`, and the previous `Math.max(1, ...)` floor handed the
+ * one guaranteed-visible tab whatever was left - 32px at a 151px rail, which renders as a bare close box with
+ * no title at all. Forcing a tab into a rail too narrow for one is the same defect the minimum exists to
+ * prevent, so the strip stops pretending: at 0 the caller draws a chat PICKER instead of a strip (one
+ * full-width control naming the chat you are in, opening a menu of all of them). See `_renderChatTabs`.
  */
 export function visibleTabCap(stripWidth: number, sessionCount: number): number {
 	if (sessionCount <= 0) { return 0; }
 	// No measurement yet (the first render, or a hidden pane): fall back to the fixed count rather than
 	// computing a cap of 1 from a width of 0 and flashing a one-tab strip before the first layout.
 	if (!Number.isFinite(stripWidth) || stripWidth <= 0) { return Math.min(sessionCount, VISIBLE_TAB_CAP); }
-	const usable = Math.max(0, stripWidth - STRIP_PADDING - NEW_CHAT_WIDTH);
-	const fitsEverything = Math.floor(usable / MIN_TAB_WIDTH);
-	if (fitsEverything >= sessionCount) { return Math.min(sessionCount, MAX_VISIBLE_TABS); }
-	// Something has to overflow, so the "N more" chip is real and takes its room out of the tabs' share.
-	const withOverflow = Math.floor(Math.max(0, usable - OVERFLOW_WIDTH) / MIN_TAB_WIDTH);
-	return Math.max(1, Math.min(withOverflow, MAX_VISIBLE_TABS));
+	const room = stripWidth - STRIP_PADDING - NEW_CHAT_WIDTH;
+	// What `n` tabs really cost: their own minimum widths, the gaps between them, and - only when `n` leaves
+	// something behind - the overflow chip plus the gap before it.
+	const costOf = (n: number) => n * MIN_TAB_WIDTH + (n - 1) * TAB_GAP + (n < sessionCount ? OVERFLOW_WIDTH + TAB_GAP : 0);
+	let cap = 0;
+	for (let n = 1; n <= Math.min(sessionCount, MAX_VISIBLE_TABS); n++) {
+		if (costOf(n) > room) { break; }
+		cap = n;
+	}
+	return cap;
 }
 
-/** The longest a derived tab title gets before it is elided (the strip is narrow; a tab is a glance). */
+/**
+ * The longest a derived tab title gets before it is elided (the strip is narrow; a tab is a glance).
+ *
+ * Measured in DISPLAY COLUMNS, not UTF-16 code units. A full-width character - CJK, kana, the wide
+ * punctuation that travels with them - is two columns wide on screen, so 28 of them are about twice the
+ * strip room 28 Latin letters take. A cap counted in code units silently means two different things
+ * depending on the language, which is not what a reader assumes a character limit means.
+ */
 const TITLE_MAX = 28;
+
+/** How wide `text` draws, in columns: one per character, two for a full-width one. */
+function columnWidth(text: string): number {
+	let width = 0;
+	const iterator = new GraphemeIterator(text);
+	while (!iterator.eol()) {
+		const start = iterator.offset;
+		iterator.nextGraphemeLength();
+		width += isFullWidthCharacter(text.charCodeAt(start)) ? 2 : 1;
+	}
+	return width;
+}
+
+/**
+ * Cut `text` down to at most `columns`, never inside a character.
+ *
+ * A plain `slice` cuts by UTF-16 code unit, which splits a surrogate pair straight down the middle: an emoji
+ * becomes a lone high surrogate that renders as a replacement glyph AND is written to workspace storage as
+ * broken data, so it is not a pixel problem that ends at the tab. VS Code's own grapheme iterator walks whole
+ * clusters, so an emoji, a skin-tone sequence or a combining accent is kept or dropped as one thing.
+ */
+function truncateColumns(text: string, columns: number): string {
+	let width = 0;
+	const iterator = new GraphemeIterator(text);
+	while (!iterator.eol()) {
+		const start = iterator.offset;
+		iterator.nextGraphemeLength();
+		width += isFullWidthCharacter(text.charCodeAt(start)) ? 2 : 1;
+		// Cut BEFORE this cluster, never through it - `start` is a boundary the iterator found, not a guess.
+		if (width > columns) { return text.slice(0, start); }
+	}
+	return text;
+}
 
 /**
  * Shorten a user message into a tab title: one line, collapsed whitespace, trimmed of Markdown noise, and
@@ -94,7 +153,9 @@ export function titleFromMessage(text: string): string | undefined {
 	// Strip leading Markdown decoration so "## Rewrite the intro" titles as "Rewrite the intro".
 	const bare = oneLine.replace(/^[#>*\-\s]+/, '').trim();
 	if (!bare.length) { return undefined; }
-	return bare.length > TITLE_MAX ? `${bare.slice(0, TITLE_MAX - 1).trimEnd()}…` : bare;
+	if (columnWidth(bare) <= TITLE_MAX) { return bare; }
+	// One column is kept back for the ellipsis, so an elided title never draws wider than the cap it names.
+	return `${truncateColumns(bare, TITLE_MAX - 1).trimEnd()}…`;
 }
 
 /**

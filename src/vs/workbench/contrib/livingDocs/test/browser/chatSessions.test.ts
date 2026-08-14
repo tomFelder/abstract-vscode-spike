@@ -45,6 +45,33 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 		});
 	});
 
+	test('a title is cut between characters and measured in the columns it draws, never in code units', () => {
+		// Two pre-existing defects the residuals surfaced (#312 fix round 1). The first is broken DATA, not a
+		// broken pixel: a plain `slice` cut a surrogate pair in half, so a lone high surrogate reached the tab
+		// AND the workspace-storage record. The second is a cap that quietly means two different things - 28
+		// CJK characters draw about twice as wide as 28 Latin ones, so counting code units makes the strip's own
+		// promise depend on the language you write in.
+		const emoji = titleFromMessage('🎉'.repeat(40)) ?? '';
+		const cjk = titleFromMessage('文'.repeat(30)) ?? '';
+		// 'e' plus a COMBINING acute: two code points that draw as one letter, kept or dropped together.
+		const accented = titleFromMessage('e\u0301'.repeat(40)) ?? '';
+		// Iterating by code point pairs surrogates up, so a HALF of a pair is the only one left standing alone.
+		const lone = (s: string) => [...s].some(c => c.length === 1 && c.charCodeAt(0) >= 0xD800 && c.charCodeAt(0) <= 0xDFFF);
+		assert.deepStrictEqual({
+			emoji, emojiLoneSurrogate: lone(emoji),
+			cjkChars: [...cjk].length, cjkLoneSurrogate: lone(cjk),
+			// A combining accent belongs to the letter in front of it and must never be orphaned onto the ellipsis.
+			accentedEndsWhole: accented.endsWith('e\u0301…'),
+		}, {
+			// 27 whole emoji plus the ellipsis - never 27 and a half, and never a lone high surrogate.
+			emoji: `${'🎉'.repeat(27)}…`, emojiLoneSurrogate: false,
+			// 13 double-width characters plus the ellipsis is 27 columns: the same room the Latin cap gets, and
+			// half the number of characters, because that is what the same amount of strip actually holds.
+			cjkChars: 14, cjkLoneSurrogate: false,
+			accentedEndsWhole: true,
+		});
+	});
+
 	test('attach is idempotent and detach is forgiving, so two sessions hold different attach sets', () => {
 		const a = attachToSession(attachToSession(session('a', 1), 'file:///ws/A.md'), 'file:///ws/A.md');
 		const b = attachToSession(session('b', 2), 'file:///ws/B.md');
@@ -111,21 +138,32 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 		// rail down to one letter and an ellipsis. A tab is only shown if it can be at least MIN_TAB_WIDTH wide.
 		const cap = (width: number, count: number) => visibleTabCap(width, count);
 		assert.deepStrictEqual({
-			// The default rail (~300px): two readable tabs and a "1 more" chip, never three unreadable ones.
+			// The default rail (~300px): ONE readable tab and a "2 more" chip. Two tabs would be 88px each once
+			// the padding, the "+", the chip and the gaps between them are paid for - under the minimum, which
+			// is the whole defect. The gaps used to go unbudgeted, so the rule quietly broke its own promise.
 			defaultRailThreeChats: cap(300, 3),
+			// Two chats need no overflow chip at all, so the same 300px comfortably holds both.
 			defaultRailTwoChats: cap(300, 2),
 			// A wide rail earns more tabs, up to the point where a strip stops being a glance.
 			wideRail: cap(900, 8),
-			// A rail too narrow for even one full-width tab still shows one - `splitTabs` makes it the active one.
-			veryNarrow: cap(120, 4),
+			// A single chat needs no chip either, so it keeps its tab far further down than a crowded rail does.
+			narrowSoleChat: cap(151, 1),
+			// Below 212px a crowded rail fits nothing at MIN_TAB_WIDTH, so the answer is ZERO and the rail draws
+			// a chat picker. The old floor of one handed the active tab 32px at 151px: a bare close box, no title.
+			tooNarrowForAnyTab: cap(151, 4),
+			tooNarrowBoundary: cap(211, 4),
+			justWideEnough: cap(212, 4),
 			// Nothing measured yet (before the first layout) falls back to the fixed count rather than to 1.
 			unmeasured: cap(0, 4),
 			noChats: cap(300, 0),
 		}, {
-			defaultRailThreeChats: 2,
+			defaultRailThreeChats: 1,
 			defaultRailTwoChats: 2,
 			wideRail: MAX_VISIBLE_TABS,
-			veryNarrow: 1,
+			narrowSoleChat: 1,
+			tooNarrowForAnyTab: 0,
+			tooNarrowBoundary: 0,
+			justWideEnough: 1,
 			unmeasured: VISIBLE_TAB_CAP,
 			noChats: 0,
 		});
@@ -133,17 +171,18 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 
 	test('every tab the width-derived cap shows has room to be read, and the rest go to the overflow menu', () => {
 		const many = Array.from({ length: 6 }, (_, i) => session(`s${i}`, i));
-		const width = 300;
+		const width = 460;
 		const { visible, overflow } = splitTabs(many, 's4', visibleTabCap(width, many.length));
 		assert.deepStrictEqual({
 			visible: visible.map(s => s.id),
 			overflow: overflow.map(s => s.id),
-			// The room each visible tab gets, once the strip's padding, the "+" and the "N more" chip are paid for.
-			roomPerTab: Math.floor((width - 16 - 30 - 62) / visible.length) >= MIN_TAB_WIDTH,
+			// The room each visible tab really gets, once the strip's padding, the "+" (and its margin), the
+			// "N more" chip and every 4px gap between them are paid for. This is the sum that used to be short.
+			roomPerTab: Math.floor((width - 16 - 34 - 62 - visible.length * 4) / visible.length) >= MIN_TAB_WIDTH,
 		}, {
 			// The active tab is pulled into the visible run; the rest are reachable through the menu.
-			visible: ['s0', 's4'],
-			overflow: ['s1', 's2', 's3', 's5'],
+			visible: ['s0', 's1', 's4'],
+			overflow: ['s2', 's3', 's5'],
 			roomPerTab: true,
 		});
 	});
