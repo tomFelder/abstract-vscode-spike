@@ -1062,7 +1062,8 @@ export class ReviewRailView extends ViewPane {
 
 		if (overflow.length) {
 			// The overflow route has to look like a control, not like a caption: a bordered chip with a chevron,
-			// which opens a menu listing every hidden chat by its FULL title (the one place nothing is elided).
+			// which opens a menu listing every hidden chat. The menu is vertical, so it shows the whole derived
+			// title rather than the strip's cut-off version - the title itself is still capped at TITLE_MAX.
 			const more = append(strip, $('div'));
 			more.style.cssText = 'display:flex;align-items:center;gap:4px;flex:0 0 auto;padding:4px 7px;margin-bottom:1px;border:1px solid var(--vscode-widget-border,#e6e8ec);border-radius:6px;background:transparent;font:500 11.5px/1.2 var(--vscode-font-family);opacity:.85;cursor:pointer;white-space:nowrap';
 			const moreLabel = append(more, $('span'));

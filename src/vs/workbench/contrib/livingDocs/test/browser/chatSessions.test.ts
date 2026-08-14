@@ -131,7 +131,7 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 		});
 	});
 
-	test('every tab the width-derived cap shows has room to be read, and the rest keep full titles in overflow', () => {
+	test('every tab the width-derived cap shows has room to be read, and the rest go to the overflow menu', () => {
 		const many = Array.from({ length: 6 }, (_, i) => session(`s${i}`, i));
 		const width = 300;
 		const { visible, overflow } = splitTabs(many, 's4', visibleTabCap(width, many.length));
@@ -141,7 +141,7 @@ suite('livingDocs - workspace chat sessions (plan 52 WP-B)', () => {
 			// The room each visible tab gets, once the strip's padding, the "+" and the "N more" chip are paid for.
 			roomPerTab: Math.floor((width - 16 - 30 - 62) / visible.length) >= MIN_TAB_WIDTH,
 		}, {
-			// The active tab is pulled into the visible run; the rest keep their full titles in the menu.
+			// The active tab is pulled into the visible run; the rest are reachable through the menu.
 			visible: ['s0', 's4'],
 			overflow: ['s1', 's2', 's3', 's5'],
 			roomPerTab: true,

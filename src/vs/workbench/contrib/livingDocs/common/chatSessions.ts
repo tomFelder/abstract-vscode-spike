@@ -41,13 +41,15 @@ export const VISIBLE_TAB_CAP = 3;
  * The narrowest a chat tab may be drawn and still be CHOOSABLE: enough room for the first word or two of the
  * title plus its close box. This is the number the many-tab design turns on - rather than squeezing N tabs
  * into whatever space exists, the strip works out how many tabs of at least this width fit and folds the
- * rest into the overflow menu, where they keep their full titles.
+ * rest into the overflow menu, where the whole derived title is readable rather than cut off by the strip.
  */
 export const MIN_TAB_WIDTH = 96;
 
 /**
  * The most tabs shown at any width. Past this a strip stops being a glance and becomes a list, and the
- * overflow menu - which shows full, untruncated titles - is the better reading of "I have a lot of chats".
+ * overflow menu - a vertical list with room for the whole derived title - is the better reading of "I have
+ * a lot of chats". Note the derived title is itself capped at TITLE_MAX below: the menu shows all of THAT,
+ * not all of the original prompt, which no surface ever promises.
  */
 export const MAX_VISIBLE_TABS = 5;
 
