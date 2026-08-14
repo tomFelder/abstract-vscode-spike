@@ -50,16 +50,11 @@ import { buildActivityLedger } from '../common/livingDocLedger.js';
 // demoted walkthrough entry point stays hidden across sessions once the user has waved it away.
 const DEMO_CARD_DISMISSED_KEY = 'livingDocs.demoCardDismissed';
 
-// The Templates STARTERS manifest (plan 48 T3), keyed by the starter id the card posts. Each maps to the
-// document NAME the review-safe creation path (`createDocument`) is called with - the "Blank living doc"
-// starter passes no name (decision 56's Untitled-on-first-save escape hatch, a truly empty agent-ready page).
-// A static manifest: these are the doc names, kept as plain English stems so the created file is legible.
-const STARTER_NAMES: Readonly<Record<string, string | undefined>> = {
-	'blank': undefined,
-	'project-brief': 'Project brief',
-	'meeting-notes': 'Meeting notes',
-	'metrics-digest': 'Metrics digest',
-};
+// The Templates STARTERS row is retired in round 2 (comp 4b/4c). A "starter" only ever preset a filename -
+// `createDocument('Project brief')` produced an empty page with that name and no structure, no bound figures
+// and no instructions - which is precisely the hollow affordance this round removes when it replaces slot
+// counts with outcome copy. A document is now born one of three honest ways on the New-document sheet: blank,
+// from your sources, or from a real template. Reinstating a named seed means giving it real structure first.
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -887,12 +882,6 @@ export class ScreenEditor extends EditorPane {
 			// card appears in the grid (T2.6 discovery).
 			case 'saveAsTemplate':
 				void this._livingDocs.saveActiveDocAsTemplate();
-				break;
-			// Starters (plan 48 T3.2): a built-in seed creates its named document through the EXISTING
-			// review-safe creation path (a blank titled `.md`, opened for editing) - no fabricated prose is
-			// written for the user. The starter id maps to its document name (static manifest).
-			case 'newStarter':
-				if (message.arg) { void this._livingDocs.createDocument(STARTER_NAMES[message.arg]); }
 				break;
 			// Use Template (primary, plan 28 iter 3): the D28-B generate sheet posts the template URI + the
 			// document name + an optional note. Generation writes the skeleton and drives the review engine.
