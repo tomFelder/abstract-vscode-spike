@@ -112,6 +112,18 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 		assert.deepStrictEqual(replaceInText(text, findInText(text, 'margin'), 'ratio'), 'ratio and ratio');
 	});
 
+	// Every one of these is injected into the editor webview RUNTIME via String(fn) so the widget runs the
+	// SAME matcher these tests cover; assert each is fully self-contained, with no import/require/transpiler
+	// helper reference the interpolated source would dangle on (the livingDocTableEdit.ts precedent).
+	test('injected helpers are self-contained (no import/require/helper refs in String(fn))', () => {
+		for (const fn of [findInText, findMatches, stepMatchIndex, replaceInText, findStatusLabel]) {
+			const src = String(fn);
+			assert.ok(!/\brequire\b/.test(src), `${fn.name} must not reference require`);
+			assert.ok(!/\bimport\b/.test(src), `${fn.name} must not reference import`);
+			assert.ok(!/__[a-zA-Z]/.test(src), `${fn.name} must not reference a transpiler helper (__x)`);
+		}
+	});
+
 	test('the count reads honestly at zero, before a first step, and while stepping', () => {
 		const labels = { ofTemplate: '{0} of {1}', noResults: 'No results' };
 		assert.deepStrictEqual(
