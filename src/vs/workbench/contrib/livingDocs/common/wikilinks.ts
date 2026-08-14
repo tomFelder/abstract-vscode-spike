@@ -101,6 +101,7 @@ export function serializeWikilink(target: string, alias?: string): string {
  */
 export function normalizeWikilinkName(name: string): string {
 	return String(name || '')
+		.trim()
 		.replace(/\.md$/i, '')
 		.replace(/[\/\\:*?"<>|]+/g, ' ')
 		.replace(/\s+/g, ' ')
@@ -118,6 +119,7 @@ export function normalizeWikilinkName(name: string): string {
  */
 export function resolveWikilinkTarget(target: string, documentNames: readonly string[]): string | undefined {
 	const norm = (name: string) => String(name || '')
+		.trim()
 		.replace(/\.md$/i, '')
 		.replace(/[\/\\:*?"<>|]+/g, ' ')
 		.replace(/\s+/g, ' ')
