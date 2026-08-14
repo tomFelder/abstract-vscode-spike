@@ -562,7 +562,10 @@ function renderAgentCanvas(agent: IAgentDef, state: IScreenState): string {
 	// The three questions, side by side. `auto-fit` resolves to the comp's three equal columns at the page's own
 	// width and folds them down rather than crushing them when the editor is split narrow - a webview has no
 	// media query of its own to fall back on.
-	const cards = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;align-items:start">${whenCard(agent)}${touchCard(agent, state)}${policyCard(agent)}</div>`;
+	// The three answers stretch to one another's height (comp 3a): they are three answers to three equally
+	// weighted questions, so a short answer must not make its card look like a lesser thing than a long one.
+	// auto-fit rather than a fixed 3 columns because this pane is resizable and the cards must survive it.
+	const cards = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;align-items:stretch">${whenCard(agent)}${touchCard(agent, state)}${policyCard(agent)}</div>`;
 	return `<div class="screen">
 	${banner}
 	<div class="scr-body">

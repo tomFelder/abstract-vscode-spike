@@ -31,7 +31,6 @@ import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateCard, ITemplateInfo, ITidyPlanItem } from '../common/livingDocs.js';
 import { HeaderPillKind, IAbstractHeaderContent, IAbstractHeaderService, IHeaderPill } from '../common/abstractHeader.js';
-import { projectHasLivingSurface } from '../common/livingUpgrade.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { buildAwayFeed, classifyProjectChat, IAwayFeed, relativeTime } from '../common/projectHomeFeed.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
@@ -1466,25 +1465,20 @@ export class ScreenEditor extends EditorPane {
 	// Home/Knowledge, agent-health on Agents, none on Templates) and the action button ("Open Folder" /
 	// "New Template" / "Add Source", each with the mock's leading glyph). Screens never show rail toggles.
 	private _publishHeader(): void {
-		// The sync pill only tells the truth once the project has a living surface (plan 42 L3): a fresh
-		// folder of plain Markdown has no sources to be "synced", so the pill is omitted rather than
-		// fabricated. Computed from the live screen state's docs + bound sources.
-		const hasLivingSurface = projectHasLivingSurface({
-			anyDocLiving: this._state.docs?.some(d => d.isLiving),
-			boundSourceCount: this._state.sources?.length,
-		});
-		const syncPill = hasLivingSurface
-			? { kind: HeaderPillKind.Sync, label: localize("livingDocs.header.allSynced", "All sources synced") }
-			: undefined;
-
+		// Round 2 removes the standing sync pill from the screens entirely (comp 1a/1b, 4a). It said the same
+		// thing the surface underneath already said - Home's state banner, Knowledge's SYNCED column - and a
+		// second voice for one fact is how two surfaces end up disagreeing. Agents keeps a pill because its
+		// roster summary ("N agents active") appears nowhere else on that screen.
 		let content: IAbstractHeaderContent;
 		switch (this._screen) {
 			case 'home':
 				content = {
 					breadcrumb: localize("livingDocs.header.home", "Home"),
-					pill: syncPill,
+					// No pill on Home (round 2, comp 1a/1b): the state banner directly below IS the status, and
+					// says it in a full sentence with its receipts. A header pill here would state the same fact
+					// twice, in two shapes, which is exactly the "permanent status pill" the round removes.
 					// allow-any-unicode-next-line
-					action: { label: localize("livingDocs.header.openFolder", "＋ Open Folder"), run: () => void this._livingDocs.openFolder() },
+					action: { label: localize("livingDocs.header.openFolder", "＋ Open folder"), run: () => void this._livingDocs.openFolder() },
 					showRailToggles: false,
 				};
 				break;
@@ -1499,9 +1493,11 @@ export class ScreenEditor extends EditorPane {
 			case 'knowledge':
 				content = {
 					breadcrumb: localize("livingDocs.header.knowledge", "Knowledge"),
-					pill: syncPill,
+					// No pill on Knowledge either (comp 4a): the SYNCED column already carries each source's
+					// freshness, per source, in the shared vocabulary. A header pill would average that into a
+					// single sentence and then disagree with the rows the moment one source drifts.
 					// allow-any-unicode-next-line
-					action: { label: localize("livingDocs.header.addSource", "＋ Add Source"), run: () => this._openScreenSheet('addsource') },
+					action: { label: localize("livingDocs.header.addSource", "＋ Add source"), run: () => this._openScreenSheet('addsource') },
 					showRailToggles: false,
 				};
 				break;
