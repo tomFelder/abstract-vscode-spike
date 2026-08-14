@@ -18,6 +18,7 @@ import { ChatGptSignInStage, ILivingDocSummary, IModelProviderStatus, IProjectAn
 import { IAwayFeed } from '../common/projectHomeFeed.js';
 import { IActivityLedger } from '../common/livingDocLedger.js';
 import { OnboardingStep } from '../common/onboarding.js';
+import { abstractTokenCss, AVATAR_NAVY, FONT, HAIRLINE, INDIGO, INK, PAPER, RADIUS, TYPE } from '../common/abstractTokens.js';
 import { renderHome } from './screenRenderHome.js';
 import { renderTemplates } from './screenRenderTemplates.js';
 import { renderKnowledge } from './screenRenderKnowledge.js';
@@ -370,12 +371,15 @@ export function esc(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-export const ACCENT = 'oklch(0.55 0.13 255)';
-export const ACCENT_DK = 'oklch(0.5 0.13 255)';
+// The one indigo. Round 2 collapses the old oklch accent pair onto the design system's indigo, so the
+// screens, the document editor and the rails cannot drift apart (docs/28-design-system-round2.md).
+export const ACCENT = INDIGO.base;
+export const ACCENT_DK = INDIGO.hover;
 
-// Project-avatar palette (Part B): blue / navy / teal / purple / amber, all with #fff text. A
-// document's colour is picked deterministically from its title so the same doc always looks the same.
-const AVATAR_COLORS = ['oklch(0.55 0.13 255)', '#3b4d8f', '#0e7c66', '#5a3ea8', '#b5642a'];
+// Project-avatar palette. Round 2 retires the rainbow (comp 4b: "no rainbow avatars"): identity is not
+// state, so an avatar may not borrow a hue that means something. Every avatar is the project indigo,
+// except the person chip, which is navy - two identities, two colours, no more.
+const AVATAR_COLORS = [INDIGO.base, AVATAR_NAVY];
 
 // A stable 2-letter avatar (initials of the first two words, else the first two letters) and its
 // palette colour, derived only from the title - no stored/fabricated identity.
@@ -462,43 +466,48 @@ const HEAD = `<meta charset="utf-8"><meta name="viewport" content="width=device-
  * full width; the cards inside .scr-body float on the #f8f9fb canvas with their own internal padding, so zeroing the
  * harness inset does not crowd them. The 48px brand/crumb top bar the screens used to draw is gone (plan 44-b): the
  * one global Abstract header (the repurposed title bar) now carries it. */
+${abstractTokenCss()}
 html,body{margin:0;padding:0;height:100%}
-body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1c20;background:#fff}
-::selection{background:rgba(80,110,235,.18)}
+body{font-family:${FONT.sans};color:${INK.heading};background:${PAPER.page}}
+::selection{background:${INDIGO.tint}}
 ::-webkit-scrollbar{width:11px;height:11px}
-::-webkit-scrollbar-thumb{background:#d7d9df;border:3px solid transparent;background-clip:content-box;border-radius:8px}
-::-webkit-scrollbar-thumb:hover{background:#c2c5cd;background-clip:content-box}
+::-webkit-scrollbar-thumb{background:${PAPER.control};border:3px solid transparent;background-clip:content-box;border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:${PAPER.frameBorder};background-clip:content-box}
 @keyframes lwdPulse{0%,100%{opacity:1}50%{opacity:.35}}
 @keyframes lwdSpin{to{transform:rotate(360deg)}}
-.screen{height:100vh;display:flex;flex-direction:column;min-height:0;background:#fff}
-.scr-head{flex:none;display:flex;align-items:center;gap:16px;padding:18px 28px;border-bottom:1px solid #eef0f3}
-.scr-title{margin:0 0 4px;font:600 18px/1.2 system-ui;color:#15171c}
-.scr-sub{font:400 12px/1 'JetBrains Mono',ui-monospace,monospace;color:#a3a8b2}
-.scr-body{flex:1;overflow-y:auto;background:#f8f9fb}
-.btn-primary{border:none;border-radius:8px;padding:10px 16px;background:${ACCENT};color:#fff;font:600 13px/1 system-ui;cursor:pointer}
-.btn-ghost{border:1px solid #e0e2e8;background:#fff;border-radius:8px;padding:8px 13px;font:500 12px/1 system-ui;color:#52575f;cursor:pointer}
-.sheet-back{display:none;position:fixed;inset:0;z-index:40;background:rgba(20,23,28,.32);align-items:flex-start;justify-content:center}
-.sheet-card{margin-top:12vh;width:460px;max-width:calc(100vw - 40px);background:#fff;border:1px solid #e6e8ed;border-radius:16px;box-shadow:0 24px 60px -24px rgba(20,23,28,.5);padding:22px 24px 20px}
-.sheet-title{font:600 16px/1.25 system-ui;color:#15171c;margin:0 0 3px}
-.sheet-sub{font:400 12.5px/1.5 system-ui;color:#696e78;margin:0 0 16px}
-.sheet-label{display:block;font:600 11px/1 system-ui;color:#52575f;margin:0 0 6px}
-.sheet-input{width:100%;border:1px solid #dfe1e7;border-radius:9px;padding:11px 12px;font:400 14px/1.3 system-ui;color:#1a1c20;background:#fff;outline:none}
-.sheet-input:focus{border-color:${ACCENT};box-shadow:0 0 0 3px rgba(80,110,235,.14)}
-.sheet-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:#fff;border:1px solid #ececf0;border-radius:10px;padding:11px 13px;cursor:pointer;margin-top:8px}
-.sheet-row:hover{background:#f7f8fb;border-color:#dfe1e7}
-/* Home ALL DOCUMENTS grid (plan 48 H3.2): a document tile lifts to accent-tint on hover; the dashed
- * New-document tile shifts to the accent ink + accent border. */
-.doc-tile:hover{background:#F4F5FD;border-color:#E0E5FB}
-.doc-newtile:hover{color:#4650B8;border-color:#9AA2E0}
-/* Templates gallery (plan 48 T2): a template card lifts on hover (accent border + a lifted shadow); the
- * dashed Save-as-template tile shifts to the accent ink; a starter card lifts to accent-tint. */
-.tpl-card:hover{border-color:#9AA2E0;box-shadow:0 8px 24px -12px rgba(20,22,28,.2)}
-.tpl-newtile:hover{color:#4650B8;border-color:#9AA2E0}
-.tpl-starter:hover{border-color:#E0E5FB;background:#F4F5FD}
+.screen{height:100vh;display:flex;flex-direction:column;min-height:0;background:${PAPER.page}}
+.scr-head{flex:none;display:flex;align-items:center;gap:16px;padding:18px 28px;border-bottom:1px solid ${HAIRLINE.strong}}
+.scr-title{margin:0 0 4px;font:${TYPE.docHeading};color:${INK.heading}}
+.scr-sub{font:${TYPE.provenance};color:${INK.meta}}
+.scr-body{flex:1;overflow-y:auto;background:${PAPER.page}}
+/* Buttons: one indigo primary, a hairline secondary. Sentence case is enforced by the copy, not by CSS -
+ * text-transform would lie about the string the renderer actually passed. */
+.btn-primary{border:none;border-radius:${RADIUS.control};padding:10px 16px;background:${INDIGO.base};color:#fff;font:${TYPE.uiBodyStrong};cursor:pointer}
+.btn-primary:hover{background:${INDIGO.hover}}
+.btn-ghost{border:1px solid ${PAPER.control};background:${PAPER.card};border-radius:${RADIUS.control};padding:8px 13px;font:${TYPE.uiBody};color:${INK.body};cursor:pointer}
+.btn-ghost:hover{background:${PAPER.sunken}}
+.sheet-back{display:none;position:fixed;inset:0;z-index:40;background:rgba(27,27,32,.32);align-items:flex-start;justify-content:center}
+.sheet-card{margin-top:12vh;width:480px;max-width:calc(100vw - 40px);background:${PAPER.page};border-radius:16px;box-shadow:var(--ab-shadow-dialog);padding:28px 30px}
+.sheet-title{font:600 19px/1.25 ${FONT.sans};color:${INK.heading};margin:0 0 5px}
+.sheet-sub{font:400 13px/1.5 ${FONT.sans};color:${INK.secondary};margin:0 0 18px}
+.sheet-label{display:block;font:600 12.5px/1 ${FONT.sans};color:${INK.bodySoft};margin:0 0 6px}
+.sheet-input{width:100%;border:1px solid ${HAIRLINE.strong};border-radius:${RADIUS.input};padding:11px 14px;font:400 14.5px/1.3 ${FONT.sans};color:${INK.heading};background:${PAPER.card};outline:none}
+.sheet-input:focus{border-color:${INDIGO.base};box-shadow:0 0 0 3px ${INDIGO.tint}}
+.sheet-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:${RADIUS.card};padding:13px 16px;cursor:pointer;margin-top:8px}
+.sheet-row:hover{background:${INDIGO.tint};border-color:${INDIGO.tintBorder}}
+/* Home DOCUMENTS grid (plan 48 H3.2, repainted round 2): a document tile lifts to indigo tint on hover;
+ * the dashed New-document tile shifts to the indigo ink + border. */
+.doc-tile:hover{background:${INDIGO.tint};border-color:${INDIGO.tintBorder}}
+.doc-newtile:hover{color:${INDIGO.base};border-color:${INDIGO.tintBorder}}
+/* Templates gallery (plan 48 T2): a template card lifts on hover; the dashed Save-as-template tile
+ * shifts to the indigo ink; a starter card lifts to indigo tint. */
+.tpl-card:hover{border-color:${INDIGO.tintBorder};box-shadow:var(--ab-shadow-frame)}
+.tpl-newtile:hover{color:${INDIGO.base};border-color:${INDIGO.tintBorder}}
+.tpl-starter:hover{border-color:${INDIGO.tintBorder};background:${INDIGO.tint}}
 /* The 240px live filter field in the Templates title row (T1.1). */
-.tpl-filter{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:9px;border:1px solid #E9EAEE;background:#FBFCFD;width:240px}
-.tpl-filter input{flex:1;min-width:0;border:none;background:none;outline:none;font:400 12.5px/1 system-ui;color:#1A1C20}
-.tpl-filter input::placeholder{color:#A3A8B2}
+.tpl-filter{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:${RADIUS.input};border:1px solid ${HAIRLINE.strong};background:${PAPER.card};width:240px}
+.tpl-filter input{flex:1;min-width:0;border:none;background:none;outline:none;font:${TYPE.secondary};color:${INK.heading}}
+.tpl-filter input::placeholder{color:${INK.meta}}
 /* The shared plain-language policy editor (spec 3.4): the Agents card's Edit policy opens the SAME component
  * the doc Properties panel uses, so its one stylesheet is inlined here too (plan 49-b A2.3, principle P2). */
 ${POLICY_EDITOR_STYLE}

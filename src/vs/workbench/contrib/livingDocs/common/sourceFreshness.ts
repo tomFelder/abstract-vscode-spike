@@ -11,6 +11,8 @@
 // has sat, computed from an INJECTABLE clock so relative times are testable (never `Date.now()` in a render
 // path). See the F12 inventory comment on issue #239 for the surface-by-surface mapping.
 
+import { AMBER, GREEN, INK, PAPER } from './abstractTokens.js';
+
 // The three source states the whole product speaks in. A fourth display state is never invented (the same
 // discipline as the three-tier trust grammar).
 export const enum SourceFreshness {
@@ -22,17 +24,19 @@ export const enum SourceFreshness {
 	ContextOnly = 'context-only',
 }
 
-// The palette F12 speaks in (exact hexes from the mock's Knowledge frame). One place, so a colour change is
-// a one-line edit that lands on every surface at once.
+// The palette F12 speaks in, drawn from the round-2 design system so a freshness dot cannot drift from the
+// state colours everywhere else: fresh is the green that means "applied / fresh / all clear", stale is the
+// amber that means "waiting on you", context-only is neutral because it is not a trust question at all.
+// One place, so a colour change is a one-line edit that lands on every surface at once.
 export const FRESHNESS_COLOURS = {
-	freshDot: '#2C8159',
-	freshText: '#2C8159',
-	staleDot: '#C99A2E',
-	staleText: '#8A6D1A',
+	freshDot: GREEN.base,
+	freshText: GREEN.base,
+	staleDot: AMBER.base,
+	staleText: AMBER.label,
 	/** The cream a stale table row is painted (K2.3). */
-	staleRowBg: '#FDFAF2',
-	contextDot: '#D5D8DE',
-	contextText: '#868B95',
+	staleRowBg: AMBER.subtleBg,
+	contextDot: PAPER.control,
+	contextText: INK.secondary,
 } as const;
 
 /**
