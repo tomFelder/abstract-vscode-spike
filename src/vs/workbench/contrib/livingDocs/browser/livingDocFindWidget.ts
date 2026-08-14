@@ -286,8 +286,8 @@ function findScrollToCurrent(){
 	const box = r.getBoundingClientRect();
 	if (!box.height && !box.width){ return; }
 	if (box.top >= 96 && box.bottom <= window.innerHeight - 48){ return; }
-	// INSTANT, never \`behavior:'smooth'\`. A smooth scroll silently never starts inside this webview frame
-	// (#316 V-1: the animated form left scrollY at 0 three seconds later while the identical instant call
+	// INSTANT, with no animated scroll behaviour asked for. An animated scroll silently never starts inside
+	// this webview frame (#316 V-1: it left scrollY at 0 three seconds later, while the identical instant call
 	// landed exactly), so next/previous reported "11 of 11" without the viewport ever moving.
 	window.scrollBy({ top: box.top - window.innerHeight / 2 });
 }
