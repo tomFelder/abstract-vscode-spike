@@ -84,16 +84,21 @@ export function docPolicyOption(level: DocAutonomyLevel): IDocAutonomyOption {
 }
 
 /**
- * The exact design-system colour for a policy tone (spec pin 12 / A2): `ok` is the green that means
- * "applied / all clear", `attention` the amber label ink that means "waiting on you", `removed` the red
- * that means "removed / failed". Callers use this instead of hard-coding a hex so the three surfaces stay
- * pixel-identical, and so the policy dial cannot speak a different colour language to the rest of the app.
+ * The exact design-system colour for a policy tone (spec pin 12 / A2, comp 3a): `ok` is the green that
+ * means "applied / all clear", `attention` the amber that means "waiting on you", `removed` the red that
+ * means "removed / failed". Callers use this instead of hard-coding a hex so the three surfaces that draw
+ * the dial - the document Properties panel, the agent roster card and the agent detail page - stay
+ * pixel-identical, and so the dial cannot speak a different colour language to the rest of the app.
+ *
+ * `attention` is deliberately `AMBER.askFirst`, not the kind-badge `AMBER.label`, and `removed` is
+ * `RED.base`, not the diff `RED.diffInk`: those two inks mean "this is a kind badge" and "this is a
+ * deleted span". A tier saying what an agent may never do is neither of those things.
  */
 export function docPolicyToneHex(tone: DocPolicyTone): string {
 	switch (tone) {
 		case 'ok': return GREEN.base;
-		case 'attention': return AMBER.label;
-		case 'removed': return RED.diffInk;
+		case 'attention': return AMBER.askFirst;
+		case 'removed': return RED.base;
 	}
 }
 

@@ -43,7 +43,7 @@ suite('Shared doc policy (plan 45 pin 12 / #122 F11)', () => {
 		// two drift while the test still passed.
 		assert.deepStrictEqual(
 			DOC_AUTONOMY_LEVELS.map(o => docPolicyToneHex(o.tone)),
-			[GREEN.base, AMBER.label, RED.diffInk]);
+			[GREEN.base, AMBER.askFirst, RED.base]);
 	});
 
 	test('docPolicyOption never returns undefined', () => {
@@ -57,7 +57,7 @@ suite('Shared doc policy (plan 45 pin 12 / #122 F11)', () => {
 		assert.strictEqual((html.match(/class="pol-opt on"/g) ?? []).length, 1);
 		assert.strictEqual((html.match(/data-policy="/g) ?? []).length, DOC_AUTONOMY_LEVELS.length);
 		// The selected option is the one whose data-policy is `never`, tinted with its removed tone.
-		assert.ok(html.includes(`data-policy="never" style="--pol-tone:${RED.diffInk}"`));
+		assert.ok(html.includes(`data-policy="never" style="--pol-tone:${RED.base}"`));
 		assert.strictEqual(renderPolicyEditor.CLICK_SELECTOR, '[data-policy]');
 	});
 

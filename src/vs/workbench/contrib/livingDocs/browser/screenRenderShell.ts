@@ -738,7 +738,7 @@ for (const el of document.querySelectorAll('[data-copy-link]')) {
 		if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(link).then(done, done); } else { done(); }
 	});
 }
-// Templates live filter (plan 48 T1.1): typing in the title-row field narrows YOUR TEMPLATES to the cards
+// Templates live filter (plan 48 T1.1): typing in the title-row field narrows the gallery to the cards
 // whose searchable text (name + description, held in data-filter) contains the query. Purely client-side (no
 // host round-trip, no flash); an empty query shows every card. A "no matches" line is toggled when the query
 // hides them all, so the grid never reads as an empty (broken) surface.
