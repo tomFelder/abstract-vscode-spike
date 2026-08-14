@@ -934,7 +934,21 @@ function enrichWikilinks(){
 		el.setAttribute('aria-label', label);
 	}
 }
-function openWikilink(el){ const target = el.getAttribute('data-target'); if (target){ vscode.postMessage({ type: 'openWikilink', target: target }); } }
+// Following a link is NOT idempotent - an unresolved one creates a document - so the same click must never
+// be able to fire it twice. A wikilink inside a table cell is seen by two handlers: the capture-phase cell
+// mousedown (which has to run, or the click opens the cell editor instead of the link) and the bubble-phase
+// click delegate. Left alone that pair created TWO documents from one click, observed in the desktop walk.
+// Collapsing them here rather than removing one call site keeps a table-cell link working whichever handler
+// wins, which is the property that actually matters.
+let _wlLastFollow = { target: '', at: 0 };
+function openWikilink(el){
+	const target = el.getAttribute('data-target');
+	if (!target){ return; }
+	const now = Date.now();
+	if (target === _wlLastFollow.target && (now - _wlLastFollow.at) < 700){ return; }
+	_wlLastFollow = { target: target, at: now };
+	vscode.postMessage({ type: 'openWikilink', target: target });
+}
 // The picker reads the caret AFTER ProseMirror has applied the change, so every hook defers a tick.
 function scheduleWikiRefresh(){ setTimeout(refreshWikiPicker, 0); }
 function onWikiKeydown(e){
