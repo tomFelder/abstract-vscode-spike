@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '../../../../nls.js';
-import { findInText, findMatches, findStatusLabel, replaceInText, stepMatchIndex } from '../common/livingDocFind.js';
+import { caseAdaptReplacement, findInText, findMatches, findStatusLabel, replaceInText, stepMatchIndex } from '../common/livingDocFind.js';
 
 // The in-document find & replace widget (plan 52 WP-E), as three strings the editor's webview shell splices
 // in: its CSS, its markup, and its runtime. It is kept in its own module - rather than added to the already
@@ -40,6 +40,10 @@ export const FIND_WIDGET_STYLE = `
 .lwd-find button:hover{background:#f6f7f9;border-color:#d8dce2}
 .lwd-find button:disabled{opacity:.42;cursor:default}
 .lwd-find .lf-act{font:500 11.5px/1 system-ui;padding:0 9px}
+/* The Aa toggle reads its own state: pressed is warm and outlined, so "this find is case sensitive" is
+   visible at a glance rather than something the reader has to infer from the count moving. */
+.lwd-find .lf-case{font:600 11.5px/1 system-ui}
+.lwd-find .lf-case[aria-pressed="true"]{background:#fdf0dd;border-color:oklch(0.66 0.16 45 / .55);color:#8a5a12}
 /* Matches are painted with the CSS Custom Highlight API, so NOTHING is inserted into the document's DOM:
    ProseMirror's own DOM invariants - and the pending inline-diff widgets sitting in it - are untouched. */
 ::highlight(lwd-find){background:#ffe9a3;color:#1a1c20}
@@ -56,6 +60,7 @@ const PREVIOUS_LABEL = localize('livingDocs.find.previous', "Previous Match (Shi
 const NEXT_LABEL = localize('livingDocs.find.next', "Next Match (Enter)");
 const CLOSE_LABEL = localize('livingDocs.find.close', "Close (Escape)");
 const REPLACE_ALL_LABEL = localize('livingDocs.find.replaceAll', "Replace All");
+const MATCH_CASE_LABEL = localize('livingDocs.find.matchCase', "Match Case");
 const NO_RESULTS_LABEL = localize('livingDocs.find.noResults', "No results");
 const OF_TEMPLATE = localize('livingDocs.find.countOf', "{0} of {1}");
 
@@ -67,6 +72,7 @@ const OF_TEMPLATE = localize('livingDocs.find.countOf', "{0} of {1}");
 export const FIND_WIDGET_HTML = `<div id="lwd-find" class="lwd-find" hidden>`
 	+ `<div class="lf-row">`
 	+ `<input data-find-input type="text" aria-label="${esc(FIND_LABEL)}" placeholder="${esc(FIND_LABEL)}">`
+	+ `<button class="lf-case" data-find-act="case" data-find-case aria-pressed="false" title="${esc(MATCH_CASE_LABEL)}" aria-label="${esc(MATCH_CASE_LABEL)}">Aa</button>`
 	+ `<span class="lf-count" data-find-count aria-live="polite">${esc(NO_RESULTS_LABEL)}</span>`
 	+ `<button data-find-act="prev" title="${esc(PREVIOUS_LABEL)}" aria-label="${esc(PREVIOUS_LABEL)}">&uarr;</button>`
 	+ `<button data-find-act="next" title="${esc(NEXT_LABEL)}" aria-label="${esc(NEXT_LABEL)}">&darr;</button>`
@@ -81,7 +87,7 @@ export const FIND_WIDGET_HTML = `<div id="lwd-find" class="lwd-find" hidden>`
 // The matcher is injected VERBATIM (the `String(fn)` seam the GFM table helpers already use), so the widget
 // running in the webview and the unit tests in test/browser/livingDocFind.test.ts are literally the same
 // code. Each function is asserted self-contained by that test, so the interpolated source dangles on nothing.
-const FIND_PURE = [findInText, findMatches, stepMatchIndex, replaceInText, findStatusLabel].map(fn => String(fn)).join('\n');
+const FIND_PURE = [findInText, findMatches, stepMatchIndex, caseAdaptReplacement, replaceInText, findStatusLabel].map(fn => String(fn)).join('\n');
 
 /**
  * The widget's runtime, appended to the webview shell's RUNTIME script (so it shares that scope and can
@@ -98,6 +104,13 @@ const findCountEl = findEl ? findEl.querySelector('[data-find-count]') : null;
 // The live search state: the document's searchable segments, the matches across ALL of them, and which one
 // is current (-1 = none). Rebuilt from the document on every keystroke, so the count can never go stale.
 let findSegs = [], findHits = [], findCur = -1;
+// Whether the \`Aa\` toggle is on. OFF by default - a calm word processor finds "Growth" when you type
+// "growth", the way Word and Docs do. What the toggle really guards is REPLACE: a case-blind find matching
+// \`Growth\` used to substitute the replacement verbatim and silently lower-case the heading. With the toggle
+// off the replacement now adopts the match's own case (caseAdaptReplacement); with it on, matching is exact
+// and the replacement is inserted exactly as typed.
+let findCase = false;
+const findCaseBtn = findEl ? findEl.querySelector('[data-find-case]') : null;
 // Build the searchable segments from the LIVE ProseMirror document, in document order. A segment is a
 // maximal contiguous run of TEXT nodes inside one textblock, so:
 //   - a query matches across inline formatting (\`**bo**ld\` is two text nodes but one segment, "bold");
@@ -108,9 +121,18 @@ let findSegs = [], findHits = [], findCur = -1;
 // document positions by simple addition from \`from\`. Tables are atoms holding their GFM source in a node
 // attribute, so each CELL contributes a segment carrying what a write-back needs (the table's position, its
 // markdown, and the cell's coordinates).
+// In RAW-Markdown mode there is no ProseMirror document - but there IS text on screen, the Markdown source in
+// the textarea, and that is the surface where a reader is most likely to be hunting a literal string (a
+// \`bind:\` key, a frontmatter field, a table pipe). Returning no segments there made the widget answer "No
+// results" for text sitting in front of the reader, which is worse than not offering find at all (#316 V-3).
+// The textarea's value is ONE segment, which is all the pure layer needs.
 function findBuildSegments(){
 	const segs = [];
-	if (!pmView) { return segs; }
+	if (!pmView) {
+		const ta = findRawTextarea();
+		if (ta){ segs.push({ text: ta.value, ta: ta }); }
+		return segs;
+	}
 	let tIdx = -1;
 	pmView.state.doc.descendants(function(node, pos){
 		if (node.type && node.type.name === 'table_block'){
@@ -137,6 +159,8 @@ function findBuildSegments(){
 }
 function findQuery(){ return findInput ? findInput.value : ''; }
 function findIsOpen(){ return !!(findEl && !findEl.hidden); }
+/** The raw-Markdown source textarea, when the editor is in raw mode; null in the ordinary (ProseMirror) mode. */
+function findRawTextarea(){ return root ? root.querySelector('textarea.raw') : null; }
 // Paint every match, with the current one in its own stronger colour, using the CSS Custom Highlight API.
 // Nothing is inserted into the document DOM, so a pending proposal's inline diff widgets cannot be disturbed.
 function findPaint(){
@@ -182,7 +206,9 @@ function findElementText(el){
 // by the width of a bold marker.
 function findRangeFor(hit){
 	const seg = findSegs[hit.segment];
-	if (!seg || !pmView){ return null; }
+	// A raw-mode segment is a textarea's value, which has no DOM text nodes to place a range over; it is
+	// revealed with the native selection instead (findRevealInTextarea).
+	if (!seg || seg.ta || !pmView){ return null; }
 	try {
 		const range = document.createRange();
 		if (seg.tPos !== undefined){
@@ -202,17 +228,68 @@ function findRangeFor(hit){
 		return range;
 	} catch (e) { return null; }
 }
+// The pixel offset, from the top of a textarea's scrollable content, of the character at \`offset\`. Measured
+// by laying the text BEFORE it out in a mirror element that copies the textarea's own typography and content
+// width - which is exact - rather than asking the browser to scroll a selection into view, which it may
+// decline to do. Used to reveal a raw-mode match.
+function findTextareaOffsetTop(ta, offset){
+	try {
+		const cs = window.getComputedStyle(ta);
+		const padLeft = parseFloat(cs.paddingLeft) || 0, padRight = parseFloat(cs.paddingRight) || 0;
+		const mirror = document.createElement('div');
+		const props = ['fontFamily','fontSize','fontWeight','fontStyle','letterSpacing','lineHeight','textTransform','wordSpacing','textIndent','tabSize'];
+		for (let i = 0; i < props.length; i++){ mirror.style[props[i]] = cs[props[i]]; }
+		mirror.style.position = 'absolute';
+		mirror.style.top = '0';
+		mirror.style.left = '-99999px';
+		mirror.style.visibility = 'hidden';
+		mirror.style.boxSizing = 'content-box';
+		mirror.style.margin = '0';
+		mirror.style.padding = '0';
+		mirror.style.border = '0';
+		mirror.style.whiteSpace = 'pre-wrap';
+		mirror.style.wordWrap = 'break-word';
+		mirror.style.overflowWrap = 'break-word';
+		mirror.style.width = Math.max(0, ta.clientWidth - padLeft - padRight) + 'px';
+		const marker = document.createElement('span');
+		marker.textContent = ta.value.charAt(offset) || '.';
+		mirror.appendChild(document.createTextNode(ta.value.slice(0, offset)));
+		mirror.appendChild(marker);
+		document.body.appendChild(mirror);
+		const top = marker.offsetTop + (parseFloat(cs.paddingTop) || 0);
+		document.body.removeChild(mirror);
+		return top;
+	} catch (e) { return null; }
+}
+// Reveal a raw-mode match. A textarea's live value is not in the DOM, so the Custom Highlight API cannot paint
+// it - the native selection is the only mark available, and it stays visible (muted) while focus returns to
+// the find box so Enter keeps stepping. The textarea is scrolled to a MEASURED offset, and the page is
+// scrolled if the textarea itself is off screen.
+function findRevealInTextarea(ta, start, end){
+	try {
+		ta.setSelectionRange(start, end);
+		const top = findTextareaOffsetTop(ta, start);
+		if (top !== null){ ta.scrollTop = Math.max(0, top - ta.clientHeight / 2); }
+		const box = ta.getBoundingClientRect();
+		if (box.top > window.innerHeight - 120 || box.bottom < 120){ window.scrollBy({ top: box.top - 96 }); }
+	} catch (e) {}
+}
 // Scroll the current match to the middle of the surface when it is not comfortably in view. The webview's
 // own window is the scroller (html/body are full-height and the document overflows them).
 function findScrollToCurrent(){
 	const hit = findHits[findCur];
 	if (!hit){ return; }
+	const seg = findSegs[hit.segment];
+	if (seg && seg.ta){ return findRevealInTextarea(seg.ta, hit.start, hit.end); }
 	const r = findRangeFor(hit);
 	if (!r){ return; }
 	const box = r.getBoundingClientRect();
 	if (!box.height && !box.width){ return; }
 	if (box.top >= 96 && box.bottom <= window.innerHeight - 48){ return; }
-	window.scrollBy({ top: box.top - window.innerHeight / 2, behavior: 'smooth' });
+	// INSTANT, never \`behavior:'smooth'\`. A smooth scroll silently never starts inside this webview frame
+	// (#316 V-1: the animated form left scrollY at 0 three seconds later while the identical instant call
+	// landed exactly), so next/previous reported "11 of 11" without the viewport ever moving.
+	window.scrollBy({ top: box.top - window.innerHeight / 2 });
 }
 // Re-read the document, recompute every match and repaint. \`keepCurrent\` holds the reader's place across a
 // replace or an edit; otherwise a fresh query lands on the first match, which is what makes typing feel live.
@@ -221,7 +298,7 @@ function findRun(keepCurrent, scroll){
 	findSegs = findBuildSegments();
 	const texts = [];
 	for (let i = 0; i < findSegs.length; i++){ texts.push(findSegs[i].text); }
-	findHits = findMatches(texts, findQuery());
+	findHits = findMatches(texts, findQuery(), findCase);
 	if (!findHits.length){ findCur = -1; }
 	else if (!keepCurrent || findCur < 0){ findCur = 0; }
 	else if (findCur >= findHits.length){ findCur = findHits.length - 1; }
@@ -242,8 +319,44 @@ function findStep(delta){
 // normal debounced save exactly once. Edits are applied in DESCENDING document position, which keeps every
 // remaining position valid against the original document. A table's cells are folded into one node-attribute
 // write (the same \`setNodeMarkup\` seam in-place cell editing already uses).
+// Write \`text\` over a textarea's current selection through the editing COMMAND rather than by assigning
+// \`.value\`, so the edit lands on the textarea's own native undo stack and one Cmd+Z takes it back; a direct
+// \`.value\` write is invisible to that stack and would leave a replace-all unundoable. The direct write is
+// kept only as a fallback for a refused command, where landing the edit beats refusing to act.
+function findInsertText(ta, text){
+	let ok = false;
+	try { ok = text ? document.execCommand('insertText', false, text) : document.execCommand('delete'); } catch (e) { ok = false; }
+	if (!ok){
+		const s = ta.selectionStart, e = ta.selectionEnd;
+		ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+		ta.setSelectionRange(s + text.length, s + text.length);
+	}
+	return true;
+}
+// Replace inside the raw-Markdown textarea. A single replace rewrites just that match; a replace-all rewrites
+// the whole value in ONE command, so it is one undo step, and the scroll position is put back rather than
+// dumping the reader at the end of the source. Like any hand edit in raw mode, the result reaches disk when
+// the reader clicks "Done editing source".
+function findApplyReplaceRaw(ta, hits, replacement){
+	const before = ta.value, scroll = ta.scrollTop;
+	ta.focus();
+	if (hits.length === 1){
+		const h = hits[0];
+		ta.setSelectionRange(h.start, h.end);
+		findInsertText(ta, findCase ? replacement : caseAdaptReplacement(before.slice(h.start, h.end), replacement));
+	} else {
+		ta.setSelectionRange(0, before.length);
+		findInsertText(ta, replaceInText(before, hits, replacement, !findCase));
+		ta.scrollTop = scroll;
+	}
+	if (findInput){ findInput.focus(); }
+	return hits.length;
+}
 function findApplyReplace(hits, replacement){
-	if (!pmView || !hits.length){ return 0; }
+	if (!hits.length){ return 0; }
+	const rawSeg = findSegs[hits[0].segment];
+	if (rawSeg && rawSeg.ta){ return findApplyReplaceRaw(rawSeg.ta, hits, replacement); }
+	if (!pmView){ return 0; }
 	const edits = [], tables = Object.create(null);
 	const bySeg = Object.create(null);
 	for (let i = 0; i < hits.length; i++){ (bySeg[hits[i].segment] = bySeg[hits[i].segment] || []).push(hits[i]); }
@@ -253,9 +366,14 @@ function findApplyReplace(hits, replacement){
 		if (seg.tPos !== undefined){
 			let entry = tables[seg.tIdx];
 			if (!entry){ entry = tables[seg.tIdx] = { pos: seg.tPos, t: parseGfmTable(seg.tMd) }; }
-			entry.t = setCell(entry.t, seg.r, seg.c, replaceInText(seg.text, list, replacement));
+			entry.t = setCell(entry.t, seg.r, seg.c, replaceInText(seg.text, list, replacement, !findCase));
 		} else {
-			for (let i = 0; i < list.length; i++){ edits.push({ pos: seg.from + list[i].start, to: seg.from + list[i].end }); }
+			// Each match carries the text it actually matched, so a case-blind find can put back the match's own
+			// capitalisation instead of flattening a heading's "Growth" to "growth" (#316 item 3).
+			for (let i = 0; i < list.length; i++){
+				const matched = seg.text.slice(list[i].start, list[i].end);
+				edits.push({ pos: seg.from + list[i].start, to: seg.from + list[i].end, rep: findCase ? replacement : caseAdaptReplacement(matched, replacement) });
+			}
 		}
 	}
 	for (const k in tables){ edits.push({ pos: tables[k].pos, md: serializeGfmTable(tables[k].t) }); }
@@ -264,7 +382,7 @@ function findApplyReplace(hits, replacement){
 	for (let i = 0; i < edits.length; i++){
 		const ed = edits[i];
 		if (ed.md !== undefined){ tr = tr.setNodeMarkup(ed.pos, null, { markdown: ed.md }); }
-		else if (replacement){ tr = tr.insertText(replacement, ed.pos, ed.to); }
+		else if (ed.rep){ tr = tr.insertText(ed.rep, ed.pos, ed.to); }
 		else { tr = tr.delete(ed.pos, ed.to); }
 	}
 	pmView.dispatch(tr);
@@ -293,14 +411,19 @@ function openFind(){
 	const bars = root ? root.querySelectorAll('.etoolbar, .reviewbar, .rawtop') : [];
 	for (let i = 0; i < bars.length; i++){ const b = bars[i].getBoundingClientRect(); if (b.height){ top = Math.max(top, b.bottom + 10); } }
 	findEl.style.top = top + 'px';
-	// Seed from a single-line selection in the document, the way a find box is expected to.
-	if (!wasOpen && pmView){
+	// Seed from a single-line selection in the document, the way a find box is expected to - from the
+	// ProseMirror selection ordinarily, and from the raw textarea's own selection in raw mode.
+	if (!wasOpen){
 		try {
-			const sel = pmView.state.selection;
-			if (!sel.empty){
-				const seeded = pmView.state.doc.textBetween(sel.from, sel.to, '', '');
-				if (seeded && seeded.indexOf('\\n') < 0){ findInput.value = seeded; }
+			let seeded = '';
+			const ta = findRawTextarea();
+			if (pmView){
+				const sel = pmView.state.selection;
+				if (!sel.empty){ seeded = pmView.state.doc.textBetween(sel.from, sel.to, '', ''); }
+			} else if (ta){
+				seeded = ta.value.slice(ta.selectionStart, ta.selectionEnd);
 			}
+			if (seeded && seeded.indexOf('\\n') < 0){ findInput.value = seeded; }
 		} catch (e) {}
 	}
 	findInput.focus();
@@ -312,11 +435,22 @@ function closeFind(){
 	findEl.hidden = true;
 	findHits = []; findCur = -1;
 	findClearPaint();
-	if (pmView){ try { pmView.focus(); } catch (e) {} }
+	// Hand focus back to whichever surface owns the text - the document, or the raw source in raw mode.
+	const ta = findRawTextarea();
+	try { if (pmView){ pmView.focus(); } else if (ta){ ta.focus(); } } catch (e) {}
+}
+// The \`Aa\` toggle. Re-running from the first match (rather than holding the reader's place) is right: the
+// match SET has changed, so the old current index means something different.
+function findToggleCase(){
+	findCase = !findCase;
+	if (findCaseBtn){ findCaseBtn.setAttribute('aria-pressed', findCase ? 'true' : 'false'); }
+	if (findInput){ findInput.focus(); }
+	findRun(false, true);
 }
 function findAct(act){
 	if (act === 'next'){ return findStep(1); }
 	if (act === 'prev'){ return findStep(-1); }
+	if (act === 'case'){ return findToggleCase(); }
 	if (act === 'replace'){ return findReplaceCurrent(); }
 	if (act === 'replaceAll'){ return findReplaceAll(); }
 	if (act === 'close'){ return closeFind(); }

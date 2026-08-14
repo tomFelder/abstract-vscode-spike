@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { FIND_WIDGET_HTML, FIND_WIDGET_RUNTIME, FIND_WIDGET_STYLE } from '../../browser/livingDocFindWidget.js';
-import { findInText, findMatches, findStatusLabel, replaceInText, stepMatchIndex } from '../../common/livingDocFind.js';
+import { caseAdaptReplacement, findInText, findMatches, findStatusLabel, replaceInText, stepMatchIndex } from '../../common/livingDocFind.js';
 
 // The document as the webview runtime hands it to the pure layer: one segment per searchable unit, in
 // document order. Here that is a heading, a paragraph, a paragraph whose bold run splits the word across two
@@ -106,18 +106,69 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 		);
 	});
 
-	test('replace preserves the matched text\'s own case only where the replacement says so', () => {
-		// A case-insensitive find matches "Margin" and "margin" alike; the replacement is inserted verbatim,
-		// so the writer gets exactly what they typed rather than a guessed capitalisation.
-		const text = 'Margin and margin';
-		assert.deepStrictEqual(replaceInText(text, findInText(text, 'margin'), 'ratio'), 'ratio and ratio');
+	test('the Aa toggle makes matching exact, so a lower-case query stops matching a heading', () => {
+		assert.deepStrictEqual(
+			{
+				insensitive: findMatches(SEGMENTS, 'margin'/* caseSensitive: off */).length,
+				sensitive: findMatches(SEGMENTS, 'margin', true).length,
+				sensitiveCapital: findMatches(SEGMENTS, 'Margin', true).length,
+				exactStillLiteral: findInText('a.b axb', 'a.b', true),
+			},
+			{ insensitive: 8, sensitive: 4, sensitiveCapital: 4, exactStillLiteral: [{ segment: 0, start: 0, end: 3 }] }
+		);
+	});
+
+	test('a case-blind replace puts back the match\'s own capitalisation, unless the replacement asks otherwise', () => {
+		// The sharp edge of a case-INSENSITIVE find: it matches "Growth" for the query "growth", and inserting
+		// the replacement verbatim would silently lower-case the heading. A lower-case replacement therefore
+		// adopts the match's shape; a replacement the writer capitalised themselves is an explicit instruction.
+		assert.deepStrictEqual(
+			{
+				lower: caseAdaptReplacement('growth', 'momentum'),
+				title: caseAdaptReplacement('Growth', 'momentum'),
+				upper: caseAdaptReplacement('GROWTH', 'momentum'),
+				mixed: caseAdaptReplacement('gROWTH', 'momentum'),
+				writerSaidCapital: caseAdaptReplacement('growth', 'Momentum'),
+				writerSaidAllCaps: caseAdaptReplacement('Growth', 'MRR'),
+				singleCapital: caseAdaptReplacement('I', 'we'),
+				emptyReplacement: caseAdaptReplacement('Growth', ''),
+				nonLetterMatch: caseAdaptReplacement('40%', 'half'),
+			},
+			{
+				lower: 'momentum',
+				title: 'Momentum',
+				upper: 'MOMENTUM',
+				mixed: 'momentum',
+				writerSaidCapital: 'Momentum',
+				writerSaidAllCaps: 'MRR',
+				singleCapital: 'We',
+				emptyReplacement: '',
+				nonLetterMatch: 'half',
+			}
+		);
+	});
+
+	test('replace applies case adaptation per match, and leaves it off when the find is case sensitive', () => {
+		const text = 'Margin and margin and MARGIN';
+		assert.deepStrictEqual(
+			{
+				adapted: replaceInText(text, findInText(text, 'margin'), 'ratio', true),
+				verbatim: replaceInText(text, findInText(text, 'margin'), 'ratio'),
+				sensitive: replaceInText(text, findInText(text, 'margin', true), 'ratio', false),
+			},
+			{
+				adapted: 'Ratio and ratio and RATIO',
+				verbatim: 'ratio and ratio and ratio',
+				sensitive: 'Margin and ratio and MARGIN',
+			}
+		);
 	});
 
 	// Every one of these is injected into the editor webview RUNTIME via String(fn) so the widget runs the
 	// SAME matcher these tests cover; assert each is fully self-contained, with no import/require/transpiler
 	// helper reference the interpolated source would dangle on (the livingDocTableEdit.ts precedent).
 	test('injected helpers are self-contained (no import/require/helper refs in String(fn))', () => {
-		for (const fn of [findInText, findMatches, stepMatchIndex, replaceInText, findStatusLabel]) {
+		for (const fn of [findInText, findMatches, stepMatchIndex, caseAdaptReplacement, replaceInText, findStatusLabel]) {
 			const src = String(fn);
 			assert.ok(!/\brequire\b/.test(src), `${fn.name} must not reference require`);
 			assert.ok(!/\bimport\b/.test(src), `${fn.name} must not reference import`);
@@ -135,12 +186,30 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 				openFind: FIND_WIDGET_RUNTIME.includes('function openFind()'),
 				refresh: FIND_WIDGET_RUNTIME.includes('function findRefresh()'),
 				matcher: FIND_WIDGET_RUNTIME.includes('function findInText('),
+				caseAdapter: FIND_WIDGET_RUNTIME.includes('function caseAdaptReplacement('),
 				chord: FIND_WIDGET_RUNTIME.includes('e.metaKey || e.ctrlKey'),
 				host: FIND_WIDGET_HTML.includes('id="lwd-find"'),
 				inputs: FIND_WIDGET_HTML.includes('data-find-input') && FIND_WIDGET_HTML.includes('data-find-replace-input'),
+				caseToggle: FIND_WIDGET_HTML.includes('data-find-case') && FIND_WIDGET_HTML.includes('aria-pressed="false"'),
 				highlights: FIND_WIDGET_STYLE.includes('::highlight(lwd-find)') && FIND_WIDGET_STYLE.includes('::highlight(lwd-find-current)'),
 			},
-			{ openFind: true, refresh: true, matcher: true, chord: true, host: true, inputs: true, highlights: true }
+			{ openFind: true, refresh: true, matcher: true, caseAdapter: true, chord: true, host: true, inputs: true, caseToggle: true, highlights: true }
+		);
+	});
+
+	// Two behaviours the validator of #316 caught live, guarded here so they cannot silently come back: the
+	// runtime must never ask for a SMOOTH scroll (which is a no-op inside this webview frame, so next/previous
+	// reported a match it never scrolled to), and it must search the raw-Markdown textarea rather than
+	// answering "No results" for source text sitting on screen.
+	test('the runtime scrolls instantly, and searches the raw-Markdown source too', () => {
+		assert.deepStrictEqual(
+			{
+				noSmoothScroll: /behavior\s*:\s*['"]smooth['"]/.test(FIND_WIDGET_RUNTIME),
+				readsRawTextarea: FIND_WIDGET_RUNTIME.includes(`querySelector('textarea.raw')`),
+				revealsRawMatch: FIND_WIDGET_RUNTIME.includes('function findRevealInTextarea('),
+				replacesRawUndoably: FIND_WIDGET_RUNTIME.includes(`document.execCommand('insertText'`),
+			},
+			{ noSmoothScroll: false, readsRawTextarea: true, revealsRawMatch: true, replacesRawUndoably: true }
 		);
 	});
 

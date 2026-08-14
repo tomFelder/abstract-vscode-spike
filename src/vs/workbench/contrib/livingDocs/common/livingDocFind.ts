@@ -39,10 +39,12 @@ export interface IFindMatch {
  * such a character, and a replace built on those offsets would corrupt the document. Per-character folding
  * can only ever make such a character fail to match, which is predictable and harmless.
  *
+ * `caseSensitive` turns the fold off entirely, which is what the widget's `Aa` toggle drives.
+ *
  * Self-contained on purpose: this function's source is injected verbatim into the editor webview (the
  * `String(fn)` seam the table helpers use), so the widget and these tests run the identical matcher.
  */
-export function findInText(text: string, query: string): readonly IFindMatch[] {
+export function findInText(text: string, query: string, caseSensitive?: boolean): readonly IFindMatch[] {
 	const out: IFindMatch[] = [];
 	if (!query) {
 		return out;
@@ -51,7 +53,9 @@ export function findInText(text: string, query: string): readonly IFindMatch[] {
 	for (let i = 0; i <= limit; i++) {
 		let hit = true;
 		for (let k = 0; k < query.length; k++) {
-			if (text.charAt(i + k).toLowerCase() !== query.charAt(k).toLowerCase()) {
+			const a = text.charAt(i + k);
+			const b = query.charAt(k);
+			if (a !== b && (caseSensitive || a.toLowerCase() !== b.toLowerCase())) {
 				hit = false;
 				break;
 			}
@@ -69,10 +73,10 @@ export function findInText(text: string, query: string): readonly IFindMatch[] {
  * every segment) rather than over the visible DOM is what makes the count honest on a long document: matches
  * far below the fold are counted, and next/previous can reach them.
  */
-export function findMatches(segments: readonly string[], query: string): readonly IFindMatch[] {
+export function findMatches(segments: readonly string[], query: string, caseSensitive?: boolean): readonly IFindMatch[] {
 	const out: IFindMatch[] = [];
 	for (let s = 0; s < segments.length; s++) {
-		const inSegment = findInText(segments[s], query);
+		const inSegment = findInText(segments[s], query, caseSensitive);
 		for (let i = 0; i < inSegment.length; i++) {
 			out.push({ segment: s, start: inSegment[i].start, end: inSegment[i].end });
 		}
@@ -96,15 +100,65 @@ export function stepMatchIndex(count: number, current: number, delta: number): n
 }
 
 /**
+ * What to actually insert for one match when the find is case-INSENSITIVE, given the text it matched.
+ *
+ * A case-blind find matches `Growth` for the query `growth`; substituting the replacement verbatim would then
+ * silently lower-case a heading. So the replacement adopts the matched text's own capitalisation - unless the
+ * writer typed a capital in the replacement, which is an explicit instruction about case and is honoured as
+ * typed. (The rule a word processor's reader already expects; it is why Word's replace does not flatten your
+ * headings.) Three shapes are recognised, and anything else is left verbatim:
+ *
+ * - the match is ALL CAPS (two or more cased characters, none lower) - `MARGIN` -> `CONTRIBUTION`;
+ * - the match starts with a capital - `Margin` -> `Contribution`;
+ * - the match is lower case - `margin` -> `contribution`.
+ *
+ * With the `Aa` toggle ON the matched text equals the query in case anyway, so the widget skips this and
+ * inserts the replacement exactly as typed.
+ */
+export function caseAdaptReplacement(matched: string, replacement: string): string {
+	if (!replacement) {
+		return replacement;
+	}
+	for (let i = 0; i < replacement.length; i++) {
+		const ch = replacement.charAt(i);
+		if (ch !== ch.toLowerCase()) {
+			return replacement;
+		}
+	}
+	let cased = 0;
+	let upper = 0;
+	for (let i = 0; i < matched.length; i++) {
+		const ch = matched.charAt(i);
+		if (ch.toLowerCase() === ch.toUpperCase()) {
+			continue;
+		}
+		cased++;
+		if (ch === ch.toUpperCase()) {
+			upper++;
+		}
+	}
+	if (cased >= 2 && upper === cased) {
+		return replacement.toUpperCase();
+	}
+	const first = matched.charAt(0);
+	if (first && first.toLowerCase() !== first.toUpperCase() && first === first.toUpperCase()) {
+		return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+	}
+	return replacement;
+}
+
+/**
  * Apply `replacement` to `matches` within one segment's text. Applied right to left so an earlier match's
  * offsets are still valid after a later one has changed the string's length. Matches are assumed to be
- * non-overlapping and in ascending order, which is what `findInText` produces.
+ * non-overlapping and in ascending order, which is what `findInText` produces. `adaptCase` runs each
+ * replacement through `caseAdaptReplacement` - the widget passes it whenever the `Aa` toggle is off.
  */
-export function replaceInText(text: string, matches: readonly IFindMatch[], replacement: string): string {
+export function replaceInText(text: string, matches: readonly IFindMatch[], replacement: string, adaptCase?: boolean): string {
 	let out = text;
 	for (let i = matches.length - 1; i >= 0; i--) {
 		const m = matches[i];
-		out = out.slice(0, m.start) + replacement + out.slice(m.end);
+		const rep = adaptCase ? caseAdaptReplacement(text.slice(m.start, m.end), replacement) : replacement;
+		out = out.slice(0, m.start) + rep + out.slice(m.end);
 	}
 	return out;
 }
