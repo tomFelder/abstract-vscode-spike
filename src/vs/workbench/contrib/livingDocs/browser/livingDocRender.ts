@@ -5,6 +5,7 @@
 
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
+import { localize } from '../../../../nls.js';
 import { addressLabel, IBlockGutterEntry } from '../common/livingDocAddress.js';
 import { isRelativeImageSrc, rewriteMarkdownImageSrcs } from '../common/livingDocAssets.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';

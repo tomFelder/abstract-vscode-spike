@@ -85,6 +85,68 @@ suite('ProseMirror vendored bundle (LWDPM)', () => {
 		assert.strictEqual(lwdpm.roundTrip(md).trim(), md);
 	});
 
+	// --- [[Wikilinks]] (plan 52 WP-C, decision 179) ------------------------------
+	// These pin the bundle rebuild's whole reason for existing. Before it, prosemirror-markdown's text
+	// serializer escaped the brackets, so a wikilink typed into the editor reached disk as
+	// `\[\[Doc Name\]\]` and the file stopped being Obsidian-compatible on the very first save.
+	suite('wikilinks', () => {
+
+		test('a wikilink parses to a wikilink node and round-trips to exactly [[Doc Name]]', () => {
+			const md = 'See [[Team Notes]] and [[Q3 Plan|the plan]] for detail.';
+			assert.deepStrictEqual(JSON.parse(JSON.stringify(lwdpm.docJSON(md))), {
+				type: 'doc',
+				content: [{
+					type: 'paragraph',
+					content: [
+						{ type: 'text', text: 'See ' },
+						{ type: 'wikilink', attrs: { target: 'Team Notes', alias: '' } },
+						{ type: 'text', text: ' and ' },
+						{ type: 'wikilink', attrs: { target: 'Q3 Plan', alias: 'the plan' } },
+						{ type: 'text', text: ' for detail.' }
+					]
+				}]
+			});
+			assert.strictEqual(lwdpm.roundTrip(md).trim(), md);
+		});
+
+		test('[[ inside code is inert, and an escaped [[ stays literal', () => {
+			// The rule is an INLINE rule, so a fence's raw content never reaches it and the earlier
+			// `backticks` / `escape` rules claim their spans first. All three must round-trip untouched
+			// AND contain no wikilink node - a code sample that silently became a link would be a defect.
+			const cases = [
+				'```\nnot a link: [[Team Notes]]\n```',
+				'Inline `[[Team Notes]]` stays code.',
+				'Escaped \\[\\[Team Notes\\]\\] stays literal.',
+			];
+			assert.deepStrictEqual(cases.map(md => ({
+				roundTrips: lwdpm.roundTrip(md).trim() === md.trim(),
+				hasNode: JSON.stringify(lwdpm.docJSON(md)).includes('"wikilink"'),
+			})), [
+				{ roundTrips: true, hasNode: false },
+				{ roundTrips: true, hasNode: false },
+				{ roundTrips: true, hasNode: false },
+			]);
+		});
+
+		test('wikilinks coexist with bind: figures and {{slot}} tokens, in prose, lists and headings', () => {
+			// The heading case also guards a data-loss bug this work found: upstream's heading content
+			// expression is `(text | image)*`, so ANY inline atom made the parser drop the heading and
+			// collapse the whole document to an empty paragraph - already true on main for bind: links.
+			const md = '## Q3 [[Team Notes]] and [49,800](bind:metrics.mrr)\n\n'
+				+ 'Prose with [[Q3 Plan]], a slot {{customer}} and [12%](bind:metrics.growth).\n\n'
+				+ '* A list item linking [[Team Notes]]\n* Second item';
+			assert.deepStrictEqual({
+				roundTrip: lwdpm.roundTrip(md).trim(),
+				wikilinkCount: JSON.stringify(lwdpm.docJSON(md)).split('"wikilink"').length - 1,
+				figureCount: JSON.stringify(lwdpm.docJSON(md)).split('"bound_figure"').length - 1,
+			}, {
+				roundTrip: md,
+				wikilinkCount: 3,
+				figureCount: 2,
+			});
+		});
+	});
+
 	// --- Keystroke-level history (plan 26 iter 1) --------------------------------
 	// These mount a real EditorView so they exercise the actual `history()` plugin + undo/redo commands
 	// (not a re-implementation). They run in the browser test environment where `document` exists.
