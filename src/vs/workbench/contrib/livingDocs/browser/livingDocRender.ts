@@ -787,6 +787,11 @@ function wlFmt(template, value){ return String(template).split('{0}').join(Strin
 let _docNames = Array.isArray(window.__LWD_DOCS) ? window.__LWD_DOCS : [];
 // The open picker: { el, list, items, index, from, to } in PM document positions, or null.
 let wikiPicker = null;
+let _wikiDismissed = -1;
+// The document position of a '[[' the user dismissed with Escape, or -1. Escape has to be remembered, not
+// merely acted on: the same keystroke's keyup runs the refresh, which would find the caret still inside the
+// partial link and reopen the picker the user just dismissed. Cleared as soon as the caret leaves that link,
+// so retyping '[[' offers the picker again.
 // The caret's textblock text up to the caret, with each inline LEAF contributing exactly one character so
 // string offsets line up 1:1 with ProseMirror's parentOffset (a bound figure is 1 position but contributes
 // no textContent, which would otherwise skew every position we compute). Returns null when the caret is
@@ -811,7 +816,9 @@ function refreshWikiPicker(){
 	const ctx = pmCaretContext();
 	if (!ctx){ return closeWikiPicker(); }
 	const active = activeWikilink(ctx.text, ctx.offset);
-	if (!active){ return closeWikiPicker(); }
+	if (!active){ _wikiDismissed = -1; return closeWikiPicker(); }
+	const from = ctx.start + active.start;
+	if (from === _wikiDismissed){ return closeWikiPicker(); }
 	const query = active.query.trim();
 	const matches = rankWikilinkTargets(_docNames, active.query, ${WIKILINK_PICKER_LIMIT});
 	const items = [];
@@ -823,7 +830,7 @@ function refreshWikiPicker(){
 	const keep = wikiPicker ? wikiPicker.items[wikiPicker.index] : null;
 	let index = 0;
 	if (keep){ for (let i = 0; i < items.length; i++){ if (items[i].target === keep.target && items[i].isNew === keep.isNew){ index = i; break; } } }
-	showWikiPicker(items, index, ctx.start + active.start, ctx.start + ctx.offset);
+	showWikiPicker(items, index, from, ctx.start + ctx.offset);
 }
 function showWikiPicker(items, index, from, to){
 	if (!wikiPicker){
@@ -894,6 +901,7 @@ function acceptWikiPick(index){
 	const from = wikiPicker.from, to = wikiPicker.to;
 	closeWikiPicker();
 	if (!it){ return; }
+	_wikiDismissed = -1;
 	const type = pmView.state.schema.nodes.wikilink;
 	if (!type){ return; }
 	try {
@@ -931,7 +939,7 @@ function openWikilink(el){ const target = el.getAttribute('data-target'); if (ta
 function scheduleWikiRefresh(){ setTimeout(refreshWikiPicker, 0); }
 function onWikiKeydown(e){
 	if (!wikiPicker){ return; }
-	if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeWikiPicker(); return; }
+	if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); _wikiDismissed = wikiPicker.from; closeWikiPicker(); return; }
 	if (e.key === 'ArrowDown'){ e.preventDefault(); e.stopPropagation(); moveWikiSel(1); return; }
 	if (e.key === 'ArrowUp'){ e.preventDefault(); e.stopPropagation(); moveWikiSel(-1); return; }
 	if (e.key === 'Enter' || e.key === 'Tab'){ e.preventDefault(); e.stopPropagation(); acceptWikiPick(); return; }
