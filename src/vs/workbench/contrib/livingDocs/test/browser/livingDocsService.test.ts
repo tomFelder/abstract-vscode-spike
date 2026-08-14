@@ -1279,17 +1279,19 @@ suite('livingDocs Service', () => {
 		await before.approve(pending.find(c => c.newText === commentary)!.id);
 		await before.reject(pending.find(c => c.newText === watch)!.id);
 
+		// The record the old sentence contradicted: the approved text really was written into the document. It is
+		// read from the service that wrote it, since a fresh service in this harness gets a fresh file map - the
+		// relaunch below shares the workspace STORAGE, which is the thing under test.
+		const commentaryOnDisk = blockText(before, WEEKLY, 'h-commentary');
+
 		const after = createService([], { model: chatReply('never asked for'), storage });
-		await after.loadDocument(WEEKLY);
 		const restored = after.getChatMessages(WEEKLY).at(-1)!;
 		assert.deepStrictEqual({
 			restored: restored.restored,
 			proposed: restored.proposedCount,
 			approved: restored.approvedCount,
 			rejected: restored.rejectedCount,
-			// The two records the old sentence contradicted: the approved text really is in the document, and the
-			// rejected one really is not.
-			commentaryOnDisk: blockText(after, WEEKLY, 'h-commentary'),
+			commentaryOnDisk,
 			// Nothing is re-queued by restoring, so the restored counts are the ONLY surviving account of it.
 			stillPending: after.getAllPending().length,
 		}, {
