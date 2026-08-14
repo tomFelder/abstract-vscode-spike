@@ -5,6 +5,7 @@
 
 import { renderMarkdown } from '../../../../base/browser/markdownRenderer.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
+import { localize } from '../../../../nls.js';
 import { addressLabel, IBlockGutterEntry } from '../common/livingDocAddress.js';
 import { isRelativeImageSrc, rewriteMarkdownImageSrcs } from '../common/livingDocAssets.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
@@ -13,6 +14,7 @@ import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../c
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
 import { deleteCol, deleteRow, gfmEscapeCell, gfmIsAlignRow, gfmParseAlign, gfmSplitCells, insertCol, insertRow, parseGfmTable, serializeGfmTable, setCell } from '../common/livingDocTableEdit.js';
 import { isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose } from '../common/livingDocWordPaste.js';
+import { activeWikilink, matchTypedWikilink, rankWikilinkTargets, resolveWikilinkTarget, splitWikilinkQuery, WIKILINK_PICKER_LIMIT, wikilinksToPlainText } from '../common/wikilinks.js';
 import { FRESHNESS_COLOURS, UNREACHABLE_SOURCE_LINE, UNREACHABLE_SOURCE_MARKER } from '../common/sourceFreshness.js';
 import { POLICY_EDITOR_STYLE } from './policyEditorRender.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
@@ -132,6 +134,13 @@ export interface ILivingDocRenderInput {
 	 * `livingDocs.v2.props.<docId>` from the storage service and hands it here).
 	 */
 	readonly properties?: IPropertiesRenderState;
+	/**
+	 * Every document name in the workspace (no `.md`), for the `[[` picker and the resolved/unresolved chip
+	 * (plan 52 WP-C). The webview cannot scan the folder, so the host supplies the list; it is seeded into the
+	 * shell for the first paint and refreshed afterwards by `lwdDocs` messages. Absent/empty simply means every
+	 * wikilink renders unresolved - a truthful state, never a fabricated resolution.
+	 */
+	readonly docNames?: readonly string[];
 }
 
 /** The Properties panel's render state: whether it is open plus the panel's own HTML (built by the editor). */
@@ -186,6 +195,32 @@ html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1c20;font-fami
 /* The keyboard route to the provenance drawer (#254): a tabbed-to bound figure shows a clear focus ring so a
  * keyboard user can see which figure Enter/Space will trace. */
 .bound:focus-visible{outline:2px solid #5B6DC4;outline-offset:1px;background:rgba(80,110,235,.16)}
+/* A [[wikilink]] chip (plan 52 WP-C, decision 179). Deliberately a DIFFERENT visual family from .bound: a
+ * bound figure is live DATA traced to a source (accent blue, dotted underline); a wikilink is NAVIGATION to
+ * another document (a quiet tinted chip with a solid underline), so the two are never confused mid-read. */
+.wikilink{background:#F4F5FD;color:#4650B8;border-bottom:1px solid #C3C9F0;border-radius:3px;padding:0 3px;cursor:pointer}
+.wikilink:hover{background:#E7EAFA;border-bottom-color:#4650B8}
+.wikilink:focus-visible{outline:2px solid #5B6DC4;outline-offset:1px}
+/* An UNRESOLVED link - no document of that name exists yet. It must read as different at a glance, not merely
+ * on hover, so the reader knows the link is a promise rather than a destination: the warm attention family,
+ * a dashed underline, and a trailing dot standing in for "not there yet". Clicking creates it (Obsidian). */
+.wikilink.unresolved{background:#FDF6E9;color:#9A6B16;border-bottom:1px dashed #D9B76A}
+.wikilink.unresolved:hover{background:#F9EDD5;border-bottom-color:#9A6B16}
+.wikilink.unresolved::after{content:"\\00b7";margin-left:3px;font-weight:700;color:#C99A2E}
+/* The caret-anchored [[ picker: fixed to the webview viewport (measured from PM's coordsAtPos), capped in
+ * height, quiet enough to read as a suggestion rather than a dialog. */
+.lwd-wikipicker{position:fixed;z-index:90;min-width:260px;max-width:360px;background:#fff;border:1px solid #E4E6EC;border-radius:10px;box-shadow:0 10px 30px rgba(20,30,60,.16);padding:5px}
+.lwd-wikipicker .wp-head{padding:6px 9px 5px;font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;color:#A3A8B2}
+.lwd-wikipicker .wp-list{max-height:238px;overflow-y:auto}
+.lwd-wikipicker .wp-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:none;background:none;border-radius:7px;padding:7px 9px;font:500 13px/1.3 system-ui;color:#2a2a31;cursor:pointer}
+.lwd-wikipicker .wp-item:hover{background:#F6F7F9}
+.lwd-wikipicker .wp-item.sel{background:#F4F5FD;color:#4650B8}
+.lwd-wikipicker .wp-glyph{flex:none;width:16px;font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#A3A8B2}
+.lwd-wikipicker .wp-item.sel .wp-glyph{color:#4650B8}
+.lwd-wikipicker .wp-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The "create this document" row uses the same warm vocabulary as the unresolved chip, so they read as one idea. */
+.lwd-wikipicker .wp-item.wp-new .wp-glyph{color:#C99A2E}
+.lwd-wikipicker .wp-item.wp-new.sel{background:#FDF6E9;color:#9A6B16}
 /* The applied-flash keyframe is reused by the PM provenance gutter's recently-changed marker. */
 @keyframes flash{0%{background:rgba(31,122,68,.34)}100%{background:rgba(31,122,68,.09)}}
 /* Inline word-diff for a meaning-change, matching the hi-fi (edit-in-place, not a stacked block). */
@@ -534,7 +569,25 @@ ${POLICY_EDITOR_STYLE}`;
 // yields injectable ES with no dangling import/helper references.
 const TABLE_HELPERS = [gfmSplitCells, gfmIsAlignRow, gfmParseAlign, gfmEscapeCell, parseGfmTable, serializeGfmTable, setCell, insertRow, deleteRow, insertCol, deleteCol].map(fn => String(fn)).join('\n');
 
+// The pure wikilink rules (plan 52 WP-C, decision 179) are injected the same way the table helpers are, so
+// the picker running INSIDE the webview and the unit tests in `common/` are literally the same code - in
+// particular the ranking, which is the @-mention picker's rule (`filterMentions`, #178) lifted to `common/`
+// rather than reimplemented. Each is asserted self-contained by `test/browser/wikilinks.test.ts`.
+const WIKILINK_HELPERS = [activeWikilink, matchTypedWikilink, rankWikilinkTargets, resolveWikilinkTarget, splitWikilinkQuery].map(fn => String(fn)).join('\n');
+
+// The RUNTIME is plain injected JavaScript and cannot call `localize()` itself, so every user-visible string
+// it shows is built HERE with a `{0}` placeholder and handed over as data. `wlFmt` below does the
+// substitution in the webview - never string concatenation, so a translation can reorder the sentence.
+const WIKILINK_STRINGS = {
+	open: localize('livingDocs.wikilink.open', "Open {0}"),
+	create: localize('livingDocs.wikilink.create', "{0} - this document does not exist yet. Click to create it."),
+	pickerHeader: localize('livingDocs.wikilink.pickerHeader', "Link to a document"),
+	pickerNew: localize('livingDocs.wikilink.pickerNew', "Create \"{0}\""),
+	pickerAlias: localize('livingDocs.wikilink.pickerAlias', "{0} - shown as \"{1}\""),
+};
+
 const RUNTIME = `${TABLE_HELPERS}
+${WIKILINK_HELPERS}
 const vscode = acquireVsCodeApi();
 const root = document.getElementById('lwd-root');
 let pmView = null, pmTimer = 0;
@@ -570,7 +623,7 @@ document.addEventListener('drop', onImageDrop, true);
 // PM recreates <img> nodes on every re-render, so relative srcs must be re-resolved idempotently: observe the
 // persistent #lwd-root subtree and re-run resolution (debounced) whenever nodes/srcs change.
 let _imgObsTimer = 0;
-const _imgObserver = new MutationObserver(function(){ clearTimeout(_imgObsTimer); _imgObsTimer = setTimeout(resolveRelativeImages, 30); });
+const _imgObserver = new MutationObserver(function(){ clearTimeout(_imgObsTimer); _imgObsTimer = setTimeout(function(){ resolveRelativeImages(); enrichWikilinks(); }, 30); });
 _imgObserver.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
 // The open in-place table cell editor (issue #140): { input, tIdx, r, c }. tIdx is the table's index
 // in document order (robust to PM rebuilding the atom's DOM on setNodeMarkup); r < 0 addresses the
@@ -598,7 +651,7 @@ function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance
 // suffix when a snapshot exists (plan 26 iter 4).
 function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
 function pmOnChange(){ if (_pmEchoSuppressed) { return; } setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
-function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } enrichBoundFigures(); reportWidgets(specChangeIds(spec)); }
+function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } enrichBoundFigures(); enrichWikilinks(); reportWidgets(specChangeIds(spec)); }
 // The change ids this decoration pass ASKED for - every pending edit and insertion in the spec.
 function specChangeIds(spec){ const ids = []; if (spec) { const lists = [spec.edits, spec.inserts]; for (let l = 0; l < lists.length; l++) { const arr = lists[l] || []; for (let i = 0; i < arr.length; i++) { if (arr[i] && arr[i].id) { ids.push(arr[i].id); } } } } return ids; }
 // Ground truth for the chat transcript's change pointers (plan 52 WP-A1 fix 1, #301/#300): tell the host
@@ -721,7 +774,278 @@ function installPasteBoundaryGuard(view){
 		} catch (err) { return slice; }
 	} });
 }
-function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); installPasteBoundaryGuard(pmView); pmDeco(spec); wireTableEditing(); resolveRelativeImages(); focusPm(); } }
+// ---- [[Wikilinks]] (plan 52 WP-C, decision 179) ------------------------------------------------
+// The picker, the resolved/unresolved chip and the click-to-navigate all live here rather than in the
+// vendored bundle: the bundle owns the Markdown GRAMMAR (the wikilink atom node, so \`[[Doc Name]]\` survives
+// parse + serialise byte-for-byte on disk), and the host webview owns everything that depends on knowing
+// WHICH DOCUMENTS EXIST - which the bundle cannot know.
+const WL_S = ${JSON.stringify(WIKILINK_STRINGS)};
+// Substitute the {0} (and optional {1}) placeholders. Never concatenate a user-visible sentence: the host
+// built these with localize() and a translation is free to reorder the placeholders.
+function wlFmt(template, value, second){
+	const one = String(template).split('{0}').join(String(value));
+	return second === undefined ? one : one.split('{1}').join(String(second));
+}
+// Every document name in the workspace, pushed by the host (it alone can scan the folder). Seeded on the
+// shell so the first paint already marks links resolved/unresolved, then refreshed by 'lwdDocs' messages.
+let _docNames = Array.isArray(window.__LWD_DOCS) ? window.__LWD_DOCS : [];
+// The open picker: { el, list, items, index, from, to } in PM document positions, or null.
+let wikiPicker = null;
+let _wikiDismissed = -1;
+// The document position of a '[[' the user dismissed with Escape, or -1. Escape has to be remembered, not
+// merely acted on: the same keystroke's keyup runs the refresh, which would find the caret still inside the
+// partial link and reopen the picker the user just dismissed. Cleared as soon as the caret leaves that link,
+// so retyping '[[' offers the picker again.
+// Is this position CODE? Both senses of it: inside a fenced/indented code BLOCK, and inside an inline
+// \`code\` SPAN. Typing \`[[\` in either is a code sample, never a link - and that is not a house preference, it
+// is what the Markdown parser does: a fence's content is never inline-parsed, and markdown-it's \`backticks\`
+// rule claims a span before the wikilink rule is ever reached. So the picker must not open here and the
+// input rule must not fire here, or the editor would disagree with the file it just wrote. One helper for
+// both, because two guards that must agree are a defect waiting to happen.
+function pmIsCodeAt($pos, storedMarks){
+	for (let d = $pos.depth; d >= 0; d--){ const t = $pos.node(d).type; if (t && (t.name === 'code_block' || t.spec && t.spec.code)){ return true; } }
+	const codeMark = pmView && pmView.state.schema.marks.code;
+	if (!codeMark){ return false; }
+	const marks = storedMarks || $pos.marks();
+	return !!(marks && codeMark.isInSet(marks));
+}
+// The caret's textblock text up to the caret, with each inline LEAF contributing exactly one character so
+// string offsets line up 1:1 with ProseMirror's parentOffset (a bound figure is 1 position but contributes
+// no textContent, which would otherwise skew every position we compute). Returns null when the caret is
+// somewhere a wikilink must never be offered: a non-empty selection, a non-textblock, or code.
+function pmCaretContext(){
+	if (!pmView){ return null; }
+	const sel = pmView.state.selection;
+	if (!sel.empty || !sel.$from){ return null; }
+	const $from = sel.$from;
+	const parent = $from.parent;
+	if (!parent || !parent.isTextblock){ return null; }
+	if (pmIsCodeAt($from, pmView.state.storedMarks)){ return null; }
+	let text = '';
+	try { text = parent.textBetween(0, $from.parentOffset, undefined, '\\ufffc'); } catch (e) { return null; }
+	return { text: text, offset: $from.parentOffset, start: $from.start() };
+}
+function closeWikiPicker(){ if (!wikiPicker){ return; } if (wikiPicker.el && wikiPicker.el.parentNode){ wikiPicker.el.parentNode.removeChild(wikiPicker.el); } wikiPicker = null; }
+// Recompute the picker from the live caret. Called after every input/keyup/click in the surface, so the
+// list narrows as the query is typed and the picker closes the moment the caret leaves the partial link.
+function refreshWikiPicker(){
+	const ctx = pmCaretContext();
+	if (!ctx){ return closeWikiPicker(); }
+	const active = activeWikilink(ctx.text, ctx.offset);
+	if (!active){ _wikiDismissed = -1; return closeWikiPicker(); }
+	const from = ctx.start + active.start;
+	if (from === _wikiDismissed){ return closeWikiPicker(); }
+	// Obsidian's alias form is authored right here, in the query: everything after the first '|' is the words
+	// the link will SHOW, and only the half before it is matched against the document list. Without this split
+	// the whole run is searched, matches nothing, and the picker offers to create a document literally named
+	// "Q3 Plan|the plan" - a name no filesystem will take. The split is the same one the parser makes.
+	const parts = splitWikilinkQuery(active.query);
+	const query = parts.target.trim();
+	const alias = parts.alias;
+	const matches = rankWikilinkTargets(_docNames, parts.target, ${WIKILINK_PICKER_LIMIT});
+	const items = [];
+	for (let i = 0; i < matches.length; i++){ items.push({ target: matches[i], label: alias ? wlFmt(WL_S.pickerAlias, matches[i], alias) : matches[i], isNew: false }); }
+	// No match is not a dead end: offer to create the document the user is clearly naming. The link inserts
+	// either way and renders unresolved until the document exists - the same Obsidian promise.
+	if (query && !resolveWikilinkTarget(query, _docNames)){
+		const made = wlFmt(WL_S.pickerNew, query);
+		items.push({ target: query, label: alias ? wlFmt(WL_S.pickerAlias, made, alias) : made, isNew: true });
+	}
+	if (!items.length){ return closeWikiPicker(); }
+	const keep = wikiPicker ? wikiPicker.items[wikiPicker.index] : null;
+	let index = 0;
+	if (keep){ for (let i = 0; i < items.length; i++){ if (items[i].target === keep.target && items[i].isNew === keep.isNew){ index = i; break; } } }
+	showWikiPicker(items, index, from, ctx.start + ctx.offset, alias);
+}
+function showWikiPicker(items, index, from, to, alias){
+	if (!wikiPicker){
+		const el = document.createElement('div');
+		el.className = 'lwd-wikipicker';
+		el.setAttribute('role', 'listbox');
+		el.setAttribute('aria-label', WL_S.pickerHeader);
+		const head = document.createElement('div');
+		head.className = 'wp-head';
+		head.textContent = WL_S.pickerHeader;
+		const list = document.createElement('div');
+		list.className = 'wp-list';
+		el.appendChild(head); el.appendChild(list);
+		document.body.appendChild(el);
+		// mousedown (not click) so the accept runs BEFORE the editor loses focus to the picker.
+		list.addEventListener('mousedown', function(e){ const row = e.target.closest && e.target.closest('[data-wp-index]'); if (!row){ return; } e.preventDefault(); e.stopPropagation(); acceptWikiPick(Number(row.getAttribute('data-wp-index'))); });
+		wikiPicker = { el: el, list: list, items: [], index: 0, from: from, to: to, alias: '' };
+	}
+	wikiPicker.items = items; wikiPicker.index = index; wikiPicker.from = from; wikiPicker.to = to;
+	wikiPicker.alias = alias || '';
+	paintWikiPicker();
+	placeWikiPicker(from);
+}
+function paintWikiPicker(){
+	if (!wikiPicker){ return; }
+	const rows = [];
+	for (let i = 0; i < wikiPicker.items.length; i++){
+		const it = wikiPicker.items[i];
+		const b = document.createElement('button');
+		b.type = 'button';
+		b.className = 'wp-item' + (it.isNew ? ' wp-new' : '') + (i === wikiPicker.index ? ' sel' : '');
+		b.setAttribute('data-wp-index', String(i));
+		b.setAttribute('role', 'option');
+		b.setAttribute('aria-selected', i === wikiPicker.index ? 'true' : 'false');
+		const g = document.createElement('span');
+		g.className = 'wp-glyph';
+		// allow-any-unicode-next-line
+		g.textContent = it.isNew ? '\\uff0b' : '\\u25a6';
+		const n = document.createElement('span');
+		n.className = 'wp-name';
+		n.textContent = it.label;
+		b.appendChild(g); b.appendChild(n);
+		rows.push(b);
+	}
+	wikiPicker.list.textContent = '';
+	for (let i = 0; i < rows.length; i++){ wikiPicker.list.appendChild(rows[i]); }
+	const sel = wikiPicker.list.querySelector('.sel');
+	if (sel && sel.scrollIntoView){ sel.scrollIntoView({ block: 'nearest' }); }
+}
+// Anchor under the '[[' that opened it, flipping above when it would fall off the bottom of the webview.
+function placeWikiPicker(from){
+	if (!wikiPicker || !pmView){ return; }
+	let coords;
+	try { coords = pmView.coordsAtPos(from); } catch (e) { return; }
+	const box = wikiPicker.el.getBoundingClientRect();
+	let top = coords.bottom + 6;
+	if (top + box.height > window.innerHeight - 6){ top = Math.max(6, coords.top - box.height - 6); }
+	let left = coords.left;
+	if (left + box.width > window.innerWidth - 6){ left = Math.max(6, window.innerWidth - box.width - 6); }
+	wikiPicker.el.style.left = left + 'px';
+	wikiPicker.el.style.top = top + 'px';
+}
+function moveWikiSel(delta){ if (!wikiPicker){ return; } const n = wikiPicker.items.length; wikiPicker.index = ((wikiPicker.index + delta) % n + n) % n; paintWikiPicker(); }
+// Accept: replace the typed '[[query' run with a real wikilink NODE (so the serializer writes exactly
+// [[Doc Name]] to disk) plus a trailing space, as ONE transaction - one undo step, one save.
+function acceptWikiPick(index){
+	if (!wikiPicker || !pmView){ return; }
+	const it = wikiPicker.items[typeof index === 'number' ? index : wikiPicker.index];
+	const from = wikiPicker.from, to = wikiPicker.to;
+	// An alias equal to its target is noise on disk, so it is dropped - the same rule serializeWikilink holds.
+	const alias = wikiPicker.alias && it && wikiPicker.alias !== it.target ? wikiPicker.alias : '';
+	closeWikiPicker();
+	if (!it){ return; }
+	_wikiDismissed = -1;
+	const type = pmView.state.schema.nodes.wikilink;
+	if (!type){ return; }
+	try {
+		const node = type.create({ target: it.target, alias: alias });
+		const tr = pmView.state.tr.replaceWith(from, to, node);
+		tr.insertText(' ', from + node.nodeSize);
+		pmView.dispatch(tr);
+	} catch (e) { return; }
+	enrichWikilinks();
+	try { pmView.focus(); } catch (e) {}
+}
+// Hand-typed links (fix round 1, #314). A \`[[Doc Name]]\` that arrives from disk, or from the picker, is a
+// real wikilink NODE and so serialises back unescaped. One merely TYPED was plain text - and
+// prosemirror-markdown's text serializer escapes \`[\` and \`]\`, so it reached disk as \`\\[\\[Doc Name\\]\\]\` and
+// was corrupt from the very first save, permanently. Because the picker could not author an alias,
+// hand-typing was also the ONLY route to \`[[Target|Alias]]\`, which made the one syntax the grammar, the
+// round-trip and the export all support the one syntax guaranteed to break.
+//
+// The fix is the ProseMirror input-rule shape: watch the text as it is typed and, the moment the closing
+// \`]]\` lands, insert a real NODE instead of that bracket. It needs NO bundle edit - the bundle's grammar was
+// already right, only the typing path was missing - because \`handleTextInput\` is an editor PROP, checked
+// before plugin props by someProp, the same sanctioned seam the paste-boundary guard uses (#256).
+//
+// The decision is the pure \`matchTypedWikilink\` from common/wikilinks.ts, injected verbatim and unit-tested
+// there. It mirrors the bundle's markdown-it inline rule exactly, so typing a link and reloading the file
+// can never disagree about what is a link. CODE is the one thing a string cannot know, so it is guarded
+// here, where the nodes and marks around the caret are visible.
+function installWikilinkInputRule(view){
+	if (!view || view._lwdWikiInput || typeof view.setProps !== 'function'){ return; }
+	view._lwdWikiInput = true;
+	view.setProps({ handleTextInput: function(v, from, to, text){
+		try {
+			const type = v.state.schema.nodes.wikilink;
+			if (!type || !text){ return false; }
+			const $from = v.state.doc.resolve(from);
+			if (!$from.parent || !$from.parent.isTextblock){ return false; }
+			if (pmIsCodeAt($from, v.state.storedMarks)){ return false; }
+			// The typed character is not in the document yet, so it is appended by hand: the rule has to see
+			// the text as it WILL be, which is the whole point of firing on the closing bracket.
+			const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '\\ufffc') + text;
+			const hit = matchTypedWikilink(before);
+			if (!hit){ return false; }
+			const start = from - (hit.length - text.length);
+			if (start < $from.start()){ return false; }
+			// An alias identical to its target is noise on disk; drop it, exactly as serializeWikilink does.
+			const alias = hit.alias && hit.alias !== hit.target ? hit.alias : '';
+			v.dispatch(v.state.tr.replaceWith(start, to, type.create({ target: hit.target, alias: alias })).scrollIntoView());
+			_wikiDismissed = -1;
+			closeWikiPicker();
+			setTimeout(enrichWikilinks, 0);
+			return true;
+		} catch (err) { return false; }
+	} });
+}
+// Mark every chip resolved or unresolved, and make it a real keyboard-reachable door (the same contract
+// enrichBoundFigures gives a bound figure). Idempotent - re-run after every render; data-lwd-wl records the
+// state already painted so a repeat pass touches nothing.
+function enrichWikilinks(){
+	if (!pmView){ return; }
+	const links = pmView.dom.querySelectorAll('span.wikilink[data-target]');
+	for (let i = 0; i < links.length; i++){
+		const el = links[i];
+		const target = el.getAttribute('data-target') || '';
+		const match = resolveWikilinkTarget(target, _docNames);
+		const label = match ? wlFmt(WL_S.open, match) : wlFmt(WL_S.create, target);
+		const state = match ? 'r' : 'u';
+		if (el.getAttribute('data-lwd-wl') === state && el.getAttribute('title') === label){ continue; }
+		el.setAttribute('data-lwd-wl', state);
+		if (match){ el.classList.remove('unresolved'); } else { el.classList.add('unresolved'); }
+		el.setAttribute('role', 'link');
+		el.setAttribute('tabindex', '0');
+		el.setAttribute('title', label);
+		el.setAttribute('aria-label', label);
+	}
+}
+// Following a link is NOT idempotent - an unresolved one creates a document - so the same click must never
+// be able to fire it twice. A wikilink inside a table cell is seen by two handlers: the capture-phase cell
+// mousedown (which has to run, or the click opens the cell editor instead of the link) and the bubble-phase
+// click delegate. Left alone that pair created TWO documents from one click, observed in the desktop walk.
+// Collapsing them here rather than removing one call site keeps a table-cell link working whichever handler
+// wins, which is the property that actually matters.
+let _wlLastFollow = { target: '', at: 0 };
+function openWikilink(el){
+	const target = el.getAttribute('data-target');
+	if (!target){ return; }
+	const now = Date.now();
+	if (target === _wlLastFollow.target && (now - _wlLastFollow.at) < 700){ return; }
+	_wlLastFollow = { target: target, at: now };
+	vscode.postMessage({ type: 'openWikilink', target: target });
+}
+// The picker reads the caret AFTER ProseMirror has applied the change, so every hook defers a tick.
+function scheduleWikiRefresh(){ setTimeout(refreshWikiPicker, 0); }
+function onWikiKeydown(e){
+	if (!wikiPicker){ return; }
+	if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); _wikiDismissed = wikiPicker.from; closeWikiPicker(); return; }
+	if (e.key === 'ArrowDown'){ e.preventDefault(); e.stopPropagation(); moveWikiSel(1); return; }
+	if (e.key === 'ArrowUp'){ e.preventDefault(); e.stopPropagation(); moveWikiSel(-1); return; }
+	if (e.key === 'Enter' || e.key === 'Tab'){ e.preventDefault(); e.stopPropagation(); acceptWikiPick(); return; }
+}
+function wireWikilinks(){
+	if (!pmView || pmView.__lwdWikiWired){ return; }
+	pmView.__lwdWikiWired = true;
+	// Capture phase on the view's own element: the picker's Enter/Arrow/Esc must be claimed before
+	// ProseMirror's keymap turns Enter into a paragraph split.
+	pmView.dom.addEventListener('keydown', onWikiKeydown, true);
+	pmView.dom.addEventListener('input', scheduleWikiRefresh);
+	pmView.dom.addEventListener('keyup', scheduleWikiRefresh);
+	pmView.dom.addEventListener('mouseup', scheduleWikiRefresh);
+	installWikilinkInputRule(pmView);
+	enrichWikilinks();
+}
+// A click anywhere outside the picker dismisses it (the caret has moved on).
+document.addEventListener('mousedown', function(e){ if (!wikiPicker){ return; } if (wikiPicker.el.contains(e.target)){ return; } closeWikiPicker(); }, true);
+window.addEventListener('scroll', function(){ if (wikiPicker){ placeWikiPicker(wikiPicker.from); } }, true);
+window.addEventListener('resize', function(){ if (wikiPicker){ placeWikiPicker(wikiPicker.from); } });
+function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && window.LWDPM) { pmView = window.LWDPM.mount(r, md || '', { onChange: pmOnChange }); installPasteBoundaryGuard(pmView); pmDeco(spec); wireTableEditing(); wireWikilinks(); resolveRelativeImages(); focusPm(); } }
 // plan 16 iter 3 (decision 56): land the caret in the document on first mount so a freshly-opened (or
 // freshly-created blank) doc is immediately writable -- "one click -> cursor ready", no extra click to
 // start typing. Only fires on the initial mount (mount-once-then-message, decision 50), so re-renders
@@ -777,6 +1101,8 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-next-doc]')) { return vscode.postMessage({ type: 'nextDoc' }); }
 	if (el = e.target.closest('[data-cells]')) { return vscode.postMessage({ type: 'reveal', cells: el.getAttribute('data-cells').split(',') }); }
 	if (el = e.target.closest('span.bound[data-key]')) { return vscode.postMessage({ type: 'reveal', cells: [el.getAttribute('data-key')] }); }
+	// A [[wikilink]] chip opens its document; an unresolved one creates it first (the Obsidian gesture).
+	if (el = e.target.closest('span.wikilink[data-target]')) { e.preventDefault(); e.stopPropagation(); return openWikilink(el); }
 	// A marked gutter number (bound or pending) opens the source-peek for the block's bind. The number is a
 	// ::before on the block node painted into the gutter lane, so only fire when the click lands in that lane
 	// (clientX left of the block's content edge); an idle number carries no bind and clicks through to text.
@@ -815,6 +1141,9 @@ root.addEventListener('keydown', e => {
 	// so this completes the "figure is a real, keyboard-reachable door" contract.
 	const fig = e.target.closest && e.target.closest('span.bound[data-key]');
 	if (fig && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) { e.preventDefault(); return vscode.postMessage({ type: 'reveal', cells: [fig.getAttribute('data-key')] }); }
+	// The same keyboard door for a wikilink chip: Enter/Space follows it (or creates its document).
+	const wl = e.target.closest && e.target.closest('span.wikilink[data-target]');
+	if (wl && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) { e.preventDefault(); return openWikilink(wl); }
 	const b = e.target.closest('[data-block]');
 	if (b && e.key === 'Enter') { e.preventDefault(); b.blur(); }
 	// Properties inputs commit on Enter (title/status blur to fire their focusout write; the tag input posts and
@@ -953,6 +1282,10 @@ function applyTableOp(op){ const ed = tblEditor; if (!ed){ return; } const tIdx 
 function onTableCellMousedown(e){ const cell = e.target.closest && e.target.closest('td, th'); if (!cell){ return; } const tableEl = cell.closest && cell.closest('table.lwd-table'); if (!tableEl || !pmView || !pmView.dom.contains(tableEl)){ return; }
 	const fig = e.target.closest && e.target.closest('span.bound[data-key]');
 	if (fig && e.detail < 2){ e.preventDefault(); e.stopPropagation(); if (tblEditor){ commitCell(); teardownCellInput(); } return vscode.postMessage({ type: 'reveal', cells: [fig.getAttribute('data-key')] }); }
+	// A wikilink inside a table cell gets the SAME wedge exception: a single click follows the link rather
+	// than opening the cell editor; the cell stays editable by clicking its non-link area or double-clicking.
+	const wcell = e.target.closest && e.target.closest('span.wikilink[data-target]');
+	if (wcell && e.detail < 2){ e.preventDefault(); e.stopPropagation(); if (tblEditor){ commitCell(); teardownCellInput(); } return openWikilink(wcell); }
 	e.preventDefault(); e.stopPropagation(); const tIdx = tablesInView().indexOf(tableEl); const coords = cellCoords(tableEl, cell); if (tblEditor){ commitCell(); teardownCellInput(); } openCellAt(tIdx, coords); }
 // Capture-phase keydown guard: while a table atom is node-selected, a single printable key would replace
 // it. Block that (the data-loss trap). Delete/Backspace still delete the table (a visible, undoable act);
@@ -966,6 +1299,9 @@ window.addEventListener('scroll', function(){ revalidateCellEditor(); }, true);
 window.addEventListener('resize', function(){ revalidateCellEditor(); });
 window.addEventListener('message', e => { const m = e.data;
 	if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); }
+	// The workspace's document names changed (one created, renamed or deleted): re-mark every chip, so a link
+	// that was unresolved a moment ago reads as resolved without a reload.
+	else if (m && m.type === 'lwdDocs') { if (Array.isArray(m.names)) { _docNames = m.names; enrichWikilinks(); if (wikiPicker) { refreshWikiPicker(); } } }
 	else if (m && m.type === 'focusChange') { focusChange(m.id); }
 	else if (m && m.type === 'revealHeading') { revealHeading(m.headingIndex); }
 	else if (m && m.type === 'revealBlock') { revealBlock(m.blockIndex); }
@@ -1249,8 +1585,9 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	// can't break out of the script); the RUNTIME reads them once on load (so a default-PM living doc shows
 	// its proposals/gutter without waiting for the first message).
 	const decoLiteral = content.pmDeco === null ? 'null' : JSON.stringify(content.pmDeco).replace(/</g, '\\u003c');
+	const docsLiteral = JSON.stringify(input.docNames ?? []).replace(/</g, '\\u003c');
 	const pmInit = `<script>window.__LWD_PM_MD=${content.pmMd === null ? 'null' : escapeForScript(content.pmMd)};`
-		+ `window.__LWD_PM_DECO=${decoLiteral};</script>`;
+		+ `window.__LWD_PM_DECO=${decoLiteral};window.__LWD_DOCS=${docsLiteral};</script>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>`
 		+ `<div id="lwd-root">${content.html}</div>`
 		+ `${pmInit}<script>${bundle}</script><script>${RUNTIME}</script></body></html>`;
@@ -1439,16 +1776,21 @@ export function renderExportHtml(doc: ILivingDoc, resolved: ReadonlyMap<string, 
  */
 export function renderExportMarkdown(doc: ILivingDoc, resolved: ReadonlyMap<string, string> = EMPTY_RESOLVED): string {
 	if (!doc.isLiving) {
-		// Plain Markdown already is its own clean export.
-		return doc.body.trim() + '\n';
+		// Plain Markdown already is its own clean export - bar the wikilinks, which mean nothing outside the
+		// workspace that resolves them.
+		return wikilinksToPlainText(doc.body).trim() + '\n';
 	}
 	const parts: string[] = [`# ${doc.title}`];
 	if (doc.subtitle) { parts.push(`_${doc.subtitle}_`); }
 	for (const block of doc.blocks) {
+		// Wikilinks collapse to the words a reader sees, exactly as bind links collapse to their value: an
+		// exported file is read OUTSIDE the workspace, where `[[Team Notes]]` is neither a link nor readable
+		// prose. Every export - md, html, docx and pdf - is built from this one resolved string, so doing it
+		// here covers all four, and no chip markup can leak because none is ever produced.
 		if (block.type === 'heading') {
-			parts.push(`${'#'.repeat(block.level ?? 2)} ${block.text}`);
+			parts.push(`${'#'.repeat(block.level ?? 2)} ${wikilinksToPlainText(block.text)}`);
 		} else {
-			parts.push(bindToValue(reconcileBindLinks(block.text, resolved)));
+			parts.push(wikilinksToPlainText(bindToValue(reconcileBindLinks(block.text, resolved))));
 		}
 	}
 	return parts.join('\n\n') + '\n';

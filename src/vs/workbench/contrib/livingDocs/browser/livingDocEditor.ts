@@ -6,6 +6,7 @@
 import { $, Dimension } from '../../../../base/browser/dom.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { isWeb } from '../../../../base/common/platform.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -40,6 +41,7 @@ import { coerceDocPolicy } from '../common/docPolicy.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { advanceOnboardingOnPeek } from './onboardingWalkthrough.js';
 import { wordPasteNotice } from '../common/livingDocWordPaste.js';
+import { documentNamesFromFiles, resolveWikilinkTarget } from '../common/wikilinks.js';
 
 export class LivingDocEditor extends EditorPane {
 
@@ -72,6 +74,14 @@ export class LivingDocEditor extends EditorPane {
 	// The document's created/updated times (from the file stat), fetched async and cached so the pure render can
 	// read them synchronously. Refreshed on setInput and after a frontmatter write (which touches mtime).
 	private _docTimes: { readonly created?: number; readonly updated?: number } = {};
+	// Every document name in the workspace, for the `[[` picker and the resolved/unresolved chip (plan 52
+	// WP-C). The webview cannot scan the folder, so the host holds the list and pushes it in. Cached on the
+	// pane rather than recomputed per render: `_render` runs on every keystroke-driven save, and this is a
+	// bounded folder scan. It survives a document switch (the set is workspace-wide, not per-document).
+	private _docNames: readonly string[] = [];
+	// Coalesces the rescan behind the service's change event, which fires on every 300ms autosave. The tree
+	// rail already rescans on every one of those with no delay at all, so this is strictly the cheaper caller.
+	private readonly _docNamesScan = this._register(new RunOnceScheduler(() => void this._refreshDocNames(), 750));
 
 	constructor(
 		group: IEditorGroup,
@@ -135,7 +145,11 @@ export class LivingDocEditor extends EditorPane {
 		// then `_resource` may already name the document that replaced this one.
 		const reportedResource = input.resource;
 		this._inputDisposables.add(toDisposable(() => this._livingDocs.clearInlineWidgets(reportedResource)));
-		this._inputDisposables.add(this._livingDocs.onDidChange(() => this._render()));
+		this._inputDisposables.add(this._livingDocs.onDidChange(() => {
+			this._render();
+			// A document may have been created, renamed or deleted, which changes which wikilinks resolve.
+			this._docNamesScan.schedule();
+		}));
 		// Rail-to-editor navigation: when a change for THIS document is asked to be focused, scroll to it.
 		this._inputDisposables.add(this._livingDocs.onDidRequestFocusChange(e => {
 			if (this._resource && e.docId === this._resource.toString()) {
@@ -162,6 +176,10 @@ export class LivingDocEditor extends EditorPane {
 			}
 		}));
 		await this._livingDocs.loadDocument(input.resource);
+		// Awaited before the first paint so a wikilink is never shown as unresolved for a document that does
+		// exist - a wrong "this does not exist yet" is exactly the kind of fabricated state this product must
+		// not show, even for one frame.
+		await this._refreshDocNames();
 		this._render();
 		// The created/updated times come from the file stat (async); fetch after the first render and re-render
 		// when they arrive so the panel shows truthful dates without blocking the editor's first paint.
@@ -196,6 +214,46 @@ export class LivingDocEditor extends EditorPane {
 		if (!resource) { return; }
 		await write(resource);
 		await this._refreshDocTimes(resource);
+	}
+
+	// The document names the `[[` picker offers and the chips resolve against (plan 52 WP-C). Identity is the
+	// FILE STEM, not the display title: that is what Obsidian links by, and it is what `createDocument(name)`
+	// writes, so a link that creates a document resolves to it immediately afterwards. Pushed to the webview
+	// only when the set actually changed, so the common case (a save that created nothing) posts nothing.
+	private async _refreshDocNames(): Promise<void> {
+		const docs = await this._livingDocs.listDocuments();
+		const names = documentNamesFromFiles(docs.map(d => basename(d.resource)));
+		if (names.length === this._docNames.length && names.every((n, i) => n === this._docNames[i])) { return; }
+		this._docNames = names;
+		void this._webview?.postMessage({ type: 'lwdDocs', names });
+	}
+
+	// Resolve a document name to its file, using the SAME pure rule the chips and the picker use, so what the
+	// reader saw marked "resolved" is exactly what opens.
+	private async _resolveWikilinkResource(target: string): Promise<URI | undefined> {
+		const docs = await this._livingDocs.listDocuments();
+		const byName = new Map<string, URI>();
+		for (const doc of docs) {
+			const stem = documentNamesFromFiles([basename(doc.resource)])[0];
+			if (stem && !byName.has(stem)) { byName.set(stem, doc.resource); }
+		}
+		const match = resolveWikilinkTarget(target, [...byName.keys()]);
+		return match ? byName.get(match) : undefined;
+	}
+
+	// Follow a wikilink: open the document it names, or create it when nothing carries that name. Opened in
+	// this pane's own group so a split layout navigates the pane the click came from, matching "Next document".
+	private async _openWikilink(target: string): Promise<void> {
+		const resource = await this._resolveWikilinkResource(target);
+		if (resource) {
+			await this._editorService.openEditor({ resource }, this.group);
+			return;
+		}
+		// `createDocument` writes `<name>.md` (stripping path-hostile characters) and opens it, so the reader
+		// lands in the document they just willed into existence. The rescan makes the link that created it
+		// resolve from then on.
+		await this._livingDocs.createDocument(target);
+		await this._refreshDocNames();
 	}
 
 	// Fetch the document's created/updated times from the file stat and re-render if they changed. Guarded on
@@ -272,7 +330,7 @@ export class LivingDocEditor extends EditorPane {
 		if (this.input) { this.group.pinEditor(this.input); }
 	}
 
-	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean; html?: string; requested?: string[]; mounted?: string[] }): void {
+	private _onMessage(message: { type?: string; cells?: string[]; mode?: string; text?: string; blockId?: string; id?: string; choice?: string; scope?: string; name?: string; mime?: string; b64?: string; reqId?: string; src?: string; policy?: string; title?: string; status?: string; tag?: string; add?: boolean; html?: string; requested?: string[]; mounted?: string[]; target?: string }): void {
 		switch (message?.type) {
 			case 'lwdReady':
 				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
@@ -411,6 +469,12 @@ export class LivingDocEditor extends EditorPane {
 			case 'nextDoc':
 				// Editor action bar: step the editor pane to the next document that still has pending changes.
 				this._openNextChangedDoc();
+				break;
+			case 'openWikilink':
+				// A [[wikilink]] chip was followed. A target that names an existing document opens it; one that
+				// names nothing CREATES that document and opens it, which is Obsidian's behaviour and the whole
+				// point of an unresolved link being clickable rather than inert.
+				if (typeof message.target === 'string') { void this._openWikilink(message.target); }
 				break;
 			case 'openProject':
 				// The breadcrumb's clickable project segment (issue #174): navigate back to the project view -
@@ -645,6 +709,9 @@ export class LivingDocEditor extends EditorPane {
 			projectName: this._workspace.getWorkspace().folders[0]?.name,
 			fileName: basename(resource),
 			properties: this._buildProperties(resource),
+			// The workspace's document names, so the shell's first paint already knows which wikilinks resolve
+			// (plan 52 WP-C); refreshed afterwards by `lwdDocs` messages rather than on every render.
+			docNames: this._docNames,
 		};
 		this._publishHeader(input);
 		const content = renderLivingDocContent(input);

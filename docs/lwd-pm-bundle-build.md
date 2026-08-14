@@ -23,6 +23,35 @@ The exact sources are reproduced below so the bundle can always be rebuilt from 
   the `bound_figure` node can be unit-tested against the real artifact
   (`test/browser/prosemirrorBundle.test.ts`).
 
+> **The reproduced sources below are a snapshot and have drifted.** The offline directory is the
+> canonical copy: `lwdpm-entry.js` there also carries the decorations plugin, the `table_block` atom and
+> the `wikilink` atom, none of which appear in the listing further down. Always rebuild from the offline
+> directory; read the listing as an explanation of the shape, not as the current file.
+
+### Wikilinks (decision 179, plan 52 WP-C)
+
+A `[[Doc Name]]` wikilink is a first-class **`wikilink` atom inline node** (`{ target, alias }`), for one
+hard reason: prosemirror-markdown's text serializer escapes `[` and `]`, so a wikilink left as plain text
+is written back to disk as `\[\[Doc Name\]\]` the first time the document round-trips - the file stops
+being Obsidian-compatible on the very first save. Three pieces:
+
+- a markdown-it **inline** rule registered `before('link')` for `[[Target]]` / `[[Target|Alias]]`. Being an
+  inline rule is what makes `[[` inert inside code: a fence's content is never inline-parsed, and the
+  earlier `backticks` and `escape` rules claim their spans first;
+- a `md.renderer.rules.wikilink` renderer, so a wikilink inside a table cell (rendered via
+  `md.renderInline`) becomes a span rather than an empty-tag placeholder - the same reason `bound_figure`
+  needs one;
+- a serializer node writing `[[Target]]` back **unescaped**.
+
+It also widens `heading`'s content expression. Upstream ships `heading` as `(text | image)*`, not
+`inline*`, so ANY inline atom in a heading made `createAndFill` return null and **silently dropped that
+heading and all of its inline content**, which the 300ms autosave then wrote to disk - one keystroke in an
+unrelated paragraph is enough to lose the line. The rest of the document survives; it degenerates to an
+empty document only when the offending heading IS the whole document. (An earlier revision of this note
+said it "collapsed the whole document to one empty paragraph" in every case - that was overstated, and it
+would send anyone chasing the bug later looking for the wrong symptom.) That was already true on `main` for
+`## Heading with [x](bind:key)`.
+
 ### The keystone — bound figures (decision 46)
 
 A bound figure `[label](bind:key)` parses to a first-class **`bound_figure` atom inline node**:
