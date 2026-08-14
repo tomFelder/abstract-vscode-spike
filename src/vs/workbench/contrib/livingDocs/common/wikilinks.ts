@@ -152,15 +152,39 @@ export function parseWikilinks(text: string): IWikilink[] {
 
 /**
  * Collapse every wikilink to the plain text a reader sees - the alias when there is one, otherwise the
- * target. This is the EXPORT rule (md, html, docx, pdf all build from one resolved Markdown string): an
- * exported file is read outside Abstract, where `[[Team Notes]]` is neither a link nor readable prose,
- * so it reads as "Team Notes". Chip markup can never leak, because there is no markup here to leak.
+ * target. This is the EXPORT rule (md, html, docx and pdf all build from one resolved Markdown string): an
+ * exported file is read outside Abstract, where `[[Team Notes]]` is neither a link nor readable prose, so it
+ * reads as "Team Notes". Chip markup can never leak, because there is no markup here to leak.
+ *
+ * CODE IS LEFT ALONE, exactly as it is in the editor. A fenced block and an inline code span are code
+ * samples, so `[[Team Notes]]` inside one must survive the export verbatim - stripping its brackets would
+ * silently rewrite someone's code. Fenced blocks and inline spans are the complete set worth handling here:
+ * the editor's serializer always writes a code block fenced, so an indented one cannot survive a round-trip
+ * to reach an export.
  */
 export function wikilinksToPlainText(text: string): string {
-	return text.replace(new RegExp(WIKILINK_RE.source, 'g'), (whole, target: string, alias?: string) => {
-		const shown = (alias ?? '').trim() || String(target).trim();
-		return shown || whole;
-	});
+	// Either a code span or a wikilink; the code-span branch comes FIRST, so a wikilink inside backticks is
+	// consumed as code and returned untouched.
+	const codeOrLink = /(`+)([^\n]*?)\1|\[\[([^\[\]\n|]+)(?:\|([^\[\]\n|]*))?\]\]/g;
+	const fenceStart = / {0,3}(`{3,}|~{3,})/;
+	const lines = String(text).split('\n');
+	let fence: string | undefined;
+	for (let i = 0; i < lines.length; i++) {
+		const opener = fenceStart.exec(lines[i]);
+		const marker = opener && lines[i].startsWith(opener[0]) ? opener[1] : undefined;
+		if (fence !== undefined) {
+			// Only a fence of the same character and at least the same length closes the block.
+			if (marker && marker[0] === fence[0] && marker.length >= fence.length) { fence = undefined; }
+			continue;
+		}
+		if (marker) { fence = marker; continue; }
+		lines[i] = lines[i].replace(codeOrLink, (whole, ticks, _code, target: string, alias?: string) => {
+			if (ticks) { return whole; }
+			const shown = (alias ?? '').trim() || String(target).trim();
+			return shown || whole;
+		});
+	}
+	return lines.join('\n');
 }
 
 /**

@@ -107,11 +107,15 @@ suite('livingDocs - [[wikilinks]] (plan 52 WP-C, decision 179)', () => {
 	});
 
 	test('exports read cleanly - a wikilink becomes the words a reader sees, never chip markup', () => {
+		// Code is the exception, and it is not cosmetic: stripping the brackets out of a code sample would
+		// silently rewrite somebody's code in the exported file.
 		const body = '# Q3\n\nSee [[Team Notes]] and [[Q3 Plan|the plan]], plus [[Nonexistent Doc]].\n\n'
-			+ 'A bound figure [49,800](bind:metrics.mrr) and a slot {{customer}} are untouched.';
+			+ 'A bound figure [49,800](bind:metrics.mrr) and a slot {{customer}} are untouched.\n\n'
+			+ '```\nconst wiki = "[[Team Notes]]";\n```\n\nInline `[[Team Notes]]` stays code.';
 		assert.deepStrictEqual(wikilinksToPlainText(body),
 			'# Q3\n\nSee Team Notes and the plan, plus Nonexistent Doc.\n\n'
-			+ 'A bound figure [49,800](bind:metrics.mrr) and a slot {{customer}} are untouched.');
+			+ 'A bound figure [49,800](bind:metrics.mrr) and a slot {{customer}} are untouched.\n\n'
+			+ '```\nconst wiki = "[[Team Notes]]";\n```\n\nInline `[[Team Notes]]` stays code.');
 	});
 
 	test('the picker offers documents, not sources, templates or export artefacts', () => {
