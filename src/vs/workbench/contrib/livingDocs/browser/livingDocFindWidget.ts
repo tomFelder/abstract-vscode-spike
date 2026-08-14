@@ -152,10 +152,34 @@ function findPaint(){
 	CSS.highlights.set('lwd-find-current', cur);
 }
 function findClearPaint(){ if (window.CSS && CSS.highlights){ CSS.highlights.delete('lwd-find'); CSS.highlights.delete('lwd-find-current'); } }
+// Place a range over [start, end) of an element's concatenated text nodes. Used for a table cell, whose DOM
+// is built by the table atom's node view rather than mapped by ProseMirror positions.
+function findRangeInElement(el, start, end){
+	const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+	const range = document.createRange();
+	let at = 0, node = walker.nextNode(), gotStart = false;
+	while (node){
+		const len = node.nodeValue.length;
+		if (!gotStart && start <= at + len){ range.setStart(node, start - at); gotStart = true; }
+		if (gotStart && end <= at + len){ range.setEnd(node, end - at); return range; }
+		at += len;
+		node = walker.nextNode();
+	}
+	return null;
+}
+// The concatenated text of an element's text nodes - what the reader actually sees in a table cell.
+function findElementText(el){
+	const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+	let out = '', node = walker.nextNode();
+	while (node){ out += node.nodeValue; node = walker.nextNode(); }
+	return out;
+}
 // The DOM Range covering one match. A text match resolves both ends through ProseMirror's own position->DOM
-// mapping, so decoration widgets are skipped by construction. A table-cell match highlights the cell's
-// contents: the cell's rendered DOM is generated from its GFM source, so there is no character-exact mapping
-// back into it, and marking the cell is the honest thing to show.
+// mapping, so decoration widgets are skipped by construction. A table-cell match is placed over the cell's
+// own text nodes when the cell's RENDERED text equals its GFM source (the ordinary case, so the highlight is
+// character-exact); when the cell carries inline markdown the two differ by the syntax characters, there is no
+// exact mapping, and marking the whole cell is the honest thing to show rather than a highlight off by the
+// width of a `**`.
 function findRangeFor(hit){
 	const seg = findSegs[hit.segment];
 	if (!seg || !pmView){ return null; }
@@ -164,6 +188,10 @@ function findRangeFor(hit){
 		if (seg.tPos !== undefined){
 			const cell = cellAt(tablesInView()[seg.tIdx], { r: seg.r, c: seg.c });
 			if (!cell){ return null; }
+			if (findElementText(cell) === seg.text){
+				const exact = findRangeInElement(cell, hit.start, hit.end);
+				if (exact){ return exact; }
+			}
 			range.selectNodeContents(cell);
 			return range;
 		}
