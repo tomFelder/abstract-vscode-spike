@@ -60,10 +60,25 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 	// The manual "Save version" entry point (D26-B): offered while ANY document is open (living or plain
 	// Markdown). saveSnapshot writes the body to the `<doc>.lock.json` regardless of `isLiving`, so a plain
 	// document can pin versions too (issue #181); the action always has a body to snapshot.
+	const saveVersionLabel = localize('livingDocs.history.saveVersion', "Save version");
 	const saveBtn = docTitle
-		? `<button data-save-version style="border:1px solid #e0e2e8;border-radius:7px;padding:5px 9px;background:#fff;color:#52575f;font:600 10.5px/1 system-ui;cursor:pointer">&#9998; Save version</button>`
+		? `<button data-save-version style="border:1px solid #e0e2e8;border-radius:7px;padding:5px 9px;background:#fff;color:#52575f;font:600 10.5px/1 system-ui;cursor:pointer">&#9998; ${esc(saveVersionLabel)}</button>`
 		: '';
 	const head = `<div style="display:flex;align-items:center;gap:8px;padding:0 2px 16px">${label}<span style="flex:1"></span>${saveBtn}</div>`;
+
+	// What this tab records, and what it does not (plan 52 WP-G / G2). The old line - "changes you approve
+	// will appear here" - was true and incomplete: it named one input and stayed silent on the one a writer
+	// most needs to know about. Nothing in this product versions your own keystrokes, so a reader who assumed
+	// otherwise would only find out by losing something. Both states now carry the SAME sentence, so the
+	// contract does not change shape once the timeline fills up: an empty History and a full one make exactly
+	// the same promise. `{0}` is the manual affordance's own label, so the escape hatch we point at is named
+	// with the words printed on the button rather than a paraphrase that drifts from it.
+	const recordedLine = localize(
+		'livingDocs.history.records',
+		"Recorded here: changes you approve or reject, and versions you save with {0}. Your own typing is not recorded - it is saved to the document, but it never becomes a version on its own.",
+		saveVersionLabel
+	);
+	const scopeLine = `<div style="font:400 11.5px/1.55 system-ui;color:#a3a8b2;padding:0 2px 14px">${esc(recordedLine)}</div>`;
 
 	// No document open: a calm, honest prompt rather than a fabricated timeline. Versions apply to any open
 	// document, not only Living Documents, so the prompt says "a document" (issue #181).
@@ -127,9 +142,12 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 		? (last: boolean) => timelineRow(`<span style="font-size:12px;color:oklch(0.66 0.16 45)">&#9733;</span>`, `Created from ${esc(fromTemplate)} template`, `<span style="font:500 9px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:3px 6px">FROM TEMPLATE</span>`, 'This document was generated from a template.', `${esc(fromTemplate)}.template.md`, last)
 		: undefined;
 
-	// Nothing recorded yet: one calm line, no fabricated versions.
+	// Nothing recorded yet: one calm line, no fabricated versions - then the same scope sentence the populated
+	// state carries, so "nothing here" is never mistaken for "nothing is being kept".
 	if (!rowFns.length && !originHtml) {
-		return head + `<div style="font:400 12.5px/1.6 system-ui;color:#a3a8b2;padding:8px 2px">No versions yet - changes you approve will appear here.</div>`;
+		return head
+			+ `<div style="font:400 12.5px/1.6 system-ui;color:#a3a8b2;padding:8px 2px 12px">${esc(localize('livingDocs.history.empty', "No versions yet."))}</div>`
+			+ scopeLine;
 	}
 
 	// Cap the display at the 20 most recent rows (the lock keeps the full record); a mono line names the
@@ -149,5 +167,5 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 		rows.push(`<div style="font:400 11px/1 'JetBrains Mono',ui-monospace,monospace;color:#bcc0c8;padding:2px 2px 16px 31px">${hidden} earlier ${hidden === 1 ? 'entry' : 'entries'}</div>`);
 	}
 	if (originHtml) { rows.push(originHtml(true)); }
-	return head + rows.join('');
+	return head + scopeLine + rows.join('');
 }

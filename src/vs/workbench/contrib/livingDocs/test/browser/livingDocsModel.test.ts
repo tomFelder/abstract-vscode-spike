@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { bulkApproveConfirm, groupDecisions, groupPendingByDoc, IProposedChange, ISkillRunDocResult, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
+import { bulkApproveConfirm, chordTargetChange, groupDecisions, groupPendingByDoc, IProposedChange, ISkillRunDocResult, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
@@ -403,6 +403,20 @@ suite('LivingDoc model - bulkApproveConfirm (plan 31 iter 4)', () => {
 
 	test('an empty set needs no confirm', () => {
 		assert.strictEqual(bulkApproveConfirm([], true).needed, false);
+	});
+});
+
+// Plan 52 A2: the approval chords have no pointer, so the change they act on must be predictable before the
+// key is pressed - the first one still pending, in the order every surface already draws them.
+suite('LivingDoc model - chordTargetChange (plan 52 A2)', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('takes the first pending change, and nothing at all from an empty set', () => {
+		const pending = [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }];
+		assert.deepStrictEqual(
+			[chordTargetChange(pending), chordTargetChange(pending.slice(1)), chordTargetChange([])],
+			[{ id: 'c1' }, { id: 'c2' }, undefined]
+		);
 	});
 });
 

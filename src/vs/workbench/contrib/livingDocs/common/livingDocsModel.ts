@@ -613,6 +613,25 @@ export function reviewFraming(change: Pick<IProposedChange, 'kind' | 'confidence
 }
 
 /**
+ * Which pending change a single-change keyboard chord acts on (plan 52 A2).
+ *
+ * A chord has no pointer, so it needs a rule the reader can predict before pressing the key. The rule is
+ * "the next one you would reach anyway": the FIRST change still pending for the document, in the order the
+ * surfaces already draw them (the inline widgets down the page, the Review cards down the rail). So Accept
+ * pressed twice accepts the top two, and the reader never has to guess which of five proposals the key hit.
+ *
+ * Deliberately NOT "the change nearest the caret": the writing surface is a webview and the caret is often
+ * nowhere near a proposal (it can be in the chat composer, or absent entirely after a fan-out), which would
+ * make the same key mean different things on different presses. Returns `undefined` for an empty set, which
+ * is what makes the chord a safe no-op when there is nothing to accept.
+ *
+ * Pure so it is unit-tested directly.
+ */
+export function chordTargetChange<T extends Pick<IProposedChange, 'id'>>(pending: readonly T[]): T | undefined {
+	return pending.length ? pending[0] : undefined;
+}
+
+/**
  * The bulk-approve safety net (plan 31 iter 4): a one-line confirm shown ONLY when a bulk approve's set
  * contains at least one `meaning` change. A figures-only bulk approve stays one-click (the auto-apply class
  * does not deserve friction). `snapshot` adds the honest "a version snapshot is taken first" reassurance -
