@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '../../../../nls.js';
-import { caseAdaptReplacement, findInText, findMatches, findStatusLabel, replaceInText, stepMatchIndex } from '../common/livingDocFind.js';
+import { caseAdaptReplacement, findInText, findMatches, findStatusLabel, replaceQueryInText, stepMatchIndex } from '../common/livingDocFind.js';
 
 // The in-document find & replace widget (plan 52 WP-E), as three strings the editor's webview shell splices
 // in: its CSS, its markup, and its runtime. It is kept in its own module - rather than added to the already
@@ -87,7 +87,7 @@ export const FIND_WIDGET_HTML = `<div id="lwd-find" class="lwd-find" hidden>`
 // The matcher is injected VERBATIM (the `String(fn)` seam the GFM table helpers already use), so the widget
 // running in the webview and the unit tests in test/browser/livingDocFind.test.ts are literally the same
 // code. Each function is asserted self-contained by that test, so the interpolated source dangles on nothing.
-const FIND_PURE = [findInText, findMatches, stepMatchIndex, caseAdaptReplacement, replaceInText, findStatusLabel].map(fn => String(fn)).join('\n');
+const FIND_PURE = [findInText, findMatches, stepMatchIndex, caseAdaptReplacement, replaceQueryInText, findStatusLabel].map(fn => String(fn)).join('\n');
 
 /**
  * The widget's runtime, appended to the webview shell's RUNTIME script (so it shares that scope and can
@@ -291,18 +291,25 @@ function findScrollToCurrent(){
 	// landed exactly), so next/previous reported "11 of 11" without the viewport ever moving.
 	window.scrollBy({ top: box.top - window.innerHeight / 2 });
 }
-// Re-read the document, recompute every match and repaint. \`keepCurrent\` holds the reader's place across a
-// replace or an edit; otherwise a fresh query lands on the first match, which is what makes typing feel live.
-function findRun(keepCurrent, scroll){
-	if (!findIsOpen()){ return; }
+// Re-read the LIVE surface and recompute every match from what is there NOW. The single door to \`findSegs\` and
+// \`findHits\`: both reading (the count) and writing (a replace) go through it in the same turn they act, so
+// neither can ever be working from text that has since moved.
+function findDerive(){
 	findSegs = findBuildSegments();
 	const texts = [];
 	for (let i = 0; i < findSegs.length; i++){ texts.push(findSegs[i].text); }
 	findHits = findMatches(texts, findQuery(), findCase);
+}
+function findShowCount(){ if (findCountEl){ findCountEl.textContent = findStatusLabel(findHits.length, findCur, FIND_LABELS); } }
+// Re-read the document, recompute every match and repaint. \`keepCurrent\` holds the reader's place across a
+// replace or an edit; otherwise a fresh query lands on the first match, which is what makes typing feel live.
+function findRun(keepCurrent, scroll){
+	if (!findIsOpen()){ return; }
+	findDerive();
 	if (!findHits.length){ findCur = -1; }
 	else if (!keepCurrent || findCur < 0){ findCur = 0; }
 	else if (findCur >= findHits.length){ findCur = findHits.length - 1; }
-	if (findCountEl){ findCountEl.textContent = findStatusLabel(findHits.length, findCur, FIND_LABELS); }
+	findShowCount();
 	findPaint();
 	if (scroll){ findScrollToCurrent(); }
 }
@@ -311,7 +318,7 @@ function findRefresh(){ if (findIsOpen()){ findRun(true, false); } }
 function findStep(delta){
 	if (!findHits.length){ return; }
 	findCur = stepMatchIndex(findHits.length, findCur, delta);
-	if (findCountEl){ findCountEl.textContent = findStatusLabel(findHits.length, findCur, FIND_LABELS); }
+	findShowCount();
 	findPaint();
 	findScrollToCurrent();
 }
@@ -337,42 +344,60 @@ function findInsertText(ta, text){
 // the whole value in ONE command, so it is one undo step, and the scroll position is put back rather than
 // dumping the reader at the end of the source. Like any hand edit in raw mode, the result reaches disk when
 // the reader clicks "Done editing source".
-function findApplyReplaceRaw(ta, hits, replacement){
+// The ranges come out of \`replaceQueryInText\` reading \`ta.value\` on the line above the splice - not out of
+// \`findHits\`. That is what makes this safe rather than merely lucky: a raw-mode keystroke used to leave
+// findHits describing text that had moved, and this function then spliced at the dead offsets and ate live
+// prose (#316 V2-1). The input hook further down keeps the count honest; deriving here keeps the WRITE honest
+// even for a mutation nothing told us about.
+function findReplaceRaw(ta, ordinal, replacement){
 	const before = ta.value, scroll = ta.scrollTop;
+	const plan = replaceQueryInText(before, findQuery(), replacement, findCase, ordinal);
+	if (!plan.replacements.length){ return 0; }
 	ta.focus();
-	if (hits.length === 1){
-		const h = hits[0];
-		ta.setSelectionRange(h.start, h.end);
-		findInsertText(ta, findCase ? replacement : caseAdaptReplacement(before.slice(h.start, h.end), replacement));
+	if (plan.replacements.length === 1){
+		const r = plan.replacements[0];
+		ta.setSelectionRange(r.start, r.end);
+		findInsertText(ta, r.text);
 	} else {
 		ta.setSelectionRange(0, before.length);
-		findInsertText(ta, replaceInText(before, hits, replacement, !findCase));
+		findInsertText(ta, plan.text);
 		ta.scrollTop = scroll;
 	}
 	if (findInput){ findInput.focus(); }
-	return hits.length;
+	return plan.replacements.length;
 }
-function findApplyReplace(hits, replacement){
-	if (!hits.length){ return 0; }
-	const rawSeg = findSegs[hits[0].segment];
-	if (rawSeg && rawSeg.ta){ return findApplyReplaceRaw(rawSeg.ta, hits, replacement); }
+// Replace in the ProseMirror surface. \`wanted\` names the segments to rewrite and, for a single replace, WHICH
+// match within that segment by ordinal - never by offset, so the ranges are again derived from the segment's
+// own text at the moment the transaction is built.
+function findReplacePm(all, replacement){
 	if (!pmView){ return 0; }
+	const wanted = Object.create(null);
+	if (all){
+		for (let i = 0; i < findHits.length; i++){ wanted[findHits[i].segment] = -1; }
+	} else {
+		const hit = findHits[findCur];
+		if (!hit){ return 0; }
+		let nth = 0;
+		for (let i = 0; i < findCur; i++){ if (findHits[i].segment === hit.segment){ nth++; } }
+		wanted[hit.segment] = nth;
+	}
 	const edits = [], tables = Object.create(null);
-	const bySeg = Object.create(null);
-	for (let i = 0; i < hits.length; i++){ (bySeg[hits[i].segment] = bySeg[hits[i].segment] || []).push(hits[i]); }
-	for (const key in bySeg){
-		const seg = findSegs[key], list = bySeg[key];
+	let count = 0;
+	for (const key in wanted){
+		const seg = findSegs[key];
 		if (!seg){ continue; }
+		// Case adaptation happens inside the pure layer, per match, so a case-blind find puts back the match's own
+		// capitalisation instead of flattening a heading's "Growth" to "growth" (#316 item 3).
+		const plan = replaceQueryInText(seg.text, findQuery(), replacement, findCase, wanted[key]);
+		count += plan.replacements.length;
 		if (seg.tPos !== undefined){
 			let entry = tables[seg.tIdx];
 			if (!entry){ entry = tables[seg.tIdx] = { pos: seg.tPos, t: parseGfmTable(seg.tMd) }; }
-			entry.t = setCell(entry.t, seg.r, seg.c, replaceInText(seg.text, list, replacement, !findCase));
+			entry.t = setCell(entry.t, seg.r, seg.c, plan.text);
 		} else {
-			// Each match carries the text it actually matched, so a case-blind find can put back the match's own
-			// capitalisation instead of flattening a heading's "Growth" to "growth" (#316 item 3).
-			for (let i = 0; i < list.length; i++){
-				const matched = seg.text.slice(list[i].start, list[i].end);
-				edits.push({ pos: seg.from + list[i].start, to: seg.from + list[i].end, rep: findCase ? replacement : caseAdaptReplacement(matched, replacement) });
+			for (let i = 0; i < plan.replacements.length; i++){
+				const r = plan.replacements[i];
+				edits.push({ pos: seg.from + r.start, to: seg.from + r.end, rep: r.text });
 			}
 		}
 	}
@@ -386,18 +411,50 @@ function findApplyReplace(hits, replacement){
 		else { tr = tr.delete(ed.pos, ed.to); }
 	}
 	pmView.dispatch(tr);
-	return hits.length;
+	return count;
 }
-function findReplaceCurrent(){
-	const hit = findHits[findCur];
-	if (!hit || !findQuery()){ return; }
-	findApplyReplace([hit], findRepInput ? findRepInput.value : '');
-	findRun(true, true);
+// Run the DOCUMENT's undo (or redo) without taking focus off the find box. ProseMirror's history is bound in a
+// keymap, and a keymap is an EditorView PROP, so it can be asked directly through the public \`someProp\` seam
+// rather than by dispatching an event at the DOM and hoping it routes - the same way ProseMirror's own view
+// code synthesises a key for a handler (\`document.createEvent('Event')\` with \`key\`/\`keyCode\` set). The binding
+// is 'Mod-z', which is Meta on macOS and Ctrl elsewhere, so both spellings are offered and the first the
+// keymap answers wins. The resulting transaction changes the doc, so pmOnChange refreshes the widget for free.
+function findKeydownEvent(shift, meta, ctrl){
+	const ev = document.createEvent('Event');
+	ev.initEvent('keydown', true, true);
+	ev.key = 'z';
+	ev.code = 'KeyZ';
+	ev.keyCode = 90;
+	ev.which = 90;
+	ev.shiftKey = !!shift;
+	ev.metaKey = !!meta;
+	ev.ctrlKey = !!ctrl;
+	ev.altKey = false;
+	return ev;
 }
-function findReplaceAll(){
-	if (!findHits.length || !findQuery()){ return; }
-	findApplyReplace(findHits, findRepInput ? findRepInput.value : '');
-	findRun(false, true);
+function findUndoDocument(redo){
+	if (!pmView || typeof pmView.someProp !== 'function'){ return false; }
+	const mods = [[true, false], [false, true]];
+	for (let i = 0; i < mods.length; i++){
+		const ev = findKeydownEvent(redo, mods[i][0], mods[i][1]);
+		let handled = false;
+		try { handled = !!pmView.someProp('handleKeyDown', function(f){ return f(pmView, ev); }); } catch (err) { handled = false; }
+		if (handled){ return true; }
+	}
+	return false;
+}
+// The one entry point for both Replace buttons. It RE-DERIVES the whole search from the live surface first, so
+// what gets rewritten is what is on screen at the instant the button was pressed - never the match set the
+// widget happened to be holding.
+function findReplace(all){
+	if (!findIsOpen() || !findQuery()){ return; }
+	findDerive();
+	if (!findHits.length){ findCur = -1; findShowCount(); findPaint(); return; }
+	if (findCur < 0 || findCur >= findHits.length){ findCur = 0; }
+	const raw = findSegs[0] && findSegs[0].ta;
+	if (raw){ findReplaceRaw(raw, all ? -1 : findCur, findRepInput ? findRepInput.value : ''); }
+	else { findReplacePm(all, findRepInput ? findRepInput.value : ''); }
+	findRun(!all, true);
 }
 // Open (or re-focus) the widget. Re-pressing Cmd+F on an open widget selects the query, the way every find
 // box behaves, so the chord is idempotent however it arrives - from this frame or from the host's action.
@@ -451,8 +508,8 @@ function findAct(act){
 	if (act === 'next'){ return findStep(1); }
 	if (act === 'prev'){ return findStep(-1); }
 	if (act === 'case'){ return findToggleCase(); }
-	if (act === 'replace'){ return findReplaceCurrent(); }
-	if (act === 'replaceAll'){ return findReplaceAll(); }
+	if (act === 'replace'){ return findReplace(false); }
+	if (act === 'replaceAll'){ return findReplace(true); }
 	if (act === 'close'){ return closeFind(); }
 }
 if (findEl){
@@ -469,9 +526,28 @@ if (findEl){
 		if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); return closeFind(); }
 		if (e.key === 'Enter'){
 			e.preventDefault(); e.stopPropagation();
-			if (e.target === findRepInput){ return findReplaceCurrent(); }
+			if (e.target === findRepInput){ return findReplace(false); }
 			return findStep(e.shiftKey ? -1 : 1);
 		}
+		// "Oh no, undo that" has to work from where the reader's hands already are. A replace leaves focus in the
+		// find box, where Cmd+Z would otherwise land on the INPUT's own undo stack and do nothing at all to the
+		// document - silently, and straight after a bulk destructive operation (#316 V2-3). It is routed to the
+		// document's own history instead. Raw mode is left alone: the browser already routes an undo there to the
+		// textarea's stack, because the replace was made with an editing command.
+		if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'z' || e.key === 'Z')){
+			if (pmView && findUndoDocument(e.shiftKey)){ e.preventDefault(); e.stopPropagation(); }
+		}
+	});
+}
+// The raw-Markdown source is a plain textarea, and NOTHING told the widget when it changed: \`pmOnChange\` only
+// fires for the ProseMirror surface and \`lwdRender\` only for a re-render, so typing in the source left an open
+// find counting - and offering to replace - text that had moved (#316 V2-1). The textarea is destroyed and
+// rebuilt by every re-render, so the listener is delegated from #lwd-root, which survives; \`input\` covers
+// typing, paste, cut, drag-and-drop and the native undo alike. findRefresh() is a no-op while the widget is
+// closed, so this costs nothing in the ordinary case.
+if (root){
+	root.addEventListener('input', function(e){
+		if (e.target && e.target.tagName === 'TEXTAREA' && e.target.classList.contains('raw')){ findRefresh(); }
 	});
 }
 // Cmd/Ctrl+F anywhere in the document opens the find. Taken in the CAPTURE phase on this frame's document so

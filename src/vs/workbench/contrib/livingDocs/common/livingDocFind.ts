@@ -114,9 +114,19 @@ export function stepMatchIndex(count: number, current: number, delta: number): n
  *
  * With the `Aa` toggle ON the matched text equals the query in case anyway, so the widget skips this and
  * inserts the replacement exactly as typed.
+ *
+ * The one case adaptation must NOT swallow is a replacement that differs from the match only in case - typing
+ * `github` over `GitHub`, or `growth` over `Growth`. That is not a word substitution at all, it is an explicit
+ * instruction about case, and adapting it back to the match's own shape makes the replace a silent no-op on
+ * exactly the words the reader is trying to normalise (#316 V2-4: ten of eleven replacements did nothing, and
+ * `GitHub` -> `github` produced `Github` - neither what was there nor what was typed). Such a replacement is
+ * taken literally, so the `Aa` toggle is not the only way to lower-case a word.
  */
 export function caseAdaptReplacement(matched: string, replacement: string): string {
 	if (!replacement) {
+		return replacement;
+	}
+	if (matched.toLowerCase() === replacement.toLowerCase()) {
 		return replacement;
 	}
 	for (let i = 0; i < replacement.length; i++) {
@@ -147,20 +157,59 @@ export function caseAdaptReplacement(matched: string, replacement: string): stri
 	return replacement;
 }
 
+/** One replacement: the half-open range of the text it was derived from, and what goes into that range. */
+export interface IFindReplacement {
+	readonly start: number;
+	readonly end: number;
+	readonly text: string;
+}
+
+/** A replace's whole outcome: the rewritten text, and the ranges of the ORIGINAL text it rewrote. */
+export interface IFindReplaceResult {
+	readonly text: string;
+	readonly replacements: readonly IFindReplacement[];
+}
+
 /**
- * Apply `replacement` to `matches` within one segment's text. Applied right to left so an earlier match's
- * offsets are still valid after a later one has changed the string's length. Matches are assumed to be
- * non-overlapping and in ascending order, which is what `findInText` produces. `adaptCase` runs each
- * replacement through `caseAdaptReplacement` - the widget passes it whenever the `Aa` toggle is off.
+ * Replace `query` in `text` - deriving the ranges FROM `text` ITSELF, here, and returning them alongside the
+ * rewritten string.
+ *
+ * That signature is the point of this function, and it is deliberately the ONLY replace this module exports.
+ * The obvious alternative - hand a replace the match list the widget is already holding - is what destroyed
+ * text on disk in #316 V2-1: the raw-Markdown textarea had no change hook, so the held matches described text
+ * that had moved, and every splice landed ten characters early and ate live prose (five `bind:` links gone,
+ * silently). A replace built on offsets it did not just compute is unsafe by construction, so there is no way
+ * left to express one: a caller cannot pass offsets in, because this derives them from the very string it is
+ * about to rewrite.
+ *
+ * `ordinal` picks a single match by its 0-based position among the matches just derived (what the widget's
+ * "Replace" button does with the current match); omitted, or negative, replaces every match. Replacements are
+ * applied right to left so an earlier range is still valid after a later one has changed the string's length.
+ * Each one is case-adapted (see `caseAdaptReplacement`) unless the find is case sensitive, in which case the
+ * matched text equals the query anyway and the replacement is inserted exactly as typed.
  */
-export function replaceInText(text: string, matches: readonly IFindMatch[], replacement: string, adaptCase?: boolean): string {
-	let out = text;
-	for (let i = matches.length - 1; i >= 0; i--) {
-		const m = matches[i];
-		const rep = adaptCase ? caseAdaptReplacement(text.slice(m.start, m.end), replacement) : replacement;
-		out = out.slice(0, m.start) + rep + out.slice(m.end);
+export function replaceQueryInText(text: string, query: string, replacement: string, caseSensitive?: boolean, ordinal?: number): IFindReplaceResult {
+	const matches = findInText(text, query, caseSensitive);
+	const picked: IFindMatch[] = [];
+	if (ordinal === undefined || ordinal < 0) {
+		for (let i = 0; i < matches.length; i++) {
+			picked.push(matches[i]);
+		}
+	} else if (matches[ordinal]) {
+		picked.push(matches[ordinal]);
 	}
-	return out;
+	const replacements: IFindReplacement[] = [];
+	for (let i = 0; i < picked.length; i++) {
+		const m = picked[i];
+		const rep = caseSensitive ? replacement : caseAdaptReplacement(text.slice(m.start, m.end), replacement);
+		replacements.push({ start: m.start, end: m.end, text: rep });
+	}
+	let out = text;
+	for (let i = replacements.length - 1; i >= 0; i--) {
+		const r = replacements[i];
+		out = out.slice(0, r.start) + r.text + out.slice(r.end);
+	}
+	return { text: out, replacements: replacements };
 }
 
 /** The two localised templates the count reads from; supplied by the host so the widget's text is translatable. */

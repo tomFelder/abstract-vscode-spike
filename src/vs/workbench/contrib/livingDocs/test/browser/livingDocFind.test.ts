@@ -6,7 +6,8 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { FIND_WIDGET_HTML, FIND_WIDGET_RUNTIME, FIND_WIDGET_STYLE } from '../../browser/livingDocFindWidget.js';
-import { caseAdaptReplacement, findInText, findMatches, findStatusLabel, replaceInText, stepMatchIndex } from '../../common/livingDocFind.js';
+import { caseAdaptReplacement, findInText, findMatches, findStatusLabel, replaceQueryInText, stepMatchIndex } from '../../common/livingDocFind.js';
+import * as livingDocFind from '../../common/livingDocFind.js';
 
 // The document as the webview runtime hands it to the pure layer: one segment per searchable unit, in
 // document order. Here that is a heading, a paragraph, a paragraph whose bold run splits the word across two
@@ -89,20 +90,68 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 
 	test('replace rewrites the matched ranges only, right to left, whatever the replacement length', () => {
 		const text = 'const margin = 0.4; // margin';
-		const all = findInText(text, 'margin');
 		assert.deepStrictEqual(
 			{
-				one: replaceInText(text, [all[0]], 'ratio'),
-				all: replaceInText(text, all, 'contribution ratio'),
-				emptied: replaceInText(text, all, ''),
-				untouched: replaceInText(text, [], 'ratio'),
+				one: replaceQueryInText(text, 'margin', 'ratio', true, 0).text,
+				second: replaceQueryInText(text, 'margin', 'ratio', true, 1).text,
+				all: replaceQueryInText(text, 'margin', 'contribution ratio', true).text,
+				emptied: replaceQueryInText(text, 'margin', '', true).text,
+				pastTheEnd: replaceQueryInText(text, 'margin', 'ratio', true, 9).text,
+				absent: replaceQueryInText(text, 'revenue', 'ratio', true).text,
+				emptyQuery: replaceQueryInText(text, '', 'ratio', true).text,
 			},
 			{
 				one: 'const ratio = 0.4; // margin',
+				second: 'const margin = 0.4; // ratio',
 				all: 'const contribution ratio = 0.4; // contribution ratio',
 				emptied: 'const  = 0.4; // ',
-				untouched: 'const margin = 0.4; // margin',
+				pastTheEnd: 'const margin = 0.4; // margin',
+				absent: 'const margin = 0.4; // margin',
+				emptyQuery: 'const margin = 0.4; // margin',
 			}
+		);
+	});
+
+	// The defect that failed #316's second validation round: raw-mode typing had no refresh hook, so the widget
+	// held matches describing text that had MOVED, and Replace All spliced at those dead offsets - eating live
+	// prose and destroying five `bind:` links on disk, silently. The runtime fix is a refresh hook plus deriving
+	// at splice time; the API fix is this - the replace derives its own ranges from the very string it rewrites,
+	// so the caller has nowhere to pass a stale offset in. Assert the property directly: replacing in text that
+	// has been edited underneath the caller still lands exactly on the matches, and touches nothing else.
+	test('a replace derives its own ranges, so text edited underneath it is still rewritten exactly', () => {
+		const before = 'MRR is [$48.6k](bind:metrics.mrr) and also [$48.6k](bind:metrics.mrr) again.';
+		const staleRanges = findInText(before, 'bind:metrics.mrr');
+		// The reader types ten characters ABOVE the first match: every true offset has moved by ten.
+		const edited = 'Headline. ' + before;
+		const result = replaceQueryInText(edited, 'bind:metrics.mrr', 'REPLACED', true);
+		assert.deepStrictEqual(
+			{
+				text: result.text,
+				ranges: result.replacements.map(r => ({ start: r.start, end: r.end, text: r.text })),
+				movedOffTheStaleRanges: result.replacements.map((r, i) => r.start - staleRanges[i].start),
+				// What the old offset-taking replace would have written, reconstructed by hand from the stale ranges.
+				hadItTrustedTheStaleRanges: edited.slice(0, staleRanges[0].start) + 'REPLACED' + edited.slice(staleRanges[0].end),
+			},
+			{
+				text: 'Headline. MRR is [$48.6k](REPLACED) and also [$48.6k](REPLACED) again.',
+				ranges: [{ start: 26, end: 42, text: 'REPLACED' }, { start: 53, end: 69, text: 'REPLACED' }],
+				movedOffTheStaleRanges: [10, 10],
+				hadItTrustedTheStaleRanges: 'Headline. MRR is [$48.6kREPLACEDetrics.mrr) and also [$48.6k](bind:metrics.mrr) again.',
+			}
+		);
+	});
+
+	// Belt and braces on the same property: the module must not export ANY replace that takes ranges from its
+	// caller, because such a call is unsafe by construction however carefully the caller is written today.
+	test('no exported replace accepts caller-supplied ranges', () => {
+		const replacers = Object.keys(livingDocFind).filter(name => /replace/i.test(name) && typeof (livingDocFind as Record<string, unknown>)[name] === 'function');
+		assert.deepStrictEqual(
+			{
+				exported: replacers,
+				// `replaceQueryInText(text, query, replacement, caseSensitive, ordinal)` - a query and an ordinal, no offsets.
+				takesNoRanges: replacers.every(name => !/\b(matches|ranges|hits)\b/.test(String((livingDocFind as Record<string, unknown>)[name]).split('{')[0])),
+			},
+			{ exported: ['caseAdaptReplacement', 'replaceQueryInText'], takesNoRanges: true }
 		);
 	});
 
@@ -152,14 +201,39 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 		const text = 'Margin and margin and MARGIN';
 		assert.deepStrictEqual(
 			{
-				adapted: replaceInText(text, findInText(text, 'margin'), 'ratio', true),
-				verbatim: replaceInText(text, findInText(text, 'margin'), 'ratio'),
-				sensitive: replaceInText(text, findInText(text, 'margin', true), 'ratio', false),
+				adapted: replaceQueryInText(text, 'margin', 'ratio').text,
+				sensitive: replaceQueryInText(text, 'margin', 'ratio', true).text,
+				sensitiveCapital: replaceQueryInText(text, 'Margin', 'ratio', true).text,
 			},
 			{
 				adapted: 'Ratio and ratio and RATIO',
-				verbatim: 'ratio and ratio and ratio',
 				sensitive: 'Margin and ratio and MARGIN',
+				sensitiveCapital: 'ratio and margin and MARGIN',
+			}
+		);
+	});
+
+	// The second sharp edge of a case-blind replace, and the one that fails SILENTLY: adapting the replacement to
+	// the match's own shape makes "normalise this brand" a no-op, because the replacement the reader typed is put
+	// back exactly as it was found. A replacement that differs from its match only in case is therefore an
+	// instruction about case and is taken literally (#316 V2-4) - while a genuine word substitution still adapts.
+	test('a replacement that differs from the match only in case is taken literally, so lower-casing works', () => {
+		assert.deepStrictEqual(
+			{
+				brand: replaceQueryInText('We ship GitHub and Github and GITHUB.', 'github', 'github').text,
+				heading: replaceQueryInText('Growth held. GROWTH held. growth held.', 'growth', 'growth').text,
+				upperCasing: replaceQueryInText('the mrr line', 'mrr', 'MRR').text,
+				stillAdaptsARealSubstitution: replaceQueryInText('Growth held. GROWTH held.', 'growth', 'momentum').text,
+				caseOnlyPair: caseAdaptReplacement('GitHub', 'github'),
+				substitutionPair: caseAdaptReplacement('Growth', 'momentum'),
+			},
+			{
+				brand: 'We ship github and github and github.',
+				heading: 'growth held. growth held. growth held.',
+				upperCasing: 'the MRR line',
+				stillAdaptsARealSubstitution: 'Momentum held. MOMENTUM held.',
+				caseOnlyPair: 'github',
+				substitutionPair: 'Momentum',
 			}
 		);
 	});
@@ -168,7 +242,7 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 	// SAME matcher these tests cover; assert each is fully self-contained, with no import/require/transpiler
 	// helper reference the interpolated source would dangle on (the livingDocTableEdit.ts precedent).
 	test('injected helpers are self-contained (no import/require/helper refs in String(fn))', () => {
-		for (const fn of [findInText, findMatches, stepMatchIndex, caseAdaptReplacement, replaceInText, findStatusLabel]) {
+		for (const fn of [findInText, findMatches, stepMatchIndex, caseAdaptReplacement, replaceQueryInText, findStatusLabel]) {
 			const src = String(fn);
 			assert.ok(!/\brequire\b/.test(src), `${fn.name} must not reference require`);
 			assert.ok(!/\bimport\b/.test(src), `${fn.name} must not reference import`);
@@ -210,6 +284,22 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 				replacesRawUndoably: FIND_WIDGET_RUNTIME.includes(`document.execCommand('insertText'`),
 			},
 			{ noSmoothScroll: false, readsRawTextarea: true, revealsRawMatch: true, replacesRawUndoably: true }
+		);
+	});
+
+	// The three hooks the second validation round of #316 turned on, guarded so they cannot silently come back
+	// out: an `input` listener on the raw textarea (without it the count froze and Replace All spliced at dead
+	// offsets, destroying text on disk), a replace that re-derives instead of trusting `findHits`, and Cmd+Z in
+	// the find box reaching the document's own history rather than the input's.
+	test('the runtime hears raw-mode typing, re-derives before replacing, and routes undo to the document', () => {
+		assert.deepStrictEqual(
+			{
+				hearsRawTyping: /addEventListener\('input'[\s\S]{0,240}classList\.contains\('raw'\)[\s\S]{0,80}findRefresh\(\)/.test(FIND_WIDGET_RUNTIME),
+				derivesBeforeReplacing: /function findReplace\(all\)\{\s*\n\s*if \(!findIsOpen\(\) \|\| !findQuery\(\)\)\{ return; \}\s*\n\s*findDerive\(\);/.test(FIND_WIDGET_RUNTIME),
+				replaceTakesNoOffsets: FIND_WIDGET_RUNTIME.includes('function replaceQueryInText(') && !FIND_WIDGET_RUNTIME.includes('function replaceInText('),
+				routesUndoToDocument: FIND_WIDGET_RUNTIME.includes('function findUndoDocument(') && FIND_WIDGET_RUNTIME.includes(`someProp('handleKeyDown'`),
+			},
+			{ hearsRawTyping: true, derivesBeforeReplacing: true, replaceTakesNoOffsets: true, routesUndoToDocument: true }
 		);
 	});
 
