@@ -351,10 +351,17 @@ suite('livingDocs Service', () => {
 		// Most settings the service reads are booleans that default to true (useModel); the fan-out context
 		// budget (plan 30, track 3) is a number a test can lower to force multi-batch packing over few docs.
 		// Most settings the service reads default to true (booleans like useModel); the fan-out budget is a number
-		// a test can lower; the model proxy URL lets a test point the STREAMING model path (a raw `fetch`, not the
-		// mocked request service) at a dead port, so the streaming call fails fast and falls back to the mocked
-		// buffered call - keeping the fan-out tests hermetic regardless of any real proxy on the default port.
-		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? opts.proxyUrl : true) } as unknown as IConfigurationService;
+		// a test can lower; the model proxy URL points the STREAMING model path (a raw `fetch`, not the mocked
+		// request service) at a dead port, so the streaming call fails fast and falls back to the mocked buffered
+		// call.
+		//
+		// `DEAD_PROXY` is the DEFAULT, not an opt-in. Left unset, the service falls back to its real
+		// `localhost:8090`, and any developer who happens to have the app running - which starts a signed-in
+		// broker on exactly that port - has their unit tests silently answered by a live model. That failure is
+		// maddening to read, because the assertion diff shows real prose where a canned fixture belongs, and it
+		// only reproduces on machines where the app is up. A unit test must not be able to reach the network at
+		// all; a test that genuinely wants a reachable proxy still passes its own `proxyUrl`.
+		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? (opts.proxyUrl ?? DEAD_PROXY) : true) } as unknown as IConfigurationService;
 		lastNotifications = [];
 		createdFolders = [];
 		const notificationService = {

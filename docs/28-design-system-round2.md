@@ -14,7 +14,7 @@ This document is the rubric for the round-2 repaint. Round 1 (plans 43-49) built
 | Green `#1F7A4D` | Applied / fresh / all clear | a button fill |
 | Amber `#C77E1F` | Waiting on you | decoration |
 | Red `#B3261E` | Removed / failed | decoration |
-| Warm neutrals | The paper | to carry meaning |
+| Cool neutrals | The paper | to carry meaning |
 
 Two corollaries the comp states outright:
 
@@ -29,15 +29,28 @@ Read the exact values from `abstractTokens.ts`. The ramps:
 - **Green** - `base #1F7A4D` · `bg #F0F6F1` · `border #CFE3D4` · `headline #164A31` · `body #4E7059` · `diffBg #E4F2E7` · `diffInk #175B38` · `blockBg #EFF7F1`
 - **Amber** - `base #C77E1F` · `bg #FDF6EC` · `border #EAD9BC` · `subtleBg #FDF8EF` · `label #8A5A12` · `headline #6E4A10` · `body #8A6A33` · `hairline #F5F0E4` · `edge #F0E4CC` · `askFirst #B45309`
 - **Red** - `base #B3261E` · `diffBg #FBE9E7` · `diffInk #A13527` · `blockBg #FBF1F0` · `blockInk #7C2D22`
-- **Paper** (nests outward-in) - `canvas #E4E2DC` → `frame #EFEEE9` → `rail #F9F8F5` → `page #FCFBF9` → `card #FFFFFF`; plus `sunken #F6F5F1` / `sunkenBorder #E9E7E0`, `chip #F1F0EB`, `frameBorder #CFCDC4`, `control #DEDCD5`
-- **Hairlines** - `strong #E3E1DA` (between surfaces) · `medium #ECEAE3` (between rows) · `soft #F1F0EB` (within a row)
-- **Ink** - `heading #1B1B20` · `body #33322E` · `bodySoft #55534C` · `secondary #6E6C64` · `meta #9B998F` · `onDark #B8B6AE`
+- **Paper** (nests outward-in) - `canvas #E3E6EC` → `frame #ECEEF2` → `rail #F5F6F8` → `page #FAFBFC` → `card #FFFFFF`; plus `sunken #F2F3F6` / `sunkenBorder #E5E8ED`, `chip #EDEFF2`, `frameBorder #CBCFD8`, `control #DADDE3`
+- **Hairlines** - `strong #DFE2E8` (between surfaces) · `medium #E7E9EE` (between rows) · `soft #EDEFF2` (within a row)
+- **Ink** - `heading #1B1B20` · `body #34373D` · `bodySoft #4D5158` · `secondary #676B74` · `meta #9498A3` · `onDark #B4B8C2`
 
-The product previously used a **cool blue-grey** neutral ramp. Round 2 is a **warm paper** ramp. This is the single largest visible change, and it is why almost every hex in the renderers moves.
+### The one deliberate departure from the comp
+
+The comp draws the paper **warm** (`#EFEEE9` / `#FCFBF9`, with a warm ink ramp). The product keeps its **cool slate** ramp, above.
+
+Only the neutrals differ. Every colour that *means* something - indigo, green, amber, red - is exactly what the comp specifies, because those carry meaning and the paper does not. A neutral's job is to recede; which way it leans is a matter of taste, and the established taste here is cool. When the comp and this page disagree on a neutral, **this page wins**; on anything else, the comp wins.
 
 ## Type
 
 Two families, two weights. Sans is the system stack; mono is **IBM Plex Mono** (round 1 used JetBrains Mono - it is gone). Weights are **400 and 600 only**; there is no 500.
+
+**The mono is bundled, not merely named.** Round 1 declared `'JetBrains Mono'` and shipped no font, so it rendered only for readers who happened to have it installed and silently fell back to `ui-monospace` for everyone else - which meant the "mono" in the design was, in practice, whatever the machine had. IBM Plex Mono now ships as a latin subset (SIL OFL 1.1, ~10KB per weight) under `livingDocs/browser/media/fonts/`, delivered two ways because the universes genuinely differ:
+
+| Surface | Delivery |
+|---|---|
+| Workbench chrome (a normal document) | `@font-face` with a relative `url()` in `elevation.css` - browser-cached |
+| Both webviews (separate documents, different origin, no `localResourceRoots`) | the same bytes as a `data:` URI, from generated `common/abstractFont.ts`, inlined by `abstractTokenCss()` |
+
+The woff2 files are the source of truth; regenerate the base64 with `node --experimental-strip-types build/lib/generate-abstract-font.ts`. `abstractTokens.test.ts` asserts both weights are really inlined, so the font cannot regress to a bare name again.
 
 | Token | Step | Used for |
 |---|---|---|
@@ -77,7 +90,7 @@ The ladder is dense because the comp is dense, and **the comp's own pixel value 
 
 ## Components
 
-- **Buttons** - one indigo primary; secondary is a `#DEDCD5` hairline on white; a destructive-ish bulk verb renders **quiet (text)** plus a confirm dialog. Never green or red buttons.
+- **Buttons** - one indigo primary; secondary is a `PAPER.control` hairline on white; a destructive-ish bulk verb renders **quiet (text)** plus a confirm dialog. Never green or red buttons.
 - **State** - a dot plus a sentence, in one place. Banner dot 11px, card/row dot 7px, source dot 6px.
 - **Kind badges** - mono, coloured by risk. Confidence is a **word** in the meta line ("confidence: high"), never a percentage. Kind also paints the card's 3px left edge.
 - **Diff** - word-grain spans up to ~60% of the paragraph rewritten; WAS/NOW blocks past that.
@@ -92,69 +105,69 @@ The bulk of the repaint is mechanical: the round-1 palette maps onto the round-2
 
 | Round 1 | Round 2 |
 |---|---|
-| `#a3a8b2` `#969ba4` `#9aa0aa` `#9a9ea7` `#9a9aa3` `#8a8f98` `#8a8f99` `#9aa0ac` `#8a8a93` `#86868f` `#b0b5be` `#b0b4bc` `#a9aeb8` | `INK.meta #9B998F` |
-| `#868b95` `#696e78` `#71767f` `#6a6a73` `#61656c` `#5b616b` `#6b7280` | `INK.secondary #6E6C64` |
-| `#52575f` `#4a4f57` `#4a4c54` | `INK.bodySoft #55534C` |
-| `#3a3f49` `#3a3f4a` `#33373f` `#3c4250` `#46464e` `#34343c` | `INK.body #33322E` |
-| `#1a1c20` `#15171c` `#26292f` `#2c2f36` `#14161a` `#2a2a31` `#15151a` `#15181f` `#23262c` `#23242a` `#2a2c32` `#26262d` `#2a2a31` `#101214` | `INK.heading #1B1B20` |
-| `#1f2229` (tooltip surface) | `DARK_SURFACE #1B1B20` |
-| `#b7bcc6` (ink on tooltip) | `INK.onDark #B8B6AE` |
+| `#a3a8b2` `#969ba4` `#9aa0aa` `#9a9ea7` `#9a9aa3` `#8a8f98` `#8a8f99` `#9aa0ac` `#8a8a93` `#86868f` `#b0b5be` `#b0b4bc` `#a9aeb8` | `INK.meta` |
+| `#868b95` `#696e78` `#71767f` `#6a6a73` `#61656c` `#5b616b` `#6b7280` | `INK.secondary` |
+| `#52575f` `#4a4f57` `#4a4c54` | `INK.bodySoft` |
+| `#3a3f49` `#3a3f4a` `#33373f` `#3c4250` `#46464e` `#34343c` | `INK.body` |
+| `#1a1c20` `#15171c` `#26292f` `#2c2f36` `#14161a` `#2a2a31` `#15151a` `#15181f` `#23262c` `#23242a` `#2a2c32` `#26262d` `#2a2a31` `#101214` | `INK.heading` |
+| `#1f2229` (tooltip surface) | `DARK_SURFACE` |
+| `#b7bcc6` (ink on tooltip) | `INK.onDark` |
 
 ### Paper and hairlines
 
 | Round 1 | Round 2 |
 |---|---|
-| `#edeff3` `#f3f4f7` | `PAPER.frame #EFEEE9` |
-| `#f8f9fb` `#fbfbfc` `#fafbfc` `#f7f8fa` `#f7f8fb` `#f7f7f9` | `PAPER.rail #F9F8F5` |
-| `#fbfcfd` `#fcfcfd` | `PAPER.page #FCFBF9` |
-| `#f4f5f7` `#f6f7f9` `#f4f4f6` `#f4f5f8` `#f3f3f5` `#f2f3f5` `#f0f0f3` `#f0f1f4` | `PAPER.sunken #F6F5F1` |
-| `#f1f2f5` `#f1f2f6` `#ececf0` `#ecedf1` `#edeef1` | `PAPER.chip #F1F0EB` |
-| `#e9eaee` `#e6e8ec` `#e6e8ed` `#e4e6ea` `#e4e6eb` `#e4e6ec` `#e6e6ea` `#e1e2e8` `#e2e4ea` `#e0e3ea` `#e1e4ea` `#e4e7ee` `#e3e7ef` `#dfe2e8` `#dfe1e6` `#dcdfe6` `#d9dae0` | `HAIRLINE.strong #E3E1DA` |
-| `#eceef2` `#eceef3` `#eef0f3` `#eef1f6` | `HAIRLINE.medium #ECEAE3` |
-| `#e0e2e8` `#dfe1e7` `#d4d7dd` `#d5d8de` `#d3d8e0` `#d3d6dd` `#d4d7de` `#d7dae2` `#d7d9df` | `PAPER.control #DEDCD5` |
-| `#c6cad2` `#bcc0c8` `#cfd3da` `#cdd1d8` `#c2c8d4` `#c2c5cd` `#c2c6ce` `#cdd2dc` `#dde0e7` | `PAPER.frameBorder #CFCDC4` |
+| `#edeff3` `#f3f4f7` | `PAPER.frame` |
+| `#f8f9fb` `#fbfbfc` `#fafbfc` `#f7f8fa` `#f7f8fb` `#f7f7f9` | `PAPER.rail` |
+| `#fbfcfd` `#fcfcfd` | `PAPER.page` |
+| `#f4f5f7` `#f6f7f9` `#f4f4f6` `#f4f5f8` `#f3f3f5` `#f2f3f5` `#f0f0f3` `#f0f1f4` | `PAPER.sunken` |
+| `#f1f2f5` `#f1f2f6` `#ececf0` `#ecedf1` `#edeef1` | `PAPER.chip` |
+| `#e9eaee` `#e6e8ec` `#e6e8ed` `#e4e6ea` `#e4e6eb` `#e4e6ec` `#e6e6ea` `#e1e2e8` `#e2e4ea` `#e0e3ea` `#e1e4ea` `#e4e7ee` `#e3e7ef` `#dfe2e8` `#dfe1e6` `#dcdfe6` `#d9dae0` | `HAIRLINE.strong` |
+| `#eceef2` `#eceef3` `#eef0f3` `#eef1f6` | `HAIRLINE.medium` |
+| `#e0e2e8` `#dfe1e7` `#d4d7dd` `#d5d8de` `#d3d8e0` `#d3d6dd` `#d4d7de` `#d7dae2` `#d7d9df` | `PAPER.control` |
+| `#c6cad2` `#bcc0c8` `#cfd3da` `#cdd1d8` `#c2c8d4` `#c2c5cd` `#c2c6ce` `#cdd2dc` `#dde0e7` | `PAPER.frameBorder` |
 
 ### Indigo
 
 | Round 1 | Round 2 |
 |---|---|
-| `oklch(0.55 0.13 255)` `#5b6dc4` `#5661c9` `#2c5be5` `#2b64d4` `#2a6fdb` | `INDIGO.base #4353C9` |
-| `oklch(0.5 0.13 255)` `oklch(0.45 0.13 255)` `#4650b8` `#4e5fb2` `#2a2f60` | `INDIGO.hover #333FA3` |
-| `#f4f5fd` `#eef1ff` `#f7f8ff` `#f7f9ff` `#fbfcff` `#f4f6ff` `#eef2fb` `#eef0fb` `#eaf0fa` `#eaf1fd` | `INDIGO.tint #EEEFFA` |
-| `#e0e5fb` `#e0e6ff` `#e4e9fb` `#e7eafa` `#e2e8ff` `#d8e0fb` `#d9d7fb` `#c9cff5` `#c3c9f0` | `INDIGO.tintBorder #C8CBE8` |
-| `#9aa2e0` `#8a93c4` `#9aa0d0` | `INDIGO.underline #B4B9E8` |
-| `#3b4d8f` | `AVATAR_NAVY #23408F` |
+| `oklch(0.55 0.13 255)` `#5b6dc4` `#5661c9` `#2c5be5` `#2b64d4` `#2a6fdb` | `INDIGO.base` |
+| `oklch(0.5 0.13 255)` `oklch(0.45 0.13 255)` `#4650b8` `#4e5fb2` `#2a2f60` | `INDIGO.hover` |
+| `#f4f5fd` `#eef1ff` `#f7f8ff` `#f7f9ff` `#fbfcff` `#f4f6ff` `#eef2fb` `#eef0fb` `#eaf0fa` `#eaf1fd` | `INDIGO.tint` |
+| `#e0e5fb` `#e0e6ff` `#e4e9fb` `#e7eafa` `#e2e8ff` `#d8e0fb` `#d9d7fb` `#c9cff5` `#c3c9f0` | `INDIGO.tintBorder` |
+| `#9aa2e0` `#8a93c4` `#9aa0d0` | `INDIGO.underline` |
+| `#3b4d8f` | `AVATAR_NAVY` |
 
 ### Green
 
 | Round 1 | Round 2 |
 |---|---|
-| `#2c8159` `#1f7a44` `#1f7a43` `#1f8a5b` `#2f7d55` `#3e9c6b` `#217346` `oklch(0.6 0.13 150)` `oklch(0.55 0.14 150)` `oklch(0.5 0.13 150)` | `GREEN.base #1F7A4D` |
-| `#eef7f0` `#e7f3ec` `#eaf3ee` `#e7f5ee` `#f1f8f3` | `GREEN.bg #F0F6F1` |
-| `#d7ecdc` `#d3e5da` `#c5e7d0` `#e0ebe3` | `GREEN.border #CFE3D4` |
-| `#e9f6ee` `#e7f6ec` | `GREEN.diffBg #E4F2E7` |
-| `#f1faf4` | `GREEN.blockBg #EFF7F1` |
-| `#1f5a36` `#5d8a66` | `GREEN.diffInk #175B38` |
+| `#2c8159` `#1f7a44` `#1f7a43` `#1f8a5b` `#2f7d55` `#3e9c6b` `#217346` `oklch(0.6 0.13 150)` `oklch(0.55 0.14 150)` `oklch(0.5 0.13 150)` | `GREEN.base` |
+| `#eef7f0` `#e7f3ec` `#eaf3ee` `#e7f5ee` `#f1f8f3` | `GREEN.bg` |
+| `#d7ecdc` `#d3e5da` `#c5e7d0` `#e0ebe3` | `GREEN.border` |
+| `#e9f6ee` `#e7f6ec` | `GREEN.diffBg` |
+| `#f1faf4` | `GREEN.blockBg` |
+| `#1f5a36` `#5d8a66` | `GREEN.diffInk` |
 
 ### Amber
 
 | Round 1 | Round 2 |
 |---|---|
-| `#c99a2e` `#e0a63a` `#e0b341` `#d9a62b` `oklch(0.66 0.16 45)` `oklch(0.78 0.1 70)` | `AMBER.base #C77E1F` |
-| `#9a6b16` `#8a6d1a` `#7a5a13` | `AMBER.label #8A5A12` |
-| `#fdf6e9` `#fdf2dc` `#fbf5e8` `#fef0d6` `#f9edd5` `oklch(0.985 0.02 75)` `oklch(0.97 0.04 75)` `oklch(0.97 0.03 70)` | `AMBER.bg #FDF6EC` |
-| `#e4dccb` `#f0e2c4` `#e6dcc2` `#e6c98f` `#d9b76a` `#d9b98e` `#f0d9a8` `#f0dcae` `#f0e5cf` `oklch(0.9 0.05 75)` | `AMBER.border #EAD9BC` |
-| `#fdfaf2` `#fbf7ee` `#fffaf1` `#fffdf8` | `AMBER.subtleBg #FDF8EF` |
-| `#f0b968` | `AMBER.base #C77E1F` |
+| `#c99a2e` `#e0a63a` `#e0b341` `#d9a62b` `oklch(0.66 0.16 45)` `oklch(0.78 0.1 70)` | `AMBER.base` |
+| `#9a6b16` `#8a6d1a` `#7a5a13` | `AMBER.label` |
+| `#fdf6e9` `#fdf2dc` `#fbf5e8` `#fef0d6` `#f9edd5` `oklch(0.985 0.02 75)` `oklch(0.97 0.04 75)` `oklch(0.97 0.03 70)` | `AMBER.bg` |
+| `#e4dccb` `#f0e2c4` `#e6dcc2` `#e6c98f` `#d9b76a` `#d9b98e` `#f0d9a8` `#f0dcae` `#f0e5cf` `oklch(0.9 0.05 75)` | `AMBER.border` |
+| `#fdfaf2` `#fbf7ee` `#fffaf1` `#fffdf8` | `AMBER.subtleBg` |
+| `#f0b968` | `AMBER.base` |
 
 ### Red
 
 | Round 1 | Round 2 |
 |---|---|
-| `#b4332f` `oklch(0.55 0.2 25)` | `RED.base #B3261E` |
-| `#b5514b` `#cf5a53` `#8a4340` `#8a2f2b` `#7a3a38` `#8a6d6b` | `RED.diffInk #A13527` |
-| `#fbeeee` `#fdecec` `#fdf2f2` `#fdf2f1` `#fdf1f0` `#fdeeed` `#faf7f7` | `RED.diffBg #FBE9E7` |
-| `#f3c9c6` `#e7c9c6` `#ecc9c6` `#eeced0` `#f0e0e0` `#f0d3d1` `#d98a8a` `#d7a3a0` | `RED.diffInk #A13527` at 1px, or `RED.blockBg #FBF1F0` as a fill |
+| `#b4332f` `oklch(0.55 0.2 25)` | `RED.base` |
+| `#b5514b` `#cf5a53` `#8a4340` `#8a2f2b` `#7a3a38` `#8a6d6b` | `RED.diffInk` |
+| `#fbeeee` `#fdecec` `#fdf2f2` `#fdf2f1` `#fdf1f0` `#fdeeed` `#faf7f7` | `RED.diffBg` |
+| `#f3c9c6` `#e7c9c6` `#ecc9c6` `#eeced0` `#f0e0e0` `#f0d3d1` `#d98a8a` `#d7a3a0` | `RED.diffInk` at 1px, or `RED.blockBg` as a fill |
 
 ### Do not touch
 

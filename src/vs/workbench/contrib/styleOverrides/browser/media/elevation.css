@@ -4,6 +4,33 @@
  *--------------------------------------------------------------------------------------------*/
 
 /*
+ * The product's mono, bundled rather than merely named. Round 1 declared 'JetBrains Mono' without ever
+ * shipping it, so the mono only rendered for readers who happened to have it installed and silently fell
+ * back to `ui-monospace` for everyone else. IBM Plex Mono (SIL OFL 1.1, see
+ * livingDocs/browser/media/fonts/LICENSE.txt) is now bundled as a latin subset, ~10KB per weight.
+ *
+ * The workbench chrome is a normal document, so it reaches the file by relative URL and the browser caches
+ * it. The two webviews are separate documents on a different origin, where a relative URL resolves to
+ * nothing; they inline the same bytes as a `data:` URI via `abstractFont.ts`. Same font, two deliveries,
+ * because the two universes genuinely differ.
+ */
+@font-face {
+	font-family: 'IBM Plex Mono';
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url('../../../livingDocs/browser/media/fonts/ibm-plex-mono-latin-400.woff2') format('woff2');
+}
+
+@font-face {
+	font-family: 'IBM Plex Mono';
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url('../../../livingDocs/browser/media/fonts/ibm-plex-mono-latin-600.woff2') format('woff2');
+}
+
+/*
  * Style-override module: "Elevation" (Abstract Editor v2, plan 44 pin 1).
  *
  * The v2 read is "the white paper floats above the tool": a darker chrome window
@@ -40,43 +67,47 @@
  */
 
 .style-override {
-	/* --- Paper. The warm neutral ramp, outward-in. --- */
+	/* --- Paper. The cool slate ramp, outward-in.
+	 *
+	 * This is the one place the implementation deliberately departs from the round-2 comp, which draws
+	 * the paper warm. Only the NEUTRALS differ: every meaning colour below - indigo, green, amber, red -
+	 * is exactly what the comp specifies, because those carry meaning and the paper does not. --- */
 	/* The canvas behind the app window. */
-	--abstract-canvas: #E4E2DC;
+	--abstract-canvas: #E3E6EC;
 	/* The app frame - the window chrome the rails and the paper float on. */
-	--abstract-chrome: #EFEEE9;
+	--abstract-chrome: #ECEEF2;
 	/* The frame's own outer border, and every dashed on-ramp edge. */
-	--abstract-chrome-border: #CFCDC4;
+	--abstract-chrome-border: #CBCFD8;
 	/* Rails and table headers. The tab well is the same rail paper. */
-	--abstract-rail-bg: #F9F8F5;
-	--abstract-tabwell: #F9F8F5;
+	--abstract-rail-bg: #F5F6F8;
+	--abstract-tabwell: #F5F6F8;
 	/* The page surface a screen's body scrolls on. */
-	--abstract-page-bg: #FCFBF9;
+	--abstract-page-bg: #FAFBFC;
 	/* Cards, inputs, and anything that must read as "on top". */
 	--abstract-paper-bg: #FFFFFF;
 	/* A recessed fill for helper boxes and quiet tiles, and its own border. */
-	--abstract-sunken: #F6F5F1;
-	--abstract-sunken-border: #E9E7E0;
+	--abstract-sunken: #F2F3F6;
+	--abstract-sunken-border: #E5E8ED;
 	/* Chip fill. */
-	--abstract-chip: #F1F0EB;
+	--abstract-chip: #EDEFF2;
 	/* Secondary-button and control borders. */
-	--abstract-control: #DEDCD5;
+	--abstract-control: #DADDE3;
 	/* Idle line numbers - the quietest ink the paper carries. */
-	--abstract-gutter-idle: #CFCDC4;
+	--abstract-gutter-idle: #CBCFD8;
 
 	/* --- The one stroke: a 1px hairline in three weights. `card-border` is `strong`,
 	 * the weight that separates two surfaces; `line-med` separates rows inside a card;
 	 * `line-soft` separates lines inside a row. --- */
-	--abstract-card-border: #E3E1DA;
-	--abstract-line-med: #ECEAE3;
-	--abstract-line-soft: #F1F0EB;
+	--abstract-card-border: #DFE2E8;
+	--abstract-line-med: #E7E9EE;
+	--abstract-line-soft: #EDEFF2;
 
-	/* --- Ink. Four steps, and only four, plus the on-dark step. --- */
+	/* --- Ink. Four steps, and only four, plus the on-dark step. Cool slate, to sit on the paper above. --- */
 	--abstract-ink: #1B1B20;
-	--abstract-ink-body: #33322E;
-	--abstract-ink-soft: #55534C;
-	--abstract-ink-2: #6E6C64;
-	--abstract-ink-3: #9B998F;
+	--abstract-ink-body: #34373D;
+	--abstract-ink-soft: #4D5158;
+	--abstract-ink-2: #676B74;
+	--abstract-ink-3: #9498A3;
 
 	/* --- Indigo: Abstract acting. The only colour a button may be filled with. --- */
 	--abstract-indigo: #4353C9;

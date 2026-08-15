@@ -19,6 +19,8 @@
 //   red = removed/failed · warm neutrals = the paper · ink ramp = the words
 // Green and red are never button colours; a highlight fill only ever means "this span is changing".
 
+import { ABSTRACT_FONT_FACE_CSS } from './abstractFont.js';
+
 /**
  * Indigo - Abstract acting. Primary buttons, links, active nav, agent narration marks, and the
  * bound-figure underline. The only colour a button may be filled with.
@@ -106,30 +108,35 @@ export const RED = {
 } as const;
 
 /**
- * Warm neutrals - the paper. The surfaces nest outward-in: canvas -> app frame -> rails -> page ->
+ * Cool neutrals - the paper. The surfaces nest outward-in: canvas -> app frame -> rails -> page ->
  * cards, each a step lighter, so depth reads without a single shadow.
+ *
+ * NOTE - this is the one place the implementation deliberately departs from the round-2 comp. The comp
+ * draws the paper warm (#EFEEE9 / #FCFBF9 and a warm ink ramp); the product keeps the cool slate ramp it
+ * has always had. Only the neutrals changed: every meaning colour below - indigo, green, amber, red - is
+ * exactly as the comp specifies, because those carry meaning and the paper does not.
  */
 export const PAPER = {
-	/** The canvas behind the app window (the comp's own backdrop). */
-	canvas: '#E4E2DC',
+	/** The canvas behind the app window. Derived one step below `frame` on this ramp's own spacing. */
+	canvas: '#E3E6EC',
 	/** The app frame - the window chrome the rails sit on. */
-	frame: '#EFEEE9',
+	frame: '#ECEEF2',
 	/** Rails and table headers. */
-	rail: '#F9F8F5',
+	rail: '#F5F6F8',
 	/** The page surface a screen's body scrolls on. */
-	page: '#FCFBF9',
+	page: '#FAFBFC',
 	/** Cards, inputs, and anything that must read as "on top". */
 	card: '#FFFFFF',
 	/** A recessed fill for helper boxes and quiet tiles. */
-	sunken: '#F6F5F1',
+	sunken: '#F2F3F6',
 	/** The border that belongs to `sunken`. */
-	sunkenBorder: '#E9E7E0',
+	sunkenBorder: '#E5E8ED',
 	/** Chip fill and the lightest hairline's sibling. */
-	chip: '#F1F0EB',
+	chip: '#EDEFF2',
 	/** The frame's own outer border, and every dashed on-ramp edge. */
-	frameBorder: '#CFCDC4',
+	frameBorder: '#CBCFD8',
 	/** Secondary-button and control borders. */
-	control: '#DEDCD5',
+	control: '#DADDE3',
 } as const;
 
 /**
@@ -137,27 +144,28 @@ export const PAPER = {
  * rows inside a card, `soft` separates lines inside a row.
  */
 export const HAIRLINE = {
-	strong: '#E3E1DA',
-	medium: '#ECEAE3',
-	soft: '#F1F0EB',
+	strong: '#DFE2E8',
+	medium: '#E7E9EE',
+	soft: '#EDEFF2',
 } as const;
 
 /**
  * The ink ramp - four steps, and only four. Headings, body, secondary, then placeholder/meta.
+ * Cool slate, to sit on the cool paper above.
  */
 export const INK = {
 	/** Headings and the strongest emphasis. */
 	heading: '#1B1B20',
 	/** Document and UI body copy. */
-	body: '#33322E',
-	/** A softer body ink for descriptions that sit under a heading. */
-	bodySoft: '#55534C',
+	body: '#34373D',
+	/** A softer body ink for descriptions that sit under a heading. Midway between body and secondary. */
+	bodySoft: '#4D5158',
 	/** Secondary copy - captions, helper lines, inactive nav labels. */
-	secondary: '#6E6C64',
+	secondary: '#676B74',
 	/** Placeholder and meta - provenance lines, mono muted, empty-field text. */
-	meta: '#9B998F',
+	meta: '#9498A3',
 	/** Secondary text on a dark surface (the hover-peek tooltip). */
-	onDark: '#B8B6AE',
+	onDark: '#B4B8C2',
 } as const;
 
 /** The dark surface the hover peek is drawn on - the only inverted surface in the product. */
@@ -257,14 +265,21 @@ export const SHADOW = {
 } as const;
 
 /**
- * The CSS custom properties every webview inlines. Keeping the names short (`--ab-*`) keeps the
- * inline `style=` attributes in the renderers readable, and having them as variables means a
- * webview's own stylesheet can reference a token without a template interpolation.
+ * The CSS custom properties every webview inlines, preceded by the `@font-face` that makes the mono
+ * real. Keeping the names short (`--ab-*`) keeps the inline `style=` attributes in the renderers
+ * readable, and having them as variables means a webview's own stylesheet can reference a token
+ * without a template interpolation.
+ *
+ * The font is inlined here rather than linked because a webview is a separate document on a different
+ * origin: a relative `url()` resolves to nothing inside one. Shipping it with the tokens means no
+ * surface can adopt the type scale while silently falling back to whatever mono the machine happens
+ * to have - which is exactly what the round-1 'JetBrains Mono' declaration did.
  *
  * Emitted into each webview's `<style>` block via `abstractTokenCss()`.
  */
 export function abstractTokenCss(): string {
-	return `:root{
+	return `${ABSTRACT_FONT_FACE_CSS}
+:root{
 --ab-indigo:${INDIGO.base};--ab-indigo-hover:${INDIGO.hover};--ab-indigo-tint:${INDIGO.tint};--ab-indigo-tint-border:${INDIGO.tintBorder};--ab-indigo-underline:${INDIGO.underline};
 --ab-green:${GREEN.base};--ab-green-bg:${GREEN.bg};--ab-green-border:${GREEN.border};--ab-green-headline:${GREEN.headline};--ab-green-body:${GREEN.body};--ab-green-diff-bg:${GREEN.diffBg};--ab-green-diff-ink:${GREEN.diffInk};--ab-green-block-bg:${GREEN.blockBg};
 --ab-amber:${AMBER.base};--ab-amber-bg:${AMBER.bg};--ab-amber-border:${AMBER.border};--ab-amber-subtle-bg:${AMBER.subtleBg};--ab-amber-label:${AMBER.label};--ab-amber-headline:${AMBER.headline};--ab-amber-body:${AMBER.body};--ab-amber-hairline:${AMBER.hairline};--ab-amber-edge:${AMBER.edge};
