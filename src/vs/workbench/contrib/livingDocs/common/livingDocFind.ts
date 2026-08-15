@@ -35,9 +35,10 @@ export interface IFindMatch {
  * read "No results" while it is empty rather than claiming a match on every character.
  *
  * The comparison case-folds ONE CHARACTER AT A TIME rather than lowercasing the whole haystack, because
- * `'İ'.toLowerCase()` is TWO characters: a whole-string fold would silently shift every offset after
- * such a character, and a replace built on those offsets would corrupt the document. Per-character folding
- * can only ever make such a character fail to match, which is predictable and harmless.
+ * `'\u0130'.toLowerCase()` (the Turkish dotted capital I) is TWO characters: a whole-string fold would
+ * silently shift every offset after such a character, and a replace built on those offsets would corrupt
+ * the document. Per-character folding can only ever make such a character fail to match, which is
+ * predictable and harmless.
  *
  * `caseSensitive` turns the fold off entirely, which is what the widget's `Aa` toggle drives.
  *

@@ -41,11 +41,11 @@ export const FIND_WIDGET_STYLE = `
 .lwd-find button:disabled{opacity:.42;cursor:default}
 .lwd-find .lf-act{font:500 11.5px/1 system-ui;padding:0 9px}
 /* The Aa toggle reads its own state: pressed is warm and outlined, so "this find is case sensitive" is
-   visible at a glance rather than something the reader has to infer from the count moving. */
+	visible at a glance rather than something the reader has to infer from the count moving. */
 .lwd-find .lf-case{font:600 11.5px/1 system-ui}
 .lwd-find .lf-case[aria-pressed="true"]{background:#fdf0dd;border-color:oklch(0.66 0.16 45 / .55);color:#8a5a12}
 /* Matches are painted with the CSS Custom Highlight API, so NOTHING is inserted into the document's DOM:
-   ProseMirror's own DOM invariants - and the pending inline-diff widgets sitting in it - are untouched. */
+	ProseMirror's own DOM invariants - and the pending inline-diff widgets sitting in it - are untouched. */
 ::highlight(lwd-find){background:#ffe9a3;color:#1a1c20}
 ::highlight(lwd-find-current){background:oklch(0.78 0.17 60);color:#1a1c20}`;
 
