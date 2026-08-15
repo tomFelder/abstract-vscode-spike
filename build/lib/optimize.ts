@@ -144,6 +144,11 @@ function bundleESMTask(opts: IBundleESMTaskOpts): NodeJS.ReadWriteStream {
 				target: [target],
 				loader: {
 					'.ttf': 'file',
+					// The bundled Abstract mono (IBM Plex Mono) is the first webfont shipped in this repo, and
+					// the workbench chrome reaches it through a relative `url()` in elevation.css. Without a
+					// loader here the production bundle fails outright ("No loader is configured for .woff2"),
+					// even though the dev and web builds serve the CSS as-is and never notice.
+					'.woff2': 'file',
 					'.svg': 'file',
 					'.png': 'file',
 					'.sh': 'file',
