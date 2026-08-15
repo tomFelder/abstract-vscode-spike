@@ -58,12 +58,16 @@ function railGlyph(side: 'left' | 'right'): SVGElement {
  * centre, action toolbars, window title) is hidden by studio.css `.abstract-header` rules; our overlay
  * paints the header on top.
  *
- * Layout, left -> right, exactly mirroring the mock:
- *   [left rail toggle] [logo "A"] [workspace] / [breadcrumb] (file)  ...  [pill] [action] [avatar] [right rail toggle]
+ * Layout, left -> right, exactly mirroring the round-2 comp's title bar:
+ *   [left rail toggle] [22px indigo "A"] [project] / [surface] (file)  ...  [state] [action] [avatar] [right rail toggle]
  *
  * The breadcrumb / pill / action come from IAbstractHeaderService (each surface publishes its own via
  * setContent). The rail toggles are only shown when the active surface has rails (the editor); the badge
  * dot on the right toggle rides pending proposals (P2.5, replacing the old force-open).
+ *
+ * Everything the header states is a fact the active surface published: the project name falls back to the
+ * folder name, the mono chip carries a real file name, and where no state is published nothing is drawn.
+ * The header never invents a version, a count or a status.
  */
 export class AbstractHeaderContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.abstractHeader';
@@ -127,10 +131,10 @@ export class AbstractHeaderContribution extends Disposable implements IWorkbench
 		store.add({ dispose: () => header.remove() });
 
 		// --- left rail toggle (far left) ---
-		const leftToggle = append(header, $('button.abstract-header-toggle.left', { 'aria-label': localize("livingDocs.header.toggleTreeRail", "Collapse Tree Rail") }));
+		const leftToggle = append(header, $('button.abstract-header-toggle.left', { 'aria-label': localize("livingDocs.header.toggleTreeRail", "Collapse tree rail") }));
 		leftToggle.appendChild(railGlyph('left'));
 		// allow-any-unicode-next-line
-		store.add(this._hoverService.setupDelayedHover(leftToggle, () => ({ content: localize("livingDocs.header.toggleTreeRailHint", "Collapse Tree Rail (⌘\\)") })));
+		store.add(this._hoverService.setupDelayedHover(leftToggle, () => ({ content: localize("livingDocs.header.toggleTreeRailHint", "Collapse tree rail (⌘\\)") })));
 		store.add(addDisposableListener(leftToggle, 'click', () => this._commandService.executeCommand(TOGGLE_TREE_RAIL_COMMAND)));
 		this._leftToggle = leftToggle;
 
@@ -154,11 +158,11 @@ export class AbstractHeaderContribution extends Disposable implements IWorkbench
 		const avatar = append(header, $('.abstract-header-avatar'));
 		avatar.textContent = 'TS';
 
-		const rightToggle = append(header, $('button.abstract-header-toggle.right', { 'aria-label': localize("livingDocs.header.toggleRightRail", "Collapse Right Rail") }));
+		const rightToggle = append(header, $('button.abstract-header-toggle.right', { 'aria-label': localize("livingDocs.header.toggleRightRail", "Collapse right rail") }));
 		rightToggle.appendChild(railGlyph('right'));
 		this._rightBadge = append(rightToggle, $('.abstract-header-badge'));
 		// allow-any-unicode-next-line
-		store.add(this._hoverService.setupDelayedHover(rightToggle, () => ({ content: localize("livingDocs.header.toggleRightRailHint", "Collapse Right Rail (⌘⇧\\)") })));
+		store.add(this._hoverService.setupDelayedHover(rightToggle, () => ({ content: localize("livingDocs.header.toggleRightRailHint", "Collapse right rail (⌘⇧\\)") })));
 		store.add(addDisposableListener(rightToggle, 'click', () => this._commandService.executeCommand(TOGGLE_RIGHT_RAIL_COMMAND)));
 		this._rightToggle = rightToggle;
 
@@ -192,8 +196,10 @@ export class AbstractHeaderContribution extends Disposable implements IWorkbench
 			this._fileName.style.display = content.fileName ? '' : 'none';
 		}
 
-		// Pill: sync (ok) / agent-health (ok) / none. Both truthful pills share the ok treatment; the
-		// producing surface decides whether to show one at all (a fresh folder omits the sync pill).
+		// State: sync (ok) / agent-health (ok) / none. Both truthful states share the ok treatment - a green
+		// dot and a sentence, never a filled chip (round 2 has no permanent status pill; the banner owns
+		// state). The producing surface decides whether to say anything at all (a fresh folder has no
+		// sources, so it publishes no sync state rather than an empty one).
 		if (this._pill) {
 			const kind = content.pill?.kind ?? HeaderPillKind.None;
 			if (kind === HeaderPillKind.None || !content.pill) {

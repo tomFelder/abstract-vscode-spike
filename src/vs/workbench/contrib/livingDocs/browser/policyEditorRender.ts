@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { DOC_AUTONOMY_LEVELS, DocAutonomyLevel, docPolicyToneHex } from '../common/docPolicy.js';
+import { FONT, HAIRLINE, INK, PAPER, RADIUS, TYPE } from '../common/abstractTokens.js';
 
 // The shared plain-language policy editor - browser renderer (spec 43 section 3.4; owner plan 45 / PR-c;
 // consumer plan 49). Pairs with the pure `common/docPolicy.ts` grammar. This is the ONE renderer for the
@@ -61,16 +62,22 @@ renderPolicyEditor.CLICK_SELECTOR = '[data-policy]';
 
 /**
  * The shared stylesheet for the policy editor, so every host paints the control identically. Hosts inline this
- * once into their `<style>`. Colours per spec pin 12 / A2 (the tone is carried per-row via `--pol-tone`).
+ * once into their `<style>`. Every colour, radius and type step is a design-system token (round 2, doc 28), so
+ * the dial reads the same on the warm paper of the screens as it does in the document editor; the tone that
+ * distinguishes the selected row is still carried per-row via `--pol-tone` (the shared grammar's colour, so
+ * this control cannot speak a different colour language to the rest of the product).
+ *
+ * A row is a control, so it takes the control radius and the sunken hover; the selected row tints its own tone
+ * into the card white rather than filling with it - a fill in this product means "this span is changing".
  */
 export const POLICY_EDITOR_STYLE = `.policy-editor{display:flex;flex-direction:column;gap:4px}
-.pol-opt{display:flex;align-items:flex-start;gap:9px;width:100%;text-align:left;border:1px solid #EDEFF3;border-radius:9px;background:#fff;padding:8px 10px;cursor:pointer;font:inherit;color:#3a3f49}
-.pol-opt:hover{background:#F6F7F9}
-.pol-opt.on{border-color:color-mix(in srgb,var(--pol-tone) 40%,#E9EAEE);background:color-mix(in srgb,var(--pol-tone) 7%,#fff)}
-.pol-dot{flex:none;width:8px;height:8px;border-radius:50%;margin-top:4px;background:#D5D8DE}
+.pol-opt{display:flex;align-items:flex-start;gap:8px;width:100%;text-align:left;border:1px solid ${HAIRLINE.medium};border-radius:${RADIUS.control};background:${PAPER.card};padding:8px 12px;cursor:pointer;font:inherit;color:${INK.body}}
+.pol-opt:hover{background:${PAPER.sunken}}
+.pol-opt.on{border-color:color-mix(in srgb,var(--pol-tone) 40%,${HAIRLINE.strong});background:color-mix(in srgb,var(--pol-tone) 7%,${PAPER.card})}
+.pol-dot{flex:none;width:8px;height:8px;border-radius:${RADIUS.pill};margin-top:4px;background:${PAPER.control}}
 .pol-opt.on .pol-dot{background:var(--pol-tone)}
-.pol-text{display:flex;flex-direction:column;gap:2px;min-width:0}
-.pol-label{font:600 12.5px/1.2 system-ui;color:#3a3f49}
+.pol-text{display:flex;flex-direction:column;gap:4px;min-width:0}
+.pol-label{font:${TYPE.uiBodyStrong};color:${INK.body}}
 .pol-opt.on .pol-label{color:var(--pol-tone)}
-.pol-desc{font:400 11px/1.35 system-ui;color:#868b95}
-.pol-check{flex:none;margin-left:auto;font:600 12px/1 system-ui;color:var(--pol-tone);min-width:12px;text-align:right}`;
+.pol-desc{font:${TYPE.secondary};color:${INK.secondary}}
+.pol-check{flex:none;margin-left:auto;font:600 13.5px/1.45 ${FONT.sans};color:var(--pol-tone);min-width:12px;text-align:right}`;

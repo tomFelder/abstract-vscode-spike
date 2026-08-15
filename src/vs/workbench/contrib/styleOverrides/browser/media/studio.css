@@ -51,13 +51,13 @@
 }
 
 /* The comp's icon-nav (Part C1 / plan 44 pin 3): a 76px rail (allocated by the core ACTIVITYBAR_WIDTH
- * patch) that in v2 loses its panel background - the items sit directly on the #EDEFF3 chrome (P3.1).
+ * patch) that in v2 loses its panel background - the items sit directly on the frame paper (P3.1).
  * Items are 60px wide with an 18px stroke glyph above a 10px label. The container name is on each
  * action-label's aria-label, so render the label via ::after. (decision log 29, G3 icon-nav; Part B
  * tokens re-pinned in plan 25 iter 1; v2 nav-on-chrome, plan 44 pin 3.)
  *
  * The part paints its own inline background in updateStyles() from the activityBar.* theme colours;
- * override to `transparent` so the workbench chrome (#EDEFF3, elevation.css) shows through, and drop
+ * override to `transparent` so the workbench frame paper (elevation.css) shows through, and drop
  * the border-right so the nav column reads as bare chrome, not a bordered panel. */
 .style-override .part.activitybar {
 	background-color: transparent !important;
@@ -76,10 +76,10 @@
 	height: auto !important;
 	margin: 0 auto;
 	padding: 8px 0 6px;
-	/* radius 10 (plan 44 pin 3 P3.2/P3.3). `!important` beats the controls-tier 4px that
-	 * `roundedCorners.css` pins on every `.monaco-action-bar .action-label` - the nav chip is a
-	 * 10px card, not a 4px control. */
-	border-radius: 10px !important;
+	/* radius 10 (plan 44 pin 3 P3.2/P3.3; the comp's nav chip). `!important` beats the controls-tier
+	 * 4px that `roundedCorners.css` pins on every `.monaco-action-bar .action-label` - the nav chip is
+	 * a 10px input-tier card, not a 4px control. */
+	border-radius: var(--abstract-r-input) !important;
 }
 /* Centre the 60px nav chip in the ~76px rail so the top nav lines up with the bottom account/settings
  * pins. The base rule above sets `margin: 0 auto`, but the stock activity-bar rule
@@ -92,26 +92,34 @@
 	margin-left: auto;
 	margin-right: auto;
 }
-/* Inactive glyph = `muted` #868B95 (comp C1). The colour is set inline by the composite bar and
- * `activityBar.css` also paints inactive items `--vscode-descriptionForeground` (#606060) via an
+/* Idle glyph = INK.meta, the quietest ink on the ramp (comp icon-nav). The colour is set inline by the
+ * composite bar and `activityBar.css` also paints inactive items `--vscode-descriptionForeground` via an
  * `!important` rule at the SAME (0,9,0) specificity that lands later in the cascade, so it wins the
- * tie. Add the real `.composite-bar` ancestor to reach (0,10,0) and win outright. (plan 25 iter 3
- * polish: close the inactive-glyph colour gap #606060 -> #868B95.) */
+ * tie. Add the real `.composite-bar` ancestor to reach (0,10,0) and win outright. */
 .style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon .action-label.action-label.codicon {
-	color: #868B95 !important;
+	color: var(--abstract-ink-3) !important;
 }
-/* Idle hover = `slate` #52575F (comp C1 / mock `style-hover`, plan 44 pin 3 P3.3) on a full-chip fill.
- * Matches the idle rule's specificity (0,10,0) and lands later in the cascade, plus `!important` to win
- * over the inline composite-bar colour. The #E2E4EA fill paints on the SAME 60px 10px-radius chip element
- * the active state uses, so the hover box encapsulates the whole button exactly like the selected chip
- * (matching the header rail-toggle hover). Excludes the active chip so hovering it keeps its white chip +
- * #4650B8 accent. */
+/* The comp draws the label a step darker than the glyph (INK.secondary under an INK.meta glyph), so the
+ * word stays readable while the glyph stays quiet. The label is our own ::after, so it can take its own
+ * ink without touching the glyph. */
+.style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon .action-label.action-label.codicon::after {
+	color: var(--abstract-ink-2);
+}
+/* Idle hover = INK.bodySoft on a full-chip chip-paper fill - one step of the paper ramp toward the white
+ * active chip, so hover reads as "on its way to selected". Matches the idle rule's specificity (0,10,0)
+ * and lands later in the cascade, plus `!important` to win over the inline composite-bar colour. The fill
+ * paints on the SAME 60px chip element the active state uses, so the hover box encapsulates the whole
+ * button exactly like the selected chip (matching the header rail-toggle hover). Excludes the active chip
+ * so hovering it keeps its white chip + indigo. */
 .style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon:not(.lwd-nav-active):hover .action-label.action-label.codicon {
-	color: #52575F !important;
-	background: #E2E4EA;
+	color: var(--abstract-ink-soft) !important;
+	background: var(--abstract-chip);
+}
+.style-override.monaco-workbench .part.activitybar .composite-bar .action-item.icon:not(.lwd-nav-active):hover .action-label.action-label.codicon::after {
+	color: var(--abstract-ink-soft);
 }
 /* A 1px hairline after Editor, separating the document group (Home . Editor) from the collections
- * group (Templates . Knowledge . Agents), per the comp's icon-nav: a 34px x 1px `#E4E6EA` rule with
+ * group (Templates . Knowledge . Agents), per the comp's icon-nav: a 34px x 1px `strong` rule with
  * 4px of vertical breathing room. Rendered as a `::before` on Templates (the first collections item;
  * matched by its stable codicon class, mirroring the workspace-hide rule above) so it sits between
  * the two groups without a spacer element. The item is `display: block`, so the `::before` stacks
@@ -127,33 +135,40 @@
 	width: 34px;
 	height: 1px;
 	margin: 4px 0;
-	background-color: #E4E6EA;
+	background-color: var(--abstract-card-border);
 }
 
 /* 18px stroke glyph (the codicon font-size drives the glyph; the default is the 24px core ICON_SIZE). */
 .style-override .part.activitybar .action-label.codicon::before {
 	font-size: 18px !important;
 }
+/* The nav label: 10px, weight 400 (the system has 400 and 600 only - the round-1 weight 500 is a
+ * defect). The active chip lifts its own label to 600 below. */
 .style-override .part.activitybar .action-label.codicon::after {
 	content: attr(aria-label);
-	font: 500 10px/1 system-ui;
+	font: 400 10px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 
-/* Active nav item = a WHITE chip behind the item, an `accent-hover` (#4650B8) glyph + label, and e1
- * elevation. The activity bar's own `.checked` state tracks the active sidebar CONTAINER (always the
- * Workspace tree-rail here, because the nav launchers bounce the sidebar back to it), so it is the
- * wrong signal. The ActiveNavChipContribution instead toggles `lwd-nav-active` on the item whose
- * screen / document is the ACTIVE EDITOR; the chip keys off that. (plan 25 iter 2, C1 active chip;
- * Part B tokens: white chip + accent-hover glyph + e1.) */
+/* Active nav item = a WHITE chip behind the item, an indigo glyph + label, and a `strong` hairline.
+ * The activity bar's own `.checked` state tracks the active sidebar CONTAINER (always the Workspace
+ * tree-rail here, because the nav launchers bounce the sidebar back to it), so it is the wrong signal.
+ * The ActiveNavChipContribution instead toggles `lwd-nav-active` on the item whose screen / document is
+ * the ACTIVE EDITOR; the chip keys off that. (plan 25 iter 2, C1 active chip.)
+ *
+ * Round 2 swaps the round-1 e1 shadow for the comp's hairline: the comp draws the selected nav chip as
+ * white paper with a 1px `strong` border and no shadow, so the chip reads by surface step, not by lift. */
 /* The glyph colour is set inline by the composite bar (updateStyles) and the theme also emits a
- * high-specificity `!important` foreground rule, so the chip's accent glyph needs a selector at least
+ * high-specificity `!important` foreground rule, so the chip's indigo glyph needs a selector at least
  * as specific as the theme's: scope under `.monaco-workbench` and double the label class. */
 .style-override.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon {
-	background: var(--abstract-paper-bg, #FFFFFF);
-	color: #4650B8 !important;
-	/* e1 (plan 20 Part B / plan 43 section 1): the base card lift. The chip carries no border in v2 -
-	 * it floats on the chrome as a bare white 60px chip (plan 44 pin 3 / mock icon-nav, P3.2). */
-	box-shadow: var(--abstract-shadow-e1, 0 1px 2px rgba(20, 22, 28, .05));
+	background: var(--abstract-paper-bg);
+	color: var(--abstract-indigo) !important;
+	/* An inset ring rather than a real border: it paints identically to a 1px hairline but takes no
+	 * layout box, so the active chip stays exactly the same size as its idle neighbours. */
+	box-shadow: inset 0 0 0 1px var(--abstract-card-border);
+}
+.style-override.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon::after {
+	color: var(--abstract-indigo);
 }
 .style-override.monaco-workbench .part.activitybar .action-item.icon.lwd-nav-active .action-label.action-label.codicon::after {
 	font-weight: 600;
@@ -162,7 +177,7 @@
 /* The bottom-pinned account + settings (the core global-activity region). It renders as the last
  * child of the activity bar's `.content` (a bare div holding a vertical action bar), which the core
  * `.composite-bar { margin-bottom: auto }` rule already floats to the bottom. Match the comp's quiet
- * treatment: 19px glyph, `faint` #A3A8B2, no label row. Functionality is untouched -- clicking still
+ * treatment: 19px glyph in INK.meta, no label row. Functionality is untouched -- clicking still
  * opens the accounts / manage menus. (plan 25 iter 2, C1 bottom pins.) */
 .style-override .part.activitybar > .content > div:not(.menubar):not(.composite-bar) {
 	flex: none;
@@ -178,7 +193,7 @@
 	padding: 7px 0;
 }
 .style-override.monaco-workbench .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-item.icon .action-label.action-label.codicon {
-	color: #A3A8B2 !important;
+	color: var(--abstract-ink-3) !important;
 }
 .style-override .part.activitybar > .content > div:not(.menubar):not(.composite-bar) .action-label.codicon::before {
 	font-size: 19px !important;
@@ -206,21 +221,23 @@
 	width: 22px;
 	height: 60px;
 	padding: 0;
-	border: 1px solid var(--vscode-widget-border, rgba(0, 0, 0, 0.08));
+	/* The affordance is an Abstract-only surface, so it is pinned to the Abstract ramp rather than to
+	 * the theme's widget colours - a theme swap must not be able to knock it off the paper ramp. */
+	border: 1px solid var(--abstract-card-border);
 	border-right: none;
 	border-radius: 6px 0 0 6px;
-	background: var(--vscode-editorWidget-background, #ffffff);
-	color: var(--vscode-icon-foreground, #61656c);
+	background: var(--abstract-paper-bg);
+	color: var(--abstract-ink-2);
 	cursor: pointer;
-	box-shadow: -1px 0 4px rgba(0, 0, 0, 0.06);
+	box-shadow: var(--abstract-shadow-card);
 	transition: color 0.1s ease, background 0.1s ease;
 }
 .style-override .part.editor > .lwd-rail-affordance:hover {
-	color: var(--vscode-textLink-foreground, #2b64d4);
-	background: var(--vscode-list-hoverBackground, #f2f3f5);
+	color: var(--abstract-indigo);
+	background: var(--abstract-sunken);
 }
 .style-override .part.editor > .lwd-rail-affordance:focus-visible {
-	outline: 1px solid var(--vscode-focusBorder, #2b64d4);
+	outline: 1px solid var(--vscode-focusBorder, var(--abstract-indigo));
 	outline-offset: -1px;
 }
 .style-override .part.editor > .lwd-rail-affordance > .codicon {
@@ -253,7 +270,7 @@
  * chrome + hairline on the `.abstract-header` overlay we fully own (below) rather than fighting that
  * inline style. Here we only pin the height and neutralise the stock shadow. */
 .style-override .part.titlebar {
-	color: #1A1C20 !important;
+	color: var(--abstract-ink) !important;
 	height: 48px;
 	box-shadow: none !important;
 }
@@ -262,20 +279,23 @@
 	line-height: normal;
 }
 
-/* The Abstract header row (mirrors the mock's 48px flex row). Paints the chrome background + hairline
- * bottom border itself so it never depends on the part's theme-driven inline styles. */
+/* The Abstract header row (mirrors the comp's title bar: a 48px flex row, 10px gaps, 20px side padding).
+ * Paints the frame paper itself so it never depends on the part's theme-driven inline styles.
+ *
+ * No hairline under it: in the comp the title bar and the panels below share one continuous sheet of
+ * frame paper, and the panels draw their own top hairline where they meet it. A rule here would float a
+ * second line in the 12px frame inset (elevation.css) that the comp does not have. */
 .style-override .abstract-header {
 	position: absolute;
 	inset: 0;
 	height: 48px;
 	display: flex;
 	align-items: center;
-	gap: 12px;
-	padding: 0 16px;
+	gap: 10px;
+	padding: 0 20px;
 	box-sizing: border-box;
-	background: var(--abstract-chrome, #EDEFF3);
-	border-bottom: 1px solid #E2E4EA;
-	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	background: var(--abstract-chrome);
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
 	/* The empty header space is a window drag handle, like a native title bar (the stock
 	 * `.titlebar-drag-region` is hidden by the rules above, so this overlay must carry the drag itself).
 	 * Interactive controls opt back out below with `no-drag`, and the OS still owns the macOS traffic
@@ -291,7 +311,7 @@
 	padding-left: 70px;
 }
 .style-override.monaco-workbench.mac:not(.web).fullscreen .abstract-header {
-	padding-left: 16px;
+	padding-left: 20px;
 }
 
 /* The interactive controls opt out of the drag region so their clicks/hover still land (a drag region
@@ -303,7 +323,7 @@
 	-webkit-app-region: no-drag;
 }
 
-/* The two 28px rail-toggle buttons (P2.1): panel glyph, hover bg #E2E4EA. */
+/* The two 28px rail-toggle buttons (P2.1): panel glyph, hovering to a chip-paper fill. */
 .style-override .abstract-header-toggle {
 	position: relative;
 	flex: none;
@@ -311,139 +331,150 @@
 	height: 28px;
 	padding: 0;
 	border: none;
-	border-radius: 8px;
+	border-radius: var(--abstract-r-control);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	color: #52575F;
+	color: var(--abstract-ink-soft);
 	background: transparent;
 	cursor: pointer;
 }
 .style-override .abstract-header-toggle:hover {
-	background: #E2E4EA;
+	background: var(--abstract-chip);
 }
 .style-override .abstract-header-toggle:focus-visible {
-	outline: 1px solid var(--vscode-focusBorder, #5B6DC4);
+	outline: 1px solid var(--vscode-focusBorder, var(--abstract-indigo));
 	outline-offset: -1px;
 }
 
-/* The 8px amber badge dot on the right toggle (P2.5): a pending proposal while the rail is collapsed. */
+/* The 8px amber badge dot on the right toggle (P2.5): a pending proposal while the rail is collapsed.
+ * Amber is the one hue that means "waiting on you", so the dot needs no words. */
 .style-override .abstract-header-badge {
 	position: absolute;
 	top: 2px;
 	right: 2px;
 	width: 8px;
 	height: 8px;
-	border-radius: 999px;
-	background: #C99A2E;
-	box-shadow: 0 0 0 2px var(--abstract-chrome, #EDEFF3);
+	border-radius: var(--abstract-r-pill);
+	background: var(--abstract-amber);
+	box-shadow: 0 0 0 2px var(--abstract-chrome);
 }
 
-/* Brand cluster: logo + workspace / breadcrumb (file). */
+/* Brand cluster: the "A" mark + `project / Surface`. The comp sets the project name in INK.heading and
+ * lets the whole "/ Surface" tail fall back to INK.meta, so the eye lands on the project first. */
 .style-override .abstract-header-brand {
 	display: flex;
 	align-items: center;
 	gap: 10px;
 	min-width: 0;
 }
+/* The 22px indigo rounded-square mark. Indigo means "Abstract acting", and the mark is Abstract itself. */
 .style-override .abstract-header-logo {
 	flex: none;
 	width: 22px;
 	height: 22px;
 	border-radius: 6px;
-	background: #5B6DC4;
-	color: #fff;
+	background: var(--abstract-indigo);
+	color: var(--abstract-paper-bg);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-weight: 700;
+	font-weight: 600;
 	font-size: 12px;
 }
 .style-override .abstract-header-workspace {
 	flex: none;
 	font-size: 13.5px;
 	font-weight: 600;
-	color: #1A1C20;
+	color: var(--abstract-ink);
 }
+/* The separator and the crumb are one phrase ("/ Board Note") at one size and one ink, so the gap
+ * between them is the space in the phrase, not a layout gap. */
 .style-override .abstract-header-sep {
 	flex: none;
-	color: #C6CAD2;
+	margin-right: -6px;
+	font-size: 13.5px;
+	color: var(--abstract-ink-3);
 }
 .style-override .abstract-header-crumb {
 	font-size: 13.5px;
-	color: #868B95;
+	color: var(--abstract-ink-3);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* The mono provenance chip - a file name, and nothing that is not a fact. Mono 11 in INK.meta is the
+ * comp's treatment for the `Saved · v3` slot; we only ever put a genuinely known fact here. */
 .style-override .abstract-header-file {
 	flex: none;
 	margin-left: 3px;
-	font-family: 'JetBrains Mono', ui-monospace, monospace;
+	font-family: var(--abstract-font-mono);
 	font-size: 11px;
-	color: #A9AEB8;
+	color: var(--abstract-ink-3);
 }
 
 .style-override .abstract-header-spacer {
 	flex: 1;
 }
 
-/* Right-side sync / agent-health pill (26px ok pill). */
+/* Right-side sync / agent-health state (7px dot + a sentence).
+ *
+ * Round 2 retires the round-1 green status pill: "there is no permanent status pill - state appears when
+ * it needs you, in one place: the banner" (docs/28). A filled green pill parked in the chrome states an
+ * all-clear forever and competes with the banner that owns state. The element and everything that feeds
+ * it are unchanged - it just reads as the system's quiet dot-plus-sentence instead of a chip. */
 .style-override .abstract-header-pill {
 	flex: none;
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	height: 26px;
-	padding: 0 10px;
-	border-radius: 999px;
-	background: #EEF7F0;
-	border: 1px solid #D7ECDC;
-	color: #2C8159;
-	font-size: 12px;
-	font-weight: 500;
+	color: var(--abstract-ink-2);
+	font-size: 12.5px;
+	font-weight: 400;
 	white-space: nowrap;
 }
+/* Green means applied / fresh / all clear - the only thing either pill kind ever reports. */
 .style-override .abstract-header-pill-dot {
 	width: 7px;
 	height: 7px;
-	border-radius: 999px;
-	background: #2C8159;
+	border-radius: var(--abstract-r-pill);
+	background: var(--abstract-green);
 }
 
-/* Right-side surface action button (30px). */
+/* Right-side surface action button: the comp's pill-shaped secondary - 12.5px on white, a `control`
+ * hairline, radius 999, 5px/14px padding. A secondary never carries a fill; only the one indigo primary
+ * does, and the header has no primary. */
 .style-override .abstract-header-action {
 	flex: none;
-	height: 30px;
-	padding: 0 12px;
+	padding: 5px 14px;
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	border-radius: 9px;
-	border: 1px solid #E6E8EC;
-	background: #fff;
+	border-radius: var(--abstract-r-pill);
+	border: 1px solid var(--abstract-control);
+	background: var(--abstract-paper-bg);
 	font-size: 12.5px;
-	font-weight: 600;
-	color: #52575F;
+	font-weight: 400;
+	color: var(--abstract-ink-soft);
 	cursor: pointer;
 	white-space: nowrap;
 }
 .style-override .abstract-header-action:hover {
-	border-color: #5B6DC4;
-	color: #4650B8;
+	border-color: var(--abstract-indigo-tint-border);
+	color: var(--abstract-indigo);
 }
 
-/* 27px avatar circle (navy). */
+/* 26px person chip. Navy is identity, not state, so it sits outside the meaning palette. */
 .style-override .abstract-header-avatar {
 	flex: none;
-	width: 27px;
-	height: 27px;
-	border-radius: 999px;
-	background: #3B4D8F;
-	color: #fff;
+	width: 26px;
+	height: 26px;
+	border-radius: var(--abstract-r-pill);
+	background: var(--abstract-avatar-navy);
+	color: var(--abstract-paper-bg);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 11px;
+	font-size: 10.5px;
 	font-weight: 600;
 }

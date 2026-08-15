@@ -28,6 +28,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
+import { AMBER, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, RED, SHADOW, TRACKING, TYPE } from '../common/abstractTokens.js';
 import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
@@ -70,18 +71,19 @@ function esc(s: string): string {
 }
 
 // The health dot colour for the composer model control + popover rows (issue #236, plan 47 P14.5). Honest,
-// never fabricated: `ready` = green (ok #2C8159); `budget-paused` = amber attention (#C99A2E, the included
-// tier's daily cap is spent but the model is otherwise fine); broker-down / unconfigured = removed-ink
-// (#B5514B, the model genuinely cannot answer); undefined (not yet probed) = a neutral grey placeholder,
-// a window the settled-status cache keeps to near-zero so the dot never blinks on a surface crossing.
+// never fabricated, and now drawn from the design system's meaning palette (doc 28) rather than the round-1
+// hexes: `ready` = green (all clear); `budget-paused` = amber (waiting on you - the included tier's daily cap
+// is spent but the model is otherwise fine); broker-down / unconfigured = red (failed - the model genuinely
+// cannot answer); undefined (not yet probed) = the neutral frame border, a window the settled-status cache
+// keeps to near-zero so the dot never blinks on a surface crossing.
 // Exported so the unit test pins the readiness -> colour mapping without a live broker.
 export function modelHealthDotColour(readiness: ModelReadiness | undefined): string {
 	switch (readiness) {
-		case 'ready': return '#2c8159';
-		case 'budget-paused': return '#c99a2e';
+		case 'ready': return GREEN.base;
+		case 'budget-paused': return AMBER.base;
 		case 'broker-down':
-		case 'unconfigured': return '#b5514b';
-		default: return '#c6cad2';
+		case 'unconfigured': return RED.base;
+		default: return PAPER.frameBorder;
 	}
 }
 
@@ -191,6 +193,11 @@ export class ReviewRailView extends ViewPane {
 	// "Workbench v2" comp drops the always-on panel; the agents stay reachable). Collapsed by default so the
 	// Review tab matches the comp; this remembers the open/closed state across re-renders this session.
 	private _checksExpanded = false;
+	// Which shape the Review tab's FIGURES card is in, per document (comp 2b). Pure view state, reset each
+	// session: `grouped` shows the value transitions, `collapsed` folds them away once they have been read, and
+	// `each` breaks the group back into individual cards with their own Approve / Reject - the escape hatch out
+	// of the bulk verb. A document with no entry is `grouped`.
+	private readonly _figuresMode = new Map<string, 'grouped' | 'collapsed' | 'each'>();
 	// Whether the Attach suggestion row is expanded to the full mentionable-file list (#177). Collapsed by
 	// default each session so the chat history keeps the reclaimed room; a re-render preserves the choice.
 	private _attachExpanded = false;
@@ -326,6 +333,10 @@ export class ReviewRailView extends ViewPane {
 	private _revealReviewCardFor(blockId: string | undefined): void {
 		if (!blockId) { this._revealReviewCard.clear(); return; }
 		this._revealReviewCard.value = disposableTimeout(() => {
+			// The Review list is rendered as one HTML string, not built element by element, so there are no
+			// element handles to hold onto - a selector is the only way back to a card, and the block id it
+			// matches on is the same durable address the document and the rail already agree about.
+			// eslint-disable-next-line no-restricted-syntax
 			this._root?.querySelector(`.ldr-card[data-block-id="${CSS.escape(blockId)}"]`)?.scrollIntoView({ block: 'center' });
 		}, 250);
 	}
@@ -430,19 +441,30 @@ export class ReviewRailView extends ViewPane {
 
 		const openModelAccess = () => void this._openScreen('settings');
 
+		// One shared shape for the three states below: a 6px state dot, a plain sentence, and a fix-it link.
+		// Written once because the three lines differ only in their words - the geometry is the design system's
+		// "a dot plus a sentence" state atom, and three copies of it drift.
+		const stateRow = (dotColour: string): { text: HTMLElement } => {
+			const row = append(footer, $('div'));
+			row.style.cssText = `display:flex;align-items:center;gap:6px;padding:0 2px;font:${TYPE.secondary};color:${INK.secondary}`;
+			const dot = append(row, $('span'));
+			dot.style.cssText = `width:6px;height:6px;flex:none;border-radius:${RADIUS.pill};background:${dotColour}`;
+			return { text: append(row, $('span')) };
+		};
+		const fixItLink = (parent: HTMLElement, label: string): void => {
+			const link = append(parent, $('button')) as HTMLButtonElement;
+			link.style.cssText = `border:none;background:transparent;padding:0;font:600 12.5px/1.5 ${FONT.sans};color:${INDIGO.base};cursor:pointer`;
+			link.textContent = label;
+			this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
+		};
+
 		// Model genuinely unavailable, or the day's included usage is spent: an honest state + a fix-it link.
 		if (this._readiness === 'broker-down' || this._readiness === 'unconfigured' || this._readiness === 'budget-paused') {
-			const row = append(footer, $('div'));
-			row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
-			const dot = append(row, $('span'));
-			const dotColour = this._readiness === 'budget-paused' ? '#e0b341' : '#d98a8a';
-			dot.style.cssText = `width:6px;height:6px;flex:none;border-radius:50%;background:${dotColour}`;
-			const text = append(row, $('span'));
+			// The dot is the same honest readiness -> colour mapping the composer's model control uses, so the two
+			// state reports on the same surface can never disagree.
+			const { text } = stateRow(modelHealthDotColour(this._readiness));
 			text.textContent = this._readiness === 'budget-paused' ? 'Daily limit reached · ' : 'Model unavailable · ';
-			const link = append(text, $('button')) as HTMLButtonElement;
-			link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
-			link.textContent = 'Open Model access';
-			this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
+			fixItLink(text, 'Open model access');
 			return;
 		}
 
@@ -452,31 +474,19 @@ export class ReviewRailView extends ViewPane {
 		// a state where the user is signed in yet ChatGPT is not the door serving them. A fix-it link opens Model
 		// Access for the full explanation. When ChatGPT actually serves (provider 'chatgpt'), this does not fire.
 		if (this._signedIn === true && this._provider === 'included') {
-			const row = append(footer, $('div'));
-			row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
-			const dot = append(row, $('span'));
-			dot.style.cssText = 'width:6px;height:6px;flex:none;border-radius:50%;background:#e0a63a';
-			const text = append(row, $('span'));
+			// Amber: this is a "waiting on you" state - the door you chose is not the door answering.
+			const { text } = stateRow(AMBER.base);
 			text.textContent = localize('livingDocs.composer.signedInFallback', "Signed in to ChatGPT, but the included model is serving · ");
-			const link = append(text, $('button')) as HTMLButtonElement;
-			link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
-			link.textContent = localize('livingDocs.composer.signedInFallbackLink', "Details");
-			this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
+			fixItLink(text, localize('livingDocs.composer.signedInFallbackLink', "Details"));
 			return;
 		}
 
 		// Ready. Only invite sign-in while signed OUT; once signed in to ChatGPT there is nothing to nag about.
 		if (this._signedIn !== false) { return; }
-		const row = append(footer, $('div'));
-		row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 2px 9px;font:400 11.5px/1.5 system-ui;color:#868b95';
-		const dot = append(row, $('span'));
-		dot.style.cssText = 'width:6px;height:6px;flex:none;border-radius:50%;background:#cdd1d8';
-		const text = append(row, $('span'));
+		// Nothing is wrong here, so the dot carries no meaning colour: it is the neutral frame border.
+		const { text } = stateRow(PAPER.frameBorder);
 		text.textContent = 'Using the included model · ';
-		const link = append(text, $('button')) as HTMLButtonElement;
-		link.style.cssText = 'border:none;background:transparent;padding:0;font:600 11.5px/1.5 system-ui;color:oklch(0.55 0.13 255);cursor:pointer';
-		link.textContent = 'Sign in with ChatGPT';
-		this._renderDisposables.add(addDisposableListener(link, 'click', openModelAccess));
+		fixItLink(text, 'Sign in with ChatGPT');
 		const tail = append(text, $('span'));
 		tail.textContent = ' for unlimited.';
 	}
@@ -488,13 +498,13 @@ export class ReviewRailView extends ViewPane {
 	// spinner; a completed sign-in (or the included pick) replays the prompt and the choice disappears.
 	private _renderInlineModelChoice(footer: HTMLElement, doc: URI): void {
 		const card = append(footer, $('div'));
-		card.style.cssText = 'margin:0 0 10px;border:1px solid #d9d7fb;border-radius:12px;background:#fff;padding:14px 15px;box-shadow:0 6px 16px -12px rgba(86,97,201,.35)';
+		card.style.cssText = `border:1px solid ${INDIGO.tintBorder};border-radius:${RADIUS.card};background:${PAPER.card};padding:14px 15px;box-shadow:${SHADOW.card}`;
 
 		const title = append(card, $('div'));
-		title.style.cssText = 'font:600 13px/1.35 system-ui;color:#15171c;margin:0 0 4px';
+		title.style.cssText = `font:${TYPE.uiBodyStrong};color:${INK.heading};margin:0 0 4px`;
 		title.textContent = localize('livingDocs.inlineModel.title', "Choose how to run your request");
 		const sub = append(card, $('div'));
-		sub.style.cssText = 'font:400 12px/1.5 system-ui;color:#696e78;margin:0 0 13px';
+		sub.style.cssText = `font:${TYPE.secondary};color:${INK.secondary};margin:0 0 13px`;
 		sub.textContent = localize('livingDocs.inlineModel.sub', "Your message is ready to send. Pick a model to answer it - your typed prompt is kept either way.");
 
 		// The pending sign-in state (plan 51 device auth): once the user clicks "Sign in with ChatGPT" we show
@@ -502,19 +512,19 @@ export class ReviewRailView extends ViewPane {
 		// spinner, and poll the flow at the broker's interval. A completed sign-in replays the held prompt.
 		if (this._inlineSignInPending) {
 			const waiting = append(card, $('div'));
-			waiting.style.cssText = 'display:flex;align-items:center;gap:9px;font:600 12.5px/1 system-ui;color:#52575f;margin:0 0 12px';
+			waiting.style.cssText = `display:flex;align-items:center;gap:9px;font:600 12.5px/1 ${FONT.sans};color:${INK.bodySoft};margin:0 0 12px`;
 			const spin = append(waiting, $('span'));
-			spin.style.cssText = 'width:12px;height:12px;border:2px solid #d3d6dd;border-top-color:oklch(0.55 0.13 255);border-radius:50%;animation:lwdSpin .8s linear infinite';
+			spin.style.cssText = `width:12px;height:12px;border:2px solid ${PAPER.control};border-top-color:${INDIGO.base};border-radius:${RADIUS.pill};animation:lwdSpin .8s linear infinite`;
 			append(waiting, $('span')).textContent = localize('livingDocs.inlineModel.waiting', "Waiting for you to finish signing in…");
 			// The device code: shown large, copyable in one click. Absent only if the broker omitted it.
 			if (this._inlineSignInUserCode) {
 				const codeRow = append(card, $('div'));
 				codeRow.style.cssText = 'display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 12px';
 				const code = append(codeRow, $('span'));
-				code.style.cssText = 'font:700 18px/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:.1em;color:#15171c;background:#f4f5f8;border:1px solid #e4e6eb;border-radius:9px;padding:10px 14px;user-select:all';
+				code.style.cssText = `font:600 18px/1 ${FONT.mono};letter-spacing:${TRACKING.kindBadge};color:${INK.heading};background:${PAPER.sunken};border:1px solid ${PAPER.sunkenBorder};border-radius:${RADIUS.input};padding:10px 14px;user-select:all`;
 				code.textContent = this._inlineSignInUserCode;
 				const copy = append(codeRow, $('button')) as HTMLButtonElement;
-				copy.style.cssText = 'border:1px solid #d4d7dd;background:#fff;border-radius:9px;padding:9px 13px;font:600 12px/1 system-ui;color:#52575f;cursor:pointer';
+				copy.style.cssText = `border:1px solid ${PAPER.control};background:${PAPER.card};border-radius:${RADIUS.control};padding:9px 13px;font:600 12.5px/1 ${FONT.sans};color:${INK.body};cursor:pointer`;
 				copy.textContent = localize('livingDocs.inlineModel.copyCode', "Copy code");
 				this._renderDisposables.add(addDisposableListener(copy, 'click', () => {
 					const codeText = this._inlineSignInUserCode ?? '';
@@ -526,7 +536,7 @@ export class ReviewRailView extends ViewPane {
 			if (this._inlineSignInUrl) {
 				const open = append(card, $('a')) as HTMLAnchorElement;
 				open.href = this._inlineSignInUrl;
-				open.style.cssText = 'display:inline-flex;align-items:center;gap:7px;border-radius:9px;padding:10px 16px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;text-decoration:none;cursor:pointer';
+				open.style.cssText = `display:inline-flex;align-items:center;gap:7px;border-radius:${RADIUS.control};padding:10px 16px;background:${INDIGO.base};color:#fff;font:600 12.5px/1 ${FONT.sans};text-decoration:none;cursor:pointer`;
 				open.textContent = localize('livingDocs.inlineModel.openSignIn', "Open the sign-in page");
 				this._renderDisposables.add(addDisposableListener(open, 'click', (e: MouseEvent) => { e.preventDefault(); this.openerService.open(URI.parse(this._inlineSignInUrl!), { openExternal: true }); }));
 			}
@@ -537,7 +547,8 @@ export class ReviewRailView extends ViewPane {
 		// upstream rejected. Shown above the choice so the user can read the real reason and try again.
 		if (this._inlineSignInError) {
 			const err = append(card, $('div'));
-			err.style.cssText = 'font:400 12px/1.5 system-ui;color:#b4332f;background:#faf7f7;border:1px solid #f0e0e0;border-radius:9px;padding:9px 11px;margin:0 0 12px';
+			// A failure block, so it wears the removed/failed fill - no border, because the fill IS the signal.
+			err.style.cssText = `font:${TYPE.secondary};color:${RED.blockInk};background:${RED.blockBg};border-radius:${RADIUS.control};padding:9px 11px;margin:0 0 12px`;
 			err.textContent = this._inlineSignInError;
 		}
 
@@ -547,13 +558,13 @@ export class ReviewRailView extends ViewPane {
 		// "Sign in with ChatGPT" - the user's own subscription (unlimited); starts the same device-auth flow the
 		// settings screen uses, kept in place so the held prompt replays once the round-trip lands signed-in.
 		const signIn = append(buttons, $('button')) as HTMLButtonElement;
-		signIn.style.cssText = 'border:none;border-radius:10px;padding:11px 16px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1.3 system-ui;cursor:pointer;text-align:left';
+		signIn.style.cssText = `border:none;border-radius:${RADIUS.input};padding:11px 16px;background:${INDIGO.base};color:#fff;font:${TYPE.uiBodyStrong};cursor:pointer;text-align:left`;
 		signIn.textContent = localize('livingDocs.inlineModel.signIn', "Sign in with ChatGPT - use your own plan, no limit");
 		this._renderDisposables.add(addDisposableListener(signIn, 'click', () => void this._inlineSignIn(doc)));
 
 		// "Use the included model" - the free metered tier; selects it and replays the prompt immediately.
 		const included = append(buttons, $('button')) as HTMLButtonElement;
-		included.style.cssText = 'border:1px solid #d4d7dd;border-radius:10px;padding:11px 16px;background:#fff;color:#52575f;font:600 13px/1.3 system-ui;cursor:pointer;text-align:left';
+		included.style.cssText = `border:1px solid ${PAPER.control};border-radius:${RADIUS.input};padding:11px 16px;background:${PAPER.card};color:${INK.body};font:${TYPE.uiBodyStrong};cursor:pointer;text-align:left`;
 		included.textContent = localize('livingDocs.inlineModel.included', "Use the included model - free, a little each day");
 		this._renderDisposables.add(addDisposableListener(included, 'click', () => void this._livingDocs.chooseIncludedModelAndReplay(doc)));
 	}
@@ -627,6 +638,20 @@ export class ReviewRailView extends ViewPane {
 		}
 	}
 
+	/**
+	 * The Review tab is the LEDGER (comp 2b): a snapshot promise, then one card per outstanding decision - a
+	 * MEANING card for each judgement call and a single FIGURES card grouping that document's low-risk value
+	 * updates - closed by a foot that counts what is left and offers the bulk verb, quietly.
+	*
+	 * The grouping is what makes the rail readable past three changes. Four near-identical figure cards read as
+	 * four decisions when they are really one; folding them into a card that shows every transition as a line
+	 * keeps each one checkable while asking for a single answer, and "Each…" always breaks the group back apart.
+	*
+	 * The rail spans EVERY document with pending changes, not only the one on screen, which the comp has no
+	 * need to show. So a section label naming the document stays, and it carries that document's own bulk verbs
+	 * ONLY while more than one document is in play - with a single document the foot already says it, and a
+	 * bulk verb repeated is a bulk verb pressed by accident.
+	 */
 	private _renderReview(content: HTMLElement, pending: readonly IProposedChange[]): void {
 		// Group pending changes by the document they belong to.
 		const groups = new Map<string, typeof pending[number][]>();
@@ -637,13 +662,16 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		const status = append(content, $('div.ldr-status'));
+		// The promise the comp opens the ledger with, and it is one the product keeps: `approveAll` /
+		// `approveAllPending` both snapshot first (plan 26), so History can always restore.
 		// The empty state is on the entry path (the rail's Review tab is reachable before any AI/source use),
 		// so it stays markdown-first (plan 42 L3): it says what the tab is FOR -- agent edits land here to
 		// review -- without the "Living Document" / "Refresh from sources" ceremony a fresh user has not met yet.
 		status.textContent = pending.length
-			? `${pending.length} change${pending.length > 1 ? 's' : ''} ${pending.length > 1 ? 'need' : 'needs'} approval across ${groups.size} document${groups.size > 1 ? 's' : ''}.`
+			? localize('livingDocs.review.snapshotPromise', "A snapshot is taken before any bulk approve - you can always restore.")
 			: localize("livingDocs.review.empty", "No changes waiting. When the agent proposes an edit, it lands here for you to review.");
 
+		const multiDoc = groups.size > 1;
 		for (const [docTitle, changes] of groups) {
 			const group = append(content, $('div.ldr-group'));
 			const docId = changes[0].docId;
@@ -652,7 +680,7 @@ export class ReviewRailView extends ViewPane {
 			// The document title opens that document (so its inline diffs are visible), Cursor-style. The
 			// whole label is the click target; the per-document Approve all / Reject all sit on the right.
 			const titleBtn = append(groupHeader, $('button.ldr-group-title')) as HTMLButtonElement;
-			titleBtn.title = `Open ${docTitle}`;
+			titleBtn.title = localize('livingDocs.review.openDoc', "Open {0}", docTitle);
 			const titleText = append(titleBtn, $('span'));
 			titleText.textContent = docTitle;
 			const count = append(titleBtn, $('span.ldr-group-count'));
@@ -669,95 +697,256 @@ export class ReviewRailView extends ViewPane {
 			const del = append(stats, $('span.ldr-stat-del'));
 			del.textContent = `-${stat.removed}`;
 
-			const groupActions = append(groupHeader, $('div.ldr-group-actions'));
-			const approveAll = append(groupActions, $('button.ldr-group-btn.approve')) as HTMLButtonElement;
-			approveAll.textContent = 'Approve all';
+			if (multiDoc) {
+				const groupActions = append(groupHeader, $('div.ldr-group-actions'));
+				const approveAll = append(groupActions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
+				approveAll.textContent = localize('livingDocs.review.approveAllDoc', "Approve all {0}…", changes.length);
+				this._renderDisposables.add(addDisposableListener(approveAll, 'click', async () => {
+					// Bulk-approve safety net (plan 31 iter 4): confirm when the set includes any meaning change;
+					// a version snapshot is taken first (plan 26). Figures-only bulk approves stay one-click.
+					const confirm = bulkApproveConfirm(this._livingDocs.getPendingForDoc(URI.parse(docId)), true);
+					if (confirm.needed) {
+						const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: localize('livingDocs.review.approveAllConfirm', "Approve all") });
+						if (!confirmed) { return; }
+					}
+					await this._livingDocs.approveAll(docId);
+					this._openNextPending(docId);
+				}));
+				const rejectAll = append(groupActions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
+				rejectAll.textContent = localize('livingDocs.review.rejectAllDoc', "Reject all…");
+				this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAll(docId)));
+			}
+
+			// Meaning first, because a judgement call is what the reader is here for; the figures fold into one
+			// card beneath it. Order within each kind is the order the agent proposed them.
+			for (const change of changes) {
+				if (change.kind === 'meaning') { this._appendChangeCard(group, change); }
+			}
+			const figures = changes.filter(c => c.kind !== 'meaning');
+			if (figures.length === 1) {
+				// One figure is not a group. Grouping it would put a bulk verb ("Approve 1 figures") on a single
+				// decision, which is the exact ceremony the FIGURES card exists to remove.
+				this._appendChangeCard(group, figures[0]);
+			} else if (figures.length) {
+				this._appendFiguresCard(group, docId, figures);
+			}
+		}
+
+		// The rail foot (comp 2b): what is left to decide, and the bulk verbs - quiet, and confirmed. A bulk
+		// verb is never a filled button here: filling it would make "approve everything" the easiest thing on
+		// the surface, which is the opposite of what a review rail is for.
+		if (pending.length) {
+			const foot = append(content, $('div.ldr-foot'));
+			const left = append(foot, $('span.ldr-foot-count'));
+			// Literally true of what the rail is showing: a decided change leaves the pending set, so nothing
+			// still on this surface has been decided. The rail keeps no memory of a batch, so the total is the
+			// live count rather than a fabricated "started with N".
+			left.textContent = localize('livingDocs.review.decided', "0 of {0} decided", pending.length);
+			append(foot, $('span.ldr-spacer'));
+			const rejectAll = append(foot, $('button.ldr-quiet-btn')) as HTMLButtonElement;
+			rejectAll.textContent = localize('livingDocs.review.rejectAll', "Reject all…");
+			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAllPending()));
+			const approveAll = append(foot, $('button.ldr-quiet-btn')) as HTMLButtonElement;
+			approveAll.textContent = localize('livingDocs.review.approveAll', "Approve all {0}…", pending.length);
 			this._renderDisposables.add(addDisposableListener(approveAll, 'click', async () => {
-				// Bulk-approve safety net (plan 31 iter 4): confirm when the set includes any meaning change;
-				// a version snapshot is taken first (plan 26). Figures-only bulk approves stay one-click.
-				const confirm = bulkApproveConfirm(this._livingDocs.getPendingForDoc(URI.parse(docId)), true);
+				const confirm = bulkApproveConfirm(pending, true);
 				if (confirm.needed) {
-					const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: 'Approve all' });
+					const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: localize('livingDocs.review.approveAllConfirm', "Approve all") });
 					if (!confirmed) { return; }
 				}
-				await this._livingDocs.approveAll(docId);
-				this._openNextPending(docId);
+				await this._livingDocs.approveAllPending();
 			}));
-			const rejectAll = append(groupActions, $('button.ldr-group-btn')) as HTMLButtonElement;
-			rejectAll.textContent = 'Reject all';
-			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAll(docId)));
-
-			for (const change of changes) {
-				const card = append(group, $('div.ldr-card'));
-				// Plan 52 WP-A1: the durable block id this card is about, so a deep link that reveals Review (a
-				// transcript pointer whose change has no inline widget) can scroll to THIS card rather than dropping
-				// the reader at the top of a list of every pending change across every document. It is the same id
-				// the panel request already carries as its payload. Purely an anchor - the card renders unchanged.
-				card.dataset.blockId = change.blockId;
-
-				// The self-explaining framing (plan 31 iter 2): the same kind tag, confidence chip, rationale and
-				// source chip the inline widget and cross-doc cards render, built from the one `reviewFraming`.
-				const framing = reviewFraming(change, change.sourceCells.join(', '));
-
-				const top = append(card, $('div.ldr-card-top'));
-				const nameWrap = append(top, $('span.ldr-card-name-wrap'));
-				const name = append(nameWrap, $('span.ldr-card-name'));
-				name.textContent = change.blockLabel;
-				// Cite the same gutter address the inline widget cites (spec 43 section 3.1 / pin 11): resolve the
-				// change's durable block id to its current display line against the live doc and render the shared
-				// "Line N" string in the same mono/accent treatment. Recomputed display-time; omitted (like the
-				// inline widget) when the doc is not loaded or the block is gone.
-				const changeDoc = this._livingDocs.getDoc(URI.parse(change.docId));
-				const addressLine = changeDoc ? resolveBlockLine(changeDoc, change.blockId) : undefined;
-				if (typeof addressLine === 'number') {
-					// Pin 13.5: the "Line N" citation is a click target - it opens the change's document and scrolls
-					// the editor to that block (navigate-only, via the address model's reveal-block seam). Rendered as
-					// a button so it reads/behaves as the actionable address the gutter, Home cards and ledger share.
-					this._appendAddressLink(nameWrap, change.docId, change.blockId, addressLine);
-				}
-				const tag = append(top, $(framing.kindAttention ? 'span.ldr-tag.attn' : 'span.ldr-tag.ok'));
-				tag.textContent = framing.kindLabel;
-
-				const diff = append(card, $('div.ldr-diff'));
-				// Click the diff to jump the editor to this change in full document context (navigate-only).
-				diff.style.cursor = 'pointer';
-				diff.title = 'Open in the document';
-				this._renderDisposables.add(addDisposableListener(diff, 'click', () => void this._navigateToChange(change)));
-				const o = append(diff, $('div.ldr-o'));
-				o.textContent = change.oldText;
-				const n = append(diff, $('div.ldr-n'));
-				n.textContent = change.newText;
-
-				// Rationale only when the model supplied one (no "AI suggested this" filler, plan 31 iter 2).
-				if (framing.rationale) {
-					const why = append(card, $('div.ldr-why'));
-					why.textContent = `Why: ${framing.rationale}`;
-				}
-
-				const meta = append(card, $('div.ldr-meta'));
-				const conf = append(meta, $(framing.confidence === 'inferred' ? 'span.ldr-conf.inferred' : 'span.ldr-conf.high'));
-				conf.textContent = framing.confidenceLabel;
-				const risk = append(meta, $('span'));
-				risk.innerText = 'Risk: narrative';
-				if (framing.sourceLabel) {
-					const src = append(meta, $('span'));
-					src.innerText = `Source: ${framing.sourceLabel}`;
-				}
-
-				const actions = append(card, $('div.ldr-actions'));
-				const approve = append(actions, $('button.ldr-approve')) as HTMLButtonElement;
-				approve.textContent = 'Approve & apply';
-				this._renderDisposables.add(addDisposableListener(approve, 'click', () => this._livingDocs.approve(change.id)));
-				const reject = append(actions, $('button.ldr-reject')) as HTMLButtonElement;
-				reject.textContent = 'Reject';
-				this._renderDisposables.add(addDisposableListener(reject, 'click', () => void this._rejectWithReason(change.id)));
-			}
 		}
 
 		// Document agents (the skill graders) are relocated to an on-demand disclosure at the bottom of
 		// Review (v4 iter 4): collapsed by default so the Review tab matches the comp, expandable to reach
 		// the wired v1 agents (Run / Re-run / Apply fix). The disclosure only shows for a living document.
 		this._appendChecks(content);
+	}
+
+	/**
+	 * One decision card (comp 2b): the kind badge and the address, the plain-words summary, the WAS/NOW pair,
+	 * the provenance atom, then Approve / Reject.
+	*
+	 * The WAS/NOW pair replaces round 1's stacked red/green diff strip. Past roughly 60% of a paragraph
+	 * rewritten a word-grain diff stops being readable (doc 28, "Diff"), and a rail card is where the whole
+	 * replacement usually is - so the rail states the two versions and lets the document show the word grain.
+	 */
+	private _appendChangeCard(parent: HTMLElement, change: IProposedChange): void {
+		const card = append(parent, $('div.ldr-card'));
+		// Plan 52 WP-A1: the durable block id this card is about, so a deep link that reveals Review (a
+		// transcript pointer whose change has no inline widget) can scroll to THIS card rather than dropping
+		// the reader at the top of a list of every pending change across every document. It is the same id
+		// the panel request already carries as its payload. Purely an anchor - the card renders unchanged.
+		card.dataset.blockId = change.blockId;
+
+		// The self-explaining framing (plan 31 iter 2): the same confidence word, rationale and source the
+		// inline widget and cross-doc cards render, built from the one `reviewFraming`.
+		const framing = reviewFraming(change, change.sourceCells.join(', '));
+
+		const top = append(card, $('div.ldr-card-top'));
+		const tag = append(top, $(change.kind === 'meaning' ? 'span.ldr-tag.attn' : 'span.ldr-tag.ok'));
+		tag.textContent = this._kindBadgeLabel(change);
+		append(top, $('span.ldr-spacer'));
+		// Cite the same gutter address the inline widget cites (spec 43 section 3.1 / pin 11): resolve the
+		// change's durable block id to its current display line against the live doc and render the shared
+		// "Line N" string in the same mono treatment. Recomputed display-time; omitted (like the inline
+		// widget) when the doc is not loaded or the block is gone.
+		const changeDoc = this._livingDocs.getDoc(URI.parse(change.docId));
+		const addressLine = changeDoc ? resolveBlockLine(changeDoc, change.blockId) : undefined;
+		if (typeof addressLine === 'number') {
+			// Pin 13.5: the "Line N" citation is a click target - it opens the change's document and scrolls
+			// the editor to that block (navigate-only, via the address model's reveal-block seam). Rendered as
+			// a button so it reads/behaves as the actionable address the gutter, Home cards and ledger share.
+			this._appendAddressLink(top, change.docId, change.blockId, addressLine);
+		}
+
+		// The summary line. The comp bolds the reframing; what the rail actually knows is WHICH block is being
+		// rewritten, so the block is what carries the weight, and the model's own rationale follows it in plain
+		// words. Rationale only when the model supplied one (no "AI suggested this" filler, plan 31 iter 2).
+		const summary = append(card, $('div.ldr-summary'));
+		const lead = append(summary, $('strong'));
+		lead.textContent = change.blockLabel;
+		if (framing.rationale) {
+			const rest = append(summary, $('span'));
+			rest.textContent = ` ${framing.rationale}`;
+		}
+
+		// The WAS/NOW pair. Still the navigate-only jump into the document it always was (plan 19, E-A):
+		// clicking it NEVER approves - the reader reads the change in full context and decides wherever
+		// they like (the inline widget or the buttons below).
+		const blocks = append(card, $('div.ldr-diff'));
+		blocks.title = localize('livingDocs.review.openInDoc', "Open in the document");
+		this._renderDisposables.add(addDisposableListener(blocks, 'click', () => void this._navigateToChange(change)));
+		// An insertion has no previous version to show, so it renders as NOW alone rather than an empty WAS.
+		if (!change.insert && change.oldText.trim()) {
+			const was = append(blocks, $('div.ldr-o'));
+			append(was, $('span.ldr-block-tag')).textContent = localize('livingDocs.review.was', "WAS");
+			append(was, $('span')).textContent = ` ${change.oldText}`;
+		}
+		const now = append(blocks, $('div.ldr-n'));
+		append(now, $('span.ldr-block-tag')).textContent = localize('livingDocs.review.now', "NOW");
+		append(now, $('span')).textContent = ` ${change.newText}`;
+
+		this._appendProvenance(card, framing.sourceLabel, [localize('livingDocs.review.confidence', "confidence: {0}", framing.confidence === 'high'
+			? localize('livingDocs.review.confidence.high', "high")
+			: localize('livingDocs.review.confidence.inferred', "inferred"))]);
+
+		const actions = append(card, $('div.ldr-actions'));
+		const approve = append(actions, $('button.ldr-approve')) as HTMLButtonElement;
+		approve.textContent = localize('livingDocs.review.approve', "Approve");
+		this._renderDisposables.add(addDisposableListener(approve, 'click', () => this._livingDocs.approve(change.id)));
+		const reject = append(actions, $('button.ldr-reject')) as HTMLButtonElement;
+		reject.textContent = localize('livingDocs.review.reject', "Reject");
+		this._renderDisposables.add(addDisposableListener(reject, 'click', () => void this._rejectWithReason(change.id)));
+	}
+
+	/**
+	 * The FIGURES card (comp 2b): one document's low-risk value updates, grouped into a single decision with
+	 * every transition still shown as a line the reader can check.
+	*
+	 * Its bulk verb is a HAIRLINE button, not the indigo primary. Approving three figures at once is the right
+	 * default and deserves to be easy, but it is still a bulk verb, and the design system reserves the one
+	 * filled button for a single, scoped act. "Each…" beside it breaks the group into individual cards.
+	 */
+	private _appendFiguresCard(parent: HTMLElement, docId: string, figures: readonly IProposedChange[]): void {
+		const mode = this._figuresMode.get(docId) ?? 'grouped';
+		const card = append(parent, $(mode === 'each' ? 'div.ldr-figs-each' : 'div.ldr-card'));
+
+		const head = append(card, $('div.ldr-card-top'));
+		const tag = append(head, $('span.ldr-tag.figs'));
+		tag.textContent = localize('livingDocs.review.figuresBadge', "FIGURES · {0}", figures.length);
+		append(head, $('span.ldr-spacer'));
+		const toggle = append(head, $('button.ldr-link')) as HTMLButtonElement;
+		// The caret rides OUTSIDE the localized words: it is a direction, not language, and a translator has no
+		// business receiving it (the same reason the icon-in-localized-string rule exists).
+		toggle.textContent = mode === 'grouped'
+			? `${localize('livingDocs.review.collapseFigures', "collapse")} \u25B4`
+			: mode === 'collapsed'
+				? `${localize('livingDocs.review.expandFigures', "expand")} \u25BE`
+				: `${localize('livingDocs.review.groupFigures', "group")} \u25B4`;
+		this._renderDisposables.add(addDisposableListener(toggle, 'click', () => {
+			this._figuresMode.set(docId, mode === 'grouped' ? 'collapsed' : 'grouped');
+			this._render();
+		}));
+
+		// Broken apart: each figure is its own card with its own controls, so the group's bulk verb is gone
+		// (there is nothing left to bulk) and the head's link is the way back.
+		if (mode === 'each') {
+			for (const figure of figures) { this._appendChangeCard(card, figure); }
+			return;
+		}
+
+		if (mode === 'grouped') {
+			const list = append(card, $('div.ldr-figs'));
+			for (const figure of figures) {
+				const row = append(list, $('div'));
+				append(row, $('span')).textContent = `${figure.blockLabel} ${figure.oldText} → `;
+				append(row, $('strong')).textContent = figure.newText;
+				const figDoc = this._livingDocs.getDoc(URI.parse(figure.docId));
+				const line = figDoc ? resolveBlockLine(figDoc, figure.blockId) : undefined;
+				if (typeof line === 'number') { this._appendAddressLink(row, figure.docId, figure.blockId, line); }
+			}
+			// One provenance atom for the whole group: the real, deduped source cells the figures were read
+			// from, then the class that earns them their grouping.
+			const cells = [...new Set(figures.flatMap(f => f.sourceCells))];
+			this._appendProvenance(card, cells.join(', '), [localize('livingDocs.review.lowRisk', "low-risk class")]);
+		}
+
+		const actions = append(card, $('div.ldr-actions'));
+		const approveFigures = append(actions, $('button.ldr-secondary')) as HTMLButtonElement;
+		approveFigures.textContent = localize('livingDocs.review.approveFigures', "Approve {0} figures", figures.length);
+		// Composed from the per-change approve the individual cards use, over ids captured before the first
+		// call - so this approves exactly these figures and never the document's meaning changes with them.
+		const figureIds = figures.map(f => f.id);
+		this._renderDisposables.add(addDisposableListener(approveFigures, 'click', async () => {
+			for (const id of figureIds) { await this._livingDocs.approve(id); }
+		}));
+		const each = append(actions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
+		each.textContent = localize('livingDocs.review.eachFigure', "Each…");
+		this._renderDisposables.add(addDisposableListener(each, 'click', () => {
+			this._figuresMode.set(docId, 'each');
+			this._render();
+		}));
+	}
+
+	/**
+	 * The mono kind badge a card wears (doc 28: "Kind badges - mono, coloured by risk"). Built from the change
+	 * itself so it is always true: which kind of edit it is, and whether it rewrites prose or adds new prose.
+	 */
+	private _kindBadgeLabel(change: IProposedChange): string {
+		if (change.kind === 'meaning') {
+			return change.insert
+				? localize('livingDocs.review.kind.meaningNew', "MEANING · NEW")
+				: localize('livingDocs.review.kind.meaningRewrite', "MEANING · REWRITE");
+		}
+		return change.insert
+			? localize('livingDocs.review.kind.figureNew', "FIGURE · NEW")
+			: localize('livingDocs.review.kind.figureUpdate', "FIGURE · UPDATE");
+	}
+
+	/**
+	 * The one provenance atom the design system puts on every card (doc 28): where the change came from, then
+	 * the facts that qualify it.
+	*
+	 * The source name is set in mono and inked indigo, the same treatment a bound figure wears in the document,
+	 * so the reader recognises it as the thing standing behind the change. It is INK, not a control: the rail
+	 * has no seam for opening a source file, and a link that goes nowhere is worse than a name that never
+	 * promised to go anywhere. Nothing renders when there is neither a source nor a fact.
+	 */
+	private _appendProvenance(card: HTMLElement, sourceLabel: string, facts: readonly string[]): void {
+		if (!sourceLabel && !facts.length) { return; }
+		const line = append(card, $('div.ldr-prov'));
+		let needsSeparator = false;
+		if (sourceLabel) {
+			append(line, $('span')).textContent = localize('livingDocs.review.from', "from ");
+			append(line, $('span.ldr-prov-src')).textContent = sourceLabel;
+			needsSeparator = true;
+		}
+		for (const fact of facts) {
+			append(line, $('span')).textContent = needsSeparator ? ` · ${fact}` : fact;
+			needsSeparator = true;
+		}
 	}
 
 	// Group pending changes by their document, preserving first-seen order, so the changed-docs list and
@@ -943,54 +1132,55 @@ export class ReviewRailView extends ViewPane {
 			this._renderStreamingTurn(scroll, doc);
 		}
 
-		// The standing chat-level accept/reject summary: whenever changes are pending, the agent surfaces
-		// one-tap controls that span the WHOLE working set (plan 18) - Accept all / Reject all every change
-		// across every document at once, plus a way to step through them. (criterion 2 keeps these wired.)
+		// The standing "something is waiting on you" note (comp 2a): an amber block, because amber is the one
+		// colour that means a human decision is outstanding. It is a SENTENCE first - the chat narrates and
+		// points, the document and the Review ledger own the decisions - which is the whole of the comp at n=1.
+		//
+		// The chat-level bulk verbs (plan 18: Accept all / Reject all across the WHOLE working set, criterion 2)
+		// are kept, because they are the only route to a set that spans documents. But they are quiet text now,
+		// and they appear only once there IS a set: at one change there is nothing to bulk, so the note simply
+		// points at it.
 		if (pendingCount > 0) {
 			const pending = this._livingDocs.getAllPending();
 			const docCount = new Set(pending.map(c => c.docId)).size;
-			const summary = append(scroll, $('div'));
-			summary.style.cssText = 'border:1px solid #e0e6ff;background:#f7f9ff;border-radius:10px;padding:11px 12px';
-			const head = append(summary, $('div'));
-			head.style.cssText = 'font:600 11.5px/1 system-ui;color:#3a3f49;margin-bottom:9px';
-			head.textContent = docCount > 1
-				? `${pendingCount} changes across ${docCount} documents`
-				: `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting on you`;
-			const actions = append(summary, $('div'));
-			actions.style.cssText = 'display:flex;gap:7px';
-			const acceptAll = append(actions, $('button')) as HTMLButtonElement;
-			acceptAll.style.cssText = 'flex:1;border:none;border-radius:8px;padding:9px;background:oklch(0.55 0.13 255);color:#fff;font:600 12.5px/1 system-ui;cursor:pointer';
-			// Span every document, not just the one in view (the chat instruction edited the whole set).
-			acceptAll.textContent = docCount > 1 ? 'Accept all' : 'Approve all';
-			this._renderDisposables.add(addDisposableListener(acceptAll, 'click', () => void this._livingDocs.approveAllPending()));
-			const rejectAll = append(actions, $('button')) as HTMLButtonElement;
-			rejectAll.style.cssText = 'border:1px solid #e7c9c6;border-radius:8px;padding:9px 12px;background:#fff;color:#b4332f;font:500 12.5px/1 system-ui;cursor:pointer';
-			rejectAll.textContent = 'Reject all';
-			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAllPending()));
-			const reviewEach = append(actions, $('button')) as HTMLButtonElement;
-			reviewEach.style.cssText = 'border:1px solid #d8e0fb;border-radius:8px;padding:9px 12px;background:#fff;color:oklch(0.5 0.13 255);font:500 12.5px/1 system-ui;cursor:pointer';
-			reviewEach.textContent = 'Review each';
+			const note = append(scroll, $('div.ldp-waiting'));
+			const line = append(note, $('div'));
+			line.textContent = docCount > 1
+				? localize('livingDocs.chat.waitingDocs', "{0} changes waiting on you across {1} documents - decide them in the document, or in Review.", pendingCount, docCount)
+				: pendingCount === 1
+					? localize('livingDocs.chat.waitingOne', "1 change waiting on you - decide it in the document.")
+					: localize('livingDocs.chat.waitingMany', "{0} changes waiting on you - decide them in the document.", pendingCount);
+
+			const actions = append(note, $('div.ldp-waiting-actions'));
+			const reviewEach = append(actions, $('button.ldr-link')) as HTMLButtonElement;
+			reviewEach.textContent = pendingCount > 1
+				? localize('livingDocs.chat.reviewEach', "Review each")
+				: localize('livingDocs.chat.reviewIt', "Review it");
 			this._renderDisposables.add(addDisposableListener(reviewEach, 'click', () => { this._activeTab = 'review'; this._render(); }));
+			if (pendingCount > 1) {
+				const acceptAll = append(actions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
+				// Spans every document, not just the one in view (the chat instruction edited the whole set).
+				acceptAll.textContent = localize('livingDocs.chat.approveAll', "Approve all {0}\u2026", pendingCount);
+				this._renderDisposables.add(addDisposableListener(acceptAll, 'click', () => void this._livingDocs.approveAllPending()));
+				const rejectAll = append(actions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
+				rejectAll.textContent = localize('livingDocs.chat.rejectAll', "Reject all\u2026");
+				this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAllPending()));
+			}
 
 			// Cursor-style changed-documents list: one row per changed doc with its +N/-N, clickable to open
 			// that document (so its inline diffs show). Shown only when the change spans more than one doc.
 			if (docCount > 1) {
-				const list = append(summary, $('div'));
-				list.style.cssText = 'margin-top:10px;border-top:1px solid #e4e9fb;padding-top:8px;display:flex;flex-direction:column;gap:2px';
+				const list = append(note, $('div.ldp-waiting-docs'));
 				for (const [docId, changes] of this._groupByDoc(pending)) {
 					const stat = this._diffStat(changes);
-					const row = append(list, $('button')) as HTMLButtonElement;
-					row.style.cssText = 'display:flex;align-items:center;gap:8px;border:none;background:transparent;padding:5px 4px;border-radius:6px;cursor:pointer;text-align:left;font:500 11.5px/1.2 system-ui;color:#3a3f49';
-					row.title = `Open ${changes[0].docTitle}`;
-					const nm = append(row, $('span'));
-					nm.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+					const row = append(list, $('button.ldp-waiting-doc')) as HTMLButtonElement;
+					row.title = localize('livingDocs.review.openDocRow', "Open {0}", changes[0].docTitle);
+					const nm = append(row, $('span.ldp-waiting-doc-name'));
 					nm.textContent = `\u25A4 ${changes[0].docTitle}`;
-					const st = append(row, $('span'));
-					st.style.cssText = 'font:600 10px/1 ui-monospace,monospace;color:#868b95';
+					const st = append(row, $('span.ldp-waiting-doc-stat'));
 					st.textContent = `+${stat.added} -${stat.removed}`;
-					const arrow = append(row, $('span'));
-					arrow.style.cssText = 'color:#aab; font-size:12px';
-					arrow.textContent = '→';
+					const arrow = append(row, $('span.ldp-waiting-doc-go'));
+					arrow.textContent = '\u2192';
 					this._renderDisposables.add(addDisposableListener(row, 'click', () => void this._editors.openEditor({ resource: URI.parse(docId) })));
 				}
 			}
@@ -1002,9 +1192,9 @@ export class ReviewRailView extends ViewPane {
 	/**
 	 * The workspace chat tab strip (plan 52 WP-B, decision 178; redesigned for the residuals, issue #312).
 	 * Chats belong to the workspace, so this is the only place that says which conversation you are in.
-	 *
+	*
 	 * Three design decisions live here, and the first two changed in the residuals pass:
-	 *
+	*
 	 * 1. The strip is ALWAYS drawn, even for a single chat. It used to appear only once a second conversation
 	 *    existed - which meant the "+" that starts one was invisible until you had already found `Cmd+T`, and
 	 *    a brand-new workspace showed no evidence that chats were a plural thing at all. One chat now reads as
@@ -1015,10 +1205,10 @@ export class ReviewRailView extends ViewPane {
 	 *    that will not fit at that width goes to the overflow menu, where titles are shown in full.
 	 * 3. The active tab is always on screen (`splitTabs` guarantees it), because a strip that hides the
 	 *    conversation you are having is a strip that lies about where you are.
-	 *
+	*
 	 * The sole tab carries no close box: closing the only chat immediately opens another (the strip is never
 	 * empty), so an × there would promise something it cannot do. Start a new chat with "+" instead.
-	 *
+	*
 	 * And a fourth, added in fix round 1 (#312): **below the width where even ONE tab clears `MIN_TAB_WIDTH`,
 	 * the strip stops being a strip.** The first cut floored the cap at one, so the guaranteed-visible tab -
 	 * the active one, the conversation you are actually in - was handed whatever pixels were left: 32px at a
@@ -1042,7 +1232,7 @@ export class ReviewRailView extends ViewPane {
 		// reads as a TAB lifted out of it. Without it, a single white tab on a white rail reads as a text field
 		// (caught in the live walk of the one-chat state). `overflow:hidden` is the belt to the cap's braces: a
 		// tab that ran past the panel edge (as the first cut did) reads as a broken layout, not as "more chats".
-		strip.style.cssText = 'display:flex;align-items:center;gap:4px;padding:6px 8px 0;background:var(--vscode-editorGroupHeader-tabsBackground,#f4f5f8);border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);flex:0 0 auto;overflow:hidden';
+		strip.style.cssText = `display:flex;align-items:center;gap:4px;padding:6px 8px 0;background:var(--vscode-editorGroupHeader-tabsBackground,${PAPER.sunken});border-bottom:1px solid var(--vscode-widget-border,${HAIRLINE.strong});flex:0 0 auto;overflow:hidden`;
 
 		// The rail is too narrow for a strip: draw the picker described above instead of a titleless stub.
 		if (cap === 0) {
@@ -1064,8 +1254,8 @@ export class ReviewRailView extends ViewPane {
 			// throws the WHOLE shorthand away, so the active tab's 600 weight never applied and the strip laid
 			// itself out at the inherited 13px against a 96px minimum tuned for 12px (#312 fix round 1).
 			tab.style.cssText = `display:flex;align-items:center;gap:4px;flex:1 1 0;min-width:0;max-width:180px;padding:5px 8px;border-radius:6px 6px 0 0;cursor:pointer;`
-				+ `font-family:system-ui;font-size:12px;line-height:1.2;font-weight:${isActive ? 600 : 400};`
-				+ `background:${isActive ? 'var(--vscode-editor-background,#fff)' : 'transparent'};border:1px solid ${isActive ? 'var(--vscode-widget-border,#e6e8ec)' : 'transparent'};border-bottom:none`;
+				+ `font-family:${FONT.sans};font-size:12px;line-height:1.2;font-weight:${isActive ? 600 : 400};color:${isActive ? INK.heading : INK.secondary};`
+				+ `background:${isActive ? `var(--vscode-editor-background,${PAPER.card})` : 'transparent'};border:1px solid ${isActive ? `var(--vscode-widget-border,${HAIRLINE.strong})` : 'transparent'};border-bottom:none`;
 			const label = append(tab, $('span'));
 			label.textContent = session.title;
 			label.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
@@ -1093,12 +1283,12 @@ export class ReviewRailView extends ViewPane {
 			// which opens a menu listing every hidden chat. The menu is vertical, so it shows the whole derived
 			// title rather than the strip's cut-off version - the title itself is still capped at TITLE_MAX.
 			const more = append(strip, $('div'));
-			more.style.cssText = 'display:flex;align-items:center;gap:4px;flex:0 0 auto;padding:4px 7px;margin-bottom:1px;border:1px solid var(--vscode-widget-border,#e6e8ec);border-radius:6px;background:transparent;font-family:system-ui;font-size:11.5px;line-height:1.2;font-weight:500;opacity:.85;cursor:pointer;white-space:nowrap';
+			more.style.cssText = `display:flex;align-items:center;gap:4px;flex:0 0 auto;padding:4px 7px;margin-bottom:1px;border:1px solid var(--vscode-widget-border,${HAIRLINE.strong});border-radius:6px;background:transparent;font-family:${FONT.sans};font-size:11.5px;line-height:1.2;font-weight:400;color:${INK.secondary};cursor:pointer;white-space:nowrap`;
 			const moreLabel = append(more, $('span'));
 			moreLabel.textContent = localize('livingDocs.chat.moreTabs', "{0} more", overflow.length);
 			const moreChevron = append(more, $('span'));
 			moreChevron.style.cssText = 'font-size:9px;opacity:.7';
-			moreChevron.textContent = '▾';
+			moreChevron.textContent = '\u25BE';
 			more.setAttribute('role', 'button');
 			this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), more, localize('livingDocs.chat.moreTabsHint', "Show the other chats")));
 			this._renderDisposables.add(addDisposableListener(more, 'click', e => {
@@ -1119,7 +1309,7 @@ export class ReviewRailView extends ViewPane {
 	private _appendNewChatButton(strip: HTMLElement): void {
 		const add = append(strip, $('div'));
 		add.textContent = '+';
-		add.style.cssText = 'flex:0 0 auto;margin-left:4px;padding:4px 8px;border-radius:6px;cursor:pointer;font-family:system-ui;font-size:13px;line-height:1;font-weight:600;opacity:.75';
+		add.style.cssText = `flex:0 0 auto;margin-left:4px;padding:4px 8px;border-radius:6px;cursor:pointer;font-family:${FONT.sans};font-size:13px;line-height:1;font-weight:600;color:${INK.secondary}`;
 		add.setAttribute('role', 'button');
 		add.setAttribute('aria-label', localize('livingDocs.chat.newTab', "New Chat"));
 		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), add, localize('livingDocs.chat.newTabHint', "New Chat (Cmd+T)")));
@@ -1128,7 +1318,7 @@ export class ReviewRailView extends ViewPane {
 
 	/**
 	 * What the strip becomes when the rail is too narrow for a single tab at `MIN_TAB_WIDTH` (#312 fix round 1).
-	 *
+	*
 	 * One control, the whole width the "+" does not need, reading as the chat you are in plus a chevron. The
 	 * menu lists EVERY chat with the current one ticked, so nothing is less reachable than it was - it is the
 	 * overflow menu doing the whole job rather than half of it. No close box: at this width there is no room
@@ -1137,14 +1327,14 @@ export class ReviewRailView extends ViewPane {
 	private _renderChatPicker(strip: HTMLElement, sessions: readonly IChatSession[], activeId: string): void {
 		const active = sessions.find(s => s.id === activeId) ?? sessions[0];
 		const picker = append(strip, $('div'));
-		picker.style.cssText = 'display:flex;align-items:center;gap:4px;flex:1 1 0;min-width:0;margin-bottom:1px;padding:4px 7px;border:1px solid var(--vscode-widget-border,#e6e8ec);border-radius:6px;'
-			+ 'background:var(--vscode-editor-background,#fff);font-family:system-ui;font-size:12px;line-height:1.2;font-weight:600;cursor:pointer';
+		picker.style.cssText = `display:flex;align-items:center;gap:4px;flex:1 1 0;min-width:0;margin-bottom:1px;padding:4px 7px;border:1px solid var(--vscode-widget-border,${HAIRLINE.strong});border-radius:6px;`
+			+ `background:var(--vscode-editor-background,${PAPER.card});font-family:${FONT.sans};font-size:12px;line-height:1.2;font-weight:600;color:${INK.heading};cursor:pointer`;
 		const label = append(picker, $('span'));
 		label.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
 		label.textContent = active.title;
 		const chevron = append(picker, $('span'));
 		chevron.style.cssText = 'flex:none;font-size:9px;opacity:.7';
-		chevron.textContent = '▾';
+		chevron.textContent = '\u25BE';
 		picker.setAttribute('role', 'button');
 		picker.setAttribute('aria-label', localize('livingDocs.chat.pickerLabel', "Chat: {0}. Choose another chat.", active.title));
 		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), picker, localize('livingDocs.chat.pickerHint', "Choose a chat - the rail is too narrow for tabs")));
@@ -1159,18 +1349,18 @@ export class ReviewRailView extends ViewPane {
 	/**
 	 * The rows behind the overflow chip and the narrow-rail picker: the chats you can switch to, and - since
 	 * fix round 2 (#312) - the chats you can close.
-	 *
+	*
 	 * `closeChatSession` had exactly ONE caller: the × on a visible tab. So closing a chat was only ever
 	 * reachable from the tab you were already standing on. Below the width where the strip becomes a picker
 	 * nothing could be closed at all, and at the default rail width with several chats only the active one
 	 * could, because only the active one has a tab. Both holes are the same hole, and a "Close Chat" submenu in
 	 * the menus that already exist closes it at every width for no pixels - which is why the picker still has
 	 * no × of its own: it does not need one.
-	 *
+	*
 	 * The submenu lists EVERY chat, not just the hidden ones, so the menu is a complete close route rather than
 	 * half of one. It is absent for a sole chat, matching the sole tab's missing × - closing the only chat
 	 * immediately opens another, so offering it there would promise something it cannot do.
-	 *
+	*
 	 * Every close row runs the `Close Chat` COMMAND rather than the service (#312 fix round 3). This submenu is
 	 * precisely where the destruction is cheapest to trigger by accident - a vertical list of similar, elided
 	 * titles, where the row above the one you meant costs a whole conversation - so it must not be able to
@@ -1197,7 +1387,7 @@ export class ReviewRailView extends ViewPane {
 	/**
 	 * "Chats mentioning this document" (plan 52 WP-B residuals, issue #312) - the surface for the service's
 	 * `getChatSessionsMentioning`, which until now had no caller at all.
-	 *
+	*
 	 * The problem it answers: chat used to belong to the document, so opening a file showed you the thread you
 	 * had had about it. Chats belong to the WORKSPACE now, which is right - a conversation survives navigation -
 	 * but it took away the "what did I already say about this one?" reading. A document joins a chat's attach
@@ -1211,18 +1401,18 @@ export class ReviewRailView extends ViewPane {
 		const others = this._livingDocs.getChatSessionsMentioning(doc).filter(session => session.id !== activeId);
 		if (!others.length) { return; }
 		const row = append(content, $('button')) as HTMLButtonElement;
-		row.style.cssText = 'display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;flex:0 0 auto;border:none;border-bottom:1px solid var(--vscode-widget-border,#e6e8ec);background:transparent;padding:7px 12px;cursor:pointer;text-align:left';
+		row.style.cssText = `display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;flex:0 0 auto;border:none;border-bottom:1px solid var(--vscode-widget-border,${HAIRLINE.strong});background:transparent;padding:7px 12px;cursor:pointer;text-align:left`;
 		const glyph = append(row, $('span'));
-		glyph.style.cssText = 'flex:none;font:400 11px/1 system-ui;color:#8a8f98';
-		glyph.textContent = '○';
+		glyph.style.cssText = `flex:none;font:400 11px/1 ${FONT.sans};color:${INK.meta}`;
+		glyph.textContent = '\u25CB';
 		const label = append(row, $('span'));
-		label.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 11.5px/1.3 system-ui;color:#5b6dc4';
+		label.style.cssText = `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 11.5px/1.3 ${FONT.sans};color:${INDIGO.base}`;
 		label.textContent = others.length === 1
 			? localize('livingDocs.chat.mentionedOnce', "1 other chat mentions this document")
 			: localize('livingDocs.chat.mentionedMany', "{0} other chats mention this document", others.length);
 		const chevron = append(row, $('span'));
-		chevron.style.cssText = 'flex:none;font:400 10px/1 system-ui;color:#aab';
-		chevron.textContent = '▾';
+		chevron.style.cssText = `flex:none;font:400 10px/1 ${FONT.sans};color:${INK.meta}`;
+		chevron.textContent = '\u25BE';
 		this._renderDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), row, localize('livingDocs.chat.mentionedHint', "Open a chat that mentions this document")));
 		this._renderDisposables.add(addDisposableListener(row, 'click', e => {
 			this.contextMenuService.showContextMenu({
@@ -1246,15 +1436,15 @@ export class ReviewRailView extends ViewPane {
 		const empty = append(scroll, $('div'));
 		empty.style.cssText = 'margin:auto 0;display:flex;flex-direction:column;align-items:center;gap:7px;text-align:center;padding:24px 14px';
 		const mark = append(empty, $('span'));
-		mark.style.cssText = 'width:30px;height:30px;border-radius:50%;background:#eef1ff;color:oklch(0.55 0.13 255);font:600 14px/30px system-ui';
-		mark.textContent = '✻';
+		mark.style.cssText = `width:30px;height:30px;border-radius:${RADIUS.pill};background:${INDIGO.tint};color:${INDIGO.base};font:600 14px/30px ${FONT.sans}`;
+		mark.textContent = '\u273B';
 		const title = append(empty, $('div'));
-		title.style.cssText = 'font:600 13px/1.4 system-ui;color:#52575f';
+		title.style.cssText = `font:${TYPE.uiBodyStrong};color:${INK.bodySoft}`;
 		title.textContent = doc
 			? localize('livingDocs.chat.emptyTitleDoc', "Ask about this document")
 			: localize('livingDocs.chat.emptyTitleWorkspace', "Ask about this workspace");
 		const hint = append(empty, $('div'));
-		hint.style.cssText = 'font:400 12px/1.6 system-ui;color:#a3a8b2;max-width:260px';
+		hint.style.cssText = `font:${TYPE.secondary};color:${INK.meta};max-width:260px`;
 		hint.textContent = doc
 			? localize('livingDocs.chat.emptyHintDoc', "Ask a question, or ask for a change - proposals land in the document for you to approve. @mention a source to pull it in.")
 			: localize('livingDocs.chat.emptyHintWorkspace', "Open a document, or @mention one, to make changes to it.");
@@ -1264,7 +1454,7 @@ export class ReviewRailView extends ViewPane {
 	 * The honest header of a trimmed conversation (plan 52 WP-B residuals): what the storage caps left out.
 	 * A trimmed transcript must never be presented as the whole of it - the count is stored alongside the
 	 * messages exactly so this line can be true. Nothing is drawn when nothing was left out.
-	 *
+	*
 	 * The tense is PRESENT, and that is the fix of round 2 (#312). It read "N earlier messages were not kept",
 	 * which is exactly right after a restore - those messages really are gone - and wrong during a live
 	 * session, where every one of them is still on screen above the notice and the number can go DOWN: a chat
@@ -1277,7 +1467,7 @@ export class ReviewRailView extends ViewPane {
 		const dropped = this._livingDocs.getDroppedChatMessages();
 		if (!dropped) { return; }
 		const note = append(scroll, $('div'));
-		note.style.cssText = 'align-self:center;font:400 11px/1.4 system-ui;color:#a3a8b2;background:#f4f5f7;border-radius:999px;padding:5px 11px';
+		note.style.cssText = `align-self:center;font:400 11px/1.4 ${FONT.sans};color:${INK.meta};background:${PAPER.chip};border-radius:${RADIUS.pill};padding:5px 11px`;
 		note.textContent = dropped === 1
 			? localize('livingDocs.chat.trimmedOne', "1 earlier message in this chat is not being kept")
 			: localize('livingDocs.chat.trimmedMany', "{0} earlier messages in this chat are not being kept", dropped);
@@ -1297,7 +1487,7 @@ export class ReviewRailView extends ViewPane {
 		const row = append(scroll, $('div'));
 		row.style.cssText = 'display:flex;gap:9px';
 		const avatar = append(row, $('span.ldp-stream-avatar'));
-		avatar.style.cssText = 'flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center';
+		avatar.style.cssText = `flex:none;width:24px;height:24px;border-radius:${RADIUS.pill};background:${INDIGO.base};color:#fff;font:600 12px/24px ${FONT.sans};text-align:center`;
 		if (!text) { avatar.style.animation = 'ldp-pulse 1.4s ease-in-out infinite'; }
 		avatar.textContent = '\u273B';
 		const col = append(row, $('div'));
@@ -1307,7 +1497,7 @@ export class ReviewRailView extends ViewPane {
 		this._appendStepsCard(stepsWrap, steps);
 
 		const bodyWrap = append(col, $('p'));
-		bodyWrap.style.cssText = 'margin:0;font:400 13.5px/1.6 system-ui;white-space:pre-wrap;color:#2c2f36';
+		bodyWrap.style.cssText = `margin:0;font:400 13.5px/1.6 ${FONT.sans};white-space:pre-wrap;color:${INK.body}`;
 		const bodyText = append(bodyWrap, $('span'));
 		bodyText.textContent = text;
 		if (!text) {
@@ -1343,25 +1533,31 @@ export class ReviewRailView extends ViewPane {
 		if (pinned && scroll) { scroll.scrollTop = scroll.scrollHeight; }
 	}
 
-	// The tool-step card shared by a settled assistant turn and the live streaming turn: one mono row per
-	// step, tick for a completed read/analysis, arrow for a queued proposal. Renders nothing for no steps.
+	/**
+	 * The agent's narration, shared by a settled assistant turn and the live streaming turn (comp 2a).
+	*
+	 * Round 1 drew this as a bordered mono card, which read as terminal output - a log the agent kept, sitting
+	 * beside the prose it wrote. The comp draws it as what it is: sentences the agent is saying, in the
+	 * secondary ink at a generous 1.8 line height, where only the MARKER carries colour. Green marks something
+	 * the agent finished, indigo marks Abstract having acted (it proposed an edit), and a muted glyph marks a
+	 * document policy told it to leave alone (issue #257). Renders nothing for no steps.
+	 */
 	private _appendStepsCard(parent: HTMLElement, steps: readonly IChatStep[]): void {
 		if (!steps.length) { return; }
-		const card = append(parent, $('div'));
-		card.style.cssText = 'border:1px solid #eceef2;border-radius:10px;overflow:hidden;background:#fff';
-		steps.forEach((step, i) => {
-			const stepRow = append(card, $('div'));
-			// A `skipped` step (a "Never change this doc" document the run left alone - issue #257) reads in a muted
-			// grey with a "left alone" glyph, distinct from a queued proposal (amber arrow) or a done read (green tick).
+		const block = append(parent, $('div'));
+		block.style.cssText = `display:flex;flex-direction:column;font:400 13px/1.8 ${FONT.sans};color:${INK.secondary}`;
+		for (const step of steps) {
+			const stepRow = append(block, $('div'));
+			stepRow.style.cssText = 'display:flex;gap:7px;align-items:baseline';
 			const skipped = step.status === 'skipped';
 			const queued = step.status === 'queued';
-			const colour = skipped ? '#8a8f98' : queued ? '#9a6b16' : '#5d8a66';
-			stepRow.style.cssText = `display:flex;gap:8px;padding:8px 12px;font:400 11.5px/1.4 ui-monospace,monospace;color:${colour}${i < steps.length - 1 ? ';border-bottom:1px solid #f4f5f7' : ''}`;
 			const glyph = append(stepRow, $('span'));
-			glyph.textContent = skipped ? '\u2298' : queued ? '\u2192' : '\u2713';
+			glyph.style.cssText = `flex:none;color:${skipped ? INK.meta : queued ? INDIGO.base : GREEN.base}`;
+			glyph.textContent = skipped ? '\u2298' : queued ? '\u270e' : '\u2713';
 			const label = append(stepRow, $('span'));
+			label.style.cssText = 'flex:1;min-width:0';
 			label.textContent = step.label;
-		});
+		}
 	}
 
 	private _renderChatMessage(scroll: HTMLElement, m: IChatMessage, isLast: boolean): void {
@@ -1372,13 +1568,15 @@ export class ReviewRailView extends ViewPane {
 				const chips = append(wrap, $('div'));
 				chips.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end';
 				for (const mention of m.mentions) {
-					const chip = append(chips, $('span'));
-					chip.style.cssText = 'font:500 10.5px/1 ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px';
+					const chip = append(chips, $('span.ldp-context-chip'));
 					chip.textContent = `@${mention}`;
 				}
 			}
 			const bubble = append(wrap, $('div'));
-			bubble.style.cssText = 'background:#eef1f6;border:1px solid #e4e7ee;border-radius:13px 13px 4px 13px;padding:10px 13px;font:400 13.5px/1.55 system-ui;color:#2c2f36;white-space:pre-wrap';
+			// Comp 2a: a chip-paper bubble, no border and no tail. The tail was drawing a speech balloon around
+			// something that is not speech, and the border was a second edge on a surface the fill already sets
+			// apart from the rail.
+			bubble.style.cssText = `background:${PAPER.chip};border-radius:${RADIUS.input};padding:12px 14px;max-width:240px;font:${TYPE.uiBody};color:${INK.body};white-space:pre-wrap`;
 			bubble.textContent = m.content;
 			// The user's OWN question can be clipped too, and it is the message a user can most easily make long
 			// enough to trigger it - a pasted brief runs to thousands of characters where a model reply rarely
@@ -1391,7 +1589,7 @@ export class ReviewRailView extends ViewPane {
 			// named rather than left as a silence the reader has to interpret. Restoring never re-runs the ask.
 			if (isLast && m.restored) {
 				const note = append(wrap, $('span'));
-				note.style.cssText = 'font:400 11px/1.4 system-ui;color:#a3a8b2';
+				note.style.cssText = `font:400 11px/1.4 ${FONT.sans};color:${INK.meta}`;
 				note.textContent = localize('livingDocs.chat.closedBeforeReply', "The app closed before the agent replied. Ask again to re-run this.");
 			}
 			return;
@@ -1400,7 +1598,7 @@ export class ReviewRailView extends ViewPane {
 		const row = append(scroll, $('div'));
 		row.style.cssText = 'display:flex;gap:9px';
 		const avatar = append(row, $('span'));
-		avatar.style.cssText = 'flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center';
+		avatar.style.cssText = `flex:none;width:24px;height:24px;border-radius:${RADIUS.pill};background:${INDIGO.base};color:#fff;font:600 12px/24px ${FONT.sans};text-align:center`;
 		avatar.textContent = '\u273B';
 		const col = append(row, $('div'));
 		col.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:10px';
@@ -1413,17 +1611,17 @@ export class ReviewRailView extends ViewPane {
 		// are rendered BELOW the error banner - the surface never reads as a silent all-clear.
 		if (m.failedDocs && m.failedDocs.length) {
 			const err = append(col, $('div'));
-			err.style.cssText = 'display:flex;flex-direction:column;gap:9px;font:400 13.5px/1.6 system-ui;color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:9px;padding:9px 11px';
+			err.style.cssText = `display:flex;flex-direction:column;gap:9px;font:${TYPE.uiBody};color:${AMBER.label};background:${AMBER.bg};border:1px solid ${AMBER.border};border-radius:${RADIUS.input};padding:9px 11px`;
 			const line = append(err, $('span'));
 			line.textContent = m.content || 'The agent model is not reachable.';
 			const list = append(err, $('div'));
-			list.style.cssText = 'display:flex;flex-direction:column;gap:3px;font:500 12.5px/1.4 system-ui;color:#7a5a13';
+			list.style.cssText = `display:flex;flex-direction:column;gap:3px;font:${TYPE.secondary};color:${AMBER.headline}`;
 			for (const d of m.failedDocs) {
 				const item = append(list, $('span'));
 				item.textContent = `\u2022 ${d.title}`;
 			}
 			const retry = append(err, $('button')) as HTMLButtonElement;
-			retry.style.cssText = 'align-self:flex-start;border:1px solid #e6c98f;border-radius:7px;padding:6px 12px;background:#fff;color:#9a6b16;font:600 12px/1 system-ui;cursor:pointer';
+			retry.style.cssText = `align-self:flex-start;border:1px solid ${PAPER.control};border-radius:7px;padding:5px 15px;background:${PAPER.card};color:${INK.body};font:600 12.5px/1 ${FONT.sans};cursor:pointer`;
 			retry.textContent = 'Retry failed';
 			this._renderDisposables.add(addDisposableListener(retry, 'click', () => { const d = this._activeDoc(); if (d) { this._livingDocs.retryFailedDocs(d); } }));
 			// Fall through so any proposals this partial run DID land still render as review cards below.
@@ -1435,11 +1633,11 @@ export class ReviewRailView extends ViewPane {
 		// same user message (the service drops this failed turn and re-runs). No prose / proposals follow.
 		if (m.failed) {
 			const err = append(col, $('div'));
-			err.style.cssText = 'display:flex;flex-direction:column;gap:9px;font:400 13.5px/1.6 system-ui;color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4;border-radius:9px;padding:9px 11px';
+			err.style.cssText = `display:flex;flex-direction:column;gap:9px;font:${TYPE.uiBody};color:${AMBER.label};background:${AMBER.bg};border:1px solid ${AMBER.border};border-radius:${RADIUS.input};padding:9px 11px`;
 			const line = append(err, $('span'));
 			line.textContent = m.content || 'The model call failed.';
 			const retry = append(err, $('button')) as HTMLButtonElement;
-			retry.style.cssText = 'align-self:flex-start;border:1px solid #e6c98f;border-radius:7px;padding:6px 12px;background:#fff;color:#9a6b16;font:600 12px/1 system-ui;cursor:pointer';
+			retry.style.cssText = `align-self:flex-start;border:1px solid ${PAPER.control};border-radius:7px;padding:5px 15px;background:${PAPER.card};color:${INK.body};font:600 12.5px/1 ${FONT.sans};cursor:pointer`;
 			retry.textContent = 'Retry';
 			this._renderDisposables.add(addDisposableListener(retry, 'click', () => { const d = this._activeDoc(); if (d) { this._livingDocs.retryChat(d); } }));
 			return;
@@ -1447,7 +1645,7 @@ export class ReviewRailView extends ViewPane {
 
 		const body = append(col, $('p'));
 		const fallback = m.via === 'fallback';
-		body.style.cssText = `margin:0;font:400 13.5px/1.6 system-ui;white-space:pre-wrap;color:${fallback ? '#9a6b16' : '#2c2f36'}${fallback ? ';background:#fdf6e9;border:1px solid #f0e2c4;border-radius:9px;padding:9px 11px' : ''}`;
+		body.style.cssText = `margin:0;font:400 13.5px/1.6 ${FONT.sans};white-space:pre-wrap;color:${fallback ? AMBER.label : INK.body}${fallback ? `;background:${AMBER.bg};border:1px solid ${AMBER.border};border-radius:${RADIUS.input};padding:9px 11px` : ''}`;
 		body.textContent = m.content || (m.stopped ? 'Stopped before the agent replied.' : '');
 
 		// A stored answer the per-message character cap shortened (plan 52 WP-B residuals): say so, rather than
@@ -1458,7 +1656,7 @@ export class ReviewRailView extends ViewPane {
 		// but deliberately-interrupted answer (never a silent truncation).
 		if (m.stopped) {
 			const tag = append(col, $('span'));
-			tag.style.cssText = 'align-self:flex-start;font:600 9px/1 ui-monospace,monospace;letter-spacing:.04em;color:#868b95;background:#eef1f6;border-radius:999px;padding:4px 7px';
+			tag.style.cssText = `align-self:flex-start;font:400 10.5px/1 ${FONT.mono};letter-spacing:${TRACKING.kindBadge};color:${INK.meta};background:${PAPER.chip};border-radius:${RADIUS.pill};padding:4px 7px`;
 			tag.textContent = 'STOPPED';
 		}
 
@@ -1468,7 +1666,7 @@ export class ReviewRailView extends ViewPane {
 
 	/**
 	 * The "this was shortened when it was saved" line, for EITHER side of the conversation (#312 fix round 1).
-	 *
+	*
 	 * It lives in one place because both message types need it and only one of them had it. The wording differs
 	 * by role: calling the user's own pasted brief an "answer" would be wrong, and a reader who cannot tell
 	 * which end of the exchange was cut cannot tell what they are missing. Nothing is drawn for a whole message,
@@ -1478,7 +1676,7 @@ export class ReviewRailView extends ViewPane {
 		if (!m.clipped) { return; }
 		const tag = append(parent, $('span'));
 		// Sits under its own bubble, so it follows the side that bubble is on rather than always the left.
-		tag.style.cssText = `align-self:${m.role === 'user' ? 'flex-end' : 'flex-start'};font:400 10.5px/1.4 system-ui;color:#a3a8b2`;
+		tag.style.cssText = `align-self:${m.role === 'user' ? 'flex-end' : 'flex-start'};font:400 11px/1.4 ${FONT.sans};color:${INK.meta}`;
 		tag.textContent = m.role === 'user'
 			? localize('livingDocs.chat.clippedQuestion', "This message was shortened when it was saved.")
 			: localize('livingDocs.chat.clipped', "This answer was shortened when it was saved.");
@@ -1512,11 +1710,11 @@ export class ReviewRailView extends ViewPane {
 			const note = describeRestoredProposals(m.proposedCount, m.approvedCount, m.rejectedCount);
 			if (!note) { return; }
 			const gone = append(col, $('div'));
-			gone.style.cssText = `display:flex;align-items:center;gap:7px;border:1px dashed ${note.applied ? '#d3e5da' : '#e4e7ee'};border-radius:9px;padding:7px 10px;font:400 11.5px/1.4 system-ui;color:#868b95`;
+			gone.style.cssText = `display:flex;align-items:center;gap:7px;border:1px dashed ${note.applied ? GREEN.border : HAIRLINE.strong};border-radius:${RADIUS.input};padding:7px 10px;font:400 11.5px/1.4 ${FONT.sans};color:${INK.meta}`;
 			const kind = append(gone, $('span'));
 			// An approved turn is the one outcome that LANDED, so its marker carries the same applied-green the
 			// rest of the app uses for a change that is in the document. Everything else stays a muted record.
-			kind.style.cssText = `flex:none;font:600 10px/1 ui-monospace,monospace;letter-spacing:.04em;color:${note.applied ? '#1f7a44' : '#a3a8b2'}`;
+			kind.style.cssText = `flex:none;font:400 10.5px/1 ${FONT.mono};letter-spacing:${TRACKING.kindBadge};color:${note.applied ? GREEN.base : INK.meta}`;
 			kind.textContent = note.tag;
 			const line = append(gone, $('span'));
 			line.style.cssText = 'flex:1;min-width:0';
@@ -1531,13 +1729,15 @@ export class ReviewRailView extends ViewPane {
 			docId => this._livingDocs.getInlineWidgets(URI.parse(docId)),
 		);
 		if (!pointers.length) { return; }
-		const list = append(col, $('div'));
-		list.style.cssText = 'display:flex;flex-direction:column;gap:5px';
+		const list = append(col, $('div.ldp-pointers'));
 		for (const pointer of pointers) {
-			// The whole pointer is ONE click target: one control, one destination. A nested "Line N" button (as
-			// the Review card carries) would be invalid inside it and would re-introduce a second thing to aim at.
-			const row = append(list, $('button')) as HTMLButtonElement;
-			row.style.cssText = 'display:flex;flex-direction:column;align-items:stretch;gap:3px;width:100%;box-sizing:border-box;text-align:left;border:1px solid #e4e7ee;border-radius:9px;padding:7px 10px;background:#fbfcff;cursor:pointer';
+			// Comp 2a draws the pointer as an INDIGO LINK - "Note to the board \u00b7 line 4 \u2193" - not as a card. The
+			// card it used to be looked like a second copy of the change (the exact defect plan 52 WP-A1 removed
+			// from the transcript); a link looks like what it is, a way to get to the one real copy.
+			//
+			// The whole pointer is still ONE click target: one control, one destination. A nested "Line N" button
+			// (as the Review card carries) would be invalid inside it and would re-introduce a second thing to aim at.
+			const row = append(list, $('button.ldp-pointer')) as HTMLButtonElement;
 			// The tooltip says only what is KNOWN. A document that has never been opened has never reported, so the
 			// honest promise is "take me there" - the click opens it, reads the report and picks the surface then.
 			row.title = pointer.route === 'review'
@@ -1546,47 +1746,35 @@ export class ReviewRailView extends ViewPane {
 					? localize('livingDocs.pointer.tip.document', "Go to this change in the document, where it can be read and approved.")
 					: localize('livingDocs.pointer.tip.unknown', "Go to this change - in the document if it previews there, otherwise in Review.");
 
-			// Row one names the change: what kind it is and which section it lands in. The section gets the whole
-			// line because it is the part the reader navigates by - the rail is ~300px, and sharing that line with
-			// the address and the counts clipped "Commentary" to "Commen..." in the live walk.
-			const head = append(row, $('div'));
-			head.style.cssText = 'display:flex;align-items:center;gap:7px';
-			const tone = pointer.insert ? '#1f7a44' : pointer.attention ? '#9a6b16' : '#5b6dc4';
-			const kind = append(head, $('span'));
-			kind.style.cssText = `flex:none;font:600 10px/1 ui-monospace,monospace;letter-spacing:.04em;color:${tone}`;
-			kind.textContent = pointer.insert ? localize('livingDocs.pointer.kind.insert', "NEW") : localize('livingDocs.pointer.kind.edit', "EDIT");
-			const where = append(head, $('span'));
-			where.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px/1.3 system-ui;color:#2c2f36';
+			// The section is what the reader navigates by, so it leads and gets the room; the rail is ~300px, and
+			// sharing this line with everything else clipped "Commentary" to "Commen..." in the live walk.
+			const where = append(row, $('span.ldp-pointer-where'));
 			where.textContent = pointer.insert
 				? localize('livingDocs.pointer.after', "after {0}", pointer.blockLabel)
 				: pointer.blockLabel;
-			const go = append(head, $('span'));
-			go.style.cssText = 'flex:none;font:400 12px/1 system-ui;color:#bcc0c8';
-			go.textContent = '\u2192';
-
-			// Row two locates and sizes it, quietly.
-			const meta = append(row, $('div'));
-			meta.style.cssText = 'display:flex;align-items:center;gap:6px;font:500 10.5px/1.4 ui-monospace,monospace';
 			// The shared address vocabulary (spec 43 section 3.1): the same "Line N" string the gutter, the inline
 			// widget, the Review card and the ledger cite, so the transcript names the place the same way they do.
 			if (typeof pointer.line === 'number') {
-				const addr = append(meta, $('span'));
-				addr.style.cssText = 'color:#5b6dc4';
-				addr.textContent = addressLabel(pointer.line);
+				const addr = append(row, $('span.ldp-pointer-addr'));
+				addr.textContent = ` \u00b7 ${addressLabel(pointer.line)}`;
 			}
-			// The size of the change, in the same word-run counts the inline widget prints, so the pointer and the
-			// widget never disagree about how big it is. An insertion has nothing to diff, so it carries none.
+			const go = append(row, $('span.ldp-pointer-go'));
+			go.textContent = ' \u2193';
+
+			// The quiet tail: how big the change is, and where this pointer actually goes. It stays because both
+			// facts are load-bearing - the counts are the same word runs the inline widget prints, so the two can
+			// never disagree, and the REVIEW marker is what stops a click landing on a paragraph with nothing on it.
+			const meta = append(row, $('span.ldp-pointer-meta'));
+			// An insertion has nothing to diff, so it carries no counts.
 			if (typeof pointer.added === 'number' && typeof pointer.removed === 'number') {
 				const stat = append(meta, $('span'));
-				stat.style.cssText = 'color:#868b95';
 				stat.textContent = localize('livingDocs.pointer.stat', "+{0} -{1}", pointer.added, pointer.removed);
 			}
 			// Say plainly where a review-routed pointer goes, rather than surprising the reader with a tab switch.
 			// Only shown for an OBSERVED `review` - the document was asked to decorate this change and mounted
 			// nothing. A pointer whose document has never been looked at wears no marker and promises nothing.
 			if (pointer.route === 'review') {
-				const hint = append(meta, $('span'));
-				hint.style.cssText = 'font-weight:600;font-size:9px;letter-spacing:.04em;color:#868b95;background:#eef1f6;border-radius:999px;padding:3px 6px';
+				const hint = append(meta, $('span.ldp-pointer-hint'));
 				hint.textContent = localize('livingDocs.pointer.hint.review', "REVIEW");
 			}
 
@@ -1709,8 +1897,7 @@ export class ReviewRailView extends ViewPane {
 	}
 
 	private _renderChatComposer(content: HTMLElement, doc: URI | undefined): void {
-		const footer = append(content, $('div'));
-		footer.style.cssText = 'flex:none;border-top:1px solid #eef0f3;padding:10px 12px;background:#fbfbfc';
+		const footer = append(content, $('div.ldp-composer-foot'));
 
 		// Plan 42 slice L2 (issue #198): when the user's first send hit an unconfigured backend, the typed prompt
 		// is held and the sign-in vs included-model choice renders INLINE here, right above the composer. The user
@@ -1724,12 +1911,16 @@ export class ReviewRailView extends ViewPane {
 			this._renderSignInHint(footer);
 		}
 
-		const box = append(footer, $('div'));
-		// Comp C6: border tinted accent (#d9d7fb), 13px radius, subtle lifted shadow.
-		box.style.cssText = 'position:relative;border:1px solid #d9d7fb;border-radius:13px;background:#fff;padding:8px 9px;box-shadow:0 6px 16px -12px rgba(86,97,201,.35)';
+		const mentions = doc ? this._livingDocs.getMentionableFiles(doc) : [];
+		// Comp 2a puts the context chips ABOVE the box: what this message will be able to see, stated before
+		// the thing you type into. Round 1 had them inside the box under the caret, where they read as part of
+		// the draft rather than as its context. Created here (empty) and filled once `insertMention` exists.
+		const chips = mentions.length ? append(footer, $('div.ldp-chips')) : undefined;
+
+		const box = append(footer, $('div.ldp-composer'));
 
 		// The working set: the documents this instruction edits across (plan 18, decision 60). A separate
-		// row from the @mention "Attach" source chips below - these are edit targets, not data bindings.
+		// row from the @mention "Attach" context chips above - these are edit targets, not data bindings.
 		if (doc) { this._renderWorkingSetRow(box, doc); }
 
 		const input = append(box, $('textarea')) as HTMLTextAreaElement;
@@ -1737,7 +1928,7 @@ export class ReviewRailView extends ViewPane {
 		input.value = this._chatDraft;
 		input.rows = 2;
 		input.disabled = !doc;
-		input.style.cssText = 'width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;font:400 13px/1.5 system-ui;color:#2c2f36';
+		input.style.cssText = `width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;font:400 13px/1.5 ${FONT.sans};color:${INK.body}`;
 		this._renderDisposables.add(addDisposableListener(input, 'input', () => { this._chatDraft = input.value; this._composerPicker?.update(); }));
 		// Caret-only moves (ArrowLeft/Right, Home/End, a mouse click) change `selectionStart` without an
 		// `input` event, so re-sync the picker on keyup/click too - otherwise it lingers open with stale
@@ -1745,7 +1936,6 @@ export class ReviewRailView extends ViewPane {
 		this._renderDisposables.add(addDisposableListener(input, 'keyup', () => this._composerPicker?.update()));
 		this._renderDisposables.add(addDisposableListener(input, 'click', () => this._composerPicker?.update()));
 
-		const mentions = doc ? this._livingDocs.getMentionableFiles(doc) : [];
 		const insertMention = (file: string) => {
 			const sep = input.value.length && !input.value.endsWith(' ') ? ' ' : '';
 			input.value = `${input.value}${sep}@${file} `;
@@ -1765,27 +1955,23 @@ export class ReviewRailView extends ViewPane {
 			input.setSelectionRange(replaced.caret, replaced.caret);
 		}));
 		this._renderDisposables.add({ dispose: () => { if (this._composerPicker === picker) { this._composerPicker = undefined; } } });
-		if (mentions.length) {
-			// #177: collapsed to the first few chips (two lines) with a "..." expander so ~30 mentionable
-			// files no longer bury the conversation. Expanding shows the full list; the choice survives the
-			// re-render each message triggers but resets to collapsed next session.
-			const chips = append(box, $('div'));
-			chips.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;padding:8px 0 2px';
-			const hint = append(chips, $('span'));
-			hint.style.cssText = 'font:500 10.5px/1.6 system-ui;color:#bcc0c8';
-			hint.textContent = 'Attach:';
+		if (chips) {
+			// #177: collapsed to the first few chips (two lines) with an expander so ~30 mentionable files no
+			// longer bury the conversation. Expanding shows the full list; the choice survives the re-render each
+			// message triggers but resets to collapsed next session. The expander is the comp's fullwidth plus - one more
+			// thing this message could see - rather than round 1's ellipsis, which read as truncation.
 			const { shown, hasMore } = collapseAttachChips(mentions, this._attachExpanded);
 			for (const file of shown) {
-				const chip = append(chips, $('button')) as HTMLButtonElement;
-				chip.style.cssText = 'font:500 10.5px/1 ui-monospace,monospace;color:#5b6dc4;background:#eef1ff;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px;cursor:pointer';
+				const chip = append(chips, $('button.ldp-context-chip')) as HTMLButtonElement;
 				chip.textContent = `@${file}`;
 				this._renderDisposables.add(addDisposableListener(chip, 'click', () => insertMention(file)));
 			}
 			if (hasMore || this._attachExpanded) {
-				const toggle = append(chips, $('button')) as HTMLButtonElement;
-				toggle.style.cssText = 'font:500 10.5px/1 ui-monospace,monospace;color:#868b95;background:transparent;border:1px solid #e0e6ff;border-radius:6px;padding:4px 7px;cursor:pointer';
-				toggle.textContent = this._attachExpanded ? 'Show less' : '…';
-				toggle.title = this._attachExpanded ? 'Show fewer files' : 'Show all mentionable files';
+				const toggle = append(chips, $('button.ldp-chip-more')) as HTMLButtonElement;
+				toggle.textContent = this._attachExpanded ? localize('livingDocs.composer.showLess', "Show less") : '\uFF0B';
+				toggle.title = this._attachExpanded
+					? localize('livingDocs.composer.showFewerFiles', "Show fewer files")
+					: localize('livingDocs.composer.showAllFiles', "Show all mentionable files");
 				this._renderDisposables.add(addDisposableListener(toggle, 'click', () => {
 					this._attachExpanded = !this._attachExpanded;
 					this._render();
@@ -1801,9 +1987,7 @@ export class ReviewRailView extends ViewPane {
 		// + Skill: opens the same skill list that backs the Review disclosure; runs through the shared
 		// runSkillCheck path. Only available when a living document is active (same gate as the disclosure).
 		const skillReport = doc ? this._livingDocs.getSkillReport(doc) : [];
-		const skillBtn = append(bar, $('button')) as HTMLButtonElement;
-		// Comp: chip text is slate #52575F (Part B secondary text / quiet buttons), border #e6e8ec, 8px radius.
-		skillBtn.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:5px 9px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer';
+		const skillBtn = append(bar, $('button.ldp-composer-chip')) as HTMLButtonElement;
 		skillBtn.textContent = '+ Skill';
 		skillBtn.disabled = !doc || !skillReport.length;
 		if (!doc || !skillReport.length) { skillBtn.style.opacity = '0.45'; }
@@ -1814,8 +1998,7 @@ export class ReviewRailView extends ViewPane {
 
 		// @ Mention: inserts a "@" and opens the caret-anchored picker (#178) so the user can type-to-filter
 		// the mentionable files; selecting one inserts the token the message parser accepts (`@filename`).
-		const mentionBtn = append(bar, $('button')) as HTMLButtonElement;
-		mentionBtn.style.cssText = 'border:1px solid #e6e8ec;border-radius:8px;padding:5px 9px;background:transparent;color:#52575f;font:500 11px/1 system-ui;cursor:pointer';
+		const mentionBtn = append(bar, $('button.ldp-composer-chip')) as HTMLButtonElement;
 		mentionBtn.textContent = '@';
 		mentionBtn.title = localize('livingDocs.composer.mention', "Mention a source");
 		mentionBtn.disabled = !doc;
@@ -1848,17 +2031,17 @@ export class ReviewRailView extends ViewPane {
 			void this._livingDocs.sendChatMessage(doc, text);
 		};
 
-		const action = append(bar, $('button')) as HTMLButtonElement;
+		const action = append(bar, $('button.ldp-send')) as HTMLButtonElement;
 		if (busy) {
 			// While a reply streams the send button becomes a Stop square (plan 27 iter 3): it cancels the
 			// in-flight call; the prose so far is kept as a muted "stopped" turn (D27-B). Esc cancels too.
-			action.style.cssText = 'width:28px;height:28px;flex:none;border:none;border-radius:8px;background:#b4332f;color:#fff;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center';
+			// It wears red because stopping a call in flight is the one destructive thing on this row.
+			action.style.background = RED.base;
 			action.textContent = '\u25a0';
-			action.title = 'Stop';
+			action.title = localize('livingDocs.composer.stop', "Stop");
 			this._renderDisposables.add(addDisposableListener(action, 'click', () => this._livingDocs.cancelChat(doc!)));
 		} else {
-			// P14.1: 28x28 accent send square, radius 8.
-			action.style.cssText = 'width:28px;height:28px;flex:none;border:none;border-radius:8px;background:oklch(0.55 0.13 255);color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center';
+			// Comp 2a: a 24px round indigo send, carrying a white arrow.
 			action.textContent = '\u2191';
 			action.disabled = !doc;
 			this._renderDisposables.add(addDisposableListener(action, 'click', submit));
@@ -1871,6 +2054,12 @@ export class ReviewRailView extends ViewPane {
 			if (e.key === 'Escape' && doc && this._livingDocs.isChatBusy(doc)) { e.preventDefault(); this._livingDocs.cancelChat(doc); return; }
 			if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
 		}));
+
+		// The promise under the composer (comp 2a). It belongs here, at the moment of asking, because this is
+		// where a reader decides how much to trust what they are about to set off - and the product keeps it:
+		// every edit an agent produces lands as a pending change in this rail, never in the file.
+		const promise = append(footer, $('div.ldp-composer-promise'));
+		promise.textContent = localize('livingDocs.composer.proposalsOnly', "Edits land as proposals you review - nothing applies silently.");
 
 		// Keep the cursor in the composer across the re-render that each message triggers.
 		if (doc && !busy) { input.focus(); }
@@ -1891,8 +2080,8 @@ export class ReviewRailView extends ViewPane {
 		if (readiness === undefined && (!models || !models.length)) { return; }
 
 		const control = append(bar, $('button')) as HTMLButtonElement;
-		// P14.2 metadata look: mono 11px muted (#868B95), 26px tall, radius 7, NO border/bg until hover.
-		control.style.cssText = 'display:flex;align-items:center;gap:5px;flex:none;height:26px;padding:0 8px;border:none;border-radius:7px;background:transparent;color:#868b95;font:400 11px/1 ui-monospace,\'JetBrains Mono\',monospace;cursor:pointer;max-width:150px';
+		// P14.2 metadata look: mono 11px in the meta ink, 26px tall, radius 7, NO border/bg until hover.
+		control.style.cssText = `display:flex;align-items:center;gap:5px;flex:none;height:26px;padding:0 8px;border:none;border-radius:7px;background:transparent;color:${INK.meta};font:400 11px/1 ${FONT.mono};cursor:pointer;max-width:150px`;
 		const dot = append(control, $('span'));
 		dot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${modelHealthDotColour(readiness)}`;
 		const label = append(control, $('span'));
@@ -1901,14 +2090,14 @@ export class ReviewRailView extends ViewPane {
 		// The control names the model when we have one; otherwise it names the state in plain words (P14.5).
 		label.textContent = selected ? selected.label : modelStateWords(readiness);
 		const caret = append(control, $('span'));
-		caret.style.cssText = 'font-size:8px;flex:none;color:#a3a8b2';
+		caret.style.cssText = `font-size:8px;flex:none;color:${INK.meta}`;
 		caret.textContent = '\u25be';
 		control.title = selected
 			? localize('livingDocs.model.control.title', "Model: {0}", selected.label)
 			: localize('livingDocs.model.control.titleState', "The model that answers your calls");
 		// Hover reveals the control (P14.2): a quiet bg + darker text, matching the +Skill / @ chips' hover feel.
-		this._renderDisposables.add(addDisposableListener(control, 'mouseenter', () => { control.style.background = '#f6f7f9'; control.style.color = '#52575f'; }));
-		this._renderDisposables.add(addDisposableListener(control, 'mouseleave', () => { control.style.background = 'transparent'; control.style.color = '#868b95'; }));
+		this._renderDisposables.add(addDisposableListener(control, 'mouseenter', () => { control.style.background = PAPER.sunken; control.style.color = INK.body; }));
+		this._renderDisposables.add(addDisposableListener(control, 'mouseleave', () => { control.style.background = 'transparent'; control.style.color = INK.meta; }));
 		this._renderDisposables.add(addDisposableListener(control, 'click', () => this._openModelPopover(control, box)));
 	}
 
@@ -1926,7 +2115,7 @@ export class ReviewRailView extends ViewPane {
 
 		const pop = append(box, $('div'));
 		// Anchored above the control, right-aligned to the composer box; card styling matches the mention picker.
-		pop.style.cssText = 'position:absolute;right:9px;bottom:calc(100% + 4px);z-index:20;min-width:200px;max-width:260px;padding:5px;background:#fff;border:1px solid #e6e8ec;border-radius:11px;box-shadow:0 12px 30px -14px rgba(20,22,28,.28)';
+		pop.style.cssText = `position:absolute;right:9px;bottom:calc(100% + 4px);z-index:20;min-width:200px;max-width:260px;padding:5px;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:11px;box-shadow:${SHADOW.dialog}`;
 		// Guard: swallow the mousedown that would otherwise bubble to the outside-dismiss listener below and
 		// close the popover before a row's click lands.
 		store.add(addDisposableListener(pop, 'mousedown', e => e.stopPropagation()));
@@ -1936,7 +2125,7 @@ export class ReviewRailView extends ViewPane {
 		if (!models.length) {
 			// Honest empty state (P14.5): the model genuinely cannot answer; no fabricated rows.
 			const state = append(pop, $('div'));
-			state.style.cssText = 'display:flex;align-items:center;gap:7px;padding:9px 10px;font:400 11.5px/1.4 system-ui;color:#868b95';
+			state.style.cssText = `display:flex;align-items:center;gap:7px;padding:9px 10px;font:400 11.5px/1.4 ${FONT.sans};color:${INK.meta}`;
 			const sdot = append(state, $('span'));
 			sdot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${modelHealthDotColour(readiness)}`;
 			append(state, $('span')).textContent = modelStateWords(readiness);
@@ -1951,12 +2140,12 @@ export class ReviewRailView extends ViewPane {
 				const rows = models.filter(m => m.tier === group.tier);
 				if (!rows.length) { continue; }
 				const heading = append(pop, $('div'));
-				heading.style.cssText = 'padding:6px 9px 3px;font:600 9.5px/1 ui-monospace,\'JetBrains Mono\',monospace;letter-spacing:.12em;text-transform:uppercase;color:#b0b5be';
+				heading.style.cssText = `padding:6px 9px 3px;font:400 11px/1 ${FONT.mono};letter-spacing:${TRACKING.sectionLabel};text-transform:uppercase;color:${INK.meta}`;
 				heading.textContent = group.heading;
 				for (const model of rows) {
 					const row = append(pop, $('button')) as HTMLButtonElement;
 					const isCurrent = model.id === this._selectedModelId;
-					row.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:30px;padding:0 9px;border:none;border-radius:7px;background:transparent;color:#3c4250;font:500 12px/1 system-ui;cursor:pointer;text-align:left';
+					row.style.cssText = `display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:30px;padding:0 9px;border:none;border-radius:7px;background:transparent;color:${INK.body};font:400 12.5px/1 ${FONT.sans};cursor:pointer;text-align:left`;
 					// Per-row health dot (P14.3): all of the active backend's models share its live readiness, so the
 					// dot honestly mirrors the broker state per row rather than fabricating per-model health.
 					const rdot = append(row, $('span'));
@@ -1966,9 +2155,9 @@ export class ReviewRailView extends ViewPane {
 					name.textContent = model.label;
 					// The current model carries a check (P14.3); the tick space is reserved so rows align.
 					const check = append(row, $('span'));
-					check.style.cssText = `flex:none;font-size:12px;color:oklch(0.55 0.13 255);width:12px;text-align:center;visibility:${isCurrent ? 'visible' : 'hidden'}`;
+					check.style.cssText = `flex:none;font-size:12px;color:${INDIGO.base};width:12px;text-align:center;visibility:${isCurrent ? 'visible' : 'hidden'}`;
 					check.textContent = '✓';
-					store.add(addDisposableListener(row, 'mouseenter', () => { row.style.background = '#f4f5fd'; }));
+					store.add(addDisposableListener(row, 'mouseenter', () => { row.style.background = INDIGO.tint; }));
 					store.add(addDisposableListener(row, 'mouseleave', () => { row.style.background = 'transparent'; }));
 					store.add(addDisposableListener(row, 'click', () => {
 						this._modelPopover.clear();
@@ -1995,26 +2184,26 @@ export class ReviewRailView extends ViewPane {
 	private _renderWorkingSetRow(box: HTMLElement, doc: URI): void {
 		const set = this._livingDocs.getWorkingSet(doc);
 		const row = append(box, $('div'));
-		row.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:0 0 8px;border-bottom:1px solid #f1f2f5;margin-bottom:8px';
+		row.style.cssText = `display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:0 0 8px;border-bottom:1px solid ${HAIRLINE.soft};margin-bottom:8px`;
 
 		const label = append(row, $('span'));
-		label.style.cssText = 'font:500 10.5px/1.6 system-ui;color:#bcc0c8';
+		label.style.cssText = `font:400 11px/1.6 ${FONT.sans};color:${INK.meta}`;
 		label.textContent = set.length ? 'Editing:' : 'Edit across:';
 
 		for (const wsDoc of set) {
 			const chip = append(row, $('span'));
-			chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font:500 11px/1 system-ui;color:#3c4250;background:#f1f3f8;border:1px solid #e3e7ef;border-radius:6px;padding:4px 5px 4px 8px';
+			chip.style.cssText = `display:inline-flex;align-items:center;gap:5px;font:400 11.5px/1 ${FONT.sans};color:${INK.body};background:${PAPER.chip};border-radius:${RADIUS.pill};padding:3px 5px 3px 10px`;
 			const name = append(chip, $('span'));
 			name.textContent = `\u25A4 ${wsDoc.title}`;
 			const remove = append(chip, $('button')) as HTMLButtonElement;
-			remove.style.cssText = 'border:none;background:transparent;color:#9aa0ac;cursor:pointer;font:600 13px/1 system-ui;padding:0 2px';
+			remove.style.cssText = `border:none;background:transparent;color:${INK.meta};cursor:pointer;font:600 13px/1 ${FONT.sans};padding:0 2px`;
 			remove.textContent = '\u00D7';
 			remove.title = `Remove ${wsDoc.title} from the working set`;
 			this._renderDisposables.add(addDisposableListener(remove, 'click', () => this._livingDocs.removeFromWorkingSet(doc, wsDoc.resource)));
 		}
 
 		const add = append(row, $('button')) as HTMLButtonElement;
-		add.style.cssText = 'border:1px dashed #cdd2dc;background:transparent;color:#6b7280;border-radius:6px;padding:4px 8px;font:500 11px/1 system-ui;cursor:pointer';
+		add.style.cssText = `border:1px dashed ${PAPER.frameBorder};background:transparent;color:${INK.secondary};border-radius:${RADIUS.pill};padding:3px 10px;font:400 11.5px/1 ${FONT.sans};cursor:pointer`;
 		add.textContent = set.length ? '\uFF0B Add' : '\uFF0B Add documents';
 		this._renderDisposables.add(addDisposableListener(add, 'click', () => this._openWorkingSetMenu(add, doc)));
 	}
@@ -2084,62 +2273,116 @@ export class ReviewRailView extends ViewPane {
 		this._stylesInjected = true;
 		const style = document.createElement('style');
 		style.textContent = `
-		.living-docs-panel{display:flex;flex-direction:column;height:100%;font:13px system-ui;background:#fbfbfc}
-		/* Pin 13 tab strip: 44px, white-chip active tab (28px + e1) matching the tree rail; idle 12.5/500 muted. */
-		.living-docs-panel .ldp-tabs{display:flex;align-items:center;gap:2px;flex:none;height:44px;padding:0 8px;border-bottom:1px solid #eef0f3}
-		.living-docs-panel .ldp-tab{border:none;background:transparent;height:28px;padding:0 11px;font:500 12.5px/1 system-ui;color:#868b95;cursor:pointer;display:flex;align-items:center;gap:6px;border-radius:8px}
-		.living-docs-panel .ldp-tab:hover{color:#52575f}
-		.living-docs-panel .ldp-tab.active{color:#1a1c20;font-weight:600;background:#fff;box-shadow:0 1px 2px rgba(20,22,28,.05)}
-		.living-docs-panel .ldp-tab-count{min-width:16px;box-sizing:border-box;text-align:center;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#fff;background:#C99A2E;border-radius:999px;padding:3px 5px}
-		.living-docs-panel .ldp-collapse{margin-left:auto;align-self:center;border:none;background:transparent;border-radius:6px;padding:5px;color:#868b95;cursor:pointer;display:flex;align-items:center}
-		.living-docs-panel .ldp-collapse:hover{color:#1a1c20;background:#f0f1f4}
-		.living-docs-panel .ldp-collapse:focus-visible{outline:2px solid oklch(0.55 0.13 255);outline-offset:1px}
+		/* The rail is a paper surface (doc 28): the rails step of the canvas -> frame -> rail -> page -> card
+		nest, so a white card sitting on it reads as lifted without needing a shadow to say so. */
+		.living-docs-panel{display:flex;flex-direction:column;height:100%;font:${TYPE.uiBody};color:${INK.body};background:${PAPER.rail}}
+		/* Comp 2a/2b tab strip: no chip, no fill. An inactive tab is 13/400 meta ink; the active one darkens to
+		heading ink at 600 and carries a 2px indigo underline 4px below its label - the only mark on the strip. */
+		.living-docs-panel .ldp-tabs{display:flex;align-items:center;gap:16px;flex:none;height:44px;padding:0 18px}
+		.living-docs-panel .ldp-tab{border:none;background:transparent;padding:0 0 4px;font:400 13px/1 ${FONT.sans};color:${INK.meta};cursor:pointer;display:flex;align-items:center;gap:6px;border-bottom:2px solid transparent}
+		.living-docs-panel .ldp-tab:hover{color:${INK.secondary}}
+		.living-docs-panel .ldp-tab.active{color:${INK.heading};font-weight:600;border-bottom-color:${INDIGO.base}}
+		.living-docs-panel .ldp-tab-count{box-sizing:border-box;text-align:center;font:400 10px/1.5 ${FONT.sans};color:#fff;background:${AMBER.base};border-radius:${RADIUS.pill};padding:1px 6px}
+		.living-docs-panel .ldp-collapse{margin-left:auto;align-self:center;border:none;background:transparent;border-radius:6px;padding:5px;color:${INK.meta};cursor:pointer;display:flex;align-items:center}
+		.living-docs-panel .ldp-collapse:hover{color:${INK.heading};background:${PAPER.chip}}
+		.living-docs-panel .ldp-collapse:focus-visible{outline:2px solid ${INDIGO.base};outline-offset:1px}
 		.living-docs-panel .ldp-collapse .codicon{font-size:14px}
 		.living-docs-panel .ldp-content{flex:1;overflow-y:auto}
-		.living-docs-panel .ldr-content,.living-docs-panel .ldp-content{padding:14px 12px}
-		.living-docs-panel .ldr-status{font:400 11.5px/1.5 system-ui;color:#868b95;margin-bottom:14px}
+		.living-docs-panel .ldr-content,.living-docs-panel .ldp-content{padding:16px 18px}
+		.living-docs-panel .ldr-spacer{flex:1}
+
+		/* --- the Review ledger (comp 2b) --- */
+		.living-docs-panel .ldr-status{font:${TYPE.secondary};color:${INK.meta};margin-bottom:14px}
 		.living-docs-panel .ldr-group{margin-bottom:16px}
-		.living-docs-panel .ldr-group-head{display:flex;align-items:center;gap:8px;margin:6px 0 8px}
-		.living-docs-panel .ldr-group-title{display:flex;align-items:center;gap:7px;border:none;background:transparent;padding:0;cursor:pointer;font:600 11px/1 system-ui;letter-spacing:.02em;color:#1a1c20;text-transform:uppercase;text-align:left}
+		.living-docs-panel .ldr-group-head{display:flex;align-items:center;gap:8px;margin:2px 0 10px}
+		.living-docs-panel .ldr-group-title{display:flex;align-items:center;gap:7px;border:none;background:transparent;padding:0;cursor:pointer;font:400 11px/1 ${FONT.mono};letter-spacing:${TRACKING.sectionLabel};color:${INK.meta};text-transform:uppercase;text-align:left}
 		.living-docs-panel .ldr-group-title:hover span:first-child{text-decoration:underline}
-		.living-docs-panel .ldr-group-count{font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#868b95;background:#0001;border-radius:999px;padding:2px 7px}
-		.living-docs-panel .ldr-group-stat{display:inline-flex;gap:6px;margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace}
-		.living-docs-panel .ldr-stat-add{color:#1f7a43}
-		.living-docs-panel .ldr-stat-del{color:#b4332f}
-		.living-docs-panel .ldr-group-actions{display:flex;gap:6px}
-		.living-docs-panel .ldr-group-btn{border:1px solid #e0e2e8;border-radius:7px;padding:5px 9px;background:#fff;color:#52575f;font:600 10.5px/1 system-ui;cursor:pointer;text-transform:none;letter-spacing:0}
-		.living-docs-panel .ldr-group-btn:hover{background:#f4f5f7}
-		.living-docs-panel .ldr-group-btn.approve{border-color:transparent;background:oklch(0.55 0.13 255);color:#fff}
-		.living-docs-panel .ldr-group-btn.approve:hover{background:oklch(0.5 0.13 255)}
-		.living-docs-panel .ldr-card{border:1px solid #eceef2;border-radius:10px;padding:13px;margin-bottom:12px;background:#fff}
-		.living-docs-panel .ldr-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
-		.living-docs-panel .ldr-card-name-wrap{display:inline-flex;align-items:baseline;gap:8px;min-width:0}
-		.living-docs-panel .ldr-card-name{font:600 12.5px/1 system-ui;color:#1a1c20}
-		.living-docs-panel .ldr-card-addr{border:none;background:transparent;padding:0;font:500 10px/1 'JetBrains Mono',ui-monospace,monospace;color:oklch(0.55 0.13 255);flex:none;cursor:pointer}
-		.living-docs-panel .ldr-card-addr:hover{text-decoration:underline}
-		.living-docs-panel .ldr-card-addr:focus-visible{outline:2px solid oklch(0.55 0.13 255);outline-offset:1px;border-radius:3px}
-		.living-docs-panel .ldr-tag{font:600 9px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;border-radius:999px;padding:4px 7px}
-		.living-docs-panel .ldr-tag.attn{color:#9a6b16;background:#fdf6e9;border:1px solid #f0e2c4}
-		.living-docs-panel .ldr-tag.ok{color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc}
-		.living-docs-panel .ldr-conf{font:600 10px/1.4 system-ui;border-radius:999px;padding:3px 8px}
-		.living-docs-panel .ldr-conf.high{color:#2c8159;background:#eef7f0;border:1px solid #d7ecdc}
-		.living-docs-panel .ldr-conf.inferred{color:#8a6d1a;background:#fdfaf2;border:1px solid #e4dccb}
-		.living-docs-panel .ldr-diff{border:1px solid #eceef2;border-radius:7px;overflow:hidden;margin-bottom:10px}
-		.living-docs-panel .ldr-o{background:#fdecec;color:#7a3a38;text-decoration:line-through;text-decoration-color:rgba(180,51,47,.4);padding:8px 10px;font:400 12.5px/1.45 system-ui}
-		.living-docs-panel .ldr-n{background:#e7f6ec;color:#1f5a36;padding:8px 10px;font:400 12.5px/1.45 system-ui}
-		.living-docs-panel .ldr-why{font:400 12.5px/1.55 system-ui;color:#4a4f6a;background:#f4f6ff;border:1px solid #e2e8ff;border-radius:9px;padding:11px 12px;margin-bottom:16px}
-		.living-docs-panel .ldr-meta{display:flex;flex-wrap:wrap;gap:12px;font:600 10px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#868b95;margin-bottom:12px}
-		.living-docs-panel .ldr-actions{display:flex;gap:8px}
-		.living-docs-panel .ldr-approve{flex:1;border:none;border-radius:8px;padding:11px;background:oklch(0.55 0.13 255);color:#fff;font:600 13px/1 system-ui;cursor:pointer}
-		.living-docs-panel .ldr-approve:hover{background:oklch(0.5 0.13 255)}
-		.living-docs-panel .ldr-reject{border:1px solid #e0e2e8;border-radius:8px;padding:11px 16px;background:#fff;color:#696e78;font:500 13px/1 system-ui;cursor:pointer}
-		.living-docs-panel .ldr-reject:hover{background:#f4f5f7}
-		.living-docs-panel .ldr-checks{margin-top:6px;padding-top:16px;border-top:1px solid #eef0f3}
+		.living-docs-panel .ldr-group-count{font:400 10px/1.5 ${FONT.sans};letter-spacing:0;color:#fff;background:${AMBER.base};border-radius:${RADIUS.pill};padding:1px 6px}
+		.living-docs-panel .ldr-group-stat{display:inline-flex;gap:6px;margin-left:auto;font:400 11px/1 ${FONT.mono}}
+		.living-docs-panel .ldr-stat-add{color:${GREEN.base}}
+		.living-docs-panel .ldr-stat-del{color:${RED.base}}
+		.living-docs-panel .ldr-group-actions{display:flex;gap:2px}
+		.living-docs-panel .ldr-card{display:flex;flex-direction:column;gap:10px;border:1px solid ${HAIRLINE.strong};border-radius:${RADIUS.card};padding:14px 16px;margin-bottom:12px;background:${PAPER.card}}
+		.living-docs-panel .ldr-card-top{display:flex;align-items:center;gap:8px}
+		.living-docs-panel .ldr-card-addr{border:none;background:transparent;padding:0;font:400 10.5px/1 ${FONT.mono};color:${INK.meta};flex:none;cursor:pointer}
+		.living-docs-panel .ldr-card-addr:hover{color:${INDIGO.base};text-decoration:underline}
+		.living-docs-panel .ldr-card-addr:focus-visible{outline:2px solid ${INDIGO.base};outline-offset:1px;border-radius:3px}
+		/* Kind badges are mono and coloured by risk - no pill, because a filled chip reads as a permanent status. */
+		.living-docs-panel .ldr-tag{font:400 10px/1 ${FONT.mono};letter-spacing:${TRACKING.kindBadge}}
+		.living-docs-panel .ldr-tag.attn{color:${AMBER.label}}
+		.living-docs-panel .ldr-tag.ok,.living-docs-panel .ldr-tag.figs{color:${GREEN.base}}
+		.living-docs-panel .ldr-summary{font:400 13px/1.55 ${FONT.sans};color:${INK.body}}
+		.living-docs-panel .ldr-summary strong{font-weight:600}
+		/* The WAS/NOW pair: two blocks, not one bordered strip. The fill is the whole signal, which is why the
+		red block carries no strikethrough - a struck-through paragraph is unreadable, and the reader has to
+		read it to judge the replacement. */
+		.living-docs-panel .ldr-diff{display:flex;flex-direction:column;gap:6px;cursor:pointer}
+		.living-docs-panel .ldr-o{background:${RED.blockBg};color:${RED.blockInk};border-radius:7px;padding:8px 10px;font:400 12px/1.5 ${FONT.sans}}
+		.living-docs-panel .ldr-n{background:${GREEN.blockBg};color:${GREEN.diffInk};border-radius:7px;padding:8px 10px;font:400 12px/1.5 ${FONT.sans}}
+		.living-docs-panel .ldr-block-tag{font:400 9px/1 ${FONT.mono};letter-spacing:${TRACKING.kindBadge}}
+		.living-docs-panel .ldr-prov{font:400 12px/1.45 ${FONT.sans};color:${INK.meta}}
+		.living-docs-panel .ldr-prov-src{font-family:${FONT.mono};color:${INDIGO.base}}
+		.living-docs-panel .ldr-figs{font:400 12.5px/1.9 ${FONT.sans};color:${INK.body}}
+		.living-docs-panel .ldr-figs strong{font-weight:600}
+		.living-docs-panel .ldr-figs .ldr-card-addr{margin-left:6px}
+		.living-docs-panel .ldr-figs-each{display:flex;flex-direction:column}
+		.living-docs-panel .ldr-figs-each > .ldr-card-top{margin:2px 0 8px}
+		.living-docs-panel .ldr-actions{display:flex;align-items:center;gap:7px}
+		/* One filled button per card, and it is always the single scoped act. */
+		.living-docs-panel .ldr-approve{border:none;border-radius:7px;padding:5px 15px;background:${INDIGO.base};color:#fff;font:600 12.5px/1.4 ${FONT.sans};cursor:pointer}
+		.living-docs-panel .ldr-approve:hover{background:${INDIGO.hover}}
+		.living-docs-panel .ldr-reject{border:1px solid ${PAPER.control};border-radius:7px;padding:5px 12px;background:${PAPER.card};color:${INK.body};font:400 12.5px/1.4 ${FONT.sans};cursor:pointer}
+		.living-docs-panel .ldr-reject:hover{background:${PAPER.sunken}}
+		.living-docs-panel .ldr-secondary{border:1px solid ${PAPER.control};border-radius:7px;padding:5px 15px;background:${PAPER.card};color:${INK.body};font:600 12.5px/1.4 ${FONT.sans};cursor:pointer}
+		.living-docs-panel .ldr-secondary:hover{background:${PAPER.sunken}}
+		/* Every bulk verb in the product is quiet text plus a confirm - never a fill, never green or red. */
+		.living-docs-panel .ldr-quiet-btn{border:none;background:transparent;border-radius:${RADIUS.control};padding:5px 10px;font:${TYPE.secondary};color:${INK.secondary};cursor:pointer}
+		.living-docs-panel .ldr-quiet-btn:hover{background:${PAPER.chip};color:${INK.body}}
+		.living-docs-panel .ldr-link{border:none;background:transparent;padding:0;font:400 11.5px/1.4 ${FONT.sans};color:${INDIGO.base};cursor:pointer}
+		.living-docs-panel .ldr-link:hover{text-decoration:underline}
+		.living-docs-panel .ldr-foot{display:flex;align-items:center;gap:10px;margin-top:2px;padding-top:12px;border-top:1px solid ${HAIRLINE.medium}}
+		.living-docs-panel .ldr-foot-count{font:${TYPE.secondary};color:${INK.secondary}}
+		.living-docs-panel .ldr-checks{margin-top:8px;padding-top:8px}
+
+		/* --- the Chat tab (comp 2a) --- */
+		.living-docs-panel .ldp-waiting{display:flex;flex-direction:column;gap:8px;border:1px solid ${AMBER.border};background:${AMBER.subtleBg};border-radius:${RADIUS.input};padding:11px 14px;font:400 13px/1.5 ${FONT.sans};color:${AMBER.label}}
+		.living-docs-panel .ldp-waiting-actions{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+		.living-docs-panel .ldp-waiting-docs{display:flex;flex-direction:column;gap:2px;border-top:1px solid ${AMBER.edge};padding-top:8px}
+		.living-docs-panel .ldp-waiting-doc{display:flex;align-items:center;gap:8px;border:none;background:transparent;padding:5px 4px;border-radius:6px;cursor:pointer;text-align:left;font:400 12px/1.3 ${FONT.sans};color:${INK.body}}
+		.living-docs-panel .ldp-waiting-doc:hover{background:${PAPER.card}}
+		.living-docs-panel .ldp-waiting-doc-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-panel .ldp-waiting-doc-stat{font:400 11px/1 ${FONT.mono};color:${INK.meta}}
+		.living-docs-panel .ldp-waiting-doc-go{color:${INK.meta};font-size:12px}
+		/* A transcript pointer is a LINK, not a card: it takes you to the one real copy of the change. */
+		.living-docs-panel .ldp-pointers{display:flex;flex-direction:column;gap:2px}
+		.living-docs-panel .ldp-pointer{display:flex;align-items:baseline;flex-wrap:wrap;width:100%;box-sizing:border-box;text-align:left;border:none;background:transparent;padding:1px 0;cursor:pointer;font:400 13px/1.6 ${FONT.sans};color:${INDIGO.base}}
+		.living-docs-panel .ldp-pointer:hover .ldp-pointer-where{text-decoration:underline}
+		.living-docs-panel .ldp-pointer-where{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+		.living-docs-panel .ldp-pointer-addr{font-family:${FONT.mono};font-size:11.5px}
+		.living-docs-panel .ldp-pointer-go{flex:none}
+		.living-docs-panel .ldp-pointer-meta{display:inline-flex;align-items:baseline;gap:6px;margin-left:8px;font:400 10.5px/1.4 ${FONT.mono};color:${INK.meta}}
+		.living-docs-panel .ldp-pointer-hint{letter-spacing:${TRACKING.kindBadge};background:${PAPER.chip};border-radius:${RADIUS.pill};padding:2px 6px}
+
+		/* --- the composer (comp 2a) --- */
+		.living-docs-panel .ldp-composer-foot{flex:none;display:flex;flex-direction:column;gap:8px;border-top:1px solid ${HAIRLINE.strong};padding:12px 18px 14px;background:${PAPER.rail}}
+		.living-docs-panel .ldp-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+		.living-docs-panel .ldp-context-chip{border:none;font:400 11.5px/1.5 ${FONT.sans};color:${INDIGO.base};background:${INDIGO.tint};border-radius:${RADIUS.pill};padding:3px 10px;cursor:pointer}
+		.living-docs-panel button.ldp-context-chip:hover{background:${INDIGO.tintBorder}}
+		.living-docs-panel .ldp-chip-more{border:none;background:transparent;font:400 11.5px/1.5 ${FONT.sans};color:${INK.meta};padding:3px 4px;cursor:pointer}
+		.living-docs-panel .ldp-chip-more:hover{color:${INK.secondary}}
+		.living-docs-panel .ldp-composer{position:relative;border:1px solid ${HAIRLINE.strong};border-radius:${RADIUS.input};background:${PAPER.card};padding:10px 12px}
+		.living-docs-panel .ldp-composer:focus-within{border-color:${INDIGO.tintBorder}}
+		.living-docs-panel .ldp-composer-chip{border:1px solid ${PAPER.control};border-radius:${RADIUS.control};padding:4px 9px;background:transparent;color:${INK.secondary};font:400 11.5px/1 ${FONT.sans};cursor:pointer}
+		.living-docs-panel .ldp-composer-chip:hover:not(:disabled){background:${PAPER.sunken};color:${INK.body}}
+		.living-docs-panel .ldp-send{width:24px;height:24px;flex:none;border:none;border-radius:${RADIUS.pill};background:${INDIGO.base};color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+		.living-docs-panel .ldp-send:hover:not(:disabled){background:${INDIGO.hover}}
+		.living-docs-panel .ldp-composer-promise{font:400 11px/1.5 ${FONT.sans};color:${INK.meta}}
+
 		.living-docs-panel .ldp-busy{display:flex;gap:9px;align-items:center}
-		.living-docs-panel .ldp-busy-avatar{flex:none;width:24px;height:24px;border-radius:50%;background:oklch(0.55 0.13 255);color:#fff;font:600 12px/24px system-ui;text-align:center;animation:ldp-pulse 1.4s ease-in-out infinite}
-		.living-docs-panel .ldp-busy-label{font:400 13px/1.6 system-ui;color:#a3a8b2}
+		.living-docs-panel .ldp-busy-avatar{flex:none;width:24px;height:24px;border-radius:${RADIUS.pill};background:${INDIGO.base};color:#fff;font:600 12px/24px ${FONT.sans};text-align:center;animation:ldp-pulse 1.4s ease-in-out infinite}
+		.living-docs-panel .ldp-busy-label{font:400 13px/1.8 ${FONT.sans};color:${INK.meta}}
 		.living-docs-panel .ldp-busy-dots::after{content:"";animation:ldp-dots 1.4s steps(4,end) infinite}
-		.living-docs-panel .ldp-caret{display:inline-block;width:2px;height:1.05em;margin-left:1px;vertical-align:text-bottom;background:oklch(0.55 0.13 255);animation:ldp-blink 1s steps(2,start) infinite}
+		.living-docs-panel .ldp-caret{display:inline-block;width:2px;height:1.05em;margin-left:1px;vertical-align:text-bottom;background:${INDIGO.base};animation:ldp-blink 1s steps(2,start) infinite}
 		@keyframes ldp-blink{0%,49%{opacity:1}50%,100%{opacity:0}}
 		@keyframes ldp-pulse{0%,100%{opacity:1}50%{opacity:.45}}
 		@keyframes ldp-dots{0%{content:""}25%{content:"\\2009."}50%{content:"\\2009.."}75%{content:"\\2009..."}100%{content:"\\2009..."}}
@@ -2176,10 +2419,10 @@ export class ReviewRailView extends ViewPane {
 function checksDisclosureHtml(expanded: boolean, flags: number, report: readonly ISkillCheck[], docTitle: string | undefined): string {
 	const chevron = expanded ? '&#9662;' : '&#9656;';
 	const flagBadge = (flags > 0 && !expanded)
-		? `<span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:#9a6b16;background:#fdf2dc;border-radius:999px;padding:4px 7px">${flags}</span>`
+		? `<span style="margin-left:auto;font:400 10px/1.5 ${FONT.sans};letter-spacing:0;color:#fff;background:${AMBER.base};border-radius:${RADIUS.pill};padding:1px 6px">${flags}</span>`
 		: '';
-	const toggle = `<button data-checks-toggle style="display:flex;align-items:center;gap:8px;width:100%;border:none;background:transparent;border-top:1px solid #eef0f3;margin-top:8px;padding:13px 2px 11px;cursor:pointer;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#a3a8b2;text-transform:uppercase">`
-		+ `<span style="color:#bcc0c8;font-size:11px">${chevron}</span>DOCUMENT AGENTS${flagBadge}</button>`;
+	const toggle = `<button data-checks-toggle style="display:flex;align-items:center;gap:8px;width:100%;border:none;background:transparent;border-top:1px solid ${HAIRLINE.medium};margin-top:8px;padding:13px 2px 11px;cursor:pointer;font:400 11px/1 ${FONT.mono};letter-spacing:${TRACKING.sectionLabel};color:${INK.meta};text-transform:uppercase">`
+		+ `<span style="color:${INK.meta};font-size:11px">${chevron}</span>DOCUMENT AGENTS${flagBadge}</button>`;
 	return toggle + (expanded ? skillsHtml(report, docTitle) : '');
 }
 
@@ -2189,48 +2432,52 @@ function checksDisclosureHtml(expanded: boolean, flags: number, report: readonly
 // ON EXPORT toggle + Add-skill row match the comp. Rendered only when the disclosure above is expanded.
 function skillsHtml(report: readonly ISkillCheck[], docTitle: string | undefined): string {
 	if (!report.length) {
-		return `<div style="font:400 12.5px/1.6 system-ui;color:#868b95;padding:8px 2px">Open a Living Document to see the Skills that run on it.</div>`;
+		return `<div style="font:${TYPE.secondary};color:${INK.meta};padding:8px 2px">Open a Living Document to see the Skills that run on it.</div>`;
 	}
 	const icons: Record<string, { glyph: string; bg: string; fg: string }> = {
-		strategy: { glyph: '&#9672;', bg: '#fdf2dc', fg: '#9a6b16' },
-		financial: { glyph: '&#8721;', bg: '#e7f3ec', fg: '#217346' },
-		formatting: { glyph: '&#182;', bg: '#eef1f6', fg: '#52575f' },
+		strategy: { glyph: '&#9672;', bg: AMBER.bg, fg: AMBER.label },
+		financial: { glyph: '&#8721;', bg: GREEN.bg, fg: GREEN.base },
+		formatting: { glyph: '&#182;', bg: PAPER.chip, fg: INK.body },
 	};
+	// The verdict badge: mono, coloured by what the verdict MEANS - green passed, amber wants you, meta says
+	// nothing can be said yet, indigo means Abstract can act. No fill, per the kind-badge rule (doc 28).
 	const badge = (s: ISkillCheck): string => {
-		const m: Record<string, { label: string; color: string; bg: string }> = {
-			pass: { label: 'PASS', color: '#1f7a44', bg: '#e7f6ec' },
-			flag: { label: 'FLAG', color: '#9a6b16', bg: '#fdf2dc' },
-			'needs-model': { label: 'NO MODEL', color: '#868b95', bg: '#eef1f6' },
-			ready: { label: 'READY', color: 'oklch(0.55 0.13 255)', bg: '#eef2fb' },
+		const m: Record<string, { label: string; color: string }> = {
+			pass: { label: 'PASS', color: GREEN.base },
+			flag: { label: 'FLAG', color: AMBER.label },
+			'needs-model': { label: 'NO MODEL', color: INK.meta },
+			ready: { label: 'READY', color: INDIGO.base },
 		};
 		const b = m[s.status];
-		return `<span style="margin-left:auto;font:600 10px/1 'JetBrains Mono',ui-monospace,monospace;color:${b.color};background:${b.bg};border-radius:999px;padding:4px 7px;flex:none">${b.label}</span>`;
+		return `<span style="margin-left:auto;font:400 10px/1 ${FONT.mono};letter-spacing:${TRACKING.kindBadge};color:${b.color};flex:none">${b.label}</span>`;
 	};
 	const runBtn = (s: ISkillCheck): string => s.canRun
-		? `<button data-skill-run="${s.id}" style="border:1px solid #e0e2e8;border-radius:7px;padding:7px 11px;background:#fff;color:#52575f;font:500 11.5px/1 system-ui;cursor:pointer">${s.status === 'pass' ? 'Re-run' : 'Run'}</button>`
+		? `<button data-skill-run="${s.id}" style="border:1px solid ${PAPER.control};border-radius:7px;padding:5px 12px;background:${PAPER.card};color:${INK.body};font:400 12.5px/1.4 ${FONT.sans};cursor:pointer">${s.status === 'pass' ? 'Re-run' : 'Run'}</button>`
 		: '';
 	// "Apply fix" appears on a flagged skill that carries a deterministic edit (Formatting heading-case);
 	// it is the primary action, so it takes the right-aligned slot with Run beside it.
 	const fixBtn = (s: ISkillCheck): string => (s.fixable && s.status === 'flag')
-		? `<button data-skill-fix="${s.id}" style="margin-left:auto;border:none;border-radius:7px;padding:7px 11px;background:oklch(0.55 0.13 255);color:#fff;font:600 11.5px/1 system-ui;cursor:pointer">Apply fix</button>`
+		? `<button data-skill-fix="${s.id}" style="margin-left:auto;border:none;border-radius:7px;padding:5px 15px;background:${INDIGO.base};color:#fff;font:600 12.5px/1.4 ${FONT.sans};cursor:pointer">Apply fix</button>`
 		: '';
 	const card = (s: ISkillCheck): string => {
+		// A flagged skill paints its kind on a 3px left edge (doc 28) rather than thickening its whole border,
+		// which used to make the card itself read as the alarm.
+		const edge = s.status === 'flag' ? `border-left:3px solid ${AMBER.base};` : '';
 		const ic = icons[s.id];
-		const border = s.status === 'flag' ? '1.5px solid oklch(0.78 0.1 70)' : '1px solid #eceef2';
-		const detailColor = s.status === 'flag' ? '#52575f' : '#868b95';
-		return `<div style="border:${border};border-radius:11px;overflow:hidden;margin-bottom:11px">`
-			+ `<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:8px;background:${ic.bg};color:${ic.fg};font-size:14px;display:flex;align-items:center;justify-content:center">${ic.glyph}</span><div style="min-width:0"><div style="font:600 13px/1.2 system-ui;color:#1a1c20">${esc(s.name)}</div><div style="font:400 11px/1.3 system-ui;color:#868b95">${esc(s.blurb)}</div></div>${badge(s)}</div>`
-			+ `<div style="margin:0 13px;border-top:1px solid #f4f5f7;padding:10px 0;display:flex;align-items:center;gap:8px"><span style="flex:1;font:400 12px/1.4 system-ui;color:${detailColor}">${esc(s.detail)}</span>${fixBtn(s)}${runBtn(s)}</div></div>`;
+		const detailColor = s.status === 'flag' ? INK.body : INK.meta;
+		return `<div style="border:1px solid ${HAIRLINE.strong};${edge}border-radius:${RADIUS.card};overflow:hidden;margin-bottom:11px;background:${PAPER.card}">`
+			+ `<div style="display:flex;align-items:center;gap:9px;padding:11px 13px"><span style="width:28px;height:28px;flex:none;border-radius:${RADIUS.control};background:${ic.bg};color:${ic.fg};font-size:14px;display:flex;align-items:center;justify-content:center">${ic.glyph}</span><div style="min-width:0"><div style="font:${TYPE.uiBodyStrong};color:${INK.heading}">${esc(s.name)}</div><div style="font:400 11.5px/1.4 ${FONT.sans};color:${INK.meta}">${esc(s.blurb)}</div></div>${badge(s)}</div>`
+			+ `<div style="margin:0 13px;border-top:1px solid ${HAIRLINE.soft};padding:10px 0;display:flex;align-items:center;gap:8px"><span style="flex:1;font:400 12px/1.45 ${FONT.sans};color:${detailColor}">${esc(s.detail)}</span>${fixBtn(s)}${runBtn(s)}</div></div>`;
 	};
-	const sub = docTitle ? `Skills that run on ${esc(docTitle)} &mdash; on demand or before export.` : 'Skills that run on this document.';
+	const sub = docTitle ? `Skills that run on ${esc(docTitle)} - on demand or before export.` : 'Skills that run on this document.';
 	// The "DOCUMENT AGENTS" label lives on the disclosure toggle (checksDisclosureHtml) now, so this body
 	// starts straight at the sub-line. The whole body only renders when the disclosure is expanded.
 	return `<div style="display:flex;flex-direction:column;padding-top:11px">
-	<div style="font:400 11px/1.45 system-ui;color:#a3a8b2;padding:0 2px 14px">${sub}</div>
+	<div style="font:${TYPE.secondary};color:${INK.meta};padding:0 2px 14px">${sub}</div>
 	${report.map(card).join('')}
-	<div style="font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.08em;color:#bcc0c8;padding:0 2px 8px">RUN ON EXPORT</div>
-	<div style="display:flex;align-items:center;gap:9px;border:1px solid #eceef2;background:#fff;border-radius:9px;padding:10px 12px;margin-bottom:14px"><span style="font:400 12px/1.4 system-ui;color:#52575f">Formatting + Financial</span><span style="margin-left:auto;width:34px;height:20px;border-radius:999px;background:oklch(0.55 0.13 255);position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;background:#fff"></span></span></div>
-	<button style="width:100%;border:1px dashed #d4d7de;background:#fff;border-radius:8px;padding:9px;font:500 12px/1 system-ui;color:#868b95;cursor:pointer">&#65291; Add skill from library</button>
+	<div style="font:400 11px/1 ${FONT.mono};letter-spacing:${TRACKING.sectionLabel};color:${INK.meta};padding:0 2px 8px">RUN ON EXPORT</div>
+	<div style="display:flex;align-items:center;gap:9px;border:1px solid ${HAIRLINE.strong};background:${PAPER.card};border-radius:${RADIUS.input};padding:10px 12px;margin-bottom:14px"><span style="font:400 12.5px/1.4 ${FONT.sans};color:${INK.body}">Formatting + Financial</span><span style="margin-left:auto;width:34px;height:20px;border-radius:${RADIUS.pill};background:${INDIGO.base};position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:${RADIUS.pill};background:${PAPER.card}"></span></span></div>
+	<button style="width:100%;border:1px dashed ${PAPER.frameBorder};background:${PAPER.card};border-radius:${RADIUS.control};padding:9px;font:400 12.5px/1.4 ${FONT.sans};color:${INK.secondary};cursor:pointer">&#65291; Add skill from library</button>
 </div>`;
 }
 
@@ -2269,7 +2516,7 @@ class MentionPicker extends Disposable {
 		this._list = append(anchor, $('ul')) as HTMLUListElement;
 		this._list.id = this._id;
 		this._list.setAttribute('role', 'listbox');
-		this._list.style.cssText = 'display:none;position:absolute;left:9px;right:9px;bottom:calc(100% + 4px);z-index:10;margin:0;padding:4px;list-style:none;max-height:184px;overflow-y:auto;background:#fff;border:1px solid #d9d7fb;border-radius:10px;box-shadow:0 10px 28px -12px rgba(86,97,201,.5)';
+		this._list.style.cssText = `display:none;position:absolute;left:9px;right:9px;bottom:calc(100% + 4px);z-index:10;margin:0;padding:4px;list-style:none;max-height:184px;overflow-y:auto;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:${RADIUS.input};box-shadow:${SHADOW.dialog}`;
 		this._input.setAttribute('role', 'combobox');
 		this._input.setAttribute('aria-autocomplete', 'list');
 		this._input.setAttribute('aria-controls', this._id);
@@ -2324,7 +2571,7 @@ class MentionPicker extends Disposable {
 			item.setAttribute('role', 'option');
 			const selected = i === this._active;
 			item.setAttribute('aria-selected', String(selected));
-			item.style.cssText = `font:500 11.5px/1 ui-monospace,monospace;color:#5b6dc4;border-radius:6px;padding:6px 8px;cursor:pointer;${selected ? 'background:#eef1ff' : ''}`;
+			item.style.cssText = `font:400 11.5px/1 ${FONT.mono};color:${INDIGO.base};border-radius:6px;padding:6px 8px;cursor:pointer;${selected ? `background:${INDIGO.tint}` : ''}`;
 			item.textContent = `@${file}`;
 			this._optionDisposables.add(addDisposableListener(item, 'mousedown', e => { e.preventDefault(); this._active = i; this._select(); }));
 			this._optionDisposables.add(addDisposableListener(item, 'mousemove', () => { if (this._active !== i) { this._active = i; this._render(); } }));

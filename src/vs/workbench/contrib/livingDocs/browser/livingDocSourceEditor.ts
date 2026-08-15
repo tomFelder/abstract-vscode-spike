@@ -20,6 +20,7 @@ import { EditorPane } from '../../../browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { FONT, HAIRLINE, INDIGO, INK, PAPER, TRACKING, TYPE } from '../common/abstractTokens.js';
 import { ISourceGrid } from '../common/sourceGrid.js';
 import { ILivingDocsService, ISourceViewerData } from '../common/livingDocs.js';
 import { AbstractTabStrip, createTabStripStyle } from './abstractTabStrip.js';
@@ -137,18 +138,22 @@ export class LivingDocSourceEditor extends EditorPane {
 const SOURCE_VIEWER_STYLE = (() => {
 	const style = document.createElement('style');
 	style.textContent = `
-.living-doc-source-editor{display:flex;flex-direction:column;background:#fff}
+.living-doc-source-editor{display:flex;flex-direction:column;background:${PAPER.card}}
 .lwd-source-viewer{flex:1;min-height:0;overflow:auto;padding:20px 28px}
 .lwd-source-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
-.lwd-source-glyph{font:400 15px/1 'JetBrains Mono',ui-monospace,monospace;color:#5B6DC4}
-.lwd-source-name{font:600 15px/1.2 system-ui;color:#1A1C20}
-.lwd-source-meta{font:600 9.5px/1 'JetBrains Mono',ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#A3A8B2;margin:0 0 10px}
-.lwd-source-empty{font:400 13px/1.5 system-ui;color:#868B95;margin-top:14px}
-.lwd-source-text{font:400 12.5px/1.6 'JetBrains Mono',ui-monospace,monospace;color:#52575F;white-space:pre-wrap;margin:8px 0 0}
-table.lwd-source-grid{border-collapse:collapse;font:400 12.5px/1.4 'JetBrains Mono',ui-monospace,monospace;color:#3A3F49}
-table.lwd-source-grid th{text-align:left;font-weight:600;color:#868B95;padding:7px 14px;border-bottom:1px solid #E9EAEE;white-space:nowrap}
-table.lwd-source-grid td{padding:7px 14px;border-bottom:1px solid #F1F2F5;white-space:nowrap}
-table.lwd-source-grid tr.sel td{background:#F4F5FD;color:#1A1C20}
+.lwd-source-glyph{font:400 14px/1 ${FONT.mono};color:${INDIGO.base}}
+.lwd-source-name{font:${TYPE.uiBodyStrong};color:${INK.heading}}
+/* "latest row applies" is a section label, so it takes the ladder's mono 11 / .14em step. */
+.lwd-source-meta{font:${TYPE.sectionLabel};letter-spacing:${TRACKING.sectionLabel};text-transform:uppercase;color:${INK.meta};margin:0 0 10px}
+.lwd-source-empty{font:${TYPE.uiBody};color:${INK.secondary};margin-top:14px}
+/* The grid and the raw-text dump are provenance facts (cells, file contents), so they are mono at the ladder's
+provenance step - never the sans UI body. */
+.lwd-source-text{font:400 12px/1.6 ${FONT.mono};color:${INK.bodySoft};white-space:pre-wrap;margin:8px 0 0}
+table.lwd-source-grid{border-collapse:collapse;font:${TYPE.provenance};color:${INK.body}}
+table.lwd-source-grid th{text-align:left;font-weight:600;color:${INK.secondary};padding:7px 14px;border-bottom:1px solid ${HAIRLINE.strong};white-space:nowrap}
+table.lwd-source-grid td{padding:7px 14px;border-bottom:1px solid ${HAIRLINE.soft};white-space:nowrap}
+/* The bound row is a SELECTED row, which is the one job the flat indigo tint has outside a diff span. */
+table.lwd-source-grid tr.sel td{background:${INDIGO.tint};color:${INK.heading}}
 `;
 	return style;
 })();

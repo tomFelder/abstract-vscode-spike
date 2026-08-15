@@ -31,7 +31,6 @@ import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
 import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateCard, ITemplateInfo, ITidyPlanItem } from '../common/livingDocs.js';
 import { HeaderPillKind, IAbstractHeaderContent, IAbstractHeaderService, IHeaderPill } from '../common/abstractHeader.js';
-import { projectHasLivingSurface } from '../common/livingUpgrade.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { buildAwayFeed, classifyProjectChat, IAwayFeed, relativeTime } from '../common/projectHomeFeed.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
@@ -50,16 +49,11 @@ import { buildActivityLedger } from '../common/livingDocLedger.js';
 // demoted walkthrough entry point stays hidden across sessions once the user has waved it away.
 const DEMO_CARD_DISMISSED_KEY = 'livingDocs.demoCardDismissed';
 
-// The Templates STARTERS manifest (plan 48 T3), keyed by the starter id the card posts. Each maps to the
-// document NAME the review-safe creation path (`createDocument`) is called with - the "Blank living doc"
-// starter passes no name (decision 56's Untitled-on-first-save escape hatch, a truly empty agent-ready page).
-// A static manifest: these are the doc names, kept as plain English stems so the created file is legible.
-const STARTER_NAMES: Readonly<Record<string, string | undefined>> = {
-	'blank': undefined,
-	'project-brief': 'Project brief',
-	'meeting-notes': 'Meeting notes',
-	'metrics-digest': 'Metrics digest',
-};
+// The Templates STARTERS row is retired in round 2 (comp 4b/4c). A "starter" only ever preset a filename -
+// `createDocument('Project brief')` produced an empty page with that name and no structure, no bound figures
+// and no instructions - which is precisely the hollow affordance this round removes when it replaces slot
+// counts with outcome copy. A document is now born one of three honest ways on the New-document sheet: blank,
+// from your sources, or from a real template. Reinstating a named seed means giving it real structure first.
 
 // The editor's interactive state; the live agent registry is injected at render time.
 interface IScreenEditorState {
@@ -888,12 +882,6 @@ export class ScreenEditor extends EditorPane {
 			case 'saveAsTemplate':
 				void this._livingDocs.saveActiveDocAsTemplate();
 				break;
-			// Starters (plan 48 T3.2): a built-in seed creates its named document through the EXISTING
-			// review-safe creation path (a blank titled `.md`, opened for editing) - no fabricated prose is
-			// written for the user. The starter id maps to its document name (static manifest).
-			case 'newStarter':
-				if (message.arg) { void this._livingDocs.createDocument(STARTER_NAMES[message.arg]); }
-				break;
 			// Use Template (primary, plan 28 iter 3): the D28-B generate sheet posts the template URI + the
 			// document name + an optional note. Generation writes the skeleton and drives the review engine.
 			case 'generateFromTemplate':
@@ -1477,25 +1465,20 @@ export class ScreenEditor extends EditorPane {
 	// Home/Knowledge, agent-health on Agents, none on Templates) and the action button ("Open Folder" /
 	// "New Template" / "Add Source", each with the mock's leading glyph). Screens never show rail toggles.
 	private _publishHeader(): void {
-		// The sync pill only tells the truth once the project has a living surface (plan 42 L3): a fresh
-		// folder of plain Markdown has no sources to be "synced", so the pill is omitted rather than
-		// fabricated. Computed from the live screen state's docs + bound sources.
-		const hasLivingSurface = projectHasLivingSurface({
-			anyDocLiving: this._state.docs?.some(d => d.isLiving),
-			boundSourceCount: this._state.sources?.length,
-		});
-		const syncPill = hasLivingSurface
-			? { kind: HeaderPillKind.Sync, label: localize("livingDocs.header.allSynced", "All sources synced") }
-			: undefined;
-
+		// Round 2 removes the standing sync pill from the screens entirely (comp 1a/1b, 4a). It said the same
+		// thing the surface underneath already said - Home's state banner, Knowledge's SYNCED column - and a
+		// second voice for one fact is how two surfaces end up disagreeing. Agents keeps a pill because its
+		// roster summary ("N agents active") appears nowhere else on that screen.
 		let content: IAbstractHeaderContent;
 		switch (this._screen) {
 			case 'home':
 				content = {
 					breadcrumb: localize("livingDocs.header.home", "Home"),
-					pill: syncPill,
+					// No pill on Home (round 2, comp 1a/1b): the state banner directly below IS the status, and
+					// says it in a full sentence with its receipts. A header pill here would state the same fact
+					// twice, in two shapes, which is exactly the "permanent status pill" the round removes.
 					// allow-any-unicode-next-line
-					action: { label: localize("livingDocs.header.openFolder", "＋ Open Folder"), run: () => void this._livingDocs.openFolder() },
+					action: { label: localize("livingDocs.header.openFolder", "＋ Open folder"), run: () => void this._livingDocs.openFolder() },
 					showRailToggles: false,
 				};
 				break;
@@ -1510,9 +1493,11 @@ export class ScreenEditor extends EditorPane {
 			case 'knowledge':
 				content = {
 					breadcrumb: localize("livingDocs.header.knowledge", "Knowledge"),
-					pill: syncPill,
+					// No pill on Knowledge either (comp 4a): the SYNCED column already carries each source's
+					// freshness, per source, in the shared vocabulary. A header pill would average that into a
+					// single sentence and then disagree with the rows the moment one source drifts.
 					// allow-any-unicode-next-line
-					action: { label: localize("livingDocs.header.addSource", "＋ Add Source"), run: () => this._openScreenSheet('addsource') },
+					action: { label: localize("livingDocs.header.addSource", "＋ Add source"), run: () => this._openScreenSheet('addsource') },
 					showRailToggles: false,
 				};
 				break;

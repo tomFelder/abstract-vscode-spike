@@ -17,6 +17,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { AMBER, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, TYPE } from '../common/abstractTokens.js';
 import { documentDisplayTitle } from '../common/livingDocMarkdown.js';
 import { ILivingDocsService } from '../common/livingDocs.js';
 import { ITabModel, ITabStripModel, TAB_OVERFLOW_THRESHOLD, tabsOverflow, toPersistedTabStrip } from '../common/livingDocTabs.js';
@@ -47,7 +48,7 @@ export function setTabRestoreInProgress(value: boolean): void {
  * editor in the group, the × / middle-click closes it (native group behaviour then activates the neighbour and
  * closes the group when the last tab goes). VS Code's own tab strip stays `showTabs:'none'`, so this is the
  * only tab row the user sees.
- *
+*
  * Preview tabs (plan 52 WP-F) are likewise a PROJECTION, not state this class owns: the group already has a
  * preview slot (`IEditorGroup.isPinned`, core's `EditorGroupModel.preview`), so the strip only reads it and
  * paints the preview tab italic. Double-clicking a tab pins it through `IEditorGroup.pinEditor`; the group
@@ -221,7 +222,7 @@ export class AbstractTabStrip extends Disposable {
 			toAction({ id: 'livingDocs.tab.close', label: localize('livingDocs.tab.menuClose', "Close"), run: () => this._close(tab.id) }),
 			toAction({
 				id: 'livingDocs.tab.closeOthers',
-				label: localize('livingDocs.tab.menuCloseOthers', "Close Others"),
+				label: localize('livingDocs.tab.menuCloseOthers', "Close others"),
 				enabled: this._group.count > 1,
 				run: () => this._closeOthers(tab.id),
 			}),
@@ -324,24 +325,28 @@ export { TAB_OVERFLOW_THRESHOLD };
 export function createTabStripStyle(): HTMLStyleElement {
 	const style = document.createElement('style');
 	style.textContent = `
-.lwd-tabstrip{display:flex;align-items:flex-end;height:40px;flex:none;background:#F3F4F7;padding:0 8px;box-sizing:border-box;overflow:hidden}
+/* The strip sits on the rail's paper; only the ACTIVE tab is a card, so the row reads as one surface with a
+single sheet lifted out of it. Every ink is a step on the ramp - heading for the active tab, secondary for
+the tabs at rest, meta for the affordances that only matter once the pointer is on them. */
+.lwd-tabstrip{display:flex;align-items:flex-end;height:40px;flex:none;background:${PAPER.rail};padding:0 8px;box-sizing:border-box;overflow:hidden}
 .lwd-tabstrip-scroll{display:flex;align-items:flex-end;gap:2px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;flex:1;min-width:0}
 .lwd-tabstrip-scroll::-webkit-scrollbar{display:none}
-.lwd-tab{display:flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:9px 9px 0 0;font:500 12.5px/1 system-ui;color:#868B95;white-space:nowrap;cursor:pointer;user-select:none;box-sizing:border-box;flex:none;max-width:200px}
-.lwd-tab:hover{background:#ECEDF1}
+.lwd-tab{display:flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:${RADIUS.control} ${RADIUS.control} 0 0;font:${TYPE.secondary};color:${INK.secondary};white-space:nowrap;cursor:pointer;user-select:none;box-sizing:border-box;flex:none;max-width:200px}
+.lwd-tab:hover{background:${PAPER.chip}}
 /* The preview tab (plan 52 WP-F): italic, exactly as VS Code marks the tab it will reuse for the next peek. */
 .lwd-tab.preview{font-style:italic}
-.lwd-tab.active{height:34px;background:#fff;color:#1A1C20;font-weight:600;border:1px solid #E9EAEE;border-bottom:1px solid #fff;margin-bottom:-1px}
-.lwd-tab.active:hover{background:#fff}
+.lwd-tab.active{height:34px;background:${PAPER.card};color:${INK.heading};font-weight:600;border:1px solid ${HAIRLINE.strong};border-bottom:1px solid ${PAPER.card};margin-bottom:-1px}
+.lwd-tab.active:hover{background:${PAPER.card}}
 .lwd-tab-label{overflow:hidden;text-overflow:ellipsis}
-.lwd-tab-glyph{font:400 12.5px/1 'JetBrains Mono',ui-monospace,monospace;color:#5B6DC4;flex:none}
-.lwd-tab-dot{width:6px;height:6px;border-radius:50%;flex:none}
-.lwd-tab-dot.ok{background:#3E9C6B}
-.lwd-tab-dot.attention{background:#C99A2E}
-.lwd-tab-x{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;color:#A3A8B2;font-size:14px;flex:none}
-.lwd-tab-x:hover{background:#ECEDF1;color:#52575F}
-.lwd-tab-overflow{display:inline-flex;align-items:center;justify-content:center;width:28px;height:32px;flex:none;color:#868B95;font-size:16px;cursor:pointer;border-radius:8px}
-.lwd-tab-overflow:hover{background:#ECEDF1}
+.lwd-tab-glyph{font:400 12.5px/1 ${FONT.mono};color:${INDIGO.base};flex:none}
+/* The status dot speaks the state palette: green = all clear, amber = waiting on you. */
+.lwd-tab-dot{width:6px;height:6px;border-radius:${RADIUS.pill};flex:none}
+.lwd-tab-dot.ok{background:${GREEN.base}}
+.lwd-tab-dot.attention{background:${AMBER.base}}
+.lwd-tab-x{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;color:${INK.meta};font-size:14px;flex:none}
+.lwd-tab-x:hover{background:${PAPER.chip};color:${INK.secondary}}
+.lwd-tab-overflow{display:inline-flex;align-items:center;justify-content:center;width:28px;height:32px;flex:none;color:${INK.secondary};font-size:16px;cursor:pointer;border-radius:${RADIUS.control}}
+.lwd-tab-overflow:hover{background:${PAPER.chip}}
 `;
 	return style;
 }

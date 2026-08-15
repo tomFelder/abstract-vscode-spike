@@ -166,7 +166,7 @@ export interface IChatGptSignInStatus {
 
 /**
  * Why a `startChatGptSignIn` attempt failed (plan 51). Each maps to a visually distinct, honest UI state -
- * the door never collapses these into one "something went wrong" (issue #283 §B):
+ * the door never collapses these into one "something went wrong" (issue #283 section B):
  * - `broker-unreachable`: the fetch itself failed (the local model helper is not running / cannot be reached).
  *   This is a UI-layer verdict, not a broker response - the broker never got a chance to answer.
  * - `upstream-rejected`: the broker reached OpenAI's device-auth endpoint but it rejected the request. The

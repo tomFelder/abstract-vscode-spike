@@ -10,6 +10,7 @@ import { localize } from '../../../../nls.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { FONT, HAIRLINE, INK, PAPER, RADIUS, RED, SHADOW } from '../common/abstractTokens.js';
 import { ILivingDocsService, ILivingDocSummary } from '../common/livingDocs.js';
 
 // THE document context menu (spec 43 pin 6 / P6.1), in ONE place. Two surfaces raise it: a right-click on a
@@ -48,18 +49,18 @@ export function createDocumentMenuActions(services: IDocumentMenuServices, resou
 		actions.push(toAction({ id: 'livingDocs.file.open', label: localize('livingDocs.menu.open', "Open"), run: () => void services.editorService.openEditor({ resource, options: { pinned: true } }) }));
 	}
 	actions.push(
-		toAction({ id: 'livingDocs.file.openRight', label: localize('livingDocs.menu.openRight', "Open to the Right"), run: () => void services.livingDocs.openToTheRight(resource) }),
+		toAction({ id: 'livingDocs.file.openRight', label: localize('livingDocs.menu.openRight', "Open to the right"), run: () => void services.livingDocs.openToTheRight(resource) }),
 		new Separator(),
 		toAction({ id: 'livingDocs.file.rename', label: localize('livingDocs.menu.rename', "Rename…"), run: () => void services.livingDocs.requestRenameDocument(resource) }),
 		toAction({ id: 'livingDocs.file.duplicate', label: localize('livingDocs.menu.duplicate', "Duplicate"), run: () => void services.livingDocs.duplicateFile(resource) }),
 		toAction({ id: 'livingDocs.file.move', label: localize('livingDocs.menu.move', "Move to…"), run: () => void moveDocument(services, resource, label) }),
 		new Separator(),
-		toAction({ id: 'livingDocs.file.bind', label: localize('livingDocs.menu.bind', "Bind Sources…"), run: () => void services.livingDocs.requestBindSources(resource) }),
-		toAction({ id: 'livingDocs.file.history', label: localize('livingDocs.menu.history', "View History"), run: () => void viewHistory(services, resource) }),
+		toAction({ id: 'livingDocs.file.bind', label: localize('livingDocs.menu.bind', "Bind sources…"), run: () => void services.livingDocs.requestBindSources(resource) }),
+		toAction({ id: 'livingDocs.file.history', label: localize('livingDocs.menu.history', "View history"), run: () => void viewHistory(services, resource) }),
 		toAction({ id: 'livingDocs.file.present', label: localize('livingDocs.menu.present', "Present"), run: () => void services.livingDocs.requestPresent(resource) }),
 		new Separator(),
-		// Delete is the LAST entry (P6.6): the injected stylesheet paints the menu's last action-item row
-		// removed-ink `#B5514B` with a `#FBEEEE` hover. It routes to the confirming, dependents-warning service delete.
+		// Delete is the LAST entry (P6.6): the injected stylesheet paints the menu's last action-item row in
+		// `RED.base` over a `RED.diffBg` hover. It routes to the confirming, dependents-warning service delete.
 		toAction({ id: 'livingDocs.file.delete', label: localize('livingDocs.menu.delete', "Delete…"), run: () => void deleteDocument(services, resource, label) }),
 	);
 	return actions;
@@ -72,7 +73,7 @@ export function createDocumentMenuActions(services: IDocumentMenuServices, resou
 export function createSourceMenuActions(services: IDocumentMenuServices, resource: URI, label: string): IAction[] {
 	return [
 		toAction({ id: 'livingDocs.file.rename', label: localize('livingDocs.menu.rename', "Rename…"), run: () => void services.livingDocs.requestRenameDocument(resource) }),
-		toAction({ id: 'livingDocs.file.addToChat', label: localize('livingDocs.menu.addToChat', "Add to Chat"), run: () => services.livingDocs.attachToChat(resource) }),
+		toAction({ id: 'livingDocs.file.addToChat', label: localize('livingDocs.menu.addToChat', "Add to chat"), run: () => services.livingDocs.attachToChat(resource) }),
 		new Separator(),
 		toAction({ id: 'livingDocs.file.delete', label: localize('livingDocs.menu.delete', "Delete…"), run: () => void deleteDocument(services, resource, label) }),
 	];
@@ -175,9 +176,9 @@ async function deleteDocument(services: IDocumentMenuServices, resource: URI, la
  * The restyled native context menu's stylesheet (P6.7 / P6.1 / P6.6): a document-scoped sheet keyed to this
  * loop's menu class (`getMenuClassName` -> the `.monaco-menu-container.livingDocs-doc-menu` overlay, which renders
  * OUTSIDE the raising view's DOM subtree, so a view-scoped sheet cannot reach it). This restyles the EXISTING
- * native menu - no parallel menu implementation - to the mock's 208px popover / radius 12 / 30px rows / hairline
- * dividers / popover shadow, and paints the Delete row `#B5514B` with a `#FBEEEE` hover. Scoped to our menu class
- * so no other menu is affected; `studio.css` is untouched.
+ * native menu - no parallel menu implementation - to the comp's 208px popover / card radius / 30px rows / hairline
+ * dividers / dialog shadow, and paints the Delete row in `RED.base` over a `RED.diffBg` hover. Scoped to our menu
+ * class so no other menu is affected; `studio.css` is untouched.
  *
  * Returned rather than injected so each owner appends it to its own `ownerDocument.head` and disposes its own
  * copy - the same shape as `createTabStripStyle()`. Two owners mounting identical sheets is harmless, and it
@@ -188,23 +189,24 @@ export function createDocumentMenuStyle(): HTMLStyleElement {
 	const SCOPE = `.monaco-menu-container.${DOCUMENT_MENU_CLASS_NAME}`;
 	style.textContent = `
 	/* radius pinned !important to beat roundedCorners.css's cornerRadius-large tier on the menu surfaces. */
-	${SCOPE}{border-radius:12px !important;box-shadow:0 12px 32px -8px rgba(20,22,28,.24),0 0 0 1px #E9EAEE;overflow:hidden}
-	${SCOPE} .monaco-menu{border-radius:12px !important;background:#FBFCFD;overflow:hidden}
-	${SCOPE} .monaco-menu .monaco-action-bar.vertical{padding:6px;width:208px;box-sizing:border-box;border-radius:12px !important}
+	${SCOPE}{border-radius:${RADIUS.card} !important;box-shadow:${SHADOW.dialog},0 0 0 1px ${HAIRLINE.strong};overflow:hidden}
+	${SCOPE} .monaco-menu{border-radius:${RADIUS.card} !important;background:${PAPER.page};overflow:hidden}
+	${SCOPE} .monaco-menu .monaco-action-bar.vertical{padding:6px;width:208px;box-sizing:border-box;border-radius:${RADIUS.card} !important}
 	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item{margin:0}
-	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-menu-item{height:30px;border-radius:8px;padding:0 10px}
-	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-label{font:400 13px/30px system-ui;color:#26292F}
+	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-menu-item{height:30px;border-radius:${RADIUS.control};padding:0 10px}
+	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-label{font:400 13.5px/30px ${FONT.sans};color:${INK.body}}
 	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item.focused .action-menu-item,
-	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-menu-item:hover{background:#F1F2F6}
+	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-menu-item:hover{background:${PAPER.chip}}
 	/* Hairline dividers between the groups (a separator row is a thin rule, not a tall gap). */
 	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item.disabled.action-label.separator,
-	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-label.separator{margin:5px 8px;padding:0;border-bottom:1px solid #EEF0F3}
-	/* Delete (P6.6): removed-ink #B5514B, hover bg #FBEEEE. The native context menu only applies an action's
-	 * class to icon items, so the Delete row is targeted structurally instead - it is always the last
-	 * action-item in this menu (see createDocumentMenuActions / createSourceMenuActions, where Delete is final). */
-	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item:last-child .action-label{color:#B5514B}
+	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-label.separator{margin:5px 8px;padding:0;border-bottom:1px solid ${HAIRLINE.medium}}
+	/* Delete (P6.6): the removed/failed red over its own tinted hover - the one hue that means "this goes away".
+	 * The native context menu only applies an action's class to icon items, so the Delete row is targeted
+	 * structurally instead - it is always the last action-item in this menu (see createDocumentMenuActions /
+	 * createSourceMenuActions, where Delete is final). */
+	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item:last-child .action-label{color:${RED.base}}
 	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item:last-child.focused .action-menu-item,
-	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item:last-child .action-menu-item:hover{background:#FBEEEE}
+	${SCOPE} .monaco-menu .monaco-action-bar.vertical .action-item:last-child .action-menu-item:hover{background:${RED.diffBg}}
 	`;
 	return style;
 }

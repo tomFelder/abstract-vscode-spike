@@ -33,7 +33,7 @@ import { DocAutonomyLevel } from './docPolicy.js';
 
 /** One row of an agent's display policy table: a plain-language change KIND and the tier it reads in. */
 export interface IAgentPolicyRow {
-	/** The plain-language change kind this row governs (e.g. "Figures & dates"). Title-style, no jargon. */
+	/** The plain-language action this row governs (e.g. "Update figures & dates"). A verb phrase, no jargon. */
 	readonly label: string;
 	/** The three-tier display level this kind resolves to under the agent's stored dial. */
 	readonly level: DocAutonomyLevel;
@@ -42,14 +42,18 @@ export interface IAgentPolicyRow {
 /**
  * The display policy table for a stored agent dial: the three change kinds (figures, meaning, structure) each
  * resolved to their honest three-tier level. Derived from what the dial does at run time, never fabricated.
- * The row labels mirror the locked mock (spec A2.2): "Figures & dates" / "Meaning changes" / "Structure changes".
+ *
+ * The labels are VERB phrases, not noun phrases (comp 3a). The card that carries this table is headed
+ * "WITHOUT ASKING, IT MAY", so each row has to complete that sentence: "without asking, it may update figures
+ * and dates". The round-1 noun labels ("Figures & dates") left the heading dangling, which is how a reader
+ * ends up unsure whether the row describes what the agent may do or merely what it looks at.
  */
 export function agentPolicyTable(policy: AgentPolicy): readonly IAgentPolicyRow[] {
 	const figures: DocAutonomyLevel = policy === 'auto-figures' ? 'auto-apply' : 'ask-first';
 	return [
-		{ label: 'Figures & dates', level: figures },
-		{ label: 'Meaning changes', level: 'ask-first' },
-		{ label: 'Structure changes', level: 'never' },
+		{ label: 'Update figures & dates', level: figures },
+		{ label: 'Change meaning', level: 'ask-first' },
+		{ label: 'Restructure', level: 'never' },
 	];
 }
 

@@ -11,6 +11,7 @@ import { countBindSlots, parseLivingDoc, templateSkeletonRows } from '../../comm
 import { IAgentDef, IAgentRun, ISkillRunSummary, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 import { IScreenState, renderScreenHtml, ScreenId } from '../../browser/screenRender.js';
 import { IActivityLedger } from '../../common/livingDocLedger.js';
+import { AMBER, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, RED } from '../../common/abstractTokens.js';
 
 suite('livingDocs screenRender', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -19,8 +20,9 @@ suite('livingDocs screenRender', () => {
 
 	// (plan 44-b PH.4) The per-webview brand/crumb top bar is GONE from every main-area screen: the one
 	// global Abstract header (the repurposed title bar, painted natively above the webviews) now carries
-	// the breadcrumb, the sync pill, the surface action and the avatar. The screen body must draw NO top
-	// bar of its own, so there is never a double header on any surface.
+	// the breadcrumb, the surface action and the avatar. The screen body must draw NO top bar of its own,
+	// so there is never a double header on any surface. (Round 2 also retired the header's standing sync
+	// pill on Home and Knowledge - Home's banner and Knowledge's SYNCED column already state that fact.)
 	const screens: { id: ScreenId; crumb: string }[] = [
 		{ id: 'home', crumb: 'Home' },
 		{ id: 'templates', crumb: 'Templates' },
@@ -45,11 +47,15 @@ suite('livingDocs screenRender', () => {
 	// --- D26 onboarding surface: the guided two-wow flow renders the current funnel step + its real action ---
 
 	test('onboarding open step shows the intro, the consent status and the See it work action', () => {
+		// Round 2 (doc 28, "Sentence case everywhere, including buttons"): the round-1 title-cased headline
+		// "Two Wows, Ten Minutes, No Setup" is a defect now, so the intro is pinned in sentence case.
 		const html = renderScreenHtml('onboarding', { ...state, onboarding: { step: 'open', consentEnabled: true, consentChosen: true, hasModel: true, demoGenerated: false } });
-		assert.ok(html.includes('Two Wows, Ten Minutes, No Setup'), 'intro headline');
-		assert.ok(/data-msg="onbSeeItWork"/.test(html), 'has the See it work action');
-		assert.ok(html.includes('never your words'), 'shows the plain-words consent line');
-		assert.ok(html.includes('Step 1 of 7'), 'shows funnel progress');
+		assert.deepStrictEqual({
+			headline: html.includes('Two wows, ten minutes, no setup'),
+			seeItWork: /data-msg="onbSeeItWork"/.test(html),
+			consentLine: html.includes('never your words'),
+			progress: html.includes('Step 1 of 7'),
+		}, { headline: true, seeItWork: true, consentLine: true, progress: true });
 	});
 
 	test('onboarding wow steps name each wow and drive the real engine (peek + prompt one edit)', () => {
@@ -120,11 +126,11 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('Acme Co') && !html.includes('Job Search 2026'), 'no hardcoded demo project cards');
 	});
 
-	test('home v2 dashboard: greeting + truthful summary, NEEDS-YOU cards from real host detail, and an ALL DOCUMENTS grid (H1-H3)', () => {
-		// The v2 Home (plan 48): a person-first greeting, a truthful needs-you count, at most two NEEDS-YOU
-		// cards built from the host-computed `homeNeedsYou` detail (real reason + freshness), and a per-document
-		// ALL DOCUMENTS grid of the open folder. The folder name is no longer printed in the body (the plan-44
-		// header breadcrumb owns it); the greeting is by person (decision 39 - the folder IS the project).
+	test('home v2 dashboard: greeting + the ONE amber state banner that becomes the queue, over a DOCUMENTS grid (H1-H3, comp 1b)', () => {
+		// Round 2 (comp 1b, doc 28 "there is no permanent status pill"): Home's state lives in exactly ONE place -
+		// the banner. It names the real pending set in its headline and GROWS the review queue below its own head,
+		// so the work and the summary of the work are never two surfaces to reconcile. The round-1 `summary` line
+		// ("1 document needs you"), the per-card "N TO APPROVE" pill and the "ALL DOCUMENTS" label are all gone.
 		const docs = [summary('/ws/Weekly Update.md', 'Weekly Update', true, 3), summary('/ws/Team Notes.md', 'Team Notes', false, 0)];
 		const html = renderScreenHtml('home', {
 			...state, hasFolder: true, folderName: 'realdocs-test', docs,
@@ -133,35 +139,63 @@ suite('livingDocs screenRender', () => {
 			homeNeedsYouTotal: 1,
 		});
 
-		// H1: person-first greeting (real name) + truthful summary count.
+		// H1: person-first greeting (real name); the folder name is not printed in the body (the plan-44 header
+		// breadcrumb owns it) and the greeting is by person (decision 39 - the folder IS the project).
 		assert.ok(/Good (morning|afternoon|evening), Tom\./.test(html), 'greets the person by name with a real time-of-day');
-		assert.ok(html.includes('1 document needs you'), 'the summary states the truthful needs-you count');
-		// H2: the NEEDS-YOU section + a card with the real reason, the amber pill, and a Review that opens the doc.
-		assert.ok(/NEEDS YOU/.test(html), 'shows the NEEDS-YOU section when a doc has pending work');
-		assert.ok(html.includes('Weekly Update') && html.includes('waiting on your call at line 6'), 'the card carries the real reason');
-		assert.ok(html.includes('3 TO APPROVE') && html.includes('refreshed 2m ago'), 'the card shows the real pill + freshness stamp');
-		// H3: the ALL DOCUMENTS grid lists every real document; both docs are openable cards.
-		assert.ok(/ALL DOCUMENTS/.test(html), 'shows the ALL DOCUMENTS grid label');
-		assert.ok(html.includes('Team Notes'), 'the non-pending document still appears in the grid');
-		assert.ok(!html.includes('Acme Co') && !html.includes('Fund III') && !/ALL PROJECTS/.test(html), 'no fixture cards, no multi-project dashboard (decision 39)');
-		assert.ok(!html.includes('data-msg="newProject"') && !/>New project</.test(html), 'the no-op New project button is gone');
+		assert.deepStrictEqual({
+			// H1: the amber banner states the REAL pending set - 3 changes, all sitting in one document - over an
+			// indigo primary that opens the review. Amber is the one hue that means "waiting on you".
+			bannerHeadline: html.includes('3 changes in 1 document are waiting on you.'),
+			bannerAmber: html.includes(`background:${AMBER.bg};border:1px solid ${AMBER.border}`),
+			bannerDot: html.includes(`width:11px;height:11px;flex:none;border-radius:${RADIUS.pill};background:${AMBER.base}`),
+			reviewAction: html.includes('Review 3 changes') && /data-msg="reviewProject"/.test(html),
+			// H2: the banner's queue - a mono MEANING badge, the host's real reason, its real freshness fact, and a
+			// review link that deep-links the exact block.
+			queueBadge: html.includes('MEANING'),
+			queueRow: html.includes('<strong>Weekly Update</strong>') && html.includes('waiting on your call at line 6'),
+			queueFact: html.includes('refreshed 2m ago'),
+			queueReview: /data-msg="reviewNeedsYou"/.test(html),
+			// H3: the grid leads with what needs the reader and still lists every real document.
+			gridLabel: html.includes('DOCUMENTS · NEEDS YOU FIRST'),
+			quietDoc: html.includes('Team Notes'),
+			// Retired in round 2: the summary line, the per-card status pill, the round-1 grid label.
+			noSummaryLine: !html.includes('1 document needs you'),
+			noApprovePill: !html.includes('3 TO APPROVE'),
+			noOldGridLabel: !/ALL DOCUMENTS/.test(html),
+			// Never: fixture cards, a multi-project dashboard, the no-op New project button (decision 39).
+			noFixtures: !html.includes('Acme Co') && !html.includes('Fund III') && !/ALL PROJECTS/.test(html),
+			noNewProject: !html.includes('data-msg="newProject"') && !/>New project</.test(html),
+		}, {
+			bannerHeadline: true, bannerAmber: true, bannerDot: true, reviewAction: true,
+			queueBadge: true, queueRow: true, queueFact: true, queueReview: true,
+			gridLabel: true, quietDoc: true,
+			noSummaryLine: true, noApprovePill: true, noOldGridLabel: true, noFixtures: true, noNewProject: true,
+		});
 	});
 
-	test('home v2: status chips agree with the tree rail dots (H3.4 - one truth), and the dashed New document tile closes the grid (H3.3)', () => {
-		// H3.4: the ALL DOCUMENTS chip is derived from the SAME docRailDot helper as the tree, so a pending doc
-		// reads "needs you", a calm living doc reads "in sync", and a plain markdown file reads "markdown".
+	test('home v2: a document card is a title, an optional 7px state dot and ONE plain-words line (H3.4 - one truth, comp 1a/1b)', () => {
+		// Round 2 (comp 1a/1b): the round-1 avatar and status chip are gone from a document card - identity is not
+		// state, and a permanent chip is exactly the pill the banner replaced. A card is a title, an optional 7px
+		// dot, and one plain-words line; that line is the SAME docRailDot tooltip the tree rail's dot carries, so a
+		// card and its rail row can never disagree. A quiet document earns no dot at all - colour only where earned.
 		const docs = [
-			summary('/ws/Pending.md', 'Pending', true, 2),          // yellow -> needs you
-			summary('/ws/Calm.md', 'Calm', true, 0),                // living, calm -> in sync
-			summary('/ws/Plain.md', 'Plain', false, 0),             // plain markdown -> markdown
+			summary('/ws/Pending.md', 'Pending', true, 2),          // yellow rail band -> waiting: amber dot + the rail's sentence
+			summary('/ws/Calm.md', 'Calm', true, 0),                // grey rail band -> quiet: bound and calm, no dot
+			summary('/ws/Plain.md', 'Plain', false, 0),             // grey rail band -> quiet: nothing has happened, no dot
 		];
 		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', docs, userName: 'Tom' });
+		const cardDot = `width:7px;height:7px;flex:none;border-radius:${RADIUS.pill}`;
 		assert.deepStrictEqual({
-			needsYou: html.includes('needs you'),
-			inSync: html.includes('in sync'),
-			markdown: html.includes('markdown'),
-			newDocTile: /class="doc-newtile"[^>]*data-sheet-open="newdoc"|data-sheet-open="newdoc"[^>]*class="doc-newtile"/.test(html) || (/class="doc-newtile"/.test(html) && /data-msg="newDocument"/.test(html)),
-		}, { needsYou: true, inSync: true, markdown: true, newDocTile: true });
+			waitingLine: html.includes('2 changes waiting for approval'),
+			waitingDot: html.includes(`${cardDot};background:${AMBER.base}`),
+			calmLine: html.includes('In sync with metrics.csv'),
+			plainLine: html.includes('Nothing has changed since you last looked.'),
+			// Exactly one card dot renders: the two quiet documents state what they are in words, not in colour.
+			dotCount: (html.match(new RegExp(cardDot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length,
+			// The round-1 chips are gone for good (doc 28: "There is no permanent status pill").
+			noChips: !/>needs you</.test(html) && !/>in sync</.test(html) && !/>markdown</.test(html),
+			newDocTile: /class="doc-newtile"/.test(html) && /data-msg="newDocument"/.test(html),
+		}, { waitingLine: true, waitingDot: true, calmLine: true, plainLine: true, dotCount: 1, noChips: true, newDocTile: true });
 	});
 
 	test('CD-1: the populated dashboard carries the "Ask this project" composer so the fan-out is launchable (1j/1w)', () => {
@@ -173,7 +207,10 @@ suite('livingDocs screenRender', () => {
 		}, { composer: true, sends: true, label: true });
 	});
 
-	test('home v2: the NEEDS-YOU section shows at most two cards and a "+N more" overflow to the Review surface (H2.1)', () => {
+	test('home v2: the banner queue carries the host\'s two detail rows and hands the rest to Review in plain words (H2.1, comp 1b)', () => {
+		// The host projects detail for at most two documents. Round 2 turns the round-1 "+N more" chip into a real
+		// queue row in the banner's own voice ("1 more document is waiting on you."), so the overflow reads as work
+		// rather than as a count, and hands the rest to the cross-document review surface instead of inventing rows.
 		const html = renderScreenHtml('home', {
 			...state, hasFolder: true, folderName: 'ws', userName: 'Tom',
 			docs: [summary('/ws/A.md', 'A', true, 1), summary('/ws/B.md', 'B', true, 1), summary('/ws/C.md', 'C', true, 1)],
@@ -183,7 +220,14 @@ suite('livingDocs screenRender', () => {
 			],
 			homeNeedsYouTotal: 3,
 		});
-		assert.ok(html.includes('+1 more') && /data-msg="reviewProject"/.test(html), 'the overflow row links to the Review surface');
+		assert.deepStrictEqual({
+			headline: html.includes('3 changes across 3 documents are waiting on you.'),
+			rowA: html.includes('<strong>A</strong>'),
+			rowB: html.includes('<strong>B</strong>'),
+			overflowRow: html.includes('1 more document is waiting on you.'),
+			reviewAll: html.includes('review all') && /data-msg="reviewProject"/.test(html),
+			noCountChip: !html.includes('+1 more'),
+		}, { headline: true, rowA: true, rowB: true, overflowRow: true, reviewAll: true, noCountChip: true });
 	});
 
 	// The name-or-template on-ramp (plan 28, iter 4): Home carries a New document primary that opens a sheet
@@ -207,20 +251,24 @@ suite('livingDocs screenRender', () => {
 	});
 
 	// --- F17 "From sources..." (journey 1b's third birth): the on-ramp gains a From-sources birth + picker ---
-	test('home offers the "From sources..." birth: a source picker sheet driven by the real folder sources', () => {
+	test('home offers the "From your sources..." birth: a source picker sheet driven by the real folder sources', () => {
+		// Round 2 (comp 4c): the birth row and its picker both say "your sources" - the possessive is what makes it
+		// the reader's own data rather than a product noun.
 		const html = renderScreenHtml('home', {
 			...state, hasFolder: true, folderName: 'realdocs-test', docs: [], templates: [],
 			dataFiles: ['metrics.csv'], docFiles: ['market-research.md', 'Team Notes.md'],
 		});
-		// The third birth is present in the New-document sheet and opens its own picker sheet.
-		assert.ok(/data-sheet-open="fromsources"/.test(html), 'the New-document sheet carries a From sources... row');
-		assert.ok(html.includes('id="sheet-fromsources"'), 'the source picker sheet is present');
-		assert.ok(html.includes('New document from sources'), 'the picker names the birth');
-		// Real data only: every folder source is a checkbox pick; the submit posts newFromSources.
-		assert.ok(html.includes('data-pick="metrics.csv"'), 'the csv data source is a pick');
-		assert.ok(html.includes('data-pick="market-research.md"') && html.includes('data-pick="Team Notes.md"'), 'the documents are picks');
-		assert.ok(/data-msg="newFromSources"/.test(html), 'the picker submits to newFromSources');
-		assert.ok(/data-field="name"/.test(html) && /data-field="note"/.test(html), 'the picker has a name and an optional instruction');
+		assert.deepStrictEqual({
+			// The third birth is present in the New-document sheet and opens its own picker sheet.
+			birthRow: /data-sheet-open="fromsources"/.test(html),
+			pickerSheet: html.includes('id="sheet-fromsources"'),
+			pickerTitle: html.includes('New document from your sources'),
+			// Real data only: every folder source is a checkbox pick; the submit posts newFromSources.
+			dataPick: html.includes('data-pick="metrics.csv"'),
+			docPicks: html.includes('data-pick="market-research.md"') && html.includes('data-pick="Team Notes.md"'),
+			submits: /data-msg="newFromSources"/.test(html),
+			nameAndNote: /data-field="name"/.test(html) && /data-field="note"/.test(html),
+		}, { birthRow: true, pickerSheet: true, pickerTitle: true, dataPick: true, docPicks: true, submits: true, nameAndNote: true });
 	});
 
 	test('home omits the From-sources birth when the project has no sources (real data only)', () => {
@@ -241,20 +289,31 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!html.includes('Acme Co') && !html.includes('Fund III'), 'no hardcoded demo project cards');
 	});
 
-	// --- Home v2: zero-pending calm state (H1.3 / H2.5) ---
-	// The v2 Home no longer carries the pre-v2 dashboard's WHILE YOU WERE AWAY feed, all-clear banner, Tidy
-	// surface or failed-run attention line (those were removed by plan 48). The "Ask this project" composer,
-	// however, now leads BOTH Home paths (CD-1 fix): dropping it from populated Home stranded the project-wide
-	// fan-out (1j) on any real project. The calm all-clear is the summary line itself, and the NEEDS-YOU section
-	// is simply absent when nothing pends.
+	// --- Home v2: zero-pending calm state (H1.3 / H2.5, comp 1a) ---
+	// Round 2 gives Home ONE state banner in two states. Calm is the GREEN state of that same banner - the
+	// round-1 "Everything is in sync." summary line is gone, because a second sentence saying the same thing is
+	// exactly the duplication the one-banner rule removes. With nothing pending the banner grows no queue, and
+	// the grid label drops its needs-you half. The "Ask this project" composer leads both Home paths (CD-1 fix).
 
-	test('home v2 all-clear: the summary reads "Everything is in sync." and the NEEDS-YOU section is absent (H1.3 / H2.5)', () => {
+	test('home v2 all-clear: ONE green banner reads "All clear - nothing needs you." and grows no queue (H1.3 / H2.5, comp 1a)', () => {
 		const html = renderScreenHtml('home', { ...state, hasFolder: true, folderName: 'ws', userName: 'Tom', docs: [summary('/ws/A.md', 'A', true, 0)] });
-		assert.ok(html.includes('Everything is in sync.'), 'the summary carries the calm all-clear when nothing pends');
-		assert.ok(!/NEEDS YOU/.test(html), 'no NEEDS-YOU section (no empty shell) when nothing pends');
-		// The pre-v2 dashboard surfaces are gone from the v2 Home body (they were never a v2 criterion); the
-		// "Ask this project" composer, by contrast, is intentionally present again (CD-1 fix, tested above).
-		assert.ok(!/WHILE YOU WERE AWAY/.test(html) && !/failed on/.test(html), 'the pre-v2 dashboard surfaces are gone from v2 Home');
+		assert.deepStrictEqual({
+			headline: html.includes('All clear - nothing needs you.'),
+			greenBanner: html.includes(`background:${GREEN.bg};border:1px solid ${GREEN.border}`),
+			bannerDot: html.includes(`width:11px;height:11px;flex:none;border-radius:${RADIUS.pill};background:${GREEN.base}`),
+			// With no run log to report, the body says so honestly rather than rendering an empty sentence.
+			quietBody: html.includes('Nothing has changed since you were last here.'),
+			historyPill: html.includes('History'),
+			// No queue and no needs-you framing when nothing pends (no empty shell), and the round-1 summary is gone.
+			noQueue: !html.includes('MEANING'),
+			noOldSummary: !html.includes('Everything is in sync.'),
+			calmGridLabel: !/NEEDS YOU/.test(html),
+			// The pre-v2 dashboard surfaces stay gone from the v2 Home body (they were never a v2 criterion).
+			noPreV2: !/WHILE YOU WERE AWAY/.test(html) && !/failed on/.test(html),
+		}, {
+			headline: true, greenBanner: true, bannerDot: true, quietBody: true, historyPill: true,
+			noQueue: true, noOldSummary: true, calmGridLabel: true, noPreV2: true,
+		});
 	});
 
 	// --- Templates v2 (plan 48 T1-T3): the pattern gallery, driven by listTemplateGallery() ---
@@ -270,75 +329,131 @@ suite('livingDocs screenRender', () => {
 		return { ...info, bindSlots: countBindSlots(body), usageCount, skeleton: templateSkeletonRows(parseLivingDoc('---\ntemplate: true\n---\n\n' + body)) };
 	}
 
-	test('templates v2: the title row carries a live filter field and the exact sub-line (T1.1 / T1.2)', () => {
+	test('templates v2: the title row carries a live filter field and the comp\'s sub-line (T1.1 / T1.2, comp 4b)', () => {
+		// Round 2 (comp 4b): the sub-line says what a template IS, in the comp's own words. The round-1 section
+		// labels are gone with the row they labelled - the gallery is the only grid on the screen, so "YOUR
+		// TEMPLATES" labels nothing, and the STARTERS row is retired (see the retirement test below).
 		const html = renderScreenHtml('templates', { ...state, templateCards: [templateCard('Weekly Summary', 'Operating recap · expects a metrics CSV', ['metrics.csv'], '# {{slot:title}}\n\nMRR is [pending](bind:metrics.mrr).', 3)] });
-		assert.ok(/data-tpl-filter/.test(html), 'the title row carries a live filter field');
-		assert.ok(html.includes('Filter templates'), 'the filter field names its purpose');
-		assert.ok(html.includes('Start a living document from a pattern. Sources bind after creation.'), 'the exact sub-line is present (T1.2)');
-		assert.ok(/YOUR TEMPLATES/.test(html) && /STARTERS/.test(html), 'the two section labels are present');
+		// The retired section labels are asserted against the VISIBLE body only: the shared <style>/<script> the
+		// shell appends to every screen carry code comments that still name them, which the user never reads.
+		const visible = html.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<script[\s\S]*?<\/script>/g, '');
+		assert.deepStrictEqual({
+			filterField: /data-tpl-filter/.test(html),
+			filterLabelled: html.includes('Filter templates'),
+			subLine: html.includes(`A template is how a recurring report is born - structure, bound figures, and the agent's instructions, reused every cycle.`),
+			noOldSubLine: !html.includes('Start a living document from a pattern. Sources bind after creation.'),
+			noSectionLabels: !/YOUR TEMPLATES/.test(visible) && !/STARTERS/.test(visible),
+		}, { filterField: true, filterLabelled: true, subLine: true, noOldSubLine: true, noSectionLabels: true });
 	});
 
-	test('templates v2: cards render the real bind-slot + usage meta and a skeleton from the parsed doc (T2.2 / T2.3)', () => {
+	test('templates v2: a card reads outcome copy over a skeleton drawn from the parsed doc, and offers Use + Edit (T2.2 / T2.3, comp 4b)', () => {
+		// The correction this screen is judged on (comp caption 4b): "outcome copy instead of '1 slot · 0 sources'".
+		// A card's meta says what the template does FOR the reader - what it draws on and whether it has earned its
+		// keep - never how it is built inside. The comp's own two meta lines are the pins: "draws on metrics.csv ·
+		// used N times" and "binds after creation · not used yet". Colours come from the tokens, not from literals.
 		const cards = [
 			templateCard('Weekly Summary', 'Operating recap · expects a metrics CSV', ['metrics.csv'], '# {{slot:title}}\n\nMRR is [pending](bind:metrics.mrr), up [pending](bind:metrics.mrr.delta).', 12),
 			templateCard('Board Note', 'Monthly narrative for the board', [], '# {{slot:client}}\n\nProgress.', 0),
 		];
 		const html = renderScreenHtml('templates', { ...state, templateCards: cards });
-		assert.ok(html.includes('Weekly Summary') && html.includes('Board Note'), 'lists every template by name');
-		assert.ok(html.includes('Operating recap'), 'shows the authored description naming the expected source');
-		// Real meta: Weekly Summary has 3 bind slots (1 slot + 2 binds), used 12×; Board Note is honest "used 0×".
-		assert.ok(html.includes('3 bind slots &middot; used 12&times;'), 'the meta reads the true bind-slot count and real usage');
-		assert.ok(html.includes('used 0&times;'), 'a template nothing was generated from honestly reports used 0×');
-		assert.ok(html.includes('LWD'), 'each card carries the LWD chip');
-		// The skeleton thumbnail is rendered from the parsed doc: accent-tint (#E0E5FB) bars mark the bind slots.
-		assert.ok(html.includes('#E0E5FB'), 'the skeleton draws accent-tint bars where bind slots occur');
-		assert.ok(html.includes('#F6F7F9') && html.includes('#D5D8DE'), 'the skeleton canvas + grey title bars are drawn from the parsed doc');
-		// Use duplicates the template into the folder with binds emptied to slots (plan 48 T2.4): each card wires
-		// Use to the direct useTemplate flow (no generate sheet), one per card.
-		assert.strictEqual(html.split('data-msg="useTemplate"').length - 1, 2, 'each card wires Use to the duplicate-into-folder flow');
-		assert.ok(!/data-msg="generateFromTemplate"/.test(html), 'the v2 Use no longer opens the generate sheet');
-		// The dashed tile saves the ACTIVE document as a template (T2.5), not the old New-template door.
-		assert.ok(html.includes('Save current doc as template') && /data-msg="saveAsTemplate"/.test(html), 'the dashed tile writes the active doc as a template');
-		assert.ok(!/data-msg="editTemplate"/.test(html), 'the v2 card drops the Edit action (Use is the single primary)');
+		const bar = (colour: string) => `height:8px;border-radius:4px;background:${colour}`;
+		assert.deepStrictEqual({
+			names: html.includes('Weekly Summary') && html.includes('Board Note'),
+			description: html.includes('Operating recap'),
+			// Weekly Summary declares a source and has been used 12 times; the source name is the one mono run.
+			drawsOn: html.includes(`draws on <span style="font:400 11.5px/1.4 ${FONT.mono}">metrics.csv</span>`),
+			usedTimes: html.includes(' · used 12 times'),
+			// Board Note binds nothing yet and honestly reports it has never been used.
+			bindsLater: html.includes('binds after creation · not used yet'),
+			// The round-1 internals copy and the LWD chip are gone.
+			noSlotCount: !/bind slot/.test(html) && !/used \d+&times;/.test(html),
+			noLwdChip: !/\bLWD\b/.test(html),
+			// The skeleton thumbnail is drawn from the PARSED doc: a strong-hairline title bar, medium-hairline
+			// prose bars, and ONE indigo tint-border bar marking where live data lands, on the rail-paper canvas.
+			skeletonTitle: html.includes(bar(HAIRLINE.strong)),
+			skeletonProse: html.includes(bar(HAIRLINE.medium)),
+			skeletonAccent: html.includes(bar(INDIGO.tintBorder)),
+			skeletonCanvas: html.includes(`background:${PAPER.rail};border-bottom:1px solid ${HAIRLINE.medium}`),
+			// Use duplicates the template into the folder with its binds emptied to slots (no generate sheet);
+			// round 2 restores Edit beside it (comp 4b draws both verbs on every card).
+			useCount: html.split('data-msg="useTemplate"').length - 1,
+			editCount: html.split('data-msg="editTemplate"').length - 1,
+			noGenerateSheet: !/data-msg="generateFromTemplate"/.test(html),
+		}, {
+			names: true, description: true, drawsOn: true, usedTimes: true, bindsLater: true,
+			noSlotCount: true, noLwdChip: true,
+			skeletonTitle: true, skeletonProse: true, skeletonAccent: true, skeletonCanvas: true,
+			useCount: 2, editCount: 2, noGenerateSheet: true,
+		});
 	});
 
-	test('templates v2: the STARTERS row offers four built-ins, each creating through the review-safe path (T3)', () => {
-		const html = renderScreenHtml('templates', { ...state, templateCards: [templateCard('T', 'd', [], 'body {{slot:x}}', 0)] });
-		assert.ok(html.includes('Blank living doc') && html.includes('Project brief') && html.includes('Meeting notes') && html.includes('Metrics digest'), 'the four starters are present');
-		assert.strictEqual(html.split('data-msg="newStarter"').length - 1, 4, 'each starter creates through the newStarter path');
-		assert.ok(/data-msg="newStarter"[^>]*data-arg="blank"/.test(html) && /data-msg="newStarter"[^>]*data-arg="metrics-digest"/.test(html), 'each starter carries its manifest id');
+	test('templates v2: the STARTERS row is retired - a starter only ever preset a filename (comp 4b)', () => {
+		// Round 2 removes the hollow affordance outright: `newStarter` exists nowhere in the product any more, and
+		// neither do the four built-in names. A template is grown from real documents or saved from a real one -
+		// both of which are the dashed on-ramps below the gallery - so a fake "Blank living doc" starter is a
+		// door onto nothing. Guarded on BOTH states, because the round-1 empty state carried the row too.
+		const populated = renderScreenHtml('templates', { ...state, templateCards: [templateCard('T', 'd', [], 'body {{slot:x}}', 0)] });
+		const empty = renderScreenHtml('templates', { ...state, templateCards: [] });
+		const retired = (html: string) => ({
+			noLabel: !/STARTERS/.test(html),
+			noStarterPath: !/newStarter/.test(html),
+			noBuiltIns: !html.includes('Blank living doc') && !html.includes('Project brief') && !html.includes('Meeting notes') && !html.includes('Metrics digest'),
+		});
+		const gone = { noLabel: true, noStarterPath: true, noBuiltIns: true };
+		assert.deepStrictEqual({ populated: retired(populated), empty: retired(empty) }, { populated: gone, empty: gone });
 	});
 
-	test('templates v2: the empty state is calm, keeps the STARTERS row, and has no fake preview', () => {
-		const html = renderScreenHtml('templates', { ...state, templateCards: [] });
-		assert.ok(/No templates yet/i.test(html), 'shows the empty-state line');
-		assert.ok(/data-msg="newTemplate"/.test(html) && html.includes('Create your first template'), 'offers to create the first template');
-		assert.ok(/STARTERS/.test(html) && html.includes('Blank living doc'), 'the four starters are still a way to begin');
-		// No fabricated draft / resolved-slots preview.
-		assert.ok(!html.includes('Weekly Operating Summary') && !html.includes('ALL SLOTS RESOLVED'), 'no fabricated draft preview');
+	test('templates v2: the empty state is calm, keeps both on-ramps, and has no fake preview', () => {
+		const html = renderScreenHtml('templates', { ...state, templateCards: [], docFiles: ['a.md'] });
+		assert.deepStrictEqual({
+			emptyLine: /No templates yet/i.test(html),
+			byHandDoor: /data-msg="newTemplate"/.test(html) && html.includes('Create your first template'),
+			// The two ways the NEXT template is born stay offered even with nothing on disk (comp 4b).
+			growRamp: html.includes('Grow one from past documents') && /data-sheet-open="fromexamples"/.test(html),
+			saveRamp: html.includes('Save the current document as a template') && /data-msg="saveAsTemplate"/.test(html),
+			// No fabricated draft / resolved-slots preview.
+			noFakePreview: !html.includes('Weekly Operating Summary') && !html.includes('ALL SLOTS RESOLVED'),
+		}, { emptyLine: true, byHandDoor: true, growRamp: true, saveRamp: true, noFakePreview: true });
 	});
 
-	// --- plan 48 T2.5: the populated grid's dashed tile saves the ACTIVE document as a template ---
-	// The from-examples wizard (F18) moved to the empty state (tested below); a populated grid leads with the
-	// Save-current-doc-as-template door, not the from-examples wizard.
-	test('templates populated grid: the dashed tile saves the active doc as a template, no from-examples wizard on the grid', () => {
+	// --- comp 4b: the two dashed on-ramps sit below the gallery, in BOTH states ---
+	// Round 1 hid the from-examples wizard on the empty state only, so a project that already had one template
+	// lost the door that grows the next one from real work. The comp draws both on-ramps under the grid: grow
+	// one from past documents, and save the current document as one.
+	test('templates populated grid: both dashed on-ramps sit below the gallery (comp 4b)', () => {
 		const cards = [templateCard('Weekly report', 'A weekly operating summary.', ['metrics.csv'], '# {{slot:title}}\n\nMRR.', 0)];
 		const html = renderScreenHtml('templates', { ...state, templateCards: cards, docFiles: ['Board Note.md', 'Team Notes.md', 'Weekly Summary.md', 'market-research.md'] });
-		assert.ok(html.includes('Save current doc as template') && /data-msg="saveAsTemplate"/.test(html), 'the dashed tile writes the active doc as a template');
-		assert.ok(!/data-sheet-open="fromexamples"/.test(html) && !html.includes('id="sheet-fromexamples"'), 'the from-examples wizard is not mounted on the populated grid (it lives in the empty state)');
+		assert.deepStrictEqual({
+			growRamp: html.includes('Grow one from past documents') && /data-sheet-open="fromexamples"/.test(html),
+			growSheet: html.includes('id="sheet-fromexamples"'),
+			saveRamp: html.includes('Save the current document as a template') && /data-msg="saveAsTemplate"/.test(html),
+			// The dashed edge is the paper's own frame border - an on-ramp is not a state, so it borrows no hue.
+			dashedEdge: html.includes(`border:1px dashed ${PAPER.frameBorder}`),
+		}, { growRamp: true, growSheet: true, saveRamp: true, dashedEdge: true });
 	});
 
-	test('templates empty state leads with the from-examples wizard when there are documents to learn from', () => {
+	test('templates from-examples wizard lists the real project documents as examples', () => {
 		const html = renderScreenHtml('templates', { ...state, templateCards: [], docFiles: ['a.md', 'b.md', 'c.md'] });
-		assert.ok(/data-sheet-open="fromexamples"/.test(html), 'the empty state offers New from examples');
-		assert.ok(html.includes('id="sheet-fromexamples"'), 'the wizard sheet is present in the empty state');
-		assert.ok(/data-msg="newTemplate"/.test(html) && html.includes('New blank template'), 'the blank editor is still offered');
+		assert.deepStrictEqual({
+			entry: /data-sheet-open="fromexamples"/.test(html),
+			sheet: html.includes('id="sheet-fromexamples"'),
+			picks: html.includes('data-pick="a.md"') && html.includes('data-pick="c.md"'),
+			submits: /data-msg="newTemplateFromExamples"/.test(html),
+			byHandDoor: /data-msg="newTemplate"/.test(html) && html.includes('Create your first template'),
+		}, { entry: true, sheet: true, picks: true, submits: true, byHandDoor: true });
 	});
 
-	test('templates empty state falls back to the blank editor when there are no documents to learn from', () => {
+	test('templates from-examples wizard explains itself rather than dead-ending when there is nothing to learn from', () => {
+		// Real-data guardrail: the on-ramp is always offered (it is one of the two ways a template is born), but
+		// with no documents to learn from the sheet states that honestly and withholds its submit, so the door
+		// explains itself instead of promising an analysis it cannot run.
 		const html = renderScreenHtml('templates', { ...state, templateCards: [], docFiles: [] });
-		assert.ok(!/data-sheet-open="fromexamples"/.test(html), 'no wizard entry without documents to learn from');
-		assert.ok(html.includes('Create your first template'), 'still offers to author a template by hand');
+		assert.deepStrictEqual({
+			entry: /data-sheet-open="fromexamples"/.test(html),
+			honestEmpty: html.includes('This project has no documents to learn from yet.'),
+			noSubmit: !/data-msg="newTemplateFromExamples"/.test(html),
+			byHandDoor: html.includes('Create your first template'),
+		}, { entry: true, honestEmpty: true, noSubmit: true, byHandDoor: true });
 	});
 
 	test('templates screen carries no "Soon" labels', () => {
@@ -361,7 +476,11 @@ suite('livingDocs screenRender', () => {
 		};
 	}
 
-	test('Knowledge Project tab renders the v2 SOURCES table with the F12 freshness vocabulary + FEEDS/BINDS', () => {
+	test('Knowledge Project tab renders the SOURCE · KIND · SYNCED · FEEDS · FIGURES table in user units (comp 4a)', () => {
+		// The correction this screen is judged on (comp caption 4a): "user units, consistent freshness words".
+		// Round 2 renames the last two columns: SYNC becomes SYNCED, and BINDS becomes FIGURES - because a figure
+		// is what the reader sees in their document, and "N binds" is the engine's word, not theirs. The cell
+		// therefore reads "feeds 3", never "3 binds". Freshness words come from the ONE F12 vocabulary.
 		const sources = [
 			source('metrics.csv', 'file', true, [
 				{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: ['metrics.mrr', 'metrics.signups'] },
@@ -370,15 +489,30 @@ suite('livingDocs screenRender', () => {
 			source('https://api.example.com/repo', 'api', false, [{ path: '/ws/Eco.md', title: 'Ecosystem', keys: ['repo.stars'] }]),
 		];
 		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources, knNow: Date.parse('2026-01-01T00:00:00Z') });
-		assert.ok(html.includes('metrics.csv'), 'the file source label shows');
-		assert.ok(html.includes('api.example.com'), 'the api source shows its host label');
-		assert.ok(/>SOURCE<[\s\S]*>KIND<[\s\S]*>SYNC<[\s\S]*>FEEDS<[\s\S]*>BINDS</.test(html), 'the spec column headers render in order');
-		assert.ok(html.includes('Weekly Summary') && html.includes('Board Note'), 'FEEDS chips name the dependent docs');
-		assert.ok(/stale · /.test(html), 'a drifted source reads the F12 stale label, never "Source changed"');
-		assert.ok(!html.includes('Source changed') && !html.includes('>Fresh<'), 'the old ad-hoc freshness words are gone');
-		assert.ok(!/\bSoon\b/i.test(html), 'the Project tab carries no "Soon" label');
-		assert.ok(/data-msg="openSource"[^>]*data-arg="[^"]*metrics\.csv"/.test(html), 'a file-source row opens the source as a product tab (K2.6)');
-		assert.ok(/data-sheet-open="addsource"/.test(html), 'an Add source action is wired');
+		assert.deepStrictEqual({
+			fileLabel: html.includes('metrics.csv'),
+			apiLabel: html.includes('api.example.com'),
+			columns: />SOURCE<[\s\S]*>KIND<[\s\S]*>SYNCED<[\s\S]*>FEEDS<[\s\S]*>FIGURES</.test(html),
+			noOldColumns: !/>SYNC</.test(html) && !/>BINDS</.test(html),
+			// User units: metrics.csv resolves 3 distinct keys across its two dependents.
+			figuresCell: html.includes('feeds 3'),
+			noEngineUnits: !/\d+ binds/.test(html),
+			feedsChips: html.includes('Weekly Summary') && html.includes('Board Note'),
+			// The F12 stale vocabulary, and the amber cream a stale row is painted (amber = waiting on you).
+			staleLabel: /stale · /.test(html),
+			staleRow: html.includes(`background:${AMBER.subtleBg}`),
+			noAdHocWords: !html.includes('Source changed') && !html.includes('>Fresh<'),
+			noSoon: !/\bSoon\b/i.test(html),
+			// K2.6: the row press SELECTS the source (filling the detail card below); the detail card carries the
+			// one "open source" door, so a row press has exactly one meaning.
+			rowSelects: /data-msg="selectSource"[^>]*data-arg="metrics\.csv"/.test(html),
+			detailOpensSource: /data-msg="openSource"[^>]*data-arg="[^"]*metrics\.csv"/.test(html),
+			addSource: /data-sheet-open="addsource"/.test(html),
+		}, {
+			fileLabel: true, apiLabel: true, columns: true, noOldColumns: true, figuresCell: true, noEngineUnits: true,
+			feedsChips: true, staleLabel: true, staleRow: true, noAdHocWords: true, noSoon: true,
+			rowSelects: true, detailOpensSource: true, addSource: true,
+		});
 	});
 
 	test('Knowledge KIND glyph and KIND word derive from ONE semantic classification, so they never diverge (D1)', () => {
@@ -410,14 +544,20 @@ suite('livingDocs screenRender', () => {
 		assert.ok(!/&#8862;(?:(?!&#\d)[\s\S])*?>Reference</.test(html), 'a Reference source never renders the table glyph (D1)');
 	});
 
-	test('Knowledge summary line + BINDS/FEEDS + context-only vocabulary are truthful', () => {
+	test('Knowledge summary line counts sources, figures and documents in user units (K1.2, comp 4a)', () => {
+		// Round 2 (comp 4a) states the library in the reader's three nouns, in the comp's own sentence shape:
+		// "Everything your documents draw on. N sources feed N figures across N documents." The round-1 line
+		// counted "bound figures" as an engine fact and never named the documents that actually read them.
 		const sources = [
 			source('metrics.csv', 'file', true, [{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: ['metrics.mrr', 'metrics.churn'] }]),
 			source('brand.md', 'file', true, [{ path: '/ws/Weekly.md', title: 'Weekly Summary', keys: [], context: true }]),
 		];
 		const html = renderScreenHtml('knowledge', { ...state, knScope: 'project', sources, knNow: Date.now() });
-		assert.ok(html.includes('2 sources in this folder · 2 bound figures depend on them.'), 'the summary counts real sources + binds');
-		assert.ok(html.includes('context only'), 'a source used only as context reads the F12 context-only label');
+		assert.deepStrictEqual({
+			summary: html.includes('Everything your documents draw on. 2 sources feed 2 figures across 1 document.'),
+			noOldSummary: !html.includes('2 sources in this folder · 2 bound figures depend on them.'),
+			contextOnly: html.includes('context only'),
+		}, { summary: true, noOldSummary: true, contextOnly: true });
 	});
 
 	test('Knowledge health strip: one attention card for the stalest source, with Re-sync + mark-as-expected', () => {
@@ -498,7 +638,8 @@ suite('livingDocs screenRender', () => {
 		const html = renderScreenHtml('project-run', { ...state });
 		assert.deepStrictEqual({
 			explicitLaunch: /data-msg="launchProjectRun"/.test(html),
-			launchLabel: html.includes('Run Across the Project'),
+			// Round 2 (doc 28): sentence case everywhere, including buttons - "Run Across the Project" is a defect.
+			launchLabel: html.includes('Run across the project'),
 			goAgents: /data-msg="goAgents"/.test(html),
 			noLivePill: !html.includes('>Live<'),
 			noStopControl: !/data-msg="stopProjectRun"/.test(html),
@@ -547,7 +688,9 @@ suite('livingDocs screenRender', () => {
 			},
 		});
 		assert.ok(html.includes('too large for this run'), 'the oversize tile reads "too large for this run"');
-		assert.ok(html.includes('#9a6b16'), 'the oversize tile uses the amber treatment');
+		// Asserted against the token, not a literal: the point is that "too large" borrows the ONE hue that means
+		// "waiting on you", so pinning a hex here would let the tile and the rest of the product drift apart.
+		assert.ok(html.includes(`color:${AMBER.label}">too large for this run`), 'the oversize tile uses the amber that means waiting on you');
 		assert.ok(html.includes('1 too large'), 'the bottom bar reports the oversize bucket with the real count');
 		assert.ok(!html.includes('reviewing&hellip;'), 'an oversize tile never renders as a spinning sub-agent');
 	});
@@ -633,21 +776,31 @@ suite('livingDocs screenRender', () => {
 
 	test('an active card shows the mono status line + accent pause toggle; a paused card is 75% opacity + resume (A2.1)', () => {
 		const html = renderScreenHtml('agents', { ...state, agents: [agent()], sources: [source('metrics.csv', 'file', true, []), source('pipeline.csv', 'file', true, [])] });
-		// A2.1 status line: the ok-green active line names the real watched-source count (2 registry sources).
-		assert.ok(html.includes('active &middot; watching 2 sources') && html.includes('#2C8159'), 'an active card reads "active · watching N sources" in ok green from the real registry');
+		// A2.1 status line: the all-clear green active line names the real watched-source count (2 registry
+		// sources). Asserted against GREEN.base rather than a literal hex, so the test protects the MEANING
+		// ("this is the applied/fresh/all-clear green") rather than a string that churns next redesign.
+		assert.ok(html.includes(`color:${GREEN.base}">&#9679; active &middot; watching 2 sources`), 'an active card reads "active · watching N sources" in the all-clear green from the real registry');
 		assert.ok(/data-msg="pauseAgent"[^>]*data-arg="weekly-refresh"/.test(html), 'the accent toggle pauses via setAgentDisabled');
 		const paused = renderScreenHtml('agents', { ...state, agents: [agent({ disabled: true })] });
 		assert.ok(paused.includes('opacity:.75') && paused.includes('&#9675; paused'), 'a paused card renders at 75% opacity with the "○ paused" status');
 		assert.ok(/data-msg="resumeAgent"[^>]*data-arg="weekly-refresh"/.test(paused), 'a paused card toggle resumes via setAgentDisabled');
 	});
 
-	test('the policy table uses exactly the three-tier grammar, honestly mapped from the stored dial (A2.2)', () => {
-		// auto-figures: figures auto-apply (ok), meaning ask first (attention), structure never (removed).
+	test('the policy table uses exactly the three-tier grammar in the comp\'s policy-dial inks (A2.2, comp 3a)', () => {
+		// auto-figures: figures auto-apply (green), meaning ask first (amber), structure never (red).
+		// The three inks are pinned against the TOKENS the comp names for this dial, not against literals:
+		//   comp 3a line 873-875 draws them #1F7A4D / #B45309 / #B3261E, and abstractTokens transcribes those as
+		//   GREEN.base ("applied / all clear"), AMBER.askFirst ("the 'ask first' tier ink on the agent policy
+		//   dial") and RED.base ("...the 'never' policy tier"). Any other amber or red here is the wrong hue.
 		const autoFigures = renderScreenHtml('agents', { ...state, agents: [agent({ policy: 'auto-figures' })] });
-		assert.ok(/#2C8159[^<]*">auto-apply/.test(autoFigures) && /#8A6D1A[^<]*">ask first/.test(autoFigures) && /#B5514B[^<]*">never/.test(autoFigures), 'auto-figures maps to auto-apply / ask first / never with the exact tone hexes');
+		assert.deepStrictEqual({
+			autoApply: new RegExp(`${GREEN.base}[^<]*">auto-apply`).test(autoFigures),
+			askFirst: new RegExp(`${AMBER.askFirst}[^<]*">ask first`).test(autoFigures),
+			never: new RegExp(`${RED.base}[^<]*">never`).test(autoFigures),
+		}, { autoApply: true, askFirst: true, never: true });
 		// ask-before-apply + draft-only: nothing auto-applies (no auto-apply row); both read the same (no 4th state).
-		const askFirst = renderScreenHtml('agents', { ...state, agents: [agent({ policy: 'ask-before-apply' })] });
-		assert.ok(!/">auto-apply</.test(askFirst), 'ask-before-apply never shows an auto-apply row (nothing lands unattended)');
+		const askBeforeApply = renderScreenHtml('agents', { ...state, agents: [agent({ policy: 'ask-before-apply' })] });
+		assert.ok(!/">auto-apply</.test(askBeforeApply), 'ask-before-apply never shows an auto-apply row (nothing lands unattended)');
 	});
 
 	test('Edit policy opens the SHARED policy editor (the same DOM as Properties) and the footer shows the real model id (A2.3)', () => {
@@ -669,14 +822,17 @@ suite('livingDocs screenRender', () => {
 			],
 		};
 		const html = renderScreenHtml('agents', { ...state, agents: [agent()], ledger, ledgerNow: Date.parse('2026-07-06T10:00:00.000Z') });
+		// Every colour below is asserted against its token, never a literal hex: the three ledger tiers exist to
+		// speak the product's one colour language (amber waits on you, green is settled, neutral is administrative),
+		// so a test that pinned a string would let the ledger drift out of the system while still passing.
 		assert.deepStrictEqual({
 			label: html.includes('>ACTIVITY<'),
-			waitingDot: html.includes('background:#C99A2E'),
-			appliedDot: html.includes('background:#2C8159'),
-			adminDot: html.includes('background:#D5D8DE'),
-			waitingPill: /#8A6D1A;background:#FDFAF2;border:1px solid #E4DCCB[^>]*>WAITING/.test(html),
-			applied: /#2C8159">auto-applied &middot; reversible/.test(html),
-			admin: /#A3A8B2">by Tom/.test(html),
+			waitingDot: html.includes(`background:${AMBER.base}`),
+			appliedDot: html.includes(`background:${GREEN.base}`),
+			adminDot: html.includes(`background:${PAPER.frameBorder}`),
+			waitingPill: new RegExp(`${AMBER.label};background:${AMBER.subtleBg};border:1px solid ${AMBER.border}[^>]*>WAITING`).test(html),
+			applied: new RegExp(`${GREEN.base}">auto-applied &middot; reversible`).test(html),
+			admin: new RegExp(`${INK.meta}">by Tom`).test(html),
 			address: html.includes('Weekly Summary &middot; line 6'),
 			deepLink: /data-msg="ledgerReview" data-arg="file:\/\/\/ws\/weekly.md" data-block="b-6"/.test(html),
 			// The same-day applied row reads as a wall-clock HH:MM stamp (local time, so the exact hour is not
@@ -699,14 +855,30 @@ suite('livingDocs screenRender', () => {
 		}, { emptyLine: true, emptyHasNoBadge: true, truncationLine: true });
 	});
 
-	test('the detail drawer shows the read-only canvas strip and the inline policy select with the three levels', () => {
+	test('the agent detail page answers three questions instead of drawing a pipeline (comp 3a)', () => {
+		// The correction this screen is judged on (comp caption 3a): "three questions instead of a pipeline". The
+		// round-1 flow graph - trigger, sources, agent, verify gate, policy gate, documents, review rail - is an
+		// IDE's answer to a question nobody asked. A reader has exactly three questions about an agent, and the
+		// page answers them in three cards. Every control the graph carried moved into the card that answers its
+		// question, so the diagram left and no behaviour left with it.
 		const html = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: [] });
-		// The read-only canvas strip (D32-B): the loop nodes.
-		assert.ok(html.includes('Policy gate') && html.includes('Verify') && html.includes('Review rail'), 'the read-only canvas strip renders the loop');
-		// The inline policy select posts setAgentPolicy on change and carries exactly the three levels.
-		assert.ok(/data-change-msg="setAgentPolicy"[^>]*data-arg="weekly-refresh"/.test(html), 'the policy select posts setAgentPolicy for this agent');
-		assert.ok(html.includes('value="auto-figures"') && html.includes('value="ask-before-apply"') && html.includes('value="draft-only"'), 'exactly the three policy levels are offered');
-		assert.ok(/value="auto-figures" selected/.test(html), 'the current policy is pre-selected');
+		assert.deepStrictEqual({
+			whenCard: html.includes('WHEN IT RUNS'),
+			touchCard: html.includes('WHAT IT MAY TOUCH'),
+			policyCard: html.includes('WITHOUT ASKING, IT MAY'),
+			// The schedule reads in plain words, never the stored cron string (that stays in the editor chip below).
+			scheduleWords: html.includes('Mondays at 9:00'),
+			noPipeline: !html.includes('Policy gate') && !html.includes('Review rail'),
+			// The policy card hosts the SHARED three-tier editor (the same DOM the doc Properties panel renders),
+			// keyed by the agent id, with this agent's honest current level marked - not a bespoke <select>.
+			sharedEditor: /data-policy-editor="weekly-refresh"/.test(html),
+			threeLevels: /data-policy="auto-apply"/.test(html) && /data-policy="ask-first"/.test(html) && /data-policy="never"/.test(html),
+			currentLevelMarked: /class="pol-opt on" data-policy="auto-apply"/.test(html),
+			noBespokeSelect: !/data-change-msg="setAgentPolicy"/.test(html) && !html.includes('value="ask-before-apply"'),
+		}, {
+			whenCard: true, touchCard: true, policyCard: true, scheduleWords: true, noPipeline: true,
+			sharedEditor: true, threeLevels: true, currentLevelMarked: true, noBespokeSelect: true,
+		});
 	});
 
 	test('the detail drawer trigger editor offers a cron day/time picker and a Save trigger action', () => {
@@ -717,12 +889,24 @@ suite('livingDocs screenRender', () => {
 		assert.ok(/data-trigger-save[^>]*data-arg="weekly-refresh"/.test(html), 'a Save trigger action carries the agent id');
 	});
 
-	test('the run log renders relative time, via and outcome-count columns, with an "N queued" review link', () => {
+	test('RECENT RUNS renders receipt rows - a mono stamp, plain words, a state dot - not a column table (comp 3a)', () => {
+		// Round 2 (comp 3a) replaces the round-1 WHEN/VIA/OUTCOME table with the product's one receipt-row atom:
+		// time (mono) -> what happened (plain words) -> state dot. The counted facts survive, spoken as a sentence
+		// rather than tallied into columns, so a run reads as an event instead of a spreadsheet row.
 		const runs = [run({ via: 'cron', docsTouched: 2, applied: 1, queued: 3 })];
 		const html = renderScreenHtml('agents', { ...state, agents: [agent()], openAgentId: 'weekly-refresh', openAgentRuns: runs });
-		assert.ok(/WHEN/.test(html) && /VIA/.test(html) && /OUTCOME/.test(html), 'the run-log columns are present');
-		assert.ok(html.includes('2 docs') && html.includes('1 applied') && html.includes('3 queued'), 'the outcome counts render');
-		assert.ok(/data-msg="goReview"[^>]*>3 queued/.test(html), 'a run that queued changes links to the review surface');
+		assert.deepStrictEqual({
+			label: html.includes('RECENT RUNS'),
+			noColumns: !/>WHEN</.test(html) && !/>VIA</.test(html) && !/>OUTCOME</.test(html),
+			// The mono stamp leads the row, uppercase weekday + wall clock (the comp's "MON 07:00").
+			stamp: /(SUN|MON|TUE|WED|THU|FRI|SAT) \d{2}:\d{2}/.test(html),
+			// What woke it, then what it did - every count is the run's own.
+			via: html.includes('On schedule'),
+			counts: html.includes('swept 2 documents') && html.includes('1 figure applied') && html.includes('3 queued for review'),
+			reviewLink: /data-msg="goReview"[^>]*>3 queued for review/.test(html),
+			// A run that left changes waiting on the reader grades amber; nothing here is a settled green.
+			amberDot: html.includes(`background:${AMBER.base}`),
+		}, { label: true, noColumns: true, stamp: true, via: true, counts: true, reviewLink: true, amberDot: true });
 	});
 
 	test('the run log truthfully shows a failed run and a still-running skip (no fabricated success)', () => {
@@ -843,7 +1027,8 @@ suite('livingDocs screenRender', () => {
 			brokerDownNamesHelper: brokerDown.includes('The local model helper isn\'t running or can\'t be reached.'),
 			upstreamShowsStatus: upstream.includes('OpenAI rejected the sign-in.') && upstream.includes('OpenAI responded with 429') && upstream.includes('slow_down'),
 			expiredNamesExpiry: expired.includes('The sign-in code expired before it was approved.'),
-			expiredOffersStartAgain: expired.includes('Start Again'),
+			// Round 2 (doc 28): sentence case on buttons too - "Start Again" is a round-1 artefact.
+			expiredOffersStartAgain: expired.includes('Start again'),
 		}, { brokerDownNamesHelper: true, upstreamShowsStatus: true, expiredNamesExpiry: true, expiredOffersStartAgain: true });
 	});
 

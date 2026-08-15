@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<title>Abstract — Redesign Screens</title>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#E4E2DC;color:#1B1B20;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#4353C9;text-decoration:none} a:hover{color:#333FA3;text-decoration:underline}
+</style>
+</helmet>
+<section style="padding: 48px 48px 0; display: flex; flex-direction: column; gap: 48px;">
+  <div style="max-width: 900px; display: flex; flex-direction: column; gap: 8px;">
+    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6E6C64;">ABSTRACT · DESIGN SYSTEM + REMAINING SCREENS · ROUND 2</span>
+    <h1 style="margin: 0; font-size: 30px; letter-spacing: -0.01em;">The system sheet, then the rest of the surfaces</h1>
+  </div>
+
+  <div id="ds" style="display: flex; flex-direction: column; gap: 12px;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">DS</span>
+      <span style="font-size: 14px; font-weight: 600;">Design system — colors, type, components</span>
+      <span style="font-size: 12.5px; color: #6E6C64;">everything the screens are built from</span>
+    </div>
+    <div style="width: 1440px; background: #FCFBF9; border: 1px solid #CFCDC4; border-radius: 14px; box-shadow: 0 2px 12px rgba(27,27,32,0.08); padding: 48px 56px; display: flex; flex-direction: column; gap: 40px;">
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px;">
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6E6C64;">COLOR · EVERY HUE HAS EXACTLY ONE MEANING</span>
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="display: flex;"><span style="width: 40px; height: 40px; background: #4353C9; border-radius: 8px 0 0 8px;"></span><span style="width: 40px; height: 40px; background: #333FA3;"></span><span style="width: 40px; height: 40px; background: #EEEFFA;"></span><span style="width: 40px; height: 40px; background: #B4B9E8; border-radius: 0 8px 8px 0;"></span></div>
+              <div style="font-size: 13px; line-height: 1.5;"><strong>Indigo — Abstract acting.</strong> Primary buttons, links, active nav, agent narration marks, bound-figure underline.<br><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">#4353C9 · hover #333FA3 · tint #EEEFFA · underline #B4B9E8</span></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="display: flex;"><span style="width: 40px; height: 40px; background: #1F7A4D; border-radius: 8px 0 0 8px;"></span><span style="width: 40px; height: 40px; background: #F0F6F1; border: 1px solid #CFE3D4;"></span><span style="width: 40px; height: 40px; background: #E4F2E7;"></span><span style="width: 40px; height: 40px; background: #175B38; border-radius: 0 8px 8px 0;"></span></div>
+              <div style="font-size: 13px; line-height: 1.5;"><strong>Green — applied / fresh / all clear.</strong> Never a button color.<br><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">#1F7A4D · bg #F0F6F1 / #CFE3D4 · diff-add #E4F2E7 / #175B38</span></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="display: flex;"><span style="width: 40px; height: 40px; background: #C77E1F; border-radius: 8px 0 0 8px;"></span><span style="width: 40px; height: 40px; background: #FDF6EC; border: 1px solid #EAD9BC;"></span><span style="width: 40px; height: 40px; background: #8A5A12;"></span><span style="width: 40px; height: 40px; background: #6E4A10; border-radius: 0 8px 8px 0;"></span></div>
+              <div style="font-size: 13px; line-height: 1.5;"><strong>Amber — waiting on you.</strong> Pending-change edges, needs-you banners, MEANING badges.<br><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">#C77E1F · bg #FDF6EC / #EAD9BC · label #8A5A12 · text #6E4A10</span></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="display: flex;"><span style="width: 40px; height: 40px; background: #B3261E; border-radius: 8px 0 0 8px;"></span><span style="width: 40px; height: 40px; background: #FBE9E7;"></span><span style="width: 40px; height: 40px; background: #FBF1F0;"></span><span style="width: 40px; height: 40px; background: #A13527; border-radius: 0 8px 8px 0;"></span></div>
+              <div style="font-size: 13px; line-height: 1.5;"><strong>Red — removed / failed.</strong> Strikethrough spans, WAS blocks, failed runs. Never decoration.<br><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">#B3261E · diff-del #FBE9E7 / #A13527 · block #FBF1F0 / #7C2D22</span></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="display: flex;"><span style="width: 40px; height: 40px; background: #EFEEE9; border: 1px solid #E3E1DA; border-radius: 8px 0 0 8px;"></span><span style="width: 40px; height: 40px; background: #F9F8F5; border: 1px solid #E3E1DA;"></span><span style="width: 40px; height: 40px; background: #FCFBF9; border: 1px solid #E3E1DA;"></span><span style="width: 40px; height: 40px; background: #fff; border: 1px solid #E3E1DA; border-radius: 0 8px 8px 0;"></span></div>
+              <div style="font-size: 13px; line-height: 1.5;"><strong>Warm neutrals — the paper.</strong> App frame → rails → page → cards; hairlines #E3E1DA / #ECEAE3 / #F1F0EB.<br><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">#EFEEE9 · #F9F8F5 · #FCFBF9 · #FFFFFF</span></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="display: flex;"><span style="width: 40px; height: 40px; background: #1B1B20; border-radius: 8px 0 0 8px;"></span><span style="width: 40px; height: 40px; background: #33322E;"></span><span style="width: 40px; height: 40px; background: #6E6C64;"></span><span style="width: 40px; height: 40px; background: #9B998F; border-radius: 0 8px 8px 0;"></span></div>
+              <div style="font-size: 13px; line-height: 1.5;"><strong>Ink ramp.</strong> Headings · body · secondary · placeholder/meta.<br><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">#1B1B20 · #33322E · #6E6C64 · #9B998F</span></div>
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6E6C64;">TYPE · TWO FAMILIES, TWO WEIGHTS</span>
+          <div style="display: flex; flex-direction: column; gap: 12px; background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 22px 24px;">
+            <div style="font-size: 34px; letter-spacing: -0.015em; font-weight: 600;">Greeting / page title <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 400; color: #9B998F; letter-spacing: 0.05em;">34 / 600</span></div>
+            <div style="font-size: 21px; font-weight: 600;">Document heading <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 400; color: #9B998F; letter-spacing: 0.05em;">21 / 600</span></div>
+            <div style="font-size: 18px; font-weight: 600; color: #164A31;">Banner headline <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 400; color: #9B998F; letter-spacing: 0.05em;">18 / 600 · state ink</span></div>
+            <div style="font-size: 16px; line-height: 1.65;">Document body — the paragraph the user is judging. Reads like paper, never highlighted at rest. <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F; letter-spacing: 0.05em;">16 / 400 / 1.65</span></div>
+            <div style="font-size: 13.5px;">UI body — buttons, rows, rail text <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F; letter-spacing: 0.05em;">13.5 / 400</span></div>
+            <div style="font-size: 12.5px; color: #6E6C64;">Secondary — receipts, captions, helper lines <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F; letter-spacing: 0.05em;">12.5 / 400</span></div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #4353C9;">SECTION LABEL — MONO, TRACKED <span style="color: #9B998F; letter-spacing: 0.05em;">11 / 0.14em</span></div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.1em; color: #8A5A12;">MEANING CHANGE · KIND BADGE <span style="color: #9B998F;">10.5 / 0.1em</span></div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #33322E;">metrics.csv · week 25 · synced 15 min ago <span style="color: #9B998F; font-size: 11px;">provenance facts — mono 12</span></div>
+          </div>
+          <div style="font-size: 13px; color: #55534C; line-height: 1.7; background: #F6F5F1; border-radius: 10px; padding: 14px 18px;">
+            <strong>Rules.</strong> Sans = system stack; mono = IBM Plex Mono. Mono is reserved for <em>section labels, kind badges, and provenance facts</em> (file names, cells, synced-when, line numbers, version chips) — never for metadata values or model ids. Weights 400/600 only. Sentence case everywhere, including buttons. Radii: 8 controls · 10 inputs · 12–14 cards · 999 pills and dots. Spacing on the 4px scale. One stroke: 1px hairline.
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6E6C64;">COMPONENTS</span>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+          <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+            <span style="font-size: 12.5px; font-weight: 600; color: #55534C;">Buttons — one indigo, sentence case</span>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <span style="background: #4353C9; color: #fff; font-size: 13.5px; font-weight: 600; border-radius: 8px; padding: 7px 18px;">Approve</span>
+              <span style="border: 1px solid #DEDCD5; color: #33322E; font-size: 13.5px; border-radius: 8px; padding: 7px 16px; background: #fff;">Edit</span>
+              <span style="font-size: 13.5px; color: #6E6C64; padding: 7px 6px;">Approve all…</span>
+            </div>
+            <div style="font-size: 12px; color: #9B998F; line-height: 1.55;">Primary = the safe/expected verb. Destructive-ish bulk verbs render quiet (text) + confirm dialog. Never green or red buttons.</div>
+          </div>
+          <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+            <span style="font-size: 12.5px; font-weight: 600; color: #55534C;">State — dot + sentence, one place</span>
+            <div style="display: flex; align-items: center; gap: 10px; background: #F0F6F1; border: 1px solid #CFE3D4; border-radius: 10px; padding: 10px 14px;"><span style="width: 9px; height: 9px; border-radius: 999px; background: #1F7A4D;"></span><span style="font-size: 13.5px; font-weight: 600; color: #164A31;">All clear — nothing needs you.</span></div>
+            <div style="display: flex; align-items: center; gap: 10px; background: #FDF6EC; border: 1px solid #EAD9BC; border-radius: 10px; padding: 10px 14px;"><span style="width: 9px; height: 9px; border-radius: 999px; background: #C77E1F;"></span><span style="font-size: 13.5px; font-weight: 600; color: #6E4A10;">3 changes waiting on you.</span></div>
+            <div style="font-size: 12px; color: #9B998F; line-height: 1.55;">The banner IS the status — no permanent pill in the title bar. Dots (7px) carry the same meaning on cards and rows.</div>
+          </div>
+          <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+            <span style="font-size: 12.5px; font-weight: 600; color: #55534C;">Kind badges — mono, colored by risk</span>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.1em; color: #8A5A12;">MEANING · NEEDS YOUR CALL</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.1em; color: #1F7A4D;">FIGURE</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.1em; color: #B3261E;">FAILED</span>
+            </div>
+            <div style="font-size: 12px; color: #9B998F; line-height: 1.55;">Confidence is a word in meta ("confidence: high"), never a percentage. Kind also paints the card's 3px left edge.</div>
+          </div>
+          <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+            <span style="font-size: 12.5px; font-weight: 600; color: #55534C;">Diff spans + WAS/NOW blocks</span>
+            <div style="font-size: 14px; line-height: 1.6;">Momentum <span style="background: #FBE9E7; color: #A13527; text-decoration: line-through; border-radius: 3px; padding: 0 2px;">is steady; we track</span> <span style="background: #E4F2E7; color: #175B38; border-radius: 3px; padding: 0 2px;">remains steady, tracking</span> plan.</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11.5px; line-height: 1.5;">
+              <div style="background: #FBF1F0; border-radius: 7px; padding: 7px 9px; color: #7C2D22;"><span style="font-family:'IBM Plex Mono',monospace; font-size: 9px; letter-spacing: 0.1em;">WAS</span> old paragraph…</div>
+              <div style="background: #EFF7F1; border-radius: 7px; padding: 7px 9px; color: #175B38;"><span style="font-family:'IBM Plex Mono',monospace; font-size: 9px; letter-spacing: 0.1em;">NOW</span> new paragraph…</div>
+            </div>
+            <div style="font-size: 12px; color: #9B998F; line-height: 1.55;">Word-grain spans up to ~60% of the paragraph rewritten; blocks past that. Highlight fills exist ONLY here.</div>
+          </div>
+          <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+            <span style="font-size: 12.5px; font-weight: 600; color: #55534C;">Bound figure + provenance line</span>
+            <div style="font-size: 16px;">MRR is <span style="text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px; text-decoration-thickness: 2px;">$48.6k</span> this week.</div>
+            <div style="font-size: 12px; color: #9B998F;">from <a style="color: #4353C9;">metrics.csv</a> · <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">mrr · week 25</span> · synced 15 min ago</div>
+            <div style="font-size: 12px; color: #9B998F; line-height: 1.55;">Indigo underline, not a fill — hover shows the peek, click opens the drawer. The "from … · synced …" line is one reusable atom on every card.</div>
+          </div>
+          <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+            <span style="font-size: 12.5px; font-weight: 600; color: #55534C;">Receipt row — the audit atom</span>
+            <div style="display: flex; align-items: center; gap: 10px; border: 1px solid #F1F0EB; border-radius: 8px; padding: 9px 12px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #9B998F;">MON 07:00</span>
+              <span style="font-size: 12.5px; color: #33322E;">6 figures applied · 2 sent to review</span>
+              <div style="flex: 1;"></div>
+              <span style="width: 7px; height: 7px; border-radius: 999px; background: #1F7A4D;"></span>
+            </div>
+            <div style="font-size: 12px; color: #9B998F; line-height: 1.55;">Time (mono) → what happened (plain words) → state dot. Used in History, agent runs, Home while-you-were-away.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 48px; align-items: flex-start;">
+
+    <div id="4a" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">4a</span>
+        <span style="font-size: 14px; font-weight: 600;">Knowledge — the source library</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">user units ("feeds N figures"), consistent freshness words, no template tokens</span>
+      </div>
+      <div style="width: 1440px; background: #EFEEE9; border: 1px solid #CFCDC4; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 12px rgba(27,27,32,0.08);">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 12px 20px;">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600;">A</div>
+          <span style="font-size: 13.5px; font-weight: 600;">northwind-reports</span><span style="font-size: 13.5px; color: #9B998F;">/ Knowledge</span>
+          <div style="flex: 1;"></div>
+          <div style="width: 26px; height: 26px; border-radius: 999px; background: #23408F; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 600;">TS</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 84px 1fr;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0 24px;">
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⌂</span><span style="font-size: 10px; color: #6E6C64;">Home</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">✎</span><span style="font-size: 10px; color: #6E6C64;">Editor</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">▤</span><span style="font-size: 10px; color: #6E6C64;">Templates</span></div>
+            <div style="width: 64px; padding: 8px 0; border-radius: 10px; background: #fff; border: 1px solid #E3E1DA; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #4353C9;">◫</span><span style="font-size: 10px; color: #4353C9; font-weight: 600;">Knowledge</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⟳</span><span style="font-size: 10px; color: #6E6C64;">Agents</span></div>
+          </div>
+          <div style="background: #FCFBF9; border-top-left-radius: 14px; border-left: 1px solid #E3E1DA; border-top: 1px solid #E3E1DA; min-height: 760px; padding: 44px 72px 56px; display: flex; flex-direction: column; gap: 24px; max-width: 1050px;">
+            <div style="display: flex; align-items: flex-end; gap: 16px;">
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                <h2 style="margin: 0; font-size: 28px; letter-spacing: -0.01em;">Knowledge</h2>
+                <p style="margin: 0; font-size: 14.5px; color: #55534C;">Everything your documents draw on. 3 sources feed 29 figures across 4 documents.</p>
+              </div>
+              <div style="flex: 1;"></div>
+              <div style="display: flex; background: #F1F0EB; border-radius: 999px; padding: 3px;"><span style="background: #fff; border-radius: 999px; font-size: 12.5px; font-weight: 600; padding: 5px 16px; border: 1px solid #E3E1DA;">This project</span><span style="font-size: 12.5px; color: #9B998F; padding: 5px 16px;">Organization</span></div>
+              <span style="background: #4353C9; color: #fff; font-size: 13px; font-weight: 600; border-radius: 8px; padding: 7px 16px;">＋ Add source</span>
+            </div>
+            <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; overflow: hidden;">
+              <div style="display: grid; grid-template-columns: 2fr 1fr 1.2fr 2.2fr 1fr; padding: 10px 24px; border-bottom: 1px solid #ECEAE3; background: #F9F8F5;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F;">SOURCE</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F;">KIND</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F;">SYNCED</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F;">FEEDS</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F; text-align: right;">FIGURES</span>
+              </div>
+              <div style="display: grid; grid-template-columns: 2fr 1fr 1.2fr 2.2fr 1fr; padding: 15px 24px; border-bottom: 1px solid #F1F0EB; align-items: center; background: #FBFAF7;">
+                <span style="font-size: 14.5px; font-weight: 600;">⊞ metrics.csv</span>
+                <span style="font-size: 13px; color: #55534C;">Table</span>
+                <span style="font-size: 13px; color: #1F7A4D; display: flex; align-items: center; gap: 6px;"><span style="width: 6px; height: 6px; border-radius: 999px; background: #1F7A4D;"></span>15 min ago</span>
+                <span style="display: flex; gap: 6px; flex-wrap: wrap;"><span style="font-size: 11.5px; color: #33322E; background: #F1F0EB; border-radius: 999px; padding: 3px 10px;">Weekly Operating Summary</span><span style="font-size: 11.5px; color: #33322E; background: #F1F0EB; border-radius: 999px; padding: 3px 10px;">Board Note</span><span style="font-size: 11.5px; color: #9B998F;">+1</span></span>
+                <span style="font-size: 13px; color: #55534C; text-align: right;">feeds 23</span>
+              </div>
+              <div style="display: grid; grid-template-columns: 2fr 1fr 1.2fr 2.2fr 1fr; padding: 15px 24px; border-bottom: 1px solid #F1F0EB; align-items: center;">
+                <span style="font-size: 14.5px; font-weight: 600;">⊞ demo-metrics.csv</span>
+                <span style="font-size: 13px; color: #55534C;">Table</span>
+                <span style="font-size: 13px; color: #1F7A4D; display: flex; align-items: center; gap: 6px;"><span style="width: 6px; height: 6px; border-radius: 999px; background: #1F7A4D;"></span>this morning</span>
+                <span style="display: flex; gap: 6px;"><span style="font-size: 11.5px; color: #33322E; background: #F1F0EB; border-radius: 999px; padding: 3px 10px;">Demo Report</span></span>
+                <span style="font-size: 13px; color: #55534C; text-align: right;">feeds 6</span>
+              </div>
+              <div style="display: grid; grid-template-columns: 2fr 1fr 1.2fr 2.2fr 1fr; padding: 15px 24px; align-items: center;">
+                <span style="font-size: 14.5px; font-weight: 600;">◇ market-research.md</span>
+                <span style="font-size: 13px; color: #55534C;">Reference</span>
+                <span style="font-size: 13px; color: #9B998F;">read as context</span>
+                <span style="display: flex; gap: 6px;"><span style="font-size: 11.5px; color: #33322E; background: #F1F0EB; border-radius: 999px; padding: 3px 10px;">Board Note</span><span style="font-size: 11.5px; color: #33322E; background: #F1F0EB; border-radius: 999px; padding: 3px 10px;">Weekly Operating Summary</span></span>
+                <span style="font-size: 13px; color: #9B998F; text-align: right;">—</span>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
+              <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <span style="font-size: 15px; font-weight: 600;">⊞ metrics.csv</span>
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">12 rows · weeks 13–25</span>
+                  <div style="flex: 1;"></div>
+                  <span style="font-size: 12.5px; color: #4353C9;">open source ↗</span>
+                </div>
+                <div style="font-size: 13px; color: #55534C; line-height: 1.7;">
+                  <strong style="color: #1B1B20;">Feeds 23 figures in 3 documents.</strong><br>
+                  Weekly Operating Summary — <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">mrr, mrr.prev, signups, churn</span> +8 more · <a style="color: #4353C9;">open ↗</a> · <a style="color: #4353C9;">detach</a><br>
+                  Board Note — <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">mrr, signups, churn</span> +3 more · <a style="color: #4353C9;">open ↗</a> · <a style="color: #4353C9;">detach</a><br>
+                  Executive Summary — <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">mrr</span> · <a style="color: #4353C9;">open ↗</a> · <a style="color: #4353C9;">detach</a>
+                </div>
+                <div style="border-top: 1px solid #F1F0EB; padding-top: 10px; font-size: 12px; color: #9B998F;">If this file moves or its columns change, every dependent figure flags stale instead of guessing.</div>
+              </div>
+              <div style="background: #F6F5F1; border: 1px solid #E9E7E0; border-radius: 14px; padding: 20px 24px; display: flex; flex-direction: column; gap: 8px;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.14em; color: #6E6C64;">HOW BINDING WORKS</span>
+                <p style="margin: 0; font-size: 13px; color: #55534C; line-height: 1.65;">A bound figure is a live reference into one of these sources. When the source changes, every document that cites it updates — through the approval rules you set per document. You can always trace a figure back to its exact cell.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="4b" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">4b</span>
+        <span style="font-size: 14px; font-weight: 600;">Templates — how a recurring report is born</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">outcome copy instead of "1 slot · 0 sources"; grow-from-examples on-ramp; no rainbow avatars</span>
+      </div>
+      <div style="width: 1440px; background: #EFEEE9; border: 1px solid #CFCDC4; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 12px rgba(27,27,32,0.08);">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 12px 20px;">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600;">A</div>
+          <span style="font-size: 13.5px; font-weight: 600;">northwind-reports</span><span style="font-size: 13.5px; color: #9B998F;">/ Templates</span>
+          <div style="flex: 1;"></div>
+          <div style="width: 26px; height: 26px; border-radius: 999px; background: #23408F; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 600;">TS</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 84px 1fr;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0 24px;">
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⌂</span><span style="font-size: 10px; color: #6E6C64;">Home</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">✎</span><span style="font-size: 10px; color: #6E6C64;">Editor</span></div>
+            <div style="width: 64px; padding: 8px 0; border-radius: 10px; background: #fff; border: 1px solid #E3E1DA; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #4353C9;">▤</span><span style="font-size: 10px; color: #4353C9; font-weight: 600;">Templates</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">◫</span><span style="font-size: 10px; color: #6E6C64;">Knowledge</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⟳</span><span style="font-size: 10px; color: #6E6C64;">Agents</span></div>
+          </div>
+          <div style="background: #FCFBF9; border-top-left-radius: 14px; border-left: 1px solid #E3E1DA; border-top: 1px solid #E3E1DA; min-height: 760px; padding: 44px 72px 56px; display: flex; flex-direction: column; gap: 26px; max-width: 1050px;">
+            <div style="display: flex; align-items: flex-end; gap: 16px;">
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                <h2 style="margin: 0; font-size: 28px; letter-spacing: -0.01em;">Templates</h2>
+                <p style="margin: 0; font-size: 14.5px; color: #55534C;">A template is how a recurring report is born — structure, bound figures, and the agent's instructions, reused every cycle.</p>
+              </div>
+              <div style="flex: 1;"></div>
+              <span style="background: #4353C9; color: #fff; font-size: 13px; font-weight: 600; border-radius: 8px; padding: 7px 16px;">＋ New template</span>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+              <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column;">
+                <div style="padding: 18px 20px 14px; background: #F9F8F5; border-bottom: 1px solid #ECEAE3; display: flex; flex-direction: column; gap: 5px;">
+                  <span style="width: 60%; height: 8px; background: #E3E1DA; border-radius: 4px;"></span>
+                  <span style="width: 30%; height: 8px; background: #C8CBE8; border-radius: 4px;"></span>
+                  <span style="width: 76%; height: 8px; background: #ECEAE3; border-radius: 4px;"></span>
+                  <span style="width: 68%; height: 8px; background: #ECEAE3; border-radius: 4px;"></span>
+                </div>
+                <div style="padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 8px; flex: 1;">
+                  <span style="font-size: 15.5px; font-weight: 600;">Weekly report</span>
+                  <span style="font-size: 13px; color: #55534C; line-height: 1.6; flex: 1;">Figures fill live from your metrics; commentary is drafted from the numbers, through review.</span>
+                  <div style="font-size: 12px; color: #9B998F;">draws on <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">metrics.csv</span> · used every week</div>
+                  <div style="display: flex; gap: 8px; padding-top: 4px;"><span style="background: #4353C9; color: #fff; font-size: 12.5px; font-weight: 600; border-radius: 7px; padding: 6px 16px;">Use</span><span style="border: 1px solid #DEDCD5; font-size: 12.5px; border-radius: 7px; padding: 6px 14px; color: #55534C;">Edit</span></div>
+                </div>
+              </div>
+              <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column;">
+                <div style="padding: 18px 20px 14px; background: #F9F8F5; border-bottom: 1px solid #ECEAE3; display: flex; flex-direction: column; gap: 5px;">
+                  <span style="width: 45%; height: 8px; background: #E3E1DA; border-radius: 4px;"></span>
+                  <span style="width: 70%; height: 8px; background: #ECEAE3; border-radius: 4px;"></span>
+                  <span style="width: 62%; height: 8px; background: #ECEAE3; border-radius: 4px;"></span>
+                  <span style="width: 30%; height: 8px; background: #C8CBE8; border-radius: 4px;"></span>
+                </div>
+                <div style="padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 8px; flex: 1;">
+                  <span style="font-size: 15.5px; font-weight: 600;">Client update</span>
+                  <span style="font-size: 13px; color: #55534C; line-height: 1.6; flex: 1;">A short, warm progress note — what shipped, what's next, and anything you need from them.</span>
+                  <div style="font-size: 12px; color: #9B998F;">binds after creation · not used yet</div>
+                  <div style="display: flex; gap: 8px; padding-top: 4px;"><span style="background: #4353C9; color: #fff; font-size: 12.5px; font-weight: 600; border-radius: 7px; padding: 6px 16px;">Use</span><span style="border: 1px solid #DEDCD5; font-size: 12.5px; border-radius: 7px; padding: 6px 14px; color: #55534C;">Edit</span></div>
+                </div>
+              </div>
+              <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column;">
+                <div style="padding: 18px 20px 14px; background: #F9F8F5; border-bottom: 1px solid #ECEAE3; display: flex; flex-direction: column; gap: 5px;">
+                  <span style="width: 55%; height: 8px; background: #E3E1DA; border-radius: 4px;"></span>
+                  <span style="width: 72%; height: 8px; background: #ECEAE3; border-radius: 4px;"></span>
+                  <span style="width: 40%; height: 8px; background: #ECEAE3; border-radius: 4px;"></span>
+                  <span style="width: 64%; height: 8px; background: #ECEAE3; border-radius: 4px;"></span>
+                </div>
+                <div style="padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 8px; flex: 1;">
+                  <span style="font-size: 15.5px; font-weight: 600;">Meeting notes → SOP</span>
+                  <span style="font-size: 13px; color: #55534C; line-height: 1.6; flex: 1;">Turns raw meeting notes into a standard operating procedure — decisions become steps, owners become responsibilities.</span>
+                  <div style="font-size: 12px; color: #9B998F;">binds a transcript · not used yet</div>
+                  <div style="display: flex; gap: 8px; padding-top: 4px;"><span style="background: #4353C9; color: #fff; font-size: 12.5px; font-weight: 600; border-radius: 7px; padding: 6px 16px;">Use</span><span style="border: 1px solid #DEDCD5; font-size: 12.5px; border-radius: 7px; padding: 6px 14px; color: #55534C;">Edit</span></div>
+                </div>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div style="border: 1px dashed #CFCDC4; border-radius: 14px; padding: 22px 24px; display: flex; align-items: center; gap: 16px;">
+                <span style="font-size: 20px; color: #4353C9;">✦</span>
+                <div style="flex: 1;">
+                  <div style="font-size: 14.5px; font-weight: 600;">Grow one from past documents</div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.55; margin-top: 3px;">Pick 3–10 reports you've already written — I'll find the pattern (structure, recurring figures, tone) and propose a template you can edit.</div>
+                </div>
+                <span style="border: 1px solid #DEDCD5; background: #fff; font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 7px 14px;">Choose documents…</span>
+              </div>
+              <div style="border: 1px dashed #CFCDC4; border-radius: 14px; padding: 22px 24px; display: flex; align-items: center; gap: 16px;">
+                <span style="font-size: 20px; color: #9B998F;">▤</span>
+                <div style="flex: 1;">
+                  <div style="font-size: 14.5px; font-weight: 600;">Save the current document as a template</div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.55; margin-top: 3px;">Its headings become the structure; its bound figures become slots the next document fills.</div>
+                </div>
+                <span style="border: 1px solid #DEDCD5; background: #fff; font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 7px 14px;">Save as template</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="4c" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">4c</span>
+        <span style="font-size: 14px; font-weight: 600;">New document — name-first birth</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">three births, outcome copy on templates, Enter creates blank</span>
+      </div>
+      <div style="width: 704px; background: #B9B7B0; border: 1px solid #CFCDC4; border-radius: 14px; box-shadow: 0 2px 12px rgba(27,27,32,0.08); padding: 48px 64px; display: grid; place-items: center;">
+        <div style="width: 480px; background: #FCFBF9; border-radius: 16px; box-shadow: 0 12px 40px rgba(27,27,32,0.28); padding: 28px 30px; display: flex; flex-direction: column; gap: 18px;">
+          <div style="display: flex; flex-direction: column; gap: 5px;">
+            <h3 style="margin: 0; font-size: 19px;">New document</h3>
+            <p style="margin: 0; font-size: 13px; color: #6E6C64; line-height: 1.5;">Name it, then start blank or let a template draft the first version — through review, like everything else.</p>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <span style="font-size: 12.5px; font-weight: 600; color: #55534C;">Name</span>
+            <div style="border: 1px solid #4353C9; box-shadow: 0 0 0 3px #EEEFFA; border-radius: 10px; padding: 11px 14px; font-size: 14.5px; color: #1B1B20; background: #fff;">Weekly Operating Summary — W26<span style="border-left: 1.5px solid #1B1B20; margin-left: 1px;"></span></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 12px; background: #EEEFFA; border: 1px solid #C8CBE8; border-radius: 12px; padding: 13px 16px;">
+              <span style="width: 30px; height: 30px; border-radius: 8px; background: #fff; border: 1px solid #C8CBE8; display: grid; place-items: center; font-size: 14px; color: #4353C9;">＋</span>
+              <div style="flex: 1;">
+                <div style="font-size: 14px; font-weight: 600;">Blank document</div>
+                <div style="font-size: 12px; color: #6E6C64;">An empty page with your name on it</div>
+              </div>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #9B998F;">ENTER ⏎</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; border: 1px solid #E3E1DA; border-radius: 12px; padding: 13px 16px; background: #fff;">
+              <span style="width: 30px; height: 30px; border-radius: 8px; background: #F6F5F1; display: grid; place-items: center; font-size: 13px; color: #55534C;">⊞</span>
+              <div style="flex: 1;">
+                <div style="font-size: 14px; font-weight: 600;">From your sources…</div>
+                <div style="font-size: 12px; color: #6E6C64;">Drafted from your data and documents, through review</div>
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.14em; color: #9B998F;">OR START FROM A TEMPLATE</span>
+            <div style="display: flex; align-items: center; gap: 12px; border: 1px solid #E3E1DA; border-radius: 12px; padding: 12px 16px; background: #fff;">
+              <div style="flex: 1;">
+                <div style="font-size: 14px; font-weight: 600;">Weekly report</div>
+                <div style="font-size: 12px; color: #6E6C64;">Figures fill live from metrics.csv; commentary drafted from the numbers</div>
+              </div>
+              <span style="font-size: 12px; color: #4353C9;">use →</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; border: 1px solid #E3E1DA; border-radius: 12px; padding: 12px 16px; background: #fff;">
+              <div style="flex: 1;">
+                <div style="font-size: 14px; font-weight: 600;">Client update</div>
+                <div style="font-size: 12px; color: #6E6C64;">A short, warm progress note; binds after creation</div>
+              </div>
+              <span style="font-size: 12px; color: #4353C9;">use →</span>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid #F1F0EB; padding-top: 14px;">
+            <span style="font-size: 13px; color: #6E6C64; padding: 7px 12px;">Cancel</span>
+            <span style="background: #4353C9; color: #fff; font-size: 13px; font-weight: 600; border-radius: 8px; padding: 7px 18px;">Create</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="4d" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">4d</span>
+        <span style="font-size: 14px; font-weight: 600;">Provenance — hover peek + source drawer</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">the wedge: click a figure, land on its exact cell; freshness words identical everywhere</span>
+      </div>
+      <div style="width: 1440px; background: #EFEEE9; border: 1px solid #CFCDC4; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 12px rgba(27,27,32,0.08);">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 12px 20px;">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600;">A</div>
+          <span style="font-size: 13.5px; font-weight: 600;">northwind-reports</span><span style="font-size: 13.5px; color: #9B998F;">/ Board Note</span>
+          <div style="flex: 1;"></div>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">Saved · v3</span>
+          <span style="font-size: 12.5px; color: #55534C; border: 1px solid #DEDCD5; border-radius: 999px; padding: 5px 14px; background: #fff;">↗ Present</span>
+          <div style="width: 26px; height: 26px; border-radius: 999px; background: #23408F; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 600;">TS</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 84px 1fr;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0 24px;">
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⌂</span><span style="font-size: 10px; color: #6E6C64;">Home</span></div>
+            <div style="width: 64px; padding: 8px 0; border-radius: 10px; background: #fff; border: 1px solid #E3E1DA; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #4353C9;">✎</span><span style="font-size: 10px; color: #4353C9; font-weight: 600;">Editor</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">▤</span><span style="font-size: 10px; color: #6E6C64;">Templates</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">◫</span><span style="font-size: 10px; color: #6E6C64;">Knowledge</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⟳</span><span style="font-size: 10px; color: #6E6C64;">Agents</span></div>
+          </div>
+          <div style="background: #FCFBF9; border-top-left-radius: 14px; border-left: 1px solid #E3E1DA; border-top: 1px solid #E3E1DA; display: flex; flex-direction: column; min-height: 820px;">
+            <div style="padding: 44px 96px 28px; display: flex; flex-direction: column; gap: 18px; max-width: 760px; position: relative;">
+              <h3 style="margin: 0; font-size: 21px;">Numbers</h3>
+              <p style="margin: 0; font-size: 16px; line-height: 1.7; color: #33322E;">MRR reached <span style="text-decoration: underline; text-decoration-color: #4353C9; text-underline-offset: 3px; text-decoration-thickness: 2px; background: #EEEFFA; border-radius: 3px; padding: 0 2px;">$48.6k</span> this week, up <span style="text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px; text-decoration-thickness: 2px;">18%</span> on <span style="text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px; text-decoration-thickness: 2px;">$41.2k</span>, with <span style="text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px; text-decoration-thickness: 2px;">427</span> new signups.</p>
+              <div style="position: absolute; top: 120px; left: 210px; background: #1B1B20; color: #fff; border-radius: 10px; padding: 12px 16px; box-shadow: 0 8px 24px rgba(27,27,32,0.3); display: flex; flex-direction: column; gap: 4px; z-index: 2;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 500;">metrics.csv · mrr · week 25</span>
+                <span style="font-size: 12px; color: #B8B6AE;">synced 15 min ago · was $41.2k when approved</span>
+                <span style="font-size: 11.5px; color: #8F94D9;">click to open the source ↓</span>
+              </div>
+              <h3 style="margin: 64px 0 0; font-size: 21px;">Note to the board</h3>
+              <p style="margin: 0; font-size: 16px; line-height: 1.7; color: #33322E;">Momentum remains steady, tracking plan with no surprises this week.</p>
+            </div>
+            <div style="margin-top: auto; border-top: 1px solid #E3E1DA; background: #fff; border-radius: 14px 14px 0 0; box-shadow: 0 -6px 24px rgba(27,27,32,0.07);">
+              <div style="display: flex; align-items: center; gap: 12px; padding: 14px 32px; border-bottom: 1px solid #F1F0EB;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 500;">⊞ metrics.csv</span>
+                <span style="font-size: 12px; color: #9B998F;">source · 12 rows · feeds 6 figures in this document</span>
+                <span style="font-size: 12px; color: #1F7A4D; display: flex; align-items: center; gap: 5px;"><span style="width: 6px; height: 6px; border-radius: 999px; background: #1F7A4D;"></span>synced 15 min ago</span>
+                <div style="flex: 1;"></div>
+                <span style="border: 1px solid #DEDCD5; font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 6px 14px; color: #33322E;">⟳ Sync now</span>
+                <span style="font-size: 14px; color: #9B998F;">✕</span>
+              </div>
+              <div style="display: grid; grid-template-columns: 1.6fr 1fr;">
+                <div style="padding: 18px 32px; border-right: 1px solid #F1F0EB;">
+                  <div style="display: grid; grid-template-columns: repeat(5, 1fr); font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.08em; color: #9B998F; padding-bottom: 8px; border-bottom: 1px solid #F1F0EB;"><span>WEEK</span><span>DATE</span><span>MRR</span><span>SIGNUPS</span><span>CHURN</span></div>
+                  <div style="display: grid; grid-template-columns: repeat(5, 1fr); font-size: 13px; color: #6E6C64; padding: 8px 0; border-bottom: 1px solid #F6F5F1;"><span>23</span><span>Jun 15</span><span>41200</span><span>312</span><span>3.1</span></div>
+                  <div style="display: grid; grid-template-columns: repeat(5, 1fr); font-size: 13px; color: #6E6C64; padding: 8px 0; border-bottom: 1px solid #F6F5F1;"><span>24</span><span>Jun 22</span><span>44800</span><span>371</span><span>2.8</span></div>
+                  <div style="display: grid; grid-template-columns: repeat(5, 1fr); font-size: 13px; color: #1B1B20; font-weight: 600; padding: 8px 10px; margin: 2px -10px 0; background: #EEEFFA; border-radius: 8px;"><span>25</span><span>Jun 29</span><span style="text-decoration: underline; text-decoration-color: #4353C9; text-underline-offset: 3px; text-decoration-thickness: 2px;">48600</span><span>427</span><span>2.4</span></div>
+                  <div style="font-size: 11.5px; color: #9B998F; padding-top: 10px;">Row 25 is what your document cites — the cell feeding the figure you clicked is underlined.</div>
+                </div>
+                <div style="padding: 18px 28px; display: flex; flex-direction: column; gap: 12px;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F;">FIGURES FED BY THIS ROW · 6</span>
+                  <div style="font-size: 12.5px; color: #33322E; line-height: 2;">
+                    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #6E6C64;">mrr</span> → $48.6k <span style="color: #9B998F;">· this doc, line 2</span><br>
+                    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #6E6C64;">mrr.prev</span> → $41.2k <span style="color: #9B998F;">· this doc, line 2</span><br>
+                    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #6E6C64;">signups</span> → 427 <span style="color: #9B998F;">· this doc, line 2</span>
+                  </div>
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F;">ALSO CITED BY</span>
+                  <div style="font-size: 12.5px; color: #33322E; line-height: 1.9;">Weekly Operating Summary · <a style="color: #4353C9;">open ↗</a><br>Executive Summary · <a style="color: #4353C9;">open ↗</a></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="max-width: 900px; display: flex; flex-direction: column; gap: 8px; padding-top: 24px; border-top: 1px solid #CFCDC4;">
+    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6E6C64;">ROUND 1 · THE FIVE CORE SCREENS</span>
+    <h1 style="margin: 0; font-size: 30px; letter-spacing: -0.01em;">Home, the decision moment, bulk review, agent detail</h1>
+    <p style="margin: 0; font-size: 14.5px; color: #55534C; line-height: 1.6;">System rules applied throughout: one indigo, sentence case; mono = section labels + provenance only; color only ever means something (green applied/fresh · amber waiting · red failed/removed · indigo = Abstract acting); highlight only ever means "this span is changing"; no permanent status pill — state appears when it needs you. Editor tabs are dropped per "one document surface."</p>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 48px; align-items: flex-start;">
+
+    <div id="1a" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">1a</span>
+        <span style="font-size: 14px; font-weight: 600;">Home — the morning all-clear</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">receipts, one state banner, demo demoted to a card</span>
+      </div>
+      <div style="width: 1440px; background: #EFEEE9; border: 1px solid #CFCDC4; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 12px rgba(27,27,32,0.08);">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 12px 20px;">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600;">A</div>
+          <span style="font-size: 13.5px; font-weight: 600;">northwind-reports</span><span style="font-size: 13.5px; color: #9B998F;">/ Home</span>
+          <div style="flex: 1;"></div>
+          <span style="font-size: 12.5px; color: #55534C; border: 1px solid #DEDCD5; border-radius: 999px; padding: 5px 14px; background: #fff;">Open folder</span>
+          <div style="width: 26px; height: 26px; border-radius: 999px; background: #23408F; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 600;">TS</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 84px 1fr;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0 24px;">
+            <div style="width: 64px; padding: 8px 0; border-radius: 10px; background: #fff; border: 1px solid #E3E1DA; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #4353C9;">⌂</span><span style="font-size: 10px; color: #4353C9; font-weight: 600;">Home</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">✎</span><span style="font-size: 10px; color: #6E6C64;">Editor</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">▤</span><span style="font-size: 10px; color: #6E6C64;">Templates</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">◫</span><span style="font-size: 10px; color: #6E6C64;">Knowledge</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⟳</span><span style="font-size: 10px; color: #6E6C64;">Agents</span></div>
+          </div>
+          <div style="background: #FCFBF9; border-top-left-radius: 14px; border-left: 1px solid #E3E1DA; border-top: 1px solid #E3E1DA; min-height: 800px; padding: 48px 72px 56px; display: flex; flex-direction: column; gap: 30px;">
+            <div style="display: flex; align-items: baseline; gap: 14px;">
+              <h2 style="margin: 0; font-size: 34px; letter-spacing: -0.015em;">Good evening, Tommy.</h2>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #9B998F; letter-spacing: 0.08em;">FRI 24 JUL</span>
+            </div>
+            <div style="display: flex; align-items: flex-start; gap: 16px; background: #F0F6F1; border: 1px solid #CFE3D4; border-radius: 14px; padding: 22px 26px;">
+              <div style="width: 11px; height: 11px; border-radius: 999px; background: #1F7A4D; margin-top: 5px;"></div>
+              <div style="flex: 1;">
+                <div style="font-size: 18px; font-weight: 600; color: #164A31;">All clear — nothing needs you.</div>
+                <div style="font-size: 14px; color: #4E7059; margin-top: 5px; line-height: 1.6;">While you were away: <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px;">metrics.csv</span> synced 15 min ago · Weekly refresh updated 2 figures in Weekly Operating Summary — <a style="color: #1F7A4D; text-decoration: underline;">see the receipt</a></div>
+              </div>
+              <span style="font-size: 12.5px; color: #4E7059; border: 1px solid #CFE3D4; border-radius: 999px; padding: 5px 14px; background: #fff;">History</span>
+            </div>
+            <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 20px 24px 16px; display: flex; flex-direction: column; gap: 12px;">
+              <div style="display: flex; align-items: center; gap: 10px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #4353C9;">ASK THIS PROJECT</span><span style="font-size: 12px; color: #6E6C64; background: #F1F0EB; border-radius: 999px; padding: 3px 12px;">8 documents · 2 sources</span></div>
+              <div style="font-size: 16px; color: #9B998F; padding: 8px 0 20px;">Ask anything, or ask me to change something across it…</div>
+              <div style="display: flex; align-items: center; gap: 12px; border-top: 1px solid #F1F0EB; padding-top: 12px;">
+                <span style="font-size: 13px; color: #9B998F;">Questions are answered read-only, with citations. Change requests open a task you review.</span>
+                <div style="flex: 1;"></div>
+                <span style="background: #4353C9; color: #fff; font-size: 14px; font-weight: 600; border-radius: 9px; padding: 8px 22px;">Ask</span>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 14px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6E6C64;">DOCUMENTS · MOST RECENT FIRST</span>
+              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;">
+                <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 15.5px; font-weight: 600;">Weekly Operating Summary</span><span style="width: 7px; height: 7px; border-radius: 999px; background: #1F7A4D;"></span></div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.5;">2 figures updated from metrics.csv · 15 min ago</div>
+                </div>
+                <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 15.5px; font-weight: 600;">Board Note</span><span style="width: 7px; height: 7px; border-radius: 999px; background: #1F7A4D;"></span></div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.5;">You approved 1 change · yesterday</div>
+                </div>
+                <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="font-size: 15.5px; font-weight: 600;">Executive Summary</div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.5;">Edited by you · Tue</div>
+                </div>
+                <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="font-size: 15.5px; font-weight: 600;">Market research</div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.5;">Referenced by 2 documents · quiet 2 weeks</div>
+                </div>
+                <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="font-size: 15.5px; font-weight: 600;">Project Brief — Northwind</div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.5;">Quiet for 3 weeks</div>
+                </div>
+                <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="font-size: 15.5px; font-weight: 600;">Team Notes</div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.5;">Quiet for 5 weeks</div>
+                </div>
+                <div style="background: #F6F5F1; border: 1px solid #E9E7E0; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 13px;">✦</span><span style="font-size: 14px; font-weight: 600; color: #55534C;">See a 90-second demo</span></div>
+                  <div style="font-size: 12.5px; color: #9B998F; line-height: 1.5;">One figure bound to its source, one reviewable edit.</div>
+                </div>
+                <div style="border: 1px dashed #CFCDC4; border-radius: 14px; padding: 18px 20px; display: grid; place-items: center; color: #6E6C64; font-size: 14px;">＋ New document</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="1b" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">1b</span>
+        <span style="font-size: 14px; font-weight: 600;">Home — something needs you</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">the same banner turns amber and becomes the queue; 90 seconds to done</span>
+      </div>
+      <div style="width: 1440px; background: #EFEEE9; border: 1px solid #CFCDC4; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 12px rgba(27,27,32,0.08);">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 12px 20px;">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600;">A</div>
+          <span style="font-size: 13.5px; font-weight: 600;">northwind-reports</span><span style="font-size: 13.5px; color: #9B998F;">/ Home</span>
+          <div style="flex: 1;"></div>
+          <span style="font-size: 12.5px; color: #55534C; border: 1px solid #DEDCD5; border-radius: 999px; padding: 5px 14px; background: #fff;">Open folder</span>
+          <div style="width: 26px; height: 26px; border-radius: 999px; background: #23408F; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 600;">TS</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 84px 1fr;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0 24px;">
+            <div style="width: 64px; padding: 8px 0; border-radius: 10px; background: #fff; border: 1px solid #E3E1DA; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #4353C9;">⌂</span><span style="font-size: 10px; color: #4353C9; font-weight: 600;">Home</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">✎</span><span style="font-size: 10px; color: #6E6C64;">Editor</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">▤</span><span style="font-size: 10px; color: #6E6C64;">Templates</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">◫</span><span style="font-size: 10px; color: #6E6C64;">Knowledge</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⟳</span><span style="font-size: 10px; color: #6E6C64;">Agents</span></div>
+          </div>
+          <div style="background: #FCFBF9; border-top-left-radius: 14px; border-left: 1px solid #E3E1DA; border-top: 1px solid #E3E1DA; min-height: 800px; padding: 48px 72px 56px; display: flex; flex-direction: column; gap: 30px;">
+            <div style="display: flex; align-items: baseline; gap: 14px;">
+              <h2 style="margin: 0; font-size: 34px; letter-spacing: -0.015em;">Good morning, Tommy.</h2>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #9B998F; letter-spacing: 0.08em;">MON 27 JUL</span>
+            </div>
+            <div style="background: #FDF6EC; border: 1px solid #EAD9BC; border-radius: 14px; overflow: hidden;">
+              <div style="display: flex; align-items: flex-start; gap: 16px; padding: 22px 26px 18px;">
+                <div style="width: 11px; height: 11px; border-radius: 999px; background: #C77E1F; margin-top: 5px;"></div>
+                <div style="flex: 1;">
+                  <div style="font-size: 18px; font-weight: 600; color: #6E4A10;">3 changes across 2 documents are waiting on you.</div>
+                  <div style="font-size: 14px; color: #8A6A33; margin-top: 5px; line-height: 1.6;">Overnight: <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px;">metrics.csv</span> week-25 row changed → Weekly refresh re-derived 2 documents. Figures auto-applied; the meaning changes below wait for you. <strong>About 2 minutes to all clear.</strong></div>
+                </div>
+                <span style="background: #4353C9; color: #fff; font-size: 13.5px; font-weight: 600; border-radius: 9px; padding: 8px 18px;">Review 3 changes</span>
+              </div>
+              <div style="border-top: 1px solid #F0E4CC; background: #fff; display: flex; flex-direction: column;">
+                <div style="display: flex; align-items: center; gap: 12px; padding: 13px 26px; border-bottom: 1px solid #F5F0E4;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #8A5A12;">MEANING</span>
+                  <span style="font-size: 14px; color: #33322E;"><strong>Weekly Operating Summary</strong> — commentary reframes growth from "steady" to "accelerating sharply"</span>
+                  <div style="flex: 1;"></div>
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">mrr +18% · week 25</span>
+                  <span style="font-size: 12.5px; color: #4353C9;">review →</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; padding: 13px 26px; border-bottom: 1px solid #F5F0E4;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #8A5A12;">MEANING</span>
+                  <span style="font-size: 14px; color: #33322E;"><strong>Board Note</strong> — note to the board tightened; adds "hiring ahead of plan"</span>
+                  <div style="flex: 1;"></div>
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">signups +37%</span>
+                  <span style="font-size: 12.5px; color: #4353C9;">review →</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; padding: 13px 26px;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #1F7A4D;">FIGURES</span>
+                  <span style="font-size: 14px; color: #33322E;">6 figures auto-applied across 2 documents</span>
+                  <div style="flex: 1;"></div>
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">metrics.csv · 07:00</span>
+                  <span style="font-size: 12.5px; color: #4353C9;">receipts ▾</span>
+                </div>
+              </div>
+            </div>
+            <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 20px 24px 16px; display: flex; flex-direction: column; gap: 12px;">
+              <div style="display: flex; align-items: center; gap: 10px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #4353C9;">ASK THIS PROJECT</span><span style="font-size: 12px; color: #6E6C64; background: #F1F0EB; border-radius: 999px; padding: 3px 12px;">8 documents · 2 sources</span></div>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="flex: 1; font-size: 16px; color: #9B998F;">Ask anything, or ask me to change something across it…</div>
+                <span style="background: #4353C9; color: #fff; font-size: 14px; font-weight: 600; border-radius: 9px; padding: 8px 22px;">Ask</span>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 14px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6E6C64;">DOCUMENTS · MOST RECENT FIRST</span>
+              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;">
+                <div style="background: #fff; border: 1px solid #EAD9BC; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 15.5px; font-weight: 600;">Weekly Operating Summary</span><span style="width: 7px; height: 7px; border-radius: 999px; background: #C77E1F;"></span></div>
+                  <div style="font-size: 13px; color: #8A6A33; line-height: 1.5;">1 change waiting · 4 figures applied 07:00</div>
+                </div>
+                <div style="background: #fff; border: 1px solid #EAD9BC; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 15.5px; font-weight: 600;">Board Note</span><span style="width: 7px; height: 7px; border-radius: 999px; background: #C77E1F;"></span></div>
+                  <div style="font-size: 13px; color: #8A6A33; line-height: 1.5;">1 change waiting · 2 figures applied 07:00</div>
+                </div>
+                <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="font-size: 15.5px; font-weight: 600;">Executive Summary</div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.5;">Edited by you · Tue</div>
+                </div>
+                <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 7px;">
+                  <div style="font-size: 15.5px; font-weight: 600;">Team Notes</div>
+                  <div style="font-size: 13px; color: #6E6C64; line-height: 1.5;">Quiet for 5 weeks</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="2a" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">2a</span>
+        <span style="font-size: 14px; font-weight: 600;">Editor — the decision moment</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">one canonical decision point; rail narrates and points; no tabs, no bulk verbs at n=1</span>
+      </div>
+      <div style="width: 1440px; background: #EFEEE9; border: 1px solid #CFCDC4; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 12px rgba(27,27,32,0.08);">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 12px 20px;">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600;">A</div>
+          <span style="font-size: 13.5px; font-weight: 600;">northwind-reports</span><span style="font-size: 13.5px; color: #9B998F;">/ Board Note</span>
+          <div style="flex: 1;"></div>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">Saved · v3</span>
+          <span style="font-size: 12.5px; color: #55534C; border: 1px solid #DEDCD5; border-radius: 999px; padding: 5px 14px; background: #fff;">↗ Present</span>
+          <div style="width: 26px; height: 26px; border-radius: 999px; background: #23408F; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 600;">TS</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 84px 252px 1fr 316px;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0 24px;">
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⌂</span><span style="font-size: 10px; color: #6E6C64;">Home</span></div>
+            <div style="width: 64px; padding: 8px 0; border-radius: 10px; background: #fff; border: 1px solid #E3E1DA; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #4353C9;">✎</span><span style="font-size: 10px; color: #4353C9; font-weight: 600;">Editor</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">▤</span><span style="font-size: 10px; color: #6E6C64;">Templates</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">◫</span><span style="font-size: 10px; color: #6E6C64;">Knowledge</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⟳</span><span style="font-size: 10px; color: #6E6C64;">Agents</span></div>
+          </div>
+          <div style="background: #F9F8F5; border: 1px solid #E3E1DA; border-bottom: none; border-top-left-radius: 14px; padding: 18px 16px; display: flex; flex-direction: column; gap: 14px; min-height: 860px;">
+            <div style="display: flex; gap: 14px; font-size: 12.5px; color: #9B998F; padding: 0 4px;"><span style="color: #1B1B20; font-weight: 600; border-bottom: 2px solid #4353C9; padding-bottom: 4px;">Files</span><span>Context</span><span>Outline</span></div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F; padding: 4px;">REPORTS</span>
+              <div style="font-size: 13px; color: #33322E; padding: 6px 8px; border-radius: 7px;">Weekly Operating Summary</div>
+              <div style="font-size: 13px; color: #1B1B20; font-weight: 600; padding: 6px 8px; border-radius: 7px; background: #fff; border: 1px solid #E3E1DA; display: flex; align-items: center; gap: 8px;">Board Note<span style="margin-left: auto; background: #C77E1F; color: #fff; border-radius: 999px; font-size: 10px; padding: 1px 7px;">1</span></div>
+              <div style="font-size: 13px; color: #33322E; padding: 6px 8px;">Executive Summary</div>
+              <div style="font-size: 13px; color: #33322E; padding: 6px 8px;">Project Brief — Northwind</div>
+              <div style="font-size: 13px; color: #33322E; padding: 6px 8px;">Team Notes</div>
+              <div style="font-size: 13px; color: #33322E; padding: 6px 8px;">Market research</div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #9B998F; padding: 4px;">SOURCES</span>
+              <div style="font-size: 13px; color: #33322E; padding: 6px 8px; display: flex; align-items: center; gap: 8px;">⊞ metrics.csv<span style="margin-left: auto; width: 6px; height: 6px; border-radius: 999px; background: #1F7A4D;"></span></div>
+            </div>
+          </div>
+          <div style="background: #FCFBF9; border-top: 1px solid #E3E1DA; padding: 0; display: flex; flex-direction: column;">
+            <div style="display: flex; align-items: center; gap: 14px; padding: 12px 40px; border-bottom: 1px solid #ECEAE3;">
+              <span style="font-size: 13px; color: #33322E;">Paragraph ▾</span>
+              <span style="font-size: 13px; font-weight: 700; color: #55534C;">B</span><span style="font-size: 13px; font-style: italic; color: #55534C;">I</span><span style="font-size: 13px; color: #55534C;">☰</span><span style="font-size: 13px; color: #55534C;">⊞</span><span style="font-size: 13px; color: #55534C;">❝</span>
+              <div style="flex: 1;"></div>
+              <span style="font-size: 12.5px; color: #4353C9;">✦ Ask AI</span>
+              <span style="font-size: 12.5px; color: #55534C;">Properties</span>
+            </div>
+            <div style="padding: 44px 64px; display: flex; flex-direction: column; gap: 22px; max-width: 720px;">
+              <h3 style="margin: 0; font-size: 21px;">Numbers</h3>
+              <div style="border: 1px solid #E3E1DA; border-radius: 10px; overflow: hidden; font-size: 14.5px;">
+                <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; background: #F6F5F1; font-weight: 600; font-size: 13px; color: #55534C;"><span style="padding: 9px 16px;">Metric</span><span style="padding: 9px 16px;">Previous</span><span style="padding: 9px 16px;">Current</span><span style="padding: 9px 16px;">Change</span></div>
+                <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; border-top: 1px solid #ECEAE3;"><span style="padding: 9px 16px;">MRR</span><span style="padding: 9px 16px; text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px;">$41.2k</span><span style="padding: 9px 16px; text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px;">$48.6k</span><span style="padding: 9px 16px; text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px;">+18%</span></div>
+                <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; border-top: 1px solid #ECEAE3;"><span style="padding: 9px 16px;">New signups</span><span style="padding: 9px 16px; text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px;">312</span><span style="padding: 9px 16px; text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px;">427</span><span style="padding: 9px 16px; text-decoration: underline; text-decoration-color: #B4B9E8; text-underline-offset: 3px;">+37%</span></div>
+              </div>
+              <div style="font-size: 12px; color: #9B998F;">Underlined figures are bound to <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">metrics.csv</span> — click one for its source, cell and freshness.</div>
+              <h3 style="margin: 8px 0 0; font-size: 21px;">Note to the board</h3>
+              <div style="border-left: 3px solid #C77E1F; border-radius: 6px; background: #fff; box-shadow: 0 1px 5px rgba(27,27,32,0.08); padding: 20px 24px; display: flex; flex-direction: column; gap: 13px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.1em; color: #8A5A12;">MEANING CHANGE · NEEDS YOUR CALL</span>
+                  <div style="flex: 1;"></div>
+                  <span style="font-size: 12px; color: #9B998F;">from <a style="color: #4353C9;">metrics.csv</a> · synced 15 min ago</span>
+                </div>
+                <div style="font-size: 16px; line-height: 1.65;">Momentum <span style="background: #FBE9E7; color: #A13527; text-decoration: line-through; border-radius: 3px; padding: 0 2px;">is steady; we continue to track</span> <span style="background: #E4F2E7; color: #175B38; border-radius: 3px; padding: 0 2px;">remains steady, tracking</span> plan with no surprises this week.</div>
+                <div style="font-size: 13px; color: #6E6C64; font-style: italic;">Why: tightened for concision — the meaning, on plan with no surprises, is unchanged.</div>
+                <div style="display: flex; align-items: center; gap: 8px; border-top: 1px solid #F1F0EB; padding-top: 13px;">
+                  <span style="background: #4353C9; color: #fff; font-size: 13.5px; font-weight: 600; border-radius: 8px; padding: 7px 20px;">Approve</span>
+                  <span style="border: 1px solid #DEDCD5; color: #33322E; font-size: 13.5px; border-radius: 8px; padding: 7px 16px;">Edit</span>
+                  <span style="border: 1px solid #DEDCD5; color: #33322E; font-size: 13.5px; border-radius: 8px; padding: 7px 16px;">Reject</span>
+                  <div style="flex: 1;"></div>
+                  <span style="font-size: 12px; color: #9B998F;">confidence: high</span>
+                </div>
+              </div>
+              <h3 style="margin: 8px 0 0; font-size: 21px;">Asks</h3>
+              <p style="margin: 0; font-size: 16px; line-height: 1.7; color: #33322E;">No asks this week. We will flag hiring needs once the next cohort closes.</p>
+            </div>
+          </div>
+          <div style="background: #F9F8F5; border: 1px solid #E3E1DA; border-bottom: none; border-right: none; padding: 18px 18px 20px; display: flex; flex-direction: column; gap: 16px;">
+            <div style="display: flex; gap: 16px; font-size: 13px; color: #9B998F;"><span style="color: #1B1B20; font-weight: 600; border-bottom: 2px solid #4353C9; padding-bottom: 4px;">Chat</span><span>Review <span style="background: #C77E1F; color: #fff; border-radius: 999px; font-size: 10px; padding: 1px 6px;">1</span></span><span>History</span></div>
+            <div style="background: #F1F0EB; border-radius: 10px; padding: 12px 14px; font-size: 13.5px; color: #33322E; align-self: flex-end; max-width: 240px;">Tighten the note to the board paragraph, keep the meaning.</div>
+            <div style="font-size: 13px; color: #6E6C64; line-height: 1.8;">
+              <span style="color: #1F7A4D;">✓</span> Read <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">metrics.csv</span>, <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">market-research.md</span><br>
+              <span style="color: #4353C9;">✎</span> Proposed 1 edit — <a style="color: #4353C9;">Note to the board · line 4 ↓</a>
+            </div>
+            <div style="border: 1px solid #EAD9BC; background: #FDF8EF; border-radius: 10px; padding: 11px 14px; font-size: 13px; color: #8A5A12; line-height: 1.5;">1 change waiting on you — decide it in the document.</div>
+            <div style="flex: 1;"></div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; gap: 6px; flex-wrap: wrap;"><span style="font-size: 11.5px; color: #4353C9; background: #EEEFFA; border-radius: 999px; padding: 3px 10px;">@metrics.csv</span><span style="font-size: 11.5px; color: #4353C9; background: #EEEFFA; border-radius: 999px; padding: 3px 10px;">@market-research.md</span><span style="font-size: 11.5px; color: #9B998F;">＋</span></div>
+              <div style="border: 1px solid #E3E1DA; background: #fff; border-radius: 10px; padding: 11px 14px; font-size: 13px; color: #9B998F; display: flex; align-items: center; gap: 8px;">Ask about this document, or run a skill…<span style="margin-left: auto; width: 24px; height: 24px; border-radius: 999px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px;">↑</span></div>
+              <div style="font-size: 11px; color: #9B998F;">Edits land as proposals you review — nothing applies silently.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="2b" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">2b</span>
+        <span style="font-size: 14px; font-weight: 600;">Editor — bulk review, 4 changes</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">bulk verbs earn their place at 2+; the rail becomes a ledger; document stays readable</span>
+      </div>
+      <div style="width: 1440px; background: #EFEEE9; border: 1px solid #CFCDC4; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 12px rgba(27,27,32,0.08);">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 12px 20px;">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600;">A</div>
+          <span style="font-size: 13.5px; font-weight: 600;">northwind-reports</span><span style="font-size: 13.5px; color: #9B998F;">/ Board Note</span>
+          <div style="flex: 1;"></div>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">Saved · v3</span>
+          <span style="font-size: 12.5px; color: #55534C; border: 1px solid #DEDCD5; border-radius: 999px; padding: 5px 14px; background: #fff;">↗ Present</span>
+          <div style="width: 26px; height: 26px; border-radius: 999px; background: #23408F; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 600;">TS</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 84px 1fr 384px;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0 24px;">
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⌂</span><span style="font-size: 10px; color: #6E6C64;">Home</span></div>
+            <div style="width: 64px; padding: 8px 0; border-radius: 10px; background: #fff; border: 1px solid #E3E1DA; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #4353C9;">✎</span><span style="font-size: 10px; color: #4353C9; font-weight: 600;">Editor</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">▤</span><span style="font-size: 10px; color: #6E6C64;">Templates</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">◫</span><span style="font-size: 10px; color: #6E6C64;">Knowledge</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⟳</span><span style="font-size: 10px; color: #6E6C64;">Agents</span></div>
+          </div>
+          <div style="background: #FCFBF9; border: 1px solid #E3E1DA; border-bottom: none; border-right: none; border-top-left-radius: 14px; display: flex; flex-direction: column; min-height: 860px;">
+            <div style="display: flex; align-items: center; gap: 12px; padding: 11px 40px; border-bottom: 1px solid #EAD9BC; background: #FDF8EF;">
+              <span style="width: 8px; height: 8px; border-radius: 999px; background: #C77E1F;"></span>
+              <span style="font-size: 13.5px; color: #6E4A10;"><strong>4 changes</strong> waiting in this document — 1 meaning · 3 figures</span>
+              <div style="flex: 1;"></div>
+              <span style="background: #fff; border: 1px solid #DEDCD5; color: #33322E; font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 6px 14px;">Review each</span>
+              <span style="font-size: 12.5px; color: #6E6C64; padding: 6px 10px;">Approve all…</span>
+            </div>
+            <div style="padding: 40px 64px; display: flex; flex-direction: column; gap: 20px; max-width: 720px;">
+              <h3 style="margin: 0; font-size: 21px;">Performance</h3>
+              <div style="border-left: 3px solid #C77E1F; border-radius: 4px; padding: 4px 0 4px 20px;">
+                <p style="margin: 0; font-size: 16px; line-height: 1.7; color: #6E6C64;">Momentum is strong and fully aligned with our plan, with no surprises this week.</p>
+                <div style="font-size: 12px; color: #8A5A12; margin-top: 6px; display: flex; align-items: center; gap: 8px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em;">REWRITE WAITING</span><a style="color: #4353C9; font-size: 12px;">review in rail →</a></div>
+              </div>
+              <h3 style="margin: 8px 0 0; font-size: 21px;">Numbers</h3>
+              <div style="border: 1px solid #E3E1DA; border-radius: 10px; overflow: hidden; font-size: 14.5px;">
+                <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; background: #F6F5F1; font-weight: 600; font-size: 13px; color: #55534C;"><span style="padding: 9px 16px;">Metric</span><span style="padding: 9px 16px;">Previous</span><span style="padding: 9px 16px;">Current</span><span style="padding: 9px 16px;">Change</span></div>
+                <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; border-top: 1px solid #ECEAE3;"><span style="padding: 9px 16px;">MRR</span><span style="padding: 9px 16px;">$48.6k</span><span style="padding: 9px 16px; background: #FDF6EC;">$52.1k</span><span style="padding: 9px 16px; background: #FDF6EC;">+7%</span></div>
+                <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; border-top: 1px solid #ECEAE3;"><span style="padding: 9px 16px;">New signups</span><span style="padding: 9px 16px;">427</span><span style="padding: 9px 16px; background: #FDF6EC;">468</span><span style="padding: 9px 16px;">+10%</span></div>
+              </div>
+              <p style="margin: 8px 0 0; font-size: 16px; line-height: 1.7; color: #33322E;">No asks this week. We will flag hiring needs once the next cohort closes.</p>
+            </div>
+          </div>
+          <div style="background: #F9F8F5; border-top: 1px solid #E3E1DA; padding: 18px 18px 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; gap: 16px; font-size: 13px; color: #9B998F;"><span>Chat</span><span style="color: #1B1B20; font-weight: 600; border-bottom: 2px solid #4353C9; padding-bottom: 4px;">Review <span style="background: #C77E1F; color: #fff; border-radius: 999px; font-size: 10px; padding: 1px 6px;">4</span></span><span>History</span></div>
+            <div style="font-size: 12.5px; color: #6E6C64;">A snapshot is taken before any bulk approve — you can always restore.</div>
+            <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #8A5A12;">MEANING · REWRITE</span>
+                <div style="flex: 1;"></div>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #9B998F;">line 2</span>
+              </div>
+              <div style="font-size: 13px; line-height: 1.55; color: #33322E;"><strong>Reframes the week from "steady" to "exceptionally strong"</strong> and adds claims about indicators and engagement not present before.</div>
+              <div style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; line-height: 1.5;">
+                <div style="background: #FBF1F0; border-radius: 7px; padding: 8px 10px; color: #7C2D22;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.1em;">WAS</span> Momentum is strong and fully aligned with our plan, with no surprises this week.</div>
+                <div style="background: #EFF7F1; border-radius: 7px; padding: 8px 10px; color: #175B38;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.1em;">NOW</span> Our momentum this week has been exceptionally strong, and performance continues to exceed our expectations…</div>
+              </div>
+              <div style="font-size: 12px; color: #9B998F;">from <a style="color: #4353C9;">metrics.csv</a> · week 25 · confidence: high</div>
+              <div style="display: flex; gap: 7px;"><span style="background: #4353C9; color: #fff; font-size: 12.5px; font-weight: 600; border-radius: 7px; padding: 5px 15px;">Approve</span><span style="border: 1px solid #DEDCD5; font-size: 12.5px; border-radius: 7px; padding: 5px 12px;">Edit</span><span style="border: 1px solid #DEDCD5; font-size: 12.5px; border-radius: 7px; padding: 5px 12px;">Reject</span></div>
+            </div>
+            <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; gap: 9px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #1F7A4D;">FIGURES · 3</span>
+                <div style="flex: 1;"></div>
+                <span style="font-size: 11.5px; color: #4353C9;">collapse ▴</span>
+              </div>
+              <div style="font-size: 12.5px; color: #33322E; line-height: 1.9;">
+                MRR $48.6k → <strong>$52.1k</strong> <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #9B998F;">line 6</span><br>
+                Change +18% → <strong>+7%</strong> <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #9B998F;">line 6</span><br>
+                New signups 427 → <strong>468</strong> <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #9B998F;">line 7</span>
+              </div>
+              <div style="font-size: 12px; color: #9B998F;">from <a style="color: #4353C9;">metrics.csv</a> · week 25 row · low-risk class</div>
+              <div style="display: flex; gap: 7px;"><span style="background: #fff; border: 1px solid #DEDCD5; color: #33322E; font-size: 12.5px; font-weight: 600; border-radius: 7px; padding: 5px 15px;">Approve 3 figures</span><span style="border: 1px solid #DEDCD5; font-size: 12.5px; border-radius: 7px; padding: 5px 12px; color: #6E6C64;">Each…</span></div>
+            </div>
+            <div style="flex: 1;"></div>
+            <div style="border-top: 1px solid #ECEAE3; padding-top: 12px; display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 12.5px; color: #6E6C64;">0 of 4 decided</span>
+              <div style="flex: 1;"></div>
+              <span style="font-size: 12.5px; color: #6E6C64;">Approve all 4…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="3a" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="background: #1B1B20; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px;">3a</span>
+        <span style="font-size: 14px; font-weight: 600;">Agent detail — de-IDE'd</span>
+        <span style="font-size: 12.5px; color: #6E6C64;">three questions instead of a pipeline: when it runs · what it may touch · what it may do without asking</span>
+      </div>
+      <div style="width: 1440px; background: #EFEEE9; border: 1px solid #CFCDC4; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 12px rgba(27,27,32,0.08);">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 12px 20px;">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #4353C9; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600;">A</div>
+          <span style="font-size: 13.5px; font-weight: 600;">northwind-reports</span><span style="font-size: 13.5px; color: #9B998F;">/ Agents / Weekly refresh</span>
+          <div style="flex: 1;"></div>
+          <div style="width: 26px; height: 26px; border-radius: 999px; background: #23408F; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 600;">TS</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 84px 1fr;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0 24px;">
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">⌂</span><span style="font-size: 10px; color: #6E6C64;">Home</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">✎</span><span style="font-size: 10px; color: #6E6C64;">Editor</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">▤</span><span style="font-size: 10px; color: #6E6C64;">Templates</span></div>
+            <div style="width: 64px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #9B998F;">◫</span><span style="font-size: 10px; color: #6E6C64;">Knowledge</span></div>
+            <div style="width: 64px; padding: 8px 0; border-radius: 10px; background: #fff; border: 1px solid #E3E1DA; display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 15px; color: #4353C9;">⟳</span><span style="font-size: 10px; color: #4353C9; font-weight: 600;">Agents</span></div>
+          </div>
+          <div style="background: #FCFBF9; border-top-left-radius: 14px; border-left: 1px solid #E3E1DA; border-top: 1px solid #E3E1DA; min-height: 780px; padding: 44px 72px 56px; display: flex; flex-direction: column; gap: 28px; max-width: 1000px;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+              <span style="font-size: 13px; color: #6E6C64;">← Agents</span>
+              <div style="flex: 1;"></div>
+              <span style="font-size: 12.5px; color: #55534C; border: 1px solid #DEDCD5; border-radius: 8px; padding: 6px 14px; background: #fff;">Pause</span>
+              <span style="background: #4353C9; color: #fff; font-size: 13px; font-weight: 600; border-radius: 8px; padding: 7px 18px;">▶ Run now</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <h2 style="margin: 0; font-size: 28px; letter-spacing: -0.01em;">Weekly refresh</h2>
+                <span style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #1F7A4D;"><span style="width: 7px; height: 7px; border-radius: 999px; background: #1F7A4D;"></span>on</span>
+              </div>
+              <p style="margin: 0; font-size: 15px; color: #55534C; line-height: 1.6;">Every Monday morning, re-derives your reports from their sources. Every change it makes lands in review — nothing applies silently beyond what you allow below.</p>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+              <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.14em; color: #6E6C64;">WHEN IT RUNS</span>
+                <div style="font-size: 15px; font-weight: 600;">Mondays at 9:00</div>
+                <div style="display: flex; gap: 8px;"><span style="border: 1px solid #DEDCD5; background: #F6F5F1; border-radius: 8px; padding: 6px 12px; font-size: 13px;">Monday ▾</span><span style="border: 1px solid #DEDCD5; background: #F6F5F1; border-radius: 8px; padding: 6px 12px; font-size: 13px;">9:00 ▾</span></div>
+                <div style="font-size: 12.5px; color: #9B998F; line-height: 1.55;">Also runs when a source changes — <a style="color: #4353C9;">change</a></div>
+              </div>
+              <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.14em; color: #6E6C64;">WHAT IT MAY TOUCH</span>
+                <div style="font-size: 15px; font-weight: 600;">3 documents · 2 sources</div>
+                <div style="font-size: 13px; color: #33322E; line-height: 1.8;">Weekly Operating Summary<br>Board Note<br>Executive Summary</div>
+                <div style="font-size: 12.5px; color: #9B998F;">reads <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">metrics.csv · market-research.md</span></div>
+              </div>
+              <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.14em; color: #6E6C64;">WITHOUT ASKING, IT MAY</span>
+                <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13.5px;">
+                  <div style="display: flex; justify-content: space-between;"><span>Update figures &amp; dates</span><span style="color: #1F7A4D; font-weight: 600;">auto-apply</span></div>
+                  <div style="display: flex; justify-content: space-between;"><span>Change meaning</span><span style="color: #B45309; font-weight: 600;">ask first</span></div>
+                  <div style="display: flex; justify-content: space-between;"><span>Restructure</span><span style="color: #B3261E; font-weight: 600;">never</span></div>
+                </div>
+                <div style="font-size: 12.5px; color: #9B998F; line-height: 1.55;">Same dial as the document header — <a style="color: #4353C9;">edit</a></div>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.14em; color: #6E6C64;">RECENT RUNS</span>
+              <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 12px; overflow: hidden;">
+                <div style="display: flex; align-items: center; gap: 12px; padding: 13px 20px; border-bottom: 1px solid #F1F0EB;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">MON 07:00</span>
+                  <span style="font-size: 13.5px; color: #33322E;">6 figures applied · 2 meaning changes sent to review · <a style="color: #4353C9;">you approved both</a></span>
+                  <div style="flex: 1;"></div>
+                  <span style="width: 7px; height: 7px; border-radius: 999px; background: #1F7A4D;"></span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; padding: 13px 20px; border-bottom: 1px solid #F1F0EB;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">MON 30 JUN</span>
+                  <span style="font-size: 13.5px; color: #33322E;">Swept 3 documents · nothing to change</span>
+                  <div style="flex: 1;"></div>
+                  <span style="width: 7px; height: 7px; border-radius: 999px; background: #CFCDC4;"></span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; padding: 13px 20px;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9B998F;">MON 23 JUN</span>
+                  <span style="font-size: 13.5px; color: #33322E;">Model was unreachable — run paused and resumed at 9:40, no documents skipped · <a style="color: #4353C9;">details</a></span>
+                  <div style="flex: 1;"></div>
+                  <span style="width: 7px; height: 7px; border-radius: 999px; background: #C77E1F;"></span>
+                </div>
+              </div>
+              <div style="font-size: 12.5px; color: #9B998F;">Runs on the standard model · <a style="color: #4353C9;">model access</a></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+</x-dc>
+</body>
+</html>

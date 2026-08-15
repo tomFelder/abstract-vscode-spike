@@ -946,7 +946,33 @@
 		"--abstract-gutter-idle",
 		"--abstract-card-border",
 		"--abstract-rail-bg",
-		"--abstract-paper-bg"
+		"--abstract-paper-bg",
+		"--abstract-canvas",
+		"--abstract-page-bg",
+		"--abstract-sunken",
+		"--abstract-sunken-border",
+		"--abstract-chip",
+		"--abstract-control",
+		"--abstract-line-med",
+		"--abstract-line-soft",
+		"--abstract-ink",
+		"--abstract-ink-body",
+		"--abstract-ink-soft",
+		"--abstract-ink-2",
+		"--abstract-ink-3",
+		"--abstract-indigo",
+		"--abstract-indigo-hover",
+		"--abstract-indigo-tint",
+		"--abstract-indigo-tint-border",
+		"--abstract-green",
+		"--abstract-green-bg",
+		"--abstract-green-border",
+		"--abstract-amber",
+		"--abstract-amber-bg",
+		"--abstract-amber-border",
+		"--abstract-amber-label",
+		"--abstract-red",
+		"--abstract-avatar-navy"
 	],
 	"others": [
 		"--activity-bar-action-height",
@@ -1096,7 +1122,12 @@
 		"--slide-from-y",
 		"--abstract-shadow-e1",
 		"--abstract-shadow-rail",
-		"--abstract-shadow-editor"
+		"--abstract-shadow-editor",
+		"--abstract-shadow-frame",
+		"--abstract-shadow-card",
+		"--abstract-shadow-dialog",
+		"--abstract-shadow-tooltip",
+		"--abstract-shadow-drawer"
 	],
 	"sizes": [
 		"--vscode-agents-fontSize-body1",
@@ -1136,6 +1167,11 @@
 		"--vscode-spacing-size360",
 		"--vscode-spacing-size400",
 		"--vscode-strokeThickness",
-		"--abstract-card-radius"
+		"--abstract-card-radius",
+		"--abstract-r-control",
+		"--abstract-r-input",
+		"--abstract-r-card",
+		"--abstract-r-pill",
+		"--abstract-font-mono"
 	]
 }
