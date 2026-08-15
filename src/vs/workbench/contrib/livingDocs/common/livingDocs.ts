@@ -694,6 +694,23 @@ export interface ILivingDocsService {
 	readonly onDidChange: Event<void>;
 
 	/**
+	 * Fires when a document's parsed body changed because you were TYPING into it (plan 52 WP-G / G1).
+	 *
+	 * Live typing persists through `saveRawText(..., { silent: true })`, which deliberately does not fire
+	 * {@link onDidChange}: that event re-renders the document webview, and re-rendering the surface mid-keystroke
+	 * would remount ProseMirror and take the caret with it. The consequence, until now unnoticed, was that every
+	 * OTHER surface reading the parsed document was left uninformed too - so the Outline showed whatever headings
+	 * the document had when its tab was last activated, and a heading you had just written was simply absent from
+	 * it. That is a view lying about the model rather than a stale cache: `getDoc` was already correct.
+	 *
+	 * So this is the narrow counterpart. It says only "this document's body was re-parsed", it carries the docId
+	 * so a listener can ignore documents it is not showing, and the editor pane deliberately does NOT subscribe -
+	 * which is what keeps the caret where the silent save was invented to keep it. Listeners are expected to
+	 * coalesce: it fires once per save, and a save happens as you type.
+	 */
+	readonly onDidChangeDocumentBody: Event<{ readonly docId: string }>;
+
+	/**
 	 * Fires when something asks the right panel to focus a tab (e.g. "Ask AI" -> Chat). This is the
 	 * already-mounted path: if the rail is not yet mounted when the request is made the event is lost,
 	 * so `focusPanel` ALSO records the request as `consumePendingPanel`'s pending state for replay.

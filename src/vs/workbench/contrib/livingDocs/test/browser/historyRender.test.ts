@@ -67,10 +67,23 @@ suite('livingDocs History tab (historyHtml)', () => {
 
 	test('truthful empty state when the document has no versions or changes', () => {
 		const h = historyHtml([], [], 'Fresh Doc', undefined, NOW);
-		assert.ok(h.includes('No versions yet - changes you approve will appear here.'), 'calm one-line empty state');
+		assert.ok(h.includes('No versions yet.'), 'calm one-line empty state');
 		assert.ok(!h.includes('data-restore'), 'no Restore rows when there is nothing to restore');
 		// Still offers the manual Save version entry point (there is a body to snapshot).
 		assert.ok(h.includes('data-save-version'), 'Save version is offered for an open document');
+	});
+
+	// Plan 52 WP-G / G2: History must state what it records AND what it does not, identically in both states -
+	// the old wording named only the approve path and left "is my typing versioned?" unanswered.
+	test('both states carry the same scope sentence: what is recorded, and that typing is not', () => {
+		const RECORDED = 'Recorded here: changes you approve or reject, and versions you save with Save version.';
+		const NOT_RECORDED = 'Your own typing is not recorded';
+		const empty = historyHtml([], [], 'Fresh Doc', undefined, NOW);
+		const populated = historyHtml([snap({ id: 's1', label: 'Saved version', via: 'manual' })], [audit({ blockId: 'body' })], 'Doc', undefined, NOW);
+		assert.deepStrictEqual(
+			[empty.includes(RECORDED), empty.includes(NOT_RECORDED), populated.includes(RECORDED), populated.includes(NOT_RECORDED)],
+			[true, true, true, true]
+		);
 	});
 
 	test('no document open shows a calm prompt, not a fabricated timeline', () => {

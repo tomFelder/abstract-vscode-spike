@@ -14,7 +14,9 @@ import { Disposable, DisposableStore, MutableDisposable } from '../../../../base
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, IMenuItem, ISubmenuItem, isIMenuItem, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { ContextKeyExpr, ContextKeyExpression, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+import { ContextKeyExpr, ContextKeyExpression, IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+import { InputFocusedContext } from '../../../../platform/contextkey/common/contextkeys.js';
+import { RawWorkbenchListFocusContextKey } from '../../../../platform/list/browser/listService.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
@@ -28,6 +30,7 @@ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js'
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { registerWorkbenchContribution2, WorkbenchPhase, IWorkbenchContribution } from '../../../common/contributions.js';
+import { ActiveEditorContext } from '../../../common/contextkeys.js';
 import { EditorExtensions, IEditorFactoryRegistry } from '../../../common/editor.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../../../services/editor/common/editorResolverService.js';
@@ -42,6 +45,7 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { CLOSE_CHAT_COMMAND_ID, DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
+import { bulkApproveConfirm, chordTargetChange, IProposedChange } from '../common/livingDocsModel.js';
 import { IAbstractHeaderService } from '../common/abstractHeader.js';
 import { AbstractHeaderService } from './abstractHeaderService.js';
 import { AbstractHeaderContribution } from './abstractHeader.js';
@@ -352,6 +356,181 @@ registerAction2(class CloseChatSessionAction extends Action2 {
 		livingDocs.closeChatSession(target.id);
 		// Closing a chat you cannot see is as confusing as opening one you cannot see.
 		livingDocs.focusPanel('chat');
+	}
+});
+
+// --- approval chords: Accept / Reject / Accept all (plan 52 slice A2) ---
+//
+// Reviewing is the highest-frequency loop in this product, and until now every accept cost a trip to the
+// mouse. These three chords put the whole loop on the keyboard, and they follow the wave's settled mechanism
+// exactly: registered ADDITIVELY at weight 1000 (the Cmd+T precedent, #293; WP-E takes Cmd+F the same way),
+// with no core patch to the stock keybinding tables.
+//
+// WHY THE CHORDS ARE GATED RATHER THAN TAKEN OUTRIGHT. All three chords are already spoken for somewhere in
+// the stock IDE, so taking them unconditionally would break a working key for the sake of one that is idle
+// most of the time. `HAS_PENDING_CHANGES` makes the claim conditional: while the active document has nothing
+// waiting on you, the key is not ours at all and the stock command resolves as it always did. That is also
+// what makes "a chord with nothing pending" harmless by construction rather than by an early return.
+//
+// THE COLLISION CHECK (grepped against this tree, mac bindings):
+//   Cmd+Enter        editor.action.insertLineAfter   when editorTextFocus  -> excluded by !inputFocus
+//                    plus chat / terminal-chat / notebook / merge-editor / markers / comments / search-editor
+//                    entries, all inside containers this shell deregisters (HideIdeContainersContribution).
+//   Cmd+Backspace    deleteAllLeft                   when textInputFocus   -> excluded by !inputFocus
+//                    moveFileToTrash                 when filesExplorerFocus -> the stock Explorer is
+//                    deregistered here and our tree rail never sets that key (grep: no hits in livingDocs/).
+//                    Terminal / debug / notifications / tunnels / preferences: all unreachable surfaces.
+//   Cmd+Shift+Enter  editor.action.insertLineBefore  when editorTextFocus  -> excluded by !inputFocus
+//                    list.toggleSelection            when listFocus        -> REACHABLE: the Files tab's tree
+//                    is a workbench list. Weight 1000 would beat it, so we stand down instead: `!listFocus`
+//                    leaves the tree its own key. Applied to all three chords, not just this one, so the rule
+//                    is one sentence - "these are the writing surface's chords" - rather than a special case.
+//
+// `!inputFocus` is what makes the document surface work while the chat composer does not: `inputFocus` is
+// bound from `isEditableElement(activeElement)`, and with the ProseMirror webview focused the active element
+// is the <iframe>, which is not editable. Keys pressed inside the webview still reach us because
+// WebviewElement re-dispatches them onto the host window as emulated keyboard events.
+const HAS_PENDING_CHANGES = new RawContextKey<boolean>('abstractHasPendingChanges', false);
+const APPROVAL_CHORD_WHEN = ContextKeyExpr.and(
+	HAS_PENDING_CHANGES,
+	InputFocusedContext.toNegated(),
+	RawWorkbenchListFocusContextKey.toNegated(),
+);
+
+// Keeps `abstractHasPendingChanges` honest: true only while the ACTIVE document has changes waiting. Doc-scoped
+// rather than workspace-wide on purpose - the chords act on the document in front of you, so the key that
+// arms them must mean the same thing.
+class ApprovalChordContextContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.livingDocs.approvalChordContext';
+
+	private readonly _hasPending: IContextKey<boolean>;
+
+	constructor(
+		@IContextKeyService contextKeyService: IContextKeyService,
+		@IEditorService private readonly _editorService: IEditorService,
+		@ILivingDocsService private readonly _livingDocs: ILivingDocsService,
+	) {
+		super();
+		this._hasPending = HAS_PENDING_CHANGES.bindTo(contextKeyService);
+		this._update();
+		this._register(this._editorService.onDidActiveEditorChange(() => this._update()));
+		this._register(this._livingDocs.onDidChange(() => this._update()));
+	}
+
+	private _update(): void {
+		this._hasPending.set(activeDocPending(this._editorService, this._livingDocs).length > 0);
+	}
+}
+registerWorkbenchContribution2(ApprovalChordContextContribution.ID, ApprovalChordContextContribution, WorkbenchPhase.AfterRestored);
+
+// The pending set of the document the chords are aimed at: the active editor, and only when it is a document
+// surface. A source tab or a screen is not something you approve changes into.
+function activeDocPending(editorService: IEditorService, livingDocs: ILivingDocsService): readonly IProposedChange[] {
+	const input = editorService.activeEditor;
+	if (!(input instanceof LivingDocEditorInput)) { return []; }
+	return livingDocs.getPendingForDoc(input.resource);
+}
+
+registerAction2(class ApproveChangeAction extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.review.approveChange',
+			title: localize2('livingDocs.review.approveChange', "Approve Next Change"),
+			category: localize2('livingDocs.category', "Abstract"),
+			f1: true,
+			keybinding: { weight: 1000, primary: KeyMod.CtrlCmd | KeyCode.Enter, when: APPROVAL_CHORD_WHEN },
+		});
+	}
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const livingDocs = accessor.get(ILivingDocsService);
+		const target = chordTargetChange(activeDocPending(accessor.get(IEditorService), livingDocs));
+		// Nothing pending: the palette can still reach this command, so it answers by doing nothing rather
+		// than by guessing at a document. (The CHORD never gets here - `when` hands the key back.)
+		if (!target) { return; }
+		await livingDocs.approve(target.id);
+	}
+});
+
+registerAction2(class RejectChangeAction extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.review.rejectChange',
+			title: localize2('livingDocs.review.rejectChange', "Reject Next Change"),
+			category: localize2('livingDocs.category', "Abstract"),
+			f1: true,
+			keybinding: { weight: 1000, primary: KeyMod.CtrlCmd | KeyCode.Backspace, when: APPROVAL_CHORD_WHEN },
+		});
+	}
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const livingDocs = accessor.get(ILivingDocsService);
+		const target = chordTargetChange(activeDocPending(accessor.get(IEditorService), livingDocs));
+		if (!target) { return; }
+		// No reason prompt on the chord. The rail's Reject asks for optional plain words because the pointer is
+		// already there and the click has landed; a chord that opened a quick input would turn a one-key discard
+		// into a modal, which is precisely the friction the chord exists to remove. The reason stays optional
+		// everywhere, so a rejection with none is a shape the audit trail already records.
+		await livingDocs.reject(target.id);
+	}
+});
+
+registerAction2(class ApproveAllChangesAction extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.review.approveAllChanges',
+			title: localize2('livingDocs.review.approveAllChanges', "Approve All Changes in This Document"),
+			category: localize2('livingDocs.category', "Abstract"),
+			f1: true,
+			keybinding: { weight: 1000, primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter, when: APPROVAL_CHORD_WHEN },
+		});
+	}
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const livingDocs = accessor.get(ILivingDocsService);
+		const editorService = accessor.get(IEditorService);
+		const input = editorService.activeEditor;
+		if (!(input instanceof LivingDocEditorInput)) { return; }
+		const pending = livingDocs.getPendingForDoc(input.resource);
+		if (!pending.length) { return; }
+		// The SAME safety net the rail's "Approve all" button runs (plan 31 iter 4): a bulk approve carrying any
+		// meaning change confirms first, and says a snapshot is taken so it can be undone. A chord is easier to
+		// press than a button is to click, so if either route deserved the net it is this one - the confirm is
+		// not skipped here on the excuse that the user asked for speed.
+		const confirm = bulkApproveConfirm(pending, true);
+		if (confirm.needed) {
+			const { confirmed } = await accessor.get(IDialogService).confirm({ message: confirm.message, primaryButton: localize('livingDocs.review.approveAll.confirm', "Approve all") });
+			if (!confirmed) { return; }
+		}
+		await livingDocs.approveAll(input.resource.toString());
+	}
+});
+
+// --- Cmd+F finds inside the document (plan 52 WP-E) ---
+// Stock Cmd+F is the code editor's find, which never fires on an Abstract surface (there is no text editor
+// there - the pre-build walk found Cmd+F doing nothing at all). It is taken the same additive way Cmd+T is
+// above: an action at weight 1000, which beats the stock binding without touching core's keybinding tables.
+//
+// The widget itself lives INSIDE the document webview, and when the caret is in the document that frame
+// answers the chord directly (no round trip). This action covers the OTHER focus positions the pane can be
+// in - the tab strip, a rail, the header - where the chord reaches the workbench instead. Scoped to
+// ActiveEditorContext so it only claims Cmd+F while a living document is the active editor; every other
+// surface keeps whatever Cmd+F meant there, and the Files-tab filter (project-wide search) is untouched.
+registerAction2(class FindInDocumentAction extends Action2 {
+	constructor() {
+		super({
+			id: 'livingDocs.editor.find',
+			title: localize2('livingDocs.editor.find', "Find in Document"),
+			f1: true,
+			keybinding: {
+				weight: 1000,
+				primary: KeyMod.CtrlCmd | KeyCode.KeyF,
+				when: ActiveEditorContext.isEqualTo(LivingDocEditor.ID),
+			},
+		});
+	}
+	run(accessor: ServicesAccessor): void {
+		const pane = accessor.get(IEditorService).activeEditorPane;
+		if (pane instanceof LivingDocEditor) {
+			pane.openFind();
+		}
 	}
 });
 

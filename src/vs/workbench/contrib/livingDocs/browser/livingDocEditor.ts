@@ -67,6 +67,11 @@ export class LivingDocEditor extends EditorPane {
 	// to `common/editorWebviewProtocol.ts` (plan 30, track 4); this class holds its state and carries out the
 	// effects. Reset per input in setInput.
 	private _proto: IEditorWebviewState = initialEditorWebviewState();
+	// A Cmd+F that arrived before the webview RUNTIME was listening (plan 52 WP-E). The find widget lives
+	// inside the webview, so a `findOpen` posted into a not-yet-ready frame would be dropped silently and the
+	// chord would look broken; hold it here instead and flush it on `lwdReady`, the same hold-until-ready rule
+	// the render/focus effects in `editorWebviewProtocol.ts` follow.
+	private _pendingFindOpen = false;
 	private readonly _inputDisposables = this._register(new DisposableStore());
 	// The Properties panel's open state for the CURRENT document (plan 45 pin 12). Read from the storage service
 	// on setInput (per-doc key `livingDocs.v2.props.<docId>`), so opening the same doc later restores the panel.
@@ -136,6 +141,8 @@ export class LivingDocEditor extends EditorPane {
 		// Dispose the previous input's webview (registered to `_inputDisposables`) and build a fresh one.
 		this._inputDisposables.clear();
 		this._proto = initialEditorWebviewState();
+		// A find held for the PREVIOUS document must not open on this one.
+		this._pendingFindOpen = false;
 		this._createWebview();
 		// This webview is the only thing that can see whether a pending change really mounted an inline widget, and
 		// what it reports is true only while it is alive and showing THIS document. So the report is retired with it
@@ -335,6 +342,11 @@ export class LivingDocEditor extends EditorPane {
 			case 'lwdReady':
 				// The webview RUNTIME has loaded and is listening; the reducer flushes any held render + focus.
 				this._runProto(applyReady(this._proto));
+				// ... and a Cmd+F that raced the load now has a widget to open.
+				if (this._pendingFindOpen) {
+					this._pendingFindOpen = false;
+					this.openFind();
+				}
 				break;
 			case 'pmWidgets':
 				// The live surface reported which pending changes it ACTUALLY mounted an inline widget for (plan 52
@@ -823,5 +835,19 @@ export class LivingDocEditor extends EditorPane {
 	override focus(): void {
 		super.focus();
 		this._webview?.focus();
+	}
+
+	/**
+	 * Open the in-document find widget (plan 52 WP-E). Called by the `livingDocs.editor.find` action when
+	 * Cmd+F is pressed with the pane focused but the caret OUTSIDE the document iframe (the tab strip, a rail,
+	 * the header). When the caret is already inside the document the webview answers the chord itself, without
+	 * a round trip - so this path exists only to make the chord work from everywhere the pane can be focused.
+	 * Focus is forwarded into the iframe first, since the widget's input lives in there.
+	 */
+	openFind(): void {
+		if (!this._webview) { return; }
+		if (!this._proto.ready) { this._pendingFindOpen = true; return; }
+		this._webview.focus();
+		void this._webview.postMessage({ type: 'findOpen' });
 	}
 }

@@ -17,6 +17,7 @@ import { isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose } from '../co
 import { activeWikilink, matchTypedWikilink, rankWikilinkTargets, resolveWikilinkTarget, splitWikilinkQuery, WIKILINK_PICKER_LIMIT, wikilinksToPlainText } from '../common/wikilinks.js';
 import { FRESHNESS_COLOURS, UNREACHABLE_SOURCE_LINE, UNREACHABLE_SOURCE_MARKER } from '../common/sourceFreshness.js';
 import { AMBER, DARK_SURFACE, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, RED, SHADOW, TRACKING, TYPE } from '../common/abstractTokens.js';
+import { FIND_WIDGET_HTML, FIND_WIDGET_RUNTIME, FIND_WIDGET_STYLE } from './livingDocFindWidget.js';
 import { POLICY_EDITOR_STYLE } from './policyEditorRender.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from './prosemirrorBundle.js';
 
@@ -643,7 +644,8 @@ textarea.raw:focus{outline:none;border-color:${INDIGO.base}}
 /* Re-centre: when the panel is open the reading column gets 284px of right padding so it re-centres in the
  * remaining width rather than sitting under the panel (P12.6). */
 .props-open .pmwrap{padding-right:324px}
-${POLICY_EDITOR_STYLE}`;
+${POLICY_EDITOR_STYLE}
+${FIND_WIDGET_STYLE}`;
 
 // The webview RUNTIME (set up ONCE per webview via the shell). It mounts the ProseMirror view a single
 // time and thereafter re-renders the document body from 'lwdRender' messages instead of a fresh setHtml,
@@ -738,7 +740,7 @@ function setProv(spec){ _prov = Object.create(null); if (spec && spec.provenance
 // the edit persists the server re-renders the chip back to its honest saved state, with an optional version
 // suffix when a snapshot exists (plan 26 iter 4).
 function setSaving(){ const s = root.querySelector('.tb-saved-text'); if (s) { s.textContent = 'Saving\\u2026'; } }
-function pmOnChange(){ if (_pmEchoSuppressed) { return; } setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
+function pmOnChange(){ if (_pmEchoSuppressed) { return; } findRefresh(); setSaving(); clearTimeout(pmTimer); pmTimer = setTimeout(function(){ if (pmView) { vscode.postMessage({ type: 'pmEdit', text: window.LWDPM.toMarkdown(pmView) }); } }, 300); }
 function pmDeco(spec){ setProv(spec); if (pmView && spec && window.LWDPM) { window.LWDPM.setDecorations(pmView, spec); } enrichBoundFigures(); enrichWikilinks(); reportWidgets(specChangeIds(spec)); }
 // The change ids this decoration pass ASKED for - every pending edit and insertion in the spec.
 function specChangeIds(spec){ const ids = []; if (spec) { const lists = [spec.edits, spec.inserts]; for (let l = 0; l < lists.length; l++) { const arr = lists[l] || []; for (let i = 0; i < arr.length; i++) { if (arr[i] && arr[i].id) { ids.push(arr[i].id); } } } } return ids; }
@@ -1417,11 +1419,14 @@ function wireTableEditing(){ if (!pmView || pmView.__lwdTableWired){ return; } p
 // scrollers too) rather than tearing it down - so opening a cell can never be undone by a stray scroll.
 window.addEventListener('scroll', function(){ revalidateCellEditor(); }, true);
 window.addEventListener('resize', function(){ revalidateCellEditor(); });
+${FIND_WIDGET_RUNTIME}
 window.addEventListener('message', e => { const m = e.data;
-	if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); }
+	if (m && m.type === 'lwdRender') { applyUpdate(m.html, m.pmMd, m.pmDeco, m.pmReset); findRefresh(); }
 	// The workspace's document names changed (one created, renamed or deleted): re-mark every chip, so a link
 	// that was unresolved a moment ago reads as resolved without a reload.
 	else if (m && m.type === 'lwdDocs') { if (Array.isArray(m.names)) { _docNames = m.names; enrichWikilinks(); if (wikiPicker) { refreshWikiPicker(); } } }
+	// The host's Cmd+F action (fired when focus sits in the pane host rather than in this frame).
+	else if (m && m.type === 'findOpen') { openFind(); }
 	else if (m && m.type === 'focusChange') { focusChange(m.id); }
 	else if (m && m.type === 'revealHeading') { revealHeading(m.headingIndex); }
 	else if (m && m.type === 'revealBlock') { revealBlock(m.blockIndex); }
@@ -1775,7 +1780,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const pmInit = `<script>window.__LWD_PM_MD=${content.pmMd === null ? 'null' : escapeForScript(content.pmMd)};`
 		+ `window.__LWD_PM_DECO=${decoLiteral};window.__LWD_DOCS=${docsLiteral};</script>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${STYLE}</style></head><body>`
-		+ `<div id="lwd-root">${content.html}</div>`
+		+ `<div id="lwd-root">${content.html}</div>${FIND_WIDGET_HTML}`
 		+ `${pmInit}<script>${bundle}</script><script>${RUNTIME}</script></body></html>`;
 }
 
