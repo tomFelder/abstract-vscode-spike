@@ -129,14 +129,16 @@ suite('livingDocFind (plan 52 WP-E)', () => {
 				text: result.text,
 				ranges: result.replacements.map(r => ({ start: r.start, end: r.end, text: r.text })),
 				movedOffTheStaleRanges: result.replacements.map((r, i) => r.start - staleRanges[i].start),
-				// What the old offset-taking replace would have written, reconstructed by hand from the stale ranges.
-				hadItTrustedTheStaleRanges: edited.slice(0, staleRanges[0].start) + 'REPLACED' + edited.slice(staleRanges[0].end),
+				// What an offset-taking replace would have written, reconstructed by hand from the FIRST stale range.
+				// This string is the shipped defect verbatim: the splice lands ten characters early and eats sixteen
+				// characters of live prose, exactly as #316 V2-1 recorded it off disk.
+				hadItTrustedTheFirstStaleRange: edited.slice(0, staleRanges[0].start) + 'REPLACED' + edited.slice(staleRanges[0].end),
 			},
 			{
 				text: 'Headline. MRR is [$48.6k](REPLACED) and also [$48.6k](REPLACED) again.',
-				ranges: [{ start: 26, end: 42, text: 'REPLACED' }, { start: 53, end: 69, text: 'REPLACED' }],
+				ranges: [{ start: 26, end: 42, text: 'REPLACED' }, { start: 62, end: 78, text: 'REPLACED' }],
 				movedOffTheStaleRanges: [10, 10],
-				hadItTrustedTheStaleRanges: 'Headline. MRR is [$48.6kREPLACEDetrics.mrr) and also [$48.6k](bind:metrics.mrr) again.',
+				hadItTrustedTheFirstStaleRange: 'Headline. MRR isREPLACEDetrics.mrr) and also [$48.6k](bind:metrics.mrr) again.',
 			}
 		);
 	});
