@@ -13,7 +13,7 @@ import { IWorkbenchLayoutService } from '../../../../services/layout/browser/lay
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
 import { NullAnalyticsService } from '../../common/analytics.js';
-import { IFileService } from '../../../../../platform/files/common/files.js';
+import { FileOperationError, FileOperationResult, IFileService } from '../../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
@@ -278,7 +278,10 @@ suite('livingDocs Service', () => {
 			onDidChangeFileSystemProviderRegistrations: Event.None,
 			readFile: async (resource: URI) => {
 				const content = files.get(resource.toString());
-				if (content === undefined) { throw new Error(`not found: ${resource.toString()}`); }
+				// A missing file fails the way the real file service fails it (a FILE_NOT_FOUND
+				// FileOperationError), so callers that tell "absent" apart from "unreadable" - the agent
+				// registry does - behave here exactly as they do in the app.
+				if (content === undefined) { throw new FileOperationError(`not found: ${resource.toString()}`, FileOperationResult.FILE_NOT_FOUND); }
 				return { value: VSBuffer.fromString(content) };
 			},
 			writeFile: async (resource: URI, buffer: VSBuffer) => {
@@ -3119,6 +3122,22 @@ suite('livingDocs Service', () => {
 		assert.ok(ratio.text.includes('[$41.2k](bind:metrics.mrr)'), 'no figure applied - the run was blocked at the gate');
 		assert.strictEqual(service.getAgents().find(a => a.id === 'agent')!.status, 'blocked', 'agent surfaces the blocked state');
 		assert.strictEqual(service.getPendingForDoc(BADBIND).length, 0, 'nothing queued either');
+	});
+
+	test('merely opening a workspace leaves its agents.json untouched', async () => {
+		// The shipped sample workspaces commit their registry in the legacy bare-array shape, which is what
+		// `opts.agents` writes here. Opening the workspace used to reshape that file on disk (and a folder
+		// with no registry at all had one created for it), so `git status` went dirty on every launch.
+		const service = createService([], { agents: [manualAgent('auto-figures')] });
+		const registry = URI.file('/ws/agents.json').toString();
+		const onOpen = lastFiles!.get(registry);
+
+		await service.orchestrator.ensureLoaded();
+
+		assert.deepStrictEqual(
+			{ onDisk: lastFiles!.get(registry), agents: service.getAgents().map(a => a.id) },
+			{ onDisk: onOpen, agents: ['agent'] },
+		);
 	});
 
 	test('a clean run passes the verify gate and lands the figure', async () => {

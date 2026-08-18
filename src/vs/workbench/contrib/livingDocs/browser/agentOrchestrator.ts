@@ -11,7 +11,7 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { parseLivingDoc } from '../common/livingDocMarkdown.js';
 import { AGENT_RUN_CAP, AgentTriggerKind, IAgentDef, IAgentRun, IAgentTrigger, IDirtyEntry } from '../common/livingDocsModel.js';
-import { IAgentStore } from './agentStore.js';
+import { IAgentRegistry, IAgentStore } from './agentStore.js';
 import { IClock, RealClock } from './clock.js';
 
 // How the orchestrator runs an agent once a trigger fires: the host (the service) supplies the actual
@@ -48,7 +48,8 @@ const TICK_MS = 60_000;
 // affected, the review rail is where output lands. There is no doc-to-doc wiring: a write to any node
 // emits a single event, and the orchestrator walks the graph's reverse edges to mark dependents dirty.
 
-// The default automation set (spec 7) seeded when no registry exists yet.
+// The default automation set (spec 7), held in memory when a workspace has no registry yet. It is NOT
+// written out on load - `agents.json` appears only once the user's first real edit or run persists it.
 function defaultAgents(): IAgentDef[] {
 	return [
 		{ id: 'weekly-refresh', name: 'Weekly refresh', trigger: { kind: 'cron', cron: 'Mon 09:00' }, flow: { sources: [], docs: [] }, policy: 'auto-figures', status: 'idle' },
@@ -77,6 +78,9 @@ export class AgentOrchestrator extends Disposable {
 
 	private _agents: IAgentDef[] = [];
 	private _loaded = false;
+	// The in-flight load, so concurrent `ensureLoaded` callers await the SAME read instead of the first one
+	// winning a `_loaded` flag it has not earned yet and the rest running against an empty registry.
+	private _loading: Promise<void> | undefined;
 	// The workspace-wide dirty queue: doc URI -> changed dependency paths, split by edge kind. The
 	// Freshness-sweep heartbeat drains this.
 	private readonly _dirty = new Map<string, IDirtyEntry>();
@@ -85,7 +89,7 @@ export class AgentOrchestrator extends Disposable {
 	// The capped run log (D32-A, decision 150), newest-last in memory and persisted to `agents.json`. The
 	// Agents screen renders it newest-first; the last run per agent is derived from it.
 	private _runs: IAgentRun[] = [];
-	// Agents whose run is currently in flight (overlap guard, spec 09 §3, plan 32 iter 2): a due agent whose
+	// Agents whose run is currently in flight (overlap guard, spec 09 section 3, plan 32 iter 2): a due agent whose
 	// previous run has not finished is skipped with a recorded "still running" run rather than stacking.
 	// Ref-counted per agentId (finding 2): a manual run bypasses the guard but still counts as in-flight, so
 	// when a manual + scheduled run overlap the marker must clear only when the LAST of them finishes - a
@@ -108,16 +112,44 @@ export class AgentOrchestrator extends Disposable {
 
 	// --- agent registry ---
 
+	/**
+	 * Load the registry from the store, once. Reading is SIDE-EFFECT FREE: merely opening a workspace must
+	 * never touch `agents.json` (issue: the sample workspace's committed registry was reshaped on every
+	 * launch, and any folder opened without a registry had one created for it unasked). A workspace with no
+	 * registry yet gets the default automation set IN MEMORY only; the file is written the first time
+	 * something real happens to it - an edit through the drawer, or a run (see `_persistAgents` callers).
+	 *
+	 * A store read that FAILS (as opposed to finding no registry) leaves the orchestrator unloaded, so the
+	 * next caller retries. That matters because the file-system provider for the open folder can register
+	 * after this service constructs (see livingDocsService.ts, the provider-registration retry): treating
+	 * that transient failure as "no registry yet" used to overwrite a real registry with the defaults.
+	 */
 	async ensureLoaded(): Promise<void> {
 		if (this._loaded) { return; }
+		if (!this._loading) {
+			this._loading = this._load().finally(() => { this._loading = undefined; });
+		}
+		await this._loading;
+	}
+
+	private async _load(): Promise<void> {
+		let stored: IAgentRegistry | undefined;
+		try {
+			stored = await this._agentStore.read();
+		} catch (e) {
+			// Unreadable right now (no provider yet, transient I/O, corrupt file): show the defaults so the
+			// Agents screen is not blank, but stay UNLOADED so a later call re-reads - and write nothing.
+			this._log.warn('[livingDocs] agents read failed', e instanceof Error ? e.message : String(e));
+			this._agents = defaultAgents();
+			this._onDidChange.fire();
+			return;
+		}
 		this._loaded = true;
-		const stored = await this._agentStore.read();
 		if (stored && stored.agents.length) {
 			this._agents = stored.agents;
 			this._runs = stored.runs.slice(-AGENT_RUN_CAP);
 		} else {
 			this._agents = defaultAgents();
-			await this._persistAgents();
 		}
 		this._onDidChange.fire();
 	}
@@ -155,6 +187,7 @@ export class AgentOrchestrator extends Disposable {
 	// Duplicate an existing agent (the drawer's Duplicate action): a fresh id, a "(copy)" name, the same
 	// trigger/flow/policy, no run history of its own (runs are keyed by agentId), starting idle + enabled.
 	async duplicateAgent(agentId: string): Promise<IAgentDef | undefined> {
+		await this.ensureLoaded();
 		const source = this.getAgent(agentId);
 		if (!source) { return undefined; }
 		return this.createAgent({
@@ -168,6 +201,7 @@ export class AgentOrchestrator extends Disposable {
 	// Pause / resume an agent (the drawer's Pause toggle): sets/clears the `disabled` flag the scheduler
 	// respects. Only ever writes `disabled:true` or deletes it, so an older registry with no flag stays enabled.
 	async setAgentDisabled(agentId: string, disabled: boolean): Promise<void> {
+		await this.ensureLoaded();
 		const agent = this.getAgent(agentId);
 		if (!agent) { return; }
 		if (disabled) { agent.disabled = true; } else { delete agent.disabled; }
@@ -178,6 +212,7 @@ export class AgentOrchestrator extends Disposable {
 	// Inline policy edit (the drawer's three-level select). Guards against an invalid value so a stray
 	// message can never write a policy the router does not understand.
 	async setAgentPolicy(agentId: string, policy: IAgentDef['policy']): Promise<void> {
+		await this.ensureLoaded();
 		const agent = this.getAgent(agentId);
 		if (!agent || (policy !== 'auto-figures' && policy !== 'ask-before-apply' && policy !== 'draft-only')) { return; }
 		agent.policy = policy;
@@ -188,6 +223,7 @@ export class AgentOrchestrator extends Disposable {
 	// Inline trigger edit (the drawer's cron day/time picker or heartbeat-hours field). Replaces the whole
 	// trigger; the caller composes it from the picker fields, so this just validates the shape minimally.
 	async setAgentTrigger(agentId: string, trigger: IAgentTrigger): Promise<void> {
+		await this.ensureLoaded();
 		const agent = this.getAgent(agentId);
 		if (!agent || !trigger || !trigger.kind) { return; }
 		agent.trigger = trigger;
@@ -215,7 +251,15 @@ export class AgentOrchestrator extends Disposable {
 		return undefined;
 	}
 
+	// Write the registry. Only ever called for a real state change (an edit through the drawer, a recorded
+	// run) - never from the load path, so opening a workspace leaves `agents.json` exactly as it was.
 	private async _persistAgents(): Promise<void> {
+		if (!this._loaded) {
+			// We never managed to read the registry, so we do not know what is on disk: writing here would
+			// replace someone's real registry with this session's defaults. Keep the change in memory instead.
+			this._log.warn('[livingDocs] agents write skipped - the registry was never loaded');
+			return;
+		}
 		try {
 			await this._agentStore.write({ agents: this._agents, runs: this._runs });
 		} catch (e) {
@@ -302,6 +346,7 @@ export class AgentOrchestrator extends Disposable {
 	// Fire every cron/heartbeat agent that is due at the clock's current time. Public + awaitable so a
 	// fake clock can drive it deterministically in tests.
 	async runDueAgents(): Promise<void> {
+		await this.ensureLoaded();
 		for (const agent of this._agents) {
 			// A paused agent stays scheduled-in-name but the scheduler skips it (plan 32 iter 3): a due cron/
 			// heartbeat tick never fires while `disabled` is set. Manual "Run now" bypasses this (see runAgent).
@@ -337,6 +382,7 @@ export class AgentOrchestrator extends Disposable {
 	// A source/folder change (from a correlated watcher): walk the graph (cheap dirty flagging) and fire
 	// any event-triggered agent whose source matches ('*' = any).
 	async onSourceChanged(changedPath: string): Promise<void> {
+		await this.ensureLoaded();
 		const dirtied = await this.propagate(changedPath);
 		for (const agent of this._agents) {
 			if (agent.disabled) { continue; } // a paused event agent does not fire on a source change (plan 32 iter 3)
@@ -364,7 +410,7 @@ export class AgentOrchestrator extends Disposable {
 	// Run one agent end-to-end via the host runner (also the manual "Run now" path). Sets status from
 	// the result (blocked / needs-approval / idle) and records the run for the Agents view + History.
 	//
-	// Overlap guard (spec 09 §3, plan 32 iter 2): a scheduled/event trigger for an agent whose previous run is
+	// Overlap guard (spec 09 section 3, plan 32 iter 2): a scheduled/event trigger for an agent whose previous run is
 	// still in flight is NOT stacked - it records a "skipped (still running)" run and returns. A manual "Run
 	// now" is always honoured (the user explicitly asked). Runs therefore never queue up behind a slow run.
 	async runAgent(agentId: string, trigger: AgentTriggerKind, docs: readonly URI[], token: CancellationToken = CancellationToken.None): Promise<IAgentRun | undefined> {
