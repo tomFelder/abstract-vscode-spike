@@ -7,12 +7,13 @@ import assert from 'assert';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { CancellationTokenSource } from '../../../../../base/common/cancellation.js';
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
+import { joinPath } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { IFileService } from '../../../../../platform/files/common/files.js';
+import { FileOperationError, FileOperationResult, IFileService } from '../../../../../platform/files/common/files.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from '../../browser/agentOrchestrator.js';
-import { IAgentRegistry, IAgentStore } from '../../browser/agentStore.js';
+import { IAgentRegistry, IAgentStore, WorkspaceAgentStore } from '../../browser/agentStore.js';
 import { IClock } from '../../browser/clock.js';
 import { AgentTriggerKind, IAgentDef, IAgentRun } from '../../common/livingDocsModel.js';
 
@@ -173,20 +174,26 @@ suite('AgentOrchestrator', () => {
 		assert.strictEqual(orch.isDirty(BOARD), false, 'the doc drops out of the queue once its last key clears');
 	});
 
-	test('the registry seeds the default automation set when none is stored', async () => {
+	test('the registry seeds the default automation set IN MEMORY when none is stored, writing nothing', async () => {
 		const { orch, written } = createOrchestrator();
 		await orch.ensureLoaded();
 		assert.deepStrictEqual(
-			orch.getAgents().map(a => ({ id: a.id, trigger: a.trigger.kind, policy: a.policy })),
-			[
-				{ id: 'weekly-refresh', trigger: 'cron', policy: 'auto-figures' },
-				{ id: 'source-watcher', trigger: 'event', policy: 'auto-figures' },
-				{ id: 'freshness-sweep', trigger: 'heartbeat', policy: 'draft-only' },
-				{ id: 'before-export-gate', trigger: 'lifecycle', policy: 'ask-before-apply' },
-				{ id: 'on-publish-snapshot', trigger: 'lifecycle', policy: 'auto-figures' },
-			],
+			{
+				agents: orch.getAgents().map(a => ({ id: a.id, trigger: a.trigger.kind, policy: a.policy })),
+				// The load path is side-effect free: seeding is what the session shows, not what it writes.
+				written: written.registry,
+			},
+			{
+				agents: [
+					{ id: 'weekly-refresh', trigger: 'cron', policy: 'auto-figures' },
+					{ id: 'source-watcher', trigger: 'event', policy: 'auto-figures' },
+					{ id: 'freshness-sweep', trigger: 'heartbeat', policy: 'draft-only' },
+					{ id: 'before-export-gate', trigger: 'lifecycle', policy: 'ask-before-apply' },
+					{ id: 'on-publish-snapshot', trigger: 'lifecycle', policy: 'auto-figures' },
+				],
+				written: undefined,
+			},
 		);
-		assert.ok(written.registry && written.registry.agents.length === 5, 'seeded registry is persisted');
 	});
 
 	test('a stored registry is used as-is (no re-seed)', async () => {
@@ -194,6 +201,84 @@ suite('AgentOrchestrator', () => {
 		const { orch } = createOrchestrator({ agents: custom });
 		await orch.ensureLoaded();
 		assert.deepStrictEqual(orch.getAgents().map(a => a.id), ['only']);
+	});
+
+	// --- reading the registry never writes it (the sample workspaces' `agents.json` was reshaped on every
+	// launch, and any folder opened without a registry had one created for it unasked) ---
+
+	// The committed sample workspaces ship their registry in the legacy bare-array shape (pre-plan-32), which
+	// the store still reads. Merely opening such a workspace must leave the file exactly as it was.
+	const LEGACY_AGENTS_JSON = JSON.stringify([
+		{ id: 'weekly-refresh', name: 'Weekly refresh', trigger: { kind: 'cron', cron: 'Mon 09:00' }, flow: { sources: [], docs: [] }, policy: 'auto-figures', status: 'idle' },
+	], null, 2) + '\n';
+
+	// An orchestrator over the REAL WorkspaceAgentStore backed by an in-memory folder, so a test sees exactly
+	// what lands on disk. `readFails` models a registry that IS there but cannot be read right now (the open
+	// folder's file-system provider registering after the service constructs, transient I/O) - a state that
+	// must never be mistaken for a fresh workspace.
+	function createStoreBacked(opts: { registry?: string; readFails?: boolean } = {}): { orch: AgentOrchestrator; state: { readFails: boolean }; agentsJson: () => string | undefined } {
+		const folder = URI.file('/ws');
+		const registryUri = joinPath(folder, 'agents.json');
+		const files = new Map<string, string>();
+		if (opts.registry !== undefined) { files.set(registryUri.toString(), opts.registry); }
+		const state = { readFails: opts.readFails ?? false };
+		const fileService = {
+			readFile: async (resource: URI) => {
+				if (state.readFails) { throw new FileOperationError('unavailable', FileOperationResult.FILE_OTHER_ERROR); }
+				const content = files.get(resource.toString());
+				if (content === undefined) { throw new FileOperationError('not found', FileOperationResult.FILE_NOT_FOUND); }
+				return { value: VSBuffer.fromString(content) };
+			},
+			writeFile: async (resource: URI, buffer: VSBuffer) => { files.set(resource.toString(), buffer.toString()); },
+		} as unknown as IFileService;
+		const orch = new AgentOrchestrator(fileService, new NullLogService(), new WorkspaceAgentStore(fileService, folder), async () => []);
+		orch.setRunner(async () => ({ applied: 0, queued: 0 }));
+		store.add(orch);
+		return { orch, state, agentsJson: () => files.get(registryUri.toString()) };
+	}
+
+	test('opening a workspace whose registry is the legacy bare array leaves agents.json byte-identical', async () => {
+		const { orch, agentsJson } = createStoreBacked({ registry: LEGACY_AGENTS_JSON });
+
+		await orch.ensureLoaded();
+
+		assert.deepStrictEqual(
+			{ onDisk: agentsJson(), loaded: orch.getAgents().map(a => a.id) },
+			{ onDisk: LEGACY_AGENTS_JSON, loaded: ['weekly-refresh'] },
+			'the legacy shape upgrades in memory only - the file is rewritten by a real edit, not by opening it',
+		);
+	});
+
+	test('a workspace with no registry gets the defaults without creating agents.json - the first real edit writes it', async () => {
+		const { orch, agentsJson } = createStoreBacked();
+
+		await orch.ensureLoaded();
+		const afterLoad = agentsJson();
+		await orch.setAgentPolicy('freshness-sweep', 'auto-figures');
+
+		assert.deepStrictEqual(
+			{ afterLoad, afterEdit: JSON.parse(agentsJson() ?? 'null').agents.length },
+			{ afterLoad: undefined, afterEdit: 5 },
+		);
+	});
+
+	test('a registry that cannot be read right now is never mistaken for a fresh workspace', async () => {
+		const { orch, state, agentsJson } = createStoreBacked({ registry: LEGACY_AGENTS_JSON, readFails: true });
+
+		await orch.ensureLoaded();
+		// An edit made while the registry is unreadable stays in memory: writing here would replace someone's
+		// real registry with this session's defaults.
+		await orch.setAgentPolicy('weekly-refresh', 'draft-only');
+		const whileUnreadable = agentsJson();
+		state.readFails = false;
+
+		await orch.ensureLoaded();
+
+		assert.deepStrictEqual(
+			{ whileUnreadable, reloaded: orch.getAgents().map(a => a.id) },
+			{ whileUnreadable: LEGACY_AGENTS_JSON, reloaded: ['weekly-refresh'] },
+			'the failed read leaves the orchestrator unloaded, so a later load re-reads the real registry',
+		);
 	});
 
 	test('a cron agent fires at its scheduled time and not otherwise (fake clock)', async () => {
