@@ -48,6 +48,9 @@ TITLEBAR_PART="src/vs/workbench/browser/parts/titlebar/titlebarPart.ts"
 BUILTIN_SCANNER="src/vs/workbench/services/extensionManagement/browser/builtinExtensionsScannerService.ts"
 CMD_PALETTE="src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts"
 QUICK_OPEN="src/vs/workbench/browser/actions/quickAccessActions.ts"
+VIEWS_COMMON="src/vs/workbench/common/views.ts"
+VIEWS_EXT_POINT="src/vs/workbench/api/browser/viewsExtensionPoint.ts"
+EXTENSIONS_VIEWLET="src/vs/workbench/contrib/extensions/browser/extensionsViewlet.ts"
 WORKBENCH_HTML="src/vs/code/electron-browser/workbench/workbench.html"
 WORKBENCH_DEV_HTML="src/vs/code/electron-browser/workbench/workbench-dev.html"
 
@@ -274,6 +277,26 @@ if ! grep_has "$LDC" "KeyMod\.CtrlCmd \| KeyCode\.Comma"; then
 fi
 if ! grep_has "$LDC" "KeyChord\(KeyMod\.CtrlCmd \| KeyCode\.KeyK, KeyMod\.CtrlCmd \| KeyCode\.KeyS\)"; then
 	fail "settings-chord-keybindings" "Cmd+K Cmd+S is no longer neutralised in $LDC (the stock Keyboard Shortcuts editor re-opens on the bare chord; re-pin per WP-I V-1)"
+fi
+
+# --- Seam 13: the missing-view-container guards that seam 1's deregisters require (core-patch) ---
+# Deregistering the stock containers (seam 1) breaks two upstream assumptions that a container is
+# always there: the extension-views fallback resolved the Explorer by hard-coded id + `!`, and the
+# extensions viewlet resolved its own container the same way. Both threw on every boot, and the
+# first throw aborted the whole extension-views handler - so NO extension-contributed view was
+# registered at all. Fails soft (boot errors return, extension views are lost again), so assert all
+# three legs.
+if ! grep_has "$VIEWS_EXT_POINT" "getDefaultViewContainers\(ViewContainerLocation\.Sidebar\)"; then
+	fail "views-fallback-default-container" "the extension-views fallback in $VIEWS_EXT_POINT no longer resolves the registered default sidebar container (a hard-coded Explorer id returns undefined here and throws on boot; re-pin per the missing-container round in docs/plans/03-merge-tax-ledger.md)"
+fi
+if ! grep_has "$VIEWS_EXT_POINT" "ViewContainerDoesnotExistNoFallback"; then
+	fail "views-fallback-no-container" "the 'no default container at all' branch is gone from $VIEWS_EXT_POINT (views would be registered against undefined again)"
+fi
+if ! grep_has "$EXTENSIONS_VIEWLET" "if \(container\) \{"; then
+	fail "extensions-viewlet-container-guard" "ExtensionsViewletViewsContribution in $EXTENSIONS_VIEWLET no longer guards on its view container existing (it registers views against undefined once seam 1 deregisters workbench.view.extensions)"
+fi
+if ! grep_has "$VIEWS_COMMON" "defaultViewContainers\.splice"; then
+	fail "deregister-clears-default" "deregisterViewContainer in $VIEWS_COMMON no longer clears the default registration (a deregistered container can be handed back as the fallback)"
 fi
 
 echo ""

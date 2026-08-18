@@ -335,8 +335,9 @@ class ViewsExtensionHandler implements IWorkbenchContribution {
 			if (viewContainer.extensionId && removedExtensions.has(viewContainer.extensionId)) {
 				// move all views in this container into default view container
 				const views = this.viewsRegistry.getViews(viewContainer);
-				if (views.length) {
-					this.viewsRegistry.moveViews(views, this.getDefaultViewContainer());
+				const defaultViewContainer = this.getDefaultViewContainer();
+				if (views.length && defaultViewContainer) {
+					this.viewsRegistry.moveViews(views, defaultViewContainer);
 				}
 				this.deregisterCustomViewContainer(viewContainer);
 			}
@@ -462,10 +463,16 @@ class ViewsExtensionHandler implements IWorkbenchContribution {
 				}
 
 				const viewContainer = this.getViewContainer(key);
-				if (!viewContainer) {
-					collector.warn(localize('ViewContainerDoesnotExist', "View container '{0}' does not exist and all views registered to it will be added to 'Explorer'.", key));
+				const container = viewContainer ?? this.getDefaultViewContainer();
+				if (!container) {
+					// No named container and no default container to fall back to: there is nowhere
+					// to host these views, so skip them rather than registering against nothing.
+					collector.warn(localize('ViewContainerDoesnotExistNoFallback', "View container '{0}' does not exist and there is no default view container, so all views registered to it are ignored.", key));
+					return;
 				}
-				const container = viewContainer || this.getDefaultViewContainer();
+				if (!viewContainer) {
+					collector.warn(localize('ViewContainerDoesnotExist', "View container '{0}' does not exist and all views registered to it will be added to '{1}'.", key, typeof container.title === 'string' ? container.title : container.title.value));
+				}
 				const viewDescriptors: ICustomViewDescriptor[] = [];
 
 				for (let index = 0; index < value.length; index++) {
@@ -561,8 +568,14 @@ class ViewsExtensionHandler implements IWorkbenchContribution {
 		return undefined;
 	}
 
-	private getDefaultViewContainer(): ViewContainer {
-		return this.viewContainersRegistry.get(EXPLORER)!;
+	/**
+	 * The container that views fall back to when the container an extension names does not exist.
+	 * This is the registered default sidebar container - the Explorer in stock VS Code - rather than
+	 * a hard-coded id, so it stays correct when an embedder replaces or removes the stock containers.
+	 * Returns `undefined` when there is no default sidebar container at all.
+	 */
+	private getDefaultViewContainer(): ViewContainer | undefined {
+		return this.viewContainersRegistry.getDefaultViewContainers(ViewContainerLocation.Sidebar)[0];
 	}
 
 	private removeViews(extensions: readonly IExtensionPointUser<ViewExtensionPointType>[]): void {
