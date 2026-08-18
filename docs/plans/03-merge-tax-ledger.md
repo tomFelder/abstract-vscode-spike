@@ -371,7 +371,7 @@ Re-pin result per seam - nothing needed hand-editing; verified post-merge:
 
 Verification: `typecheck-client` 0, `valid-layers-check` 0, LivingDocs suite 66/66, ActivitybarPart 14/14; live web drive - branded calm shell, 76px nav, no IDE containers, full PM editor with bound figures, no living-docs console errors (G6).
 
-**Known pre-existing noise (not a regression, not fixed here):** the hidden Extensions view container throws two console errors on boot (`viewsExtensionPoint` / `extensionsViewlet` -> `viewDescriptorService`) because we deregister its container while the extensions viewlet still registers views into it. All three files are byte-identical to our pre-merge base, so this is a byproduct of the 0-core-patch de-IDE seam (amplified by the incomplete web build - `watch` not `watch-web`), present before 1.127. Candidate cleanup: guard `ExtensionsViewletViewsContribution` when its container is absent, tracked separately from version bumps.
+**Known pre-existing noise (not a regression, not fixed here):** the hidden Extensions view container throws two console errors on boot (`viewsExtensionPoint` / `extensionsViewlet` -> `viewDescriptorService`) because we deregister its container while the extensions viewlet still registers views into it. All three files are byte-identical to our pre-merge base, so this is a byproduct of the 0-core-patch de-IDE seam (amplified by the incomplete web build - `watch` not `watch-web`), present before 1.127. Candidate cleanup: guard `ExtensionsViewletViewsContribution` when its container is absent, tracked separately from version bumps. **RESOLVED** - see the "Missing-view-container round" at the end of this ledger (MC-1/MC-2/MC-3); it also turned out to be more than noise, since the first throw was losing every extension-contributed view in the window.
 ### Redesign round - plans 21-24 + the rails follow-up: 0 ADDED core patches
 
 For completeness alongside the plan-25 entries above: **plans 21, 22, 23 and 24 added nothing to this
@@ -451,7 +451,8 @@ re-pinning a guard inside the chat file. **New core-patch count: 6 total (was 5,
 Not fixed (out of scope, noted): the known pre-existing Extensions-container boot noise
 (`viewsExtensionPoint` registering views into the deregistered `workbench.view.extensions` container ->
 `Cannot read properties of undefined (reading 'id'/'extensionId')`) is a **different** root cause than K2
-and is tracked separately in the 1.127.0 merge log above; bundle K does not touch it.
+and is tracked separately in the 1.127.0 merge log above; bundle K does not touch it. (Since fixed by the
+"Missing-view-container round" at the end of this ledger.)
 
 ### Editor v2 wave (plans 43-49) - sanctioned seam budget: 2 (decision 169)
 
@@ -483,3 +484,28 @@ seam of the wave, budgeted up front.
 **File-reality wave core-patch count: +1 (both legs are the same two html files, one CSP entry pair).** The
 seam is CSS-adjacent config in a stable, rarely-churned file pair, low fragility, fail-soft, and product-correct:
 it only widens an allow-list to the fork's own loopback broker, which the packaged app requires to function.
+
+### Missing-view-container round - closing the boot warning + two boot errors the deregisters cause: +3 core patches (count 6 -> 9)
+
+This closes the item the 1.127.0 merge log parked as "Known pre-existing noise" and that bundle K explicitly
+did not touch. It is **not** cosmetic: measured live (dev desktop run, CDP probe of the views registry), the
+first error aborted `ViewsExtensionHandler.addViews` before `registerViews2` ever ran, so **every**
+extension-contributed view in the window was silently lost - `references-view.tree` (Find All References)
+resolved to `null` before the fix and to its own container after it.
+
+Root cause is one broken upstream assumption, dereferenced at three places: seam 1 deregisters
+`workbench.view.explorer` and `workbench.view.extensions` (decision D25-C / ledger row 25-2c), but upstream
+treats both as guaranteed and reaches for them through a non-null assertion.
+
+| Item | Change | Tier | File(s) | Note / re-pin check |
+|------|--------|------|---------|---------------------|
+| MC-1 | The extension-views fallback resolves the **registered default sidebar container** (`getDefaultViewContainers(ViewContainerLocation.Sidebar)[0]`) instead of the hard-coded Explorer id + `!`, and returns `ViewContainer \| undefined`. When there is no default container at all, that one contribution is skipped with an accurate warning instead of being registered against `undefined`. The stock warning text no longer hard-codes "Explorer" - it names the container the views actually go to. | **core-patch** | `src/vs/workbench/api/browser/viewsExtensionPoint.ts` | Behaviour-identical upstream (the Explorer is the only `isDefault` Sidebar container in stock VS Code), so this is upstream-mergeable rather than a fork behaviour change - it swaps a hard-coded id for the registry's own "default container" concept. In the fork it resolves to the Workspace tree-rail (`workbench.viewContainer.livingDocs.documents`, already `isDefault: true`). **Product check (measured live):** the only extensions that land there are `ms-vscode.js-debug` (3 views) and `vscode.npm` (1 view); all four are `when`-gated on debug-session / npm-script context keys that are never true in Abstract, so the rail still renders as the single merged Workspace view with **zero** extra pane headers. If a future extension ever leaks a *visible* view there, that is a product-policy call for our own contribution (drop the extension, or extend the deregister list) - core stays upstream-faithful. **Re-pin (`check-seams.sh` seam 13):** `getDefaultViewContainers(ViewContainerLocation.Sidebar)` + the `ViewContainerDoesnotExistNoFallback` branch. |
+| MC-2 | `ExtensionsViewletViewsContribution` no longer asserts its container into existence - it resolves `workbench.view.extensions` and contributes nothing when it is absent. **Dropping those views is the intended behaviour here and is now deliberate rather than accidental:** the fork removes the Extensions viewlet entirely, so its views have no host and can never be shown. Also registers the two `registerViewWelcomeContent` disposables it was leaking. | **core-patch** | `src/vs/workbench/contrib/extensions/browser/extensionsViewlet.ts` | This is exactly the cleanup the 1.127.0 merge log nominated ("guard `ExtensionsViewletViewsContribution` when its container is absent"). Fails soft: a rebase that drops the guard just re-surfaces the boot error. **Re-pin (`check-seams.sh` seam 13):** the `if (container) {` guard. Covered by `contrib/extensions/test/browser/extensionsViewlet.test.ts`. |
+| MC-3 | `deregisterViewContainer` now also removes the container from `defaultViewContainers`. | **core-patch** | `src/vs/workbench/common/views.ts` | A genuine upstream defect: deregistered containers linger in that array forever, so re-registering the same id **without** `isDefault` still reports it as a default container - and MC-1's fallback would then hand out a dead container. Makes MC-1 deterministic instead of relying on `getViewContainerLocation` happening to return `undefined` for a deregistered container (the same quirk bundle K's K2 had to patch around). **Re-pin (`check-seams.sh` seam 13):** `defaultViewContainers.splice`. Covered by `services/views/test/browser/viewContainerModel.test.ts`. |
+
+Why not the 0-core route: re-registering an Explorer-shaped container so the stock fallback resolves would
+put the Explorer back in the UI, reversing decision D25-C / ledger row 25-2c, and a hidden sink container is
+just "drop the views" with more machinery. The fork's own container-hiding lives in `livingDocs`, so the only
+place left to make the assumption safe is the assumption itself. **New core-patch count: 9 total (was 6).**
+All three fail *soft* (the boot errors and the lost extension views come back; no IDE leak), all three sit in
+stable methods, and MC-1 + MC-3 are shaped as upstream bug fixes rather than fork behaviour.

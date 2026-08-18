@@ -70,6 +70,22 @@ suite('ViewContainerModel', () => {
 		assert.strictEqual(testObject.visibleViewDescriptors.length, 0);
 	});
 
+	test('deregistering a default container clears its default registration', () => {
+		// eslint-disable-next-line local/code-no-any-casts
+		const descriptor = { id: 'test', title: nls.localize2('test', 'test'), ctorDescriptor: new SyncDescriptor(<any>{}) };
+		container = ViewContainerRegistry.registerViewContainer(descriptor, ViewContainerLocation.Sidebar, { isDefault: true });
+		const isDefaultContainer = () => ViewContainerRegistry.getDefaultViewContainers(ViewContainerLocation.Sidebar).some(({ id }) => id === container.id);
+
+		const whileRegistered = isDefaultContainer();
+		ViewContainerRegistry.deregisterViewContainer(container);
+		// Registering the same container again without `isDefault` must not resurrect the default
+		// registration it had before it was deregistered.
+		container = ViewContainerRegistry.registerViewContainer(descriptor, ViewContainerLocation.Sidebar);
+		const afterReregistered = isDefaultContainer();
+
+		assert.deepStrictEqual({ whileRegistered, afterReregistered }, { whileRegistered: true, afterReregistered: false });
+	});
+
 	test('register/unregister', () => {
 		// eslint-disable-next-line local/code-no-any-casts
 		container = ViewContainerRegistry.registerViewContainer({ id: 'test', title: nls.localize2('test', 'test'), ctorDescriptor: new SyncDescriptor(<any>{}) }, ViewContainerLocation.Sidebar);
