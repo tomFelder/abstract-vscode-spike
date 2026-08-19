@@ -254,6 +254,13 @@ class ViewContainersRegistryImpl extends Disposable implements IViewContainersRe
 				if (viewContainers.length === 0) {
 					this.viewContainers.delete(viewContainerLocation);
 				}
+				// A deregistered container must stop being a default container too, otherwise it
+				// lingers here forever and `getDefaultViewContainers` can hand out a container that
+				// is no longer registered.
+				const defaultIndex = this.defaultViewContainers.indexOf(viewContainer);
+				if (defaultIndex !== -1) {
+					this.defaultViewContainers.splice(defaultIndex, 1);
+				}
 				this._onDidDeregister.fire({ viewContainer, viewContainerLocation });
 				return;
 			}

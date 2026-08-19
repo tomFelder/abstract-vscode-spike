@@ -99,8 +99,6 @@ interface IExtensionsViewletState {
 
 export class ExtensionsViewletViewsContribution extends Disposable implements IWorkbenchContribution {
 
-	private readonly container: ViewContainer;
-
 	constructor(
 		@IExtensionManagementServerService private readonly extensionManagementServerService: IExtensionManagementServerService,
 		@ILabelService private readonly labelService: ILabelService,
@@ -108,11 +106,16 @@ export class ExtensionsViewletViewsContribution extends Disposable implements IW
 	) {
 		super();
 
-		this.container = Registry.as<IViewContainersRegistry>(Extensions.ViewContainersRegistry).get(VIEWLET_ID)!;
-		this.registerViews();
+		// Embedders can deregister the Extensions view container to remove the viewlet entirely. Its
+		// views have no other home, so contribute nothing rather than registering them against a
+		// container that does not exist.
+		const container = Registry.as<IViewContainersRegistry>(Extensions.ViewContainersRegistry).get(VIEWLET_ID);
+		if (container) {
+			this.registerViews(container);
+		}
 	}
 
-	private registerViews(): void {
+	private registerViews(container: ViewContainer): void {
 		const viewDescriptors: IViewDescriptor[] = [];
 
 		/* Default views */
@@ -152,17 +155,17 @@ export class ExtensionsViewletViewsContribution extends Disposable implements IW
 		});
 
 		const viewRegistry = Registry.as<IViewsRegistry>(Extensions.ViewsRegistry);
-		viewRegistry.registerViews(viewDescriptors, this.container);
+		viewRegistry.registerViews(viewDescriptors, container);
 
-		viewRegistry.registerViewWelcomeContent('workbench.views.extensions.marketplaceAccess', {
+		this._register(viewRegistry.registerViewWelcomeContent('workbench.views.extensions.marketplaceAccess', {
 			content: localize('sign in', "[Sign in to access Extensions Marketplace]({0})", `command:${DEFAULT_ACCOUNT_SIGN_IN_COMMAND}`),
 			when: CONTEXT_EXTENSIONS_GALLERY_STATUS.isEqualTo(ExtensionGalleryManifestStatus.RequiresSignIn)
-		});
+		}));
 
-		viewRegistry.registerViewWelcomeContent('workbench.views.extensions.marketplaceAccess', {
+		this._register(viewRegistry.registerViewWelcomeContent('workbench.views.extensions.marketplaceAccess', {
 			content: localize('access denied', "Your account does not have access to the Extensions Marketplace. Please contact your administrator."),
 			when: CONTEXT_EXTENSIONS_GALLERY_STATUS.isEqualTo(ExtensionGalleryManifestStatus.AccessDenied)
-		});
+		}));
 	}
 
 	private createDefaultExtensionsViewDescriptors(): IViewDescriptor[] {
