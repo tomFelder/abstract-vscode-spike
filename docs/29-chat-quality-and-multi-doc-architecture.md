@@ -9,7 +9,7 @@ The founder's verdict on the current chat is that the results are poor, and the 
 
 The current implementation cannot get there by tuning. It is a single-shot HTTP call that asks a model to return a JSON blob inside prose, and its edit contract cannot express a whole-document rewrite at all. This document states what is actually broken and why, what is already built and worth keeping, how Cursor solves the same problems, and the architectural decisions that need making. It is deliberately opinionated about the diagnosis and deliberately neutral about the solution.
 
-One finding has already been fixed (F1 below). Two of the eight architectural decisions were settled by the founder on review of the first draft and are recorded in 1.4; the rest are open.
+One finding has already been fixed (F1 below). Two of the eight architectural decisions were settled by the founder on review of the first draft and are recorded in 1.6; the rest are open.
 
 ## 1. What the product must do
 
@@ -49,13 +49,47 @@ Requirement 4 expands into three nested levels, all of which must exist:
 
 This is Cursor's review model, and it is the shape a twenty-document change set has to be reviewable in. **The important correction to the first draft is that this is largely built already.** The gap is not the controls; it is that the three levels are not modelled as one coherent change set, which is how #334 happens: the bulk confirm counts one set and approves another because the count is read before an `await` and the apply re-reads after it. Add a previous-document control and make the levels agree, rather than building this layer again.
 
-### 1.3 Requirements that follow but are not yet stated
+### 1.3 Reviewing what you cannot see
+
+A whole-document rewrite (requirement 3) scatters changes down a document longer than the viewport, so the review UI has to answer "what is off screen, and in which direction". The founder's model, taken from this document's own comment UI:
+
+> "If there are edits below on the page we can display them on the bottom in a floating bar and if they are above they can be displayed as a floating bar at the top. These should visually indicate the changes too such as counting, stacking icons, colours. On the top floating bar is maybe where we have the fix all in doc options."
+
+So: **two directional bars rather than one status bar.** Each appears only when changes exist off-viewport in its direction, encodes how many and of what kind (count, stacked icons, colour), and navigates to the nearest change that way. The top bar also carries the document-level verbs from 1.2.
+
+This is an evolution of existing chrome, not a new surface. `docReviewBar` (`livingDocRender.ts:1598`, comp 2b) already renders a single sticky bar with a count sentence, a kind breakdown, "Review each", a quiet "Approve all", "Next document" and "Approve everywhere". Those controls carry deliberate design rules the architect should not discard by accident:
+
+- A bulk verb is **never** a filled button, and the host raises a confirm before it applies.
+- At exactly one pending change there is **no bulk verb at all**: the card in the document is the decision, and a bar offering to approve it in bulk is a second, heavier way to press its own Approve.
+- The bar's **disappearance is the done signal**. There is no persistent status pill anywhere in round 2.
+
+Splitting one bar into two directional bars has to preserve those rules or consciously revise them. Open design questions: what shows when changes exist in both directions at once; whether the bars count changes or change groups; and how colour encodes kind without inventing a semantic language outside `common/abstractTokens.ts`, which is the design system's single seam.
+
+### 1.4 Comment as a third verb
+
+The largest change to the review model, and the one with consequences well beyond the UI.
+
+> "Rather than just approve/reject we probably need comment too, which will allow you to drop a comment and have the agent respond directly to it if you want to work through a specific item."
+
+Today a pending change has exactly two terminal verbs. Adding a third turns review from a binary decision into **a conversation scoped to one change**, which is much closer to a code review than to a diff viewer. That is a good direction, and it is not a UI addition. It touches:
+
+| Area | Consequence |
+|---|---|
+| **Change state** | `pending → {approved, rejected}` gains a third live state (under discussion). A change being discussed is neither approved nor rejected, and **must not be swept by any bulk verb** at any of the three levels in 1.2. |
+| **Agent loop (D4)** | The loop must be re-enterable *scoped to a single change*, carrying that change's block, the instruction that produced it, and its source grounding, rather than re-running over the whole document. |
+| **Revision identity** | When the agent answers a comment with a revised proposal, does that supersede the original in place, or stack as a new version on the same change? Review threads that lose their history are worse than no threads. |
+| **Audit trail** | The comment and the agent's reply become part of the record. This is arguably the feature's best side effect: it is provenance for *why* a change landed the way it did, which no diff alone can carry. |
+| **Bulk correctness** | Bulk verbs must exclude changes under discussion. Given #334 already miscounts a bulk set today, this makes a correct change-set model a precondition rather than a nice-to-have. |
+
+**This is also the strongest argument yet for D1.** A comment thread presumes the change is a stable, addressable object with an identity that survives being revised. Anchored search/replace (F7) cannot offer that: its identity *is* a quoted string that the next edit invalidates. A modelled change set makes it natural. Whoever decides D1 should decide it with this requirement in view.
+
+### 1.5 Requirements that follow but are not yet stated
 
 - **An edit representation that scales.** Requirements 2 and 3 together rule out the current contract, which can only express "replace this exact quoted sentence" (see F7).
 - **A cost and latency envelope.** The founder's framing: *"we need to be smart about what we request and feed into the prompt to be sure the cost and speed are balanced well for the user."* Whole-document rewrites across a project multiply both, so this is coupled directly to 1.1.
 - **Truthful accounting.** This product's differentiator is that the audit trail can be trusted. An architecture that silently drops edits (as today's does) attacks the one thing that makes the product defensible.
 
-### 1.4 Already decided
+### 1.6 Already decided
 
 Two of the decisions in section 6 were settled by the founder on review, and are recorded here as constraints on the architecture rather than open options:
 
@@ -151,6 +185,7 @@ The expert should not start from zero. `_chatRespondMulti` is a genuinely consid
 - **Honest terminal states.** A model outage, a spent budget cap, and a clean run with no changes are three visibly different outcomes. The code goes to real lengths to ensure an outage can never render as "no changes proposed".
 - **A per-document policy dial.** A document marked "never change this" is skipped, and the refusal is spoken rather than silent (#257).
 - **A working audit trail** with proposal/resolution records on disk.
+- **A sticky bulk review bar with documented design rules** (`docReviewBar`, comp 2b): no filled bulk buttons, no bulk verb at a single change, and disappearance as the done signal. 1.3 evolves this rather than replacing it.
 - **The review hierarchy is largely built.** Inline diffs render in place with per-change accept/reject (plan 52 WP-A); per-document approve/reject all and a next-changed-document step exist in the review rail; chat-level and editor-level bulk verbs span the whole working set. See 1.2 for what is actually missing. What is *not* built is the whole-document rewrite case (F7).
 - **A per-request door abstraction** in the broker that already handles two upstreams with different wire shapes, plus metering, a daily spend cap, and entitlement tracking.
 
@@ -194,12 +229,12 @@ These are the questions the architecture has to answer. **D2 and D4 are now sett
 
 | # | Decision | Options | Notes specific to this codebase |
 |---|---|---|---|
-| **D1** | **Edit representation** | (a) keep anchored search/replace, hardened; (b) whole-document rewrite, diffed locally; (c) structured block operations against the existing block model | The block model is an asset (b) and (c) can both exploit: blocks have stable ids, so a rewrite can be diffed back to block-level changes for the existing review UI. (b) is Cursor's answer and the only one that satisfies requirement 3 cleanly. |
+| **D1** | **Edit representation** | (a) keep anchored search/replace, hardened; (b) whole-document rewrite, diffed locally; (c) structured block operations against the existing block model | The block model is an asset (b) and (c) can both exploit: blocks have stable ids, so a rewrite can be diffed back to block-level changes for the existing review UI. (b) is Cursor's answer and the only one that satisfies requirement 3 cleanly. **1.4 raises the bar further**: a comment thread needs a change to be a stable, addressable object that survives revision, which anchored search/replace cannot provide because its identity is a quoted string the next edit invalidates. |
 | **D2** | **One model or two** | ~~single frontier model~~; **planner + apply split (DECIDED)** | Settled (1.4): plan with the more capable model, apply with a cheaper one. Open sub-question: is a hosted fast-apply available, or does this mean training/serving one? The broker's door abstraction makes adding a second serving path tractable. |
 | **D3** | **Retrieval and scope inference** | manual working set (today); keyword/grep; embeddings + vector store; hybrid | **Narrowed by 1.1.** Retrieval must not fire when the user has already made scope explicit, and must satisfy *minimum sufficient context*. So the question is not only "which retriever" but "how does the system classify the ask" (explicit attachment vs folder vs project-wide wording vs ambiguous). A documents project is far smaller than a codebase, so full-corpus embedding is cheap; documents also carry frontmatter, sources and a wikilink graph a code retriever would not have. |
 | **D4** | **Execution model** | ~~single shot~~; **tool-calling agent loop (DECIDED)** | Settled (1.4): the model iterates as Cursor's agent does. Open sub-question: what bounds the loop? A loop over N documents needs a cost and step ceiling to satisfy 1.1, and the existing daily spend cap is a per-request meter, not a per-task budget. |
 | **D5** | **Framework** | continue hand-rolled; Anthropic SDK tool runner; Vercel AI SDK; LangGraph | Hand-rolled has kept the broker dependency-free and testable with `node --test`, which is genuinely valuable and should not be given up lightly. Weigh against the cost of rebuilding streaming, tool loops, and retries. |
-| **D6** | **Review at scale** | **the three-level hierarchy in 1.2, which mostly ships already** | **Specified by 1.2, and largely built.** All three levels exist; the missing control is previous-document. The real work is modelling the pending set as one change set so the levels cannot disagree, which is what #334 is: a count read before an `await` and an apply that re-reads after it. Treat this as hardening, not new construction. |
+| **D6** | **Review at scale** | **the hierarchy in 1.2, the directional bars in 1.3, the comment verb in 1.4** | **Partly built, and now materially larger than the first draft implied.** The three levels of 1.2 exist (missing: previous-document); 1.3 is an evolution of `docReviewBar`; 1.4 is genuinely new and adds a third live change state. The real work is modelling the pending set as one change set so the levels cannot disagree (#334) and so a change under discussion can never be swept by a bulk verb. |
 | **D7** | **Cost and latency envelope** | prompt caching; incremental context; batching; speculative apply | **Narrowed by 1.1 and 1.3**: the founder's bar is that cost and speed feel balanced *to the user*, which makes this a perceived-quality requirement, not just a bill. F6 (no prompt caching anywhere) is unimplemented and cheap. A whole-project rewrite without caching would be prohibitively expensive on any frontier model, and an agent loop (D4) multiplies the turn count that caching pays off against. |
 | **D8** | **Verification** | none (today); anchor re-validation; a second model pass; deterministic post-checks | The audit trail is the product's trust wedge, so "we recorded an approval that did not happen" (#329) must become structurally impossible, not merely unlikely. |
 
@@ -213,7 +248,9 @@ These are the questions the architecture has to answer. **D2 and D4 are now sett
 6. Should the broker gain a first-party Anthropic door, or stay a two-door proxy? The planner/apply split makes this a question about two serving paths, not one.
 7. How much of the existing fan-out machinery (batching, attribution, partial success, surgical retry) survives a move to a retrieval-driven agent loop?
 8. The three-level review in 1.2 mostly ships. How is the pending set re-modelled as one change set so the levels cannot disagree, given #334 is exactly that failure today?
-9. What is the migration path? The product ships today; this cannot be a rewrite behind a six-month flag.
+9. How is a commented change modelled over time: does an agent revision supersede the original in place, or stack as a version on one thread? What does the audit trail record, given the comment exchange is provenance for the final state?
+10. What re-enters the agent loop when a user comments on a single change, and how is that scoped so it costs a fraction of a full turn?
+11. What is the migration path? The product ships today; this cannot be a rewrite behind a six-month flag.
 
 ## Appendix A: file map
 
