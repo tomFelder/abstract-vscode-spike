@@ -31,6 +31,7 @@ the convention and links are provenance — the layers below are the read-order.
 | [26-glossary-and-id-index.md](26-glossary-and-id-index.md) | **Keep open while reading anything else.** The vocabulary and every ID system (journeys, F-fixes, map-D vs decisions, VPs, T-tests, principle-P vs priority-P), each mapped to its home doc |
 | [27-data-flow-one-pager.md](27-data-flow-one-pager.md) | **The trust story in plain words** (issue #135; the sole decision-163 moratorium exemption): what leaves your machine, when, and to whom - the chat/run paths, the default-on scheduled agents (and how to pause them), the two model doors, what the localhost helper keeps, that no analytics ships yet, and what is never sent. Surfaced in-product on the Model access screen. Every claim traced to a live code path |
 | [28-design-system-round2.md](28-design-system-round2.md) | **The design system, and the rubric for matching it.** Round 1 (plans 43-49) built the structure of the eight screens; round 2 fixes the system they are drawn in. Every hue's one meaning, the type ladder, radii and shadows, the complete round-1 to round-2 colour migration map, and how "pixel perfect" is judged. Implemented as code in `livingDocs/common/abstractTokens.ts`; the comp lives in [design/abstract-redesign/](design/abstract-redesign/) |
+| [30-editing-architecture.md](30-editing-architecture.md) | **The agentic editing layer, architected** (20 Aug 2026). The six-member council's resolution of the doc-29 brief: D1-D8 decided (segment/rewrite wire with the host owning all geometry, a renderer-hosted agent loop with no framework, a persisted change store, invariants I1-I8 with an intent journal), the review UX at project scale incl. comment-as-a-verb, the staged delivery plan, founder questions and recorded dissent |
 
 *Named gap (decision 161): a fork-independent product spec for the greenfield team — to be
 written once the T1 audit and beta evidence land.*
@@ -104,6 +105,6 @@ and the per-plan `plans/NN-verify/` folders.
   diagnosis plus a brief for an outside architect. Ten findings (F1 model routing, now fixed; F2 no
   structured outputs; F7 the edit contract cannot express a whole-document rewrite; F10 no retrieval),
   what already works and should survive, how Cursor splits planning from applying, and the eight
-  decisions the architecture has to make.
+  decisions the architecture has to make. Resolved by the council in [30-editing-architecture.md](30-editing-architecture.md).
 - **Still open:** editor depth (Q2) — the **T1 paste-from-Word audit** is the pre-beta
   disqualifier check ([21](21-beta-v1-prioritization.md) §4 item 8, issue #128).
