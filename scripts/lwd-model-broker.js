@@ -40,6 +40,7 @@ const { spawn } = require('child_process');
 const { Readable } = require('stream');
 const { SpendMeter } = require('./lwd-spend-meter.js');
 const openaiOAuth = require('./lwd-openai-oauth.js');
+const openrouterModels = require('./lwd-openrouter-models.js');
 const { renderDocx } = require('./lwd-docx.js');
 
 // Bind dual-stack (issue #121): the packaged desktop app's default proxy URL is http://localhost:8090, and on
@@ -71,11 +72,15 @@ const BACKEND_OVERRIDE = process.env.LWD_BACKEND ? process.env.LWD_BACKEND.toLow
 const BACKEND_MODE = BACKEND_OVERRIDE ? 'forced' : 'dynamic';
 
 const OPENROUTER_URL = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
-// Default fallback model: a capable mid-tier model, NOT the cheapest available. The beta bar is "more
-// reliable than ChatGPT" (doc 18 section 2.1, P0) and a bottom-shelf model (e.g. gpt-4o-mini) poisons the
-// one thing the fallback must prove; gpt-4.1-mini is a strong, low-cost mid-tier that keeps the ~$1/day
-// cap serving many requests while staying reliable. Override with OPENROUTER_MODEL.
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4.1-mini';
+// OpenRouter's live model index, used ONLY by the /models/openrouter/catalogue discovery route to tell the
+// operator which curated ids upstream actually serves right now. Never consulted on the serving path.
+const OPENROUTER_MODELS_URL = process.env.OPENROUTER_MODELS_URL || 'https://openrouter.ai/api/v1/models';
+// The id a call lands on when it carries no model, or one this door does not offer. The door now serves a
+// CURATED LIST (lwd-openrouter-models.js) rather than a single hardcoded model, so this is the list's default
+// rather than a constant; OPENROUTER_MODEL still forces one id for a dev/one-off run.
+function openRouterDefaultModel() {
+	return openrouterModels.defaultModelId();
+}
 
 // Bound the request body so a runaway client cannot exhaust memory; model calls here are tiny.
 const MAX_BODY_BYTES = 1 * 1024 * 1024;
@@ -212,7 +217,7 @@ function capReached() {
 			id: 'lwd-cap',
 			type: 'message',
 			role: 'assistant',
-			model: OPENROUTER_MODEL,
+			model: openRouterDefaultModel(),
 			stop_reason: 'pause',
 			content: [{ type: 'text', text: CAP_MESSAGE }],
 		}),
@@ -321,7 +326,11 @@ function openRouterCost(usage) {
 async function openRouterForward(body, req) {
 	const key = openRouterKey();
 	if (!key) { return proxyError('OPENROUTER_API_KEY (or OPENROUTER_API_KEY_FILE) is not set'); }
-	const orBody = JSON.stringify({ model: OPENROUTER_MODEL, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), usage: { include: true } });
+	// Serve the model the caller resolved onto (forwardMessages stamps `req.model` after validating it against
+	// this door's curated list). Before plan 53 this door hardcoded a single id and DISCARDED req.model, so the
+	// composer's picker was decorative on the included door - every turn ran on gpt-4.1-mini whatever it said.
+	const orModel = req.model || openRouterDefaultModel();
+	const orBody = JSON.stringify({ model: orModel, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), usage: { include: true } });
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -350,7 +359,7 @@ async function openRouterForward(body, req) {
 		id: orJson.id || 'or-msg',
 		type: 'message',
 		role: 'assistant',
-		model: orJson.model || OPENROUTER_MODEL,
+		model: orJson.model || orModel,
 		stop_reason: stopReason,
 		content: [{ type: 'text', text: String(text) }],
 	};
@@ -365,7 +374,9 @@ async function openRouterForwardStream(req, res) {
 		res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'OPENROUTER_API_KEY (or OPENROUTER_API_KEY_FILE) is not set' } }));
 		return { usage: undefined };
 	}
-	const orBody = JSON.stringify({ model: OPENROUTER_MODEL, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } });
+	// Same as the buffered path: the caller's resolved model is load-bearing here, not advisory.
+	const orModel = req.model || openRouterDefaultModel();
+	const orBody = JSON.stringify({ model: orModel, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } });
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -451,7 +462,7 @@ async function openAiAuthHeaders() {
 // `output_text`, everything else `input_text`), reusing the shared toOpenRouterMessages flattening.
 //
 // The three constants below are NOT stylistic - the Codex Responses backend rejects a request missing any of
-// them, each with its own 400. Established at the wire during the 12 Aug founder smoke (plan 51 §5), which is
+// them, each with its own 400. Established at the wire during the 12 Aug founder smoke (plan 51 section 5), which is
 // where the stub-validated shape and the real shape were first compared:
 //   - no `store`             -> {"detail":"Store must be set to false"}
 //   - `stream:false`         -> {"detail":"Stream must be set to true"}
@@ -625,6 +636,47 @@ async function openAiForwardStream(req, res) {
 	return { usage: undefined };
 }
 
+// --- OpenRouter catalogue discovery (plan 53) ------------------------------------------------------------
+// Fetch OpenRouter's live model index and report which CURATED ids it actually serves. Answers the one
+// question the allowlist cannot answer on its own - "is this slug still real?" - so promoting a candidate to
+// `validated: true` is grounded in the upstream list rather than in someone's memory of a model name.
+// Best effort by construction: an upstream failure returns `live: null` with the reason, and every curated id
+// reports `upstream: 'unknown'` rather than being called dead. Never used to gate serving.
+async function openRouterCatalogue() {
+	const curated = openrouterModels.OPENROUTER_MODELS.map(m => ({
+		id: m.id,
+		label: m.label,
+		validated: m.validated === true,
+		validatedOn: m.validatedOn,
+		notes: m.notes,
+	}));
+	const offered = new Set(openrouterModels.listModels().map(m => m.id));
+	let live = null;
+	let liveError;
+	const key = openRouterKey();
+	try {
+		const headers = key ? { authorization: `Bearer ${key}` } : {};
+		const upstream = await fetch(OPENROUTER_MODELS_URL, { headers });
+		if (!upstream.ok) { throw new Error(`openrouter http ${upstream.status}`); }
+		const json = await upstream.json();
+		if (json && Array.isArray(json.data)) { live = new Set(json.data.map(m => m && m.id).filter(Boolean)); }
+		else { throw new Error('unexpected /models shape'); }
+	} catch (e) {
+		liveError = e && e.message ? e.message : String(e);
+	}
+	return {
+		configPath: openrouterModels.MODELS_CONFIG_PATH,
+		includeUnvalidated: openrouterModels.includeUnvalidated(),
+		liveModelCount: live ? live.size : null,
+		liveError,
+		models: curated.map(m => Object.assign({}, m, {
+			// What the picker does with it right now, and whether upstream still has the slug.
+			offered: offered.has(m.id),
+			upstream: live ? (live.has(m.id) ? 'available' : 'missing') : 'unknown',
+		})),
+	};
+}
+
 // --- backend registry ---------------------------------------------------------------------------------
 // One interface per backend: `isConfigured()` gates /healthz; `forward` (buffered) and `forwardStream`
 // (SSE) do the request/response translation. `meters` marks whether calls draw on the founder-funded
@@ -686,8 +738,9 @@ async function modelsForBackend(backend) {
 		// A listModels failure must never empty the picker: fall back to the one known default model.
 		return [{ id: openaiOAuth.OPENAI_MODEL, label: 'ChatGPT model', default: true, tier: 'own-key' }];
 	}
-	// openrouter: a single founder-funded included model, product-labelled (never the raw upstream id).
-	return [{ id: OPENROUTER_MODEL, label: 'Included model', default: true, tier: 'included' }];
+	// openrouter: the CURATED allowlist (lwd-openrouter-models.js), product-labelled, never the raw upstream id.
+	// Was a single hardcoded entry before plan 53; now every validated model the founder has proven for this task.
+	return openrouterModels.listModels().map(m => ({ ...m, tier: 'included' }));
 }
 
 // The merged /models catalogue (plan 51 WP-C): BOTH backends' models in one list, each entry carrying its
@@ -733,9 +786,10 @@ function defaultModelId(models) {
 }
 
 // Resolve the caller's requested model against the active backend's list: keep it when it is a known id,
-// otherwise fall back to the backend default (absent OR unknown/stale). Returns the id to actually use. Note
-// the resolved id is currently ADVISORY for the openrouter backend (it serves its single included model
-// regardless); it becomes load-bearing for openai-oauth, whose Responses request already carries a model id.
+// otherwise fall back to the backend default (absent OR unknown/stale). Returns the id to actually use. The
+// resolved id is LOAD-BEARING on both doors: openai-oauth stamps it into the Responses request, and since
+// plan 53 openrouter forwards it too (it previously discarded it and served one hardcoded model, which made
+// the composer's picker decorative on the included door - the root cause of "the model I picked is ignored").
 function resolveRequestedModel(requested, models) {
 	const fallback = defaultModelId(models);
 	if (typeof requested !== 'string' || !requested) { return fallback; }
@@ -758,7 +812,7 @@ function forLog(value) {
 // return whether the day's included usage is now spent. Not called for a non-metering backend (a user's
 // own subscription is not the founder's budget). Cost uses real API numbers where present, an honest
 // estimate otherwise (see openRouterCost).
-function meterCall(backend, usage) {
+function meterCall(backend, usage, model) {
 	if (!backend.meters) { return; }
 	const { costUsd, estimated } = openRouterCost(usage);
 	const outcome = spendMeter.charge(costUsd);
@@ -766,7 +820,7 @@ function meterCall(backend, usage) {
 		event: 'model_spend',
 		ts: new Date().toISOString(),
 		provider: backend.name,
-		model: OPENROUTER_MODEL,
+		model: model || openRouterDefaultModel(),
 		cost: Number(costUsd.toFixed(6)),
 		cost_estimated: estimated,
 		daily_total: Number(outcome.dailyTotalUsd.toFixed(6)),
@@ -792,8 +846,8 @@ async function forwardMessages(req, res) {
 	// Resolve the caller's optional `model` against the active backend's list (issue #179): an absent, unknown,
 	// or stale-persisted id falls back to the backend default rather than 500ing. The resolved id is stamped
 	// onto the parsed request so the backend forwarders use it, and logged so the E2E can prove which model a
-	// call actually ran on. openrouter still serves its single included model (the id is advisory there); for
-	// openai-oauth the id is load-bearing (it becomes the Responses request's `model`).
+	// call actually ran on. Load-bearing on BOTH doors since plan 53: openai-oauth makes it the Responses
+	// request's `model`, and openrouter forwards it upstream instead of discarding it for a hardcoded id.
 	const requestedModel = typeof parsed.model === 'string' ? parsed.model : undefined;
 	const models = await modelsForBackend(backend);
 	const resolvedModel = resolveRequestedModel(requestedModel, models);
@@ -813,12 +867,12 @@ async function forwardMessages(req, res) {
 	}
 	if (streaming) {
 		const { usage } = await backend.forwardStream(parsed, res);
-		meterCall(backend, usage);
+		meterCall(backend, usage, resolvedModel);
 		return;
 	}
 	const result = await backend.forward(body, parsed);
 	// Only meter a successful model call (a proxy/backend error did not spend the founder's budget).
-	if (result.status === 200) { meterCall(backend, result.usage); }
+	if (result.status === 200) { meterCall(backend, result.usage, resolvedModel); }
 	setCors(res, req);
 	res.writeHead(result.status, { 'content-type': result.contentType });
 	res.end(result.text);
@@ -1236,6 +1290,19 @@ const server = http.createServer((req, res) => {
 	// `available` is that door's real health (oauth: signed-in + servable; openrouter: key present), and
 	// `serving` marks the door selectBackend() would use now - so the selector can render every door and name
 	// which is live without re-deriving selection. Purely additive: id/label/default/tier are unchanged.
+	// GET /models/openrouter/catalogue - the VALIDATION helper for the curated OpenRouter allowlist (plan 53).
+	// Intersects lwd-openrouter-models.js with OpenRouter's live /api/v1/models and reports, per curated id,
+	// whether upstream still serves it. This is how a candidate's slug gets confirmed before it is promoted to
+	// `validated: true` - guessing slugs from memory is exactly how a picker ends up offering ids that 400.
+	// Diagnostic only: it is NEVER consulted on the serving path, so an upstream outage here cannot break chat.
+	// Registered BEFORE the /models prefix route below, which would otherwise swallow it.
+	if (req.method === 'GET' && url.startsWith('/models/openrouter/catalogue')) {
+		setCors(res, req);
+		openRouterCatalogue()
+			.then(payload => sendJson(res, 200, payload))
+			.catch(err => sendJson(res, 502, { error: { type: 'catalogue_error', message: String(err && err.message ? err.message : err) } }));
+		return;
+	}
 	if (req.method === 'GET' && url.startsWith('/models')) {
 		setCors(res, req);
 		const serving = selectBackend();
@@ -1412,7 +1479,7 @@ function reportListening() {
 
 // Establish at the wire which catalogue models this subscription may actually call, so the picker never
 // offers a model upstream will refuse (plan 51 founder smoke; the entitlement block in lwd-openai-oauth).
-// Deliberately NOT awaited: the cold-start floor plan 51 §3 box 1 proved (~0.5s spawn -> healthy) must not
+// Deliberately NOT awaited: the cold-start floor plan 51 section 3 box 1 proved (~0.5s spawn -> healthy) must not
 // regress behind network probes, and /healthz is already answering while this settles. Verdicts are cached
 // for 24h, so a normal start does no upstream work at all.
 function refreshEntitlementsInBackground() {
