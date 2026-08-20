@@ -98,5 +98,12 @@ and the per-plan `plans/NN-verify/` folders.
   editor substrate (vendored ProseMirror, [06](06-design-notes.md) D7); **fork vs greenfield
   (Q3) — the fork is the beta vehicle**, greenfield/cloud is the post-raise chapter
   ([14](14-product-strategy.md) §6; upstream syncs frozen, decision 159).
+- **Chat quality + the multi-document architecture (20 Aug 2026):** why the agent's answers are poor
+  and what a Cursor-like project-wide editing layer would need
+  ([29-chat-quality-and-multi-doc-architecture.md](29-chat-quality-and-multi-doc-architecture.md)): a
+  diagnosis plus a brief for an outside architect. Ten findings (F1 model routing, now fixed; F2 no
+  structured outputs; F7 the edit contract cannot express a whole-document rewrite; F10 no retrieval),
+  what already works and should survive, how Cursor splits planning from applying, and the eight
+  decisions the architecture has to make.
 - **Still open:** editor depth (Q2) — the **T1 paste-from-Word audit** is the pre-beta
   disqualifier check ([21](21-beta-v1-prioritization.md) §4 item 8, issue #128).
