@@ -9,25 +9,60 @@ The founder's verdict on the current chat is that the results are poor, and the 
 
 The current implementation cannot get there by tuning. It is a single-shot HTTP call that asks a model to return a JSON blob inside prose, and its edit contract cannot express a whole-document rewrite at all. This document states what is actually broken and why, what is already built and worth keeping, how Cursor solves the same problems, and the architectural decisions that need making. It is deliberately opinionated about the diagnosis and deliberately neutral about the solution.
 
-One finding has already been fixed (F1 below); everything else is open.
+One finding has already been fixed (F1 below). Two of the eight architectural decisions were settled by the founder on review of the first draft and are recorded in 1.4; the rest are open.
 
 ## 1. What the product must do
 
-Stated requirements, from the founder:
+Stated requirements, from the founder. Items in *italics* are the founder's own qualifications, added on review of the first draft.
 
-1. A single chat updates an entire **project** of documents, not one document.
-2. Multiple documents are edited **in one turn**.
+1. A single chat updates an entire **project** of documents, not one document, *when the scope has been made explicit*.
+2. Multiple documents are edited **in one turn**, *where those documents were `+`-added to the chat context, their folder was added, or the prompt said so in words*.
 3. A whole document can be rewritten when the instruction calls for it, not only a paragraph.
 4. Changes are reviewed as **line-by-line diffs**.
-5. The overall feel is Cursor's.
+5. The overall feel is Cursor's, including *the agent loop: the model should iterate, as Cursor's agent does, rather than answering in one shot*.
 
-Requirements that follow from those but are not yet stated anywhere:
+### 1.1 Scope inference
 
-- **Retrieval.** "Update the whole project" implies the system decides which documents are in scope. Today the user must name every one by hand (see F10).
+This is a first-class requirement rather than an implementation detail, and it is the founder's sharpest note on the first draft.
+
+> "The chat should be smart. If a user explicitly adds files then it is likely that we don't need to grep the entire project, but if the prompt explicitly calls for it such as 'update the whole project' then we should be smart enough to interpret the difference. We only want to pull in the minimum context required to complete the task at any given moment to best manage the context window. There is a balance here but the goal is to appear intelligent and genuinely helpful to the user."
+
+Three signals make scope explicit, and the system must distinguish them from an ambiguous ask:
+
+| Signal | Scope |
+|---|---|
+| Documents `+`-added to the chat context | Exactly those documents. Do not sweep the project. |
+| A folder added to the chat context | That folder's documents. |
+| The prompt says so in words ("update the whole project") | Discover the scope, project-wide. |
+
+The operative constraint is **minimum sufficient context**: pull in the least that completes the task at each moment, not everything that might be relevant. That makes context budgeting a product requirement about feeling intelligent and fast, not merely a cost optimisation. It also means an over-eager retrieval layer is a defect, not a safe default.
+
+### 1.2 The review hierarchy
+
+Requirement 4 expands into three nested levels, all of which must exist:
+
+| Level | Controls | State today |
+|---|---|---|
+| **Individual edit** | Line-by-line diff with a local approve/reject on each change. | **Ships.** Inline diffs render in place in the ProseMirror surface with per-change accept/reject (plan 52 WP-A). |
+| **Document** | `< prev doc` / `next doc >` navigation, plus "approve all in this doc" and "reject all in this doc". | **Mostly ships.** Per-document "Approve all {N}" and "Reject all" are in the review rail (`reviewRailView.ts:703,716`); a "Next document" button steps to the next document with pending changes (`livingDocRender.ts:1605`, `_openNextChangedDoc`). There is **no previous-document control**. |
+| **Whole change set** | "Approve all", reachable from the chat. | **Ships.** `approveAllEverywhere` on the editor action bar (plan 19), and chat-level Accept all / Reject all across the whole working set (plan 18). |
+
+This is Cursor's review model, and it is the shape a twenty-document change set has to be reviewable in. **The important correction to the first draft is that this is largely built already.** The gap is not the controls; it is that the three levels are not modelled as one coherent change set, which is how #334 happens: the bulk confirm counts one set and approves another because the count is read before an `await` and the apply re-reads after it. Add a previous-document control and make the levels agree, rather than building this layer again.
+
+### 1.3 Requirements that follow but are not yet stated
+
 - **An edit representation that scales.** Requirements 2 and 3 together rule out the current contract, which can only express "replace this exact quoted sentence" (see F7).
-- **Review that scales to N documents.** A twenty-document change set is not reviewable as twenty separate approval queues.
-- **A cost and latency envelope.** Whole-document rewrites across a project multiply both.
+- **A cost and latency envelope.** The founder's framing: *"we need to be smart about what we request and feed into the prompt to be sure the cost and speed are balanced well for the user."* Whole-document rewrites across a project multiply both, so this is coupled directly to 1.1.
 - **Truthful accounting.** This product's differentiator is that the audit trail can be trusted. An architecture that silently drops edits (as today's does) attacks the one thing that makes the product defensible.
+
+### 1.4 Already decided
+
+Two of the decisions in section 6 were settled by the founder on review, and are recorded here as constraints on the architecture rather than open options:
+
+- **A planner/apply split (D2).** *"We should plan with a more intelligent model and then apply those changes with a cheaper model."* This is Cursor's architecture and is now the intended one here.
+- **An agent loop (D4).** *"We certainly want the model to perform loops as the Cursor agent does."* Single-shot is ruled out.
+
+Both have consequences the architect should price in: the loop needs a cost ceiling to satisfy 1.1, and the apply model needs a second serving path in the broker.
 
 ## 2. How it works today
 
@@ -105,6 +140,8 @@ There is no context management. The prompt is assembled by concatenation and bou
 
 `getWorkingSet` reads a map the user populates through `addToWorkingSet` via attach chips and `@`-mentions. To "update an entire project" today, the user must manually attach every document. This is the largest single gap against requirement 1, and nothing in the codebase addresses it.
 
+Note the nuance in 1.1: the fix is **not** "always retrieve". An explicit attachment already *is* the scope, and sweeping the project in that case is the wrong behaviour. What is missing is the classifier that tells the two asks apart, and the retrieval path behind only one of them.
+
 ## 4. What already exists and is worth keeping
 
 The expert should not start from zero. `_chatRespondMulti` is a genuinely considered multi-document implementation, and several of its properties are hard-won:
@@ -114,7 +151,7 @@ The expert should not start from zero. `_chatRespondMulti` is a genuinely consid
 - **Honest terminal states.** A model outage, a spent budget cap, and a clean run with no changes are three visibly different outcomes. The code goes to real lengths to ensure an outage can never render as "no changes proposed".
 - **A per-document policy dial.** A document marked "never change this" is skipped, and the refusal is spoken rather than silent (#257).
 - **A working audit trail** with proposal/resolution records on disk.
-- **Inline diffs already render** in the ProseMirror surface, in place, with per-change accept/reject (plan 52 WP-A). Requirement 4 is partly built; what is missing is the *whole-document* case.
+- **The review hierarchy is largely built.** Inline diffs render in place with per-change accept/reject (plan 52 WP-A); per-document approve/reject all and a next-changed-document step exist in the review rail; chat-level and editor-level bulk verbs span the whole working set. See 1.2 for what is actually missing. What is *not* built is the whole-document rewrite case (F7).
 - **A per-request door abstraction** in the broker that already handles two upstreams with different wire shapes, plus metering, a daily spend cap, and entitlement tracking.
 
 The weakness is not the orchestration. It is the edit representation, the absence of retrieval, and the single-shot call underneath.
@@ -123,7 +160,7 @@ The weakness is not the orchestration. It is the edit representation, the absenc
 
 Grounded in Cursor's own engineering write-ups; sources at the end.
 
-### Two models, split by job
+### Two models, split by job  *(adopted, D2)*
 
 Cursor separates **planning** from **applying**. A frontier model reasons about what should change and produces a conversational, abbreviated edit. A separate, specialised **apply model** (a fine-tuned Llama-3-70B) takes that plan plus the current file and emits the result. The apply step is treated as mechanical and is optimised for speed rather than intelligence.
 
@@ -147,33 +184,36 @@ Cursor builds a **Merkle tree** over the repository to detect changes cheaply, c
 
 This is the direct answer to F8 and F10.
 
-### An agent loop, not a single call
+### An agent loop, not a single call  *(adopted, D4)*
 
 Composer/Agent mode is a tool-calling loop: the model searches, reads, edits, and re-reads across multiple turns within one user request, creating files and editing across several of them in a single operation.
 
 ## 6. The decisions this needs
 
-These are the questions the architecture has to answer. Each is a real fork with real trade-offs, not a foregone conclusion.
+These are the questions the architecture has to answer. **D2 and D4 are now settled** (see 1.4) and are kept in the table as constraints; **D3, D6 and D7 have been narrowed** by the founder's notes and now carry a stated direction rather than an open field. D1, D5 and D8 remain genuinely open.
 
 | # | Decision | Options | Notes specific to this codebase |
 |---|---|---|---|
 | **D1** | **Edit representation** | (a) keep anchored search/replace, hardened; (b) whole-document rewrite, diffed locally; (c) structured block operations against the existing block model | The block model is an asset (b) and (c) can both exploit: blocks have stable ids, so a rewrite can be diffed back to block-level changes for the existing review UI. (b) is Cursor's answer and the only one that satisfies requirement 3 cleanly. |
-| **D2** | **One model or two** | single frontier model; or planner + apply split | The apply-model split buys latency and reliability but needs a second serving path. The broker's door abstraction makes adding one tractable. Consider whether a hosted fast-apply is available before training anything. |
-| **D3** | **Retrieval** | manual working set (today); keyword/grep; embeddings + vector store; hybrid | A documents project is far smaller than a codebase, so full-corpus embedding is cheap. Note documents already carry structured metadata (frontmatter, sources, wikilinks) that a code retriever would not have. The wikilink graph is a real signal worth exploiting. |
-| **D4** | **Execution model** | single shot (today); tool-calling agent loop; deterministic workflow with model steps | Requirement 1 (project-wide) probably needs a loop, since the model must discover scope. But a loop over N documents needs a cost ceiling. |
+| **D2** | **One model or two** | ~~single frontier model~~; **planner + apply split (DECIDED)** | Settled (1.4): plan with the more capable model, apply with a cheaper one. Open sub-question: is a hosted fast-apply available, or does this mean training/serving one? The broker's door abstraction makes adding a second serving path tractable. |
+| **D3** | **Retrieval and scope inference** | manual working set (today); keyword/grep; embeddings + vector store; hybrid | **Narrowed by 1.1.** Retrieval must not fire when the user has already made scope explicit, and must satisfy *minimum sufficient context*. So the question is not only "which retriever" but "how does the system classify the ask" (explicit attachment vs folder vs project-wide wording vs ambiguous). A documents project is far smaller than a codebase, so full-corpus embedding is cheap; documents also carry frontmatter, sources and a wikilink graph a code retriever would not have. |
+| **D4** | **Execution model** | ~~single shot~~; **tool-calling agent loop (DECIDED)** | Settled (1.4): the model iterates as Cursor's agent does. Open sub-question: what bounds the loop? A loop over N documents needs a cost and step ceiling to satisfy 1.1, and the existing daily spend cap is a per-request meter, not a per-task budget. |
 | **D5** | **Framework** | continue hand-rolled; Anthropic SDK tool runner; Vercel AI SDK; LangGraph | Hand-rolled has kept the broker dependency-free and testable with `node --test`, which is genuinely valuable and should not be given up lightly. Weigh against the cost of rebuilding streaming, tool loops, and retries. |
-| **D6** | **Review at scale** | per-document queues (today); a project-level change-set review; staged apply | Twenty documents of pending changes is not reviewable one card at a time. This is a design problem as much as an engineering one. |
-| **D7** | **Cost and latency envelope** | prompt caching; incremental context; batching; speculative apply | F6 is unimplemented and cheap. A whole-project rewrite without caching would be prohibitively expensive on any frontier model. |
+| **D6** | **Review at scale** | **the three-level hierarchy in 1.2, which mostly ships already** | **Specified by 1.2, and largely built.** All three levels exist; the missing control is previous-document. The real work is modelling the pending set as one change set so the levels cannot disagree, which is what #334 is: a count read before an `await` and an apply that re-reads after it. Treat this as hardening, not new construction. |
+| **D7** | **Cost and latency envelope** | prompt caching; incremental context; batching; speculative apply | **Narrowed by 1.1 and 1.3**: the founder's bar is that cost and speed feel balanced *to the user*, which makes this a perceived-quality requirement, not just a bill. F6 (no prompt caching anywhere) is unimplemented and cheap. A whole-project rewrite without caching would be prohibitively expensive on any frontier model, and an agent loop (D4) multiplies the turn count that caching pays off against. |
 | **D8** | **Verification** | none (today); anchor re-validation; a second model pass; deterministic post-checks | The audit trail is the product's trust wedge, so "we recorded an approval that did not happen" (#329) must become structurally impossible, not merely unlikely. |
 
 ## 7. Open questions for the architect
 
-1. Is the block model the right substrate for edits, or should the unit of change be the whole document with block-level diffing done locally after the fact?
+1. Is the block model the right substrate for edits, or should the unit of change be the whole document with block-level diffing done locally after the fact? (D1)
 2. Can a whole-project rewrite be made affordable without a speculative-apply path, or does that capability gate the requirement?
-3. What is the right scope-discovery mechanism for a documents corpus, given it is orders of magnitude smaller than a codebase but richer in explicit structure (frontmatter, sources, wikilinks)?
-4. Should the broker gain a first-party Anthropic door, or stay a two-door proxy?
-5. How much of the existing fan-out machinery (batching, attribution, partial success, surgical retry) survives a move to a retrieval-driven agent loop?
-6. What is the migration path? The product ships today; this cannot be a rewrite behind a six-month flag.
+3. Given the planner/apply split is decided, what plays the apply role? A hosted fast-apply, a small commodity model prompted for mechanical merge, or something trained? What is the fidelity bar, and how is a bad apply detected rather than trusted?
+4. How does the system classify an ask into the scope signals in 1.1, reliably enough that a wrong call is rare and recoverable? A misread that sweeps the project is expensive; one that under-scopes silently does less than the user asked.
+5. What bounds the agent loop: step count, token budget, wall clock, or a planner-declared scope agreed up front? How does the user see and steer it mid-run?
+6. Should the broker gain a first-party Anthropic door, or stay a two-door proxy? The planner/apply split makes this a question about two serving paths, not one.
+7. How much of the existing fan-out machinery (batching, attribution, partial success, surgical retry) survives a move to a retrieval-driven agent loop?
+8. The three-level review in 1.2 mostly ships. How is the pending set re-modelled as one change set so the levels cannot disagree, given #334 is exactly that failure today?
+9. What is the migration path? The product ships today; this cannot be a rewrite behind a six-month flag.
 
 ## Appendix A: file map
 
