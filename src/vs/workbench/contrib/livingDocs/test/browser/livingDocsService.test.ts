@@ -2278,6 +2278,186 @@ suite('livingDocs Service', () => {
 		);
 	});
 
+	// --- Honest turn receipts (docs/30 invariant I3; issue #303): a reply that CLAIMS edits the queue then
+	// dropped must reconcile the two before the prose reaches the bubble. Every drop site used to return a bare
+	// `undefined`, so the user read "I sharpened the commentary" over a document nothing had happened to. Each
+	// test below stages one real drop reason end to end and pins that the rendered turn NAMES it, and that a
+	// turn which claimed changes but queued NONE renders as a failure rather than success prose. ---
+
+	// The rendered shape of a claimed-but-dropped turn: what the rail shows, whether it is a failure, and
+	// whether anything actually reached the review queue.
+	function receiptOf(service: LivingDocsService, resource: URI): { content: string; failed: boolean; via: string | undefined; pending: number } {
+		const turn = service.getChatMessages(resource).at(-1)!;
+		return { content: turn.content, failed: turn.failed === true, via: turn.via, pending: service.getAllPending().length };
+	}
+
+	test('I3: an edit that targeted a HEADING renders as a failure naming the heading, never the success prose', async () => {
+		// The model quotes a heading as the text to rewrite. Chat rewrites prose, never the document's structure,
+		// so the edit is refused - and the refusal must SAY "targeted a heading", not read as a sharpened doc.
+		const service = createService([], {
+			model: chatReply('I sharpened the commentary for you.', [
+				{ heading: 'Commentary', oldText: 'Commentary', newText: 'Commentary and outlook', rationale: 'r' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Rename the commentary heading');
+
+		assert.deepStrictEqual(
+			receiptOf(service, WEEKLY),
+			{
+				content: 'I described a change but could not apply it: 1 targeted a heading.',
+				failed: true,
+				via: 'fallback',
+				pending: 0,
+			},
+			'a heading target is named, the turn is a failure, and the model\'s success prose is discarded',
+		);
+	});
+
+	test('I3: an edit whose quoted text is NOWHERE in the document renders as a failure naming the no-match', async () => {
+		const service = createService([], {
+			model: chatReply('Done - I tightened that line.', [
+				{ heading: 'Commentary', oldText: 'Penguins migrate across the tundra each autumn.', newText: 'Penguins stay put.', rationale: 'r' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+
+		assert.deepStrictEqual(
+			receiptOf(service, WEEKLY),
+			{
+				content: 'I described a change but could not apply it: 1 quoted text that is not in the document.',
+				failed: true,
+				via: 'fallback',
+				pending: 0,
+			},
+			'a hallucinated quote is named as such rather than reported as a completed edit',
+		);
+	});
+
+	test('I3: an edit that targeted a LIVE FIGURE renders as a failure naming the figure guard', async () => {
+		// Ratio Doc's only prose paragraph is wholly bound (two bind links), so the figure guard refuses it. The
+		// receipt must name the guard - "I could not find that text" would blame the document for a working rule.
+		const service = createService([], {
+			badBind: true,
+			model: chatReply('I rewrote the ratio line.', [
+				{ heading: 'Ratio', oldText: 'MRR is $41.2k at a ratio of 0.0.', newText: 'MRR is climbing at a healthy ratio.', rationale: 'r' },
+			]),
+		});
+		await service.loadDocument(BADBIND);
+
+		await service.sendChatMessage(BADBIND, 'Rewrite the ratio line');
+
+		assert.deepStrictEqual(
+			receiptOf(service, BADBIND),
+			{
+				content: 'I described a change but could not apply it: 1 targeted a live figure.',
+				failed: true,
+				via: 'fallback',
+				pending: 0,
+			},
+			'the bind guard is named, and the figure is left alone without a false all-done',
+		);
+	});
+
+	test('I3 fan-out: edits for a document that was NOT in the run render as a failure naming the title miss', async () => {
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			model: multiReply('Updated the quarterly plan.', [
+				{ doc: 'Quarterly Planning', edits: [{ oldText: 'Anything at all.', newText: 'Something else.', rationale: 'r' }] },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD]);
+
+		await service.sendChatMessage(WEEKLY, 'tighten every note across the project');
+
+		assert.deepStrictEqual(
+			receiptOf(service, WEEKLY),
+			{
+				content: 'I described a change but could not apply it: 1 named a document that was not in this run.',
+				failed: true,
+				via: 'fallback',
+				pending: 0,
+			},
+			'a doc title the run never contained is named as a miss, not silently dropped behind the model reply',
+		);
+	});
+
+	test('I3 fan-out: edits for a "never" document are named as a POLICY refusal, not as a title miss', async () => {
+		// The never-doc is partitioned off before the model is called, so its title is not routable in the batch.
+		// The receipt must still say the human's dial refused it - blaming the model for naming an unknown
+		// document would misreport a choice the user made.
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			model: multiReply('Tightened the board note.', [
+				{ doc: 'Board Note', edits: [{ oldText: 'Momentum is steady this week.', newText: 'Momentum accelerated.', rationale: 'r' }] },
+			]),
+		});
+		lastFiles!.set(BOARD.toString(), BOARD_MD.replace('title: Board Note', 'title: Board Note\npolicy: never'));
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD]);
+
+		await service.sendChatMessage(WEEKLY, 'tighten every note across the project');
+
+		assert.deepStrictEqual(
+			receiptOf(service, WEEKLY),
+			{
+				content: 'I described a change but could not apply it: 1 was blocked by the document\'s policy.',
+				failed: true,
+				via: 'fallback',
+				pending: 0,
+			},
+			'the policy dial is named as the reason, and the turn is an honest failure',
+		);
+	});
+
+	test('I3: a PARTIAL turn keeps the reply and the proposals, and appends the named shortfall', async () => {
+		// Two claims, one lands: the prose is real (a change genuinely was proposed), so it stays - but the count
+		// the user reads must reconcile with the count the rail holds, so the shortfall is named alongside it.
+		const service = createService([], {
+			model: chatReply('Sharpened the commentary and renamed the section.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+				{ heading: 'Commentary', oldText: 'Commentary', newText: 'Commentary and outlook', rationale: 'r' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Sharpen the commentary and rename the section');
+
+		assert.deepStrictEqual(
+			receiptOf(service, WEEKLY),
+			{
+				content: 'Sharpened the commentary and renamed the section.\n\n1 change could not be applied: 1 targeted a heading.',
+				failed: false,
+				via: 'model',
+				pending: 1,
+			},
+			'a partial keeps its reply and its proposal, and says plainly what did not land',
+		);
+	});
+
+	test('I3: a turn where every claim lands is left completely alone (no shortfall noise on the golden path)', async () => {
+		const service = createService([], {
+			model: chatReply('Sharpened the commentary.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+			]),
+		});
+		await service.loadDocument(WEEKLY);
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+
+		assert.deepStrictEqual(
+			receiptOf(service, WEEKLY),
+			{ content: 'Sharpened the commentary.', failed: false, via: 'model', pending: 1 },
+			'a clean turn is unchanged by the reconciliation',
+		);
+	});
+
 	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {
 		const newText = '1. First lever\n2. Second lever\n3. Third lever';
 		const service = createService([], {
