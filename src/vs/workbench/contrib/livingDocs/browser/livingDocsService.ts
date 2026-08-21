@@ -6,7 +6,7 @@
 import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
-import { IntervalTimer, Limiter } from '../../../../base/common/async.js';
+import { IntervalTimer, Limiter, timeout } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableMap, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
@@ -48,6 +48,7 @@ import { buildDemoReportMarkdown, DEMO_CSV, DEMO_CSV_NAME, DEMO_DOC_NAME, founde
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
 import { ChatDropReason, reconcileTurnReceipt } from '../common/turnReceipts.js';
+import { parseRetryAfterMs, retryDelayMs } from '../common/livingDocRetry.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
@@ -207,8 +208,40 @@ function bindingIsFresh(current: IResolution | undefined, entry: IBindingEntry):
 // the renderer/service are backend-agnostic. These are the request defaults; the base URL is configurable
 // via livingDocs.modelProxyUrl.
 const DEFAULT_PROXY_URL = 'http://localhost:8090';
-const DEFAULT_MODEL = 'claude-opus-4-8';
-const MODEL_MAX_TOKENS = 1024;
+
+/**
+ * The lanes a model call can run in. A purpose is NOT a model choice or a routing hint - the broker's
+ * catalogue owns both. It is the honest name of what the call is for, and it carries the two things
+ * that must differ per lane: how much output the call may produce, and how many of its kind may be in
+ * flight at once. The set is deliberately small and matches today's call sites exactly (doc 30
+ * section 2.6 names `plan|apply|chat` as the eventual set; that plumbing is not built here).
+ *
+ *  - `chat` - a person is waiting on this reply: the document conversation and the Project Home ask.
+ *  - `fanout` - one batch of a whole-project run, carrying many documents' edits in one envelope.
+ *  - `rewrite` - one document's Review-impact proposal during a refresh.
+ *  - `grade` - the verify gate's strategy grader, which returns a two-field verdict.
+ */
+const MODEL_CALL_PURPOSES = ['chat', 'fanout', 'rewrite', 'grade'] as const;
+type ModelCallPurpose = typeof MODEL_CALL_PURPOSES[number];
+
+/**
+ * The output ceiling per lane. There used to be ONE global cap of 1024 tokens, which doc 30
+ * section 2.6 calls a truncation machine and which is exactly that: a chat turn that rewrites two
+ * paragraphs, or a fan-out batch carrying edits for six documents, does not fit, and truncation
+ * arrives as a half-finished JSON envelope the tolerant parser degrades into a bare prose reply -
+ * so the user sees a vague answer rather than a failure. The caps below are sized to the shape of
+ * each lane's reply, and the broker forwards a caller's cap verbatim.
+ */
+const MODEL_MAX_TOKENS: Record<ModelCallPurpose, number> = {
+	// A reply plus a handful of rewritten paragraphs and inserts.
+	chat: 4096,
+	// The same envelope, but keyed across every document in the batch - the widest reply we ever ask for.
+	fanout: 8192,
+	// One revised passage plus its rationale.
+	rewrite: 2048,
+	// `{"pass": boolean, "flag": string}` and nothing else.
+	grade: 512,
+};
 
 // The plain-words message the proxy returns when the day's included usage is spent on the founder-funded
 // fallback (plan 35 iter 3; doc 18 section 2.1). Used as the fallback default when the proxy omits its own
@@ -226,6 +259,23 @@ class ModelPausedError extends Error {
 }
 function isModelPausedError(e: unknown): e is ModelPausedError {
 	return e instanceof ModelPausedError;
+}
+
+/**
+ * A model call the upstream rate-limited (HTTP 429). Transient and worth retrying, but ONLY after
+ * waiting: a 429 is the one failure where retrying immediately is guaranteed to fail again and to
+ * make the limit worse for every other call in the same wave. When the response named a
+ * `Retry-After`, `retryAfterMs` carries it so the backoff honours the server's own instruction
+ * instead of guessing.
+ */
+class ModelRateLimitedError extends Error {
+	constructor(readonly retryAfterMs: number | undefined) {
+		super('model proxy rate limited the request');
+		this.name = 'ModelRateLimitedError';
+	}
+}
+function isModelRateLimitedError(e: unknown): e is ModelRateLimitedError {
+	return e instanceof ModelRateLimitedError;
 }
 // How long a model-availability probe result is trusted before re-checking (so starting the proxy
 // mid-session is picked up without re-probing on every render).
@@ -246,8 +296,23 @@ const BROKER_DOWN_REPROBE_MS = 12_000;
 // live. A per-host cooldown suppresses an identical remote fetch repeated within the window (unauthenticated
 // GitHub is 60 req/h/IP - a per-source cooldown is correctness, not polish; doc 04).
 const SOURCE_FETCH_CONCURRENCY = 4;
-const MODEL_CALL_CONCURRENCY = 2;
 const SOURCE_COOLDOWN_MS = 30_000;
+
+/**
+ * The model-call concurrency budget PER LANE. There used to be one shared limiter of width 2 across
+ * every purpose, which meant the lanes could only ever hurt each other: a rewrite wave filled both
+ * slots and the chat turn a person was waiting on queued behind it, and conversely raising the width
+ * for a wave would have unthrottled the interactive lanes too (doc 30 section 2.6). Splitting it is
+ * the whole point of this record; the widths are deliberately held at the historic 2 so this change
+ * is isolation and nothing else. Tuning a lane - an 8-wide rewrite wave, say - is a later, separate
+ * decision that can now be made one lane at a time.
+ */
+const MODEL_CALL_CONCURRENCY: Record<ModelCallPurpose, number> = {
+	chat: 2,
+	fanout: 2,
+	rewrite: 2,
+	grade: 2,
+};
 
 // Persisted flag (application scope): has this install ever emitted project_opened? Drives the is_first
 // property of the project_opened analytics event so the activation funnel can tell a first project apart.
@@ -573,10 +638,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _lastSyncDiff = new Map<string, IFigureChange[]>();
 
 	// Bounded concurrency for a refresh/agent run (plan 30, track 2, D30-A). The source limiter caps
-	// concurrent REMOTE (api/mcp) fetches; the model limiter caps concurrent model calls. Both are created
-	// once and reused across runs; disposed with the service. Local file reads bypass them (cheap + cached).
+	// concurrent REMOTE (api/mcp) fetches. Created once and reused across runs; disposed with the service.
+	// Local file reads bypass it (cheap + cached).
 	private readonly _sourceLimiter = this._register(new Limiter<Map<string, IResolution>>(SOURCE_FETCH_CONCURRENCY));
-	private readonly _modelLimiter = this._register(new Limiter<string>(MODEL_CALL_CONCURRENCY));
+	// One model limiter PER LANE (plan 55 B1), so a rewrite wave and the chat turn a person is waiting on
+	// hold separate budgets. Built eagerly from the purpose list - a fixed, tiny set - so no limiter is ever
+	// created inside a per-call code path, and every one is registered for disposal at construction.
+	private readonly _modelLimiters: ReadonlyMap<ModelCallPurpose, Limiter<string>> = new Map(
+		MODEL_CALL_PURPOSES.map(purpose => [purpose, this._register(new Limiter<string>(MODEL_CALL_CONCURRENCY[purpose]))])
+	);
 	// Per-host cooldown: the last time (clock ms) we fetched each remote host, so an identical fetch within
 	// SOURCE_COOLDOWN_MS is suppressed (the last resolved value is reused). Keyed by host, workspace-wide.
 	private readonly _hostCooldown = new Map<string, number>();
@@ -585,6 +655,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// cooldown window can be advanced deterministically. Not a DI service (the orchestrator's clock is the
 	// same plain seam), so it stays off the constructor to keep the service's DI signature clean.
 	private _clock: IClock = new RealClock();
+
+	// The two non-deterministic halves of the model-call retry backoff (plan 55 B1), behind the same plain
+	// seam as the clock above: production jitters with Math.random and sleeps for real; tests swap both via
+	// {@link setRetryBackoff} so a retry's exact delay is asserted and the unit suite never actually waits.
+	// Kept off the constructor for the same reason as _clock - it is not a DI service.
+	private _retryJitter: () => number = Math.random;
+	private _retrySleep: (delayMs: number) => Promise<void> = async delayMs => { await timeout(delayMs); };
 
 	// (plan 33 iter 2, L5) The contents of the folder's `.abstract-name` marker, if it ships one. Read once
 	// at startup + on folder change and cached so `getWorkspaceFolderName()` can stay synchronous. Only ever
@@ -3735,7 +3812,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const system = 'You are a strategy reviewer. Decide whether any of the document\'s claims contradict or are clearly unsupported by the decision stack (the team\'s strategy, OKRs, and market context). '
 				+ 'Reply with ONLY a JSON object: {"pass": boolean, "flag": string}. Set pass=false ONLY for a clear contradiction, with a one-sentence reason starting with "Strategy: " in flag. When in doubt, pass.';
 			const user = `Decision stack:\n"""${decisionStack}"""\n\nClaims:\n${claims.map(c => `- ${c}`).join('\n')}`;
-			const text = await this._callModel(system, user);
+			const text = await this._callModel(system, user, 'grade');
 			const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) as { pass?: boolean; flag?: string };
 			if (json.pass === false) {
 				const flag = (typeof json.flag === 'string' && json.flag.trim()) ? json.flag.trim() : 'Strategy: a claim conflicts with the decision stack.';
@@ -4319,6 +4396,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Test seam (plan 30, track 2): swap the clock the per-host cooldown reads, so a test can advance the
 	// 30 s window deterministically without wall-clock waits. Production always keeps the RealClock.
 	setClock(clock: IClock): void { this._clock = clock; }
+
+	/**
+	 * Test seam (plan 55 B1): swap the jitter source and the sleep behind the model-call retry backoff, so a
+	 * test can assert the EXACT delay a retry chose without the suite waiting for it. Production always keeps
+	 * `Math.random` and a real timeout.
+	 *
+	 * @param jitter a deterministic stand-in for `Math.random`, returning a number in [0, 1).
+	 * @param sleep called with the chosen delay instead of waiting for it.
+	 */
+	setRetryBackoff(jitter: () => number, sleep: (delayMs: number) => Promise<void>): void {
+		this._retryJitter = jitter;
+		this._retrySleep = sleep;
+	}
 
 	async refreshFromSources(resource?: URI): Promise<void> {
 		// One pass shares every source read + remote resolution across the documents it derives (plan 30,
@@ -5060,9 +5150,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return url.replace(/\/+$/, '');
 	}
 
-	private _modelName(): string {
+	// The configured model id, or undefined when the user has expressed no preference. There is NO client-side
+	// default here any more: it used to be `claude-opus-4-8`, a name no backend has ever served - the broker's
+	// resolveRequestedModel silently swapped it for the active door's default on every call, so the constant
+	// routed nowhere while reading like a decision. Naming a model the client cannot know is served is worse
+	// than naming none: the catalogue is the only thing that knows, and it already handles an absent id.
+	private _modelName(): string | undefined {
 		const preferred = this._config.getValue<string>('livingDocs.commentaryModel');
-		return (typeof preferred === 'string' && preferred.length > 0) ? preferred : DEFAULT_MODEL;
+		return (typeof preferred === 'string' && preferred.length > 0) ? preferred : undefined;
 	}
 
 	// Quick liveness check for the interop routes' honest error copy (issue #131/#245 C2). A GET /healthz that
@@ -5080,17 +5175,36 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	// The model id to send on a /v1/messages call (issue #179): the user's selected model for the active backend
-	// when the picker resolves one, else the configured/default name. The broker validates it against the active
-	// backend's list and falls back to that backend's default on an absent/unknown id, so this never 500s a call
-	// on a stale pick; passing the selection here is what makes the composer's dropdown load-bearing.
-	private async _requestModelId(): Promise<string> {
+	// when the picker resolves one, else the configured id, else NOTHING. The broker validates whatever arrives
+	// against the active backend's list and falls back to that backend's default on an absent or unknown id, so
+	// this never 500s a call on a stale pick; passing the selection here is what makes the composer's dropdown
+	// load-bearing. Sending no id at all is a first-class case, not a gap: it means "the user has not chosen",
+	// and the catalogue is the only party that can answer that honestly.
+	private async _requestModelId(): Promise<string | undefined> {
 		try {
 			const selected = await this.getSelectedModelId();
 			if (selected) { return selected; }
 		} catch {
-			// Catalogue unreachable - fall through to the configured/default name so the call still goes out.
+			// Catalogue unreachable - fall through to the configured id (or none) so the call still goes out.
 		}
 		return this._modelName();
+	}
+
+	/**
+	 * The request body shared by the buffered and streaming model calls. Building it in one place is what
+	 * keeps the two paths honest with each other: the per-purpose cap, and the rule that `model` is OMITTED
+	 * rather than sent as a placeholder when the user has chosen nothing, must hold on both.
+	 */
+	private _modelRequestBody(modelId: string | undefined, purpose: ModelCallPurpose, system: string, user: string, stream: boolean): string {
+		return JSON.stringify({
+			...(modelId ? { model: modelId } : {}),
+			max_tokens: MODEL_MAX_TOKENS[purpose],
+			thinking: { type: 'adaptive' },
+			output_config: { effort: 'low' },
+			...(stream ? { stream: true } : {}),
+			system,
+			messages: [{ role: 'user', content: user }],
+		});
 	}
 
 	private async _hasModel(): Promise<boolean> {
@@ -5124,39 +5238,47 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._modelProbe;
 	}
 
+	/**
+	 * The lane's limiter. Every purpose has one, built at construction, so this is a lookup and never a
+	 * creation - the non-null assertion is safe by the map's construction from {@link MODEL_CALL_PURPOSES}.
+	 */
+	private _modelLimiter(purpose: ModelCallPurpose): Limiter<string> {
+		return this._modelLimiters.get(purpose)!;
+	}
+
 	// POST one short request to the proxy and return the assistant text. Throws on a refusal or any
-	// transport/parse error so the caller falls back to the deterministic path. Opus 4.8 request shape:
-	// adaptive thinking, low effort, no sampling params (those 400). The credential stays in the proxy.
+	// transport/parse error so the caller falls back to the deterministic path. Request shape: adaptive
+	// thinking, low effort, no sampling params (those 400). The credential stays in the proxy.
 	// Call the model, retrying ONCE on a transient failure (plan 16 iter 5, decision 58). The OpenRouter
 	// backend intermittently errors or returns an empty/refusal body on larger follow-ups; a single silent
 	// retry recovers most of those before the caller's honest fallback ever shows. A refusal is NOT retried
 	// (it would just refuse again). Only a genuine second failure propagates.
-	private async _callModel(system: string, user: string): Promise<string> {
-		// Bounded model concurrency (plan 30, track 2, D30-A): at most MODEL_CALL_CONCURRENCY buffered model
-		// calls run at once, so a fan-out that grades/rewrites many documents never opens an unbounded burst
-		// of proxy requests. The single silent retry (decision 58) stays inside the gated task.
-		return this._modelLimiter.queue(async () => {
+	private async _callModel(system: string, user: string, purpose: ModelCallPurpose): Promise<string> {
+		// Bounded model concurrency, per lane (plan 30 track 2 D30-A; split per purpose by plan 55 B1): at most
+		// MODEL_CALL_CONCURRENCY[purpose] buffered calls of this KIND run at once, so a fan-out that rewrites
+		// many documents never opens an unbounded burst of proxy requests and never queues ahead of the chat
+		// turn a person is waiting on. The single silent retry (decision 58) stays inside the gated task.
+		return this._modelLimiter(purpose).queue(async () => {
 			try {
-				return await this._callModelOnce(system, user);
+				return await this._callModelOnce(system, user, purpose);
 			} catch (e) {
 				if (e instanceof Error && e.message === 'model refused the request') { throw e; }
 				// A paused call (spent daily budget) is not transient - retrying just pauses again; propagate it.
 				if (isModelPausedError(e)) { throw e; }
-				this._log.info('[livingDocs] model call failed, retrying once', e instanceof Error ? e.message : String(e));
-				return await this._callModelOnce(system, user);
+				// WAIT before retrying (plan 55 B1). The retry used to be immediate, which is the worst possible
+				// behaviour during a wave: N concurrent calls meet the same transient fault and all re-fire in the
+				// same millisecond at twice the wave's width. Full jitter spreads them; a 429's own Retry-After is
+				// honoured as an instruction rather than guessed at.
+				const delayMs = retryDelayMs(1, isModelRateLimitedError(e) ? e.retryAfterMs : undefined, this._retryJitter);
+				this._log.info(`[livingDocs] model call failed, retrying once in ${delayMs}ms`, e instanceof Error ? e.message : String(e));
+				await this._retrySleep(delayMs);
+				return await this._callModelOnce(system, user, purpose);
 			}
 		});
 	}
 
-	private async _callModelOnce(system: string, user: string): Promise<string> {
-		const body = JSON.stringify({
-			model: await this._requestModelId(),
-			max_tokens: MODEL_MAX_TOKENS,
-			thinking: { type: 'adaptive' },
-			output_config: { effort: 'low' },
-			system,
-			messages: [{ role: 'user', content: user }],
-		});
+	private async _callModelOnce(system: string, user: string, purpose: ModelCallPurpose): Promise<string> {
+		const body = this._modelRequestBody(await this._requestModelId(), purpose, system, user, false);
 		const context = await this._request.request({
 			type: 'POST',
 			url: `${this._proxyUrl()}/v1/messages`,
@@ -5164,6 +5286,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			data: body,
 			callSite: 'livingDocs.model',
 		}, CancellationToken.None);
+		// A rate limit is a TYPED failure, not just a body that fails to parse: the retry has to know to wait,
+		// and for how long, which is the one thing the response headers can tell it (plan 55 B1).
+		if (context.res.statusCode === 429) {
+			throw new ModelRateLimitedError(parseRetryAfterMs(context.res.headers?.['retry-after'], Date.now()));
+		}
 		const raw = await asText(context);
 		if (!raw) { throw new Error('empty model response'); }
 		const json = JSON.parse(raw) as { stop_reason?: string; content?: { type: string; text?: string }[]; error?: { message?: string } };
@@ -5184,28 +5311,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// ever committed from the complete response, never from a partial. On `token` cancellation the fetch is
 	// aborted and a distinguishable CancellationError is thrown so the caller can salvage the streamed prose
 	// (D27-B) rather than treating it as a failure. The credential stays in the proxy (decision 14).
-	private async _callModelStream(system: string, user: string, onDelta: (text: string) => void, token: CancellationToken): Promise<string> {
+	private async _callModelStream(system: string, user: string, purpose: ModelCallPurpose, onDelta: (text: string) => void, token: CancellationToken): Promise<string> {
 		const controller = new AbortController();
 		const sub = token.onCancellationRequested(() => controller.abort());
 		try {
 			if (token.isCancellationRequested) { throw new CancellationError(); }
 			const modelId = await this._requestModelId();
 			if (token.isCancellationRequested) { throw new CancellationError(); }
-			const body = JSON.stringify({
-				model: modelId,
-				max_tokens: MODEL_MAX_TOKENS,
-				thinking: { type: 'adaptive' },
-				output_config: { effort: 'low' },
-				stream: true,
-				system,
-				messages: [{ role: 'user', content: user }],
-			});
+			const body = this._modelRequestBody(modelId, purpose, system, user, true);
 			const response = await fetch(`${this._proxyUrl()}/v1/messages`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body,
 				signal: controller.signal,
 			});
+			// Typed so the buffered fallback below inherits the wait rather than re-firing into the same limit.
+			if (response.status === 429) {
+				throw new ModelRateLimitedError(parseRetryAfterMs(response.headers.get('retry-after') ?? undefined, Date.now()));
+			}
 			if (!response.ok || !response.body) { throw new Error(`model proxy http ${response.status}`); }
 			const reader = response.body.getReader();
 			const decoder = new TextDecoder();
@@ -5244,16 +5367,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// to the buffered _callModel (which itself keeps the decision-58 single silent retry); a genuine failure
 	// there propagates to the caller's honest heuristic fallback. Cancellation is re-thrown untouched so the
 	// streamed prose can be salvaged (D27-B) rather than being retried or masked as an error.
-	private async _chatModelCall(system: string, user: string, onDelta: (text: string) => void, token: CancellationToken): Promise<string> {
+	private async _chatModelCall(system: string, user: string, purpose: ModelCallPurpose, onDelta: (text: string) => void, token: CancellationToken): Promise<string> {
 		try {
-			return await this._callModelStream(system, user, onDelta, token);
+			return await this._callModelStream(system, user, purpose, onDelta, token);
 		} catch (e) {
 			if (isCancellationError(e)) { throw e; }
 			// A pause (spent daily budget) is not a stream failure to retry - the buffered path would just pause
 			// again and charge nothing extra; propagate it so the caller shows the plain-words cap turn.
 			if (isModelPausedError(e)) { throw e; }
+			// A rate limit must not be walked straight back into: wait out the server's instruction BEFORE the
+			// buffered fallback fires, or the fallback is itself the herd the Retry-After header exists to stop.
+			if (isModelRateLimitedError(e)) {
+				await this._retrySleep(retryDelayMs(1, e.retryAfterMs, this._retryJitter));
+			}
 			this._log.info('[livingDocs] streaming chat call failed, falling back to buffered call', e instanceof Error ? e.message : String(e));
-			return await this._callModel(system, user);
+			return await this._callModel(system, user, purpose);
 		}
 	}
 
@@ -5273,7 +5401,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			+ 'Reply with ONLY a JSON object: {"newText": string, "kind": "figure" | "meaning", "confidence": number, "rationale": string}. '
 			+ 'Use kind="meaning" when the qualitative framing should change; otherwise kind="figure" and return newText unchanged.';
 		const user = `The source(s) ${contextFiles.join(', ')} now read:\n"""${diff}"""\nCurrent commentary: "${oldText}". Revise it if the framing should change.`;
-		const text = await this._callModel(system, user);
+		const text = await this._callModel(system, user, 'rewrite');
 		const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
 		return {
 			newText: String(json.newText ?? oldText),
@@ -5779,7 +5907,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const user = `Project documents:\n\n${sections.join('\n\n')}\n\nQuestion: ${trimmed}`;
 		let raw: string;
 		try {
-			raw = await this._callModel(system, user);
+			// A person is waiting on this answer on Project Home, so it shares the interactive lane with chat.
+			raw = await this._callModel(system, user, 'chat');
 		} catch (e) {
 			if (isModelPausedError(e)) { return { answer: e.message, citations: [], via: 'fallback' }; }
 			this._log.info('[livingDocs] project question failed, honest fallback', e instanceof Error ? e.message : String(e));
@@ -5986,7 +6115,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			+ 'Propose changes only when the user asks to write, generate or revise; otherwise return empty arrays. Keep reply concise.';
 		const transcript = this._chatTranscript(state.uri);
 		const user = `Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nHeadings: ${headings.join(' | ') || '(none)'}\n\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
-		const raw = await this._chatModelCall(system, user, onDelta, token);
+		const raw = await this._chatModelCall(system, user, 'chat', onDelta, token);
 		// Tolerant parse (plan 16 iter 5): a non-JSON / truncated / prose-wrapped reply degrades to a plain
 		// chat answer instead of throwing (which used to surface as a false "the agent model errored").
 		const json = parseChatResponse(raw);
@@ -6147,8 +6276,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			let raw: string;
 			try {
 				raw = b === 0
-					? await this._chatModelCall(system, user, onDelta, token)
-					: await this._callModel(system, user);
+					? await this._chatModelCall(system, user, 'fanout', onDelta, token)
+					: await this._callModel(system, user, 'fanout');
 			} catch (e) {
 				// A cancel is the user stopping the whole run - salvage the streamed prose (D27-B), never a failure.
 				if (isCancellationError(e)) { throw e; }
