@@ -41,7 +41,7 @@ import { IAnalyticsService } from '../common/analytics.js';
 import { applyFailureStatus, BlockApplyFailure, describeApplyFailure } from '../common/applyOutcome.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
-import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
 import { coerceDocPolicy, docPolicyNeverRefusal, docPolicyNeverSkipReason, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
@@ -387,20 +387,8 @@ function sourceLabel(id: string, kind: SourceKind): string {
 	try { return new URL(id).host || id; } catch { return id; }
 }
 
-function tokenize(s: string): string[] {
-	return s.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-}
-
-// Token-overlap (Jaccard) similarity of two strings, 0..1. Used to relocate a prose claim against the
-// current text - deterministic, no model. 1 = identical token sets, 0 = nothing in common.
-function similarity(a: string, b: string): number {
-	const ta = new Set(tokenize(a));
-	const tb = new Set(tokenize(b));
-	if (ta.size === 0 || tb.size === 0) { return 0; }
-	let inter = 0;
-	for (const t of ta) { if (tb.has(t)) { inter++; } }
-	return inter / (ta.size + tb.size - inter);
-}
+// Token-overlap similarity used to relocate a prose claim against the current text is now the ONE shipped
+// `jaccardSimilarity` in `livingDocMarkdown.ts`, shared with the differ's block pairing (docs/30 section 2.1).
 
 // The "New document" starting point (plan 16 iter 3, decision 56): a BLANK writing surface, not an
 // IDE boilerplate template. A new doc is clean Markdown the user owns -- no injected `title:`
@@ -4715,7 +4703,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		let best: { blockId: string | undefined; score: number } = { blockId: undefined, score: 0 };
 		for (const block of doc.blocks) {
 			if (block.type === 'heading') { continue; }
-			const score = similarity(anchor, block.text);
+			const score = jaccardSimilarity(anchor, block.text);
 			if (score > best.score) { best = { blockId: block.id, score }; }
 		}
 		return best;
@@ -6401,17 +6389,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (score > 0.5 && (!bestSkip || score > bestSkip.score)) { bestSkip = { score, reason }; }
 		};
 		for (const block of state.doc.blocks) {
-			if (block.type === 'heading') { noteSkip(similarity(block.text, oldText), 'heading'); continue; }
+			if (block.type === 'heading') { noteSkip(jaccardSimilarity(block.text, oldText), 'heading'); continue; }
 			// A wholly-bound block (a figure paragraph) is never chat-editable. A LIST block may carry a bind
 			// in one item while other items are plain prose the agent can revise, so lists stay candidates and
 			// the per-item bind guard below protects the bound item (decision-68 fix, plan 31 iter 1).
 			if (block.binds.length && listItems(block.text).length < 2) {
-				noteSkip(similarity(scopeBlockEdit(block.text, oldText).oldText, oldText), 'bind-guard');
+				noteSkip(jaccardSimilarity(scopeBlockEdit(block.text, oldText).oldText, oldText), 'bind-guard');
 				continue;
 			}
 			// Score against the item the edit targets, not the whole block, so a single-item edit to a long
 			// list can still select that list block (the whole-list token set otherwise dilutes the match).
-			const score = similarity(scopeBlockEdit(block.text, oldText).oldText, oldText);
+			const score = jaccardSimilarity(scopeBlockEdit(block.text, oldText).oldText, oldText);
 			if (score > bestScore) { bestScore = score; best = block; }
 		}
 		if (!best) { return { queued: false, reason: bestSkip?.reason ?? 'no-match' }; }
@@ -6475,7 +6463,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			let bestScore = 0.5;
 			for (const block of state.doc.blocks) {
 				if (block.type !== 'heading') { continue; }
-				const score = similarity(block.text, afterHeading);
+				const score = jaccardSimilarity(block.text, afterHeading);
 				if (score > bestScore) { bestScore = score; best = block; }
 			}
 			if (best) { afterBlockId = best.id; label = best.text; }

@@ -84,8 +84,8 @@ suite('livingDocs changeRecord (docs/30 sections 2.1, 5)', () => {
 		const base = 'x'.repeat(100);
 		assert.deepStrictEqual(
 			{
-				targeted: deriveChangeClass([{ docUri: A, baseRevision: 'h', span: { start: 0, end: 20 }, oldText: '', newText: '' }], base.length),
-				rewrite: deriveChangeClass([{ docUri: A, baseRevision: 'h', span: { start: 0, end: 100 }, oldText: '', newText: '' }], base.length),
+				targeted: deriveChangeClass([{ span: { start: 0, end: 20 }, oldText: '', newText: '' }], base.length),
+				rewrite: deriveChangeClass([{ span: { start: 0, end: 100 }, oldText: '', newText: '' }], base.length),
 			},
 			{ targeted: 'targeted', rewrite: 'rewrite' },
 		);
@@ -107,8 +107,8 @@ suite('livingDocs changeRecord (docs/30 sections 2.1, 5)', () => {
 		assert.deepStrictEqual(
 			{
 				both: spliceDoc(base, [anchor(A, base, 'alpha', 'ALPHA'), anchor(A, base, 'gamma', 'GAMMA')]),
-				moved: spliceDoc(base, [{ docUri: A, baseRevision: 'h', span: { start: 6, end: 10 }, oldText: 'moved on', newText: 'x' }]),
-				outside: spliceDoc(base, [{ docUri: A, baseRevision: 'h', span: { start: 0, end: 99 }, oldText: base, newText: 'x' }]),
+				moved: spliceDoc(base, [{ span: { start: 6, end: 10 }, oldText: 'moved on', newText: 'x' }]),
+				outside: spliceDoc(base, [{ span: { start: 0, end: 99 }, oldText: base, newText: 'x' }]),
 			},
 			{
 				both: { ok: true, text: 'ALPHA beta GAMMA' },
