@@ -4901,12 +4901,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// (a model the backend no longer offers) resolves to the catalogue default, never a dead selection. Returns
 	// undefined only when the catalogue is empty (broker unreachable) - the call path then omits `model` and the
 	// broker uses its own default, so a call never fails for lack of a resolvable selection.
+	//
+	// AVAILABILITY IS PART OF "VALID" NOW (plan 55 WP-B3). The catalogue merges both doors, and since the broker
+	// routes by model id a pick on a signed-out door no longer quietly falls back - it fails with a typed
+	// `door_unavailable`. So an UNAVAILABLE id is treated exactly like a stale one here: a signed-out user whose
+	// first entry happens to be a ChatGPT model must not have every send fail before they have chosen anything.
+	// The stored pick still wins whenever its door is up, so a deliberate choice is never quietly overridden;
+	// only a genuinely unusable one is stepped over, and the picker says why on the row itself.
 	async getSelectedModelId(): Promise<string | undefined> {
 		const catalogue = await this.getModelCatalogue();
 		if (!catalogue.models.length) { return undefined; }
 		const stored = this._storage.get(SELECTED_MODEL_KEY, StorageScope.WORKSPACE);
-		if (stored && catalogue.models.some(m => m.id === stored)) { return stored; }
-		const fallback = catalogue.models.find(m => m.isDefault) ?? catalogue.models[0];
+		if (stored && catalogue.models.some(m => m.id === stored && m.available)) { return stored; }
+		const usable = catalogue.models.filter(m => m.available);
+		const fallback = usable.find(m => m.isDefault) ?? usable[0]
+			// Nothing is available at all (every door down): keep the old answer rather than none, so the call
+			// still carries a model and the broker's own honest failure is what the user sees.
+			?? catalogue.models.find(m => m.isDefault) ?? catalogue.models[0];
 		return fallback.id;
 	}
 

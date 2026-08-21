@@ -2143,7 +2143,9 @@ export class ReviewRailView extends ViewPane {
 
 		const pop = append(box, $('div'));
 		// Anchored above the control, right-aligned to the composer box; card styling matches the mention picker.
-		pop.style.cssText = `position:absolute;right:9px;bottom:calc(100% + 4px);z-index:20;min-width:200px;max-width:260px;padding:5px;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:11px;box-shadow:${SHADOW.dialog}`;
+		// The width grew with the per-row provider column (plan 55 WP-B3): at the old 260px cap the invitation
+		// line wrapped mid-phrase and the provider tag crowded the model name.
+		pop.style.cssText = `position:absolute;right:9px;bottom:calc(100% + 4px);z-index:20;min-width:236px;max-width:304px;padding:5px;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:11px;box-shadow:${SHADOW.dialog}`;
 		// Guard: swallow the mousedown that would otherwise bubble to the outside-dismiss listener below and
 		// close the popover before a row's click lands.
 		store.add(addDisposableListener(pop, 'mousedown', e => e.stopPropagation()));
@@ -2214,11 +2216,18 @@ export class ReviewRailView extends ViewPane {
 		// actually know the answer is `false`; an unprobed `undefined` renders nothing rather than guessing.
 		if (this._signedIn === false) {
 			const connect = append(pop, $('button')) as HTMLButtonElement;
-			connect.style.cssText = `display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:7px 9px;border:none;border-top:1px solid ${HAIRLINE.soft};border-radius:0 0 7px 7px;background:transparent;color:${INK.secondary};font:400 11.5px/1.4 ${FONT.sans};cursor:pointer;text-align:left`;
-			connect.textContent = localize('livingDocs.model.connectOwnAccount', "Use your own OpenAI account - no daily limit");
+			connect.style.cssText = `display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:8px 9px 9px;border:none;border-top:1px solid ${HAIRLINE.soft};border-radius:0 0 7px 7px;background:transparent;cursor:pointer;text-align:left`;
 			connect.title = localize('livingDocs.model.connectOwnAccountTitle', "Connect your OpenAI account on the Model Access screen");
-			store.add(addDisposableListener(connect, 'mouseenter', () => { connect.style.background = INDIGO.tint; connect.style.color = INDIGO.base; }));
-			store.add(addDisposableListener(connect, 'mouseleave', () => { connect.style.background = 'transparent'; connect.style.color = INK.secondary; }));
+			// Two deliberate lines rather than one sentence left to wrap: the composer box is ~240px, so a single
+			// string breaks mid-phrase ("no / daily limit"). The invitation leads, the reason follows in meta type.
+			const connectLead = append(connect, $('div'));
+			connectLead.style.cssText = `font:400 12px/1.35 ${FONT.sans};color:${INK.body}`;
+			connectLead.textContent = localize('livingDocs.model.connectOwnAccount', "Use your own OpenAI account");
+			const connectWhy = append(connect, $('div'));
+			connectWhy.style.cssText = `font:400 11px/1.35 ${FONT.sans};color:${INK.meta}`;
+			connectWhy.textContent = localize('livingDocs.model.connectOwnAccountWhy', "No daily limit");
+			store.add(addDisposableListener(connect, 'mouseenter', () => { connect.style.background = INDIGO.tint; connectLead.style.color = INDIGO.base; }));
+			store.add(addDisposableListener(connect, 'mouseleave', () => { connect.style.background = 'transparent'; connectLead.style.color = INK.body; }));
 			// The SAME destination the composer's "Sign in with ChatGPT" fix-it link already uses, deliberately:
 			// one sign-in route, one behaviour, no second flow to keep in step with the first.
 			store.add(addDisposableListener(connect, 'click', () => { this._modelPopover.clear(); void this._openScreen('settings'); }));

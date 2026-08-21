@@ -47,7 +47,11 @@ const OPENROUTER_MODELS = [
 	// --- validated -----------------------------------------------------------------------------------
 	{
 		id: 'anthropic/claude-sonnet-5',
-		label: 'Included (planner)',
+		// Named for the MODEL, matching every other row on both doors ("Opus 4.8", "Sol", "Terra"). The old
+		// "Included (fast)" style dates from when this door served exactly one model and the label had to carry
+		// the tier; the picker now prints the provider on every row (plan 55 WP-B3), so a tier-shaped label
+		// would just say "Included" three times in one row.
+		label: 'Sonnet 5',
 		default: true,
 		validated: true,
 		validatedOn: '2026-08-20',
@@ -59,7 +63,7 @@ const OPENROUTER_MODELS = [
 	},
 	{
 		id: 'openai/gpt-4.1-mini',
-		label: 'Included (fast)',
+		label: 'GPT-4.1 Mini',
 		validated: true,
 		validatedOn: '2026-07-10',
 		notes: 'The founder-funded fallback since plan 35, DEMOTED from default by doc 30 section 2.2. Reliable '

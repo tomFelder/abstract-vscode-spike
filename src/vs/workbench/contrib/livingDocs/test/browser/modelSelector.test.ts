@@ -305,6 +305,41 @@ suite('livingDocs model selector (plan 47 47-b, issue #236)', () => {
 		assert.strictEqual(storage.get('livingDocs.v2.model', StorageScope.WORKSPACE), 'model-gone');
 	});
 
+	// Plan 55 WP-B3: the catalogue now merges BOTH doors and the broker routes by model id, so a pick on a
+	// signed-out door no longer quietly falls back - it fails with a typed `door_unavailable`. That makes an
+	// unavailable id as dead as a stale one, and this is the case that would otherwise bite hardest: a
+	// signed-out user whose catalogue happens to list a ChatGPT model first would have every single send fail
+	// before they had chosen anything. The stored pick still wins whenever its own door is up.
+	test('an unavailable model is stepped over like a stale one - a signed-out door never becomes the default pick', async () => {
+		const modelsBody = {
+			backend: 'openrouter', models: [
+				// First in the list AND flagged default, but its door is signed out.
+				{ id: 'own-first', label: 'Own First', default: true, tier: 'own-key', door: 'openai-oauth', available: false },
+				{ id: 'included-a', label: 'Included A', default: true, tier: 'included', door: 'openrouter', available: true },
+				{ id: 'included-b', label: 'Included B', default: false, tier: 'included', door: 'openrouter', available: true },
+			]
+		};
+		const health = { ok: true, backend: 'openrouter', reason: 'ready', meters: true, signedIn: false, dailyBudgetUsd: 1 };
+		const fresh = createServiceWithHealth(health, modelsBody);
+		const unpicked = await fresh.getSelectedModelId();
+
+		// A deliberate pick on an AVAILABLE model is honoured verbatim, not second-guessed.
+		const picked = createServiceWithHealth(health, modelsBody);
+		await picked.setSelectedModelId('included-b');
+		const afterPick = await picked.getSelectedModelId();
+
+		// A pick left over from when that door WAS signed in steps aside rather than failing every send.
+		const stale = createServiceWithHealth(health, modelsBody);
+		await stale.setSelectedModelId('own-first');
+		const afterSignOut = await stale.getSelectedModelId();
+
+		assert.deepStrictEqual({ unpicked, afterPick, afterSignOut }, {
+			unpicked: 'included-a',
+			afterPick: 'included-b',
+			afterSignOut: 'included-a',
+		});
+	});
+
 	// --- D1: down->up recovery within a session (issue #236, VALIDATION ROUND 1 D1) ---
 	// The flicker fix serves `broker-down` from the settled cache without re-probing while idle, so a broker that
 	// recovers mid-session never returned the control to green. These pin the low-frequency background re-probe:
