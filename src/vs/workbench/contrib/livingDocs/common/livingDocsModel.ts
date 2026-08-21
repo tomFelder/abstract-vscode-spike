@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '../../../../nls.js';
 import { BlockApplyFailure } from './applyOutcome.js';
 
 // Living Documents - research spike data model (clean-file + lock-file format, spec 08).
@@ -638,27 +639,216 @@ export function chordTargetChange<T extends Pick<IProposedChange, 'id'>>(pending
 	return pending.length ? pending[0] : undefined;
 }
 
+// --- the ONE bulk path (docs/30 section 5, invariant I4; issues #334 / #305) ---
+//
+// A bulk verb is the widest gesture in the product: one click moves work the reviewer will not read again.
+// The invariant that makes it safe is structural, not procedural - a bulk verb operates on an IMMUTABLE id
+// snapshot captured together with the sentence the user confirmed, and the applied set may only ever SHRINK
+// from that snapshot, never grow. Everything below exists to make the alternative impossible to write: there
+// is no query-based `approveAll(docId)` for a call site to re-derive a set from at apply time, and the
+// eligibility rule lives in exactly one function (`buildBulkSet`) rather than being restated per surface.
+
+/** The two bulk verbs. Comment is not one: it never resolves a change. */
+export type BulkVerb = 'approve' | 'reject';
+
 /**
- * The bulk-approve safety net (plan 31 iter 4): a one-line confirm shown ONLY when a bulk approve's set
- * contains at least one `meaning` change. A figures-only bulk approve stays one-click (the auto-apply class
- * does not deserve friction). `snapshot` adds the honest "a version snapshot is taken first" reassurance -
- * plan 26 landed the autosnapshot on bulk approve, so the copy can promise it. Counts are REAL (from the
- * passed set); an empty set or a figures-only set returns `needed: false`. Pure so it is unit-tested directly.
+ * Which pending changes one bulk verb addresses.
+ *
+ * `docId` restricts the capture to a single document (the per-document "Approve all"); omitting it captures
+ * the EVERYWHERE shapes - the rail foot, the editor bar's "Approve everywhere", the chat-level verbs - which
+ * span the whole working set.
  */
-export interface IBulkApproveConfirm {
-	readonly needed: boolean;
-	readonly message: string;
+export interface IBulkScope {
+	readonly verb: BulkVerb;
+	readonly docId?: string;
 }
 
-export function bulkApproveConfirm(changes: readonly Pick<IProposedChange, 'kind'>[], snapshot = false): IBulkApproveConfirm {
-	const total = changes.length;
-	const meaning = changes.filter(c => c.kind === 'meaning').length;
-	if (total === 0 || meaning === 0) { return { needed: false, message: '' }; }
-	const changeWord = total === 1 ? 'change' : 'changes';
-	const meaningWord = meaning === 1 ? 'meaning change' : 'meaning changes';
-	let message = `Approve ${total} ${changeWord} including ${meaning} ${meaningWord}?`;
-	if (snapshot) { message += ' A version snapshot is taken first, so you can restore.'; }
-	return { needed: true, message };
+/**
+ * Why some in-scope pending changes were left OUT of a captured set, and how many. Named in the confirm
+ * sentence rather than silently dropped (docs/30 section 4.5): "Approve 9 changes? 1 needing attention is
+ * not included." A reviewer who is told what is excluded can go and deal with it; one who is not simply
+ * believes the rail is empty.
+ */
+export interface IBulkExclusion {
+	readonly reason: 'needs-attention';
+	readonly count: number;
+}
+
+/**
+ * An immutable bulk set: the ids the verb will act on, captured WITH the sentence that describes them.
+ *
+ * The pairing is the whole point. Because the sentence is derived from the same snapshot that is handed to
+ * `approveByIds` / `rejectByIds`, the dialog can never describe a set different from the one that gets
+ * applied - which is exactly what #334 was: a confirm counted at click time, an apply re-queried after the
+ * user had spent seconds reading it, and any change the agent queued in between silently swept up.
+ */
+export interface IBulkSet {
+	readonly verb: BulkVerb;
+	/** The immutable id snapshot, in the order the surfaces already draw the changes. */
+	readonly ids: readonly string[];
+	/** How many documents the captured ids span. Past one the sentence names it, and the verb always confirms. */
+	readonly docCount: number;
+	readonly excluded: readonly IBulkExclusion[];
+	/** Whether the verb must raise a confirm dialog. Also decides whether its label carries an ellipsis. */
+	readonly confirmNeeded: boolean;
+	/** The confirm sentence. Empty when no confirm is needed. */
+	readonly sentence: string;
+	/** Title-style label for the confirm dialog's primary button. */
+	readonly primaryButton: string;
+}
+
+/** Past this many decisions in one gesture, a bulk verb confirms whatever the set is made of. */
+export const BULK_CONFIRM_THRESHOLD = 10;
+
+/**
+ * Bulk eligibility, in ONE place (docs/30 section 4.5). Today: the change is still genuinely pending. A
+ * change whose approve could not be applied (R2 / invariant I1) stays in the queue flagged `applyFailure` -
+ * it is `needs-attention`, not pending, so a bulk verb must not sweep it up; it is named as an exclusion
+ * instead. The `!hasOpenThread` half of the predicate arrives with the comment-as-a-third-verb work and
+ * belongs HERE when it does, not in a call site.
+ */
+function isBulkEligible(change: Pick<IProposedChange, 'applyFailure'>): boolean {
+	return change.applyFailure === undefined;
+}
+
+/**
+ * Capture a bulk set: filter the pending queue to the scope, drop the ineligible (counting them as named
+ * exclusions), and write the confirm sentence for exactly what is left.
+ *
+ * The confirm policy, coherent across every level (docs/30 sections 4.4 / 4.5):
+ *  - REJECT always confirms. Discarding an agent's work is not recoverable from the rail.
+ *  - Any EVERYWHERE-scoped verb confirms, including the chat-level ones - a set the reviewer cannot see the
+ *    edges of is never one-click.
+ *  - Any set spanning more than one document confirms, whatever it is made of.
+ *  - Any set larger than {@link BULK_CONFIRM_THRESHOLD} confirms, whatever it is made of.
+ *  - Any set containing a `meaning` change confirms (the shipped plan-31 safety net).
+ * Which leaves exactly one one-click case: a small, single-document, figures-only approve. The auto-apply
+ * class does not deserve friction; everything else does.
+ *
+ * Pure, so the policy and the sentence are unit-tested directly rather than through a dialog.
+ */
+export function buildBulkSet(scope: IBulkScope, pending: readonly IProposedChange[]): IBulkSet {
+	const inScope = scope.docId === undefined ? pending : pending.filter(c => c.docId === scope.docId);
+	const eligible = inScope.filter(isBulkEligible);
+	const ids = eligible.map(c => c.id);
+	const docCount = new Set(eligible.map(c => c.docId)).size;
+	const attention = inScope.length - eligible.length;
+	const excluded: IBulkExclusion[] = attention > 0 ? [{ reason: 'needs-attention', count: attention }] : [];
+	const meaning = eligible.filter(c => c.kind === 'meaning').length;
+	const confirmNeeded = ids.length > 0 && (
+		scope.verb === 'reject'
+		|| scope.docId === undefined
+		|| docCount > 1
+		|| ids.length > BULK_CONFIRM_THRESHOLD
+		|| meaning > 0
+	);
+	return {
+		verb: scope.verb,
+		ids,
+		docCount,
+		excluded,
+		confirmNeeded,
+		sentence: confirmNeeded ? bulkSentence(scope.verb, ids.length, docCount, excluded) : '',
+		primaryButton: scope.verb === 'approve'
+			? localize('livingDocs.bulk.approveButton', "Approve All")
+			: localize('livingDocs.bulk.rejectButton', "Reject All"),
+	};
+}
+
+/**
+ * The confirm sentence: what is being decided, what is being left out, and what the reviewer can do
+ * afterwards. Counts trade in ONE currency - decisions (docs/30 section 4.4) - so the number in the sentence
+ * is the number of ids in the set, never a group count or a block count.
+ */
+function bulkSentence(verb: BulkVerb, count: number, docCount: number, excluded: readonly IBulkExclusion[]): string {
+	const parts: string[] = [];
+	if (verb === 'approve') {
+		parts.push(docCount > 1
+			? localize('livingDocs.bulk.approveAcross', "Approve {0} changes across {1} documents?", count, docCount)
+			: count === 1
+				? localize('livingDocs.bulk.approveOne', "Approve 1 change?")
+				: localize('livingDocs.bulk.approveMany', "Approve {0} changes?", count));
+	} else {
+		parts.push(docCount > 1
+			? localize('livingDocs.bulk.rejectAcross', "Reject {0} changes across {1} documents?", count, docCount)
+			: count === 1
+				? localize('livingDocs.bulk.rejectOne', "Reject 1 change?")
+				: localize('livingDocs.bulk.rejectMany', "Reject {0} changes?", count));
+	}
+	for (const exclusion of excluded) {
+		parts.push(exclusion.count === 1
+			? localize('livingDocs.bulk.excludedOne', "1 change needing attention is not included.")
+			: localize('livingDocs.bulk.excludedMany', "{0} changes needing attention are not included.", exclusion.count));
+	}
+	// Both tails are promises the engine keeps: `approveByIds` snapshots every affected document before the
+	// batch (plan 26), and a reject never touches a document body.
+	parts.push(verb === 'approve'
+		? localize('livingDocs.bulk.approveTail', "A version snapshot is taken first, so you can restore.")
+		: localize('livingDocs.bulk.rejectTail', "The documents are left unchanged."));
+	return parts.join(' ');
+}
+
+/**
+ * The in-surface label for a bulk verb. The trailing ellipsis is not decoration: it is the promise that a
+ * dialog follows, so it appears if and only if this exact set would raise one. Deriving it from the same
+ * captured set that drives the click is what keeps the promise honest as the queue changes underneath.
+ */
+export function bulkVerbLabel(set: Pick<IBulkSet, 'verb' | 'confirmNeeded' | 'ids'>): string {
+	if (set.verb === 'approve') {
+		return set.confirmNeeded
+			? localize('livingDocs.bulk.approveLabelConfirm', "Approve all {0}…", set.ids.length)
+			: localize('livingDocs.bulk.approveLabel', "Approve all {0}", set.ids.length);
+	}
+	return set.confirmNeeded
+		? localize('livingDocs.bulk.rejectLabelConfirm', "Reject all…")
+		: localize('livingDocs.bulk.rejectLabel', "Reject all");
+}
+
+/** Why one captured id was NOT acted on. Applied sets shrink for exactly these three reasons and no others. */
+export type BulkSkipReason =
+	/** It left the queue between capture and apply - someone decided it, or a restore cleared it. */
+	| 'decided-elsewhere'
+	/** It is in the queue but no longer eligible (a failed apply flipped it to needs-attention). */
+	| 'needs-attention'
+	/** The apply itself did not land (invariant I1): the document had moved on under the change. */
+	| 'apply-failed';
+
+/** One captured id the bulk verb did not act on, named so the reviewer sees what was left behind. */
+export interface IBulkSkip {
+	readonly id: string;
+	/** Human address ("Weekly Update - Commentary"), or empty when the change had already left the queue. */
+	readonly label: string;
+	readonly reason: BulkSkipReason;
+}
+
+/**
+ * The closed result of a bulk apply (the bulk sibling of R2's per-change apply result). `applied.length +
+ * skipped.length === captured` always holds, which is the machine-checkable form of "the applied set may
+ * shrink, never grow".
+ */
+export interface IBulkApplyResult {
+	readonly verb: BulkVerb;
+	readonly captured: number;
+	readonly applied: readonly string[];
+	readonly skipped: readonly IBulkSkip[];
+}
+
+/** The human address of a change, for a skip report the reviewer can act on. */
+export function bulkChangeLabel(change: Pick<IProposedChange, 'docTitle' | 'blockLabel'>): string {
+	return localize('livingDocs.bulk.changeLabel', "{0} - {1}", change.docTitle, change.blockLabel);
+}
+
+/**
+ * The plain-words report for a bulk apply that shrank. Empty when nothing was skipped - silence is the
+ * correct output for a bulk verb that did exactly what its sentence said.
+ */
+export function describeBulkSkips(result: IBulkApplyResult): string {
+	if (!result.skipped.length) { return ''; }
+	const head = result.skipped.length === 1
+		? localize('livingDocs.bulk.skippedOne', "1 of {0} changes was not applied.", result.captured)
+		: localize('livingDocs.bulk.skippedMany', "{0} of {1} changes were not applied.", result.skipped.length, result.captured);
+	const named = result.skipped.filter(s => s.label).map(s => s.label);
+	return named.length ? `${head} ${localize('livingDocs.bulk.skippedNames', "Still waiting on you: {0}.", named.join(', '))}` : head;
 }
 
 /**

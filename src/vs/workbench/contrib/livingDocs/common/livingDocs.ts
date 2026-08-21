@@ -10,7 +10,8 @@ import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IInlineWidgetReport } from './changePointer.js';
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
-import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBulkApplyResult, IBulkScope, IBulkSet, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ILedgerInputs } from './livingDocLedger.js';
 import { DocAutonomyLevel } from './docPolicy.js';
 import { ISourceGrid } from './sourceGrid.js';
@@ -1550,16 +1551,30 @@ export interface ILivingDocsService {
 	amendChange(changeId: string, newText: string): void;
 
 	approve(changeId: string): Promise<void>;
-	/** Accept every pending change for a document at once (the comp's "accept all"). */
-	approveAll(docId: string): Promise<void>;
-	/** Accept every pending change across every document at once (the chat-level "Accept all"). */
-	approveAllPending(): Promise<void>;
 	/** Discard one pending change. `reason` is the reviewer's optional plain-words note, recorded on the audit row. */
 	reject(changeId: string, reason?: string): Promise<void>;
-	/** Discard every pending change for one document at once (the per-document "Reject all"). */
-	rejectAll(docId: string): Promise<void>;
-	/** Discard every pending change across every document at once (the chat-level "Reject all"). */
-	rejectAllPending(): Promise<void>;
+
+	// --- the ONE bulk path (docs/30 section 5, invariant I4) ---
+	//
+	// There is deliberately NO `approveAll(docId)` / `approveAllPending()` here. A query-based bulk verb lets
+	// a call site re-derive its set at apply time, seconds after the user read a sentence describing a
+	// different one (issue #334). Removing them from the surface is what makes that unwritable rather than
+	// merely discouraged: every bulk gesture must capture, confirm, then apply the captured ids.
+
+	/**
+	 * Capture the immutable id snapshot a bulk verb will act on, together with the sentence that describes
+	 * it. Eligibility lives inside this call, never in the caller. See {@link runBulkVerb} for the
+	 * capture -> confirm -> apply sequence every surface uses.
+	 */
+	captureBulkSet(scope: IBulkScope): IBulkSet;
+	/**
+	 * Apply a captured approve set. Each id is re-checked at apply time - still queued, still eligible, and
+	 * the edit actually lands - so the applied set can only SHRINK from what was captured. Skips are returned
+	 * by name and reason rather than swallowed.
+	 */
+	approveByIds(ids: readonly string[]): Promise<IBulkApplyResult>;
+	/** Apply a captured reject set, under the same shrink-only contract as {@link approveByIds}. */
+	rejectByIds(ids: readonly string[], reason?: string): Promise<IBulkApplyResult>;
 
 	// --- source-peek + "Sync across" (the comp's signature editing interaction) ---
 	/**
@@ -1608,4 +1623,25 @@ export interface ILivingDocsService {
 	getAddedContext(resource: URI): readonly IAddedContext[];
 	/** Add a typed context item to a document (from the Context panel's "Add context") and persist it. */
 	addContext(resource: URI, kind: AddedContextKind, text: string): Promise<void>;
+}
+
+/**
+ * Run one bulk verb, end to end: capture -> confirm -> apply the captured ids (docs/30 section 5, I4).
+ *
+ * EVERY bulk gesture in the product goes through this function - the editor action bar, the review rail's
+ * per-document and foot verbs, the chat-level verbs, the project-review screen and the command-palette
+ * chord. Sharing one implementation is not tidiness: it is what guarantees the sentence the user reads and
+ * the ids that get applied are the same object, and that no surface can quietly invent a looser confirm
+ * policy of its own.
+ *
+ * Returns the closed apply result, or `undefined` when there was nothing to do or the user said no.
+ */
+export async function runBulkVerb(livingDocs: ILivingDocsService, dialogService: IDialogService, scope: IBulkScope): Promise<IBulkApplyResult | undefined> {
+	const set = livingDocs.captureBulkSet(scope);
+	if (!set.ids.length) { return undefined; }
+	if (set.confirmNeeded) {
+		const { confirmed } = await dialogService.confirm({ message: set.sentence, primaryButton: set.primaryButton });
+		if (!confirmed) { return undefined; }
+	}
+	return set.verb === 'approve' ? livingDocs.approveByIds(set.ids) : livingDocs.rejectByIds(set.ids);
 }

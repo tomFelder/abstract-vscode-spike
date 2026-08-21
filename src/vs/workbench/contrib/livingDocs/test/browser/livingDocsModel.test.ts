@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { bulkApproveConfirm, chordTargetChange, groupDecisions, groupPendingByDoc, IProposedChange, ISkillRunDocResult, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
+import { buildBulkSet, bulkVerbLabel, chordTargetChange, describeBulkSkips, groupDecisions, groupPendingByDoc, IProposedChange, ISkillRunDocResult, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
@@ -376,33 +376,127 @@ suite('LivingDoc model - reviewFraming (plan 31 iter 2)', () => {
 	});
 });
 
-suite('LivingDoc model - bulkApproveConfirm (plan 31 iter 4)', () => {
+// The ONE bulk path (docs/30 section 5, invariant I4; issues #334 / #305). `buildBulkSet` is where scope,
+// eligibility, the confirm policy and the sentence all live, so it is where they are all tested.
+suite('LivingDoc model - buildBulkSet (the one bulk path, docs/30 I4)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('confirms with real counts when the set includes meaning changes', () => {
-		const set = [
-			{ kind: 'figure' as const }, { kind: 'figure' as const }, { kind: 'figure' as const },
-			{ kind: 'meaning' as const }, { kind: 'meaning' as const }, { kind: 'figure' as const },
-		];
-		const c = bulkApproveConfirm(set);
-		assert.strictEqual(c.needed, true);
-		assert.strictEqual(c.message, 'Approve 6 changes including 2 meaning changes?');
+	function figure(docId: string, id: string): IProposedChange {
+		return { ...change(docId, id), kind: 'figure' };
+	}
+
+	test('a document-scoped capture takes that document only, and counts in decisions', () => {
+		const pending = [change('a', '1'), change('b', '2'), change('a', '3')];
+		const set = buildBulkSet({ verb: 'approve', docId: 'a' }, pending);
+		assert.deepStrictEqual(
+			{ ids: set.ids, docCount: set.docCount, confirmNeeded: set.confirmNeeded, sentence: set.sentence },
+			{
+				ids: ['1', '3'], docCount: 1, confirmNeeded: true,
+				sentence: 'Approve 2 changes? A version snapshot is taken first, so you can restore.',
+			},
+		);
 	});
 
-	test('mentions the version snapshot when snapshot is on (plan 26 landed)', () => {
-		const c = bulkApproveConfirm([{ kind: 'meaning' }, { kind: 'figure' }], true);
-		assert.strictEqual(c.needed, true);
-		assert.strictEqual(c.message, 'Approve 2 changes including 1 meaning change? A version snapshot is taken first, so you can restore.');
+	test('an everywhere capture spans documents and the sentence names how many', () => {
+		const set = buildBulkSet({ verb: 'approve' }, [change('a', '1'), change('b', '2'), change('b', '3')]);
+		assert.deepStrictEqual(
+			{ ids: set.ids, docCount: set.docCount, sentence: set.sentence },
+			{
+				ids: ['1', '2', '3'], docCount: 2,
+				sentence: 'Approve 3 changes across 2 documents? A version snapshot is taken first, so you can restore.',
+			},
+		);
 	});
 
-	test('a figures-only bulk approve needs no confirm (stays one-click)', () => {
-		const c = bulkApproveConfirm([{ kind: 'figure' }, { kind: 'figure' }], true);
-		assert.strictEqual(c.needed, false);
-		assert.strictEqual(c.message, '');
+	// Eligibility lives INSIDE the capture (docs/30 section 4.5), and what it excludes it NAMES. A change
+	// whose approve failed to apply is needs-attention, not pending: sweeping it into a bulk approve is how
+	// a reviewer comes to believe a stuck edit landed.
+	test('an unapplied change is excluded from the set and named in the sentence, never silently dropped', () => {
+		const stuck: IProposedChange = { ...change('a', '2'), applyFailure: 'anchor-miss' };
+		const set = buildBulkSet({ verb: 'approve', docId: 'a' }, [change('a', '1'), stuck, change('a', '3')]);
+		assert.deepStrictEqual(
+			{ ids: set.ids, excluded: set.excluded, sentence: set.sentence },
+			{
+				ids: ['1', '3'],
+				excluded: [{ reason: 'needs-attention', count: 1 }],
+				sentence: 'Approve 2 changes? 1 change needing attention is not included. A version snapshot is taken first, so you can restore.',
+			},
+		);
 	});
 
-	test('an empty set needs no confirm', () => {
-		assert.strictEqual(bulkApproveConfirm([], true).needed, false);
+	// The confirm policy, at every level, in one table. The only one-click case left is a small,
+	// single-document, figures-only approve.
+	test('confirm policy: reject always, everywhere always, multi-doc always, over ten always, meaning always', () => {
+		const oneDocFigures = [figure('a', '1'), figure('a', '2')];
+		const eleven = Array.from({ length: 11 }, (_, i) => figure('a', `f${i}`));
+		assert.deepStrictEqual(
+			{
+				rejectOneDocFigures: buildBulkSet({ verb: 'reject', docId: 'a' }, oneDocFigures).confirmNeeded,
+				rejectEverywhere: buildBulkSet({ verb: 'reject' }, oneDocFigures).confirmNeeded,
+				approveEverywhere: buildBulkSet({ verb: 'approve' }, oneDocFigures).confirmNeeded,
+				approveMultiDocFigures: buildBulkSet({ verb: 'approve' }, [figure('a', '1'), figure('b', '2')]).confirmNeeded,
+				approveElevenFigures: buildBulkSet({ verb: 'approve', docId: 'a' }, eleven).confirmNeeded,
+				approveMeaning: buildBulkSet({ verb: 'approve', docId: 'a' }, [change('a', '1')]).confirmNeeded,
+				approveOneDocFigures: buildBulkSet({ verb: 'approve', docId: 'a' }, oneDocFigures).confirmNeeded,
+				approveEmpty: buildBulkSet({ verb: 'approve', docId: 'a' }, []).confirmNeeded,
+			},
+			{
+				rejectOneDocFigures: true,
+				rejectEverywhere: true,
+				approveEverywhere: true,
+				approveMultiDocFigures: true,
+				approveElevenFigures: true,
+				approveMeaning: true,
+				approveOneDocFigures: false,
+				approveEmpty: false,
+			},
+		);
+	});
+
+	test('a reject sentence promises what a reject does: nothing is written to the documents', () => {
+		const set = buildBulkSet({ verb: 'reject', docId: 'a' }, [change('a', '1')]);
+		assert.deepStrictEqual(
+			{ sentence: set.sentence, primaryButton: set.primaryButton },
+			{ sentence: 'Reject 1 change? The documents are left unchanged.', primaryButton: 'Reject All' },
+		);
+	});
+
+	// The ellipsis audit: a trailing ellipsis is a promise that a dialog follows, so it appears if and only
+	// if this exact set would raise one.
+	test('ellipsis audit: a label carries an ellipsis exactly when its set confirms', () => {
+		const figures = [figure('a', '1'), figure('a', '2')];
+		assert.deepStrictEqual(
+			{
+				approveOneClick: bulkVerbLabel(buildBulkSet({ verb: 'approve', docId: 'a' }, figures)),
+				approveConfirming: bulkVerbLabel(buildBulkSet({ verb: 'approve', docId: 'a' }, [change('a', '1')])),
+				rejectConfirming: bulkVerbLabel(buildBulkSet({ verb: 'reject', docId: 'a' }, figures)),
+				emptyNeverPromises: bulkVerbLabel(buildBulkSet({ verb: 'reject', docId: 'a' }, [])),
+			},
+			{
+				approveOneClick: 'Approve all 2',
+				approveConfirming: 'Approve all 1\u2026',
+				rejectConfirming: 'Reject all\u2026',
+				emptyNeverPromises: 'Reject all',
+			},
+		);
+	});
+
+	test('a bulk apply that did exactly what it said reports nothing; one that shrank names what it left', () => {
+		assert.deepStrictEqual(
+			{
+				clean: describeBulkSkips({ verb: 'approve', captured: 2, applied: ['1', '2'], skipped: [] }),
+				shrank: describeBulkSkips({
+					verb: 'approve', captured: 3, applied: ['1'], skipped: [
+						{ id: '2', label: 'Weekly Update - Commentary', reason: 'apply-failed' },
+						{ id: '3', label: '', reason: 'decided-elsewhere' },
+					],
+				}),
+			},
+			{
+				clean: '',
+				shrank: '2 of 3 changes were not applied. Still waiting on you: Weekly Update - Commentary.',
+			},
+		);
 	});
 });
 

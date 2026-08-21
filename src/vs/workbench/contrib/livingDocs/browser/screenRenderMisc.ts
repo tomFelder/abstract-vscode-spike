@@ -9,7 +9,7 @@
 // keep the shell thin; shared helpers come from screenRenderShell.
 
 import { localize } from '../../../../nls.js';
-import { groupPendingByDoc, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
+import { buildBulkSet, groupPendingByDoc, IDecisionGroup, IProjectRunSummary, IProposedChange, IReviewedDoc, ProjectRunDocStatus, reviewConfidence, reviewFraming } from '../common/livingDocsModel.js';
 import { ChatGptSignInStage } from '../common/livingDocs.js';
 import { ONBOARDING_STEPS, onboardingStepIndex, OnboardingStep } from '../common/onboarding.js';
 import { AMBER, AVATAR_NAVY, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, RED, TRACKING, TYPE } from '../common/abstractTokens.js';
@@ -682,7 +682,7 @@ function swarmTile(_docId: string, title: string, status: ProjectRunDocStatus, c
 // showing the change in context, a `decision . line NN` source chip, and a filled-dot "High" / half-dot
 // "Inferred" confidence chip (D24-A). Accept / Tweak / Reject per card and the sticky bar (Accept all here /
 // Next / Accept all remaining) post messages the editor routes to the EXISTING engine
-// (approve/reject/approveAll/approveAllPending); the C6 Review rail consumes the same model and stays in sync.
+// (approve/reject plus the captured-set bulk path); the C6 Review rail consumes the same model and stays in sync.
 export function renderReviewProject(state: IScreenState): string {
 	const rp = state.reviewProject;
 	const pending = rp?.pending ?? [];
@@ -693,7 +693,7 @@ export function renderReviewProject(state: IScreenState): string {
 
 	// The 48px topbar: project avatar + name crumb + `Review project update` + the attached source pill.
 	// The right side reports the session totals from the reviewed set - honest zeros when nothing has been
-	// reviewed yet. `Accept All Remaining` -> approveAllPending() (posts `reviewAcceptAllRemaining`); shown
+	// reviewed yet. The bulk verb posts `reviewAcceptAllRemaining`, which captures the everywhere set; shown
 	// only while something is still pending.
 	const sourcePill = rp?.source
 		? `<span style="font:${TYPE.provenance};color:${INDIGO.base};background:${INDIGO.tint};border:1px solid ${INDIGO.tintBorder};border-radius:${RADIUS.pill};padding:4px 10px">${esc(rp.source)}</span>`
@@ -816,7 +816,7 @@ function reviewColumn(changes: readonly IProposedChange[], docId: string, docTit
 	const bottomBar = `<div style="flex:none;height:64px;border-top:1px solid ${HAIRLINE.medium};background:${PAPER.rail};display:flex;align-items:center;padding:0 40px;gap:14px">
 		<span style="font:${TYPE.secondary};color:${INK.secondary}">${attention}</span>
 		<div style="margin-left:auto;display:flex;align-items:center;gap:10px">
-			<button data-msg="reviewAcceptAllHere" data-arg="${esc(docId)}" style="${BTN_QUIET}">Approve all ${changes.length} here&hellip;</button>
+			<button data-msg="reviewAcceptAllHere" data-arg="${esc(docId)}" style="${BTN_QUIET}">Approve all ${changes.length} here${buildBulkSet({ verb: 'approve', docId }, changes).confirmNeeded ? '&hellip;' : ''}</button>
 			${nextBtn}
 		</div>
 	</div>`;

@@ -26,10 +26,10 @@ import { IEditorOpenContext } from '../../../common/editor.js';
 import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ILivingDocsService } from '../common/livingDocs.js';
+import { ILivingDocsService, runBulkVerb } from '../common/livingDocs.js';
 import { HeaderPillKind, IAbstractHeaderService } from '../common/abstractHeader.js';
 import { localize } from '../../../../nls.js';
-import { bulkApproveConfirm, nextPendingDocId } from '../common/livingDocsModel.js';
+import { IBulkScope, nextPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { documentDisplayTitle, parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { applyFocusRequest, applyReady, applyRender, applyRevealBlock, applyRevealHeading, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
@@ -296,10 +296,6 @@ export class LivingDocEditor extends EditorPane {
 		this._webview = webview;
 	}
 
-	// Bulk-approve safety net (plan 31 iter 4): confirm before applying a bulk approve whose set contains any
-	// meaning change. Figures-only bulk approves stay one-click. The confirm mentions the pre-approve snapshot
-	// (plan 26's autosnapshot on bulk approve is real) so the reviewer knows it is restorable. Runs `apply`
-	// only after the user confirms (or when no confirm was needed).
 	// The resource whose pending changes the doc-scoped bulk actions operate on (#253). Prefer this pane's
 	// own `_resource`, but fall back to the group's active-editor resource when `_resource` has no pending
 	// changes of its own - the chat rail queues proposals against the group's active-editor resource, so on
@@ -316,13 +312,12 @@ export class LivingDocEditor extends EditorPane {
 		return this._resource;
 	}
 
-	private async _confirmBulkApprove(changes: readonly { readonly kind: 'figure' | 'meaning' }[], apply: () => Promise<void>): Promise<void> {
-		const confirm = bulkApproveConfirm(changes, true);
-		if (confirm.needed) {
-			const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: 'Approve all' });
-			if (!confirmed) { return; }
-		}
-		await apply();
+	/**
+	 * Run a bulk verb through the ONE bulk path (docs/30 invariant I4): capture the ids with their sentence,
+	 * confirm, then apply exactly those ids. The pane never derives a set of its own.
+	 */
+	private async _runBulk(scope: IBulkScope): Promise<void> {
+		await runBulkVerb(this._livingDocs, this._dialogService, scope);
 	}
 
 	/**
@@ -456,27 +451,24 @@ export class LivingDocEditor extends EditorPane {
 				break;
 			case 'approveAllDoc': {
 				// Editor action bar: accept every pending change in THIS document at once (plan 19 iter 4).
-				// Route the confirm gate AND the apply through the proposals' OWN docId (#253), mirroring the
-				// working review-rail "Approve all" - never a re-derived `this._resource.toString()`. `_resource`
-				// can drift from the docId the proposals were queued under (the chat rail queues them against the
-				// GROUP's active-editor resource, which is not guaranteed to be the same URI instance this pane
-				// last set), which used to make `approveAll` filter to an empty set and silently no-op - no
-				// dialog, no apply. Resolving to the proposals' own docId makes the confirm-list and the apply-set
-				// provably the same set. `_resourceForPending` falls back to the group's active-editor resource so
-				// a drifted `_resource` cannot strand the pending changes the user is looking at.
+				// Scope the capture by the proposals' OWN docId (#253) - never a re-derived
+				// `this._resource.toString()`. `_resource` can drift from the docId the proposals were queued
+				// under (the chat rail queues them against the GROUP's active-editor resource, which is not
+				// guaranteed to be the same URI instance this pane last set), which used to make the bulk verb
+				// filter to an empty set and silently no-op - no dialog, no apply. `_resourceForPending` falls
+				// back to the group's active-editor resource so a drifted `_resource` cannot strand the pending
+				// changes the user is looking at. The capture then makes the confirmed set and the applied set
+				// the same object by construction (docs/30 invariant I4).
 				const resource = this._resourceForPending();
-				if (resource) {
-					const pending = this._livingDocs.getPendingForDoc(resource);
-					const docId = this._livingDocs.pendingDocIdFor(resource);
-					if (docId) {
-						void this._confirmBulkApprove(pending, () => this._livingDocs.approveAll(docId));
-					}
+				const docId = resource && this._livingDocs.pendingDocIdFor(resource);
+				if (docId) {
+					void this._runBulk({ verb: 'approve', docId });
 				}
 				break;
 			}
 			case 'approveAllEverywhere':
 				// Editor action bar: accept every pending change across ALL documents (plan 19 iter 5).
-				void this._confirmBulkApprove(this._livingDocs.getAllPending(), () => this._livingDocs.approveAllPending());
+				void this._runBulk({ verb: 'approve' });
 				break;
 			case 'nextDoc':
 				// Editor action bar: step the editor pane to the next document that still has pending changes.

@@ -58,7 +58,7 @@ import { buildTidyPlan, ITidyInventoryItem } from '../common/tidyPlan.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AddedContextKind, AgentPolicy, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, buildBulkSet, bulkChangeLabel, BulkVerb, describeBulkSkips, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IBulkApplyResult, IBulkScope, IBulkSet, IBulkSkip, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
 import { classifyWorkspaceExtra } from '../common/treeRail.js';
 import { countUnseenAgentEdits } from '../common/railStatus.js';
@@ -4091,7 +4091,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		// Reject any pending changes for this document first - restoring resets the body, so unreviewed
 		// proposals against the old body no longer apply.
-		await this.rejectAll(resource.toString());
+		await this._discardQueueForDoc(resource.toString());
 		// Write the snapshot body back through the existing persist path (parse -> disk -> lock).
 		state.doc = parseLivingDoc(snapshot.body);
 		state.rawText = snapshot.body;
@@ -6623,28 +6623,6 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
-	// Accept every pending change for a document in one action (the comp's "accept all"). Applied in
-	// order; each approve re-resolves its anchor by stable block id, so insertions stay correctly placed.
-	async approveAll(docId: string): Promise<void> {
-		const ids = this._pending.filter(c => c.docId === docId).map(c => c.id);
-		if (!ids.length) { return; }
-		// Snapshot the pre-approve body ONCE per bulk approve (D26-B) so the run is restorable to the
-		// state before the batch landed. Individual approve() calls do not snapshot.
-		const state = this._docs.get(docId);
-		if (state) {
-			await this.saveSnapshot(state.uri, 'Before bulk approve', 'bulk-approve');
-		}
-		// Mark the fanned approves as bulk so each proposal_resolved carries bulk:true (doc 15 section 3.1).
-		this._inBulkApprove = true;
-		try {
-			for (const id of ids) {
-				await this.approve(id);
-			}
-		} finally {
-			this._inBulkApprove = false;
-		}
-	}
-
 	// Discard one pending change. `reason` is the reviewer's optional plain-words note (1f frame-3): it lands
 	// on the audit row so the trail carries the rejection AND why. This mirrors approve()'s persistence
 	// contract - the rejected row, the reviewed-context clear, and the reason all write through to the lock
@@ -6670,20 +6648,133 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._onDidChange.fire();
 	}
 
-	// Accept every pending change across every document at once (the chat-level "Accept all" spanning the
-	// whole working set). Applied per document so each doc's insertions stay correctly anchored.
-	async approveAllPending(): Promise<void> {
-		const docIds = [...new Set(this._pending.map(c => c.docId))];
-		for (const docId of docIds) {
-			await this.approveAll(docId);
-		}
+	// --- the ONE bulk path (docs/30 section 5, invariant I4; issues #334 / #305) ---
+
+	/**
+	 * Capture the immutable id snapshot a bulk verb will act on, together with its confirm sentence.
+	 *
+	 * This is the ONLY way a bulk set comes into existence. The scope filter, the eligibility predicate and
+	 * the sentence all live in one pure function (`buildBulkSet`), so a caller cannot express a set this
+	 * method would not have produced - which is what removed the class of bug where a confirm counted one
+	 * set and the apply re-queried another.
+	 */
+	captureBulkSet(scope: IBulkScope): IBulkSet {
+		return buildBulkSet(scope, this._pending);
 	}
 
-	// Discard every pending change for one document in a single action (the per-document "Reject all",
-	// mirroring approveAll). Each reject audits the discard and clears it from the rail; other documents'
-	// pending changes are untouched.
-	async rejectAll(docId: string): Promise<void> {
+	/**
+	 * Apply a captured approve set. Every affected document is snapshotted ONCE before the batch (D26-B) so
+	 * the run is restorable, then each id is re-checked and approved individually - each approve re-resolves
+	 * its anchor by stable block id, so insertions stay correctly placed.
+	 */
+	async approveByIds(ids: readonly string[]): Promise<IBulkApplyResult> {
+		return this._applyBulk('approve', ids);
+	}
+
+	/** Apply a captured reject set. Each reject audits the discard and clears it from the rail. */
+	async rejectByIds(ids: readonly string[], reason?: string): Promise<IBulkApplyResult> {
+		return this._applyBulk('reject', ids, reason);
+	}
+
+	/**
+	 * The shrink-only engine behind both by-ids verbs (invariant I4).
+	 *
+	 * The captured ids are the whole input: nothing is re-queried from `_pending` to decide WHAT to act on,
+	 * only to decide whether each captured id is still actionable. That asymmetry is the invariant. An id
+	 * can drop out for exactly three reasons, each recorded rather than swallowed:
+	 *
+	 *  - `decided-elsewhere`: it left the queue between capture and apply (someone approved it in the
+	 *    document while the confirm dialog was open, a restore cleared it, the agent superseded it);
+	 *  - `needs-attention`: it is still queued but no longer eligible - an earlier approve failed to apply
+	 *    and flagged it, so it is a decision the reviewer must make with their eyes open;
+	 *  - `apply-failed`: the approve ran and the edit did not land (invariant I1 / R2). `approve()` leaves
+	 *    such a change in the queue flagged, which is precisely how this loop detects it - no second apply
+	 *    path, no duplicated failure logic, one source of truth for "did it land".
+	 *
+	 * The result is closed: `applied.length + skipped.length === captured`.
+	 */
+	private async _applyBulk(verb: BulkVerb, ids: readonly string[], reason?: string): Promise<IBulkApplyResult> {
+		const captured = [...new Set(ids)];
+		const applied: string[] = [];
+		const skipped: IBulkSkip[] = [];
+		if (!captured.length) { return { verb, captured: 0, applied, skipped }; }
+
+		if (verb === 'approve') {
+			// One pre-batch snapshot per affected document, before anything is written - the reassurance the
+			// confirm sentence makes ("a version snapshot is taken first, so you can restore") is only true if
+			// it happens here rather than per change.
+			const docIds = new Set<string>();
+			for (const id of captured) {
+				const docId = this._pending.find(c => c.id === id)?.docId;
+				if (docId) { docIds.add(docId); }
+			}
+			for (const docId of docIds) {
+				const state = this._docs.get(docId);
+				if (state) {
+					await this.saveSnapshot(state.uri, 'Before bulk approve', 'bulk-approve');
+				}
+			}
+		}
+
+		// Mark the fanned decisions as bulk so each proposal_resolved carries bulk:true (doc 15 section 3.1).
+		if (verb === 'approve') { this._inBulkApprove = true; } else { this._inBulkReject = true; }
+		const touched = new Set<string>();
+		try {
+			for (const id of captured) {
+				const change = this._pending.find(c => c.id === id);
+				if (!change) {
+					skipped.push({ id, label: '', reason: 'decided-elsewhere' });
+					continue;
+				}
+				if (change.applyFailure !== undefined) {
+					skipped.push({ id, label: bulkChangeLabel(change), reason: 'needs-attention' });
+					continue;
+				}
+				touched.add(change.docId);
+				if (verb === 'approve') {
+					await this.approve(id);
+				} else {
+					await this.reject(id, reason);
+				}
+				// The one honest test of whether the decision landed: a change that resolved has left the queue.
+				if (this._pending.some(c => c.id === id)) {
+					skipped.push({ id, label: bulkChangeLabel(change), reason: 'apply-failed' });
+				} else {
+					applied.push(id);
+				}
+			}
+		} finally {
+			if (verb === 'approve') { this._inBulkApprove = false; } else { this._inBulkReject = false; }
+		}
+
+		const result: IBulkApplyResult = { verb, captured: captured.length, applied, skipped };
+		if (skipped.length) {
+			// A bulk verb that shrank must SAY so. The per-change status lines have already scrolled past by
+			// now, so the surviving statement is the document's status - the surfaces read it, and it is the
+			// difference between "the rail emptied" and "the rail emptied except for these".
+			this._log.warn('[livingDocs] bulk', verb, 'skipped', skipped.length, 'of', captured.length);
+			const report = describeBulkSkips(result);
+			for (const docId of touched) {
+				const state = this._docs.get(docId);
+				if (state) { state.status = report; }
+			}
+			this._onDidChange.fire();
+		}
+		return result;
+	}
+
+	/**
+	 * Discard every queued change for one document, eligible or not.
+	 *
+	 * Deliberately NOT a bulk verb and deliberately private: this is the queue half of a document RESET
+	 * (restore an earlier version), where proposals against the replaced body are stale by construction and
+	 * there is no reviewer decision to confirm. The user-facing gesture that reaches it - restoring a
+	 * version - carries its own confirm. Leaving a `needs-attention` change behind here would strand it
+	 * against prose that no longer exists.
+	 */
+	private async _discardQueueForDoc(docId: string): Promise<void> {
 		const ids = this._pending.filter(c => c.docId === docId).map(c => c.id);
+		if (!ids.length) { return; }
 		this._inBulkReject = true;
 		try {
 			for (const id of ids) {
@@ -6691,15 +6782,6 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		} finally {
 			this._inBulkReject = false;
-		}
-	}
-
-	// Discard every pending change across every document at once (the chat-level "Reject all" spanning
-	// the whole working set). Clears the rail in one action.
-	async rejectAllPending(): Promise<void> {
-		const ids = this._pending.map(c => c.id);
-		for (const id of ids) {
-			await this.reject(id);
 		}
 	}
 
