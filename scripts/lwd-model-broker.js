@@ -82,6 +82,14 @@ function openRouterDefaultModel() {
 	return openrouterModels.defaultModelId();
 }
 
+// The output cap used when a caller names none. The client sends a PER-PURPOSE `max_tokens` (a chat reply,
+// a fan-out batch and a one-sentence grade want wildly different ceilings), so this value is only the floor
+// for a hand-run curl or an older client. It was 1024, which silently truncated any real reply - a truncation
+// machine, in doc 30 section 2.6's words - and truncation on this door surfaces as `stop_reason: max_tokens`
+// with a half-finished JSON body the renderer then fails to parse. Raised so the default errs towards a
+// complete answer; a caller that wants a tighter cap still says so and is honoured verbatim.
+const DEFAULT_MAX_TOKENS = 4096;
+
 // Bound the request body so a runaway client cannot exhaust memory; model calls here are tiny.
 const MAX_BODY_BYTES = 1 * 1024 * 1024;
 // The source-extraction routes carry a base64-encoded workbook/PDF, which is larger than a model
@@ -235,6 +243,18 @@ function sseEvent(event, data) {
 	return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+// The opening `message_start` event, naming the model this stream is ACTUALLY served by. The buffered path
+// has always echoed the resolved id in its `model` field; a stream had no equivalent, so a caller could not
+// tell which model answered - and after resolveRequestedModel swaps a stale or absent pick for the catalogue
+// default, "which model answered" is a different question from "which model was asked for". The renderer's
+// SSE parser ignores event types it does not know (livingDocSse.ts), so this is additive on the wire.
+function sseMessageStart(id, model) {
+	return sseEvent('message_start', {
+		type: 'message_start',
+		message: { id, type: 'message', role: 'assistant', model, content: [] },
+	});
+}
+
 // Emit the plain-words cap message as a short SSE stream that ends with a paused-run signal + message_stop.
 // The renderer reads the text as prose and pauses the run (D15) instead of erroring.
 function writeCapStream(res) {
@@ -330,7 +350,7 @@ async function openRouterForward(body, req) {
 	// this door's curated list). Before plan 53 this door hardcoded a single id and DISCARDED req.model, so the
 	// composer's picker was decorative on the included door - every turn ran on gpt-4.1-mini whatever it said.
 	const orModel = req.model || openRouterDefaultModel();
-	const orBody = JSON.stringify({ model: orModel, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), usage: { include: true } });
+	const orBody = JSON.stringify({ model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), usage: { include: true } });
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -376,7 +396,7 @@ async function openRouterForwardStream(req, res) {
 	}
 	// Same as the buffered path: the caller's resolved model is load-bearing here, not advisory.
 	const orModel = req.model || openRouterDefaultModel();
-	const orBody = JSON.stringify({ model: orModel, max_tokens: req.max_tokens || 1024, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } });
+	const orBody = JSON.stringify({ model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } });
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -399,6 +419,7 @@ async function openRouterForwardStream(req, res) {
 		return { usage: undefined };
 	}
 	writeSseHead(res);
+	res.write(sseMessageStart('or-msg', orModel));
 	const nodeStream = Readable.fromWeb(upstream.body);
 	res.on('close', () => nodeStream.destroy());
 	// OpenRouter emits a final SSE chunk carrying `usage` (with `usage: {include:true}`) - capture it so the
@@ -623,6 +644,7 @@ async function openAiForwardStream(req, res) {
 		return { usage: undefined };
 	}
 	writeSseHead(res);
+	res.write(sseMessageStart('oa-msg', sent.model));
 	const endStream = () => { if (!res.writableEnded) { res.write(sseEvent('message_stop', { type: 'message_stop' })); res.end(); } };
 	res.on('close', () => { /* the shared reader stops when the client hangs up */ });
 	// Translate each upstream text delta into the Anthropic-shaped content_block_delta the renderer's SSE

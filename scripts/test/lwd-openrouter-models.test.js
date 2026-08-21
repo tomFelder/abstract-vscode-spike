@@ -68,15 +68,28 @@ function listen(server) {
 	return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 }
 
-/** A stub OpenRouter chat-completions upstream that records the model each call asked for. */
-function stubOpenRouter(seen) {
+/**
+ * A stub OpenRouter chat-completions upstream that records the WHOLE body of each call it is asked to
+ * serve (so a case can assert the model, the cap, or anything else that was forwarded), and answers in
+ * whichever shape the call asked for - a JSON completion, or the OpenAI-style SSE the broker translates
+ * into Anthropic events. It echoes the model it was given, so a resolved id can be traced end to end.
+ * @param {object[]} sent collects each parsed request body, in order.
+ */
+function stubOpenRouter(sent) {
 	return http.createServer((req, res) => {
 		let body = '';
 		req.on('data', c => { body += c.toString(); });
 		req.on('end', () => {
 			let parsed;
 			try { parsed = JSON.parse(body); } catch { parsed = {}; }
-			seen.push(parsed.model);
+			sent.push(parsed);
+			if (parsed.stream === true) {
+				res.writeHead(200, { 'content-type': 'text/event-stream' });
+				res.write(`data: ${JSON.stringify({ id: 'or-msg', model: parsed.model, choices: [{ delta: { content: 'ok' } }] })}\n\n`);
+				res.write('data: [DONE]\n\n');
+				res.end();
+				return;
+			}
 			res.writeHead(200, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({
 				id: 'or-msg',
@@ -87,6 +100,15 @@ function stubOpenRouter(seen) {
 		});
 	});
 }
+
+// The port band this suite owns. `LWD_PROXY_PORT` is fixed at spawn, so a collision is fatal to the child
+// rather than something Node can retry around - which makes an overlapping band a flake generator. The
+// other broker suites sit at 8300 and above (lwd-backend-selection, lwd-catalogue-fallback,
+// lwd-responses-parity), so this one stays strictly below them, and still retries on a fresh port when it
+// loses the race to something outside the repo.
+const PORT_BAND_START = 8150;
+const PORT_BAND_SIZE = 90;
+const PORT_ATTEMPTS = 5;
 
 /** Spawn the real broker forced onto the openrouter door, and wait until it is listening. */
 function startBroker(cfg) {
@@ -107,11 +129,36 @@ function startBroker(cfg) {
 	child.stderr.on('data', c => { out += c.toString(); });
 	const ready = new Promise((resolve, reject) => {
 		const timer = setTimeout(() => reject(new Error(`broker did not listen in time; output:\n${out}`)), 5000);
+		const settle = (fn, arg) => { clearInterval(iv); clearTimeout(timer); fn(arg); };
 		const iv = setInterval(() => {
-			if (/listening on/.test(out)) { clearInterval(iv); clearTimeout(timer); resolve(undefined); }
+			if (/listening on/.test(out)) { settle(resolve, undefined); }
+			// Fail FAST on a taken port so the caller can retry on another one instead of waiting out the
+			// timeout and reporting it as "the broker is broken".
+			else if (/EADDRINUSE/.test(out)) { settle(reject, new Error(`EADDRINUSE on port ${cfg.port}`)); }
 		}, 25);
 	});
 	return { child, ready };
+}
+
+/**
+ * Start the broker on a port from this suite's band, retrying on a collision. Returns the live child and
+ * the port it won, so a case never has to reason about ports at all.
+ */
+async function startBrokerOnFreePort(cfg) {
+	let lastError;
+	for (let attempt = 0; attempt < PORT_ATTEMPTS; attempt++) {
+		const port = PORT_BAND_START + Math.floor(Math.random() * PORT_BAND_SIZE);
+		const { child, ready } = startBroker(Object.assign({}, cfg, { port }));
+		try {
+			await ready;
+			return { child, port };
+		} catch (e) {
+			child.kill();
+			lastError = e;
+			if (!/EADDRINUSE/.test(String(e && e.message))) { throw e; }
+		}
+	}
+	throw lastError;
 }
 
 async function postMessage(port, body) {
@@ -121,6 +168,25 @@ async function postMessage(port, body) {
 		body: JSON.stringify(body),
 	});
 	return res.json();
+}
+
+/** POST a streaming /v1/messages call and return every parsed SSE `data:` payload, in order. */
+async function postStream(port, body) {
+	const res = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(Object.assign({ stream: true }, body)),
+	});
+	const text = await res.text();
+	const events = [];
+	for (const line of text.split('\n')) {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith('data:')) { continue; }
+		const payload = trimmed.slice(5).trim();
+		if (!payload || payload === '[DONE]') { continue; }
+		try { events.push(JSON.parse(payload)); } catch { /* not a JSON event */ }
+	}
+	return events;
 }
 
 // --- 1) unit: the curated allowlist ----------------------------------------------------------------------
@@ -176,14 +242,12 @@ test('the models.json openrouter slice overlays the built-ins, and a bad slice d
 // --- 2) E2E: the requested model is the model served ------------------------------------------------------
 
 test('the openrouter door serves the model the caller picked (regression: it used to discard it)', async (t) => {
-	const seen = [];
-	const upstream = stubOpenRouter(seen);
+	const sent = [];
+	const upstream = stubOpenRouter(sent);
 	const upstreamPort = await listen(upstream);
 	const home = mkHome();
-	const port = 8100 + Math.floor(Math.random() * 800);
-	const { child, ready } = startBroker({
+	const { child, port } = await startBrokerOnFreePort({
 		home,
-		port,
 		openrouterUrl: `http://127.0.0.1:${upstreamPort}/chat`,
 		includeUnvalidated: true, // need >1 entry to prove a non-default pick is honoured
 	});
@@ -192,7 +256,6 @@ test('the openrouter door serves the model the caller picked (regression: it use
 		upstream.close();
 		fs.rmSync(home, { recursive: true, force: true });
 	});
-	await ready;
 
 	const catalogue = await (await fetch(`http://127.0.0.1:${port}/models`)).json();
 	const openrouter = catalogue.models.filter(m => m.backend === 'openrouter');
@@ -202,14 +265,64 @@ test('the openrouter door serves the model the caller picked (regression: it use
 	// THE REGRESSION GUARD: pick a non-default curated model; the stub must be asked for exactly that id.
 	const picked = openrouter.find(m => !m.default).id;
 	await postMessage(port, { model: picked, max_tokens: 64, messages: [{ role: 'user', content: 'hi' }] });
-	assert.equal(seen.at(-1), picked, 'upstream was asked for the picked model');
+	assert.equal(sent.at(-1).model, picked, 'upstream was asked for the picked model');
 
 	// A stale/unknown persisted id still lands on the curated default rather than 500ing or forwarding junk.
 	const fallback = openrouter.find(m => m.default).id;
 	await postMessage(port, { model: 'vendor/not-a-real-model', max_tokens: 64, messages: [{ role: 'user', content: 'hi' }] });
-	assert.equal(seen.at(-1), fallback, 'an unknown id falls back to the curated default');
+	assert.equal(sent.at(-1).model, fallback, 'an unknown id falls back to the curated default');
 
 	// An absent model does the same - the historical no-model call path is unchanged.
 	await postMessage(port, { max_tokens: 64, messages: [{ role: 'user', content: 'hi' }] });
-	assert.equal(seen.at(-1), fallback, 'an absent model falls back to the curated default');
+	assert.equal(sent.at(-1).model, fallback, 'an absent model falls back to the curated default');
+});
+
+// --- 3) the resolved id is echoed back, and the output cap is per-call (plan 55, B1) ----------------------
+
+// The broker's own default cap (scripts/lwd-model-broker.js, DEFAULT_MAX_TOKENS). Pinned here because it is
+// a wire contract: the client now sends a per-purpose cap, and this is what a caller who names none gets.
+// It was 1024, low enough to truncate any real reply into a half-finished body the renderer cannot parse.
+const BROKER_DEFAULT_MAX_TOKENS = 4096;
+
+test('an unknown/absent model resolves via the catalogue and the RESOLVED id comes back, buffered and streamed', async (t) => {
+	const sent = [];
+	const upstream = stubOpenRouter(sent);
+	const upstreamPort = await listen(upstream);
+	const home = mkHome();
+	const { child, port } = await startBrokerOnFreePort({
+		home,
+		openrouterUrl: `http://127.0.0.1:${upstreamPort}/chat`,
+	});
+	t.after(() => {
+		child.kill();
+		upstream.close();
+		fs.rmSync(home, { recursive: true, force: true });
+	});
+
+	const catalogue = await (await fetch(`http://127.0.0.1:${port}/models`)).json();
+	const fallback = catalogue.models.filter(m => m.backend === 'openrouter').find(m => m.default).id;
+
+	// Buffered: the reply must NAME the model that actually answered. After resolveRequestedModel swaps a
+	// stale pick for the catalogue default, "which model was asked for" and "which model answered" are
+	// different questions, and only the second one is honest to show.
+	const buffered = await postMessage(port, { model: 'vendor/not-a-real-model', messages: [{ role: 'user', content: 'hi' }] });
+	assert.deepEqual(
+		{ replyModel: buffered.model, upstreamModel: sent.at(-1).model, upstreamCap: sent.at(-1).max_tokens },
+		{ replyModel: fallback, upstreamModel: fallback, upstreamCap: BROKER_DEFAULT_MAX_TOKENS },
+		'the buffered reply echoes the resolved id, upstream ran on it, and the capless call got the raised default',
+	);
+
+	// A caller-named cap is forwarded verbatim - the default is a floor, never a ceiling imposed on callers.
+	await postMessage(port, { max_tokens: 12000, messages: [{ role: 'user', content: 'hi' }] });
+	assert.equal(sent.at(-1).max_tokens, 12000, 'a per-call cap is forwarded untouched');
+
+	// Streamed: the same resolution, announced in the opening message_start. A stream previously carried no
+	// model at all, so a caller could not tell which model answered it.
+	const events = await postStream(port, { model: 'vendor/not-a-real-model', max_tokens: 64, messages: [{ role: 'user', content: 'hi' }] });
+	const start = events.find(e => e.type === 'message_start');
+	assert.deepEqual(
+		{ announced: start && start.message.model, upstreamModel: sent.at(-1).model, streamed: sent.at(-1).stream },
+		{ announced: fallback, upstreamModel: fallback, streamed: true },
+		'the stream announces the resolved id and ran upstream on it',
+	);
 });
