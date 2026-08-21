@@ -107,6 +107,24 @@ suite('livingDocs changeJournal (docs/30 section 5)', () => {
 		);
 	});
 
+	test('concurrent appends claim distinct, contiguous sequence numbers instead of colliding on one', async () => {
+		// A sequence number read before an await and written after it is claimed by everything in flight at
+		// once. The file then holds several records swearing they are the same entry in the log, and
+		// `readJournal` - rightly - stops trusting everything past the collision, discarding the very commits
+		// and resolutions that prove what happened to a document. The journal cannot be the authority on the
+		// order things happened in if it cannot order its own writes.
+		const fs = new FakeChangeFileSystem();
+		const log = journal(fs);
+		await log.load();
+		await Promise.all([1, 2, 3, 4, 5].map(n => log.append({ kind: 'supersede', changeId: `c${n}`, supersededBy: 'x' }, 'pre-mutation')));
+		const reread = readJournal(fs.files.get(log.path)!);
+
+		assert.deepStrictEqual(
+			{ seqs: reread.records.map(r => r.seq), truncated: reread.truncated },
+			{ seqs: [1, 2, 3, 4, 5], truncated: 0 },
+		);
+	});
+
 	test('a store directory with no journal is reported, never mistaken for a project that has never had changes', async () => {
 		// Silently starting empty would forget every decision the user has already made. Forgetting is not a
 		// state the store is allowed to enter quietly.

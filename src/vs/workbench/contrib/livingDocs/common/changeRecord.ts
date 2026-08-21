@@ -199,9 +199,15 @@ export function isOpenChange(change: IChange): boolean {
 	return !isTerminalStatus(change.status) && change.supersededBy === undefined;
 }
 
-/** Whether the change's thread is open - i.e. it is under discussion and no bulk verb may sweep it. */
+/**
+ * Whether the change's thread is OPEN - i.e. it is under discussion and no bulk verb may sweep it.
+ *
+ * A decided change's thread is history rather than a live conversation, so it does not hold anything open:
+ * the thread survives for the audit trail (that is the point of stacking versions on one id), but there is
+ * nothing left to protect it from, and a terminal change is refused by every verb anyway.
+ */
 export function hasOpenThread(change: IChange): boolean {
-	return change.thread.length > 0;
+	return change.thread.length > 0 && !isTerminalStatus(change.status);
 }
 
 /**
@@ -219,9 +225,33 @@ export function bulkCandidates(changes: readonly IChange[]): readonly IBulkCandi
 		id: change.id,
 		docId: change.anchors.length ? change.anchors[0].docUri : '',
 		kind: change.kind,
-		applyFailure: change.status === 'pending' ? undefined : 'anchor-miss' as BlockApplyFailure,
+		// `needsAttention` rather than a borrowed `applyFailure`: the store's records carry four different
+		// non-pending states (`needs-attention`, `partially-applied`, `interrupted`, `unverified`) and only one
+		// of them is an apply failure. Restating them in R2's vocabulary would keep the eligibility rule shared
+		// at the cost of saying something untrue about three of them.
+		needsAttention: change.status !== 'pending',
 		hasOpenThread: hasOpenThread(change),
 	}));
+}
+
+/**
+ * Fold a change's per-anchor outcomes into its status, least-assuming verdict first.
+ *
+ * The ordering is the ethic and it is shared by the live resolution path and the startup reconciler; only
+ * the two LABELS differ, because a status reached by writing and a status reached by proving after a crash
+ * are different facts about the same document and the audit trail should say which one happened. If ANY
+ * anchor is unprovable the change is `unverified` even when the others plainly landed - claiming a partial
+ * success over a document nobody can account for is a smaller lie than issue #329's, but the same kind.
+ */
+export function foldAnchorOutcomes(outcomes: readonly AnchorOutcome[], allLanded: ChangeStatus, noneLanded: ChangeStatus): ChangeStatus {
+	if (outcomes.some(o => !o.landed && (o.reason === 'unverified' || o.reason === 'doc-gone'))) {
+		return 'unverified';
+	}
+	const landed = outcomes.filter(o => o.landed).length;
+	if (landed === outcomes.length) {
+		return allLanded;
+	}
+	return landed === 0 ? noneLanded : 'partially-applied';
 }
 
 /**

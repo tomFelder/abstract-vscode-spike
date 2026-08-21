@@ -716,6 +716,12 @@ export const BULK_CONFIRM_THRESHOLD = 10;
 export type IBulkCandidate = Pick<IProposedChange, 'id' | 'docId' | 'kind' | 'applyFailure'> & {
 	/** True when the change is under discussion. A change being talked about is never swept by a bulk verb. */
 	readonly hasOpenThread?: boolean;
+	/**
+	 * True when the change is not pending for a reason `applyFailure` cannot express. The persisted change
+	 * store carries four distinct non-pending states, only one of which is an apply failure, so it says so
+	 * here rather than restating them all as anchor misses.
+	 */
+	readonly needsAttention?: boolean;
 };
 
 /**
@@ -726,8 +732,8 @@ export type IBulkCandidate = Pick<IProposedChange, 'id' | 'docId' | 'kind' | 'ap
  * bulk sweep must never resolve something a person is mid-conversation about. Both are NAMED exclusions in
  * the confirm sentence rather than silent drops.
  */
-function isBulkEligible(change: Pick<IBulkCandidate, 'applyFailure' | 'hasOpenThread'>): boolean {
-	return change.applyFailure === undefined && !change.hasOpenThread;
+function isBulkEligible(change: Pick<IBulkCandidate, 'applyFailure' | 'hasOpenThread' | 'needsAttention'>): boolean {
+	return change.applyFailure === undefined && !change.needsAttention && !change.hasOpenThread;
 }
 
 /**
@@ -752,8 +758,8 @@ export function buildBulkSet(scope: IBulkScope, pending: readonly IBulkCandidate
 	const eligible = inScope.filter(isBulkEligible);
 	const ids = eligible.map(c => c.id);
 	const docCount = new Set(eligible.map(c => c.docId)).size;
-	const attention = inScope.filter(c => c.applyFailure !== undefined).length;
-	const discussed = inScope.filter(c => c.applyFailure === undefined && c.hasOpenThread).length;
+	const attention = inScope.filter(c => c.applyFailure !== undefined || c.needsAttention).length;
+	const discussed = inScope.filter(c => c.applyFailure === undefined && !c.needsAttention && c.hasOpenThread).length;
 	const excluded: IBulkExclusion[] = [];
 	if (attention > 0) { excluded.push({ reason: 'needs-attention', count: attention }); }
 	if (discussed > 0) { excluded.push({ reason: 'in-discussion', count: discussed }); }

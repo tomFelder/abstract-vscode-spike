@@ -55,6 +55,20 @@ function fold(store: ChangeStore): { readonly open: number; readonly statuses: r
 	return { open: store.openChanges().length, statuses: store.allChanges().map(c => c.status) };
 }
 
+/** A record the store's own types cannot express, framed exactly as the journal frames its own. */
+interface IForgedRecord {
+	readonly seq: number;
+	readonly at: number;
+	readonly kind: string;
+	readonly changeId?: string;
+	readonly reason?: string;
+}
+
+function forgedLine(record: IForgedRecord): string {
+	const payload = JSON.stringify(record);
+	return `${hashContent(payload)} ${payload.length} ${payload}\n`;
+}
+
 suite('livingDocs changeStore (docs/30 section 5)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -262,7 +276,11 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 
 		assert.deepStrictEqual(
 			{
-				frozenRun: frozenRun.failure?.reason,
+				// F3: the post-mutation refusal must NEVER borrow the fail-closed-at-J1 sentence. The document
+				// WAS written; telling the user nothing was changed is issue #329's betrayal with the sign
+				// flipped, so the phase is carried as its own reason with its own honest copy.
+				frozenRun: frozenRun.failure,
+				documentWasActuallyChanged: it.docs.docs.get(A),
 				frozenAfterTheWrite,
 				newIntentRefused: refused.failure,
 				writesWhileFrozen,
@@ -271,11 +289,16 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 				afterThaw: afterThaw.resolved.map(r => r.status),
 			},
 			{
-				frozenRun: 'append-failed',
+				frozenRun: {
+					ok: false,
+					reason: 'append-failed-after-write',
+					message: 'This change was written to your document, but recording it failed - so nothing else will be changed until it can be recorded.',
+				},
+				documentWasActuallyChanged: 'Alpha.\nBETA!\nGamma.\n',
 				frozenAfterTheWrite: true,
 				newIntentRefused: { ok: false, reason: 'frozen', message: 'An earlier change could not be recorded, so no new changes can be made until that is sorted out.' },
 				writesWhileFrozen: [A],
-				retry: undefined,
+				retry: { ok: true },
 				thawed: false,
 				afterThaw: ['approved'],
 			},
@@ -415,6 +438,193 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 				supersededBy: replacement.receipts[0].changeId,
 				openAfterSupersede: [replacement.receipts[0].changeId],
 			},
+		);
+	});
+
+	// --- concurrency: the write boundary must judge validity ATOMICALLY with admission (invariant I8) ---
+	//
+	// Admission ("is this change still valid against the document?") and the write it authorises are separated
+	// by many awaits: reading documents, taking snapshots, appending J1. Left unserialised, two approves both
+	// pass admission against the same base, both splice from it, and both write - one edit is lost while both
+	// are recorded `approved`, which is issue #329's family reintroduced by way of concurrency, inside the
+	// module built to make it impossible. These three tests are that reproduction, now closed.
+
+	test('two overlapping approves in one document are serialised: both edits land, and the journal stays wholly readable', async () => {
+		const it = stage();
+		await it.store.open();
+		const first = await proposeEdit(it, A, 'Alpha.', 'Alpha, at a different length.');
+		const second = await proposeEdit(it, A, 'Gamma.', 'GAMMA!');
+		const [a, b] = await Promise.all([it.store.approveByIds([first]), it.store.approveByIds([second])]);
+		const journal = readJournal(it.fs.files.get(`${HOME}/changes/journal.log`)!);
+
+		assert.deepStrictEqual(
+			{
+				statuses: [...a.resolved, ...b.resolved].map(r => r.status),
+				// Neither edit is lost: the first approve's write is still there under the second's.
+				doc: it.docs.docs.get(A),
+				// A colliding `seq` would make `readJournal` discard everything after the collision.
+				truncated: journal.truncated,
+				sequence: journal.records.map(r => r.seq),
+				fold: fold(it.store),
+			},
+			{
+				statuses: ['approved', 'approved'],
+				doc: 'Alpha, at a different length.\nBeta.\nGAMMA!\n',
+				truncated: 0,
+				sequence: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+				fold: { open: 0, statuses: ['approved', 'approved'] },
+			},
+		);
+	});
+
+	test('two concurrent approves of the SAME id write the document once; the loser is skipped as already-decided', async () => {
+		const it = stage();
+		await it.store.open();
+		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
+		const [a, b] = await Promise.all([it.store.approveByIds([changeId]), it.store.approveByIds([changeId])]);
+
+		assert.deepStrictEqual(
+			{
+				resolved: [...a.resolved, ...b.resolved].map(r => r.status),
+				skipped: [...a.skipped, ...b.skipped],
+				writes: it.docs.writes,
+				snapshots: it.docs.snapshots,
+				doc: it.docs.docs.get(A),
+			},
+			{
+				resolved: ['approved'],
+				skipped: [{ changeId: 'id-1', reason: 'already-decided' }],
+				writes: [A],
+				snapshots: [A],
+				doc: 'Alpha.\nBETA!\nGamma.\n',
+			},
+		);
+	});
+
+	test('an amend racing an approve cannot leave a decided change whose anchors were never written', async () => {
+		// The queue makes the outcome an ORDER rather than a race: the approve was asked for first, so it wins,
+		// and the amend is refused for the same reason every other verb is refused against a terminal change.
+		// What must never happen is the amend landing after the resolution and leaving `anchors` describing
+		// text that is not in the document - an audit trail that disagrees with the disk.
+		const it = stage();
+		await it.store.open();
+		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
+		const revised = anchorAt(it.docs, A, 'Beta.', 'Beta, revised.');
+		const [approve, amend, comment] = await Promise.all([
+			it.store.approveByIds([changeId]),
+			it.store.amend(changeId, [revised]),
+			it.store.comment(changeId, 'hold on'),
+		]);
+		const change = it.store.change(changeId)!;
+
+		assert.deepStrictEqual(
+			{
+				approved: approve.resolved.map(r => r.status),
+				amend,
+				comment,
+				versions: change.versions.length,
+				threadStaysEmpty: change.thread.length,
+				anchorsDescribeWhatIsOnDisk: it.docs.docs.get(A)!.includes(change.anchors[0].newText),
+				doc: it.docs.docs.get(A),
+			},
+			{
+				approved: ['approved'],
+				amend: { ok: false, reason: 'already-decided', message: 'This change could not be updated - you have already decided it.' },
+				comment: { ok: false, reason: 'already-decided', message: 'This change could not be updated - you have already decided it.' },
+				versions: 1,
+				threadStaysEmpty: 0,
+				anchorsDescribeWhatIsOnDisk: true,
+				doc: 'Alpha.\nBETA!\nGamma.\n',
+			},
+		);
+	});
+
+	test('I6: the post-condition is proved by reading the document BACK, so a store that normalises on write cannot mint a false approved', async () => {
+		// The exact class R6 will be backed by - a serialiser that re-emits a parsed document is entitled to
+		// change bytes on the way out. Restating the intended text as the post-hash would produce a durable
+		// `approved` whose hash matches nothing on disk, and the reconciler could never catch it either,
+		// because it believes a J2 commit outright. So there is no J2: the absence of a commit is the honest
+		// record, and it leaves the disk matching neither the base nor the expectation on any later recovery.
+		const it = stage();
+		await it.store.open();
+		it.docs.normaliseOnWrite = text => text.replace(/\n+$/, '');
+		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
+		const report = await it.store.approveByIds([changeId]);
+		const journal = readJournal(it.fs.files.get(`${HOME}/changes/journal.log`)!);
+		const reopened = reopen(it);
+		await reopened.open();
+
+		assert.deepStrictEqual(
+			{
+				status: report.resolved.map(r => r.status),
+				anchorOutcomes: report.resolved[0].anchorOutcomes,
+				noCommitWasWritten: journal.records.map(r => r.kind),
+				textOnDisk: it.docs.docs.get(A),
+				survivesAReload: reopened.change(changeId)!.status,
+			},
+			{
+				status: ['unverified'],
+				anchorOutcomes: [{ docUri: A, landed: false, reason: 'unverified' }],
+				noCommitWasWritten: ['propose', 'intent', 'resolution'],
+				textOnDisk: 'Alpha.\nBETA!\nGamma.',
+				survivesAReload: 'unverified',
+			},
+		);
+	});
+
+	test('F4: a retry that lands the frozen record folds it, so no decided change is offered again for the rest of the session', async () => {
+		const it = stage();
+		await it.store.open();
+		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
+		it.fs.failAppendWhen = (_path, text) => text.includes('"kind":"resolution"');
+		await it.store.approveByIds([changeId]);
+		const beforeRetry = { status: it.store.change(changeId)!.status, offered: it.store.captureBulkSet({ verb: 'approve' }).ids };
+		it.fs.failAppendWhen = undefined;
+		const retry = await it.store.retryFrozenAppend();
+
+		assert.deepStrictEqual(
+			{
+				beforeRetry,
+				retry,
+				status: it.store.change(changeId)!.status,
+				stillOffered: it.store.captureBulkSet({ verb: 'approve' }).ids,
+				writesAfterRetry: it.docs.writes,
+				agreesWithAReload: await (async () => { const r = reopen(it); await r.open(); return r.change(changeId)!.status; })(),
+			},
+			{
+				beforeRetry: { status: 'pending', offered: ['id-1'] },
+				retry: { ok: true },
+				status: 'approved',
+				stillOffered: [],
+				writesAfterRetry: [A],
+				agreesWithAReload: 'approved',
+			},
+		);
+	});
+
+	test('a readable record the store cannot make sense of is COUNTED, not passed over, and the records after it still fold', async () => {
+		// A store whose thesis is "no silent drops" does not get to make an exception for its own log. An
+		// unrecognised kind (a newer version, or a hand edit) and a record naming a change that is not in the
+		// log are both quarantined rather than folded away to nothing.
+		const it = stage();
+		await it.store.open();
+		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
+		const path = `${HOME}/changes/journal.log`;
+		it.fs.files.set(path, it.fs.files.get(path)!
+			+ forgedLine({ seq: 2, at: 2, kind: 'invented-by-a-later-version' })
+			+ forgedLine({ seq: 3, at: 3, kind: 'attention', changeId: 'a-change-that-does-not-exist', reason: 'stale-base' })
+			+ forgedLine({ seq: 4, at: 4, kind: 'attention', changeId, reason: 'human-edit' }));
+		const reopened = reopen(it);
+		const report = await reopened.open();
+
+		assert.deepStrictEqual(
+			{
+				truncated: report.truncated,
+				quarantined: report.quarantined,
+				laterRecordStillFolded: reopened.change(changeId)!.attentionReason,
+				status: reopened.change(changeId)!.status,
+			},
+			{ truncated: 0, quarantined: 2, laterRecordStillFolded: 'human-edit', status: 'needs-attention' },
 		);
 	});
 

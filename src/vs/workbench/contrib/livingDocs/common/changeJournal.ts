@@ -276,10 +276,19 @@ export function readJournal(text: string): IJournalReadResult {
 	return { records, truncated, healed: kept.length ? `${kept.join('\n')}\n` : '' };
 }
 
-/** Why the journal could not do what was asked. Each one is a sentence the UI can say out loud. */
+/**
+ * Why the journal could not do what was asked. Each one is a sentence the UI can say out loud.
+ *
+ * The two append failures are separate reasons rather than one reason plus a phase field, because the phase
+ * IS the difference in meaning: before the mutation, the honest sentence is that nothing was changed; after
+ * it, that sentence is false about the user's own writing. A caller that cannot tell them apart will
+ * eventually say the wrong one, so the type does not let it hold an undifferentiated "append failed".
+ */
 export type JournalFailure =
-	/** The append did not reach the disk: out of space, read-only, permissions. Nothing was mutated. */
+	/** The append did not reach the disk BEFORE any mutation: out of space, read-only, permissions. */
 	| 'append-failed'
+	/** The append did not reach the disk AFTER the document was written. The document HAS changed. */
+	| 'append-failed-after-write'
 	/** A post-mutation append failed earlier; new intents are refused until that append lands. */
 	| 'frozen'
 	/** The store directory exists but its journal does not - the record of past decisions is missing. */
@@ -292,12 +301,19 @@ export interface IJournalError {
 	readonly message: string;
 }
 
-/** The append landed and is durable. */
+/** The append landed and is durable. `record` is what was written, stamped with its place in the log. */
 export interface IJournalOk {
 	readonly ok: true;
+	readonly record: JournalRecord;
 }
 
 export type JournalResult = IJournalOk | IJournalError;
+
+/** A retry that had nothing outstanding to retry: the journal was never frozen. */
+export interface IJournalNothingPending {
+	readonly ok: true;
+	readonly record: undefined;
+}
 
 /** The journal was read: its records, and how many unreadable trailing ones had to be dropped. */
 export interface IJournalLoaded {
@@ -315,6 +331,10 @@ export function describeJournalFailure(reason: JournalFailure): string {
 	switch (reason) {
 		case 'append-failed':
 			return localize('livingDocs.journal.appendFailed', "Couldn't record this approval, so nothing was changed.");
+		case 'append-failed-after-write':
+			// Never the sentence above. The document HAS been changed, and telling someone their writing is
+			// untouched when it is not is the same betrayal as issue #329 with the sign flipped.
+			return localize('livingDocs.journal.appendFailedAfterWrite', "This change was written to your document, but recording it failed - so nothing else will be changed until it can be recorded.");
 		case 'frozen':
 			return localize('livingDocs.journal.frozen', "An earlier change could not be recorded, so no new changes can be made until that is sorted out.");
 		case 'journal-missing':
@@ -340,6 +360,18 @@ export class ChangeJournal {
 	private _seq = 0;
 	private _frozen = false;
 	private _pending: JournalRecord | undefined;
+
+	/**
+	 * The tail of the append chain. Every append waits for the previous one before it reads `_seq`, so a
+	 * sequence number is claimed and written in one uninterrupted step.
+	 *
+	 * Without this, two appends in flight at once both read `_seq` as `n` and both write themselves as `n + 1`.
+	 * The file then holds two records claiming the same place in the log, `readJournal`'s contiguity check
+	 * (correctly) refuses to trust anything past the collision, and every record after it is discarded on the
+	 * next load - including the commits and resolutions that prove what happened to a document. The journal
+	 * cannot be the authority on the order things happened in if it cannot order its own writes.
+	 */
+	private _tail: Promise<unknown> = Promise.resolve();
 
 	constructor(
 		private readonly _fs: IChangeStoreFileSystem,
@@ -402,42 +434,48 @@ export class ChangeJournal {
 	 * their approval was not recorded. A `post-mutation` failure is not clean: the document has already
 	 * changed, so the journal freezes and the store stops taking new intents until the record catches up.
 	 */
-	async append(entry: JournalEntry, phase: 'pre-mutation' | 'post-mutation'): Promise<JournalResult> {
-		if (this._frozen && phase === 'pre-mutation') {
-			return journalError('frozen');
-		}
-		const record: JournalRecord = { ...entry, seq: this._seq + 1, at: this._now() };
-		try {
-			await this._fs.append(this.path, frameRecord(record));
-		} catch {
-			if (phase === 'post-mutation') {
-				this._frozen = true;
-				this._pending = record;
+	append(entry: JournalEntry, phase: 'pre-mutation' | 'post-mutation'): Promise<JournalResult> {
+		return this._serialised(async () => {
+			if (this._frozen && phase === 'pre-mutation') {
+				return journalError('frozen');
 			}
-			return journalError('append-failed');
-		}
-		this._seq = record.seq;
-		return { ok: true };
+			const record: JournalRecord = { ...entry, seq: this._seq + 1, at: this._now() };
+			try {
+				await this._fs.append(this.path, frameRecord(record));
+			} catch {
+				if (phase === 'post-mutation') {
+					this._frozen = true;
+					this._pending = record;
+					return journalError('append-failed-after-write');
+				}
+				return journalError('append-failed');
+			}
+			this._seq = record.seq;
+			return { ok: true, record };
+		});
 	}
 
 	/**
-	 * Retry the append that froze the journal. The freeze lifts only when an append actually succeeds - the
-	 * one condition docs/30 sets - so a caller cannot clear it by asserting that things are fine now.
+	 * Retry the append that froze the journal, returning the record it landed so the caller can absorb it into
+	 * its own state. The freeze lifts only when an append actually succeeds - the one condition docs/30 sets -
+	 * so a caller cannot clear it by asserting that things are fine now.
 	 */
-	async retryFrozenAppend(): Promise<JournalResult> {
-		if (!this._frozen || !this._pending) {
-			return { ok: true };
-		}
-		const record = { ...this._pending, seq: this._seq + 1 };
-		try {
-			await this._fs.append(this.path, frameRecord(record));
-		} catch {
-			return journalError('append-failed');
-		}
-		this._seq = record.seq;
-		this._frozen = false;
-		this._pending = undefined;
-		return { ok: true };
+	retryFrozenAppend(): Promise<IJournalOk | IJournalNothingPending | IJournalError> {
+		return this._serialised(async () => {
+			if (!this._frozen || !this._pending) {
+				return { ok: true, record: undefined };
+			}
+			const record: JournalRecord = { ...this._pending, seq: this._seq + 1 };
+			try {
+				await this._fs.append(this.path, frameRecord(record));
+			} catch {
+				return journalError('append-failed-after-write');
+			}
+			this._seq = record.seq;
+			this._frozen = false;
+			this._pending = undefined;
+			return { ok: true, record };
+		});
 	}
 
 	/** Rewrite a derived view. Derived views are rebuilt idempotently from the fold, never edited in place. */
@@ -448,5 +486,15 @@ export class ChangeJournal {
 			// A derived view is a convenience, not a fact: the journal remains the authority and the next
 			// rebuild will overwrite whatever is there. Failing the user's approval over it would be absurd.
 		}
+	}
+
+	/**
+	 * Run `operation` after every operation queued before it, whatever became of them. Failures do not break
+	 * the chain: an append that could not reach the disk must not stop the retry that repairs it from running.
+	 */
+	private _serialised<T>(operation: () => Promise<T>): Promise<T> {
+		const run = this._tail.then(operation, operation);
+		this._tail = run.then(() => undefined, () => undefined);
+		return run;
 	}
 }

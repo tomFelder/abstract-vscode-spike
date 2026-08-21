@@ -68,6 +68,13 @@ export class FakeChangeDocuments implements IChangeStoreDocuments {
 	/** Return true to make this document's write fail. */
 	failWriteWhen: ((docUri: string) => boolean) | undefined;
 
+	/**
+	 * Transform the text on its way to storage, the way a serialiser that re-emits a parsed document does.
+	 * This is the class of failure invariant I6 exists for: the write "succeeds", and what is on disk is not
+	 * what was asked for. The store must catch it by reading back, never by trusting the request.
+	 */
+	normaliseOnWrite: ((text: string) => string) | undefined;
+
 	async read(docUri: string): Promise<string | undefined> {
 		return this.docs.get(docUri);
 	}
@@ -82,7 +89,7 @@ export class FakeChangeDocuments implements IChangeStoreDocuments {
 			throw new Error('write failed');
 		}
 		this.writes.push(docUri);
-		this.docs.set(docUri, text);
+		this.docs.set(docUri, this.normaliseOnWrite ? this.normaliseOnWrite(text) : text);
 	}
 }
 

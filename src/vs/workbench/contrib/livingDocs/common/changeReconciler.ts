@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { AnchorOutcome, ChangeStatus, IChange } from './changeRecord.js';
+import { AnchorOutcome, foldAnchorOutcomes, IChange } from './changeRecord.js';
 import { IChangeResolution, IIntentRecord, JournalRecord } from './changeJournal.js';
 
 // The startup reconciler (docs/30 section 5). It answers one question about every intent the journal opened
@@ -85,25 +85,6 @@ function classifyDoc(baseHash: string, expectedPostHash: string, committed: stri
 }
 
 /**
- * Fold a change's per-anchor outcomes into its status, least-assuming verdict first.
- *
- * The ordering is the whole ethic of the module. If ANY anchor is unprovable, the change is `unverified`
- * even when the others plainly landed - claiming a partial success over a document we cannot account for
- * would be a smaller lie than #329's but the same kind. Only when every anchor is accounted for do the
- * cheerful classifications become available.
- */
-function foldStatus(outcomes: readonly AnchorOutcome[]): ChangeStatus {
-	if (outcomes.some(o => !o.landed && (o.reason === 'unverified' || o.reason === 'doc-gone'))) {
-		return 'unverified';
-	}
-	const landed = outcomes.filter(o => o.landed).length;
-	if (landed === outcomes.length) {
-		return 'applied-recovered';
-	}
-	return landed === 0 ? 'interrupted' : 'partially-applied';
-}
-
-/**
  * Reconcile one crash window into a verdict per change (docs/30 section 5).
  *
  * A `reject` intent is settled without looking at any document: rejecting never mutates anything, so a
@@ -144,7 +125,10 @@ export function reconcileIntent(
 				? { docUri: anchor.docUri, landed: true, postHash: verdict.postHash }
 				: { docUri: anchor.docUri, landed: false, reason: verdict.reason };
 		});
-		resolutions.push({ changeId, status: foldStatus(anchorOutcomes), anchorOutcomes });
+		// `applied-recovered` and `interrupted` are the RECOVERED labels for the same two facts the live
+		// resolution path calls `approved` and `needs-attention`: the ordering is shared, the names differ, and
+		// the audit trail is entitled to say which of the two routes a status arrived by.
+		resolutions.push({ changeId, status: foldAnchorOutcomes(anchorOutcomes, 'applied-recovered', 'interrupted'), anchorOutcomes });
 	}
 	return resolutions;
 }
