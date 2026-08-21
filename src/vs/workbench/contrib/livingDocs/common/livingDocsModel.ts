@@ -677,7 +677,7 @@ export interface IBulkScope {
  * believes the rail is empty.
  */
 export interface IBulkExclusion {
-	readonly reason: 'needs-attention';
+	readonly reason: 'needs-attention' | 'in-discussion';
 	readonly count: number;
 }
 
@@ -708,14 +708,26 @@ export interface IBulkSet {
 export const BULK_CONFIRM_THRESHOLD = 10;
 
 /**
- * Bulk eligibility, in ONE place (docs/30 section 4.5). Today: the change is still genuinely pending. A
- * change whose approve could not be applied (R2 / invariant I1) stays in the queue flagged `applyFailure` -
- * it is `needs-attention`, not pending, so a bulk verb must not sweep it up; it is named as an exclusion
- * instead. The `!hasOpenThread` half of the predicate arrives with the comment-as-a-third-verb work and
- * belongs HERE when it does, not in a call site.
+ * What a bulk verb needs to know about one queued change to judge it. Deliberately structural rather than
+ * `IProposedChange` itself: the persisted change store (docs/30 section 5) holds richer records of its own,
+ * and must be able to reuse this ONE eligibility rule by projecting onto this shape rather than restating
+ * the policy against its own type - which is exactly how the rule came to be stated five different ways.
  */
-function isBulkEligible(change: Pick<IProposedChange, 'applyFailure'>): boolean {
-	return change.applyFailure === undefined;
+export type IBulkCandidate = Pick<IProposedChange, 'id' | 'docId' | 'kind' | 'applyFailure'> & {
+	/** True when the change is under discussion. A change being talked about is never swept by a bulk verb. */
+	readonly hasOpenThread?: boolean;
+};
+
+/**
+ * Bulk eligibility, in ONE place (docs/30 section 4.5). The change must be genuinely pending, and it must
+ * not be under discussion. A change whose approve could not be applied (R2 / invariant I1) stays in the
+ * queue flagged `applyFailure` - it is `needs-attention`, not pending, so a bulk verb must not sweep it up.
+ * A change with an open comment thread is excluded for the same structural reason (docs/30 section 1.5): a
+ * bulk sweep must never resolve something a person is mid-conversation about. Both are NAMED exclusions in
+ * the confirm sentence rather than silent drops.
+ */
+function isBulkEligible(change: Pick<IBulkCandidate, 'applyFailure' | 'hasOpenThread'>): boolean {
+	return change.applyFailure === undefined && !change.hasOpenThread;
 }
 
 /**
@@ -734,14 +746,17 @@ function isBulkEligible(change: Pick<IProposedChange, 'applyFailure'>): boolean 
  *
  * Pure, so the policy and the sentence are unit-tested directly rather than through a dialog.
  */
-export function buildBulkSet(scope: IBulkScope, pending: readonly IProposedChange[]): IBulkSet {
+export function buildBulkSet(scope: IBulkScope, pending: readonly IBulkCandidate[]): IBulkSet {
 	const inDoc = scope.docId === undefined ? pending : pending.filter(c => c.docId === scope.docId);
 	const inScope = scope.kind === undefined ? inDoc : inDoc.filter(c => c.kind === scope.kind);
 	const eligible = inScope.filter(isBulkEligible);
 	const ids = eligible.map(c => c.id);
 	const docCount = new Set(eligible.map(c => c.docId)).size;
-	const attention = inScope.length - eligible.length;
-	const excluded: IBulkExclusion[] = attention > 0 ? [{ reason: 'needs-attention', count: attention }] : [];
+	const attention = inScope.filter(c => c.applyFailure !== undefined).length;
+	const discussed = inScope.filter(c => c.applyFailure === undefined && c.hasOpenThread).length;
+	const excluded: IBulkExclusion[] = [];
+	if (attention > 0) { excluded.push({ reason: 'needs-attention', count: attention }); }
+	if (discussed > 0) { excluded.push({ reason: 'in-discussion', count: discussed }); }
 	const meaning = eligible.filter(c => c.kind === 'meaning').length;
 	const confirmNeeded = ids.length > 0 && (
 		scope.verb === 'reject'
@@ -784,6 +799,12 @@ function bulkSentence(verb: BulkVerb, count: number, docCount: number, excluded:
 				: localize('livingDocs.bulk.rejectMany', "Reject {0} changes?", count));
 	}
 	for (const exclusion of excluded) {
+		if (exclusion.reason === 'in-discussion') {
+			parts.push(exclusion.count === 1
+				? localize('livingDocs.bulk.discussedOne', "1 change you are discussing is not included.")
+				: localize('livingDocs.bulk.discussedMany', "{0} changes you are discussing are not included.", exclusion.count));
+			continue;
+		}
 		parts.push(exclusion.count === 1
 			? localize('livingDocs.bulk.excludedOne', "1 change needing attention is not included.")
 			: localize('livingDocs.bulk.excludedMany', "{0} changes needing attention are not included.", exclusion.count));
