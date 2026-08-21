@@ -5216,15 +5216,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * The request body shared by the buffered and streaming model calls. Building it in one place is what
 	 * keeps the two paths honest with each other: the per-purpose cap, and the rule that `model` is OMITTED
 	 * rather than sent as a placeholder when the user has chosen nothing, must hold on both.
+	 *
+	 * Prompt caching (plan 55 WP-B4, doc 30 section 2.6) is expressed here in exactly two fields:
+	 *
+	 * - `system` is an ARRAY of one block carrying the turn's ONE `cache_control` breakpoint. The system
+	 *   prompt is the stable prefix - a literal, identical on every turn of every conversation - and a
+	 *   breakpoint can only bite on a prefix that does not move. It is on the wire's first content and
+	 *   everything volatile (the document, the transcript, the instruction) is after it, in the user turn.
+	 *   Below a provider's minimum cacheable prefix (1024 tokens on Anthropic and OpenAI alike) the marker
+	 *   simply does nothing, which is the honest state today: the win arrives when the append-only context
+	 *   restructure grows the prefix past it.
+	 * - `session_id` names the conversation. OpenRouter keeps a session on the provider that just served it
+	 *   for ~10 minutes after a cache hit, and the broker derives the Codex door's `prompt_cache_key` from
+	 *   it. Omitted when there is no conversation yet, exactly as `model` is when the user has picked none.
 	 */
 	private _modelRequestBody(modelId: string | undefined, purpose: ModelCallPurpose, system: string, user: string, stream: boolean): string {
+		const sessionId = this._conversationId();
 		return JSON.stringify({
 			...(modelId ? { model: modelId } : {}),
+			...(sessionId ? { session_id: sessionId } : {}),
 			max_tokens: MODEL_MAX_TOKENS[purpose],
 			thinking: { type: 'adaptive' },
 			output_config: { effort: 'low' },
 			...(stream ? { stream: true } : {}),
-			system,
+			system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
 			messages: [{ role: 'user', content: user }],
 		});
 	}
@@ -5583,17 +5598,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
-	 * The key every chat map is stored under: the active session, created on demand. Chat is never keyed by
-	 * document again, so opening another file leaves the conversation exactly where it was.
+	 * The conversation a call belongs to, or nothing when there is not one yet - READ-ONLY, and unlike
+	 * `_chatKey` it creates nothing.
+	 *
+	 * The distinction is the whole point. `_chatKey` opens a fresh session when none exists, which is right
+	 * for a chat turn (you are about to have a conversation) and wrong for everything else: a document-impact
+	 * revision naming the conversation it runs under must not bring a chat tab into existence as a side effect
+	 * of asking. Every model call reads its cache session id from here (see `_modelRequestBody`), so this had
+	 * to be the non-creating half.
 	 */
-	private _chatKey(): string {
+	private _conversationId(): string | undefined {
 		this._loadChatSessions();
 		if (this._activeChatSession && this._chatSessions.some(s => s.id === this._activeChatSession)) {
 			return this._activeChatSession;
 		}
-		if (this._chatSessions.length) {
-			this._activeChatSession = this._chatSessions[0].id;
-			return this._activeChatSession;
+		return this._chatSessions.length ? this._chatSessions[0].id : undefined;
+	}
+
+	/**
+	 * The key every chat map is stored under: the active session, created on demand. Chat is never keyed by
+	 * document again, so opening another file leaves the conversation exactly where it was.
+	 */
+	private _chatKey(): string {
+		const existing = this._conversationId();
+		if (existing) {
+			this._activeChatSession = existing;
+			return existing;
 		}
 		return this.newChatSession();
 	}
@@ -6143,7 +6173,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			+ 'Use "edits" to rewrite an existing paragraph (oldText must quote the current prose). Use "inserts" to add NEW content: newText is Markdown (e.g. a numbered or bulleted list) placed after the named heading (empty afterHeading = end of the document). '
 			+ 'Propose changes only when the user asks to write, generate or revise; otherwise return empty arrays. Keep reply concise.';
 		const transcript = this._chatTranscript(state.uri);
-		const user = `Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nHeadings: ${headings.join(' | ') || '(none)'}\n\nSources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
+		// ORDERED BY VOLATILITY, most stable first (plan 55 WP-B4, doc 30 section 2.6). A prefix cache pays for
+		// the longest run of bytes that is identical to last turn's request, so anything that changes between
+		// turns has to sit BEHIND everything that does not. The document is the most volatile thing here - the
+		// agent edits it, so it can differ every single turn - and it used to be first, which meant the cache
+		// had nothing after the system prompt to hold onto and every turn re-prefilled the whole prompt. Now:
+		// sources (the same files all conversation), then the transcript (which only grows), then the mutating
+		// document, then this turn's instruction. The full append-only restructure is still ahead of us; this
+		// is the part that simply stops actively defeating the cache.
+		const user = `Sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}Document "${state.doc.title}" (${state.doc.subtitle}):\n${docText}\n\nHeadings: ${headings.join(' | ') || '(none)'}\n\nUser: ${text}`;
 		const raw = await this._chatModelCall(system, user, 'chat', onDelta, token);
 		// Tolerant parse (plan 16 iter 5): a non-JSON / truncated / prose-wrapped reply degrades to a plain
 		// chat answer instead of throwing (which used to surface as a false "the agent model errored").
@@ -6301,7 +6339,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			publishProgress(b + 1);
 			if (plan.batchCount > 1) { addStep({ label: `Batch ${b + 1} of ${plan.batchCount} (${batch.docs.length} documents)`, status: 'done' }); }
 			const docSections = batch.docs.map(d => d.body).join('\n\n');
-			const user = `Working set (${batch.docs.length} documents):\n\n${docSections}\n\nShared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}User: ${text}`;
+			// Same volatility ordering as the single-document prompt above, and it matters most here: the
+			// working set is the largest and most-mutated thing in any prompt this service sends, so leading
+			// with it left nothing cacheable behind the system prompt on the calls that cost the most.
+			const user = `Shared sources (${sourceFiles.join(', ') || 'none'}):\n"""${sources}"""\n\n${transcript}Working set (${batch.docs.length} documents):\n\n${docSections}\n\nUser: ${text}`;
 			let raw: string;
 			try {
 				raw = b === 0
