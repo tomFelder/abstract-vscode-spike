@@ -6726,11 +6726,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					skipped.push({ id, label: '', reason: 'decided-elsewhere' });
 					continue;
 				}
+				// Every id we can still put a document to counts as touched, INCLUDING the ineligible ones -
+				// otherwise a bulk whose every captured change had gone needs-attention would report its
+				// shrinkage to nowhere, which is the opposite of the contract below.
+				touched.add(change.docId);
 				if (change.applyFailure !== undefined) {
 					skipped.push({ id, label: bulkChangeLabel(change), reason: 'needs-attention' });
 					continue;
 				}
-				touched.add(change.docId);
 				if (verb === 'approve') {
 					await this.approve(id);
 				} else {
@@ -6751,7 +6754,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (skipped.length) {
 			// A bulk verb that shrank must SAY so. The per-change status lines have already scrolled past by
 			// now, so the surviving statement is the document's status - the surfaces read it, and it is the
-			// difference between "the rail emptied" and "the rail emptied except for these".
+			// difference between "the rail emptied" and "the rail emptied except for these". The one case
+			// with nowhere to write is a capture whose every id had ALREADY left the queue: nothing was
+			// touched because nothing of it still existed, and the rail showing them gone is the true report.
 			this._log.warn('[livingDocs] bulk', verb, 'skipped', skipped.length, 'of', captured.length);
 			const report = describeBulkSkips(result);
 			for (const docId of touched) {

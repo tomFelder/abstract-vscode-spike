@@ -657,10 +657,17 @@ export type BulkVerb = 'approve' | 'reject';
  * `docId` restricts the capture to a single document (the per-document "Approve all"); omitting it captures
  * the EVERYWHERE shapes - the rail foot, the editor bar's "Approve everywhere", the chat-level verbs - which
  * span the whole working set.
+ *
+ * `kind` restricts it further to one class of change. Exactly one surface needs this today - the rail's
+ * FIGURES card, which groups a document's low-risk value updates into a single decision - and it is a real
+ * scope rather than a convenience: without it that card would have to hand-build its own id list, which is
+ * how it came to be the one bulk verb in the product carrying its own (implicit, and wrong past ten) confirm
+ * rule. A scope is what lets it inherit the policy instead of restating it.
  */
 export interface IBulkScope {
 	readonly verb: BulkVerb;
 	readonly docId?: string;
+	readonly kind?: ChangeKind;
 }
 
 /**
@@ -728,7 +735,8 @@ function isBulkEligible(change: Pick<IProposedChange, 'applyFailure'>): boolean 
  * Pure, so the policy and the sentence are unit-tested directly rather than through a dialog.
  */
 export function buildBulkSet(scope: IBulkScope, pending: readonly IProposedChange[]): IBulkSet {
-	const inScope = scope.docId === undefined ? pending : pending.filter(c => c.docId === scope.docId);
+	const inDoc = scope.docId === undefined ? pending : pending.filter(c => c.docId === scope.docId);
+	const inScope = scope.kind === undefined ? inDoc : inDoc.filter(c => c.kind === scope.kind);
 	const eligible = inScope.filter(isBulkEligible);
 	const ids = eligible.map(c => c.id);
 	const docCount = new Set(eligible.map(c => c.docId)).size;

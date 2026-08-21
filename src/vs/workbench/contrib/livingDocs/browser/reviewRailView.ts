@@ -34,7 +34,7 @@ import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWid
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier, runBulkVerb } from '../common/livingDocs.js';
-import { bulkVerbLabel, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
+import { bulkVerbLabel, IBulkScope, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenId } from './screenRender.js';
@@ -895,14 +895,27 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		const actions = append(card, $('div.ldr-actions'));
-		const approveFigures = append(actions, $('button.ldr-secondary')) as HTMLButtonElement;
-		approveFigures.textContent = localize('livingDocs.review.approveFigures', "Approve {0} figures", figures.length);
-		// An id snapshot taken before the first apply - so this approves exactly these figures and never the
-		// document's meaning changes with them - handed to the same shrink-only engine every other bulk verb
-		// uses (docs/30 invariant I4). It carries no confirm because a small figures-only set is the one
-		// one-click case the policy allows; the label therefore carries no ellipsis either.
-		const figureIds = figures.map(f => f.id);
-		this._renderDisposables.add(addDisposableListener(approveFigures, 'click', () => void this._livingDocs.approveByIds(figureIds)));
+		// The card's bulk verb is a real captured SCOPE, like every other bulk verb in the product (docs/30
+		// invariant I4). Handing `approveByIds` a hand-built id list would have kept it outside the confirm
+		// policy - and a document with fifteen bound figures would apply fifteen decisions on one click with
+		// no dialog, which the recorded policy forbids "regardless of kind". Through a scope it inherits the
+		// whole policy: still one click for a small set (the auto-apply class does not deserve friction),
+		// dialog past ten, and the label's ellipsis derived from the same capture the click applies.
+		//
+		// The count is the CAPTURED count, not `figures.length`: the card is drawn from the document's full
+		// pending set, while the capture drops any figure flagged needs-attention. Those two can differ, and
+		// the button must state the number it will actually act on. Below two there is nothing to bulk - the
+		// same rule that sends a lone figure to its own card - so the verb is not drawn at all and "Each…"
+		// beside it is the way to reach what is left.
+		const figuresScope: IBulkScope = { verb: 'approve', docId, kind: 'figure' };
+		const figuresSet = this._livingDocs.captureBulkSet(figuresScope);
+		if (figuresSet.ids.length > 1) {
+			const approveFigures = append(actions, $('button.ldr-secondary')) as HTMLButtonElement;
+			approveFigures.textContent = figuresSet.confirmNeeded
+				? localize('livingDocs.review.approveFiguresConfirm', "Approve {0} figures…", figuresSet.ids.length)
+				: localize('livingDocs.review.approveFigures', "Approve {0} figures", figuresSet.ids.length);
+			this._renderDisposables.add(addDisposableListener(approveFigures, 'click', () => void runBulkVerb(this._livingDocs, this._dialogService, figuresScope)));
+		}
 		const each = append(actions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
 		each.textContent = localize('livingDocs.review.eachFigure', "Each…");
 		this._renderDisposables.add(addDisposableListener(each, 'click', () => {

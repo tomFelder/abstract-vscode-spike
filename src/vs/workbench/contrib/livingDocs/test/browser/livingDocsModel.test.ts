@@ -426,30 +426,58 @@ suite('LivingDoc model - buildBulkSet (the one bulk path, docs/30 I4)', () => {
 
 	// The confirm policy, at every level, in one table. The only one-click case left is a small,
 	// single-document, figures-only approve.
+	//
+	// The FIGURES-card rows use the SCOPE that card actually captures - `{ docId, kind: 'figure' }`, mixed in
+	// with the document's meaning changes exactly as `_pending` holds them - rather than a pre-filtered array.
+	// A table that only fed `buildBulkSet` a tidy figures-only list would assert a policy the card was not
+	// subject to, which was true of the first version of this test: the card hand-built its ids and never
+	// reached the builder at all, so eleven figures applied on one click with no dialog.
 	test('confirm policy: reject always, everywhere always, multi-doc always, over ten always, meaning always', () => {
 		const oneDocFigures = [figure('a', '1'), figure('a', '2')];
-		const eleven = Array.from({ length: 11 }, (_, i) => figure('a', `f${i}`));
+		const elevenFiguresBesideMeaning = [change('a', 'm'), ...Array.from({ length: 11 }, (_, i) => figure('a', `f${i}`))];
+		const twoFiguresBesideMeaning = [change('a', 'm'), figure('a', 'f1'), figure('a', 'f2')];
 		assert.deepStrictEqual(
 			{
 				rejectOneDocFigures: buildBulkSet({ verb: 'reject', docId: 'a' }, oneDocFigures).confirmNeeded,
 				rejectEverywhere: buildBulkSet({ verb: 'reject' }, oneDocFigures).confirmNeeded,
 				approveEverywhere: buildBulkSet({ verb: 'approve' }, oneDocFigures).confirmNeeded,
 				approveMultiDocFigures: buildBulkSet({ verb: 'approve' }, [figure('a', '1'), figure('b', '2')]).confirmNeeded,
-				approveElevenFigures: buildBulkSet({ verb: 'approve', docId: 'a' }, eleven).confirmNeeded,
 				approveMeaning: buildBulkSet({ verb: 'approve', docId: 'a' }, [change('a', '1')]).confirmNeeded,
 				approveOneDocFigures: buildBulkSet({ verb: 'approve', docId: 'a' }, oneDocFigures).confirmNeeded,
 				approveEmpty: buildBulkSet({ verb: 'approve', docId: 'a' }, []).confirmNeeded,
+				// The FIGURES card's own scope: the kind filter excludes the meaning change beside them, so the
+				// count is the figures alone - and past ten it confirms anyway, "regardless of kind".
+				figuresCardEleven: buildBulkSet({ verb: 'approve', docId: 'a', kind: 'figure' }, elevenFiguresBesideMeaning).confirmNeeded,
+				figuresCardElevenIds: buildBulkSet({ verb: 'approve', docId: 'a', kind: 'figure' }, elevenFiguresBesideMeaning).ids.length,
+				figuresCardTwo: buildBulkSet({ verb: 'approve', docId: 'a', kind: 'figure' }, twoFiguresBesideMeaning).confirmNeeded,
+				figuresCardTwoIds: buildBulkSet({ verb: 'approve', docId: 'a', kind: 'figure' }, twoFiguresBesideMeaning).ids,
 			},
 			{
 				rejectOneDocFigures: true,
 				rejectEverywhere: true,
 				approveEverywhere: true,
 				approveMultiDocFigures: true,
-				approveElevenFigures: true,
 				approveMeaning: true,
 				approveOneDocFigures: false,
 				approveEmpty: false,
+				figuresCardEleven: true,
+				figuresCardElevenIds: 11,
+				// The one one-click case, preserved exactly: a small figures-only set in one document.
+				figuresCardTwo: false,
+				figuresCardTwoIds: ['f1', 'f2'],
 			},
+		);
+	});
+
+	// The card is drawn from the document's FULL pending set but applies the captured one, so the two counts
+	// can differ. The label must state the number the click will act on, or the reviewer is told they are
+	// approving three things and three do not happen.
+	test('a kind-scoped capture drops a needs-attention figure, so the card counts what it will really apply', () => {
+		const stuck: IProposedChange = { ...figure('a', 'f2'), applyFailure: 'anchor-miss' };
+		const set = buildBulkSet({ verb: 'approve', docId: 'a', kind: 'figure' }, [figure('a', 'f1'), stuck, figure('a', 'f3')]);
+		assert.deepStrictEqual(
+			{ ids: set.ids, excluded: set.excluded, label: bulkVerbLabel(set) },
+			{ ids: ['f1', 'f3'], excluded: [{ reason: 'needs-attention', count: 1 }], label: 'Approve all 2' },
 		);
 	});
 
