@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { $, addDisposableListener, append, clearNode, getWindow } from '../../../../base/browser/dom.js';
+import { $, addDisposableListener, append, clearNode, findParentWithClass, getWindow } from '../../../../base/browser/dom.js';
 import { safeSetInnerHtml } from '../../../../base/browser/domSanitize.js';
 import { IAction, Separator, SubmenuAction, toAction } from '../../../../base/common/actions.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
@@ -33,7 +33,7 @@ import { applyFailureRailNote } from '../common/applyOutcome.js';
 import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
-import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier, runBulkVerb } from '../common/livingDocs.js';
+import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelDoor, ModelProvider, ModelReadiness, ModelTier, runBulkVerb } from '../common/livingDocs.js';
 import { bulkVerbLabel, IBulkScope, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
@@ -99,6 +99,17 @@ export function modelStateWords(readiness: ModelReadiness | undefined): string {
 		case 'unconfigured': return localize('livingDocs.model.state.unavailable', "Model unavailable");
 		default: return localize('livingDocs.model.state.checking', "Checking model…");
 	}
+}
+
+// The provider named on every model row (founder ruling 9.1, plan 55 WP-B3). Not decoration: since the broker
+// routes by model id, a row's door is literally where that call goes and therefore whose credits pay for it -
+// the user's own OpenAI account, or the founder-funded included tier under its daily cap. Kept short because it
+// sits beside the model's own name; the popover's section heading carries the longer form. Exported so the unit
+// test pins the door -> words mapping without a DOM.
+export function modelDoorWords(door: ModelDoor): string {
+	return door === 'openai-oauth'
+		? localize('livingDocs.model.door.ownAccount', "Your account")
+		: localize('livingDocs.model.door.included', "Included");
 }
 
 // How many Attach chips show before the "..." expander (#177). Four fits ~two lines in the 392px rail
@@ -2131,8 +2142,26 @@ export class ReviewRailView extends ViewPane {
 		this._modelPopover.value = store;
 
 		const pop = append(box, $('div'));
-		// Anchored above the control, right-aligned to the composer box; card styling matches the mention picker.
-		pop.style.cssText = `position:absolute;right:9px;bottom:calc(100% + 4px);z-index:20;min-width:200px;max-width:260px;padding:5px;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:11px;box-shadow:${SHADOW.dialog}`;
+		// Anchored above the control and to BOTH sides of the composer box (`left` + `right`), exactly like the
+		// @mention picker below. The old `right:9px` + a min-width was a width the container never agreed to: the
+		// rail's scroll box clips its children, so once the per-row provider column pushed the popover past the
+		// composer's width at the DEFAULT rail size, the left edge was simply cut off - every availability dot and
+		// the first characters of every model name with it. A popover cannot be wider than the thing it is anchored
+		// inside, so it no longer claims a width at all; it takes the composer's, at every rail size.
+		// The insets and the card padding are deliberately tight (7px / 4px): a first-run rail can be as narrow as
+		// ~169px (see #353), and every pixel spent on chrome here is a pixel taken off the model NAME, which is the
+		// one thing a row cannot do without.
+		pop.style.cssText = `position:absolute;left:7px;right:7px;bottom:calc(100% + 4px);z-index:20;padding:4px;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:11px;box-shadow:${SHADOW.dialog}`;
+		// ...and to the room actually available ABOVE the composer inside the rail's own scroll box (`.ldp-content`,
+		// created by this same view at the top of the panel). A narrow rail turns every row into two lines, and a
+		// card taller than the rail would simply run off the TOP - the models nearest the heading would vanish,
+		// which is the horizontal clipping bug rotated ninety degrees. Capped and scrollable, it can only shrink.
+		const scroller = findParentWithClass(box, 'ldp-content');
+		if (scroller) {
+			const room = Math.floor(box.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12);
+			pop.style.maxHeight = `${Math.max(150, room)}px`;
+			pop.style.overflowY = 'auto';
+		}
 		// Guard: swallow the mousedown that would otherwise bubble to the outside-dismiss listener below and
 		// close the popover before a row's click lands.
 		store.add(addDisposableListener(pop, 'mousedown', e => e.stopPropagation()));
@@ -2157,23 +2186,69 @@ export class ReviewRailView extends ViewPane {
 				const rows = models.filter(m => m.tier === group.tier);
 				if (!rows.length) { continue; }
 				const heading = append(pop, $('div'));
-				heading.style.cssText = `padding:6px 9px 3px;font:400 11px/1 ${FONT.mono};letter-spacing:${TRACKING.sectionLabel};text-transform:uppercase;color:${INK.meta}`;
+				heading.style.cssText = `padding:6px 6px 3px;font:400 10.5px/1.3 ${FONT.mono};letter-spacing:${TRACKING.sectionLabel};text-transform:uppercase;color:${INK.meta};overflow-wrap:anywhere`;
 				heading.textContent = group.heading;
 				for (const model of rows) {
 					const row = append(pop, $('button')) as HTMLButtonElement;
 					const isCurrent = model.id === this._selectedModelId;
-					row.style.cssText = `display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:30px;padding:0 9px;border:none;border-radius:7px;background:transparent;color:${INK.body};font:400 12.5px/1 ${FONT.sans};cursor:pointer;text-align:left`;
-					// Per-row health dot (P14.3): all of the active backend's models share its live readiness, so the
-					// dot honestly mirrors the broker state per row rather than fabricating per-model health.
+					const providerWords = modelDoorWords(model.door);
+					// `min-height` rather than a fixed height, because a row is allowed to become two lines when the
+					// rail is too narrow to hold the name and its provider side by side (see the wrap note below).
+					row.style.cssText = `display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;min-height:30px;padding:3px 6px;border:none;border-radius:7px;background:transparent;color:${INK.body};font:400 12.5px/1.3 ${FONT.sans};cursor:pointer;text-align:left`;
+					// Per-row health dot (P14.3). Since plan 55 WP-B3 the broker routes by MODEL id, so a row's door
+					// can be down while the door serving right now is fine - the dot therefore reads that row's own
+					// `available` flag first and only falls back to the broker-wide readiness. A green dot on a row
+					// that would fail with `door_unavailable` the moment it was picked is exactly the kind of lie
+					// this surface exists not to tell.
 					const rdot = append(row, $('span'));
-					rdot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${modelHealthDotColour(readiness)}`;
-					const name = append(row, $('span'));
-					name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+					rdot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${model.available ? modelHealthDotColour(readiness) : RED.base}`;
+					// The name and the provider share ONE wrapping flex line, and the order decides who yields when
+					// the rail runs out of room. The first shape of this row put the name on `flex:1;overflow:hidden`
+					// beside a `flex:none` provider column, which inverted the priority: `overflow:hidden` gives a
+					// flex item an automatic minimum size of zero, so the name paid the whole shortfall while the
+					// provider paid none - at a 239px rail every name ellipsised, and at 169px the name column was
+					// literally 0px wide and the rows read "INCLUDED" / "YOUR ACCOUNT" with no model on them.
+					//
+					// Now the name is FIRST in a `flex-wrap:wrap` box and sized from its own content, so it takes
+					// line one outright; the provider (carrying the tick with it) drops to a second line underneath
+					// whenever both will not fit. Nothing is ever truncated: at a wide rail the row is one line and
+					// looks exactly as it did, and at a narrow one it becomes two honest lines instead of one
+					// unreadable one. Ruling 9.1 still holds - the provider is on every row, just no longer at the
+					// name's expense.
+					const main = append(row, $('span'));
+					main.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;column-gap:6px;row-gap:1px;flex:1 1 auto;min-width:0';
+					const name = append(main, $('span'));
+					// No `nowrap`/ellipsis: if even one line will not hold the name, it wraps at its own spaces
+					// (`anywhere` only as the last resort for a single unbreakable token) rather than losing letters.
+					name.style.cssText = 'flex:1 1 auto;min-width:0;overflow-wrap:anywhere';
 					name.textContent = model.label;
-					// The current model carries a check (P14.3); the tick space is reserved so rows align.
-					const check = append(row, $('span'));
-					check.style.cssText = `flex:none;font-size:12px;color:${INDIGO.base};width:12px;text-align:center;visibility:${isCurrent ? 'visible' : 'hidden'}`;
+					// The provider, on EVERY row (founder ruling 9.1, doc 30 section 9): whose credits this model
+					// spends is the choice the ruling asks the picker to make explicit, and it is no longer implied
+					// by anything else on screen - the broker routes by model id, so the row's door IS where the
+					// call goes. Sentence-case sans rather than the tracked uppercase it used to borrow from the
+					// group heading directly above it: quieter (the heading already shouts the grouping once), and
+					// roughly a third narrower, which is most of what buys the name its line back.
+					const meta = append(main, $('span'));
+					meta.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 1 auto;min-width:0;margin-left:auto';
+					const provider = append(meta, $('span'));
+					// Wraps rather than ellipsises, for the same reason the name does: on this card a word that runs
+					// out of room costs a line, never a letter.
+					provider.style.cssText = `flex:0 1 auto;min-width:0;overflow-wrap:anywhere;font:400 10.5px/1.4 ${FONT.sans};color:${INK.meta}`;
+					provider.textContent = providerWords;
+					// The current model carries a check (P14.3). It rides with the provider so that it stays at the
+					// row's right edge on whichever line the provider ends up on, and its space is still reserved on
+					// every row so the ticks line up.
+					const check = append(meta, $('span'));
+					check.style.cssText = `flex:none;font-size:11px;color:${INDIGO.base};width:11px;text-align:center;visibility:${isCurrent ? 'visible' : 'hidden'}`;
 					check.textContent = '✓';
+					// The door is named again in the accessible name and in a hover, so the choice ruling 9.1 asks
+					// the picker to make explicit is carried by more than the printed word - and a screen reader
+					// hears the provider without having to infer it from the row's second line.
+					const doorHint = model.door === 'openai-oauth'
+						? localize('livingDocs.model.row.hintOwnAccount', "{0} runs on your own OpenAI account.", model.label)
+						: localize('livingDocs.model.row.hintIncluded', "{0} is included with Abstract.", model.label);
+					row.setAttribute('aria-label', localize('livingDocs.model.row.aria', "{0}, {1}", model.label, providerWords));
+					store.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), row, doorHint));
 					store.add(addDisposableListener(row, 'mouseenter', () => { row.style.background = INDIGO.tint; }));
 					store.add(addDisposableListener(row, 'mouseleave', () => { row.style.background = 'transparent'; }));
 					store.add(addDisposableListener(row, 'click', () => {
@@ -2184,6 +2259,33 @@ export class ReviewRailView extends ViewPane {
 					}));
 				}
 			}
+		}
+
+		// The signed-out encouragement (founder ruling 9.1). The $1/day included cap stays, and the OAuth door is
+		// the relief valve - so the moment the picker is open and no OpenAI account is connected, it offers the
+		// connection in one quiet line rather than waiting for the user to hit the cap and read an apology. It sits
+		// UNDER the rows, in meta type, with no fill and no icon: an invitation, not a nag (P7). Only while we
+		// actually know the answer is `false`; an unprobed `undefined` renders nothing rather than guessing.
+		if (this._signedIn === false) {
+			const connect = append(pop, $('button')) as HTMLButtonElement;
+			connect.style.cssText = `display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px 6px 8px;border:none;border-top:1px solid ${HAIRLINE.soft};border-radius:0 0 7px 7px;background:transparent;cursor:pointer;text-align:left`;
+			connect.title = localize('livingDocs.model.connectOwnAccountTitle', "Connect your OpenAI account on the Model Access screen");
+			// Two deliberate lines rather than one sentence left to wrap: the composer box is ~240px, so a single
+			// string breaks mid-phrase ("no / daily limit"). The invitation leads, the reason follows in meta type.
+			// The lead itself still has to wrap on a first-run rail (~169px holds about fifteen characters), so
+			// "OpenAI account" is joined by a NO-BREAK SPACE: the line can only ever break where the phrase does,
+			// giving "Use your own" / "OpenAI account" instead of the three-line "Use your own / OpenAI / account".
+			const connectLead = append(connect, $('div'));
+			connectLead.style.cssText = `font:400 12px/1.35 ${FONT.sans};color:${INK.body}`;
+			connectLead.textContent = localize('livingDocs.model.connectOwnAccount', "Use your own OpenAI\u00a0account");
+			const connectWhy = append(connect, $('div'));
+			connectWhy.style.cssText = `font:400 11px/1.35 ${FONT.sans};color:${INK.meta};white-space:nowrap`;
+			connectWhy.textContent = localize('livingDocs.model.connectOwnAccountWhy', "No daily limit");
+			store.add(addDisposableListener(connect, 'mouseenter', () => { connect.style.background = INDIGO.tint; connectLead.style.color = INDIGO.base; }));
+			store.add(addDisposableListener(connect, 'mouseleave', () => { connect.style.background = 'transparent'; connectLead.style.color = INK.body; }));
+			// The SAME destination the composer's "Sign in with ChatGPT" fix-it link already uses, deliberately:
+			// one sign-in route, one behaviour, no second flow to keep in step with the first.
+			store.add(addDisposableListener(connect, 'click', () => { this._modelPopover.clear(); void this._openScreen('settings'); }));
 		}
 
 		// Dismiss on an outside pointer-down or Escape. The window is resolved from the control's own element so
