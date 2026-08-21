@@ -11,7 +11,7 @@ import { matchesSomeScheme, Schemas } from '../../../../base/common/network.js';
 import { URI } from '../../../../base/common/uri.js';
 import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
-import { AgentPolicy, bulkApproveConfirm, groupDecisions, groupPendingByDoc, IAgentRun, IAgentTrigger, IProposedChange, ISkillRunSummary, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
+import { AgentPolicy, groupDecisions, groupPendingByDoc, IAgentRun, IAgentTrigger, IBulkScope, IProposedChange, ISkillRunSummary, nextPendingDocId, reviewedDocsFromSeen, summariseProjectRun } from '../common/livingDocsModel.js';
 import { coerceDocPolicy } from '../common/docPolicy.js';
 import { coerceAgentPolicyFromLevel } from '../common/agentPolicyGrammar.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -29,7 +29,7 @@ import { IEditorGroup } from '../../../services/editor/common/editorGroupsServic
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.js';
-import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateCard, ITemplateInfo, ITidyPlanItem } from '../common/livingDocs.js';
+import { ChatGptSignInStage, ILivingDocSummary, ILivingDocsService, IModelProviderStatus, IProjectAnswer, ISkillCheck, ISourceInfo, ITemplateCard, ITemplateInfo, ITidyPlanItem, runBulkVerb } from '../common/livingDocs.js';
 import { HeaderPillKind, IAbstractHeaderContent, IAbstractHeaderService, IHeaderPill } from '../common/abstractHeader.js';
 import { IAnalyticsService } from '../common/analytics.js';
 import { buildAwayFeed, classifyProjectChat, IAwayFeed, relativeTime } from '../common/projectHomeFeed.js';
@@ -804,11 +804,10 @@ export class ScreenEditor extends EditorPane {
 					void this._livingDocs.approve(id);
 				}
 				break;
-			// Sticky doc action bar: `Accept All N Here` -> approveAll(docId) for the current document.
+			// Sticky doc action bar: `Approve all N here` for the current document, through the ONE bulk path.
 			case 'reviewAcceptAllHere':
 				if (message.arg) {
-					const docId = message.arg;
-					void this._confirmBulkApprove(this._livingDocs.getAllPending().filter(c => c.docId === docId), () => this._livingDocs.approveAll(docId));
+					void this._runBulk({ verb: 'approve', docId: message.arg });
 				}
 				break;
 			// `Next` -> advance the current document to the next one that still has pending changes.
@@ -821,9 +820,9 @@ export class ScreenEditor extends EditorPane {
 					}
 				}
 				break;
-			// Topbar `Accept All Remaining` -> approveAllPending() across every document.
+			// Topbar `Approve all N` across every document, through the ONE bulk path.
 			case 'reviewAcceptAllRemaining':
-				void this._confirmBulkApprove(this._livingDocs.getAllPending(), () => this._livingDocs.approveAllPending());
+				void this._runBulk({ verb: 'approve' });
 				break;
 			case 'openFolder':
 				void this._livingDocs.openFolder();
@@ -1354,16 +1353,12 @@ export class ScreenEditor extends EditorPane {
 	// Tweak a change (24.2): open its document and focus its inline diff for hand-editing, reusing the
 	// plan-19 navigate-to-inline path (openEditor + focusChange). Resolves the docId from the live pending
 	// set by change id. Navigate-only - it never approves; the user then edits/approves in the document.
-	// Bulk-approve safety net (plan 31 iter 4): confirm before a bulk approve whose set includes any meaning
-	// change; the confirm mentions the pre-approve snapshot (plan 26). Figures-only bulk approves stay
-	// one-click. Applies only after the user confirms (or when no confirm was needed).
-	private async _confirmBulkApprove(changes: readonly { readonly kind: 'figure' | 'meaning' }[], apply: () => Promise<void>): Promise<void> {
-		const confirm = bulkApproveConfirm(changes, true);
-		if (confirm.needed) {
-			const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: 'Approve all' });
-			if (!confirmed) { return; }
-		}
-		await apply();
+	/**
+	 * Run a bulk verb through the ONE bulk path (docs/30 invariant I4): capture the ids with their sentence,
+	 * confirm, then apply exactly those ids. The screen never derives a set of its own.
+	 */
+	private async _runBulk(scope: IBulkScope): Promise<void> {
+		await runBulkVerb(this._livingDocs, this._dialogService, scope);
 	}
 
 	private async _tweakChange(changeId: string): Promise<void> {

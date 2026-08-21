@@ -44,8 +44,8 @@ import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture,
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
-import { CLOSE_CHAT_COMMAND_ID, DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID } from '../common/livingDocs.js';
-import { bulkApproveConfirm, chordTargetChange, IProposedChange } from '../common/livingDocsModel.js';
+import { CLOSE_CHAT_COMMAND_ID, DOCUMENTS_CONTAINER_ID, DOCUMENTS_VIEW_ID, ILivingDocsService, REVIEW_RAIL_CONTAINER_ID, REVIEW_RAIL_VIEW_ID, runBulkVerb } from '../common/livingDocs.js';
+import { chordTargetChange, IProposedChange } from '../common/livingDocsModel.js';
 import { IAbstractHeaderService } from '../common/abstractHeader.js';
 import { AbstractHeaderService } from './abstractHeaderService.js';
 import { AbstractHeaderContribution } from './abstractHeader.js';
@@ -488,18 +488,13 @@ registerAction2(class ApproveAllChangesAction extends Action2 {
 		const editorService = accessor.get(IEditorService);
 		const input = editorService.activeEditor;
 		if (!(input instanceof LivingDocEditorInput)) { return; }
-		const pending = livingDocs.getPendingForDoc(input.resource);
-		if (!pending.length) { return; }
-		// The SAME safety net the rail's "Approve all" button runs (plan 31 iter 4): a bulk approve carrying any
-		// meaning change confirms first, and says a snapshot is taken so it can be undone. A chord is easier to
-		// press than a button is to click, so if either route deserved the net it is this one - the confirm is
-		// not skipped here on the excuse that the user asked for speed.
-		const confirm = bulkApproveConfirm(pending, true);
-		if (confirm.needed) {
-			const { confirmed } = await accessor.get(IDialogService).confirm({ message: confirm.message, primaryButton: localize('livingDocs.review.approveAll.confirm', "Approve all") });
-			if (!confirmed) { return; }
-		}
-		await livingDocs.approveAll(input.resource.toString());
+		// The SAME bulk path every button runs (docs/30 invariant I4). A chord is easier to press than a button
+		// is to click, so if either route deserved the confirm it is this one - it is not skipped here on the
+		// excuse that the user asked for speed. Scoped by the proposals' OWN docId (#253) so a URI-form drift
+		// cannot silently capture an empty set.
+		const docId = livingDocs.pendingDocIdFor(input.resource);
+		if (!docId) { return; }
+		await runBulkVerb(livingDocs, accessor.get(IDialogService), { verb: 'approve', docId });
 	}
 });
 

@@ -10,7 +10,7 @@ import { addressLabel, IBlockGutterEntry } from '../common/livingDocAddress.js';
 import { isRelativeImageSrc, rewriteMarkdownImageSrcs } from '../common/livingDocAssets.js';
 import { IFigureChange, ISourcePeek } from '../common/livingDocs.js';
 import { parseLivingDoc, reconcileBindLinks } from '../common/livingDocMarkdown.js';
-import { ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
+import { buildBulkSet, ILivingDoc, IProposedChange, IReviewFraming, reviewFraming } from '../common/livingDocsModel.js';
 import { buildPmDecorationSpec, IPmDiffSegment, IPmEditDecoration, IPmGutterMarker, IPmInsertDecoration, IPmProvenance } from '../common/livingDocPmDecorations.js';
 import { deleteCol, deleteRow, gfmEscapeCell, gfmIsAlignRow, gfmParseAlign, gfmSplitCells, insertCol, insertRow, parseGfmTable, serializeGfmTable, setCell } from '../common/livingDocTableEdit.js';
 import { isWordHtml, normalizeWordPasteHtml, pasteStartShouldClose } from '../common/livingDocWordPaste.js';
@@ -1640,7 +1640,9 @@ function docReviewBar(pending: readonly IProposedChange[], totalPendingCount: nu
 		+ `<span class="rv-say"><strong>${pendingCount} changes</strong> waiting in this document${breakdown}</span>`
 		+ `<span class="rv-spacer"></span>${next}`
 		+ `<button class="rv-btn" data-review-each title="Open the first change in the document">Review each</button>`
-		+ `<button class="rv-quiet" data-approve-all-doc title="Approve every pending change in this document">Approve all&#8230;</button>`
+		// The ellipsis is a promise that a dialog follows, so it is drawn only when this exact set would raise
+		// one (docs/30 I4). A small figures-only set here is genuinely one click, and says so.
+		+ `<button class="rv-quiet" data-approve-all-doc title="Approve every pending change in this document">Approve all${buildBulkSet({ verb: 'approve', docId: pending[0].docId }, pending).confirmNeeded ? '&#8230;' : ''}</button>`
 		+ approveEverywhere
 		+ `</div>`;
 }

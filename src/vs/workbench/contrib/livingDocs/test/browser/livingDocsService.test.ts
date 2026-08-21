@@ -1535,11 +1535,12 @@ suite('livingDocs Service', () => {
 		// repro opened Board Note after the Appendix. The pending changes still belong to WEEKLY.
 		await service.loadDocument(BOARD);
 
-		// The editor action bar's approveAllDoc handler: resolve the pending set + its own docId, then apply.
+		// The editor action bar's approveAllDoc handler: resolve the proposals' own docId, capture the set,
+		// then apply exactly the captured ids (docs/30 invariant I4 - no re-derivation at apply time).
 		const pendingBefore = service.getPendingForDoc(WEEKLY);
 		const docId = service.pendingDocIdFor(WEEKLY);
 		assert.ok(docId, 'the open document reports the docId its pending changes are keyed under');
-		await service.approveAll(docId!);
+		await service.approveByIds(service.captureBulkSet({ verb: 'approve', docId: docId! }).ids);
 
 		assert.deepStrictEqual(
 			{
@@ -1745,7 +1746,7 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'cleared from the rail after approve');
 	});
 
-	test('approveAll accepts every pending change for a document at once (F6 accept-all)', async () => {
+	test('a captured per-document approve set accepts every pending change for that document at once (F6 accept-all)', async () => {
 		const service = createService([], {
 			model: modelMessage({
 				reply: 'Edited and added.', edits: [
@@ -1760,14 +1761,14 @@ suite('livingDocs Service', () => {
 		await service.sendChatMessage(WEEKLY, 'Tighten the commentary and add a closing note');
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 2, 'an edit and an insertion are queued');
 
-		await service.approveAll(WEEKLY.toString());
+		await service.approveByIds(service.captureBulkSet({ verb: 'approve', docId: WEEKLY.toString() }).ids);
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'accept-all clears the whole rail');
 		const blocks = service.getDoc(WEEKLY)!.blocks;
 		assert.ok(blocks.some(b => b.text === 'A new closing note.'), 'the insertion landed');
 		assert.ok(blocks.some(b => b.text === 'Growth accelerated this week.'), 'the edit landed');
 	});
 
-	// --- multi-document review (plan 18): reject-all mirrors of approveAll ---
+	// --- multi-document review (plan 18): the reject mirrors of the captured approve set ---
 
 	// Queue one end-of-document insertion into each of two docs by chatting on each in turn. The single
 	// canned model reply (an insert with an empty afterHeading) lands in whichever doc is active, so this
@@ -1784,41 +1785,185 @@ suite('livingDocs Service', () => {
 		return service;
 	}
 
-	test('rejectAll(docId) discards one document\'s pending changes and leaves the others untouched', async () => {
+	test('a captured document-scoped reject set discards one document\'s pending changes and leaves the others untouched', async () => {
 		const service = await queuePendingInTwoDocs();
 		assert.strictEqual(service.getAllPending().length, 2, 'precondition: one pending change in each of two docs');
 
-		await service.rejectAll(WEEKLY.toString());
+		await service.rejectByIds(service.captureBulkSet({ verb: 'reject', docId: WEEKLY.toString() }).ids);
 
 		assert.deepStrictEqual(
 			{ weekly: service.getPendingForDoc(WEEKLY).length, board: service.getPendingForDoc(BOARD).length },
 			{ weekly: 0, board: 1 },
-			'rejectAll clears the named doc only',
+			'a document-scoped reject clears the named doc only',
 		);
 		assert.ok(service.getAudit().some(e => e.action === 'rejected' && e.docTitle === 'Board Note') === false
 			&& service.getAudit().some(e => e.action === 'rejected'), 'the rejection is audited for the cleared doc');
 	});
 
-	test('rejectAllPending() discards every pending change across all documents in one action', async () => {
+	test('a captured everywhere reject set discards every pending change across all documents in one action', async () => {
 		const service = await queuePendingInTwoDocs();
 		assert.strictEqual(service.getAllPending().length, 2, 'precondition: pending across two docs');
 
-		await service.rejectAllPending();
+		await service.rejectByIds(service.captureBulkSet({ verb: 'reject' }).ids);
 
 		assert.strictEqual(service.getAllPending().length, 0, 'reject-all clears every doc');
 	});
 
-	test('approveAllPending() applies every pending change across all documents in one action (chat-level accept-all)', async () => {
+	test('a captured everywhere approve set applies every pending change across all documents in one action (chat-level accept-all)', async () => {
 		const service = await queuePendingInTwoDocs();
 		assert.strictEqual(service.getAllPending().length, 2, 'precondition: pending across two docs');
 
-		await service.approveAllPending();
+		await service.approveByIds(service.captureBulkSet({ verb: 'approve' }).ids);
 
 		assert.strictEqual(service.getAllPending().length, 0, 'accept-all clears every doc');
 		assert.ok(
 			service.getDoc(WEEKLY)!.blocks.some(b => b.text === 'A shared closing note.')
 			&& service.getDoc(BOARD)!.blocks.some(b => b.text === 'A shared closing note.'),
 			'the change landed in both documents',
+		);
+	});
+
+	// --- the ONE bulk path (docs/30 section 5, invariant I4; kills issues #334 / #305) ---
+
+	/**
+	 * The structural half of "no call site may re-derive a set at apply time".
+	 *
+	 * The enforcement is the TYPE SYSTEM, not this assertion: `approveAll` / `approveAllPending` / `rejectAll`
+	 * / `rejectAllPending` no longer exist on `ILivingDocsService` or on the class, so any surface reaching for
+	 * one fails `typecheck-client` before it can ship. This test is the runtime witness of that deletion, so a
+	 * reviewer reading the suite can see the surface is gone rather than having to trust a compiler pass.
+	 */
+	test('I4: the query-based bulk verbs are gone from the service surface, so no call site can re-derive a set', async () => {
+		const service = createService();
+		await service.loadDocument(WEEKLY);
+		const methods = new Set<string>();
+		for (let proto = Object.getPrototypeOf(service); proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+			for (const name of Object.getOwnPropertyNames(proto)) { methods.add(name); }
+		}
+		assert.deepStrictEqual(
+			{
+				removed: ['approveAll', 'approveAllPending', 'rejectAll', 'rejectAllPending'].filter(name => methods.has(name)),
+				present: ['captureBulkSet', 'approveByIds', 'rejectByIds'].filter(name => methods.has(name)),
+			},
+			{ removed: [], present: ['captureBulkSet', 'approveByIds', 'rejectByIds'] },
+		);
+	});
+
+	/**
+	 * Issue #334, staged adversarially: the queue MOVES while the confirm dialog is open.
+	 *
+	 * This is not contrived. The rail and the document sit side by side, and a fan-out turn can land while the
+	 * reviewer is reading a sentence. Under the old query-based verbs the apply re-queried `_pending` seconds
+	 * after the confirm was counted, so anything that arrived in between was swept up by a sentence that had
+	 * never described it. Here the ids are captured WITH the sentence, and all three kinds of drift are staged
+	 * at once - one captured change decided elsewhere, one made un-appliable by a hand edit, and one brand-new
+	 * change queued by a second turn. The applied set must be a SUBSET of what was captured.
+	 */
+	test('I4: a bulk approve applies only its captured ids - the set can shrink under the confirm, never grow', async () => {
+		const service = createService([], {
+			boardNote: true,
+			modelSequence: [
+				chatReply('Sharpened all three levers.', [
+					{ heading: 'Growth Levers', oldText: '- Increase revenue this quarter', newText: '- Grow revenue sharply this quarter', rationale: 'r' },
+					{ heading: 'Growth Levers', oldText: '- Increase revenue next quarter', newText: '- Grow revenue sharply next quarter', rationale: 'r' },
+					{ heading: 'Growth Levers', oldText: '- Increase revenue this year', newText: '- Grow revenue sharply this year', rationale: 'r' },
+				]),
+				modelMessage({ reply: 'Added.', edits: [], inserts: [{ afterHeading: '', newText: 'A late arrival.', rationale: 'r' }] }),
+			],
+		});
+		lastFiles!.set(LEVERS.toString(), LEVERS_MD);
+		await service.loadDocument(LEVERS);
+		await service.sendChatMessage(LEVERS, 'Sharpen every lever');
+
+		// The reviewer presses "Approve all". The ids are frozen here, together with the sentence they read.
+		const captured = service.captureBulkSet({ verb: 'approve' });
+
+		// While the dialog is open the world moves three ways at once.
+		await service.reject(captured.ids[0]);
+		const listBlock = service.getDoc(LEVERS)!.blocks.find(b => b.text.includes('Increase revenue'))!;
+		await service.editBlock(LEVERS, listBlock.id, [
+			'- Grow revenue sharply this quarter',
+			'- Rethink revenue next quarter',
+			'- Increase revenue this year',
+		].join('\n'));
+		await service.loadDocument(BOARD);
+		await service.sendChatMessage(BOARD, 'Add a closing note');
+		const lateArrival = service.getPendingForDoc(BOARD)[0];
+
+		// The reviewer presses Approve on the dialog.
+		const result = await service.approveByIds(captured.ids);
+
+		assert.deepStrictEqual(
+			{
+				capturedCount: captured.ids.length,
+				sentence: captured.sentence,
+				// The invariant, twice over: nothing applied that was not captured, and the result is closed.
+				appliedWithinCaptured: result.applied.every(id => captured.ids.includes(id)),
+				closed: result.applied.length + result.skipped.length === result.captured,
+				// Positions in the captured set, so the assertion reads without uuids in it.
+				applied: result.applied.map(id => captured.ids.indexOf(id)),
+				skipped: result.skipped.map(skip => ({ at: captured.ids.indexOf(skip.id), label: skip.label, reason: skip.reason })),
+				// The change nobody confirmed is still waiting, untouched by a sentence that predates it.
+				lateArrivalStillPending: service.getAllPending().some(c => c.id === lateArrival.id),
+				lateArrivalLanded: service.getDoc(BOARD)!.blocks.some(b => b.text === 'A late arrival.'),
+			},
+			{
+				capturedCount: 3,
+				sentence: 'Approve 3 changes? A version snapshot is taken first, so you can restore.',
+				appliedWithinCaptured: true,
+				closed: true,
+				applied: [2],
+				skipped: [
+					{ at: 0, label: '', reason: 'decided-elsewhere' },
+					{ at: 1, label: 'Levers - Growth Levers', reason: 'apply-failed' },
+				],
+				lateArrivalStillPending: true,
+				lateArrivalLanded: false,
+			},
+		);
+	});
+
+	/**
+	 * The exclusion half of the same invariant: a change that is queued but NOT eligible (an earlier approve
+	 * failed to apply, so it is needs-attention) is left out of the capture and NAMED in the sentence. The
+	 * reviewer is told what they are not deciding rather than being left to believe the rail emptied.
+	 */
+	test('I4: a needs-attention change is excluded from the capture and named in the confirm sentence', async () => {
+		const service = createService([], {
+			model: chatReply('Sharpened two levers.', [
+				{ heading: 'Growth Levers', oldText: '- Increase revenue this quarter', newText: '- Grow revenue sharply this quarter', rationale: 'r' },
+				{ heading: 'Growth Levers', oldText: '- Increase revenue next quarter', newText: '- Grow revenue sharply next quarter', rationale: 'r' },
+			]),
+		});
+		lastFiles!.set(LEVERS.toString(), LEVERS_MD);
+		await service.loadDocument(LEVERS);
+		await service.sendChatMessage(LEVERS, 'Sharpen the first two levers');
+		const queued = service.getPendingForDoc(LEVERS);
+
+		// Break the first change's anchor, then approve it: R2 leaves it queued and flagged rather than
+		// pretending it landed. It is now needs-attention.
+		const listBlock = service.getDoc(LEVERS)!.blocks.find(b => b.text.includes('Increase revenue'))!;
+		await service.editBlock(LEVERS, listBlock.id, [
+			'- Rethink revenue this quarter',
+			'- Increase revenue next quarter',
+			'- Increase revenue this year',
+		].join('\n'));
+		await service.approve(queued[0].id);
+
+		const captured = service.captureBulkSet({ verb: 'approve', docId: LEVERS.toString() });
+		assert.deepStrictEqual(
+			{
+				queuedNow: service.getPendingForDoc(LEVERS).length,
+				capturedIds: captured.ids.map(id => queued.findIndex(c => c.id === id)),
+				excluded: captured.excluded,
+				sentence: captured.sentence,
+			},
+			{
+				queuedNow: 2,
+				capturedIds: [1],
+				excluded: [{ reason: 'needs-attention', count: 1 }],
+				sentence: 'Approve 1 change? 1 change needing attention is not included. A version snapshot is taken first, so you can restore.',
+			},
 		);
 	});
 
@@ -3641,7 +3786,7 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 2, 'two changes queued');
 		const bodyBeforeApprove = service.getRawText(WEEKLY);
 
-		await service.approveAll(WEEKLY.toString());
+		await service.approveByIds(service.captureBulkSet({ verb: 'approve', docId: WEEKLY.toString() }).ids);
 
 		const snapshots = service.getSnapshots(WEEKLY);
 		assert.deepStrictEqual(

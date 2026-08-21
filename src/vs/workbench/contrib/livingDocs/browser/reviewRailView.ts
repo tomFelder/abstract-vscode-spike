@@ -33,8 +33,8 @@ import { applyFailureRailNote } from '../common/applyOutcome.js';
 import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
-import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier } from '../common/livingDocs.js';
-import { bulkApproveConfirm, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
+import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier, runBulkVerb } from '../common/livingDocs.js';
+import { bulkVerbLabel, IBulkScope, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
 import { ScreenId } from './screenRender.js';
@@ -663,8 +663,8 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		const status = append(content, $('div.ldr-status'));
-		// The promise the comp opens the ledger with, and it is one the product keeps: `approveAll` /
-		// `approveAllPending` both snapshot first (plan 26), so History can always restore.
+		// The promise the comp opens the ledger with, and it is one the product keeps: every bulk approve runs
+		// `approveByIds` snapshots every affected document first (plan 26), so History can always restore.
 		// The empty state is on the entry path (the rail's Review tab is reachable before any AI/source use),
 		// so it stays markdown-first (plan 42 L3): it says what the tab is FOR -- agent edits land here to
 		// review -- without the "Living Document" / "Refresh from sources" ceremony a fresh user has not met yet.
@@ -700,22 +700,18 @@ export class ReviewRailView extends ViewPane {
 
 			if (multiDoc) {
 				const groupActions = append(groupHeader, $('div.ldr-group-actions'));
+				// Both per-document bulk verbs run the ONE bulk path (docs/30 invariant I4): the label's count
+				// and its ellipsis come from the same capture shape the click will make, so the button can
+				// never promise a dialog it does not raise or a count it does not act on.
 				const approveAll = append(groupActions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
-				approveAll.textContent = localize('livingDocs.review.approveAllDoc', "Approve all {0}…", changes.length);
+				approveAll.textContent = bulkVerbLabel(this._livingDocs.captureBulkSet({ verb: 'approve', docId }));
 				this._renderDisposables.add(addDisposableListener(approveAll, 'click', async () => {
-					// Bulk-approve safety net (plan 31 iter 4): confirm when the set includes any meaning change;
-					// a version snapshot is taken first (plan 26). Figures-only bulk approves stay one-click.
-					const confirm = bulkApproveConfirm(this._livingDocs.getPendingForDoc(URI.parse(docId)), true);
-					if (confirm.needed) {
-						const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: localize('livingDocs.review.approveAllConfirm', "Approve all") });
-						if (!confirmed) { return; }
-					}
-					await this._livingDocs.approveAll(docId);
+					await runBulkVerb(this._livingDocs, this._dialogService, { verb: 'approve', docId });
 					this._openNextPending(docId);
 				}));
 				const rejectAll = append(groupActions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
-				rejectAll.textContent = localize('livingDocs.review.rejectAllDoc', "Reject all…");
-				this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAll(docId)));
+				rejectAll.textContent = bulkVerbLabel(this._livingDocs.captureBulkSet({ verb: 'reject', docId }));
+				this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void runBulkVerb(this._livingDocs, this._dialogService, { verb: 'reject', docId })));
 			}
 
 			// Meaning first, because a judgement call is what the reader is here for; the figures fold into one
@@ -745,18 +741,11 @@ export class ReviewRailView extends ViewPane {
 			left.textContent = localize('livingDocs.review.decided', "0 of {0} decided", pending.length);
 			append(foot, $('span.ldr-spacer'));
 			const rejectAll = append(foot, $('button.ldr-quiet-btn')) as HTMLButtonElement;
-			rejectAll.textContent = localize('livingDocs.review.rejectAll', "Reject all…");
-			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAllPending()));
+			rejectAll.textContent = bulkVerbLabel(this._livingDocs.captureBulkSet({ verb: 'reject' }));
+			this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void runBulkVerb(this._livingDocs, this._dialogService, { verb: 'reject' })));
 			const approveAll = append(foot, $('button.ldr-quiet-btn')) as HTMLButtonElement;
-			approveAll.textContent = localize('livingDocs.review.approveAll', "Approve all {0}…", pending.length);
-			this._renderDisposables.add(addDisposableListener(approveAll, 'click', async () => {
-				const confirm = bulkApproveConfirm(pending, true);
-				if (confirm.needed) {
-					const { confirmed } = await this._dialogService.confirm({ message: confirm.message, primaryButton: localize('livingDocs.review.approveAllConfirm', "Approve all") });
-					if (!confirmed) { return; }
-				}
-				await this._livingDocs.approveAllPending();
-			}));
+			approveAll.textContent = bulkVerbLabel(this._livingDocs.captureBulkSet({ verb: 'approve' }));
+			this._renderDisposables.add(addDisposableListener(approveAll, 'click', () => void runBulkVerb(this._livingDocs, this._dialogService, { verb: 'approve' })));
 		}
 
 		// Document agents (the skill graders) are relocated to an on-demand disclosure at the bottom of
@@ -906,14 +895,27 @@ export class ReviewRailView extends ViewPane {
 		}
 
 		const actions = append(card, $('div.ldr-actions'));
-		const approveFigures = append(actions, $('button.ldr-secondary')) as HTMLButtonElement;
-		approveFigures.textContent = localize('livingDocs.review.approveFigures', "Approve {0} figures", figures.length);
-		// Composed from the per-change approve the individual cards use, over ids captured before the first
-		// call - so this approves exactly these figures and never the document's meaning changes with them.
-		const figureIds = figures.map(f => f.id);
-		this._renderDisposables.add(addDisposableListener(approveFigures, 'click', async () => {
-			for (const id of figureIds) { await this._livingDocs.approve(id); }
-		}));
+		// The card's bulk verb is a real captured SCOPE, like every other bulk verb in the product (docs/30
+		// invariant I4). Handing `approveByIds` a hand-built id list would have kept it outside the confirm
+		// policy - and a document with fifteen bound figures would apply fifteen decisions on one click with
+		// no dialog, which the recorded policy forbids "regardless of kind". Through a scope it inherits the
+		// whole policy: still one click for a small set (the auto-apply class does not deserve friction),
+		// dialog past ten, and the label's ellipsis derived from the same capture the click applies.
+		//
+		// The count is the CAPTURED count, not `figures.length`: the card is drawn from the document's full
+		// pending set, while the capture drops any figure flagged needs-attention. Those two can differ, and
+		// the button must state the number it will actually act on. Below two there is nothing to bulk - the
+		// same rule that sends a lone figure to its own card - so the verb is not drawn at all and "Each…"
+		// beside it is the way to reach what is left.
+		const figuresScope: IBulkScope = { verb: 'approve', docId, kind: 'figure' };
+		const figuresSet = this._livingDocs.captureBulkSet(figuresScope);
+		if (figuresSet.ids.length > 1) {
+			const approveFigures = append(actions, $('button.ldr-secondary')) as HTMLButtonElement;
+			approveFigures.textContent = figuresSet.confirmNeeded
+				? localize('livingDocs.review.approveFiguresConfirm', "Approve {0} figures…", figuresSet.ids.length)
+				: localize('livingDocs.review.approveFigures', "Approve {0} figures", figuresSet.ids.length);
+			this._renderDisposables.add(addDisposableListener(approveFigures, 'click', () => void runBulkVerb(this._livingDocs, this._dialogService, figuresScope)));
+		}
 		const each = append(actions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
 		each.textContent = localize('livingDocs.review.eachFigure', "Each…");
 		this._renderDisposables.add(addDisposableListener(each, 'click', () => {
@@ -1170,13 +1172,16 @@ export class ReviewRailView extends ViewPane {
 				: localize('livingDocs.chat.reviewIt', "Review it");
 			this._renderDisposables.add(addDisposableListener(reviewEach, 'click', () => { this._activeTab = 'review'; this._render(); }));
 			if (pendingCount > 1) {
+				// The chat-level verbs span every document, not just the one in view (the chat instruction
+				// edited the whole set) - which is exactly why they now CONFIRM. A set whose edges the reader
+				// cannot see on this surface is never one click away from being applied (docs/30 I4); they
+				// used to fire straight into the engine with no dialog at all.
 				const acceptAll = append(actions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
-				// Spans every document, not just the one in view (the chat instruction edited the whole set).
-				acceptAll.textContent = localize('livingDocs.chat.approveAll', "Approve all {0}\u2026", pendingCount);
-				this._renderDisposables.add(addDisposableListener(acceptAll, 'click', () => void this._livingDocs.approveAllPending()));
+				acceptAll.textContent = bulkVerbLabel(this._livingDocs.captureBulkSet({ verb: 'approve' }));
+				this._renderDisposables.add(addDisposableListener(acceptAll, 'click', () => void runBulkVerb(this._livingDocs, this._dialogService, { verb: 'approve' })));
 				const rejectAll = append(actions, $('button.ldr-quiet-btn')) as HTMLButtonElement;
-				rejectAll.textContent = localize('livingDocs.chat.rejectAll', "Reject all\u2026");
-				this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void this._livingDocs.rejectAllPending()));
+				rejectAll.textContent = bulkVerbLabel(this._livingDocs.captureBulkSet({ verb: 'reject' }));
+				this._renderDisposables.add(addDisposableListener(rejectAll, 'click', () => void runBulkVerb(this._livingDocs, this._dialogService, { verb: 'reject' })));
 			}
 
 			// Cursor-style changed-documents list: one row per changed doc with its +N/-N, clickable to open
