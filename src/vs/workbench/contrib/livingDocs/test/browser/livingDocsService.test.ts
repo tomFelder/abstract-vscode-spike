@@ -250,7 +250,7 @@ suite('livingDocs Service', () => {
 	// notice racing ahead and deduping it.
 	let writeExternalNoWatcher: ((resource: URI, content: string) => void) | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[] } = {}): LivingDocsService {
 		const files = new Map<string, string>();
 		// Correlated watchers registered per resource (issue #133), so `simulateExternalEdit` can fire the same
 		// change event the real file service delivers for an edit made outside Abstract.
@@ -394,6 +394,8 @@ suite('livingDocs Service', () => {
 					return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.wrap(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x64, 0x6f, 0x63, 0x78]))) };
 				}
 				let payload: object = API_PAYLOAD;
+				// Set only by `modelHttpSequence` below; everything else answers 200 as it always has.
+				let modelHttpStatus: { statusCode: number; headers?: Record<string, string> } | undefined;
 				// The proxy routes (plan 29 iter 4): /mcp/resolve returns the extracted value + raw payload;
 				// /proxy/fetch returns the authenticated api JSON. Both capture the sent body so a test can
 				// assert the renderer only ever names the secret, never carries its value.
@@ -410,11 +412,15 @@ suite('livingDocs Service', () => {
 						// `model` returns the same reply every call. lastModelCalls counts calls either way.
 						payload = opts.modelSequence ? (opts.modelSequence[lastModelCalls] ?? opts.modelSequence[opts.modelSequence.length - 1]) : opts.model!;
 						lastModelBody = options.data;
+						// `modelHttpSequence` overrides the HTTP envelope of the Nth /v1/messages call, so a test can
+						// hand the service a real 429 (with its own Retry-After) and watch the backoff, rather than
+						// only ever seeing a 200. Read BEFORE the counter moves so entry 0 is the first call.
+						modelHttpStatus = opts.modelHttpSequence?.[lastModelCalls];
 						lastModelCalls++;
 					}
 				}
 				return {
-					res: { statusCode: 200, headers: {} },
+					res: { statusCode: modelHttpStatus?.statusCode ?? 200, headers: modelHttpStatus?.headers ?? {} },
 					stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))),
 				};
 			},
@@ -1440,6 +1446,48 @@ suite('livingDocs Service', () => {
 		assert.ok(body.includes('Weekly Operating Summary'), 'prompt includes the document title');
 		assert.ok(body.includes('$48.6k'), 'prompt includes the resolved figure value');
 		assert.ok(body.includes('week,mrr') || body.includes('metrics.csv'), `prompt includes the mentioned source: ${body.slice(0, 120)}`);
+	});
+
+	test('a chat call carries the chat lane\'s output cap and names no model when the user has picked none', async () => {
+		const service = createService([], { model: chatReply('Done.') });
+		await service.loadDocument(WEEKLY);
+		lastModelBody = undefined;
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+
+		const body = JSON.parse(lastModelBody ?? '{}') as { model?: string; max_tokens?: number };
+		assert.deepStrictEqual(
+			{ model: body.model, maxTokens: body.max_tokens },
+			// No `model` key at all: the client used to send a hardcoded `claude-opus-4-8` that no backend has
+			// ever served, which the broker then silently swapped for the real default on every single call.
+			// The cap is the chat lane's, not the old global 1024 that truncated any reply of real length.
+			{ model: undefined, maxTokens: 4096 },
+		);
+	});
+
+	test('a rate-limited model call WAITS the server\'s Retry-After before its single retry', async () => {
+		// The first /v1/messages call answers 429 with an explicit Retry-After; the second succeeds. The
+		// retry used to fire immediately, which during a fan-out wave means every call in the wave re-firing
+		// in the same millisecond - the herd that turns a transient limit into a failed run.
+		const service = createService([], {
+			model: chatReply('Second time lucky.'),
+			modelHttpSequence: [{ statusCode: 429, headers: { 'retry-after': '3' } }],
+		});
+		const slept: number[] = [];
+		// Deterministic: jitter pinned, and the sleep records the delay instead of taking it, so the assertion
+		// is an exact number and the suite never waits.
+		service.setRetryBackoff(() => 0, async delayMs => { slept.push(delayMs); });
+		await service.loadDocument(WEEKLY);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
+
+		const reply = service.getChatMessages(WEEKLY).at(-1);
+		assert.deepStrictEqual(
+			{ slept, calls: lastModelCalls, content: reply?.content, via: reply?.via },
+			// 3s honoured exactly (jitter pinned to 0 adds nothing on top), then one retry that succeeds.
+			{ slept: [3000], calls: 2, content: 'Second time lucky.', via: 'model' },
+		);
 	});
 
 	test('a chat reply that proposes an edit queues it to the Review rail; approve applies it to the prose', async () => {

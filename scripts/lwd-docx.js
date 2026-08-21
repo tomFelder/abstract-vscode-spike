@@ -7,11 +7,11 @@
 
 'use strict';
 
-// Zero-dependency Office Open XML (WordprocessingML) writer for the living-document docx export (doc 22 §3).
+// Zero-dependency Office Open XML (WordprocessingML) writer for the living-document docx export (doc 22 section 3).
 // It turns the renderer's already-resolved export Markdown (bind values inlined as plain text) into a clean
 // .docx whose paragraphs map onto Word's BUILT-IN styles (Title, Heading 1..6, Normal, List Bullet, List
 // Number) so the receiving organisation can restyle. No Abstract chrome, provenance dots, or diff UI ever
-// reaches the output - the export is the trust story (doc 14 §1).
+// reaches the output - the export is the trust story (doc 14 section 1).
 //
 // PURE: no fetch, no wall clock, no file system. Everything is string assembly + byte packing, so the writer
 // is exercised end-to-end by a plain Node unit script (test/lwd-docx.test.js) without a workbench build - the
@@ -25,13 +25,13 @@ const EMU_PER_PX = 9525; // 914400 EMU per inch / 96 px per inch.
 
 // Characters forbidden in XML 1.0 char data: the C0 controls except tab/newline/carriage-return, plus the two
 // non-characters U+FFFE/U+FFFF. A single one of these (e.g. a NUL in a bound value) makes document.xml malformed,
-// so we drop them before entity-escaping.
-// eslint-disable-next-line no-control-regex
+// so we drop them before entity-escaping. The class is built from a STRING, not a regex literal, so
+// `no-control-regex` never sees it in source and no lint suppression is needed to express it.
 const XML_FORBIDDEN = new RegExp('[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]', 'g');
 
 /** Escape the five XML predefined entities so nothing in a source value can break out as markup. */
 function xml(s) {
-	return String(s == null ? '' : s)
+	return String(s ?? '')
 		.replace(XML_FORBIDDEN, '')
 		.replace(/&/g, '&amp;')
 		.replace(/</g, '&lt;')
@@ -183,7 +183,7 @@ function parseInline(text) {
  * @returns {Array<object>}
  */
 function parseBlocks(md) {
-	const lines = String(md == null ? '' : md).replace(/\r\n?/g, '\n').split('\n');
+	const lines = String(md ?? '').replace(/\r\n?/g, '\n').split('\n');
 	const blocks = [];
 	let i = 0;
 	const isTableSep = s => /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/.test(s);
@@ -383,7 +383,7 @@ function tableXml(block, rels) {
 	const headerRow = `<w:tr>${block.header.map(h => cell(h, true)).join('')}</w:tr>`;
 	const bodyRows = block.rows.map(row => {
 		const padded = [];
-		for (let c = 0; c < cols; c++) { padded.push(cell(row[c] != null ? row[c] : '', false)); }
+		for (let c = 0; c < cols; c++) { padded.push(cell(row[c] ?? '', false)); }
 		return `<w:tr>${padded.join('')}</w:tr>`;
 	}).join('');
 	return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr>${grid}${headerRow}${bodyRows}</w:tbl>`;

@@ -60,3 +60,10 @@
 # Vendored third-party libraries
 src/vs/base/common/lit-html/**
 src/vs/base/common/signals-core/**
+
+# Generated design-comp runtime. `docs/design/abstract-editor-v2/support.js` is a bundler output
+# ("GENERATED from dc-runtime/src/*.ts - do not edit" on its first line) that ships alongside the
+# static design comps; linting a build artefact reports hundreds of warnings nobody can act on
+# without editing generated code. It stays on `.eslint-allowed-javascript-files` because the
+# hygiene task reads that list to decide which `.js` files may exist at all.
+docs/design/**/support.js

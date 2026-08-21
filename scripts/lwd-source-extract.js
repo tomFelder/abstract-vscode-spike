@@ -6,7 +6,7 @@
 'use strict';
 
 // The source-extraction + parsing-floor engine for the "spreadsheets as CSV sources + PDF as
-// read-only context" domain (issue #131, doc 22 §4). Extraction runs in the node/proxy layer where
+// read-only context" domain (issue #131, doc 22 section 4). Extraction runs in the node/proxy layer where
 // file access lives, NEVER in the renderer (P6 portability + the guardrail that a limitation is
 // named, never a silent misread). This module is pure and dependency-injectable so it can be
 // unit-tested directly with `node --test` (see lwd-source-extract.test.js): callers pass in the
@@ -26,7 +26,7 @@
 
 // --- encoding ---------------------------------------------------------------------------------
 
-// Decode a source file's raw bytes to a string, tolerating the Excel realities from doc 21 §6.5:
+// Decode a source file's raw bytes to a string, tolerating the Excel realities from doc 21 section 6.5:
 // a UTF-8/UTF-16 byte-order mark, and Windows-1252 (CP-1252) bytes that plain UTF-8 would mangle
 // into replacement characters. Returns the decoded text plus the detected encoding label (for the
 // named-limitation surface). `buffer` is a Node Buffer.
@@ -52,6 +52,7 @@ function decodeBuffer(buffer) {
 	// signals a decode failure - the classic sign of Windows-1252 bytes (a lone 0x92 curly quote,
 	// 0xA3 pound sign, etc.) read as UTF-8.
 	const asUtf8 = body.toString('utf8');
+	// allow-any-unicode-next-line
 	if (asUtf8.indexOf('�') === -1) {
 		return { text: asUtf8, encoding: start ? 'utf-8-bom' : 'utf-8' };
 	}
@@ -143,7 +144,7 @@ function parseDelimitedLine(line, delimiter) {
 // open in any tool (P6), so we always emit UTF-8 with `\n` and a comma delimiter.
 function writeCsvRow(cells) {
 	return cells.map(cell => {
-		const s = cell == null ? '' : String(cell);
+		const s = String(cell ?? '');
 		if (/[",\n\r]/.test(s)) { return '"' + s.replace(/"/g, '""') + '"'; }
 		return s;
 	}).join(',');
@@ -151,12 +152,12 @@ function writeCsvRow(cells) {
 
 // --- number normalisation ---------------------------------------------------------------------
 
-// Read a cell as a number if it plausibly is one, folding the Excel realities (doc 21 §6.5): a
+// Read a cell as a number if it plausibly is one, folding the Excel realities (doc 21 section 6.5): a
 // leading currency symbol, thousands separators, a parenthesised negative `(430)`, a trailing
 // percent, and both US (`1,234.56`) and European (`1.234,56`) grouping. Returns the machine value
 // as a string when confident, otherwise `null` (the cell is left as-is - text is never coerced).
 function parseNumberCell(raw) {
-	if (raw == null) { return null; }
+	if (raw === null || raw === undefined) { return null; }
 	let s = String(raw).trim();
 	if (s === '') { return null; }
 	let negative = false;
@@ -167,6 +168,7 @@ function parseNumberCell(raw) {
 	let percent = false;
 	if (/%$/.test(s)) { percent = true; s = s.slice(0, -1).trim(); }
 	// Strip a leading/trailing currency symbol and any surrounding spaces.
+	// allow-any-unicode-next-line
 	s = s.replace(/^\s*[$€£¥₹]\s?/, '').replace(/\s*[$€£¥₹]\s*$/, '').trim();
 	// A leading sign after symbol stripping.
 	if (/^[-+]/.test(s)) {
@@ -214,7 +216,7 @@ const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8,
 // ambiguous slash date (both <= 12) is read day-first only when `dayFirst` is set, else month-first
 // (US Excel default).
 function normaliseDateCell(raw, dayFirst = false) {
-	if (raw == null) { return null; }
+	if (raw === null || raw === undefined) { return null; }
 	const s = String(raw).trim();
 	if (s === '') { return null; }
 	// Already ISO.
@@ -261,7 +263,7 @@ function normaliseCell(raw, opts) {
 	if (num !== null) { return num; }
 	const date = normaliseDateCell(raw, opts && opts.dayFirst);
 	if (date !== null) { return date; }
-	return raw == null ? '' : String(raw);
+	return String(raw ?? '');
 }
 
 // --- CSV normalisation (raw file -> clean CSV) ------------------------------------------------
@@ -283,7 +285,7 @@ function normaliseCsv(buffer, opts) {
 // --- workbook extraction ----------------------------------------------------------------------
 
 // Extract each sheet of an xlsx/xls workbook to a clean comma-delimited CSV, normalising numbers
-// and dates on the way out (doc 22 §4). `buffer` is the workbook bytes; `xlsx` is the injected
+// and dates on the way out (doc 22 section 4). `buffer` is the workbook bytes; `xlsx` is the injected
 // SheetJS module (require('xlsx')) - injected so the engine stays testable without the binary lib.
 // Returns { sheets: [{ name, csv, rows, cols, warnings }] }. A sheet with merged header cells is a
 // NAMED limitation ("this sheet has merged headers - values may misalign"), never a silent misread.
@@ -298,7 +300,7 @@ function extractWorkbook(buffer, xlsx, opts) {
 		const range = xlsx.utils.decode_range(ws['!ref']);
 		const headerRow = range.s.r;
 		// A merge that touches the header row means the column headers do not line up 1:1 with the
-		// data columns - warn rather than silently misalign the values (doc 22 §4, doc 21 §6.5).
+		// data columns - warn rather than silently misalign the values (doc 22 section 4, doc 21 section 6.5).
 		if (merges.some(mg => mg.s.r <= headerRow && mg.e.r >= headerRow)) {
 			warnings.push('This sheet has merged header cells - values may misalign with their columns.');
 		} else if (merges.length) {
@@ -307,7 +309,7 @@ function extractWorkbook(buffer, xlsx, opts) {
 		// Read the grid as a matrix, then normalise each non-header cell.
 		const matrix = xlsx.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '', blankrows: false });
 		const cleaned = matrix.map((row, i) => (i === 0
-			? row.map(c => String(c == null ? '' : c).trim())
+			? row.map(c => String(c ?? '').trim())
 			: row.map(c => normaliseCell(c, opts))));
 		const cols = cleaned.reduce((max, r) => Math.max(max, r.length), 0);
 		// A "pivot-looking" sheet (a largely blank header band above a totals block) is common; we
@@ -337,7 +339,7 @@ function sheetFileName(name) {
 
 // --- PDF extraction ---------------------------------------------------------------------------
 
-// Extract the text of a PDF for use as read-only CONTEXT (doc 22 §4 - PDFs feed framing, never
+// Extract the text of a PDF for use as read-only CONTEXT (doc 22 section 4 - PDFs feed framing, never
 // value bindings). `buffer` is the PDF bytes; `PdfParse` is the injected pdf-parse `PDFParse` class.
 // A password-protected or corrupt PDF, and a scanned/image-only PDF that yields no text, each NAME
 // themselves unreadable (with a plain-words reason) rather than returning empty context. Returns

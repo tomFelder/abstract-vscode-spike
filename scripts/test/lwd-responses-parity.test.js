@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Golden-transcript parity for the Anthropic -> Codex Responses mapping (plan 51 §3 box 6).
+// Golden-transcript parity for the Anthropic -> Codex Responses mapping (plan 51 section 3 box 6).
 //
 // WHY THIS SUITE EXISTS. The pre-#120 parity test asserted against a mock somebody invented, and every
 // automated box in the plan 51 wave passed while NO real call could ever have succeeded: the stub honoured a
@@ -241,7 +241,7 @@ test('the RECORDED model refusal reaches the client in plain words and demotes t
 			servedText: served.json.content[0].text,
 		}, {
 			refusedStatus: 502,
-			refusedMessage: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+			refusedMessage: 'The \'gpt-5.6-sol\' model is not supported when using Codex with a ChatGPT account.',
 			solEntitled: false,
 			solAvailable: false,
 			solIsDefault: false,

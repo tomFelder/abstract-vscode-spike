@@ -124,7 +124,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'livingDocs.commentaryModel': {
 			type: 'string',
 			default: '',
-			description: localize('livingDocs.commentaryModel', "Model id used for narrative rewrites and the Strategy grader. Leave empty to use the default ({0}).", 'claude-opus-4-8'),
+			description: localize('livingDocs.commentaryModel', "Model id used for narrative rewrites and the Strategy grader. Leave empty to let the broker's catalogue choose, which is what the model picker in the composer sets. An id the active backend does not serve falls back to that backend's default rather than failing the call."),
 		},
 		'livingDocs.modelProxyUrl': {
 			type: 'string',
