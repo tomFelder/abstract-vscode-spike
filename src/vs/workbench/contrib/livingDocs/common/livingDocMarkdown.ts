@@ -468,6 +468,102 @@ function classify(chunk: string): LivingDocBlockType {
 	return 'paragraph';
 }
 
+// --- Body chunking (docs/30 section 2.1) ------------------------------------------------------------
+//
+// The ONE place a document body is cut into blocks. `parseLivingDoc` reads the block list off it, and the
+// differ (`livingDocDiffer.ts`) aligns against it - so a block the reader sees and a block the differ
+// pairs are the same thing by construction, not by two regexes that agree today and drift tomorrow.
+//
+// Two properties the old inline `split(/\r?\n[ \t]*\r?\n/)` could not give:
+//
+//  - EXACT OFFSETS. Every chunk carries its half-open `[start, end)` range in the string it was cut from,
+//    so a change's span can be stated in document coordinates and spliced back byte-exactly. A split-based
+//    chunker loses the arithmetic the moment it trims.
+//  - FENCED BLOCKS STAY WHOLE. A ``` fence containing a blank line used to shred into one block per
+//    paragraph inside it, which meant an edit to a code sample was proposed against half a code sample.
+//    A fence is one unit from its opening marker to its closing marker (or to the end of the body when it
+//    is never closed).
+//
+// Everything else keeps the shipped rule exactly: blocks are separated by blank lines, and a block's
+// trailing whitespace is not part of it.
+
+/** A blank line for chunking purposes - the shipped separator, matched literally. */
+const BLANK_LINE_RE = /^[ \t]*$/;
+
+/** An opening code fence: up to three leading spaces, then three or more backticks or tildes. */
+const FENCE_OPEN_RE = /^ {0,3}(?<marker>`{3,}|~{3,})/;
+
+/**
+ * One block of a document body, with the exact half-open `[start, end)` range it occupies in the string it
+ * was chunked from. `text` is always `body.slice(start, end)`; the whitespace BETWEEN chunks (the blank-line
+ * separators, the trailing newline) belongs to no chunk and is what a caller must treat as the seams.
+ */
+export interface IBodyChunk {
+	readonly start: number;
+	readonly end: number;
+	readonly text: string;
+}
+
+/**
+ * Cut a document body into blocks, preserving exact offsets. Headings, paragraphs, lists and tables split on
+ * blank lines (a tight list is one block, as it has always been - see {@link listItems} for sub-scoping);
+ * a fenced code block is one block regardless of what it contains.
+ */
+export function chunkDocBody(body: string): IBodyChunk[] {
+	const chunks: IBodyChunk[] = [];
+	let start = -1;
+	let end = -1;
+	let fence: string | undefined;
+
+	const flush = () => {
+		if (start >= 0) { chunks.push({ start, end, text: body.slice(start, end) }); }
+		start = -1;
+	};
+
+	let offset = 0;
+	while (offset < body.length) {
+		const newline = body.indexOf('\n', offset);
+		const lineEnd = newline < 0 ? body.length : newline;
+		const raw = body.slice(offset, lineEnd);
+		const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+
+		if (fence !== undefined) {
+			// Inside a fence nothing separates: a blank line is content, and only a matching closing marker
+			// (same character, at least as long, nothing after it) ends the block.
+			if (!BLANK_LINE_RE.test(line)) {
+				end = offset + line.replace(/\s+$/, '').length;
+				const closer = new RegExp(`^ {0,3}${fence[0] === '`' ? '`' : '~'}{${fence.length},}[ \t]*$`);
+				if (closer.test(line)) { fence = undefined; }
+			}
+		} else if (BLANK_LINE_RE.test(line)) {
+			flush();
+		} else {
+			if (start < 0) { start = offset; }
+			end = offset + line.replace(/\s+$/, '').length;
+			const opener = FENCE_OPEN_RE.exec(line);
+			if (opener) { fence = opener.groups!.marker; }
+		}
+
+		if (newline < 0) { break; }
+		offset = newline + 1;
+	}
+	flush();
+	return chunks;
+}
+
+// Token-overlap (Jaccard) similarity of two strings, 0..1: 1 = identical token sets, 0 = nothing in common.
+// Deterministic, no model. This is the ONE shipped implementation - the differ pairs blocks with it
+// (docs/30 section 2.1), `scopeBlockEdit` locates the list item an edit targets with it, and the service
+// relocates a prose claim against moved text with it. It used to exist three times.
+export function jaccardSimilarity(a: string, b: string): number {
+	const ta = new Set(a.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+	const tb = new Set(b.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+	if (ta.size === 0 || tb.size === 0) { return 0; }
+	let inter = 0;
+	for (const t of ta) { if (tb.has(t)) { inter++; } }
+	return inter / (ta.size + tb.size - inter);
+}
+
 function blockFor(chunk: string, index: number): ILivingDocBlock {
 	const type = classify(chunk);
 	const binds = extractBindLinks(chunk);
@@ -485,9 +581,8 @@ export function parseLivingDoc(text: string): ILivingDoc {
 
 	const blocks: ILivingDocBlock[] = [];
 	let index = 0;
-	for (const chunk of cleanBody.split(/\r?\n[ \t]*\r?\n/)) {
-		if (chunk.trim().length === 0) { continue; }
-		blocks.push(blockFor(chunk.replace(/\s+$/, ''), index++));
+	for (const chunk of chunkDocBody(cleanBody)) {
+		blocks.push(blockFor(chunk.text, index++));
 	}
 
 	const hasBinds = blocks.some(b => b.binds.length > 0);
@@ -706,16 +801,6 @@ function listItemContent(line: string): string {
 	return line.replace(/^(\s*)([-*+]|\d+[.)])\s+/, '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-// Jaccard token overlap of two strings, used to locate the single item an edit targets.
-function listTokenOverlap(a: string, b: string): number {
-	const ta = new Set(a.match(/[a-z0-9]+/g) ?? []);
-	const tb = new Set(b.match(/[a-z0-9]+/g) ?? []);
-	if (ta.size === 0 || tb.size === 0) { return 0; }
-	let inter = 0;
-	for (const t of ta) { if (tb.has(t)) { inter++; } }
-	return inter / (ta.size + tb.size - inter);
-}
-
 /**
  * Scope an edit to the single list item it targets. When `blockText` is a multi-item list and `quote` (the
  * model's quoted oldText, or the proposed newText when locating the changed item) clearly matches ONE item,
@@ -734,7 +819,7 @@ export function scopeBlockEdit(blockText: string, quote: string): { oldText: str
 	let bestScore = 0;
 	for (const item of items) {
 		const content = listItemContent(item.text);
-		const score = content === target ? 1 : (content.includes(target) || target.includes(content) ? 0.9 : listTokenOverlap(content, target));
+		const score = content === target ? 1 : (content.includes(target) || target.includes(content) ? 0.9 : jaccardSimilarity(content, target));
 		if (score > bestScore) { bestScore = score; best = item; }
 	}
 	if (best && bestScore >= 0.5 && best.text.trim() !== blockText.trim()) {

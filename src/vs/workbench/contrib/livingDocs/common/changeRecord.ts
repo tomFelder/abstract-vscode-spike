@@ -91,6 +91,14 @@ export interface IChangeAnchor {
 	readonly newText: string;
 }
 
+/**
+ * The three fields a splice actually reads: where, what is there now, what replaces it. Stated as its own
+ * type so anything shaped like an anchor can be spliced and classified without first being handed a
+ * `docUri` and a `baseRevision` it has no business knowing - the differ's hunks (`livingDocDiffer.ts`) are
+ * exactly this shape, and the caller that persists them supplies the document identity.
+ */
+export type ISplicePlacement = Pick<IChangeAnchor, 'span' | 'oldText' | 'newText'>;
+
 /** Why one anchor did not land. Extends the closed apply-failure vocabulary from invariant I1 (R2). */
 export type AnchorFailure =
 	| BlockApplyFailure
@@ -274,7 +282,7 @@ export function hashContent(text: string): string {
  * declared intent is stored beside this as advisory provenance; a mismatch between the two is a free
  * quality signal, which is why the host derives rather than believes.
  */
-export function deriveChangeClass(anchors: readonly IChangeAnchor[], baseLength: number): ChangeClass {
+export function deriveChangeClass(anchors: readonly ISplicePlacement[], baseLength: number): ChangeClass {
 	const changed = anchors.reduce((sum, a) => sum + Math.max(a.span.end - a.span.start, a.newText.length), 0);
 	return changed / Math.max(baseLength, 1) >= 0.6 ? 'rewrite' : 'targeted';
 }
@@ -374,7 +382,7 @@ export type SpliceResult = ISpliceApplied | ISpliceFailed;
  * splice never shifts a later anchor's offsets - the arithmetic post-condition invariant I6 asks for,
  * obtained by construction rather than by re-diffing afterwards.
  */
-export function spliceDoc(base: string, anchors: readonly IChangeAnchor[]): SpliceResult {
+export function spliceDoc(base: string, anchors: readonly ISplicePlacement[]): SpliceResult {
 	for (const anchor of anchors) {
 		if (anchor.span.start < 0 || anchor.span.end > base.length || anchor.span.start > anchor.span.end) {
 			return { ok: false, reason: 'block-gone' };
