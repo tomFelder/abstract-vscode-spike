@@ -1,0 +1,32 @@
+{
+	"id": "gen-MALFORMED000000000",
+	"object": "chat.completion",
+	"created": 1786521358,
+	"model": "openai/gpt-4.1-mini",
+	"choices": [
+		{
+			"index": 0,
+			"finish_reason": "tool_calls",
+			"message": {
+				"role": "assistant",
+				"content": "",
+				"tool_calls": [
+					{
+						"id": "call_or_MALFORMED01",
+						"type": "function",
+						"function": {
+							"name": "read_document",
+							"arguments": "{\"docId\": "
+						}
+					}
+				]
+			}
+		}
+	],
+	"usage": {
+		"prompt_tokens": 48,
+		"completion_tokens": 9,
+		"total_tokens": 57,
+		"cost": 0.00001
+	}
+}

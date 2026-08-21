@@ -1,0 +1,16 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-TOOLCALL0000000000","object":"chat.completion.chunk","created":1786521358,"model":"openai/gpt-4.1-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"Read"},"finish_reason":null}]}
+
+data: {"id":"gen-TOOLCALL0000000000","object":"chat.completion.chunk","created":1786521358,"model":"openai/gpt-4.1-mini","choices":[{"index":0,"delta":{"content":"ing pricing."},"finish_reason":null}]}
+
+data: {"id":"gen-TOOLCALL0000000000","object":"chat.completion.chunk","created":1786521358,"model":"openai/gpt-4.1-mini","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_or_TOOLCALL0001","type":"function","function":{"name":"read_document","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"gen-TOOLCALL0000000000","object":"chat.completion.chunk","created":1786521358,"model":"openai/gpt-4.1-mini","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"docId\""}}]},"finish_reason":null}]}
+
+data: {"id":"gen-TOOLCALL0000000000","object":"chat.completion.chunk","created":1786521358,"model":"openai/gpt-4.1-mini","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"pricing\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"gen-TOOLCALL0000000000","object":"chat.completion.chunk","created":1786521358,"model":"openai/gpt-4.1-mini","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":48,"completion_tokens":21,"total_tokens":69,"cost":0.000042}}
+
+data: [DONE]
+
