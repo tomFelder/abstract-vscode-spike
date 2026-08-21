@@ -286,7 +286,7 @@ test('cap path: metering accumulates, the $1/day cap pauses gracefully (200 paus
 			secondServed: 'served-by-openrouter',
 			thirdStatus: 200,
 			thirdPaused: 'pause',
-			thirdText: "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.",
+			thirdText: 'You\'ve used today\'s included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.',
 			healthPausedReason: 'budget-paused',
 			healthPausedOk: true,
 			includedAvailableWhilePaused: false,

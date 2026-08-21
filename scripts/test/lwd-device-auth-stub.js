@@ -53,9 +53,9 @@ function readBody(req) {
  */
 function createStubServer(opts = {}) {
 	const mode = opts.mode || process.env.STUB_MODE || 'instant';
-	const approveAfter = opts.approveAfter != null ? opts.approveAfter : Number.parseInt(process.env.STUB_APPROVE_AFTER || '2', 10);
-	const errorStatus = opts.status != null ? opts.status : Number.parseInt(process.env.STUB_STATUS || '400', 10);
-	const expiresInSec = opts.expiresInSec != null ? opts.expiresInSec : 3600;
+	const approveAfter = opts.approveAfter ?? Number.parseInt(process.env.STUB_APPROVE_AFTER || '2', 10);
+	const errorStatus = opts.status ?? Number.parseInt(process.env.STUB_STATUS || '400', 10);
+	const expiresInSec = opts.expiresInSec ?? 3600;
 	const email = opts.email || 'founder@example.com';
 	const accountId = opts.accountId || 'acct_stub_123';
 
@@ -92,7 +92,7 @@ function createStubServer(opts = {}) {
 				return json(errorStatus, { error: 'server_error', error_description: 'the sign-in server failed' });
 			}
 			if (mode === 'expired') {
-				// Signal via the textbook JSON error on a 200 (upstream-notes §5 fallback branch).
+				// Signal via the textbook JSON error on a 200 (upstream-notes section 5 fallback branch).
 				return json(200, { error: 'expired_token' });
 			}
 			if (mode === 'slow_down' && n === 1) {
@@ -159,7 +159,6 @@ if (require.main === module) {
 	server.listen(port, '127.0.0.1', () => {
 		const addr = server.address();
 		const actual = typeof addr === 'object' && addr ? addr.port : port;
-		// eslint-disable-next-line no-console
 		console.log(`[device-auth-stub] mode=${process.env.STUB_MODE || 'instant'} listening on http://127.0.0.1:${actual}`);
 	});
 }

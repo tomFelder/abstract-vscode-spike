@@ -39,21 +39,21 @@ const path = require('path');
 
 // --- constants (the public Codex CLI client + OpenAI's device-auth/OAuth/API endpoints) -----------------
 // These are the same public values the official Codex CLI uses for its "Sign in with ChatGPT" device flow
-// (upstream-notes §1-§2, §8). CLIENT_ID is a PUBLIC OAuth client (PKCE, no secret), so shipping the id is
+// (upstream-notes sections 1-2, 8). CLIENT_ID is a PUBLIC OAuth client (PKCE, no secret), so shipping the id is
 // expected and safe. The auth base is overridable via env so the whole flow runs against the local stub in
 // tests; the real sign-in needs the founder and is deferred (see the header).
 const CLIENT_ID = process.env.LWD_OPENAI_CLIENT_ID || 'app_EMoamEEZ73f0CkXaXp7hrann';
-// The issuer. Every device-auth + token URL is built from it (upstream-notes §2). LWD_OPENAI_AUTH_BASE is
+// The issuer. Every device-auth + token URL is built from it (upstream-notes section 2). LWD_OPENAI_AUTH_BASE is
 // the single override the broker points at scripts/test/lwd-device-auth-stub.js for automated validation.
 const AUTH_BASE = (process.env.LWD_OPENAI_AUTH_BASE || 'https://auth.openai.com').replace(/\/+$/, '');
-// The bespoke device-auth endpoints live under {issuer}/api/accounts (upstream-notes §3).
+// The bespoke device-auth endpoints live under {issuer}/api/accounts (upstream-notes section 3).
 const DEVICEAUTH_USERCODE_URL = `${AUTH_BASE}/api/accounts/deviceauth/usercode`;
 const DEVICEAUTH_TOKEN_URL = `${AUTH_BASE}/api/accounts/deviceauth/token`;
-// The redirect_uri the token exchange must echo for the DEVICE flow (upstream-notes §6) - not the loopback.
+// The redirect_uri the token exchange must echo for the DEVICE flow (upstream-notes section 6) - not the loopback.
 const DEVICEAUTH_REDIRECT_URI = `${AUTH_BASE}/deviceauth/callback`;
 // The ordinary OAuth token endpoint used for BOTH the code exchange (form-encoded) and refresh (JSON).
 const TOKEN_URL = `${AUTH_BASE}/oauth/token`;
-// The URL the human opens and types the user code into (upstream-notes §3b). No code-embedded variant.
+// The URL the human opens and types the user code into (upstream-notes section 3b). No code-embedded variant.
 const VERIFICATION_URL = `${AUTH_BASE}/codex/device`;
 // The scopes bound to the session server-side; recorded in the bundle for the contract's granted-scopes.
 const SCOPE = 'openid profile email offline_access api.connectors.read api.connectors.invoke';
@@ -61,14 +61,14 @@ const SCOPE = 'openid profile email offline_access api.connectors.read api.conne
 // The Codex Responses backend the subscription token is entitled to call. Overridable so a mock upstream
 // can stand in for it in the parity/forward tests.
 const RESPONSES_URL = process.env.LWD_OPENAI_RESPONSES_URL || 'https://chatgpt.com/backend-api/codex/responses';
-// The Codex model the subscription path serves by default (upstream-notes §10). Overridable. The current
+// The Codex model the subscription path serves by default (upstream-notes section 10). Overridable. The current
 // ChatGPT-sign-in Codex default is gpt-5.6-sol (OpenAI's "Power" preset at medium reasoning) - read live
 // from OpenAI's Codex docs on 3 Aug 2026, NOT training data (the gpt-5-codex name is several generations
 // stale). WP-D turns this into a ~/.abstract/models.json overlay so the next rename never needs a broker edit.
 const OPENAI_MODEL = process.env.LWD_OPENAI_MODEL || 'gpt-5.6-sol';
 
 // The models the "Sign in with ChatGPT" subscription can drive through the Codex Responses backend
-// (upstream-notes §10). STATIC capability list, not a live enumeration: the Codex OAuth bundle carries no
+// (upstream-notes section 10). STATIC capability list, not a live enumeration: the Codex OAuth bundle carries no
 // model-listing entitlement. These are the real current OpenAI Codex tiers (their slugs ARE gpt-5.6-{sol,
 // terra,luna}; "Sol / Terra / Luna" are OpenAI's own tier names, matching the fork's label convention from
 // issue #179). `default` MUST resolve to OPENAI_MODEL so an absent/invalid selection lands unchanged.
@@ -78,13 +78,13 @@ const OPENAI_MODELS = [
 	{ id: 'gpt-5.6-luna', label: 'Luna', default: false },
 ];
 
-// The device flow's 15-minute window (upstream-notes §3c/§4): the poll loop deadline and the expiresIn we
+// The device flow's 15-minute window (upstream-notes sections 3c/4): the poll loop deadline and the expiresIn we
 // report to the UI. The interval floor keeps us politer than a 0/absent upstream interval would.
 const DEVICE_EXPIRES_IN_SEC = 15 * 60;
 const MIN_INTERVAL_SEC = 5;
-// slow_down back-off increment (RFC 8628 §3.5 convention; upstream-notes §4).
+// slow_down back-off increment (RFC 8628 section 3.5 convention; upstream-notes section 4).
 const SLOW_DOWN_BUMP_SEC = 5;
-// Refresh a little BEFORE expiry so an in-flight call never races the boundary (upstream-notes §9: Codex
+// Refresh a little BEFORE expiry so an in-flight call never races the boundary (upstream-notes section 9: Codex
 // uses a 5-minute pre-expiry window).
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 // Fallback bundle lifetime when the access token is opaque (no JWT `exp` to read). Conservative: the real
@@ -95,12 +95,12 @@ const FALLBACK_EXPIRY_MS = 60 * 60 * 1000;
 // Model ids are DATA, not code (plan 51 WP-D): a config file at ~/.abstract/models.json overlays the built-in
 // gpt-5.6 defaults so the next OpenAI rename (as the 5.4->5.6 migration showed they do) never needs a broker
 // edit. There is NO live-list path for the ChatGPT-sign-in door: the Codex OAuth token carries no
-// model-listing entitlement (upstream-notes §10 - the Responses backend exposes no models route the token is
+// model-listing entitlement (upstream-notes section 10 - the Responses backend exposes no models route the token is
 // scoped for), so the overlay is the intended fix path, not a wire enumeration. Where a token ever DID permit
 // a live listing, that query would slot in ahead of the overlay inside listModels(); today it does not exist,
 // so the static list + overlay is the whole story and this comment is the honest record of why.
 //
-// Documented config shape (also in docs/plans/51-verify/upstream-notes.md §catalogue):
+// Documented config shape (also in docs/plans/51-verify/upstream-notes.md, the catalogue section):
 //   {
 //     "openai-oauth": {
 //       "default": "gpt-5.6-terra",                       // optional: which id is the default (must be in the list)
@@ -127,7 +127,6 @@ let _lastConfigWarning = '';
 function warnBadModelsConfig(message) {
 	if (message === _lastConfigWarning) { return; }
 	_lastConfigWarning = message;
-	// eslint-disable-next-line no-console
 	console.error(`[lwd-oauth] ${message}; using the built-in model catalogue`);
 }
 
@@ -276,7 +275,7 @@ async function probeModelEntitlement(modelId) {
 
 /**
  * Probe every id in the effective catalogue and cache the verdicts. Fired (not awaited) at broker start so
- * the picker tells the truth without blocking the cold-start floor plan 51 §3 box 1 proved (~0.5s to healthy).
+ * the picker tells the truth without blocking the cold-start floor plan 51 section 3 box 1 proved (~0.5s to healthy).
  */
 async function refreshEntitlements() {
 	if (!canServe()) { return null; }
@@ -314,7 +313,7 @@ function entitlementStale() {
  * The models the signed-in subscription can drive (issue #179), as DATA (plan 51 WP-D). Starts from the
  * built-in gpt-5.6 Codex family (OPENAI_MODELS) and overlays ~/.abstract/models.json when present + valid, so
  * a new/renamed id never needs a broker edit. There is no live-list query for this door (see the overlay
- * comment above / upstream-notes §10); this method stays async + Promise-returning so a future live source
+ * comment above / upstream-notes section 10); this method stays async + Promise-returning so a future live source
  * drops in here without changing the broker's call site. Returns fresh objects so a caller can never mutate
  * the module's list.
  *
@@ -382,7 +381,7 @@ function base64url(buf) {
 }
 
 /** Make one PKCE verifier/challenge pair (S256) per RFC 7636. Used only for the browser-redirect fallback;
- * the device flow's PKCE pair is minted server-side and returned on the successful poll (upstream-notes §3c). */
+ * the device flow's PKCE pair is minted server-side and returned on the successful poll (upstream-notes section 3c). */
 function makePkce() {
 	const verifier = base64url(crypto.randomBytes(32));
 	const challenge = base64url(crypto.createHash('sha256').update(verifier).digest());
@@ -456,7 +455,7 @@ function bundleHealth() {
 // --- JWT claims -> account id + expiry -------------------------------------------------------------------
 // The id_token/access_token are JWTs. We only READ the payload (never verify the signature here - the token
 // came straight from the token endpoint over TLS in this same process); a malformed token just yields no
-// value. The account claim (upstream-notes §9) names the billing account the Responses backend needs.
+// value. The account claim (upstream-notes section 9) names the billing account the Responses backend needs.
 
 /** Decode a JWT payload without verifying the signature. Returns {} on any malformed input. */
 function decodeJwtPayload(jwt) {
@@ -482,7 +481,7 @@ function emailFromIdToken(idToken) {
 	return String(payload.email || authClaim.email || profile.email || '');
 }
 
-/** Absolute expiry (ms) read from a token JWT's `exp` claim (upstream-notes §9), or a conservative fallback. */
+/** Absolute expiry (ms) read from a token JWT's `exp` claim (upstream-notes section 9), or a conservative fallback. */
 function expiryFromToken(accessToken) {
 	const payload = decodeJwtPayload(accessToken);
 	if (typeof payload.exp === 'number' && payload.exp > 0) { return payload.exp * 1000; }
@@ -509,7 +508,7 @@ function toBundle(json, previous) {
 
 /**
  * Exchange the server-minted authorization code (+ its server-minted PKCE verifier) for a token bundle and
- * persist it (upstream-notes §6). Form-encoded, redirect_uri = {issuer}/deviceauth/callback. Throws with a
+ * persist it (upstream-notes section 6). Form-encoded, redirect_uri = {issuer}/deviceauth/callback. Throws with a
  * plain-words message (and attaches upstream status/body) on any failure so the caller can surface it.
  */
 async function exchangeCode(code, verifier) {
@@ -536,7 +535,7 @@ async function exchangeCode(code, verifier) {
 }
 
 /**
- * Silent refresh (upstream-notes §7): swap the stored refresh_token for a fresh access_token and persist.
+ * Silent refresh (upstream-notes section 7): swap the stored refresh_token for a fresh access_token and persist.
  * The refresh request is JSON (not form-encoded) and carries no scope. On success returns the new bundle;
  * on failure throws so the caller surfaces the plain-words re-auth pause (only a real sign-in recovers).
  */
@@ -606,7 +605,7 @@ let pending = null;
 /** Sleep helper for the poll loop (injectable via the exported clock for tests). */
 let sleepImpl = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-/** POST the usercode request (upstream-notes §3a). Returns { deviceAuthId, userCode, interval }. */
+/** POST the usercode request (upstream-notes section 3a). Returns { deviceAuthId, userCode, interval }. */
 async function requestUserCode() {
 	const res = await fetch(DEVICEAUTH_USERCODE_URL, {
 		method: 'POST',
@@ -626,7 +625,7 @@ async function requestUserCode() {
 	}
 	const userCode = String(json.user_code || json.usercode || '');
 	const deviceAuthId = String(json.device_auth_id || '');
-	// interval may arrive as a string; floor to MIN_INTERVAL_SEC (upstream-notes §4).
+	// interval may arrive as a string; floor to MIN_INTERVAL_SEC (upstream-notes section 4).
 	const rawInterval = Number.parseInt(String(json.interval), 10);
 	const interval = Number.isFinite(rawInterval) && rawInterval > 0 ? Math.max(rawInterval, MIN_INTERVAL_SEC) : MIN_INTERVAL_SEC;
 	if (!userCode || !deviceAuthId) {
@@ -638,7 +637,7 @@ async function requestUserCode() {
 }
 
 /**
- * One poll of the device-token endpoint (upstream-notes §3c/§5). Returns a discriminated result:
+ * One poll of the device-token endpoint (upstream-notes sections 3c/5). Returns a discriminated result:
  *  - { kind: 'approved', authorizationCode, codeVerifier }
  *  - { kind: 'pending' }                          (HTTP 403/404, or JSON authorization_pending)
  *  - { kind: 'slow_down' }                        (JSON slow_down)
@@ -665,7 +664,7 @@ async function pollOnce(deviceAuthId, userCode) {
 		if (json && json.authorization_code && json.code_verifier) {
 			return { kind: 'approved', authorizationCode: String(json.authorization_code), codeVerifier: String(json.code_verifier) };
 		}
-		// A 200 may also carry a textbook RFC error field (stub + fallback path, upstream-notes §5).
+		// A 200 may also carry a textbook RFC error field (stub + fallback path, upstream-notes section 5).
 		const rfc = json && json.error;
 		if (rfc === 'authorization_pending') { return { kind: 'pending' }; }
 		if (rfc === 'slow_down') { return { kind: 'slow_down' }; }
@@ -674,7 +673,7 @@ async function pollOnce(deviceAuthId, userCode) {
 		return { kind: 'error', reason: 'the sign-in server returned an unexpected response', upstreamStatus: res.status, upstreamBody: text.slice(0, 500) };
 	}
 
-	// 403/404 = still pending (upstream-notes §3c). This is the real upstream's "keep polling" signal.
+	// 403/404 = still pending (upstream-notes section 3c). This is the real upstream's "keep polling" signal.
 	if (res.status === 403 || res.status === 404) { return { kind: 'pending' }; }
 
 	// Any other status is a hard failure.
