@@ -108,17 +108,30 @@ export interface IModelProviderStatus {
 export type ModelTier = 'included' | 'own-key';
 
 /**
- * One model the active backend can drive, for the composer's model picker (issue #179). `id` is the upstream
- * model id the broker sends; `label` is the product-facing name shown in the dropdown (e.g. "Included model",
- * or the ChatGPT tiers "Sol"/"Terra"/"Luna"); `isDefault` marks the backend's fallback, the one a request
- * lands on when it carries no (or a stale) selection; `tier` groups the popover (see ModelTier). Read from
- * the broker's /models endpoint.
+ * The door a model runs on (plan 55 WP-B3; the broker's `/models` `door` field). Since the broker began routing
+ * by model id rather than by a pre-chosen backend, this is not a label - it is where the request for this model
+ * will actually go, and therefore whose credits pay for it: `openai-oauth` is the user's own ChatGPT account,
+ * `openrouter` is the founder-funded included tier. Founder ruling 9.1 requires the picker to name it on every
+ * row, because the $1/day cap stays and signing in with an OpenAI account is the relief valve.
+ */
+export type ModelDoor = 'openai-oauth' | 'openrouter';
+
+/**
+ * One model the broker can drive, for the composer's model picker (issue #179). `id` is the upstream model id
+ * the broker sends; `label` is the product-facing name shown in the dropdown (e.g. "Included model", or the
+ * ChatGPT tiers "Sol"/"Terra"/"Luna"); `isDefault` marks the fallback, the one a request lands on when it
+ * carries no (or a stale) selection; `tier` groups the popover (see ModelTier); `door` names the provider on
+ * the row and is what the broker routes on (see ModelDoor); `available` is that door's live health, so a row
+ * whose door is signed out or unset reads honestly rather than looking selectable. Read from the broker's
+ * /models endpoint.
  */
 export interface IModelOption {
 	readonly id: string;
 	readonly label: string;
 	readonly isDefault: boolean;
 	readonly tier: ModelTier;
+	readonly door: ModelDoor;
+	readonly available: boolean;
 }
 
 /**

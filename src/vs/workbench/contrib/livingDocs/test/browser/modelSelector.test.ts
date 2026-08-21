@@ -22,7 +22,7 @@ import { IHostService } from '../../../../services/host/browser/host.js';
 import { IWorkbenchLayoutService } from '../../../../services/layout/browser/layoutService.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { NullAnalyticsService } from '../../common/analytics.js';
-import { modelHealthDotColour, modelStateWords } from '../../browser/reviewRailView.js';
+import { modelDoorWords, modelHealthDotColour, modelStateWords } from '../../browser/reviewRailView.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AMBER, GREEN, PAPER, RED } from '../../common/abstractTokens.js';
 
@@ -139,11 +139,11 @@ suite('livingDocs model selector (plan 47 47-b, issue #236)', () => {
 
 	// A service whose /healthz answers a fixed body, so a test can assert how a specific wire shape maps to the
 	// IModelProviderStatus the composer + Model Access read. Used to pin the signed-in-but-cannot-serve mapping.
-	function createServiceWithHealth(healthBody: object): LivingDocsService {
+	function createServiceWithHealth(healthBody: object, modelsBody: object = MODELS_BODY): LivingDocsService {
 		const requestService = {
 			request: async (options: { url?: string }) => {
 				const url = options.url ?? '';
-				const payload: object = url.includes('/healthz') ? healthBody : (url.includes('/models') ? MODELS_BODY : {});
+				const payload: object = url.includes('/healthz') ? healthBody : (url.includes('/models') ? modelsBody : {});
 				return { res: { statusCode: 200, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))) };
 			},
 		} as unknown as IRequestService;
@@ -186,6 +186,43 @@ suite('livingDocs model selector (plan 47 47-b, issue #236)', () => {
 		assert.deepStrictEqual(
 			{ provider: status.provider, signedIn: status.signedIn },
 			{ provider: 'chatgpt', signedIn: true },
+		);
+	});
+
+	// Plan 55 WP-B3 (founder ruling 9.1): the broker now routes by MODEL id, so each row's `door` is literally
+	// where that call goes and whose credits pay for it - which is what the picker labels every row with. The
+	// mapping has to survive an older broker too (the field is additive), so the fallbacks are pinned alongside:
+	// an absent `door` is derived from the tier (exact today - a door serves exactly one tier), and an absent
+	// `available` stays true so an older broker's rows do not all grey out.
+	test('the /models catalogue carries a door and its live availability per row, with honest fallbacks for an older broker', async () => {
+		const service = createServiceWithHealth(
+			{ ok: true, backend: 'openrouter', reason: 'ready', meters: true, signedIn: false, dailyBudgetUsd: 1 },
+			{
+				backend: 'openrouter', models: [
+					{ id: 'included-a', label: 'Included A', default: true, tier: 'included', door: 'openrouter', available: true },
+					// A signed-out OAuth door: the row is honestly unavailable rather than looking selectable.
+					{ id: 'own-a', label: 'Own A', default: false, tier: 'own-key', door: 'openai-oauth', available: false },
+					// An older broker: `backend` is `door`'s alias, and no `available` field at all.
+					{ id: 'legacy-alias', label: 'Legacy Alias', default: false, tier: 'own-key', backend: 'openai-oauth' },
+					// An older broker still: neither field, so the tier decides the door.
+					{ id: 'legacy-bare', label: 'Legacy Bare', default: false, tier: 'included' },
+				]
+			},
+		);
+		const catalogue = await service.getModelCatalogue();
+		assert.deepStrictEqual(catalogue.models.map(m => ({ id: m.id, door: m.door, available: m.available })), [
+			{ id: 'included-a', door: 'openrouter', available: true },
+			{ id: 'own-a', door: 'openai-oauth', available: false },
+			{ id: 'legacy-alias', door: 'openai-oauth', available: true },
+			{ id: 'legacy-bare', door: 'openrouter', available: true },
+		]);
+	});
+
+	// The words on every row (founder ruling 9.1). Short by design: they sit beside the model's own name.
+	test('every model row names its provider - the user own account vs the included tier', () => {
+		assert.deepStrictEqual(
+			{ ownAccount: modelDoorWords('openai-oauth'), included: modelDoorWords('openrouter') },
+			{ ownAccount: 'Your account', included: 'Included' },
 		);
 	});
 

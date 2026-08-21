@@ -33,7 +33,7 @@ import { applyFailureRailNote } from '../common/applyOutcome.js';
 import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
-import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelProvider, ModelReadiness, ModelTier, runBulkVerb } from '../common/livingDocs.js';
+import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelDoor, ModelProvider, ModelReadiness, ModelTier, runBulkVerb } from '../common/livingDocs.js';
 import { bulkVerbLabel, IBulkScope, IProposedChange, reviewFraming } from '../common/livingDocsModel.js';
 import { historyHtml } from './historyRender.js';
 import { ScreenEditorInput } from './screenEditorInput.js';
@@ -99,6 +99,17 @@ export function modelStateWords(readiness: ModelReadiness | undefined): string {
 		case 'unconfigured': return localize('livingDocs.model.state.unavailable', "Model unavailable");
 		default: return localize('livingDocs.model.state.checking', "Checking model…");
 	}
+}
+
+// The provider named on every model row (founder ruling 9.1, plan 55 WP-B3). Not decoration: since the broker
+// routes by model id, a row's door is literally where that call goes and therefore whose credits pay for it -
+// the user's own OpenAI account, or the founder-funded included tier under its daily cap. Kept short because it
+// sits beside the model's own name; the popover's section heading carries the longer form. Exported so the unit
+// test pins the door -> words mapping without a DOM.
+export function modelDoorWords(door: ModelDoor): string {
+	return door === 'openai-oauth'
+		? localize('livingDocs.model.door.ownAccount', "Your account")
+		: localize('livingDocs.model.door.included', "Included");
 }
 
 // How many Attach chips show before the "..." expander (#177). Four fits ~two lines in the 392px rail
@@ -2163,13 +2174,23 @@ export class ReviewRailView extends ViewPane {
 					const row = append(pop, $('button')) as HTMLButtonElement;
 					const isCurrent = model.id === this._selectedModelId;
 					row.style.cssText = `display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:30px;padding:0 9px;border:none;border-radius:7px;background:transparent;color:${INK.body};font:400 12.5px/1 ${FONT.sans};cursor:pointer;text-align:left`;
-					// Per-row health dot (P14.3): all of the active backend's models share its live readiness, so the
-					// dot honestly mirrors the broker state per row rather than fabricating per-model health.
+					// Per-row health dot (P14.3). Since plan 55 WP-B3 the broker routes by MODEL id, so a row's door
+					// can be down while the door serving right now is fine - the dot therefore reads that row's own
+					// `available` flag first and only falls back to the broker-wide readiness. A green dot on a row
+					// that would fail with `door_unavailable` the moment it was picked is exactly the kind of lie
+					// this surface exists not to tell.
 					const rdot = append(row, $('span'));
-					rdot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${modelHealthDotColour(readiness)}`;
+					rdot.style.cssText = `width:6px;height:6px;flex:none;border-radius:999px;background:${model.available ? modelHealthDotColour(readiness) : RED.base}`;
 					const name = append(row, $('span'));
 					name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
 					name.textContent = model.label;
+					// The provider, on EVERY row (founder ruling 9.1, doc 30 section 9): whose credits this model
+					// spends is the choice the ruling asks the picker to make explicit, and it is no longer implied
+					// by anything else on screen - the broker routes by model id, so the row's door IS where the
+					// call goes. Quiet meta text, so the model's own name still leads the row.
+					const provider = append(row, $('span'));
+					provider.style.cssText = `flex:none;font:400 10.5px/1 ${FONT.mono};letter-spacing:${TRACKING.sectionLabel};text-transform:uppercase;color:${INK.meta}`;
+					provider.textContent = modelDoorWords(model.door);
 					// The current model carries a check (P14.3); the tick space is reserved so rows align.
 					const check = append(row, $('span'));
 					check.style.cssText = `flex:none;font-size:12px;color:${INDIGO.base};width:12px;text-align:center;visibility:${isCurrent ? 'visible' : 'hidden'}`;
@@ -2184,6 +2205,23 @@ export class ReviewRailView extends ViewPane {
 					}));
 				}
 			}
+		}
+
+		// The signed-out encouragement (founder ruling 9.1). The $1/day included cap stays, and the OAuth door is
+		// the relief valve - so the moment the picker is open and no OpenAI account is connected, it offers the
+		// connection in one quiet line rather than waiting for the user to hit the cap and read an apology. It sits
+		// UNDER the rows, in meta type, with no fill and no icon: an invitation, not a nag (P7). Only while we
+		// actually know the answer is `false`; an unprobed `undefined` renders nothing rather than guessing.
+		if (this._signedIn === false) {
+			const connect = append(pop, $('button')) as HTMLButtonElement;
+			connect.style.cssText = `display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:7px 9px;border:none;border-top:1px solid ${HAIRLINE.soft};border-radius:0 0 7px 7px;background:transparent;color:${INK.secondary};font:400 11.5px/1.4 ${FONT.sans};cursor:pointer;text-align:left`;
+			connect.textContent = localize('livingDocs.model.connectOwnAccount', "Use your own OpenAI account - no daily limit");
+			connect.title = localize('livingDocs.model.connectOwnAccountTitle', "Connect your OpenAI account on the Model Access screen");
+			store.add(addDisposableListener(connect, 'mouseenter', () => { connect.style.background = INDIGO.tint; connect.style.color = INDIGO.base; }));
+			store.add(addDisposableListener(connect, 'mouseleave', () => { connect.style.background = 'transparent'; connect.style.color = INK.secondary; }));
+			// The SAME destination the composer's "Sign in with ChatGPT" fix-it link already uses, deliberately:
+			// one sign-in route, one behaviour, no second flow to keep in step with the first.
+			store.add(addDisposableListener(connect, 'click', () => { this._modelPopover.clear(); void this._openScreen('settings'); }));
 		}
 
 		// Dismiss on an outside pointer-down or Escape. The window is resolved from the control's own element so

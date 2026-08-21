@@ -33,7 +33,7 @@ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/edit
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { ChatGptSignInStage, IBoundSourceSummary, IChatGptSignInStart, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, REVIEW_RAIL_VIEW_ID, DOCUMENTS_VIEW_ID } from '../common/livingDocs.js';
+import { ChatGptSignInStage, IBoundSourceSummary, IChatGptSignInStart, IChatGptSignInStatus, IChatMessage, IChatStep, IExtractedSheet, IFanoutProgress, IFigureChange, IFileOpDependent, IImportOutcome, ILivingDocsPanelRequest, ILivingDocsService, ILivingDocSummary, IModelCatalogue, IModelOption, IModelProviderStatus, IOnboardingSurvey, IPdfContextResult, IPendingModelPrompt, IProjectAnswer, ISkillCheck, ISourceInfo, ISourcePayload, ISourcePeek, ISourcePeekRow, ISourceUsage, ISourceViewerData, ITemplateCard, ITemplateInfo, ITidyPlanItem, IWorkbookProvenance, IWorkbookUseResult, IWorkingSetDoc, LivingDocsPanelTab, ModelProvider, ModelReadiness, MODEL_UNAVAILABLE_MESSAGE, ModelDoor, ModelTier, REVIEW_RAIL_VIEW_ID, DOCUMENTS_VIEW_ID } from '../common/livingDocs.js';
 import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js';
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageAssetName } from '../common/livingDocAssets.js';
@@ -4865,13 +4865,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			let catalogue: IModelCatalogue = { backend: '', models: [] };
 			try {
 				const context = await this._request.request({ type: 'GET', url: `${this._proxyUrl()}/models`, callSite: 'livingDocs.models', disableCache: true }, CancellationToken.None);
-				const json = await asJson<{ backend?: string; models?: { id?: string; label?: string; default?: boolean; tier?: string }[] }>(context);
+				const json = await asJson<{ backend?: string; models?: { id?: string; label?: string; default?: boolean; tier?: string; door?: string; backend?: string; available?: boolean }[] }>(context);
 				if (json && Array.isArray(json.models)) {
 					const models: IModelOption[] = json.models
 						.filter(m => m && typeof m.id === 'string' && m.id.length > 0)
 						// `tier` is additive (issue #236): an absent/unknown tier coerces to `included` so an older broker
-						// still groups sensibly in the picker's popover (plan 47 pin 14).
-						.map(m => ({ id: m.id!, label: (typeof m.label === 'string' && m.label) ? m.label : m.id!, isDefault: m.default === true, tier: m.tier === 'own-key' ? 'own-key' : 'included' }));
+						// still groups sensibly in the picker's popover (plan 47 pin 14). `door` (plan 55 WP-B3) is read
+						// the same forgiving way: the broker publishes it per entry, `backend` is its older alias, and an
+						// absent one is derived from the tier - which is exact today, since a door serves exactly one tier.
+						// `available` defaults to true so an older broker's rows stay selectable rather than all greying out.
+						.map(m => {
+							const tier: ModelTier = m.tier === 'own-key' ? 'own-key' : 'included';
+							const named = m.door ?? m.backend;
+							const door: ModelDoor = named === 'openai-oauth' || named === 'openrouter'
+								? named
+								: (tier === 'own-key' ? 'openai-oauth' : 'openrouter');
+							return { id: m.id!, label: (typeof m.label === 'string' && m.label) ? m.label : m.id!, isDefault: m.default === true, tier, door, available: m.available !== false };
+						});
 					catalogue = { backend: typeof json.backend === 'string' ? json.backend : '', models };
 				}
 			} catch {
