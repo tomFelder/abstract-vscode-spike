@@ -2143,9 +2143,13 @@ export class ReviewRailView extends ViewPane {
 
 		const pop = append(box, $('div'));
 		// Anchored above the control, right-aligned to the composer box; card styling matches the mention picker.
-		// The width grew with the per-row provider column (plan 55 WP-B3): at the old 260px cap the invitation
-		// line wrapped mid-phrase and the provider tag crowded the model name.
-		pop.style.cssText = `position:absolute;right:9px;bottom:calc(100% + 4px);z-index:20;min-width:236px;max-width:304px;padding:5px;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:11px;box-shadow:${SHADOW.dialog}`;
+		// Anchored to BOTH sides of the composer box (`left` + `right`), exactly like the @mention picker below.
+		// The old `right:9px` + a min-width was a width the container never agreed to: the rail's scroll box
+		// clips its children, so once the per-row provider column pushed the popover past the composer's width
+		// at the DEFAULT rail size, the left edge was simply cut off - every availability dot and the first
+		// characters of every model name with it. A popover cannot be wider than the thing it is anchored
+		// inside, so it no longer claims a width at all; it takes the composer's, at every rail size.
+		pop.style.cssText = `position:absolute;left:9px;right:9px;bottom:calc(100% + 4px);z-index:20;padding:5px;background:${PAPER.card};border:1px solid ${HAIRLINE.strong};border-radius:11px;box-shadow:${SHADOW.dialog}`;
 		// Guard: swallow the mousedown that would otherwise bubble to the outside-dismiss listener below and
 		// close the popover before a row's click lands.
 		store.add(addDisposableListener(pop, 'mousedown', e => e.stopPropagation()));
