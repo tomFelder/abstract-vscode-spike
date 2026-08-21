@@ -47,6 +47,7 @@ import { LivingDocSourceInput } from './livingDocSourceInput.js';
 import { buildDemoReportMarkdown, DEMO_CSV, DEMO_CSV_NAME, DEMO_DOC_NAME, founderFeedbackLogLine, IFeedbackReport, onboardingStepLabel, OnboardingStep } from '../common/onboarding.js';
 import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutBudget.js';
 import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
+import { ChatDropReason, reconcileTurnReceipt } from '../common/turnReceipts.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
@@ -90,6 +91,13 @@ interface IRefreshPass {
 function newRefreshPass(): IRefreshPass {
 	return { fileBodies: new Map(), resolutions: new Map() };
 }
+
+// The result of trying to turn one parsed edit/insert into a queued proposal (I3, issue #303). A refusal
+// carries the REASON it was refused rather than a bare `undefined`, which is what lets the chat composer
+// reconcile "the model claimed 3 changes" against "1 landed" and name the two that did not.
+type IQueueOutcome =
+	| { readonly queued: true; readonly id: string; readonly label: string }
+	| { readonly queued: false; readonly reason: ChatDropReason };
 
 // Everything we hold for one open or discovered document.
 interface IDocState {
@@ -5994,27 +6002,39 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// about the doc; only when it WANTED to edit (returned any edit/insert) do we surface the named refusal so
 		// the user sees their dial was honoured, naming the doc and its policy. A `never` doc is still read normally.
 		const refused = this._policyForState(state) === 'never' && (json.edits.length > 0 || json.inserts.length > 0);
+		// Honest turn receipts (I3, issue #303): count what the reply CLAIMED, and record a named reason for every
+		// claim the queue refused, so the bubble can reconcile the two instead of printing success prose over a
+		// document nothing happened to.
+		const claimed = json.edits.length + json.inserts.length;
+		const drops: ChatDropReason[] = [];
 		if (!refused) {
 			for (const edit of json.edits) {
-				const queued = this._queueChatEdit(state, edit);
-				if (queued) { addStep({ label: `Proposed edit: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+				const outcome = this._queueChatEdit(state, edit);
+				if (outcome.queued) { addStep({ label: `Proposed edit: ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
+				else { drops.push(outcome.reason); }
 			}
 			for (const insert of json.inserts) {
-				const queued = this._queueChatInsert(state, insert);
-				if (queued) { addStep({ label: `Proposed new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+				const outcome = this._queueChatInsert(state, insert);
+				if (outcome.queued) { addStep({ label: `Proposed new content after ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
+				else { drops.push(outcome.reason); }
 			}
 		}
 		// What the bubble shows: a NAMED refusal when the doc's policy blocked an edit the model wanted; else the
 		// model's reply when it gave one; nothing when proposals carry the meaning (their cards speak); otherwise a
 		// neutral honest line. `parseChatResponse` already routed a non-JSON plain-text answer into `reply`, so a
 		// truthy `reply` is always real prose -- we NEVER surface the raw JSON envelope.
-		const content = refused
-			? docPolicyNeverRefusal(state.doc.title)
-			: (json.reply || (proposedIds.length ? '' : 'I do not have anything to add on that.'));
+		const spoken = json.reply || (proposedIds.length ? '' : 'I do not have anything to add on that.');
+		// Reconcile the claims against the receipts before the prose can reach the bubble (I3). A turn that claimed
+		// changes and queued NONE renders as a failure naming every reason (with an inline Retry, since re-asking
+		// is the useful move); a partial keeps the reply and appends the named shortfall.
+		const receipt = refused
+			? { content: docPolicyNeverRefusal(state.doc.title), isError: false }
+			: reconcileTurnReceipt({ claimed, queued: proposedIds.length, drops, reply: spoken });
 		return {
-			role: 'assistant', via: refused ? 'fallback' : 'model', content,
+			role: 'assistant', via: refused || receipt.isError ? 'fallback' : 'model', content: receipt.content,
 			steps: steps.length ? steps : undefined,
 			proposedIds: proposedIds.length ? proposedIds : undefined,
+			failed: receipt.isError || undefined,
 		};
 	}
 
@@ -6059,6 +6079,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const skippedByPolicy = states.filter(s => this._policyForState(s) === 'never');
 		const editableStates = states.filter(s => this._policyForState(s) !== 'never');
 		const skippedByPolicyDocIds = skippedByPolicy.map(s => s.uri.toString());
+		// The titles held back by the policy dial, so a reply that names one is reported as the policy skip it
+		// really is rather than as a document the run never heard of (I3, issue #303).
+		const skippedByPolicyTitles = new Set(skippedByPolicy.map(s => s.doc.title.trim().toLowerCase()));
 		const stateByTitle = new Map(editableStates.map(s => [s.doc.title.trim().toLowerCase(), s]));
 		const fanoutDocs: IFanoutDoc[] = editableStates.map(s => ({ id: s.uri.toString(), title: s.doc.title, body: sectionFor(s) }));
 		const budget = this._fanoutContextBudget();
@@ -6070,6 +6093,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 		const steps: IChatStep[] = [];
 		const proposedIds: string[] = [];
+		// The turn's receipts (I3, issue #303): how many edits/inserts the batches CLAIMED across the whole run,
+		// and a named reason for every claim that never became a proposal. Reconciled into the run's outcome below
+		// so a fan-out cannot report a clean run over changes it silently dropped.
+		let claimed = 0;
+		const drops: ChatDropReason[] = [];
 		const addStep = (step: IChatStep) => { steps.push(step); onStep(step); };
 		if (sourceFiles.length) { addStep({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
 
@@ -6145,15 +6173,27 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			// airtight (a document is only ever edited by the one batch that actually contained its body).
 			const batchByTitle = new Map(batch.docs.map(d => [d.title.trim().toLowerCase(), stateByTitle.get(d.title.trim().toLowerCase())]));
 			for (const entry of json.docs) {
-				const target = batchByTitle.get(entry.doc.trim().toLowerCase());
-				if (!target) { continue; }
+				const key = entry.doc.trim().toLowerCase();
+				const target = batchByTitle.get(key);
+				claimed += entry.edits.length + entry.inserts.length;
+				if (!target) {
+					// The reply named a document this batch cannot route to. Two different truths hide behind that
+					// (I3): the document was partitioned off by its own "never" dial, or the model simply named a
+					// title that was not in the run. Name whichever it actually was - a policy skip reported as a
+					// title miss would blame the model for a choice the human made.
+					const missed: ChatDropReason = skippedByPolicyTitles.has(key) ? 'policy' : 'title-miss';
+					for (let i = entry.edits.length + entry.inserts.length; i > 0; i--) { drops.push(missed); }
+					continue;
+				}
 				for (const edit of entry.edits) {
-					const queued = this._queueChatEdit(target, edit, sources, 'fan-out');
-					if (queued) { addStep({ label: `${target.doc.title}: ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+					const outcome = this._queueChatEdit(target, edit, sources, 'fan-out');
+					if (outcome.queued) { addStep({ label: `${target.doc.title}: ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
+					else { drops.push(outcome.reason); }
 				}
 				for (const insert of entry.inserts) {
-					const queued = this._queueChatInsert(target, insert, sources, 'fan-out');
-					if (queued) { addStep({ label: `${target.doc.title}: new content after ${queued.label}`, status: 'queued' }); proposedIds.push(queued.id); }
+					const outcome = this._queueChatInsert(target, insert, sources, 'fan-out');
+					if (outcome.queued) { addStep({ label: `${target.doc.title}: new content after ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
+					else { drops.push(outcome.reason); }
 				}
 			}
 		}
@@ -6167,14 +6207,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// clean run keeps the existing reply / neutral no-change line. The all-clear is reachable ONLY when there
 		// were no failures and no pause, so a model outage can never render as "no changes proposed".
 		const outcome = summarizeFanoutRun({ proposedCount: proposedIds.length, failedDocs, reply: anyReply, pausedMessage });
+		// Reconcile the run's claims against its receipts (I3, issue #303) on the paths `summarizeFanoutRun` reads
+		// as clean. An outage or a budget pause already speaks for itself with a named error / the cap message, and
+		// must not be talked over by a shortfall line about batches that never ran.
+		const receipt = outcome.isError || outcome.isPaused
+			? { content: outcome.content, isError: false }
+			: reconcileTurnReceipt({ claimed, queued: proposedIds.length, drops, reply: outcome.content });
 		return {
 			role: 'assistant',
-			via: outcome.isError || outcome.isPaused ? 'fallback' : 'model',
-			content: outcome.content,
+			via: outcome.isError || outcome.isPaused || receipt.isError ? 'fallback' : 'model',
+			content: receipt.content,
 			steps: steps.length ? steps : undefined,
 			proposedIds: proposedIds.length ? proposedIds : undefined,
 			failedDocs: outcome.failedDocs.length ? outcome.failedDocs : undefined,
 			paused: outcome.isPaused || undefined,
+			failed: receipt.isError || undefined,
 		};
 	}
 
@@ -6196,35 +6243,47 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	// Locate the prose block an edit targets (best token-overlap match under the named heading) and queue
-	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the
-	// block label when queued, else undefined.
-	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): { id: string; label: string } | undefined {
+	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the queued
+	// block label, else a NAMED drop reason - never a bare `undefined`, so the composer can reconcile what the
+	// model claimed against what actually landed and say which claims did not (I3, issue #303).
+	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): IQueueOutcome {
 		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - no proposal is
 		// ever created for it, in chat or fan-out. The caller names the refusal; here we simply make no change.
-		if (this._policyForState(state) === 'never') { return undefined; }
+		if (this._policyForState(state) === 'never') { return { queued: false, reason: 'policy' }; }
 		const newText = String(edit.newText ?? '').trim();
 		const oldText = String(edit.oldText ?? '').trim();
-		if (!newText || !oldText) { return undefined; }
+		if (!newText || !oldText) { return { queued: false, reason: 'empty' }; }
 		let best: ILivingDocBlock | undefined;
 		let bestScore = 0.5;
+		// Why a non-match happened, so the receipt can NAME it instead of reporting a bare "no match" (I3): the
+		// blocks this loop deliberately skips are still scored, and the best-scoring skip is remembered. A model
+		// that quoted a heading, or a figure paragraph, gets a specific, explainable refusal - not "I could not
+		// find that text", which reads like the document is at fault when the guard is doing its job.
+		let bestSkip: { score: number; reason: ChatDropReason } | undefined;
+		const noteSkip = (score: number, reason: ChatDropReason) => {
+			if (score > 0.5 && (!bestSkip || score > bestSkip.score)) { bestSkip = { score, reason }; }
+		};
 		for (const block of state.doc.blocks) {
-			if (block.type === 'heading') { continue; }
+			if (block.type === 'heading') { noteSkip(similarity(block.text, oldText), 'heading'); continue; }
 			// A wholly-bound block (a figure paragraph) is never chat-editable. A LIST block may carry a bind
 			// in one item while other items are plain prose the agent can revise, so lists stay candidates and
 			// the per-item bind guard below protects the bound item (decision-68 fix, plan 31 iter 1).
-			if (block.binds.length && listItems(block.text).length < 2) { continue; }
+			if (block.binds.length && listItems(block.text).length < 2) {
+				noteSkip(similarity(scopeBlockEdit(block.text, oldText).oldText, oldText), 'bind-guard');
+				continue;
+			}
 			// Score against the item the edit targets, not the whole block, so a single-item edit to a long
 			// list can still select that list block (the whole-list token set otherwise dilutes the match).
 			const score = similarity(scopeBlockEdit(block.text, oldText).oldText, oldText);
 			if (score > bestScore) { bestScore = score; best = block; }
 		}
-		if (!best) { return undefined; }
+		if (!best) { return { queued: false, reason: bestSkip?.reason ?? 'no-match' }; }
 		// Anchor the edit at the targeted list item's boundary (or the whole block for prose). Storing the
 		// scoped `oldText` is what makes approve splice just this item and keep its siblings byte-identical.
 		const scoped = scopeBlockEdit(best.text, oldText);
 		// Never touch a bound figure: if the targeted range still carries a bind link, skip this edit.
-		if (extractBindLinks(scoped.oldText).length) { return undefined; }
-		if (scoped.oldText.trim() === newText) { return undefined; }
+		if (extractBindLinks(scoped.oldText).length) { return { queued: false, reason: 'bind-guard' }; }
+		if (scoped.oldText.trim() === newText) { return { queued: false, reason: 'no-op' }; }
 		const label = this._blockLabel(state.doc, best.id);
 		const id = generateUuid();
 		const grounding = this._resolveSourceGrounding(edit.sourceQuote, edit.sourceLine, sourceText);
@@ -6245,7 +6304,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		};
 		this._pending.push(change);
 		this._captureProposalCreated(change, source);
-		return { id, label };
+		return { queued: true, id, label };
 	}
 
 	// Resolve the source grounding for a fan-out change (plan 23.4, decision #77): keep the model's
@@ -6264,12 +6323,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Queue a generative insertion: brand-new Markdown content (a list, a section) to be added after the
 	// named heading (best fuzzy match; empty/unknown -> end of document). No oldText - the inline diff
-	// renders it all-additions, and approve splices a new block into the document.
-	private _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): { id: string; label: string } | undefined {
+	// renders it all-additions, and approve splices a new block into the document. Like `_queueChatEdit`,
+	// a refusal comes back NAMED so the composer can reconcile the turn's claims against its receipts (I3).
+	private _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): IQueueOutcome {
 		// Policy gate (issue #257): a "Never change this doc" document accepts no generated inserts either.
-		if (this._policyForState(state) === 'never') { return undefined; }
+		if (this._policyForState(state) === 'never') { return { queued: false, reason: 'policy' }; }
 		const newText = String(insert.newText ?? '').trim();
-		if (!newText) { return undefined; }
+		if (!newText) { return { queued: false, reason: 'empty' }; }
 		const afterHeading = String(insert.afterHeading ?? '').trim();
 		let afterBlockId = '';
 		let label = 'the end';
@@ -6303,7 +6363,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		};
 		this._pending.push(change);
 		this._captureProposalCreated(change, source);
-		return { id, label };
+		return { queued: true, id, label };
 	}
 
 	private _parseMentions(resource: URI, text: string): string[] {
