@@ -38,6 +38,13 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
+// Both upstream SSE readers decode their byte chunks through a StringDecoder rather than
+// `chunk.toString('utf8')` (issue #348). A TCP chunk boundary can land in the MIDDLE of a multi-byte UTF-8
+// sequence; `toString` on the partial sequence yields U+FFFD and the following chunk decodes its tail as more
+// replacement characters, so a single unlucky packet split silently corrupts streamed prose and tool arguments
+// (an em dash, a curly quote, an accent, any emoji). StringDecoder holds the incomplete sequence back until its
+// remaining bytes arrive, which is exactly the fix and costs nothing on the common whole-character chunk.
+const { StringDecoder } = require('string_decoder');
 const { SpendMeter } = require('./lwd-spend-meter.js');
 const openaiOAuth = require('./lwd-openai-oauth.js');
 const openrouterModels = require('./lwd-openrouter-models.js');
@@ -89,6 +96,14 @@ function openRouterDefaultModel() {
 // with a half-finished JSON body the renderer then fails to parse. Raised so the default errs towards a
 // complete answer; a caller that wants a tighter cap still says so and is honoured verbatim.
 const DEFAULT_MAX_TOKENS = 4096;
+
+// The lanes a caller may declare on /v1/messages via `purpose` (plan 55 WP-B3, doc 30 section 2.2). `plan` is
+// the turn that reads the documents and proposes; `apply` is the turn that authors a body or expands a segment
+// list; `chat` is a conversational reply that proposes nothing. ADVISORY at this stage - the field is validated,
+// stripped before either door renders its upstream body, and stamped into the `model_spend` audit so per-lane
+// cost is measurable. Per-lane model defaults, output caps and reasoning effort are designed against that
+// evidence LATER; nothing routes on this today, deliberately, so no behaviour rides on an unmeasured guess.
+const PURPOSES = new Set(['plan', 'apply', 'chat']);
 
 // Bound the request body so a runaway client cannot exhaust memory; model calls here are tiny.
 const MAX_BODY_BYTES = 1 * 1024 * 1024;
@@ -669,6 +684,9 @@ async function openRouterForwardStream(req, res) {
 	// caller can meter the streamed call with real numbers where available.
 	const captured = { usage: undefined };
 	const tools = createToolStream(res);
+	// Decode bytes -> text through a StringDecoder so a multi-byte character split across two TCP chunks is
+	// reassembled rather than mangled into U+FFFD (issue #348).
+	const decoder = new StringDecoder('utf8');
 	let buf = '';
 	const endStream = () => {
 		if (res.writableEnded || res.destroyed) { return; }
@@ -681,7 +699,7 @@ async function openRouterForwardStream(req, res) {
 	};
 	return await new Promise(resolve => {
 		nodeStream.on('data', chunk => {
-			buf += chunk.toString('utf8');
+			buf += decoder.write(chunk);
 			let nl;
 			while ((nl = buf.indexOf('\n')) >= 0) {
 				const line = buf.slice(0, nl).trim();
@@ -824,10 +842,13 @@ async function readResponsesStream(nodeStream, handlers = {}) {
 	// Every function-call event carries the item's position in the output array; that is the stable key across
 	// `output_item.added`, the argument deltas and `output_item.done`.
 	const keyOf = j => String(j.output_index !== undefined ? j.output_index : (j.item_id || j.call_id || ''));
+	// Same StringDecoder rule as the openrouter reader: a chunk boundary inside a multi-byte character must not
+	// corrupt the delta it lands in (issue #348).
+	const decoder = new StringDecoder('utf8');
 	let buf = '';
 	let completed;
 	for await (const chunk of nodeStream) {
-		buf += chunk.toString('utf8');
+		buf += decoder.write(chunk);
 		let nl;
 		while ((nl = buf.indexOf('\n')) >= 0) {
 			const line = buf.slice(0, nl).trim();
@@ -1081,19 +1102,65 @@ const backends = {
 };
 
 /**
+ * Which doors are UP right now - an availability input, not a routing decision (plan 55 WP-B3, doc 30 section
+ * 2.2). `openai-oauth` is up when a bundle is stored AND can serve (valid, or expired but refreshable, decided
+ * from the bundle alone with no network); `openrouter` is up when a key is present. Deliberately NOT gated on
+ * the daily budget: a spent cap is a different, gentler state that the request path answers with the
+ * plain-words cap message (capReached / writeCapStream), never with a door-is-down error.
+ * @returns {{ 'openai-oauth': boolean; openrouter: boolean }}
+ */
+function doorAvailability() {
+	return {
+		'openai-oauth': backends['openai-oauth'].isConfigured() && openaiOAuth.canServe(),
+		openrouter: backends.openrouter.isConfigured(),
+	};
+}
+
+/**
  * Choose the backend for THIS moment (plan 51 WP-C). Forced mode honours LWD_BACKEND exactly (dev override).
  * Dynamic mode (the default) prefers `openai-oauth` whenever the OAuth bundle can serve - valid, or expired but
  * refreshable, decided by lwd-openai-oauth.canServe() from the bundle alone (no network) - otherwise falls back
  * to `openrouter`. Pure and synchronous, so every request re-decides from live state: a mid-session sign-in or a
  * bundle deletion takes effect on the next call with no restart. This is the fix for #120 (backend no longer
- * fixed at spawn). Selection happens once per request, at the start; a chosen backend that then fails upstream
- * surfaces its honest error - there is deliberately NO mid-request cross-backend retry here.
+ * fixed at spawn).
+ *
+ * DEMOTED in plan 55 WP-B3 (doc 30 section 2.2): this is no longer the thing that picks the serving door when a
+ * request NAMES a model. The merged catalogue makes the model id imply the door, so a planner call on the OAuth
+ * door and an apply call on the included door are routable within one turn - which they were not while the door
+ * was chosen before the model. selectBackend() now answers only the narrower question it can honestly answer:
+ * which door would serve a call that named NO model (and which door /healthz and /models should point at). A
+ * chosen backend that then fails upstream still surfaces its honest error - there is deliberately NO
+ * mid-request cross-backend retry here.
  */
 function selectBackend() {
 	if (BACKEND_MODE === 'forced') {
 		return backends[BACKEND_OVERRIDE] || backends.openrouter;
 	}
 	return openaiOAuth.canServe() ? backends['openai-oauth'] : backends.openrouter;
+}
+
+// Per-model door overrides from ~/.abstract/models.json (plan 55 WP-B3). The merged catalogue prefers the OAuth
+// door on a collision - an id both doors offer runs on the user's own ChatGPT credits rather than the founder's
+// budget - and this map is the escape hatch when that is the wrong call for a particular model:
+//
+//   { "doors": { "openai/gpt-4.1": "openrouter" } }
+//
+// Shares the file (and the file's forgiving-read rules) with the two per-door `models` slices already there. A
+// missing file, a missing `doors` slice, or a malformed one all degrade silently to "no overrides"; an entry
+// naming a door that does not exist is skipped rather than poisoning the map. Read fresh per merge, like every
+// other config read here, so editing the file takes effect without a broker restart.
+function readDoorOverrides() {
+	/** @type {Record<string, string>} */
+	const out = {};
+	let parsed;
+	try { parsed = JSON.parse(fs.readFileSync(openrouterModels.MODELS_CONFIG_PATH, 'utf8')); }
+	catch { return out; }
+	const slice = parsed && typeof parsed === 'object' ? parsed.doors : undefined;
+	if (!slice || typeof slice !== 'object') { return out; }
+	for (const [id, door] of Object.entries(slice)) {
+		if (typeof id === 'string' && id && typeof door === 'string' && backends[door]) { out[id] = door; }
+	}
+	return out;
 }
 
 // --- model listing (issue #179) -----------------------------------------------------------------------
@@ -1133,14 +1200,28 @@ async function modelsForBackend(backend) {
 // highlight the live door without re-deriving the selection logic. This is purely ADDITIVE over the prior
 // single-backend shape: id/label/default/tier are unchanged, so an older renderer keeps working; the response
 // still carries a top-level `backend` naming the serving door for backward compatibility.
+// THE MODEL ID IMPLIES THE DOOR (plan 55 WP-B3, doc 30 section 2.2). Since this catalogue is keyed by id, the
+// request path can route by the model the caller named instead of asking selectBackend() first - so one turn can
+// plan on the OAuth door and apply on the included door, and the included-tier picker stops being decorative
+// while a ChatGPT bundle is signed in. Two additive fields carry that: `door` (the canonical name for the door
+// an id runs on - `backend` remains as its backward-compatible alias) and `validated` (whether a human has
+// actually watched this model do the job: the curated flag on the included door, the wire-established
+// entitlement verdict on the OAuth door).
+//
+// COLLISIONS. An id offered by both doors resolves to ONE entry, because a duplicate row is a picker that asks
+// the user to choose between two identical labels and a router with no answer. The OAuth door wins by default -
+// that call spends the user's own ChatGPT credits rather than the founder's budget, which is founder ruling 9.1
+// read literally. `~/.abstract/models.json` -> `doors` overrides it per id (readDoorOverrides above).
 async function mergedModels() {
 	const serving = selectBackend();
+	const doorUp = doorAvailability();
 	// The metered fallback is unavailable while its daily cap is spent, mirroring /healthz's `budget-paused`
 	// reason - so the picker's included row honestly greys out for the rest of the day, not just when key-less.
-	const openrouterAvailable = backends.openrouter.isConfigured() && !spendMeter.isOverBudget();
-	const oauthAvailable = backends['openai-oauth'].isConfigured() && openaiOAuth.canServe();
-	const availabilityFor = name => (name === 'openai-oauth' ? oauthAvailable : openrouterAvailable);
-	const out = [];
+	// (The pin path uses doorUp instead, which excludes the cap: a spent budget pauses in plain words.)
+	const availabilityFor = name => (name === 'openai-oauth' ? doorUp['openai-oauth'] : doorUp.openrouter && !spendMeter.isOverBudget());
+	const overrides = readDoorOverrides();
+	/** @type {Map<string, any>} */
+	const byId = new Map();
 	for (const name of ['openai-oauth', 'openrouter']) {
 		const list = await modelsForBackend(backends[name]);
 		for (const m of list) {
@@ -1148,10 +1229,71 @@ async function mergedModels() {
 			// (plan 51 founder smoke: gpt-5.6-sol exists in the docs but no ChatGPT account may call it). An
 			// unverified model (`entitled: null`) stays available - we only ever demote on a proven refusal.
 			const available = availabilityFor(name) && m.entitled !== false;
-			out.push({ ...m, backend: name, available, serving: serving.name === name });
+			// `validated` is per-door truth, not a guess: the included door reports its curated flag, the OAuth
+			// door reports a PROVEN entitlement (an unverified `entitled: null` is not a validation).
+			const validated = name === 'openai-oauth' ? m.entitled === true : m.validated === true;
+			const entry = { ...m, backend: name, door: name, validated, available, serving: serving.name === name };
+			const existing = byId.get(m.id);
+			// First door to claim an id keeps it (the loop runs OAuth first); a `doors` override hands it over.
+			if (!existing || overrides[m.id] === name) { byId.set(m.id, entry); }
 		}
 	}
-	return out;
+	return [...byId.values()];
+}
+
+/**
+ * Resolve the door for a request from the model it named (plan 55 WP-B3). Returns the merged catalogue entry
+ * when the id is one BOTH doors' catalogues know, otherwise undefined - an absent or stale id is not a pin and
+ * falls back to selectBackend() + that door's own default, exactly as before.
+ * @param {string|undefined} requested
+ * @param {{ id: string }[]} merged
+ */
+function pinnedEntry(requested, merged) {
+	if (typeof requested !== 'string' || !requested) { return undefined; }
+	return merged.find(m => m.id === requested);
+}
+
+// The typed failure for a pinned model whose door is down or signed out (plan 55 WP-B3; doc 30 section 2.2:
+// "loud failure - no silent cross-door substitution, ever, because that is the F1 bug class this branch just
+// fixed"). Serving the request on the OTHER door would answer in a different model's voice, on a different
+// budget, without saying so - which is precisely how #120 hid for weeks. So the lane pauses and names itself.
+const DOOR_WORDS = {
+	// eslint-disable-next-line local/code-no-unexternalized-strings -- a Node script has no nls; user-facing prose.
+	'openai-oauth': "your OpenAI account, which isn't signed in right now",
+	// eslint-disable-next-line local/code-no-unexternalized-strings -- a Node script has no nls; user-facing prose.
+	openrouter: "the included tier, which isn't set up right now",
+};
+function doorUnavailableMessage(model, door) {
+	const words = DOOR_WORDS[door] || door;
+	const alternative = door === 'openai-oauth'
+		// eslint-disable-next-line local/code-no-unexternalized-strings -- a Node script has no nls; user-facing prose.
+		? "Sign in again, or pick an included model."
+		// eslint-disable-next-line local/code-no-unexternalized-strings -- a Node script has no nls; user-facing prose.
+		: "Pick a model from your OpenAI account instead.";
+	return `${model} runs on ${words}. ${alternative}`;
+}
+function doorUnavailable(model, door) {
+	return {
+		status: 503,
+		contentType: 'application/json',
+		text: JSON.stringify({
+			type: 'error',
+			error: { type: 'door_unavailable', model, door, message: doorUnavailableMessage(model, door) },
+		}),
+	};
+}
+// The streamed form. The typed `error` event carries the machine-readable verdict (the renderer's SSE parser
+// ignores event types it does not know, so this is additive), and the prose that follows uses the SAME
+// paused-run shape as the cap and re-auth messages - so a person sees an honest sentence and the run pauses via
+// D15 with its proposals intact, rather than a stream that ends having said nothing.
+function writeDoorUnavailableStream(res, model, door) {
+	const message = doorUnavailableMessage(model, door);
+	writeSseHead(res);
+	res.write(sseEvent('error', { type: 'error', error: { type: 'door_unavailable', model, door, message } }));
+	res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: message } }));
+	res.write(sseEvent('message_delta', { type: 'message_delta', delta: { stop_reason: 'pause' } }));
+	res.write(sseEvent('message_stop', { type: 'message_stop' }));
+	res.end();
 }
 
 // The default model id for a backend's list (the entry flagged default, else the first). Used to resolve an
@@ -1192,7 +1334,7 @@ function forLog(value) {
 // return whether the day's included usage is now spent. Not called for a non-metering backend (a user's
 // own subscription is not the founder's budget). Cost uses real API numbers where present, an honest
 // estimate otherwise (see openRouterCost).
-function meterCall(backend, usage, model) {
+function meterCall(backend, usage, model, purpose) {
 	if (!backend.meters) { return; }
 	const { costUsd, estimated } = openRouterCost(usage);
 	const outcome = spendMeter.charge(costUsd);
@@ -1201,6 +1343,10 @@ function meterCall(backend, usage, model) {
 		ts: new Date().toISOString(),
 		provider: backend.name,
 		model: model || openRouterDefaultModel(),
+		// The caller's declared lane (plan 55 WP-B3). Advisory: it steers nothing today, it is stamped so the
+		// spend log can answer "what is the budget actually going on" per lane before any per-lane policy is
+		// designed against it. Absent when the caller declared none - never guessed.
+		purpose: purpose || undefined,
 		cost: Number(costUsd.toFixed(6)),
 		cost_estimated: estimated,
 		daily_total: Number(outcome.dailyTotalUsd.toFixed(6)),
@@ -1218,21 +1364,59 @@ async function forwardMessages(req, res) {
 		sendJson(res, 400, { type: 'error', error: { type: 'proxy_error', message: 'invalid request body' } });
 		return;
 	}
-	// Pick the door for THIS request (plan 51 WP-C): dynamic mode prefers a servable ChatGPT bundle, else the
-	// included fallback; forced mode honours LWD_BACKEND. Chosen once, here, at request start - a forward that
-	// then fails upstream returns its honest error, never a silent retry on the other door (see selectBackend).
-	const backend = selectBackend();
 	const streaming = parsed.stream === true;
-	// Resolve the caller's optional `model` against the active backend's list (issue #179): an absent, unknown,
-	// or stale-persisted id falls back to the backend default rather than 500ing. The resolved id is stamped
-	// onto the parsed request so the backend forwarders use it, and logged so the E2E can prove which model a
-	// call actually ran on. Load-bearing on BOTH doors since plan 53: openai-oauth makes it the Responses
-	// request's `model`, and openrouter forwards it upstream instead of discarding it for a hardcoded id.
+	// The caller's declared lane (plan 55 WP-B3, doc 30 section 2.2). ADVISORY ONLY: nothing routes on it yet -
+	// it is validated, stripped from the body before either door renders its upstream request, and stamped into
+	// the spend audit so per-lane cost is measurable before any per-lane policy is designed. An unknown value is
+	// dropped rather than echoed, so a typo can never reach an audit record or a log line.
+	const purpose = PURPOSES.has(parsed.purpose) ? parsed.purpose : undefined;
+	delete parsed.purpose;
+	// Resolve the caller's optional `model` against the catalogue (issue #179): an absent, unknown, or
+	// stale-persisted id falls back to a door default rather than 500ing. The resolved id is stamped onto the
+	// parsed request so the backend forwarders use it, and logged so the E2E can prove which model a call
+	// actually ran on. Load-bearing on BOTH doors since plan 53: openai-oauth makes it the Responses request's
+	// `model`, and openrouter forwards it upstream instead of discarding it for a hardcoded id.
 	const requestedModel = typeof parsed.model === 'string' ? parsed.model : undefined;
-	const models = await modelsForBackend(backend);
-	const resolvedModel = resolveRequestedModel(requestedModel, models);
+	// Pick the door for THIS request. Since plan 55 WP-B3 the MODEL decides it whenever the caller named one the
+	// merged catalogue knows (doc 30 section 2.2) - so a planner call and an apply call in the same turn can land
+	// on different doors, and the included-tier picker is no longer decorative while ChatGPT is signed in. Three
+	// cases, in order:
+	//
+	//   1. Forced mode (LWD_BACKEND) - the dev override still pins the door outright, and the model resolves
+	//      within it. This is the one place a named model does NOT choose the door, deliberately: the whole
+	//      point of the override is to exercise one door.
+	//   2. A pinned model - its catalogue entry names the door. If that door is down or signed out we FAIL,
+	//      loudly and typed (door_unavailable), rather than answering on the other door in a different model's
+	//      voice on a different budget. That silent substitution is the F1 bug class this branch just fixed.
+	//   3. No model, or an id no door offers - availability picks the door (selectBackend) and that door's own
+	//      catalogue picks the model, exactly as before. Note the fallback in case 2 stays WITHIN the pinned
+	//      door: a known-refused id (entitled:false) lands on its own door's default, never across.
+	let backend;
+	let resolvedModel;
+	if (BACKEND_MODE === 'forced') {
+		backend = selectBackend();
+		resolvedModel = resolveRequestedModel(requestedModel, await modelsForBackend(backend));
+	} else {
+		const pinned = pinnedEntry(requestedModel, await mergedModels());
+		if (pinned) {
+			backend = backends[pinned.door];
+			if (!doorAvailability()[pinned.door]) {
+				console.log(`[lwd-proxy] /v1/messages door_unavailable model=${forLog(requestedModel)} door=${pinned.door}`);
+				if (streaming) { writeDoorUnavailableStream(res, requestedModel, pinned.door); return; }
+				const failure = doorUnavailable(requestedModel, pinned.door);
+				setCors(res, req);
+				res.writeHead(failure.status, { 'content-type': failure.contentType });
+				res.end(failure.text);
+				return;
+			}
+			resolvedModel = resolveRequestedModel(requestedModel, await modelsForBackend(backend));
+		} else {
+			backend = selectBackend();
+			resolvedModel = resolveRequestedModel(requestedModel, await modelsForBackend(backend));
+		}
+	}
 	parsed.model = resolvedModel;
-	console.log(`[lwd-proxy] /v1/messages backend=${backend.name} requested=${requestedModel === undefined ? 'null' : JSON.stringify(forLog(requestedModel))} resolved=${resolvedModel}`);
+	console.log(`[lwd-proxy] /v1/messages backend=${backend.name} requested=${requestedModel === undefined ? 'null' : JSON.stringify(forLog(requestedModel))} resolved=${resolvedModel} purpose=${purpose || 'null'}`);
 	// Budget gate (metered backends only): if the day's included usage is already spent, do NOT call the
 	// model - return the plain-words cap message so the renderer pauses the run via D15 and keeps proposals.
 	if (backend.meters && spendMeter.isOverBudget()) {
@@ -1247,12 +1431,12 @@ async function forwardMessages(req, res) {
 	}
 	if (streaming) {
 		const { usage } = await backend.forwardStream(parsed, res);
-		meterCall(backend, usage, resolvedModel);
+		meterCall(backend, usage, resolvedModel, purpose);
 		return;
 	}
 	const result = await backend.forward(body, parsed);
 	// Only meter a successful model call (a proxy/backend error did not spend the founder's budget).
-	if (result.status === 200) { meterCall(backend, result.usage, resolvedModel); }
+	if (result.status === 200) { meterCall(backend, result.usage, resolvedModel, purpose); }
 	setCors(res, req);
 	res.writeHead(result.status, { 'content-type': result.contentType });
 	res.end(result.text);
@@ -1663,13 +1847,16 @@ const server = http.createServer((req, res) => {
 		});
 		return;
 	}
-	// GET /models (issue #179; tier added #236; merged both backends in plan 51 WP-C): every model BOTH doors
-	// can drive, for the composer's picker. Shape: { backend, backendMode, models: [{ id, label, default, tier,
-	// backend, available, serving }] }. `backend` at top-level names the door serving the next request (kept for
-	// backward compatibility with the single-backend shape). Per-entry `backend` tags each model's door,
-	// `available` is that door's real health (oauth: signed-in + servable; openrouter: key present), and
-	// `serving` marks the door selectBackend() would use now - so the selector can render every door and name
-	// which is live without re-deriving selection. Purely additive: id/label/default/tier are unchanged.
+	// GET /models (issue #179; tier added #236; merged both backends in plan 51 WP-C; door/validated in plan 55
+	// WP-B3): every model BOTH doors can drive, for the composer's picker. Shape: { backend, backendMode,
+	// models: [{ id, label, default, tier, backend, door, validated, available, serving }] }. `backend` at
+	// top-level names the door serving a call that pins no model (kept for backward compatibility with the
+	// single-backend shape). Per-entry `door` names the door THAT MODEL runs on - which since WP-B3 is what
+	// actually routes the request, so the picker can label each row with its provider truthfully; `backend` is
+	// its backward-compatible alias. `validated` says whether a human has watched the model do this job.
+	// `available` is that door's real health (oauth: signed-in + servable; openrouter: key present and the daily
+	// cap not spent), and `serving` marks the door selectBackend() would use now. Purely additive:
+	// id/label/default/tier/backend are unchanged.
 	// GET /models/openrouter/catalogue - the VALIDATION helper for the curated OpenRouter allowlist (plan 53).
 	// Intersects lwd-openrouter-models.js with OpenRouter's live /api/v1/models and reports, per curated id,
 	// whether upstream still serves it. This is how a candidate's slug gets confirmed before it is promoted to

@@ -196,8 +196,14 @@ test('only validated models are offered; candidates need the explicit flag', () 
 	try {
 		const validatedOnly = listModelsIn({ home });
 		assert.deepEqual(
-			validatedOnly.map(m => ({ id: m.id, default: m.default })),
-			[{ id: 'openai/gpt-4.1-mini', default: true }],
+			validatedOnly.map(m => ({ id: m.id, default: m.default, validated: m.validated })),
+			[
+				// Sonnet 5 is the included planner AND rewrite author (founder ruling 9.3, doc 30 section 9).
+				{ id: 'anthropic/claude-sonnet-5', default: true, validated: true },
+				// gpt-4.1-mini stays offered but no longer answers a call that named no model: its own catalogue
+				// notes blame it for #303 (doc 30 section 2.2 demotes it).
+				{ id: 'openai/gpt-4.1-mini', default: false, validated: true },
+			],
 			'the built-in list offers exactly the validated entries, with one default',
 		);
 
@@ -205,6 +211,7 @@ test('only validated models are offered; candidates need the explicit flag', () 
 		assert.ok(withCandidates.length > validatedOnly.length, 'candidates appear behind the flag');
 		assert.equal(withCandidates.filter(m => m.default).length, 1, 'still exactly one default');
 		assert.ok(withCandidates.some(m => m.id === 'openai/gpt-4.1-mini'), 'validated entries stay offered');
+		assert.ok(withCandidates.some(m => m.id === 'google/gemini-2.5-pro' && m.validated === false), 'a candidate reports itself unvalidated');
 	} finally {
 		fs.rmSync(home, { recursive: true, force: true });
 	}
@@ -223,17 +230,20 @@ test('the models.json openrouter slice overlays the built-ins, and a bad slice d
 		});
 		assert.deepEqual(
 			listModelsIn({ home }),
-			[{ id: 'vendor/new-model', label: 'New', default: false }, { id: 'vendor/other', label: 'Other', default: true }],
+			// Overlay entries are validated by construction - naming an id here IS the act of validating it.
+			[{ id: 'vendor/new-model', label: 'New', default: false, validated: true }, { id: 'vendor/other', label: 'Other', default: true, validated: true }],
 			'overlay replaces the list and honours the named default',
 		);
 
+		const builtInIds = ['anthropic/claude-sonnet-5', 'openai/gpt-4.1-mini'];
+
 		// A malformed slice must never empty the picker - it falls back to the built-ins.
 		writeModelsConfig(home, { openrouter: { models: 'not-an-array' } });
-		assert.deepEqual(listModelsIn({ home }).map(m => m.id), ['openai/gpt-4.1-mini'], 'bad slice -> built-ins');
+		assert.deepEqual(listModelsIn({ home }).map(m => m.id), builtInIds, 'bad slice -> built-ins');
 
 		// A file with no openrouter slice at all is the silent common case (the openai-oauth door owns its own).
 		writeModelsConfig(home, { 'openai-oauth': { models: [{ id: 'gpt-x', label: 'X' }] } });
-		assert.deepEqual(listModelsIn({ home }).map(m => m.id), ['openai/gpt-4.1-mini'], 'no slice -> built-ins');
+		assert.deepEqual(listModelsIn({ home }).map(m => m.id), builtInIds, 'no slice -> built-ins');
 	} finally {
 		fs.rmSync(home, { recursive: true, force: true });
 	}

@@ -40,6 +40,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
+const { OPENROUTER_MODELS } = require('../lwd-openrouter-models.js');
 
 const BROKER_SCRIPT = path.join(__dirname, '..', 'lwd-model-broker.js');
 const FIXTURES = path.join(__dirname, 'fixtures');
@@ -53,6 +54,13 @@ const OR_TOOL_STREAM = readFixture('openrouter-tool-call-stream.sse');
 const OR_TOOL_MALFORMED = readFixture('openrouter-tool-args-malformed.json');
 const OR_TOOL_MALFORMED_STREAM = readFixture('openrouter-tool-args-malformed-stream.sse');
 const PROMPT = { max_tokens: 64, messages: [{ role: 'user', content: 'Reply with exactly: ABSTRACT SMOKE OK' }] };
+
+// The included door's default id, DERIVED from the curated list rather than pinned as a literal. These cases
+// send no `model`, so every echo below is whatever the catalogue's flagged default happens to be; hard-coding
+// it made an unrelated promotion (plan 55 WP-B3 moved the default to Sonnet 5) fail three parity tests for a
+// reason that has nothing to do with wire parity. Read from the built-in list, not defaultModelId(), so a
+// ~/.abstract/models.json on the machine running the tests cannot change the expectation.
+const OPENROUTER_DEFAULT = OPENROUTER_MODELS.find(m => m.validated === true && m.default === true).id;
 
 // The one tool definition every tool case drives, in the Anthropic shape the client speaks.
 const READ_DOCUMENT_TOOL = {
@@ -528,7 +536,7 @@ test('openrouter door: a streamed tool call arrives as Anthropic content_block_s
 			stream: true, max_tokens: 64, tools: [READ_DOCUMENT_TOOL],
 			messages: [{ role: 'user', content: 'What does pricing say?' }],
 		}, { stream: true });
-		assert.deepStrictEqual(eventShapes(res.text), toolStreamShapes('openai/gpt-4.1-mini', 'call_or_TOOLCALL0001'));
+		assert.deepStrictEqual(eventShapes(res.text), toolStreamShapes(OPENROUTER_DEFAULT, 'call_or_TOOLCALL0001'));
 	});
 });
 
@@ -545,7 +553,7 @@ test('openrouter door: malformed tool arguments are a structured error buffered,
 			// tool_use block with `input: {}`, which the client would happily run with invented arguments.
 			bufferedStatus: 502,
 			bufferedMessage: 'the model returned malformed arguments for tool read_document: {"docId": ',
-			streamedShapes: malformedStreamShapes('openai/gpt-4.1-mini', 'call_or_MALFORMED01'),
+			streamedShapes: malformedStreamShapes(OPENROUTER_DEFAULT, 'call_or_MALFORMED01'),
 		});
 	});
 });
@@ -557,7 +565,7 @@ test('openrouter door: an upstream abort mid-stream ends the client stream clean
 			messages: [{ role: 'user', content: 'What does pricing say?' }],
 		}, { stream: true });
 		assert.deepStrictEqual(eventShapes(res.text), [
-			['message_start', 'openai/gpt-4.1-mini'],
+			['message_start', OPENROUTER_DEFAULT],
 			['content_block_delta', 0, 'text_delta', 'Read'],
 			['content_block_delta', 0, 'text_delta', 'ing pricing.'],
 			// The prose that DID arrive is kept; the client is told the rest never will, and the stream still

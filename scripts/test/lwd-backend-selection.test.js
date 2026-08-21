@@ -181,8 +181,11 @@ function openrouterOk(model) {
 	return { id: 'or_stub', model, choices: [{ message: { content: 'served-by-openrouter' }, finish_reason: 'stop' }], usage: { total_tokens: 10 } };
 }
 
-// A prompt the broker accepts.
-const PROMPT = { model: 'gpt-5.6-sol', max_tokens: 64, messages: [{ role: 'user', content: 'hello' }] };
+// A prompt the broker accepts. It names NO model on purpose: since plan 55 WP-B3 a named model implies its own
+// door (doc 30 section 2.2), so a prompt pinned to `gpt-5.6-sol` would be asking about pinning, not about
+// availability-driven selection. A model-less call is exactly the case selectBackend() still owns, which is
+// what these cases are about; the pinning rules get their own suite (lwd-model-pinning.test.js).
+const PROMPT = { max_tokens: 64, messages: [{ role: 'user', content: 'hello' }] };
 
 // =========================================================================================================
 // 1) UNIT: the selection predicate (lwd-openai-oauth.canServe / bundleHealth)
