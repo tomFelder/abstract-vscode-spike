@@ -1,0 +1,18 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_MALFORMED0000000000000000000","object":"response","created_at":1786521358,"status":"in_progress","model":"gpt-5.6-terra","output":[],"store":false,"tool_choice":"auto","usage":null,"metadata":{}},"sequence_number":0}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"fc_MALFORMED000000000000000000000","type":"function_call","status":"in_progress","arguments":"","call_id":"call_MALFORMED000000000000000","name":"read_document"},"output_index":0,"sequence_number":1}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_MALFORMED000000000000000000000","output_index":0,"delta":"{\"docId\": ","sequence_number":2}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_MALFORMED000000000000000000000","output_index":0,"arguments":"{\"docId\": ","sequence_number":3}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"fc_MALFORMED000000000000000000000","type":"function_call","status":"completed","arguments":"{\"docId\": ","call_id":"call_MALFORMED000000000000000","name":"read_document"},"output_index":0,"sequence_number":4}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_MALFORMED0000000000000000000","object":"response","created_at":1786521358,"status":"completed","completed_at":1786521361,"model":"gpt-5.6-terra","output":[],"store":false,"tool_choice":"auto","usage":{"input_tokens":48,"output_tokens":9,"total_tokens":57},"metadata":{}},"sequence_number":5}
+

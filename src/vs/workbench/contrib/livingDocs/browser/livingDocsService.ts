@@ -5327,10 +5327,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				signal: controller.signal,
 			});
 			// Typed so the buffered fallback below inherits the wait rather than re-firing into the same limit.
+			// CLOSE THE BODY FIRST: a `fetch` response whose stream is neither read nor cancelled holds its
+			// connection open until GC gets to it, and this path throws on every rate limit - exactly the
+			// moment a retry storm is about to open more of them. `cancel()` releases it deterministically.
 			if (response.status === 429) {
+				await response.body?.cancel().catch(() => undefined);
 				throw new ModelRateLimitedError(parseRetryAfterMs(response.headers.get('retry-after') ?? undefined, Date.now()));
 			}
-			if (!response.ok || !response.body) { throw new Error(`model proxy http ${response.status}`); }
+			if (!response.ok || !response.body) {
+				await response.body?.cancel().catch(() => undefined);
+				throw new Error(`model proxy http ${response.status}`);
+			}
 			const reader = response.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = '';

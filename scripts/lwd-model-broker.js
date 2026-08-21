@@ -312,19 +312,240 @@ function openRouterKey() {
 	try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; }
 }
 
+// --- tool passthrough (plan 55 B2, doc 30 section 2.2) -------------------------------------------------
+// The broker speaks the ANTHROPIC Messages shape to its client in both directions, and each door speaks its
+// own dialect upstream. Before this block tool calls were unrepresentable in either direction on either
+// door: request bodies dropped `tools`, Anthropic-shaped `tool_use`/`tool_result` content blocks were
+// flattened to '' by the text-only content walk, and both stream parsers only knew text deltas. The renderer's
+// agent loop (plan 55 B5) drives an Anthropic tool-use loop, so everything below normalises TO that shape.
+//
+// The translation is deliberately split into a door-neutral read of the client's request (normaliseTurns)
+// and a per-door render, so "what the client said" is parsed exactly once and only the wire shape differs.
+// Text-only traffic is byte-for-byte what it was before tools existed - that is pinned by the parity suite.
+
+/**
+ * Split one Anthropic message's content into its parts: the concatenated text, the `tool_use` blocks (the
+ * assistant asking for a tool to run) and the `tool_result` blocks (the client returning what it ran). A
+ * string content is all text; any other block that carries `.text` contributes text exactly as it always did.
+ */
+function splitContent(content) {
+	if (typeof content === 'string') { return { text: content, toolUses: [], toolResults: [] }; }
+	if (!Array.isArray(content)) { return { text: String(content ?? ''), toolUses: [], toolResults: [] }; }
+	let text = '';
+	const toolUses = [];
+	const toolResults = [];
+	for (const part of content) {
+		if (!part) { continue; }
+		if (part.type === 'tool_use') { toolUses.push(part); }
+		else if (part.type === 'tool_result') { toolResults.push(part); }
+		else if (part.text) { text += part.text; }
+	}
+	return { text, toolUses, toolResults };
+}
+
+/**
+ * The door-neutral view of an Anthropic Messages request: the system text plus one entry per turn carrying
+ * its role, its flattened text and its tool blocks. Both doors render from this.
+ */
+function normaliseTurns(req) {
+	const system = (typeof req.system === 'string' && req.system) ? req.system : '';
+	const turns = (req.messages || []).map(m => Object.assign({
+		role: m.role === 'assistant' ? 'assistant' : (m.role === 'system' ? 'system' : 'user'),
+	}, splitContent(m.content)));
+	return { system, turns };
+}
+
+/**
+ * Flatten a `tool_result` block to the plain string both doors carry it as. An `is_error` result is prefixed
+ * rather than dropped: neither upstream dialect has an error flag on a tool result, and a failure the model
+ * cannot see is a failure it will confidently build on. The prefix is the only channel available.
+ */
+function toolResultOutput(block) {
+	const raw = block.content;
+	let text;
+	if (typeof raw === 'string') { text = raw; }
+	else if (Array.isArray(raw)) { text = raw.map(p => (p && typeof p.text === 'string') ? p.text : '').join(''); }
+	else { text = (raw === undefined || raw === null) ? '' : JSON.stringify(raw); }
+	return block.is_error === true ? `Error: ${text}` : text;
+}
+
+/**
+ * Parse a tool call's `arguments` string. An absent/empty string means "no arguments", which is legitimate;
+ * anything that is not a JSON object is a MALFORMED call. We never guess past this point - handing the client
+ * `input: {}` for arguments we could not read would have it run a real tool with invented parameters.
+ */
+function parseToolArguments(raw) {
+	const text = typeof raw === 'string' ? raw.trim() : '';
+	if (!text) { return { ok: true, input: {} }; }
+	try {
+		const input = JSON.parse(text);
+		if (input && typeof input === 'object' && !Array.isArray(input)) { return { ok: true, input }; }
+	} catch { /* fall through to the malformed verdict */ }
+	return { ok: false, input: {} };
+}
+
+/** The one wording used for a malformed tool call, buffered (proxy error) or streamed (error event). */
+function malformedToolMessage(name, raw) {
+	return `the model returned malformed arguments for tool ${name || '(unnamed)'}: ${forLog(raw)}`;
+}
+
+/** Anthropic tool definitions -> the OpenAI CHAT `tools` array (each tool inside a `function` envelope). */
+function toOpenAiChatTools(tools) {
+	return tools.map(t => ({
+		type: 'function',
+		function: {
+			name: t.name,
+			description: t.description || '',
+			parameters: t.input_schema || { type: 'object', properties: {} },
+		},
+	}));
+}
+
+/** Anthropic tool definitions -> Responses function tools (FLAT - no `function` envelope, unlike chat). */
+function toResponsesTools(tools) {
+	return tools.map(t => ({
+		type: 'function',
+		name: t.name,
+		description: t.description || '',
+		parameters: t.input_schema || { type: 'object', properties: {} },
+		// Strict mode demands every property be required with additionalProperties:false. The client's schemas
+		// are not written to that contract, so asking for it would 400 on schemas upstream would otherwise accept.
+		strict: false,
+	}));
+}
+
+/** Anthropic `tool_choice` -> the chat form, or undefined when the caller named none. */
+function toOpenAiChatToolChoice(choice) {
+	if (!choice || typeof choice !== 'object') { return undefined; }
+	if (choice.type === 'any') { return 'required'; }
+	if (choice.type === 'none') { return 'none'; }
+	if (choice.type === 'tool' && choice.name) { return { type: 'function', function: { name: choice.name } }; }
+	return 'auto';
+}
+
+/** Anthropic `tool_choice` -> the Responses form (again flat), or undefined when the caller named none. */
+function toResponsesToolChoice(choice) {
+	if (!choice || typeof choice !== 'object') { return undefined; }
+	if (choice.type === 'any') { return 'required'; }
+	if (choice.type === 'none') { return 'none'; }
+	if (choice.type === 'tool' && choice.name) { return { type: 'function', name: choice.name }; }
+	return 'auto';
+}
+
+/** The caller's Anthropic tool definitions, or undefined when this request carries none. */
+function requestedTools(req) {
+	return (Array.isArray(req.tools) && req.tools.length) ? req.tools : undefined;
+}
+
+/**
+ * Assemble the Anthropic `content` array for a buffered reply: the text block (kept even when empty, exactly
+ * as before, UNLESS tool calls carry the turn - Anthropic omits an empty text block there) then one
+ * `tool_use` block per call.
+ */
+function anthropicContent(text, toolBlocks) {
+	const content = [];
+	if (text || !toolBlocks.length) { content.push({ type: 'text', text: String(text) }); }
+	for (const block of toolBlocks) { content.push(block); }
+	return content;
+}
+
+/**
+ * Emits the Anthropic-shaped tool_use side of a stream. Both doors drive it with the same three calls, so the
+ * event vocabulary the renderer reads (`content_block_start` -> `input_json_delta` deltas ->
+ * `content_block_stop`, then a `message_delta` naming `stop_reason: 'tool_use'`) is written in exactly ONE
+ * place and the two doors are provably identical on the wire.
+ *
+ * Text keeps content block index 0 and keeps emitting bare `content_block_delta` events with no surrounding
+ * start/stop, exactly as it always has; tool blocks are numbered from 1. So a text-only stream is byte-for-byte
+ * what it was before tools existed, which is what the parity suite pins.
+ */
+function createToolStream(res) {
+	/** @type {Map<string, { index: number; name: string; args: string }>} */
+	const blocks = new Map();
+	let nextIndex = 1;
+	const write = (event, data) => { if (!res.writableEnded && !res.destroyed) { res.write(sseEvent(event, data)); } };
+	return {
+		/** Whether this stream carried any tool call at all (decides the closing `message_delta`). */
+		any() { return blocks.size > 0; },
+		/** Open a tool block. Idempotent per key - upstream repeats the id/name on later fragments. */
+		start(key, id, name) {
+			if (blocks.has(key)) { return; }
+			const index = nextIndex++;
+			blocks.set(key, { index, name: name || '', args: '' });
+			write('content_block_start', {
+				type: 'content_block_start', index,
+				content_block: { type: 'tool_use', id: id || `toolu_${index}`, name: name || '', input: {} },
+			});
+		},
+		/** Forward one raw JSON fragment of the call's arguments, accumulating it for the end-of-block check. */
+		argsDelta(key, fragment) {
+			const block = blocks.get(key);
+			if (!block || !fragment) { return; }
+			block.args += fragment;
+			write('content_block_delta', { type: 'content_block_delta', index: block.index, delta: { type: 'input_json_delta', partial_json: fragment } });
+		},
+		/**
+		 * Close every open tool block, and report any whose accumulated arguments are not valid JSON as an
+		 * `error` event. Mid-stream we cannot retract what we already sent, so a malformed call ends as a
+		 * well-formed DEGRADED event the client can act on rather than a silently truncated stream.
+		 */
+		close() {
+			for (const block of blocks.values()) {
+				write('content_block_stop', { type: 'content_block_stop', index: block.index });
+				if (!parseToolArguments(block.args).ok) {
+					write('error', { type: 'error', error: { type: 'invalid_tool_arguments', message: malformedToolMessage(block.name, block.args) } });
+				}
+			}
+		},
+	};
+}
+
 // Flatten an Anthropic Messages request into the OpenAI-style `messages` array OpenRouter expects. Shared by
-// the buffered and streaming paths so the request shape is translated in exactly one place.
+// the buffered and streaming paths so the request shape is translated in exactly one place. Tool blocks get
+// OpenAI's own representation: an assistant `tool_calls` array for a `tool_use`, and a separate `role:"tool"`
+// message per `tool_result` (OpenAI does NOT carry results inside the user turn).
 function toOpenRouterMessages(req) {
+	const { system, turns } = normaliseTurns(req);
 	const messages = [];
-	if (typeof req.system === 'string' && req.system) { messages.push({ role: 'system', content: req.system }); }
-	for (const m of req.messages || []) {
-		const content = typeof m.content === 'string'
-			? m.content
-			: (Array.isArray(m.content) ? m.content.map(p => (p && p.text) ? p.text : '').join('') : String(m.content ?? ''));
-		const role = m.role === 'assistant' ? 'assistant' : (m.role === 'system' ? 'system' : 'user');
-		messages.push({ role, content });
+	if (system) { messages.push({ role: 'system', content: system }); }
+	for (const turn of turns) {
+		// Results first: they answer the assistant turn just above, and must precede whatever the user then says.
+		for (const result of turn.toolResults) {
+			messages.push({ role: 'tool', tool_call_id: result.tool_use_id, content: toolResultOutput(result) });
+		}
+		if (turn.toolUses.length) {
+			messages.push({
+				role: 'assistant',
+				content: turn.text,
+				tool_calls: turn.toolUses.map(t => ({
+					id: t.id, type: 'function',
+					function: { name: t.name, arguments: JSON.stringify(t.input === undefined ? {} : t.input) },
+				})),
+			});
+		} else if (turn.text || !turn.toolResults.length) {
+			// Unchanged for every text-only turn - including an empty one, which still becomes an empty message.
+			messages.push({ role: turn.role, content: turn.text });
+		}
 	}
 	return messages;
+}
+
+/**
+ * Translate OpenAI-shape `tool_calls` into Anthropic `tool_use` content blocks. A call whose arguments are
+ * not valid JSON is NOT guessed at: the reason comes back so the buffered caller can surface a structured
+ * error instead of handing the client a tool call it would execute with input we invented.
+ */
+function toolUseBlocksFromChat(toolCalls) {
+	const blocks = [];
+	if (!Array.isArray(toolCalls)) { return { blocks, malformed: '' }; }
+	for (const call of toolCalls) {
+		if (!call || !call.function || (call.type && call.type !== 'function')) { continue; }
+		const name = call.function.name || '';
+		const parsed = parseToolArguments(call.function.arguments);
+		if (!parsed.ok) { return { blocks, malformed: malformedToolMessage(name, call.function.arguments) }; }
+		blocks.push({ type: 'tool_use', id: call.id || `toolu_${blocks.length + 1}`, name, input: parsed.input });
+	}
+	return { blocks, malformed: '' };
 }
 
 // Best-effort dollar cost for one OpenRouter call. OpenRouter returns real spend when `usage` includes a
@@ -350,7 +571,7 @@ async function openRouterForward(body, req) {
 	// this door's curated list). Before plan 53 this door hardcoded a single id and DISCARDED req.model, so the
 	// composer's picker was decorative on the included door - every turn ran on gpt-4.1-mini whatever it said.
 	const orModel = req.model || openRouterDefaultModel();
-	const orBody = JSON.stringify({ model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), usage: { include: true } });
+	const orBody = JSON.stringify(withChatTools(req, { model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), usage: { include: true } }));
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -372,18 +593,37 @@ async function openRouterForward(body, req) {
 		return proxyError(message);
 	}
 	const choice = (orJson.choices && orJson.choices[0]) || {};
-	const text = (choice.message && choice.message.content) || '';
+	const message = choice.message || {};
+	const text = message.content || '';
+	const { blocks, malformed } = toolUseBlocksFromChat(message.tool_calls);
+	// Arguments we cannot read are a structured error, never a tool call with invented input (see
+	// parseToolArguments). The client sees the honest reason and can retry the turn.
+	if (malformed) { console.error(`[lwd-proxy] openrouter ${malformed}`); return proxyError(malformed); }
 	const finish = choice.finish_reason || 'stop';
-	const stopReason = finish === 'length' ? 'max_tokens' : (finish === 'content_filter' ? 'refusal' : 'end_turn');
+	const stopReason = (blocks.length || finish === 'tool_calls')
+		? 'tool_use'
+		: (finish === 'length' ? 'max_tokens' : (finish === 'content_filter' ? 'refusal' : 'end_turn'));
 	const anthropic = {
 		id: orJson.id || 'or-msg',
 		type: 'message',
 		role: 'assistant',
 		model: orJson.model || orModel,
 		stop_reason: stopReason,
-		content: [{ type: 'text', text: String(text) }],
+		content: anthropicContent(text, blocks),
 	};
 	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic), usage: orJson.usage };
+}
+
+/** Add the caller's tools to an OpenAI CHAT body, when they sent any. Mutates and returns the body. */
+function withChatTools(req, body) {
+	const tools = requestedTools(req);
+	if (!tools) { return body; }
+	body.tools = toOpenAiChatTools(tools);
+	const choice = toOpenAiChatToolChoice(req.tool_choice);
+	if (choice !== undefined) { body.tool_choice = choice; }
+	// Anthropic expresses "one tool at a time" as a flag ON tool_choice; OpenAI as a sibling parameter.
+	if (req.tool_choice && req.tool_choice.disable_parallel_tool_use === true) { body.parallel_tool_calls = false; }
+	return body;
 }
 
 async function openRouterForwardStream(req, res) {
@@ -396,7 +636,7 @@ async function openRouterForwardStream(req, res) {
 	}
 	// Same as the buffered path: the caller's resolved model is load-bearing here, not advisory.
 	const orModel = req.model || openRouterDefaultModel();
-	const orBody = JSON.stringify({ model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } });
+	const orBody = JSON.stringify(withChatTools(req, { model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } }));
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -421,12 +661,24 @@ async function openRouterForwardStream(req, res) {
 	writeSseHead(res);
 	res.write(sseMessageStart('or-msg', orModel));
 	const nodeStream = Readable.fromWeb(upstream.body);
-	res.on('close', () => nodeStream.destroy());
+	// A client hang-up is not an upstream fault: remember it so the truncation path below stays quiet and
+	// simply lets the (already dead) response go, rather than reporting an error nobody is listening for.
+	let clientGone = false;
+	res.on('close', () => { if (!res.writableEnded) { clientGone = true; } nodeStream.destroy(); });
 	// OpenRouter emits a final SSE chunk carrying `usage` (with `usage: {include:true}`) - capture it so the
 	// caller can meter the streamed call with real numbers where available.
 	const captured = { usage: undefined };
+	const tools = createToolStream(res);
 	let buf = '';
-	const endStream = () => { if (!res.writableEnded) { res.write(sseEvent('message_stop', { type: 'message_stop' })); res.end(); } };
+	const endStream = () => {
+		if (res.writableEnded || res.destroyed) { return; }
+		// Close any tool blocks first, then name the tool stop so the client's loop knows to run them. A
+		// text-only stream writes NOTHING here and ends with message_stop exactly as it always has.
+		tools.close();
+		if (tools.any()) { res.write(sseEvent('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' } })); }
+		res.write(sseEvent('message_stop', { type: 'message_stop' }));
+		res.end();
+	};
 	return await new Promise(resolve => {
 		nodeStream.on('data', chunk => {
 			buf += chunk.toString('utf8');
@@ -445,18 +697,37 @@ async function openRouterForwardStream(req, res) {
 					if (typeof text === 'string' && text.length) {
 						res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }));
 					}
+					// OpenAI streams a tool call as an indexed `tool_calls` fragment: the FIRST fragment for an
+					// index carries id + function.name, every later one appends to function.arguments.
+					if (delta && Array.isArray(delta.tool_calls)) {
+						for (const call of delta.tool_calls) {
+							if (!call) { continue; }
+							const key = String(call.index === undefined ? (call.id || '0') : call.index);
+							tools.start(key, call.id, call.function && call.function.name);
+							if (call.function && typeof call.function.arguments === 'string') { tools.argsDelta(key, call.function.arguments); }
+						}
+					}
 				} catch { /* keep-alive comment or malformed chunk -> ignore */ }
 			}
 		});
 		nodeStream.on('end', () => { endStream(); resolve(captured); });
-		nodeStream.on('error', () => { if (!res.writableEnded) { res.end(); } resolve(captured); });
+		// Upstream cut the stream short. Say so and then END CLEANLY (error event, tool blocks closed,
+		// message_stop) rather than dropping the socket mid-event, which left the client hanging on a
+		// half-written stream with no way to tell a truncation from a slow model.
+		nodeStream.on('error', () => {
+			if (!clientGone && !res.writableEnded && !res.destroyed) {
+				res.write(sseEvent('error', { type: 'error', error: { type: 'upstream_stream_error', message: 'the model stream ended early' } }));
+			}
+			endStream();
+			resolve(captured);
+		});
 	});
 }
 
 // --- backend: openai-oauth ("Sign in with ChatGPT") ---------------------------------------------------
 // Serves the engine's Anthropic-Messages requests from the user's OWN ChatGPT subscription via the Codex
-// OAuth token (scripts/lwd-openai-oauth.js). The request translation is SHARED with openrouter -
-// toOpenRouterMessages produces the OpenAI-style role/content messages both need - so the mapping lives once
+// OAuth token (scripts/lwd-openai-oauth.js). The request READ is SHARED with openrouter - normaliseTurns
+// parses the client's Anthropic request once and both doors render from it - so the parsing lives once
 // (plan 35 note: extend the existing seam, don't duplicate). The upstream here is OpenAI's Responses API,
 // which takes `instructions` + an `input` array and returns an `output` array; the translation below is the
 // only openai-oauth-specific part. A token near expiry is refreshed silently before the call; a hard auth
@@ -480,7 +751,9 @@ async function openAiAuthHeaders() {
 
 // Translate an Anthropic Messages request to an OpenAI Responses request. The system prompt maps to
 // `instructions`; the conversation maps to `input` with typed text parts (an assistant turn uses
-// `output_text`, everything else `input_text`), reusing the shared toOpenRouterMessages flattening.
+// `output_text`, everything else `input_text`), reading the request through the shared normaliseTurns. Tool
+// definitions map to FLAT Responses function tools, a `tool_use` to a `function_call` item and a
+// `tool_result` to a `function_call_output` item - the Responses API keeps both outside message content.
 //
 // The three constants below are NOT stylistic - the Codex Responses backend rejects a request missing any of
 // them, each with its own 400. Established at the wire during the 12 Aug founder smoke (plan 51 section 5), which is
@@ -494,12 +767,25 @@ async function openAiAuthHeaders() {
 // the renderer's own handling, not by upstream truncation. The `stream` parameter is kept in the signature
 // because callers still read it, but it can only ever be true on the wire.
 function toResponsesRequest(req, _stream) {
-	const flattened = toOpenRouterMessages(req);
-	const instructionsParts = flattened.filter(m => m.role === 'system').map(m => m.content);
-	const input = flattened.filter(m => m.role !== 'system').map(m => ({
-		role: m.role,
-		content: [{ type: m.role === 'assistant' ? 'output_text' : 'input_text', text: m.content }],
-	}));
+	const { system, turns } = normaliseTurns(req);
+	const instructionsParts = system ? [system] : [];
+	const input = [];
+	for (const turn of turns) {
+		if (turn.role === 'system') { instructionsParts.push(turn.text); continue; }
+		// The Responses API models a tool result as its OWN top-level item keyed by the call id, never as part
+		// of a user message's content - and it has to precede whatever the user then says.
+		for (const result of turn.toolResults) {
+			input.push({ type: 'function_call_output', call_id: result.tool_use_id, output: toolResultOutput(result) });
+		}
+		if (turn.text || (!turn.toolUses.length && !turn.toolResults.length)) {
+			input.push({ role: turn.role, content: [{ type: turn.role === 'assistant' ? 'output_text' : 'input_text', text: turn.text }] });
+		}
+		// An assistant `tool_use` replays as the `function_call` item upstream itself emitted, so the model
+		// sees its own call alongside the output above.
+		for (const use of turn.toolUses) {
+			input.push({ type: 'function_call', call_id: use.id, name: use.name, arguments: JSON.stringify(use.input === undefined ? {} : use.input) });
+		}
+	}
 	const body = {
 		// The resolved model id (issue #179): forwardMessages stamps `req.model` after validating it against the
 		// subscription's list, so the user's pick is load-bearing here. Falls back to the backend default model
@@ -510,15 +796,34 @@ function toResponsesRequest(req, _stream) {
 		stream: true,
 	};
 	if (instructionsParts.length) { body.instructions = instructionsParts.join('\n\n'); }
+	const tools = requestedTools(req);
+	if (tools) {
+		body.tools = toResponsesTools(tools);
+		const choice = toResponsesToolChoice(req.tool_choice);
+		if (choice !== undefined) { body.tool_choice = choice; }
+		if (req.tool_choice && req.tool_choice.disable_parallel_tool_use === true) { body.parallel_tool_calls = false; }
+	}
 	return body;
 }
 
-// Read a Codex Responses SSE body, handing each text delta to `onDelta` and resolving the terminal
-// `response.completed` payload (or undefined if the stream ended without one). Shared by both forward paths
-// so the event vocabulary - `response.output_text.delta`, `response.completed` - is parsed in exactly one
-// place; the real event sequence it is written against is pinned in scripts/test/fixtures/.
-async function readResponsesStream(webStream, onDelta) {
-	const nodeStream = Readable.fromWeb(webStream);
+// Read a Codex Responses SSE body. Text deltas go to `handlers.onText`; a function call is both ANNOUNCED
+// live (`onToolStart` / `onToolArgs`, for the streaming door) and ACCUMULATED into the returned `toolCalls`
+// (for the buffered door, which has no other source: the recorded `response.completed` carries an EMPTY
+// `output` array, which is exactly why the item stream has to be the one that works - see the buffered text
+// path below). Resolves `{ completed, toolCalls }`; `completed` is the terminal `response.completed` payload
+// or undefined if the stream ended without one. Shared by both forward paths so the event vocabulary -
+// `response.output_text.delta`, `response.output_item.added`, `response.function_call_arguments.delta`,
+// `response.completed` - is parsed in exactly one place; the sequences it is written against live in
+// scripts/test/fixtures/.
+async function readResponsesStream(nodeStream, handlers = {}) {
+	const onText = handlers.onText || (() => { });
+	const onToolStart = handlers.onToolStart || (() => { });
+	const onToolArgs = handlers.onToolArgs || (() => { });
+	/** @type {Map<string, { id: string; name: string; args: string; streamed: boolean }>} */
+	const calls = new Map();
+	// Every function-call event carries the item's position in the output array; that is the stable key across
+	// `output_item.added`, the argument deltas and `output_item.done`.
+	const keyOf = j => String(j.output_index !== undefined ? j.output_index : (j.item_id || j.call_id || ''));
 	let buf = '';
 	let completed;
 	for await (const chunk of nodeStream) {
@@ -529,18 +834,46 @@ async function readResponsesStream(webStream, onDelta) {
 			buf = buf.slice(nl + 1);
 			if (!line.startsWith('data:')) { continue; }
 			const payload = line.slice(5).trim();
-			if (payload === '[DONE]') { return completed; }
+			if (payload === '[DONE]') { return { completed, toolCalls: [...calls.values()] }; }
 			let j;
 			try { j = JSON.parse(payload); } catch { continue; } // keep-alive comment or partial chunk
 			if (j.type === 'response.output_text.delta' && typeof j.delta === 'string' && j.delta.length) {
-				onDelta(j.delta);
+				onText(j.delta);
+			} else if (j.type === 'response.output_item.added' && j.item && j.item.type === 'function_call') {
+				const key = keyOf(j);
+				const id = j.item.call_id || j.item.id || '';
+				calls.set(key, { id, name: j.item.name || '', args: '', streamed: false });
+				onToolStart(key, id, j.item.name || '');
+			} else if (j.type === 'response.function_call_arguments.delta' && typeof j.delta === 'string' && j.delta.length) {
+				const call = calls.get(keyOf(j));
+				if (call) { call.args += j.delta; call.streamed = true; onToolArgs(keyOf(j), j.delta); }
+			} else if (j.type === 'response.output_item.done' && j.item && j.item.type === 'function_call') {
+				// Some responses carry the whole `arguments` only on the done item and stream no deltas at all.
+				// Replay it as one delta so both doors see the same thing rather than an empty call.
+				const key = keyOf(j);
+				const call = calls.get(key);
+				if (call && !call.streamed && typeof j.item.arguments === 'string' && j.item.arguments.length) {
+					call.args = j.item.arguments;
+					onToolArgs(key, j.item.arguments);
+				}
 			} else if (j.type === 'response.completed') {
 				completed = j.response || j;
-				return completed;
+				return { completed, toolCalls: [...calls.values()] };
 			}
 		}
 	}
-	return completed;
+	return { completed, toolCalls: [...calls.values()] };
+}
+
+/** Accumulated Responses function calls -> Anthropic `tool_use` blocks, with the same malformed verdict. */
+function toolUseBlocksFromResponses(toolCalls) {
+	const blocks = [];
+	for (const call of toolCalls) {
+		const parsed = parseToolArguments(call.args);
+		if (!parsed.ok) { return { blocks, malformed: malformedToolMessage(call.name, call.args) }; }
+		blocks.push({ type: 'tool_use', id: call.id || `toolu_${blocks.length + 1}`, name: call.name, input: parsed.input });
+	}
+	return { blocks, malformed: '' };
 }
 
 // Pull the assistant text out of a buffered Responses result. Prefer the `output_text` convenience field;
@@ -594,15 +927,18 @@ async function openAiForward(_body, req) {
 		return proxyError(upstreamRefusal(sent.model, upstream.status, rawText));
 	}
 	let text = '';
-	const completed = await readResponsesStream(upstream.body, delta => { text += delta; });
+	const { completed, toolCalls } = await readResponsesStream(Readable.fromWeb(upstream.body), { onText: delta => { text += delta; } });
 	const json = completed || {};
+	const { blocks, malformed } = toolUseBlocksFromResponses(toolCalls);
+	// Same rule as the other door: arguments we cannot read are a structured error, never invented input.
+	if (malformed) { console.error(`[lwd-proxy] openai-oauth ${malformed}`); return proxyError(malformed); }
 	const anthropic = {
 		id: json.id || 'oa-msg',
 		type: 'message',
 		role: 'assistant',
 		model: json.model || sent.model,
-		stop_reason: responsesStopReason(json),
-		content: [{ type: 'text', text: String(text || textFromResponses(json)) }],
+		stop_reason: blocks.length ? 'tool_use' : responsesStopReason(json),
+		content: anthropicContent(text || textFromResponses(json), blocks),
 	};
 	// meters:false, so no usage is returned to the meter (a subscription call is not the founder's budget).
 	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic), usage: undefined };
@@ -645,15 +981,37 @@ async function openAiForwardStream(req, res) {
 	}
 	writeSseHead(res);
 	res.write(sseMessageStart('oa-msg', sent.model));
-	const endStream = () => { if (!res.writableEnded) { res.write(sseEvent('message_stop', { type: 'message_stop' })); res.end(); } };
-	res.on('close', () => { /* the shared reader stops when the client hangs up */ });
+	const nodeStream = Readable.fromWeb(upstream.body);
+	const tools = createToolStream(res);
+	let clientGone = false;
+	// A client hang-up now actually STOPS the read: before this the shared reader kept draining upstream for a
+	// response nobody would ever receive.
+	res.on('close', () => { if (!res.writableEnded) { clientGone = true; } nodeStream.destroy(); });
+	const endStream = () => {
+		if (res.writableEnded || res.destroyed) { return; }
+		tools.close();
+		if (tools.any()) { res.write(sseEvent('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' } })); }
+		res.write(sseEvent('message_stop', { type: 'message_stop' }));
+		res.end();
+	};
 	// Translate each upstream text delta into the Anthropic-shaped content_block_delta the renderer's SSE
-	// parser reads; the shared reader owns the event vocabulary and the terminal `response.completed`.
-	await readResponsesStream(upstream.body, delta => {
-		if (!res.writableEnded) {
-			res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } }));
-		}
-	}).catch(() => undefined);
+	// parser reads, and each function-call item into the tool_use block sequence; the shared reader owns the
+	// event vocabulary and the terminal `response.completed`, and createToolStream owns the Anthropic side, so
+	// the two doors emit byte-identical tool events.
+	let truncated = false;
+	await readResponsesStream(nodeStream, {
+		onText: delta => {
+			if (!res.writableEnded && !res.destroyed) {
+				res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } }));
+			}
+		},
+		onToolStart: (key, id, name) => tools.start(key, id, name),
+		onToolArgs: (key, fragment) => tools.argsDelta(key, fragment),
+	}).catch(() => { truncated = true; });
+	// Upstream cut the stream short: name it, then end cleanly (see the openrouter door for the same rule).
+	if (truncated && !clientGone && !res.writableEnded && !res.destroyed) {
+		res.write(sseEvent('error', { type: 'error', error: { type: 'upstream_stream_error', message: 'the model stream ended early' } }));
+	}
 	endStream();
 	return { usage: undefined };
 }
