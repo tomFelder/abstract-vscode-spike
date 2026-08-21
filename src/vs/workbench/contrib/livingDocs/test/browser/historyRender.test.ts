@@ -159,4 +159,17 @@ suite('livingDocs History tab (historyHtml)', () => {
 		const restored = historyHtml([], [audit({ action: 'approved', via: 'restore' })], 'Weekly Summary', undefined, NOW);
 		assert.ok(!restored.includes('This Was Wrong'), 'a restore is not a fresh applied agent change');
 	});
+
+	test('I1: an approval that could not be applied reads as the failure it is, never as "Approved"', () => {
+		// docs/30 I1, issue #329. Before the closed result type this row was written as `approved`, so History
+		// - the surface a user checks precisely BECAUSE they doubt what happened - confirmed the lie in the
+		// past tense and offered to flag the "applied" change as wrong.
+		const h = historyHtml([], [audit({ action: 'apply-failed', reason: 'the text it was written for has changed since it was proposed' })], 'Weekly Summary', undefined, NOW);
+		assert.deepStrictEqual({
+			verb: h.includes('Could not apply'),
+			notApproved: !h.includes('Approved'),
+			reasonShown: h.includes('the text it was written for has changed since it was proposed'),
+			noFlagVerb: !h.includes('This Was Wrong'),
+		}, { verb: true, notApproved: true, reasonShown: true, noFlagVerb: true });
+	});
 });

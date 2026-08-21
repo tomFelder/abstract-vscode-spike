@@ -773,48 +773,64 @@ suite('LivingDoc bind-link format', () => {
 			assert.strictEqual(scopeBlockEdit('A single prose block.', 'A single prose block.').oldText, 'A single prose block.');
 		});
 
+		// Every assertion below reads the WHOLE closed result (docs/30 invariant I1), never just its text: the
+		// point of the discriminated return is that `landed` and the text arrive together and cannot be read
+		// apart. A helper that unwrapped the text for brevity would re-open exactly the hole issue #329 came
+		// through, so each test snapshots `{landed, text}` or `{landed, reason}` in one deepStrictEqual.
+
 		test('applyBlockEdit splices ONE item and leaves siblings byte-identical (the data-loss repro)', () => {
-			const next = applyBlockEdit(FOUR_ITEM, '- Win back churned accounts', '- Win back churned accounts with a targeted email campaign');
-			assert.strictEqual(next, [
-				'- Expand the free trial',
-				'- Win back churned accounts with a targeted email campaign',
-				'- Launch an annual plan',
-				'- Improve onboarding',
-			].join('\n'));
-			// The pre-fix behaviour (whole-block replace with the one rewritten item) would have dropped the
-			// three siblings; assert they are all still present.
-			assert.ok(next.includes('- Expand the free trial') && next.includes('- Launch an annual plan') && next.includes('- Improve onboarding'), 'siblings preserved');
+			// The pre-fix behaviour (whole-block replace with the one rewritten item) dropped the three siblings;
+			// the snapshot below is the whole block, so their survival is asserted byte for byte.
+			assert.deepStrictEqual(applyBlockEdit(FOUR_ITEM, '- Win back churned accounts', '- Win back churned accounts with a targeted email campaign'), {
+				landed: true,
+				text: [
+					'- Expand the free trial',
+					'- Win back churned accounts with a targeted email campaign',
+					'- Launch an annual plan',
+					'- Improve onboarding',
+				].join('\n'),
+			});
 		});
 
 		test('applyBlockEdit replaces the whole block for a prose edit (oldText === block)', () => {
-			assert.strictEqual(applyBlockEdit('Growth remained steady this week.', 'Growth remained steady this week.', 'Growth accelerated this week.'), 'Growth accelerated this week.');
+			assert.deepStrictEqual(
+				applyBlockEdit('Growth remained steady this week.', 'Growth remained steady this week.', 'Growth accelerated this week.'),
+				{ landed: true, text: 'Growth accelerated this week.' },
+			);
 		});
 
 		test('ordered lists: editing item 2 of 4 preserves the numbered siblings', () => {
 			const ordered = ['1. First lever', '2. Second lever', '3. Third lever', '4. Fourth lever'].join('\n');
-			const next = applyBlockEdit(ordered, '2. Second lever', '2. Second lever, now with a metric');
-			assert.strictEqual(next, ['1. First lever', '2. Second lever, now with a metric', '3. Third lever', '4. Fourth lever'].join('\n'));
+			assert.deepStrictEqual(applyBlockEdit(ordered, '2. Second lever', '2. Second lever, now with a metric'), {
+				landed: true,
+				text: ['1. First lever', '2. Second lever, now with a metric', '3. Third lever', '4. Fourth lever'].join('\n'),
+			});
 		});
 
 		test('nested lists (one level): editing a parent item leaves its nested children untouched', () => {
 			const nested = ['- Growth', '  - trial expansion', '  - annual plan', '- Retention', '- Activation'].join('\n');
-			const next = applyBlockEdit(nested, '- Retention', '- Retention and win-back');
-			assert.strictEqual(next, ['- Growth', '  - trial expansion', '  - annual plan', '- Retention and win-back', '- Activation'].join('\n'));
-			// The nested children of the untouched "Growth" item are byte-identical.
-			assert.ok(next.includes('  - trial expansion') && next.includes('  - annual plan'), 'nested children preserved');
+			assert.deepStrictEqual(applyBlockEdit(nested, '- Retention', '- Retention and win-back'), {
+				landed: true,
+				text: ['- Growth', '  - trial expansion', '  - annual plan', '- Retention and win-back', '- Activation'].join('\n'),
+			});
 		});
 
 		test('a list item containing a bound figure atom stays byte-identical when a sibling is edited', () => {
 			const withFigure = ['- Revenue grew this quarter', '- Costs stayed flat this quarter', '- Margin improved', '- Cash balance is [$48.6k](bind:metrics.mrr)'].join('\n');
-			const next = applyBlockEdit(withFigure, '- Costs stayed flat this quarter', '- Costs fell sharply this quarter');
-			assert.ok(next.includes('- Cash balance is [$48.6k](bind:metrics.mrr)'), 'the bound figure item is untouched, bind link intact');
-			assert.strictEqual(next.split('\n').length, 4, 'no item added or dropped');
+			assert.deepStrictEqual(applyBlockEdit(withFigure, '- Costs stayed flat this quarter', '- Costs fell sharply this quarter'), {
+				landed: true,
+				text: ['- Revenue grew this quarter', '- Costs fell sharply this quarter', '- Margin improved', '- Cash balance is [$48.6k](bind:metrics.mrr)'].join('\n'),
+			});
 		});
 
-		test('fail-soft: a scoped oldText no longer present leaves the block unchanged (never wholesale-replaces)', () => {
-			// The anchor item was already edited away; applyBlockEdit must NOT fall back to a whole-block
-			// replace (that is the exact sibling-destroying data loss this guards against).
-			assert.strictEqual(applyBlockEdit(FOUR_ITEM, '- An item that is not here', '- rewritten'), FOUR_ITEM);
+		test('fail-soft AND fail-loud: a scoped oldText no longer present reports anchor-miss, never a block', () => {
+			// The anchor item was already edited away. Two things must hold at once, and only one of them used
+			// to: applyBlockEdit must NOT fall back to a whole-block replace (the sibling-destroying data loss
+			// this guard was built for), AND it must SAY so. The old signature returned `blockText` here -
+			// byte-identical to a successful whole-block no-op - so `approve()` could not tell the difference
+			// and recorded an approval over an untouched document (docs/30 I1, issue #329). There is no text on
+			// a failed result to fall back to, by construction.
+			assert.deepStrictEqual(applyBlockEdit(FOUR_ITEM, '- An item that is not here', '- rewritten'), { landed: false, reason: 'anchor-miss' });
 		});
 	});
 

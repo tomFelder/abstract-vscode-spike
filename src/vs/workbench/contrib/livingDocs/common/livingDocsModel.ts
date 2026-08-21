@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { BlockApplyFailure } from './applyOutcome.js';
+
 // Living Documents - research spike data model (clean-file + lock-file format, spec 08).
 //
 // A document is ~99% pure Markdown the user owns. Where a value is bound to a source, the author
@@ -371,6 +373,11 @@ export interface IProposedChange {
 	// D31-B). Set by `amendChange`; the subsequent approve records the audit `via: 'tweaked'` so the trail
 	// shows a human modified the agent's words - a trust signal, not bookkeeping.
 	readonly tweaked?: boolean;
+	// The reviewer APPROVED this change and the apply could not land (docs/30 invariant I1, issue #329): the
+	// document moved on between the proposal and the approval. The change deliberately STAYS pending - it was
+	// never applied, so it is still the reviewer's call - and carries the named reason so the review rail can
+	// say what happened instead of clearing the card as though the edit had landed.
+	readonly applyFailure?: BlockApplyFailure;
 }
 
 /**
@@ -713,7 +720,10 @@ export interface IAuditEntry {
 	// 'external-overwrite-kept' records that the file changed on disk outside Abstract while the document was
 	// open and the reviewer chose "Keep my version", so the next persist knowingly overwrote the external edit
 	// (issue #133, the external-edit floor). The decision is on the record like any other applied change.
-	readonly action: 'auto-applied' | 'approved' | 'rejected' | 'external-overwrite-kept';
+	// 'apply-failed' records an approval that could NOT be applied because the document had moved on since the
+	// proposal (docs/30 invariant I1, issue #329). It is the row that used to be written as 'approved' over a
+	// document nothing had happened to; NOTHING was written to the file, and the change is still pending.
+	readonly action: 'auto-applied' | 'approved' | 'rejected' | 'external-overwrite-kept' | 'apply-failed';
 	readonly oldText: string;
 	readonly newText: string;
 	// 'restore' records a snapshot restore: the body was replaced with an earlier saved version through
@@ -725,7 +735,8 @@ export interface IAuditEntry {
 	readonly via: 'model' | 'heuristic' | 'api' | 'restore' | 'tweaked' | 'override';
 	// The reviewer's optional plain-words reason for a rejection (1f frame-3: "the optional reason becomes
 	// context for the next derivation"). Recorded on the audit row so it survives relaunch and shows in
-	// History; only meaningful on a 'rejected' action, absent otherwise.
+	// History. On an 'apply-failed' row it carries the named reason the apply could not land (I1) rather than
+	// a human's note; absent on the other actions.
 	reason?: string;
 	// A "this was wrong" flag against an APPLIED change (doc 18 section 2.5). Written here so the flag survives
 	// relaunch and the History row renders flagged (not an infinitely re-flaggable button). The analytics event

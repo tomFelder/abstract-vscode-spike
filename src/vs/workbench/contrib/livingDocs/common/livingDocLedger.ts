@@ -154,6 +154,12 @@ function auditEntry(docId: string, docTitle: string, blockIds: readonly string[]
 	if (e.action === 'rejected') {
 		return { at, kind: 'admin', lead: 'Rejected a proposed change in ', doc: ref, tail: '', badge: `by ${user}`, deepLink: false };
 	}
+	// An approval that could NOT be applied (docs/30 I1, issue #329). It has to be caught BEFORE the fall-through
+	// below, which reads every unhandled action as "Approved a change" - the very sentence this invariant exists
+	// to stop the product from writing about a document nothing happened to.
+	if (e.action === 'apply-failed') {
+		return { at, kind: 'admin', lead: 'A change could not be applied to ', doc: ref, tail: '', badge: 'not applied', deepLink: false };
+	}
 	if (e.via === 'restore') {
 		return { at, kind: 'applied', lead: 'Restored an earlier version of ', doc: ref, tail: '', badge: `by ${user}`, deepLink: false };
 	}
