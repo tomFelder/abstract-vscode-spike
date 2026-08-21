@@ -98,4 +98,19 @@ suite('livingDocs activity ledger read model (livingDocLedger)', () => {
 		}, 'Tom');
 		assert.deepStrictEqual(ledger.entries.map(e => e.kind), ['admin', 'admin'], 'both are administrative, grey');
 	});
+
+	test('I1: an approval that could not be applied is an admin row saying so, never an applied "Approved a change"', () => {
+		// docs/30 I1, issue #329. The audit fold ends in a fall-through that reads any unhandled action as
+		// "Approved a change in", so a new failure action that is not caught explicitly does not merely go
+		// unrendered - it renders as the exact false claim the invariant exists to stop.
+		const ledger = buildActivityLedger({
+			runs: [],
+			audits: [auditInput({ entries: [audit({ action: 'apply-failed', via: 'model', reason: 'the text it was written for has changed since it was proposed' })] })],
+			waiting: [],
+		}, 'Tom');
+		assert.deepStrictEqual(
+			ledger.entries.map(e => ({ kind: e.kind, lead: e.lead, badge: e.badge })),
+			[{ kind: 'admin', lead: 'A change could not be applied to ', badge: 'not applied' }],
+		);
+	});
 });

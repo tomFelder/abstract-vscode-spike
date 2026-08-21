@@ -2458,6 +2458,109 @@ suite('livingDocs Service', () => {
 		);
 	});
 
+	// --- Closed apply results (docs/30 invariant I1; kills issue #329): an approval the apply could not land
+	// must NOT be recorded as an approval. The document moves on between a proposal being queued and the
+	// reviewer clicking Approve - they hand-edit the paragraph, or delete the section outright - and both of
+	// approve()'s failure paths used to fall straight through into the approval bookkeeping. The rail cleared,
+	// the audit gained an `approved` row, the transcript counted an approval, and the file on disk still said
+	// the old thing. The two tests below stage exactly those two mutations and pin the whole outcome. ---
+
+	const LEVERS = URI.file('/ws/Levers.md');
+	const LEVERS_LOCK = URI.file('/ws/Levers.lock.json');
+	const LEVERS_MD = [
+		'---', 'title: Levers', '---', '',
+		'## Growth Levers', '',
+		'- Increase revenue this quarter',
+		'- Increase revenue next quarter',
+		'- Increase revenue this year',
+	].join('\n') + '\n';
+
+	/**
+	 * Everything a failed approve must and must not have written, in one shape. `approvedAnywhere` is the
+	 * invariant itself: no `approved` row on the ON-DISK lock (what a cold reopen rehydrates) and no approval
+	 * counted on any chat turn. `fileOnDisk` is compared against the bytes captured before the approve.
+	 */
+	function approveOutcome(service: LivingDocsService, resource: URI, lockResource: URI): object {
+		const lock = JSON.parse(lastFiles!.get(lockResource.toString()) ?? '{"audit":[]}') as { audit: IAuditEntry[] };
+		const transcriptApprovals = service.getChatMessages(resource).reduce((n, m) => n + (m.approvedCount ?? 0), 0);
+		const pending = service.getPendingForDoc(resource);
+		return {
+			fileOnDisk: lastFiles!.get(resource.toString()),
+			auditActions: lock.audit.map(e => e.action),
+			auditReason: lock.audit.at(-1)?.reason,
+			approvedAnywhere: lock.audit.some(e => e.action === 'approved') || transcriptApprovals > 0,
+			pendingCount: pending.length,
+			pendingFailure: pending[0]?.applyFailure,
+			status: service.getStatus(resource),
+		};
+	}
+
+	test('I1: approving an edit whose block was hand-edited since the proposal records NO approval and leaves the file alone', async () => {
+		const service = createService([], {
+			model: chatReply('Sharpened the second lever.', [
+				{ heading: 'Growth Levers', oldText: '- Increase revenue next quarter', newText: '- Increase revenue substantially next quarter', rationale: 'r' },
+			]),
+		});
+		lastFiles!.set(LEVERS.toString(), LEVERS_MD);
+		await service.loadDocument(LEVERS);
+		await service.sendChatMessage(LEVERS, 'Sharpen the second lever');
+		const pending = service.getPendingForDoc(LEVERS)[0];
+		assert.strictEqual(pending.oldText, '- Increase revenue next quarter', 'precondition: the proposal is anchored on the one item');
+
+		// The reviewer reads the proposal, then edits that very item by hand before deciding on it. This is the
+		// ordinary case, not a contrived one: the rail and the document are open side by side.
+		const listBlock = service.getDoc(LEVERS)!.blocks.find(b => b.text.includes('Increase revenue'))!;
+		await service.editBlock(LEVERS, listBlock.id, [
+			'- Increase revenue this quarter',
+			'- Grow revenue next quarter',
+			'- Increase revenue this year',
+		].join('\n'));
+		const beforeApprove = lastFiles!.get(LEVERS.toString());
+
+		await service.approve(pending.id);
+
+		assert.deepStrictEqual(approveOutcome(service, LEVERS, LEVERS_LOCK), {
+			// Byte-identical to the hand-edited body: the agent's rewrite never reached the file.
+			fileOnDisk: beforeApprove,
+			auditActions: ['apply-failed'],
+			auditReason: 'the text it was written for has changed since it was proposed',
+			approvedAnywhere: false,
+			// Still the reviewer's call. Dropping it from the rail is how the user came to believe it landed.
+			pendingCount: 1,
+			pendingFailure: 'anchor-miss',
+			status: 'Change could not be applied - Levers is unchanged because the text it was written for has changed since it was proposed',
+		});
+	});
+
+	test('I1: approving an edit whose block was DELETED since the proposal records NO approval either', async () => {
+		const service = createService([], {
+			model: chatReply('Sharpened the second lever.', [
+				{ heading: 'Growth Levers', oldText: '- Increase revenue next quarter', newText: '- Increase revenue substantially next quarter', rationale: 'r' },
+			]),
+		});
+		lastFiles!.set(LEVERS.toString(), LEVERS_MD);
+		await service.loadDocument(LEVERS);
+		await service.sendChatMessage(LEVERS, 'Sharpen the second lever');
+		const pending = service.getPendingForDoc(LEVERS)[0];
+
+		// The reviewer deletes the whole list before deciding, leaving the heading behind. The change's block id
+		// resolves to nothing at all - the path that used to skip the apply silently and audit an approval anyway.
+		await service.saveRawText(LEVERS, ['---', 'title: Levers', '---', '', '## Growth Levers'].join('\n') + '\n');
+		const beforeApprove = lastFiles!.get(LEVERS.toString());
+
+		await service.approve(pending.id);
+
+		assert.deepStrictEqual(approveOutcome(service, LEVERS, LEVERS_LOCK), {
+			fileOnDisk: beforeApprove,
+			auditActions: ['apply-failed'],
+			auditReason: 'the part of the document it was written for is no longer there',
+			approvedAnywhere: false,
+			pendingCount: 1,
+			pendingFailure: 'block-gone',
+			status: 'Change could not be applied - Levers is unchanged because the part of the document it was written for is no longer there',
+		});
+	});
+
 	test('chat works on a PLAIN doc (decision 48): a generated insert queues + approve splices it, and the doc stays plain', async () => {
 		const newText = '1. First lever\n2. Second lever\n3. Third lever';
 		const service = createService([], {

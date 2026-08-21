@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { blockApplyFailed, blockApplyLanded, BlockApplyResult } from './applyOutcome.js';
 import { IBindLink, ILivingDoc, ILivingDocBlock, LivingDocBlockType } from './livingDocsModel.js';
 import { docHasEarnedLiving } from './livingUpgrade.js';
 
@@ -745,18 +746,23 @@ export function scopeBlockEdit(blockText: string, quote: string): { oldText: str
 /**
  * Apply an approved edit to a block's raw text. When `oldText` is the whole block (a prose rewrite) the block
  * becomes `newText`. When `oldText` is a scoped sub-span (one list item) `newText` is spliced over exactly
- * that range, so every sibling line stays byte-identical. Fail-soft: if a scoped `oldText` is no longer
- * present (the block changed since the proposal was queued) the block is returned unchanged rather than
- * destroying sibling content with a whole-block replace - the exact data loss this guards against.
+ * that range, so every sibling line stays byte-identical.
+ *
+ * Fail-soft AND fail-LOUD (docs/30 invariant I1, issue #329): if a scoped `oldText` is no longer present (the
+ * block changed since the proposal was queued) nothing is written - sibling content is never destroyed by a
+ * whole-block replace - and the caller is handed `{landed: false, reason: 'anchor-miss'}`. The old `string`
+ * return handed back the block UNCHANGED on that path, which is byte-for-byte what a successful no-op edit
+ * returns, so the caller could not tell "applied" from "did nothing" and recorded an approval either way.
+ * A caller now has to narrow on `landed` before it can reach the text at all.
  */
-export function applyBlockEdit(blockText: string, oldText: string, newText: string): string {
+export function applyBlockEdit(blockText: string, oldText: string, newText: string): BlockApplyResult {
 	const old = oldText ?? '';
-	if (!old || old === blockText || old.trim() === blockText.trim()) { return newText; }
+	if (!old || old === blockText || old.trim() === blockText.trim()) { return blockApplyLanded(newText); }
 	const at = blockText.indexOf(old);
 	if (at >= 0) {
-		return blockText.slice(0, at) + newText + blockText.slice(at + old.length);
+		return blockApplyLanded(blockText.slice(0, at) + newText + blockText.slice(at + old.length));
 	}
-	return blockText;
+	return blockApplyFailed('anchor-miss');
 }
 
 export function serializeLivingDoc(doc: ILivingDoc): string {

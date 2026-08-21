@@ -29,6 +29,7 @@ import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { AMBER, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, RED, SHADOW, TRACKING, TYPE } from '../common/abstractTokens.js';
+import { applyFailureRailNote } from '../common/applyOutcome.js';
 import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
@@ -785,8 +786,12 @@ export class ReviewRailView extends ViewPane {
 		const framing = reviewFraming(change, change.sourceCells.join(', '));
 
 		const top = append(card, $('div.ldr-card-top'));
-		const tag = append(top, $(change.kind === 'meaning' ? 'span.ldr-tag.attn' : 'span.ldr-tag.ok'));
-		tag.textContent = this._kindBadgeLabel(change);
+		// A change whose approval could not be applied (docs/30 I1, issue #329) leads with a FAILED badge in
+		// place of its kind badge. The card is still here BECAUSE the change is still pending - nothing was
+		// written, so the decision is still the reviewer's - and the badge is the first thing that says so.
+		const failed = change.applyFailure;
+		const tag = append(top, $(failed ? 'span.ldr-tag.failed' : change.kind === 'meaning' ? 'span.ldr-tag.attn' : 'span.ldr-tag.ok'));
+		tag.textContent = failed ? localize('livingDocs.review.failedBadge', "NOT APPLIED") : this._kindBadgeLabel(change);
 		append(top, $('span.ldr-spacer'));
 		// Cite the same gutter address the inline widget cites (spec 43 section 3.1 / pin 11): resolve the
 		// change's durable block id to its current display line against the live doc and render the shared
@@ -799,6 +804,13 @@ export class ReviewRailView extends ViewPane {
 			// the editor to that block (navigate-only, via the address model's reveal-block seam). Rendered as
 			// a button so it reads/behaves as the actionable address the gutter, Home cards and ledger share.
 			this._appendAddressLink(top, change.docId, change.blockId, addressLine);
+		}
+
+		// The named failure, in plain words, directly under the badge: what did not happen, why, and that the
+		// change is still the reviewer's to decide. This is the surface the invariant is FOR - the old code
+		// cleared this card and told the user their change had been applied.
+		if (failed) {
+			append(card, $('div.ldr-failed')).textContent = applyFailureRailNote(failed);
 		}
 
 		// The summary line. The comp bolds the reframing; what the rail actually knows is WHICH block is being
@@ -2311,6 +2323,10 @@ export class ReviewRailView extends ViewPane {
 		.living-docs-panel .ldr-tag{font:400 10px/1 ${FONT.mono};letter-spacing:${TRACKING.kindBadge}}
 		.living-docs-panel .ldr-tag.attn{color:${AMBER.label}}
 		.living-docs-panel .ldr-tag.ok,.living-docs-panel .ldr-tag.figs{color:${GREEN.base}}
+		/* A change whose approval could not be applied (I1): the one place the rail speaks in red, because the
+		reader acted and nothing happened - the single state they must never be left to discover for themselves. */
+		.living-docs-panel .ldr-tag.failed{color:${RED.base}}
+		.living-docs-panel .ldr-failed{font:${TYPE.secondary};color:${RED.blockInk};background:${RED.blockBg};border-radius:${RADIUS.control};padding:9px 11px}
 		.living-docs-panel .ldr-summary{font:400 13px/1.55 ${FONT.sans};color:${INK.body}}
 		.living-docs-panel .ldr-summary strong{font-weight:600}
 		/* The WAS/NOW pair: two blocks, not one bordered strip. The fill is the whole signal, which is why the

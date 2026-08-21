@@ -38,6 +38,7 @@ import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js'
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
+import { applyFailureStatus, BlockApplyFailure, describeApplyFailure } from '../common/applyOutcome.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
 import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
@@ -6415,13 +6416,28 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const anchorIndex = change.afterBlockId ? state.doc.blocks.findIndex(b => b.id === change.afterBlockId) : state.doc.blocks.length - 1;
 			state.doc.blocks.splice(anchorIndex + 1, 0, newBlock);
 			state.recent.add(newBlock.id);
-		} else if (block && !change.relink) {
+		} else if (!change.relink) {
 			// A re-link prompt re-anchors the claim to the current best-match prose without rewriting it;
 			// a normal impact change applies its rewrite to the block. `applyBlockEdit` splices at the change's
 			// anchor: a whole-block `oldText` replaces the block (prose), a scoped `oldText` (one list item) is
 			// spliced in place so sibling list items survive (decision-68 data-loss fix, plan 31 iter 1).
-			const nextText = applyBlockEdit(block.text, change.oldText, change.newText);
-			block.text = nextText; block.binds = extractBindLinks(nextText); state.recent.add(block.id);
+			//
+			// The apply is the ONLY thing that can authorise everything below (docs/30 invariants I1/I2, issue
+			// #329). Both of this branch's failure modes used to fall straight through into the approval
+			// bookkeeping: a missing block skipped the branch entirely (`block &&`), and an anchor that had
+			// moved on came back from `applyBlockEdit` as the block's own unchanged text. Either way the rail
+			// cleared, the audit gained an `approved` row, the transcript counted an approval - over a file that
+			// still said the old thing. Now a failure returns HERE, before a single one of those is written.
+			if (!block) {
+				await this._recordApplyFailure(state, change, 'block-gone');
+				return;
+			}
+			const applied = applyBlockEdit(block.text, change.oldText, change.newText);
+			if (!applied.landed) {
+				await this._recordApplyFailure(state, change, applied.reason);
+				return;
+			}
+			block.text = applied.text; block.binds = extractBindLinks(applied.text); state.recent.add(block.id);
 		}
 		if (change.claimId) {
 			const prior = state.lock.claims[change.claimId];
@@ -6449,6 +6465,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		state.status = `Change approved - applied to ${change.docTitle}`;
 		await this._persist(state);
 		await this._recomputeFreshness(state);
+		this._onDidChange.fire();
+	}
+
+	/**
+	 * Record an approval that could NOT be applied (docs/30 invariants I1/I2; issue #329).
+	 *
+	 * This is the whole point of the closed result type: the ONE thing this method must never do is anything
+	 * `approve()` does after a successful apply. So it writes the exact inverse of that block -
+	 *
+	 *  - the change STAYS pending, flagged with the named failure. It was never applied, so it is still the
+	 *    reviewer's call; silently dropping it from the rail is how the user came to believe it had landed.
+	 *  - the audit row is `apply-failed`, never `approved`, and carries the reason in plain words, so History
+	 *    and the activity ledger read the failure rather than an approval that never happened.
+	 *  - no transcript outcome, no `proposal_resolved` analytics, no funnel hooks, no claim flipped to
+	 *    `applied`, no reviewed-context clear. Nothing counts a resolution that did not occur.
+	 *
+	 * The persist still runs: the document body is untouched (that is the point), but the lock now carries the
+	 * failure row, and a trail that only survives until the next relaunch is not a trail.
+	 */
+	private async _recordApplyFailure(state: IDocState, change: IProposedChange, reason: BlockApplyFailure): Promise<void> {
+		const idx = this._pending.findIndex(c => c.id === change.id);
+		if (idx >= 0) { this._pending[idx] = { ...change, applyFailure: reason }; }
+		this._log.warn('[livingDocs] approve could not be applied', change.id, reason);
+		state.lock.audit.push(this._entry(state, change.blockId, 'apply-failed', change.oldText, change.newText, change.via ?? 'model', describeApplyFailure(reason)));
+		state.status = applyFailureStatus(change.docTitle, reason);
+		await this._persist(state);
 		this._onDidChange.fire();
 	}
 

@@ -143,13 +143,15 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 		}
 		// A change row (audit entry): the verb + block, the via + relative time. Not restorable on its own.
 		const e = ev.entry;
-		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'external-overwrite-kept' ? 'Kept your version' : e.action === 'approved' ? (e.via === 'restore' ? 'Restored' : 'Approved') : 'Auto-applied';
+		// 'apply-failed' (docs/30 I1, issue #329) is an approval that could NOT be applied. It must read as the
+		// failure it is: it is the exact row that used to be written - and rendered - as "Approved".
+		const verb = e.action === 'rejected' ? 'Rejected' : e.action === 'apply-failed' ? 'Could not apply' : e.action === 'external-overwrite-kept' ? 'Kept your version' : e.action === 'approved' ? (e.via === 'restore' ? 'Restored' : 'Approved') : 'Auto-applied';
 		// The feedback verb (doc 18 section 2.5): "this was wrong" on any APPLIED change (approved or
 		// auto-applied, not a rejection or a restore). Once flagged (persisted on the row as `wrong`, issue #258)
 		// the row reads as flagged instead of offering an infinitely re-flaggable button. The change ref is the
 		// row's own ISO time - a stable, unique key so the flag lands on THIS row after relaunch. The reviewRail
 		// turns an unflagged click into a persisted flag + optional comment, logged for the founder + counted.
-		const isApplied = e.action !== 'rejected' && e.action !== 'external-overwrite-kept' && e.via !== 'restore';
+		const isApplied = e.action !== 'rejected' && e.action !== 'apply-failed' && e.action !== 'external-overwrite-kept' && e.via !== 'restore';
 		const flaggedBadge = `<span title="${esc(localize('livingDocs.history.flagged.title', "You flagged this applied change as wrong"))}" style="flex:none;font:400 10.5px/1 ${FONT.mono};letter-spacing:${TRACKING.kindBadge};color:${RED.base}">${esc(localize('livingDocs.history.flagged.label', "Flagged Wrong"))}</span>`;
 		const wrongBtn = isApplied
 			? (e.wrong
@@ -158,14 +160,14 @@ export function historyHtml(snapshots: readonly ISnapshotEntry[], audit: readonl
 			: '';
 		// Surface the persisted note beneath the row: a rejection's optional reason (1f frame-3) or a flag's
 		// comment, so the trail reads why - not just what. Both are plain reviewer words kept local on the lock.
-		const note = e.action === 'rejected' ? e.reason : e.wrong?.comment;
+		const note = e.action === 'rejected' || e.action === 'apply-failed' ? e.reason : e.wrong?.comment;
 		const noteHtml = note
 			? `<div style="margin-top:4px;font:400 12px/1.45 ${FONT.sans};color:${INK.secondary}">&ldquo;${esc(note)}&rdquo;</div>`
 			: '';
 		const sentence = `${verb}${tail(`${esc(e.docTitle)} / ${esc(e.blockId)} &middot; ${esc(e.via)}`)}${noteHtml}`;
 		// The dot reports what became of the change: a flagged row failed the reader, a kept-your-version row is
 		// a conflict that warned, a rejection left nothing to do, and anything else landed cleanly.
-		const state: ReceiptState = e.wrong ? 'failed' : e.action === 'external-overwrite-kept' ? 'warned' : e.action === 'rejected' ? 'idle' : 'clean';
+		const state: ReceiptState = e.wrong || e.action === 'apply-failed' ? 'failed' : e.action === 'external-overwrite-kept' ? 'warned' : e.action === 'rejected' ? 'idle' : 'clean';
 		return (first: boolean) => receiptRow(relTime(e.time, now), sentence, state, first, wrongBtn);
 	});
 
