@@ -111,6 +111,7 @@ scripts/test/lwd-catalogue-fallback.test.js
 scripts/test/lwd-device-auth-stub.js
 scripts/test/lwd-openai-oauth.test.js
 scripts/test/lwd-model-pinning.test.js
+scripts/test/lwd-prompt-cache.test.js
 scripts/test/lwd-openrouter-models.test.js
 scripts/test/lwd-responses-parity.test.js
 scripts/xterm-update.js

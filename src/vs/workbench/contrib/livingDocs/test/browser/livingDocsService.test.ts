@@ -1465,6 +1465,57 @@ suite('livingDocs Service', () => {
 		);
 	});
 
+	/**
+	 * Prompt caching, from the client side (plan 55 WP-B4, doc 30 section 2.6).
+	 *
+	 * A prefix cache pays for the longest run of leading bytes identical to the previous turn's request, so the
+	 * only thing that makes it work is ORDER: everything that cannot change first, everything that can change
+	 * behind it, one breakpoint at the seam. This service used to do the exact opposite - it re-serialised the
+	 * document, which the agent itself edits and which can therefore differ on every single turn, at the very
+	 * front of the prompt - so nothing after the ~300-token system prompt ever survived and every turn paid a
+	 * full prefill. This case pins the fixed order rather than any one section's wording, because the order is
+	 * the behaviour: sources, then the transcript (which only grows), then the mutating document, then the
+	 * instruction, with the static system prompt alone ahead of all of it carrying the turn's one breakpoint.
+	 *
+	 * The SECOND turn is the one asserted, because a first turn has no prior transcript to place.
+	 */
+	test('the chat request leads with the static system prompt and its one cache breakpoint, then orders the turn most-stable first', async () => {
+		const service = createService([], { model: chatReply('Done.') });
+		await service.loadDocument(WEEKLY);
+		await service.sendChatMessage(WEEKLY, 'First question');
+		lastModelBody = undefined;
+
+		await service.sendChatMessage(WEEKLY, 'Second question @metrics.csv');
+
+		const body = JSON.parse(lastModelBody ?? '{}') as {
+			session_id?: string;
+			system?: { type: string; text: string; cache_control?: { type: string } }[];
+			messages?: { role: string; content: string }[];
+		};
+		const turn = body.messages?.[0].content ?? '';
+		// The sections in the order they MUST appear, and the same list re-sorted by where they actually do.
+		const sections = ['Sources (', 'Conversation so far:', 'Document "', 'User: Second question'];
+		assert.deepStrictEqual({
+			// One block, one breakpoint, and the block is the literal system prompt - nothing per-turn is
+			// allowed in here or the breakpoint has nothing stable to bite on.
+			systemBlocks: body.system?.length,
+			systemStartsStatic: body.system?.[0].text.startsWith('You are the agent inside a Living Document editor'),
+			breakpoint: body.system?.[0].cache_control,
+			// The conversation is named, so the broker can steer OpenRouter's sticky routing and derive the
+			// Codex door's prompt_cache_key from it.
+			sessionNamed: typeof body.session_id === 'string' && body.session_id.length > 0,
+			missing: sections.filter(s => !turn.includes(s)),
+			order: [...sections].sort((a, b) => turn.indexOf(a) - turn.indexOf(b)),
+		}, {
+			systemBlocks: 1,
+			systemStartsStatic: true,
+			breakpoint: { type: 'ephemeral' },
+			sessionNamed: true,
+			missing: [],
+			order: sections,
+		});
+	});
+
 	test('a rate-limited model call WAITS the server\'s Retry-After before its single retry', async () => {
 		// The first /v1/messages call answers 429 with an explicit Retry-After; the second succeeds. The
 		// retry used to fire immediately, which during a fan-out wave means every call in the wave re-firing

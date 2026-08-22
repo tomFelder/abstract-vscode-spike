@@ -45,6 +45,10 @@ const { Readable } = require('stream');
 // (an em dash, a curly quote, an accent, any emoji). StringDecoder holds the incomplete sequence back until its
 // remaining bytes arrive, which is exactly the fix and costs nothing on the common whole-character chunk.
 const { StringDecoder } = require('string_decoder');
+// Only ever used to DERIVE the Codex door's prompt cache key from the caller's conversation id (see
+// promptCacheKey). Nothing here is a security boundary - the hash exists so an arbitrary client-supplied
+// string becomes a bounded, opaque, stable token before it is sent to a third party.
+const crypto = require('crypto');
 const { SpendMeter } = require('./lwd-spend-meter.js');
 const openaiOAuth = require('./lwd-openai-oauth.js');
 const openrouterModels = require('./lwd-openrouter-models.js');
@@ -338,36 +342,156 @@ function openRouterKey() {
 // and a per-door render, so "what the client said" is parsed exactly once and only the wire shape differs.
 // Text-only traffic is byte-for-byte what it was before tools existed - that is pinned by the parity suite.
 
+// --- prompt caching (plan 55 WP-B4; architecture of record docs/30-editing-architecture.md section 2.6) ---
+// Three separate mechanisms, one per thing they steer, and the broker's whole job here is to carry them
+// FAITHFULLY rather than to have an opinion:
+//   1. `cache_control` breakpoints. An Anthropic-shape marker on a system or content block. OpenRouter
+//      forwards it per provider - Anthropic honours explicit breakpoints (1.25x write, 0.1x read), OpenAI
+//      caches automatically at >= 1024 tokens and ignores the marker. So the correct behaviour on this side is
+//      to STRIP NOTHING and INVENT NOTHING: whatever the client marked arrives upstream exactly as marked.
+//   2. A per-conversation `session_id`. OpenRouter does sticky provider routing for ~10 minutes after a cache
+//      hit, steered by this; without it a mid-loop provider failover silently goes cold.
+//   3. A per-conversation `prompt_cache_key` on the Codex door, which caches server-side (the recorded
+//      fixture scripts/test/fixtures/codex-responses-stream.sse:2,38 shows the field echoed back alongside
+//      `prompt_cache_retention: "24h"`). Codex CLI sends a stable key per conversation; so do we.
+
 /**
- * Split one Anthropic message's content into its parts: the concatenated text, the `tool_use` blocks (the
- * assistant asking for a tool to run) and the `tool_result` blocks (the client returning what it ran). A
- * string content is all text; any other block that carries `.text` contributes text exactly as it always did.
+ * The Anthropic prompt-cache breakpoint carried by one content block, or undefined. Read, never rewritten:
+ * the shape (`{type: 'ephemeral'}`, and whatever else a provider grows) belongs to the client and the
+ * provider, not to this proxy.
+ */
+function cacheControlOf(part) {
+	return (part && typeof part === 'object' && part.cache_control && typeof part.cache_control === 'object')
+		? part.cache_control
+		: undefined;
+}
+
+/** One text part plus its breakpoint (omitted rather than set to undefined, so a plain part stays plain). */
+function textPart(text, cacheControl) {
+	return cacheControl ? { text, cache_control: cacheControl } : { text };
+}
+
+/**
+ * Split one Anthropic message's content into its parts: the concatenated text, the per-block text PARTS (each
+ * keeping any `cache_control` breakpoint it carried), the `tool_use` blocks (the assistant asking for a tool
+ * to run) and the `tool_result` blocks (the client returning what it ran). A string content is all text; any
+ * other block that carries `.text` contributes text exactly as it always did.
  */
 function splitContent(content) {
-	if (typeof content === 'string') { return { text: content, toolUses: [], toolResults: [] }; }
-	if (!Array.isArray(content)) { return { text: String(content ?? ''), toolUses: [], toolResults: [] }; }
+	if (typeof content === 'string') { return { text: content, textParts: [textPart(content)], toolUses: [], toolResults: [] }; }
+	if (!Array.isArray(content)) {
+		const text = String(content ?? '');
+		return { text, textParts: [textPart(text)], toolUses: [], toolResults: [] };
+	}
 	let text = '';
+	const textParts = [];
 	const toolUses = [];
 	const toolResults = [];
 	for (const part of content) {
 		if (!part) { continue; }
 		if (part.type === 'tool_use') { toolUses.push(part); }
 		else if (part.type === 'tool_result') { toolResults.push(part); }
-		else if (part.text) { text += part.text; }
+		else if (part.text) { text += part.text; textParts.push(textPart(part.text, cacheControlOf(part))); }
 	}
-	return { text, toolUses, toolResults };
+	return { text, textParts, toolUses, toolResults };
 }
 
 /**
- * The door-neutral view of an Anthropic Messages request: the system text plus one entry per turn carrying
- * its role, its flattened text and its tool blocks. Both doors render from this.
+ * The system prompt's text parts. Anthropic's `system` is either a plain string or an ARRAY of text blocks,
+ * and the array form is the only place a system-level cache breakpoint can live - which is exactly where the
+ * client puts the one breakpoint of a turn, at the end of its stable prefix. Before WP-B4 a non-string
+ * `system` was silently dropped here, so accepting the array is not a nicety: it is what stops a client that
+ * marks a breakpoint from losing its whole system prompt.
+ */
+function systemParts(system) {
+	if (typeof system === 'string') { return system ? [textPart(system)] : []; }
+	if (!Array.isArray(system)) { return []; }
+	const parts = [];
+	for (const block of system) {
+		if (!block) { continue; }
+		const text = typeof block === 'string' ? block : (typeof block.text === 'string' ? block.text : '');
+		if (!text) { continue; }
+		parts.push(textPart(text, cacheControlOf(block)));
+	}
+	return parts;
+}
+
+/**
+ * The door-neutral view of an Anthropic Messages request: the system text (flattened, plus its parts with any
+ * breakpoints intact) and one entry per turn carrying its role, its flattened text, its text parts and its
+ * tool blocks. Both doors render from this.
  */
 function normaliseTurns(req) {
-	const system = (typeof req.system === 'string' && req.system) ? req.system : '';
+	const sysParts = systemParts(req.system);
+	const system = sysParts.map(p => p.text).join('\n\n');
 	const turns = (req.messages || []).map(m => Object.assign({
 		role: m.role === 'assistant' ? 'assistant' : (m.role === 'system' ? 'system' : 'user'),
 	}, splitContent(m.content)));
-	return { system, turns };
+	return { system, systemParts: sysParts, turns };
+}
+
+// The longest conversation id we will carry to an upstream body. A real one is a uuid; anything longer is a
+// caller mistake (or a client POSTing junk), and a proxy must not relay unbounded caller-controlled strings.
+const MAX_SESSION_ID_LENGTH = 200;
+
+/**
+ * The caller's per-conversation identifier, or undefined. An absent, non-string, empty or over-long value is
+ * DROPPED rather than repaired: a wrong session id is worse than none, because it would steer two separate
+ * conversations onto one sticky provider and one cache key.
+ */
+function normaliseSessionId(value) {
+	if (typeof value !== 'string') { return undefined; }
+	const trimmed = value.trim();
+	return (trimmed && trimmed.length <= MAX_SESSION_ID_LENGTH) ? trimmed : undefined;
+}
+
+/**
+ * The Codex door's `prompt_cache_key`: a stable, bounded, opaque token DERIVED from the conversation id, so
+ * two turns of one conversation share a key and two conversations never do. Derived rather than passed
+ * through because the conversation id is the client's own identifier: today it is a uuid, but the derivation
+ * is what guarantees that a future id carrying anything local (a workspace path, a document name) can never
+ * reach OpenAI, and that the key stays a fixed length whatever the client sends.
+ */
+function promptCacheKey(sessionId) {
+	return sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 32) : undefined;
+}
+
+/**
+ * The cache half of an upstream `usage` payload, normalised across the three dialects the two doors between
+ * them produce: OpenAI chat (`prompt_tokens_details.cached_tokens`), OpenAI Responses
+ * (`input_tokens_details.cached_tokens` / `.cache_write_tokens`) and the Anthropic fields OpenRouter relays
+ * (`cache_read_input_tokens` / `cache_creation_input_tokens`), plus OpenRouter's own `cache_discount`.
+ *
+ * Returns undefined when the payload carries NO cache accounting at all. That distinction is load-bearing:
+ * a model without caching must meter exactly as it did before this existed, so "no cache fields" writes no
+ * cache fields rather than writing zeroes that would read as a measured miss.
+ */
+function cacheStats(usage) {
+	if (!usage || typeof usage !== 'object') { return undefined; }
+	const num = v => (typeof v === 'number' && Number.isFinite(v)) ? v : undefined;
+	const details = usage.prompt_tokens_details || usage.input_tokens_details || {};
+	const readTokens = num(details.cached_tokens) ?? num(usage.cache_read_input_tokens);
+	const writeTokens = num(details.cache_write_tokens) ?? num(usage.cache_creation_input_tokens);
+	const discountUsd = num(usage.cache_discount);
+	if (readTokens === undefined && writeTokens === undefined && discountUsd === undefined) { return undefined; }
+	return { readTokens: readTokens ?? 0, writeTokens: writeTokens ?? 0, discountUsd: discountUsd ?? 0 };
+}
+
+// Process-lifetime cache accounting per door. The metered door's numbers ALSO land on every `model_spend`
+// record; the subscription door has no spend record to land on (a user's own ChatGPT quota is not the
+// founder's budget), so /healthz is where its cache accounting surfaces. Deliberately not persisted: this
+// answers "is caching working right now", which is a serving question, not an audit one.
+const cacheTotals = {
+	openrouter: { readTokens: 0, writeTokens: 0, discountUsd: 0 },
+	'openai-oauth': { readTokens: 0, writeTokens: 0, discountUsd: 0 },
+};
+
+function recordCacheStats(backendName, stats) {
+	const bucket = cacheTotals[backendName];
+	if (!bucket || !stats) { return; }
+	bucket.readTokens += stats.readTokens;
+	bucket.writeTokens += stats.writeTokens;
+	bucket.discountUsd += stats.discountUsd;
 }
 
 /**
@@ -520,9 +644,9 @@ function createToolStream(res) {
 // OpenAI's own representation: an assistant `tool_calls` array for a `tool_use`, and a separate `role:"tool"`
 // message per `tool_result` (OpenAI does NOT carry results inside the user turn).
 function toOpenRouterMessages(req) {
-	const { system, turns } = normaliseTurns(req);
+	const { system, systemParts: sysParts, turns } = normaliseTurns(req);
 	const messages = [];
-	if (system) { messages.push({ role: 'system', content: system }); }
+	if (system) { messages.push({ role: 'system', content: openRouterContent(sysParts, system) }); }
 	for (const turn of turns) {
 		// Results first: they answer the assistant turn just above, and must precede whatever the user then says.
 		for (const result of turn.toolResults) {
@@ -531,7 +655,7 @@ function toOpenRouterMessages(req) {
 		if (turn.toolUses.length) {
 			messages.push({
 				role: 'assistant',
-				content: turn.text,
+				content: openRouterContent(turn.textParts, turn.text),
 				tool_calls: turn.toolUses.map(t => ({
 					id: t.id, type: 'function',
 					function: { name: t.name, arguments: JSON.stringify(t.input === undefined ? {} : t.input) },
@@ -539,10 +663,34 @@ function toOpenRouterMessages(req) {
 			});
 		} else if (turn.text || !turn.toolResults.length) {
 			// Unchanged for every text-only turn - including an empty one, which still becomes an empty message.
-			messages.push({ role: turn.role, content: turn.text });
+			messages.push({ role: turn.role, content: openRouterContent(turn.textParts, turn.text) });
 		}
 	}
 	return messages;
+}
+
+/**
+ * One message's text as OpenAI-shape content for OpenRouter. A message carrying NO cache breakpoint stays the
+ * plain string it has always been - byte-identical on the wire, which is what the parity suite pins and what
+ * keeps this change free for every caller that does not cache. A message that DOES carry one becomes the
+ * typed-parts array with the breakpoint on the part the client marked, because a breakpoint has nowhere to
+ * live on a bare string. The marker itself is copied through untouched (see cacheControlOf).
+ */
+function openRouterContent(parts, flat) {
+	if (!parts.some(p => p.cache_control)) { return flat; }
+	return parts.map(p => (p.cache_control ? { type: 'text', text: p.text, cache_control: p.cache_control } : { type: 'text', text: p.text }));
+}
+
+/**
+ * Add the caller's per-conversation `session_id` to an OpenRouter body, when they sent a usable one.
+ * OpenRouter keeps routing a session to the provider that just served it for ~10 minutes after a cache hit;
+ * that stickiness is what makes a cached prefix survive a multi-step loop instead of going cold the first
+ * time the pool reassigns a provider.
+ */
+function withSession(req, body) {
+	const sessionId = normaliseSessionId(req.session_id);
+	if (sessionId) { body.session_id = sessionId; }
+	return body;
 }
 
 /**
@@ -586,7 +734,7 @@ async function openRouterForward(body, req) {
 	// this door's curated list). Before plan 53 this door hardcoded a single id and DISCARDED req.model, so the
 	// composer's picker was decorative on the included door - every turn ran on gpt-4.1-mini whatever it said.
 	const orModel = req.model || openRouterDefaultModel();
-	const orBody = JSON.stringify(withChatTools(req, { model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), usage: { include: true } }));
+	const orBody = JSON.stringify(withSession(req, withChatTools(req, { model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), usage: { include: true } })));
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -651,7 +799,7 @@ async function openRouterForwardStream(req, res) {
 	}
 	// Same as the buffered path: the caller's resolved model is load-bearing here, not advisory.
 	const orModel = req.model || openRouterDefaultModel();
-	const orBody = JSON.stringify(withChatTools(req, { model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } }));
+	const orBody = JSON.stringify(withSession(req, withChatTools(req, { model: orModel, max_tokens: req.max_tokens || DEFAULT_MAX_TOKENS, messages: toOpenRouterMessages(req), stream: true, usage: { include: true } })));
 	const upstream = await fetch(OPENROUTER_URL, {
 		method: 'POST',
 		headers: {
@@ -814,6 +962,14 @@ function toResponsesRequest(req, _stream) {
 		stream: true,
 	};
 	if (instructionsParts.length) { body.instructions = instructionsParts.join('\n\n'); }
+	// This door caches SERVER-side rather than by breakpoint: the key is what partitions the cache, so a
+	// stable key per conversation is the whole mechanism (Codex CLI sends one; the recorded fixture shows the
+	// field echoed back). No breakpoint is sent here and none could be - the Responses API has no
+	// `cache_control`, which is why the client's markers simply do not survive the flattening above. Omitted
+	// entirely when the caller named no conversation, never a random key: a fresh key every turn is a
+	// guaranteed miss dressed up as a feature.
+	const cacheKey = promptCacheKey(normaliseSessionId(req.session_id));
+	if (cacheKey) { body.prompt_cache_key = cacheKey; }
 	const tools = requestedTools(req);
 	if (tools) {
 		body.tools = toResponsesTools(tools);
@@ -961,8 +1117,11 @@ async function openAiForward(_body, req) {
 		stop_reason: blocks.length ? 'tool_use' : responsesStopReason(json),
 		content: anthropicContent(text || textFromResponses(json), blocks),
 	};
-	// meters:false, so no usage is returned to the meter (a subscription call is not the founder's budget).
-	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic), usage: undefined };
+	// The usage IS returned now (WP-B4). It is not returned to be CHARGED - meterCall still refuses to charge a
+	// non-metering door, because a subscription call is not the founder's budget - it is returned so the cache
+	// accounting in it (`input_tokens_details.cached_tokens`) has somewhere to land. Without this the one door
+	// whose caching is entirely server-side would be the one door we could not tell was working.
+	return { status: 200, contentType: 'application/json', text: JSON.stringify(anthropic), usage: json.usage };
 }
 
 /**
@@ -1020,7 +1179,7 @@ async function openAiForwardStream(req, res) {
 	// event vocabulary and the terminal `response.completed`, and createToolStream owns the Anthropic side, so
 	// the two doors emit byte-identical tool events.
 	let truncated = false;
-	await readResponsesStream(nodeStream, {
+	const read = await readResponsesStream(nodeStream, {
 		onText: delta => {
 			if (!res.writableEnded && !res.destroyed) {
 				res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } }));
@@ -1028,13 +1187,15 @@ async function openAiForwardStream(req, res) {
 		},
 		onToolStart: (key, id, name) => tools.start(key, id, name),
 		onToolArgs: (key, fragment) => tools.argsDelta(key, fragment),
-	}).catch(() => { truncated = true; });
+	}).catch(() => { truncated = true; return undefined; });
 	// Upstream cut the stream short: name it, then end cleanly (see the openrouter door for the same rule).
 	if (truncated && !clientGone && !res.writableEnded && !res.destroyed) {
 		res.write(sseEvent('error', { type: 'error', error: { type: 'upstream_stream_error', message: 'the model stream ended early' } }));
 	}
 	endStream();
-	return { usage: undefined };
+	// Same rule as the buffered path: returned for its cache accounting, never to be charged (meters:false).
+	// A truncated stream carries no `response.completed`, so there is simply nothing to report.
+	return { usage: (read && read.completed) ? read.completed.usage : undefined };
 }
 
 // --- OpenRouter catalogue discovery (plan 53) ------------------------------------------------------------
@@ -1335,6 +1496,11 @@ function forLog(value) {
 // own subscription is not the founder's budget). Cost uses real API numbers where present, an honest
 // estimate otherwise (see openRouterCost).
 function meterCall(backend, usage, model, purpose) {
+	// Cache accounting is read on BOTH doors, before the metering gate, because "was the prefix cached" is a
+	// serving fact rather than a budget one. The metered door's numbers go into the audit record below as well;
+	// the subscription door's live only in the running totals /healthz reports (it writes no spend record).
+	const cache = cacheStats(usage);
+	recordCacheStats(backend.name, cache);
 	if (!backend.meters) { return; }
 	const { costUsd, estimated } = openRouterCost(usage);
 	const outcome = spendMeter.charge(costUsd);
@@ -1349,6 +1515,14 @@ function meterCall(backend, usage, model, purpose) {
 		purpose: purpose || undefined,
 		cost: Number(costUsd.toFixed(6)),
 		cost_estimated: estimated,
+		// Cache reads are their OWN number and are NEVER folded into an input-token count (doc 30 section 2.6):
+		// a cached read is billed at a fraction of a fresh input token, so adding the two together would make
+		// the audit lie about both the volume and the price. All three fields are absent when upstream reported
+		// no cache accounting at all, so a record for a model without caching is exactly what it always was -
+		// zeroes would be a measured miss, and we have not measured one.
+		cache_read_tokens: cache ? cache.readTokens : undefined,
+		cache_write_tokens: cache ? cache.writeTokens : undefined,
+		cache_discount: cache ? Number(cache.discountUsd.toFixed(6)) : undefined,
 		daily_total: Number(outcome.dailyTotalUsd.toFixed(6)),
 		daily_budget: DAILY_BUDGET_USD,
 		cap_hit: outcome.capHit,
@@ -1416,7 +1590,9 @@ async function forwardMessages(req, res) {
 		}
 	}
 	parsed.model = resolvedModel;
-	console.log(`[lwd-proxy] /v1/messages backend=${backend.name} requested=${requestedModel === undefined ? 'null' : JSON.stringify(forLog(requestedModel))} resolved=${resolvedModel} purpose=${purpose || 'null'}`);
+	// `session` is logged as PRESENT-or-not rather than by value: the id is the client's own conversation
+	// identifier, it is the thing the cache is partitioned by, and a broker log is not the place for it.
+	console.log(`[lwd-proxy] /v1/messages backend=${backend.name} requested=${requestedModel === undefined ? 'null' : JSON.stringify(forLog(requestedModel))} resolved=${resolvedModel} purpose=${purpose || 'null'} session=${normaliseSessionId(parsed.session_id) ? 'yes' : 'no'}`);
 	// Budget gate (metered backends only): if the day's included usage is already spent, do NOT call the
 	// model - return the plain-words cap message so the renderer pauses the run via D15 and keeps proposals.
 	if (backend.meters && spendMeter.isOverBudget()) {
@@ -1844,6 +2020,15 @@ const server = http.createServer((req, res) => {
 			signedIn: openaiOAuth.isSignedIn(),
 			dailyBudgetUsd: DAILY_BUDGET_USD,
 			dailyTotalUsd: backend.meters ? Number(spendMeter.dailyTotalUsd().toFixed(6)) : undefined,
+			// Prompt-cache accounting since this broker started, per door (plan 55 WP-B4). This is where the
+			// SUBSCRIPTION door's cache numbers live: it writes no `model_spend` record, so without this the one
+			// door that caches purely server-side would be the one we could not observe. The metered door reports
+			// here as well as per call in the spend log. `discountUsd` is OpenRouter's own `cache_discount` and
+			// stays 0 on a door that reports no cost accounting.
+			cache: {
+				openrouter: { readTokens: cacheTotals.openrouter.readTokens, writeTokens: cacheTotals.openrouter.writeTokens, discountUsd: Number(cacheTotals.openrouter.discountUsd.toFixed(6)) },
+				'openai-oauth': { readTokens: cacheTotals['openai-oauth'].readTokens, writeTokens: cacheTotals['openai-oauth'].writeTokens, discountUsd: Number(cacheTotals['openai-oauth'].discountUsd.toFixed(6)) },
+			},
 		});
 		return;
 	}
