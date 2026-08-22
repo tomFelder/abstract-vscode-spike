@@ -3,6 +3,25 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// The broker's tool-event wire contract (plan 55 B2), recorded here because this is the file every client
+// adapter reaches for first and the contract is invisible from the parser below, which only reads text:
+//
+//   - Text keeps content block index 0 and streams as BARE `content_block_delta` / `text_delta` events with
+//     no surrounding `content_block_start` / `content_block_stop`, exactly as it did before tools existed.
+//   - A tool call is `content_block_start` (a `tool_use` block, indexes numbered from 1) -> one or more
+//     `content_block_delta` / `input_json_delta` fragments -> `content_block_stop`.
+//   - A turn that carried at least one tool call closes with `message_delta` naming
+//     `stop_reason: "tool_use"`. A turn that carried NO tool call emits NO `message_delta` at all, and the
+//     `message_delta` never carries `usage`. So a text-only stream is byte-for-byte what it always was,
+//     which is what the broker's parity suite pins (`scripts/lwd-model-broker.js:592-640`).
+//   - A malformed tool call still closes its block, then emits a typed `error` event
+//     (`{ type: "error", error: { type: "invalid_tool_arguments", message } }`) right after that block's
+//     `content_block_stop`, which is how the adapter attributes it to a call. A broken upstream body emits
+//     `error` with `upstream_stream_error` followed by `message_stop` (issue #346).
+//
+// The state machine that consumes the assembled turns is `common/livingDocsAgentLoop.ts`; its
+// `IAgentModelResponse` is the shape an adapter over this parser has to produce.
+
 /**
  * The result of parsing one network buffer of Anthropic-shaped Server-Sent Events (plan 27). The
  * proxy normalises BOTH backends to the same event vocabulary (`content_block_delta` with a
