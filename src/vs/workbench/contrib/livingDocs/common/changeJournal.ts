@@ -168,6 +168,12 @@ export interface IRebaseRecord extends IJournalRecordBase {
 	readonly rebased: readonly IChangeRebase[];
 	/** Changes whose spans overlapped what was written: recorded as needing attention, never discarded. */
 	readonly stale: readonly string[];
+	/**
+	 * Why the stale ones need attention. Absent means `stale-base` - the store wrote over them itself.
+	 * A remap over a HUMAN edit records `human-edit` instead, because the two are different facts about the
+	 * document and the reviewer is entitled to be told which one moved their proposal.
+	 */
+	readonly staleReason?: AttentionReason;
 }
 
 /** A recorded change became ineligible - the document moved on underneath it. Never a silent drop. */

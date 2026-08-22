@@ -556,8 +556,25 @@ export function chunkDocBody(body: string): IBodyChunk[] {
 // (docs/30 section 2.1), `scopeBlockEdit` locates the list item an edit targets with it, and the service
 // relocates a prose claim against moved text with it. It used to exist three times.
 export function jaccardSimilarity(a: string, b: string): number {
-	const ta = new Set(a.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-	const tb = new Set(b.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+	return jaccardOfTokens(similarityTokens(a), similarityTokens(b));
+}
+
+/**
+ * The token set {@link jaccardSimilarity} compares, exposed so a caller that scores the SAME string many
+ * times can tokenise it once.
+ *
+ * The differ needs this: its gap aligner fills a dynamic-programming table and asks for the similarity of
+ * the same pair of blocks up to three ways per cell, so tokenising inside the comparison re-scans the same
+ * prose thousands of times on a large document. Splitting the rule from the scoring keeps ONE definition of
+ * what a token is (the reason `jaccardSimilarity` is now written in terms of these two) while letting the
+ * hot path hoist the scanning out of its inner loop.
+ */
+export function similarityTokens(text: string): ReadonlySet<string> {
+	return new Set(text.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+}
+
+/** The Jaccard overlap of two token sets from {@link similarityTokens}: 0..1, 1 = identical sets. */
+export function jaccardOfTokens(ta: ReadonlySet<string>, tb: ReadonlySet<string>): number {
 	if (ta.size === 0 || tb.size === 0) { return 0; }
 	let inter = 0;
 	for (const t of ta) { if (tb.has(t)) { inter++; } }

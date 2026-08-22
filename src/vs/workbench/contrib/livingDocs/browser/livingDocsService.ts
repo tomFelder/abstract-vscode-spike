@@ -17,6 +17,11 @@ import { localize } from '../../../../nls.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IInlineWidgetReport } from '../common/changePointer.js';
+import { IChangeResolution } from '../common/changeJournal.js';
+import { applyFailureStatus, BlockApplyFailure, describeApplyFailure } from '../common/applyOutcome.js';
+import { describeAnchorFailure, describeChangeStatus, hashContent, IChangeAnchor, IChangeDisplay, singleEditBetween, toProposedChange } from '../common/changeRecord.js';
+import { bulkSkipFor, ChangeStore, IChangeStoreDocuments, IReviewProgress } from '../common/changeStore.js';
+import { changeStoreHomeFor, WorkbenchChangeStoreFileSystem } from './livingDocChangeStore.js';
 import { attachToSession, closeSession as closeSessionInList, createSession, deserialiseSessions, IChatSession, serialiseSessions, sessionsMentioning, titleSession } from '../common/chatSessions.js';
 import { deserialiseTranscripts, serialiseTranscripts } from '../common/chatTranscripts.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -38,10 +43,9 @@ import { ModelAccessGate, needsModelChoice } from '../common/modelAccessGate.js'
 import { convertDocxHtml, formatImportSummary, IDocxDetections } from '../common/docxImport.js';
 import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageAssetName } from '../common/livingDocAssets.js';
 import { IAnalyticsService } from '../common/analytics.js';
-import { applyFailureStatus, BlockApplyFailure, describeApplyFailure } from '../common/applyOutcome.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
-import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag } from '../common/livingDocMarkdown.js';
+import { buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, chunkDocBody, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { coerceDocPolicy, docPolicyNeverRefusal, docPolicyNeverSkipReason, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
@@ -58,7 +62,7 @@ import { buildTidyPlan, ITidyInventoryItem } from '../common/tidyPlan.js';
 import { AgentOrchestrator, IAgentRunContext, IAgentRunResult } from './agentOrchestrator.js';
 import { IClock, RealClock } from './clock.js';
 import { WorkspaceAgentStore } from './agentStore.js';
-import { AddedContextKind, AgentPolicy, buildBulkSet, bulkChangeLabel, BulkVerb, describeBulkSkips, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IBulkApplyResult, IBulkScope, IBulkSet, IBulkSkip, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
+import { AddedContextKind, AgentPolicy, buildBulkSet, bulkChangeLabel, BulkVerb, ChangeKind, describeBulkSkips, emptyLock, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBindingEntry, IBulkApplyResult, IBulkScope, IBulkSet, IBulkSkip, IFreshness, ILivingDoc, ILivingDocBlock, ILivingDocLock, IProposedChange, ISkillRunDocResult, ISkillRunSummary, ISnapshotEntry, SNAPSHOT_CAP, SkillRunDocStatus, SnapshotVia, SourceKind, summariseSkillRun } from '../common/livingDocsModel.js';
 import { buildSourceGrid } from '../common/sourceGrid.js';
 import { classifyWorkspaceExtra } from '../common/treeRail.js';
 import { countUnseenAgentEdits } from '../common/railStatus.js';
@@ -521,7 +525,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// api JSON, cached during resolution so source-peek can show the real payload with the extracted field
 	// highlighted (closing the "provenance falls back to the CSV" gap for api/mcp kinds).
 	private readonly _payloadRawCache = new Map<string, string>();
+	// The review queue, DERIVED from the change store and rebuilt by `_refreshPending()` after every store
+	// verb. Nothing in this file assigns to it except that method: identity, state and count have exactly one
+	// persisted home (docs/30 invariant I5), and this array is a projection of it for the shipped surfaces.
+	// Before R6 this WAS the queue - renderer memory that vanished on reload, with the audit trail and the
+	// activity ledger as two further disagreeing records of the same fact.
 	private _pending: IProposedChange[] = [];
+	private _changeStore: ChangeStore | undefined;
+	private _changeStoreReady: Promise<ChangeStore | undefined> | undefined;
+	// True when the store had open proposals the moment this window opened them - i.e. the review is being
+	// RESUMED rather than started. Decided once, at open, so the rail's sentence cannot drift into claiming a
+	// resumption for work done in this session.
+	private _resumedReview = false;
 	// The since-last-looked anchor per document (issue #212), keyed by doc URI string -> ISO time last active.
 	// Read once from storage at construction (DOC_LAST_VIEWED_KEY, WORKSPACE), stamped on active-editor change,
 	// and pruned to the current doc set on each write. The Files-rail green dot reads it via _summarize.
@@ -1149,6 +1164,188 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// --- workspace-wide views ---
 
 	getAllPending(): readonly IProposedChange[] { return this._pending; }
+
+	/**
+	 * How far through the live proposal sets the reviewer is, for the rail's foot (docs/30 stage 1).
+	 *
+	 * `resumed` is the difference between "0 of 12 decided" on a fresh run and "Resumed - 41 of 63 decided"
+	 * after a reload, and it is a fact about this window rather than about the numbers.
+	 */
+	getReviewProgress(): IReviewProgress & { readonly resumed: boolean } {
+		const progress = this._changeStore?.reviewProgress() ?? { decided: 0, total: this._pending.length };
+		return { ...progress, resumed: this._resumedReview };
+	}
+
+	// --- the persisted change store (docs/30 section 5, stage 1) ------------------------------------
+
+	/**
+	 * The change store's view of the documents it edits.
+	 *
+	 * **Nothing in here may call a store verb.** Every mutating verb runs on the store's internal queue so
+	 * that admission and the write it authorises are atomic with respect to one another (invariant I8), and
+	 * the store awaits this seam from INSIDE that queue. A seam that reached back for `propose` /
+	 * `approveByIds` / `comment` would wait for a queue slot that only frees once the seam it is waiting on
+	 * returns: a permanent deadlock, not a slow path. Read the body, snapshot, write the bytes, resolve.
+	 *
+	 * `read` and `write` speak BODY text, never whole files. That is the frontmatter quarantine (docs/30
+	 * section 8.3): the store's spans are body offsets, and `withReplacedBody` re-attaches the original
+	 * `---` block verbatim, so the approve path cannot go anywhere near `serializeLivingDoc` - which drops
+	 * `template`, `name`, `description`, `fromTemplate` and every unknown user key the parser reads.
+	 */
+	private readonly _storeDocuments: IChangeStoreDocuments = {
+		read: async docUri => {
+			const state = this._docs.get(docUri);
+			return state ? this._bodyOf(state) : undefined;
+		},
+		snapshot: async docUri => {
+			const state = this._docs.get(docUri);
+			if (!state) { return ''; }
+			await this.saveSnapshot(state.uri, 'Before bulk approve', 'bulk-approve');
+			return state.lock.snapshots[state.lock.snapshots.length - 1]?.id ?? '';
+		},
+		write: async (docUri, body) => {
+			const state = this._docs.get(docUri);
+			if (!state) { throw new Error(`document not loaded: ${docUri}`); }
+			// The external-edit floor (issue #133) lives on this path too: if the `.md` on disk moved outside
+			// Abstract and the user has not chosen to keep their version, the write REFUSES rather than
+			// clobbering it. The store reads a throw as a document that did not land, which is exactly right -
+			// the approval becomes `needs-attention`, never a standing `approved` over a file it never touched.
+			if (!(await this._diskUnchanged(state)) && !state.keepMine) {
+				this._promptExternalChange(state, { source: 'persist' });
+				throw new Error('the document changed outside Abstract');
+			}
+			const next = withReplacedBody(state.rawText, body);
+			await this._files.writeFile(state.uri, VSBuffer.fromString(next));
+			state.rawText = next;
+			state.doc = parseLivingDoc(next);
+			state.keepMine = undefined;
+			state.unsavedRaw = false;
+			await this._captureDiskState(state);
+		},
+	};
+
+	/**
+	 * The store for the open project, opened once per session and reused.
+	 *
+	 * Opening replays the journal, heals a torn tail and reconciles every intent the last session left open,
+	 * so a crash window is CLASSIFIED before a single proposal is rendered. A window with no folder open has
+	 * nowhere to keep a journal and therefore no store: the queue is empty and every verb is a no-op, which
+	 * is the honest behaviour for a window with no project in it.
+	 */
+	private _ensureChangeStore(): Promise<ChangeStore | undefined> {
+		if (!this._changeStoreReady) {
+			this._changeStoreReady = this._openChangeStore();
+		}
+		return this._changeStoreReady;
+	}
+
+	private async _openChangeStore(): Promise<ChangeStore | undefined> {
+		const folder = this._workspace.getWorkspace().folders[0]?.uri;
+		if (!folder) { return undefined; }
+		const store = new ChangeStore(new WorkbenchChangeStoreFileSystem(this._files), this._storeDocuments, changeStoreHomeFor(folder));
+		const report = await store.open();
+		this._changeStore = store;
+		// "Resumed" is a claim about THIS window, so it is decided exactly once, here: anything open in the
+		// journal at this moment is work the reviewer left behind last time.
+		this._resumedReview = store.openChanges().length > 0;
+		if (report.failure) {
+			this._log.warn('[livingDocs] change store could not be opened', report.failure.reason);
+		}
+		if (report.truncated || report.quarantined) {
+			this._log.warn('[livingDocs] change journal healed', report.truncated, 'truncated,', report.quarantined, 'quarantined');
+		}
+		this._refreshPending();
+		return store;
+	}
+
+	/** Rebuild the derived queue from the store. The ONLY assignment to `_pending` in this file. */
+	private _refreshPending(): void {
+		this._pending = (this._changeStore?.openChanges() ?? []).map(change => {
+			const proposed = toProposedChange(change);
+			if (proposed.applyFailure === undefined) { return proposed; }
+			// WHICH failure the card shows is a fact about blocks, and only the loaded document knows it. The
+			// store reasons in spans - it can prove the text moved, and it is right not to guess at what a
+			// block is - so the card's "the part of the document it was written for is no longer there" is
+			// derived here, where the parsed document is in hand, rather than invented in either place.
+			const state = this._docs.get(proposed.docId);
+			const present = !state || state.doc.blocks.some(b => b.id === proposed.blockId);
+			return present ? proposed : { ...proposed, applyFailure: 'block-gone' as const };
+		});
+	}
+
+	/**
+	 * The document's body as it currently stands.
+	 *
+	 * Deliberately re-derived from `rawText` rather than read off `state.doc.body`: several paths mutate
+	 * `state.doc.blocks` in place and persist a re-serialised document WITHOUT re-parsing, so the cached
+	 * `body` on the parsed document goes stale the moment a figure lands or a block is hand-edited. An anchor
+	 * measured against a stale body is an anchor measured against a document that does not exist, and a base
+	 * revision is only worth anything if it hashes the text the offsets were actually taken in.
+	 */
+	private _bodyOf(state: IDocState): string {
+		return parseLivingDoc(state.rawText).body;
+	}
+
+	/**
+	 * Record one proposal in the store and return its id, or a named refusal.
+	 *
+	 * This is the queue-time conversion (docs/30 stage 1): the incoming `{heading, oldText, newText}` shape
+	 * is resolved to a block ONCE, here, and persisted as a base-revision hunk - a span in the document body,
+	 * the exact text sitting at it, and the text that replaces it, all measured against a hash of the body
+	 * they were measured in. Everything downstream reads offsets off that record instead of matching strings
+	 * again, which is what ends the three-matchers era the #303 / #329 / #300 families come from.
+	 */
+	private async _recordProposal(state: IDocState, anchor: IChangeAnchor, kind: ChangeKind, display: IChangeDisplay, source: 'chat' | 'fan-out' | 'agent' | 'hook', supersedes?: string): Promise<string | undefined> {
+		const store = await this._ensureChangeStore();
+		if (!store) { return undefined; }
+		const receipts = await store.propose({ changes: [{ anchors: [anchor], kind, display, baseLength: this._bodyOf(state).length, supersedes }] });
+		this._refreshPending();
+		const receipt = receipts.receipts[0];
+		if (!receipt) { return undefined; }
+		const queued = this._pending.find(c => c.id === receipt.changeId);
+		if (queued) { this._captureProposalCreated(queued, source); }
+		return receipt.changeId;
+	}
+
+	/**
+	 * The base-revision anchor for an edit that has already resolved to a block.
+	 *
+	 * `chunkDocBody` cuts the body into the same blocks `parseLivingDoc` did, with exact offsets, so the
+	 * block's position in the parsed document IS its position in the text - no second matcher, no search.
+	 * The scoped `oldText` (one list item inside a tight list) is located within that block only, so the
+	 * span is as narrow as the edit really is and every sibling line is untouched by construction.
+	 */
+	private _anchorForBlock(state: IDocState, blockId: string, oldText: string, newText: string): IChangeAnchor | undefined {
+		const body = this._bodyOf(state);
+		const index = state.doc.blocks.findIndex(b => b.id === blockId);
+		const chunk = index >= 0 ? chunkDocBody(body)[index] : undefined;
+		if (!chunk) { return undefined; }
+		const at = oldText ? chunk.text.indexOf(oldText) : 0;
+		if (at < 0) { return undefined; }
+		const start = chunk.start + at;
+		return { docUri: state.uri.toString(), baseRevision: hashContent(body), span: { start, end: start + oldText.length }, oldText, newText };
+	}
+
+	/**
+	 * The anchor for a generative insertion: a zero-width span at the end of the block it goes after.
+	 *
+	 * The blank line goes BEFORE the new content and never after, so the body's own trailing newline still
+	 * terminates the document and the spliced result round-trips through `withReplacedBody` byte-for-byte -
+	 * which is what lets the store prove the write landed by reading it back and hashing it.
+	 */
+	private _anchorForInsert(state: IDocState, afterBlockId: string, newText: string): IChangeAnchor {
+		const body = this._bodyOf(state);
+		const chunks = chunkDocBody(body);
+		const index = afterBlockId ? state.doc.blocks.findIndex(b => b.id === afterBlockId) : -1;
+		const chunk = index >= 0 ? chunks[index] : chunks[chunks.length - 1];
+		const at = chunk ? chunk.end : 0;
+		return { docUri: state.uri.toString(), baseRevision: hashContent(body), span: { start: at, end: at }, oldText: '', newText: at > 0 ? `\n\n${newText}` : newText };
+	}
+
+	/** The open change ids in one document, for the paths that supersede or discard a document's queue. */
+	private _openChangeIdsFor(docId: string): string[] {
+		return this._pending.filter(c => c.docId === docId).map(c => c.id);
+	}
 	getAudit(): readonly IAuditEntry[] {
 		// The audit is folded into each document's lock; aggregate across the loaded documents.
 		return [...this._docs.values()].flatMap(s => s.lock.audit);
@@ -3132,6 +3329,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this.clearInlineWidgets(resource);
 		const state = await this._loadState(resource);
 		if (state) {
+			// Open the change store against the project (docs/30 section 5, R6). Doing it here rather than in
+			// the constructor is what makes the reconciler correct: it classifies a crash window by reading the
+			// documents an intent named, so it must run once the document it is about can actually be read.
+			// `_ensureChangeStore` is idempotent, so every later document open is a no-op that returns the same
+			// store, and the reconciled state is folded before any surface asks for a count.
+			await this._ensureChangeStore();
 			// First open with no lock yet: bootstrap it from the sources (the initial sync). Otherwise
 			// the lock is authoritative - load is read-only and the cache reconciles to it at render.
 			await this._bootstrapLock(state);
@@ -3728,7 +3931,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const docPolicy = this._figurePolicyForState(state);
 		if (docPolicy === 'never') { return; }
 		for (const change of this._figureReconciles(state)) {
-			if (docPolicy === 'ask-first') { this._queueFigureForReview(state, change); }
+			if (docPolicy === 'ask-first') { await this._queueFigureForReview(state, change); }
 			else { this._applyFigure(state, change); }
 		}
 	}
@@ -3738,25 +3941,32 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// lands as a real pending change on the same rail, awaiting one approval - the prose is left byte-identical
 	// until the human approves. De-dupes any earlier pending figure for the same block so a re-refresh does not
 	// stack duplicates.
-	private _queueFigureForReview(state: IDocState, change: { blockId: string; oldText: string; newText: string }): void {
+	private async _queueFigureForReview(state: IDocState, change: { blockId: string; oldText: string; newText: string }): Promise<void> {
+		await this._queueFigureChange(state, change, false);
+	}
+
+	/**
+	 * Record one figure reconciliation as a persisted change.
+	 *
+	 * The de-dupe is a SUPERSESSION rather than a deletion: an earlier proposal for the same block leaves the
+	 * pending view with a `supersededBy` pointer, so a re-refresh does not stack duplicate cards and does not
+	 * quietly destroy the record of what the previous sync had offered either.
+	 */
+	private async _queueFigureChange(state: IDocState, change: { blockId: string; oldText: string; newText: string }, draft: boolean): Promise<void> {
 		const block = state.doc.blocks.find(b => b.id === change.blockId);
-		this._pending = this._pending.filter(c => !(c.docId === state.uri.toString() && c.blockId === change.blockId));
-		const figureChange: IProposedChange = {
-			id: generateUuid(),
-			docId: state.uri.toString(),
+		const anchor = this._anchorForBlock(state, change.blockId, change.oldText, change.newText);
+		if (!anchor) { return; }
+		const superseded = this._pending.find(c => c.docId === state.uri.toString() && c.blockId === change.blockId);
+		await this._recordProposal(state, anchor, 'figure', {
 			docTitle: state.doc.title,
 			blockId: change.blockId,
 			blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
-			oldText: change.oldText,
-			newText: change.newText,
-			kind: 'figure',
 			confidence: 1,
 			rationale: 'Source value changed; figure update prepared.',
 			sourceCells: block ? block.binds.map(b => b.key) : [],
 			via: 'heuristic',
-		};
-		this._pending.push(figureChange);
-		this._captureProposalCreated(figureChange, 'agent');
+			...(draft ? { draft: true } : {}),
+		}, 'agent', superseded?.id);
 	}
 
 	// The verify gate (spec 5, maker != checker): run the document's Skills as graders before apply.
@@ -3859,27 +4069,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				applied++;
 				continue;
 			}
-			// ask-before-apply / draft-only: queue for the rail without touching the doc.
-			const block = state.doc.blocks.find(b => b.id === change.blockId);
-			this._pending = this._pending.filter(c => !(c.docId === state.uri.toString() && c.blockId === change.blockId));
-			const figureChange: IProposedChange = {
-				id: generateUuid(),
-				docId: state.uri.toString(),
-				docTitle: state.doc.title,
-				blockId: change.blockId,
-				blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
-				oldText: change.oldText,
-				newText: change.newText,
-				kind: 'figure',
-				confidence: 1,
-				rationale: 'Source value changed; figure update prepared.',
-				sourceCells: block ? block.binds.map(b => b.key) : [],
-				via: 'heuristic',
-				draft: policy === 'draft-only',
-			};
-			this._pending.push(figureChange);
-			// A policy-driven agent run prepared this figure update, so its source is 'agent'.
-			this._captureProposalCreated(figureChange, 'agent');
+			// ask-before-apply / draft-only: queue for the rail without touching the doc. A policy-driven agent
+			// run prepared this figure update, so its source is 'agent'.
+			await this._queueFigureChange(state, change, policy === 'draft-only');
 			queued++;
 		}
 		return { applied, queued };
@@ -3889,6 +4081,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const id = resource.toString();
 		const doc = parseLivingDoc(text);
 		const prev = this._docs.get(id);
+		const previousBody = prev ? this._bodyOf(prev) : undefined;
 		const lock = prev?.lock ?? (await this._lockStore.read(resource)) ?? emptyLock();
 		const state: IDocState = {
 			uri: resource,
@@ -3951,6 +4144,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// treat its own echo as self, not external) and re-arm the document watcher.
 		await this._captureDiskState(state);
 		this._watchDoc(state);
+		await this._noteHumanEdit(id, previousBody, doc.body);
 		// Silent saves (live ProseMirror typing) persist to disk + refresh state but do NOT fire the
 		// change event, so the editor does not re-render the webview and remount the editor mid-keystroke.
 		//
@@ -3964,6 +4158,40 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			this._onDidChange.fire();
 		} else {
 			this._onDidChangeDocumentBody.fire({ docId: id });
+		}
+	}
+
+	/**
+	 * Tell the store a PERSON changed the document under its open proposals (docs/30 invariant I8).
+	 *
+	 * The store cannot rebase a human edit on its own: it has no map of what was typed, and guessing there is
+	 * how anchored search/replace earns its defect families. So the delta is computed here, where both
+	 * revisions are in hand, and it is computed the only way that is total - trim the common prefix and the
+	 * common suffix, and what is left is the one contiguous region that differs. For typing that IS the edit,
+	 * exactly; for a paste or a wholesale rewrite it is the smallest region that provably contains it.
+	 *
+	 * What the store then does with it is the honest half: a proposal entirely before or after the edited
+	 * region moves by the exact length difference and stays eligible, and a proposal the edit landed INSIDE
+	 * flips to `needs-attention (human-edit)` on the same id, keeping its thread and its history. Nothing is
+	 * dropped and nothing is re-aimed at prose it was not written for.
+	 */
+	private async _noteHumanEdit(docId: string, previousBody: string | undefined, nextBody: string): Promise<void> {
+		if (previousBody === undefined || previousBody === nextBody) { return; }
+		const store = this._changeStore;
+		if (!store || !store.openChanges().some(c => c.anchors.some(a => a.docUri === docId))) { return; }
+		const edit = singleEditBetween(previousBody, nextBody);
+		const report = await store.noteExternalEdit(docId, edit, hashContent(previousBody), hashContent(nextBody));
+		if (report.failure) {
+			this._log.warn('[livingDocs] human-edit remap could not be journalled', report.failure.reason);
+		}
+		this._refreshPending();
+		if (report.flagged.length) {
+			const state = this._docs.get(docId);
+			if (state) {
+				state.status = report.flagged.length === 1
+					? localize('livingDocs.humanEdit.one', "1 proposed change now needs your attention - you edited the text it was written for.")
+					: localize('livingDocs.humanEdit.many', "{0} proposed changes now need your attention - you edited the text they were written for.", report.flagged.length);
+			}
 		}
 	}
 
@@ -4625,13 +4853,14 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const diff = await this._readContext(state, contextFiles);
 		const modelAvailable = await this._hasModel();
 
-		// Re-running the pass replaces this document's earlier impact candidates so it stays idempotent.
-		this._pending = this._pending.filter(c => c.docId !== id);
+		// Re-running the pass supersedes this document's earlier impact candidates block by block, so it stays
+		// idempotent WITHOUT the old wholesale clear - which deleted proposals from a different pass along with
+		// its own, with no record that they had ever existed (invariant I5: nothing leaves without a trace).
 
 		for (const target of this._claimTargets(state)) {
 			if (target.relink) {
 				// Guardrail 2: a low-confidence anchor match fails loudly - ask to re-link, never re-attach.
-				this._pending.push(this._relinkPrompt(state, target, contextFiles));
+				await this._queueRelinkPrompt(state, target, contextFiles);
 				this._notify.info(`This commentary is bound to ${contextFiles.join(', ') || 'a source'} - re-link?`);
 				continue;
 			}
@@ -4639,31 +4868,29 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (!block) { continue; }
 			const proposal = await this._proposeImpact(diff, contextFiles, block.text, modelAvailable);
 			if (proposal.newText === block.text) { continue; }
-			const change: IProposedChange = {
-				id: generateUuid(),
-				docId: id,
-				docTitle: state.doc.title,
-				blockId: block.id,
-				blockLabel: this._blockLabel(state.doc, block.id),
-				oldText: block.text,
-				newText: proposal.newText,
-				kind: proposal.kind,
-				confidence: proposal.confidence,
-				rationale: proposal.rationale,
-				sourceCells: [],
-				claimId: target.claimId,
-				contextReviewed: contextFiles,
-				via: proposal.via,
-			};
 			if (proposal.kind === 'figure') {
 				// Confidence-gated routing (guardrail 4): figure-class ripples may auto-stage.
-				if (block) { block.text = proposal.newText; block.binds = extractBindLinks(proposal.newText); state.recent.add(block.id); }
-				state.lock.audit.push(this._entry(state, block.id, 'auto-applied', change.oldText, change.newText, proposal.via));
+				state.lock.audit.push(this._entry(state, block.id, 'auto-applied', block.text, proposal.newText, proposal.via));
+				block.text = proposal.newText;
+				block.binds = extractBindLinks(proposal.newText);
+				state.recent.add(block.id);
 			} else {
-				// Meaning/influence changes wait for approval in the review rail (no eager rewrites).
-				this._pending.push(change);
-				// The impact pass is driven by a source change (agent/hook), so this proposal's source is 'agent'.
-				this._captureProposalCreated(change, 'agent');
+				// Meaning/influence changes wait for approval in the review rail (no eager rewrites). The impact
+				// pass is driven by a source change (agent/hook), so this proposal's source is 'agent'.
+				const anchor = this._anchorForBlock(state, block.id, block.text, proposal.newText);
+				if (!anchor) { continue; }
+				const superseded = this._pending.find(c => c.docId === id && c.blockId === block.id);
+				await this._recordProposal(state, anchor, proposal.kind, {
+					docTitle: state.doc.title,
+					blockId: block.id,
+					blockLabel: this._blockLabel(state.doc, block.id),
+					confidence: proposal.confidence,
+					rationale: proposal.rationale,
+					sourceCells: [],
+					claimId: target.claimId,
+					contextReviewed: contextFiles,
+					via: proposal.via,
+				}, 'agent', superseded?.id);
 			}
 		}
 
@@ -4709,18 +4936,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return best;
 	}
 
-	private _relinkPrompt(state: IDocState, target: { claimId?: string; blockId?: string }, contextFiles: string[]): IProposedChange {
+	/**
+	 * Record a re-link prompt: the claim's stored anchor no longer matches the prose, so the reviewer is
+	 * asked to re-point it rather than the pass re-attaching it to the wrong sentence (guardrail 2).
+	 *
+	 * A re-link WRITES NOTHING to the document - it moves a claim, not prose - so its anchor is a no-op over
+	 * the block it would re-point to, and the card's WAS comes from `claimAnchor` on the display side. When
+	 * the block is gone entirely the anchor is the claim's own recorded text placed at the head of the body,
+	 * where it demonstrably is not: the store admits it as `needs-attention (anchor-invalid)` and no approve
+	 * can ever record it as applied. That is issue #344 - "the re-link arm records approved on a gone block" -
+	 * closed structurally rather than by a guard someone has to remember to write.
+	 */
+	private async _queueRelinkPrompt(state: IDocState, target: { claimId?: string; blockId?: string }, contextFiles: string[]): Promise<void> {
 		const claim = target.claimId ? state.lock.claims[target.claimId] : undefined;
 		const best = target.blockId ? state.doc.blocks.find(b => b.id === target.blockId) : undefined;
-		return {
-			id: generateUuid(),
-			docId: state.uri.toString(),
+		const anchor = best
+			? this._anchorForBlock(state, best.id, best.text, best.text)
+			: { docUri: state.uri.toString(), baseRevision: hashContent(this._bodyOf(state)), span: { start: 0, end: (claim?.anchor ?? '').length }, oldText: claim?.anchor ?? '', newText: claim?.anchor ?? '' };
+		if (!anchor) { return; }
+		await this._recordProposal(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: target.blockId ?? '',
 			blockLabel: 'Re-link claim',
-			oldText: claim?.anchor ?? '',
-			newText: best?.text ?? '',
-			kind: 'meaning',
+			wasText: claim?.anchor ?? '',
+			nowText: best?.text ?? '',
 			confidence: 0,
 			rationale: `This commentary is bound to ${contextFiles.join(', ') || 'a source'} but its anchor no longer matches the prose - re-link?`,
 			sourceCells: [],
@@ -4728,7 +4967,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			contextReviewed: contextFiles,
 			via: 'heuristic',
 			relink: true,
-		};
+		}, 'agent');
 	}
 
 	// --- model access: provider picker + survey (plan 35 iter 4) ---
@@ -6193,12 +6432,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const drops: ChatDropReason[] = [];
 		if (!refused) {
 			for (const edit of json.edits) {
-				const outcome = this._queueChatEdit(state, edit);
+				const outcome = await this._queueChatEdit(state, edit);
 				if (outcome.queued) { addStep({ label: `Proposed edit: ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
 				else { drops.push(outcome.reason); }
 			}
 			for (const insert of json.inserts) {
-				const outcome = this._queueChatInsert(state, insert);
+				const outcome = await this._queueChatInsert(state, insert);
 				if (outcome.queued) { addStep({ label: `Proposed new content after ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
 				else { drops.push(outcome.reason); }
 			}
@@ -6373,12 +6612,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					continue;
 				}
 				for (const edit of entry.edits) {
-					const outcome = this._queueChatEdit(target, edit, sources, 'fan-out');
+					const outcome = await this._queueChatEdit(target, edit, sources, 'fan-out');
 					if (outcome.queued) { addStep({ label: `${target.doc.title}: ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
 					else { drops.push(outcome.reason); }
 				}
 				for (const insert of entry.inserts) {
-					const outcome = this._queueChatInsert(target, insert, sources, 'fan-out');
+					const outcome = await this._queueChatInsert(target, insert, sources, 'fan-out');
 					if (outcome.queued) { addStep({ label: `${target.doc.title}: new content after ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
 					else { drops.push(outcome.reason); }
 				}
@@ -6433,7 +6672,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the queued
 	// block label, else a NAMED drop reason - never a bare `undefined`, so the composer can reconcile what the
 	// model claimed against what actually landed and say which claims did not (I3, issue #303).
-	private _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): IQueueOutcome {
+	private async _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): Promise<IQueueOutcome> {
 		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - no proposal is
 		// ever created for it, in chat or fan-out. The caller names the refusal; here we simply make no change.
 		if (this._policyForState(state) === 'never') { return { queued: false, reason: 'policy' }; }
@@ -6472,25 +6711,23 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (extractBindLinks(scoped.oldText).length) { return { queued: false, reason: 'bind-guard' }; }
 		if (scoped.oldText.trim() === newText) { return { queued: false, reason: 'no-op' }; }
 		const label = this._blockLabel(state.doc, best.id);
-		const id = generateUuid();
 		const grounding = this._resolveSourceGrounding(edit.sourceQuote, edit.sourceLine, sourceText);
-		const change: IProposedChange = {
-			id,
-			docId: state.uri.toString(),
+		// The queue-time conversion (docs/30 stage 1): the edit is resolved to a block exactly once, here, and
+		// persisted as a base-revision hunk. The scoped `oldText` keeps the span as narrow as the edit really
+		// is, so approving a one-line change to a long list leaves every sibling item byte-identical.
+		const anchor = this._anchorForBlock(state, best.id, scoped.oldText, newText);
+		if (!anchor) { return { queued: false, reason: 'no-match' }; }
+		const id = await this._recordProposal(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: best.id,
 			blockLabel: label,
-			oldText: scoped.oldText,
-			newText,
-			kind: 'meaning',
 			confidence: 0.85,
 			rationale: String(edit.rationale ?? 'Proposed by the Chat agent.'),
 			sourceCells: [],
 			via: 'model',
 			...grounding,
-		};
-		this._pending.push(change);
-		this._captureProposalCreated(change, source);
+		}, source);
+		if (!id) { return { queued: false, reason: 'no-match' }; }
 		return { queued: true, id, label };
 	}
 
@@ -6512,7 +6749,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// named heading (best fuzzy match; empty/unknown -> end of document). No oldText - the inline diff
 	// renders it all-additions, and approve splices a new block into the document. Like `_queueChatEdit`,
 	// a refusal comes back NAMED so the composer can reconcile the turn's claims against its receipts (I3).
-	private _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): IQueueOutcome {
+	private async _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): Promise<IQueueOutcome> {
 		// Policy gate (issue #257): a "Never change this doc" document accepts no generated inserts either.
 		if (this._policyForState(state) === 'never') { return { queued: false, reason: 'policy' }; }
 		const newText = String(insert.newText ?? '').trim();
@@ -6530,16 +6767,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 			if (best) { afterBlockId = best.id; label = best.text; }
 		}
-		const id = generateUuid();
-		const change: IProposedChange = {
-			id,
-			docId: state.uri.toString(),
+		const anchor = this._anchorForInsert(state, afterBlockId, newText);
+		const id = await this._recordProposal(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: afterBlockId,
 			blockLabel: label,
-			oldText: '',
-			newText,
-			kind: 'meaning',
+			// The anchor writes a blank line before the content; the card shows the content.
+			nowText: newText,
 			confidence: 0.8,
 			rationale: String(insert.rationale ?? 'New content proposed by the Chat agent.'),
 			sourceCells: [],
@@ -6547,9 +6781,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			insert: true,
 			afterBlockId,
 			...this._resolveSourceGrounding(insert.sourceQuote, insert.sourceLine, sourceText),
-		};
-		this._pending.push(change);
-		this._captureProposalCreated(change, source);
+		}, source);
+		if (!id) { return { queued: false, reason: 'no-match' }; }
 		return { queued: true, id, label };
 	}
 
@@ -6577,71 +6810,169 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// amended proposal as still-pending. The subsequent approve() reads `tweaked` to record the audit
 	// `via: 'tweaked'`. Guarded: figures come from sources (not hand-editable), and an empty/no-op amendment
 	// is ignored. No new persist path - the amended text lands through the existing approve() serialisation.
-	amendChange(changeId: string, newText: string): void {
-		const idx = this._pending.findIndex(c => c.id === changeId);
-		if (idx < 0) { return; }
-		const change = this._pending[idx];
-		if (change.kind === 'figure') { return; }
+	async amendChange(changeId: string, newText: string): Promise<void> {
+		const store = await this._ensureChangeStore();
+		const record = store?.change(changeId);
+		if (!store || !record) { return; }
+		if (record.kind === 'figure') { return; }
 		const next = String(newText ?? '').trim();
-		if (!next || next === change.newText) { return; }
-		this._pending[idx] = { ...change, newText: next, tweaked: true };
+		if (!next || record.anchors.every(a => a.newText === next)) { return; }
+		// A tweak stacks a REVISION on the same id rather than replacing the proposal, so the card keeps its
+		// thread, its history and its provenance - the trail shows the agent proposed one thing and a human
+		// changed it, which is the trust signal the audit row `via: 'tweaked'` reports.
+		const anchors = record.anchors.map((a, i) => (i === 0 ? { ...a, newText: next } : a));
+		await store.amend(changeId, anchors, record.plannerIntent, { ...record.display, tweaked: true });
+		this._refreshPending();
 		this._onDidChange.fire();
 	}
 
 	async approve(changeId: string): Promise<void> {
-		const change = this._pending.find(c => c.id === changeId);
-		if (!change) { return; }
+		await this._resolveThroughStore('approve', [changeId]);
+	}
+
+	/**
+	 * Discard one pending change. `reason` is the reviewer's optional plain-words note (1f frame-3): it lands
+	 * on the audit row so the trail carries the rejection AND why.
+	 */
+	async reject(changeId: string, reason?: string): Promise<void> {
+		await this._resolveThroughStore('reject', [changeId], reason);
+	}
+
+	/**
+	 * The ONE decision path: every approve and every reject, single or bulk, goes through the store.
+	 *
+	 * The store owns what the old code did by hand and got wrong twice (issues #329 / #334). It snapshots each
+	 * affected document once, journals the whole intent - including the hash every document MUST have
+	 * afterwards - splices the approved hunks into RAW TEXT, reads each document back to prove it landed where
+	 * the intent declared, and only then records the decision. The applied set is a subset of the captured ids
+	 * by construction. What is left here is the bookkeeping that is genuinely this service's: the lock's audit
+	 * trail, the claims, the analytics, the freshness recompute and the status line.
+	 *
+	 * The document write no longer goes anywhere near `serializeLivingDoc`. That is the point of item 4 in the
+	 * brief and it fixes a live data-loss bug (docs/30 section 8.3): the serialiser rebuilds a document from
+	 * its parsed blocks and emits only the frontmatter keys it knows, so every approve silently dropped
+	 * `template`, `name`, `description`, the `fromTemplate` provenance field and any key a user had authored
+	 * by hand. The store splices the body and `withReplacedBody` re-attaches the original `---` block verbatim.
+	 */
+	private async _resolveThroughStore(verb: BulkVerb, ids: readonly string[], reason?: string): Promise<IBulkApplyResult> {
+		const captured = [...new Set(ids)];
+		if (!captured.length) { return { verb, captured: 0, applied: [], skipped: [] }; }
+		const store = await this._ensureChangeStore();
+		if (!store) {
+			return { verb, captured: captured.length, applied: [], skipped: captured.map(id => ({ id, label: '', reason: 'decided-elsewhere' as const })) };
+		}
+		// The cards as they read BEFORE the verb: a decided change leaves the pending view, and the audit row,
+		// the status line and the analytics event all need the words that were on it.
+		const before = new Map(this._pending.map(c => [c.id, c]));
+		const anchorsBefore = new Map(captured.map(id => [id, store.change(id)?.anchors ?? []]));
+		if (verb === 'approve') { this._inBulkApprove = captured.length > 1; } else { this._inBulkReject = captured.length > 1; }
+		let report;
+		try {
+			report = verb === 'approve' ? await store.approveByIds(captured) : await store.rejectByIds(captured);
+		} finally {
+			this._refreshPending();
+		}
+		const applied: string[] = [];
+		const skipped: IBulkSkip[] = [];
+		const touched = new Set<string>();
+		try {
+			for (const id of captured) {
+				const change = before.get(id);
+				if (change) { touched.add(change.docId); }
+				const resolution = report.resolved.find(r => r.changeId === id);
+				if (change && resolution && (resolution.status === 'approved' || resolution.status === 'rejected')) {
+					applied.push(id);
+					await this._recordDecision(change, resolution.status, anchorsBefore.get(id) ?? [], reason);
+					continue;
+				}
+				// Everything else is a SHRINK, and every shrink is named. A change the store refused before
+				// touching anything is `decided-elsewhere` or `needs-attention` depending on why; one it tried
+				// and could not land is `apply-failed`, and it stays in the queue flagged rather than clearing
+				// off the rail as though the edit had happened.
+				const skip = report.skipped.find(s => s.changeId === id);
+				skipped.push({ id, label: change ? bulkChangeLabel(change) : '', reason: bulkSkipFor(skip?.reason, resolution?.status) });
+				// The reviewer pressed Approve and it did not happen, so the trail says so - whether the store
+				// refused before touching anything (the document moved under the proposal) or tried and could
+				// not prove the write. The two cases that get NO row are the ones with nothing to report: a
+				// change someone else had already decided, and one a later turn superseded.
+				const refusalIsSilent = skip?.reason === 'unknown-change' || skip?.reason === 'already-decided' || skip?.reason === 'superseded' || skip?.reason === 'in-discussion';
+				if (change && verb === 'approve' && !refusalIsSilent) {
+					await this._recordUnlandedApprove(change, resolution);
+				}
+			}
+		} finally {
+			if (verb === 'approve') { this._inBulkApprove = false; } else { this._inBulkReject = false; }
+		}
+
+		if (report.failure) {
+			// The journal refused. `append-failed` means no document was touched; `append-failed-after-write`
+			// means one was and the record of it is not on disk, so the store is frozen until it lands. Either
+			// way the reviewer is told in the document's own status line, not in a log nobody reads.
+			this._log.warn('[livingDocs] change store journal failure', report.failure.reason);
+			for (const docId of touched) {
+				const state = this._docs.get(docId);
+				if (state) { state.status = report.failure.message; }
+			}
+		}
+		const result: IBulkApplyResult = { verb, captured: captured.length, applied, skipped };
+		if (skipped.length && captured.length > 1) {
+			// A BULK verb that shrank must say so. The per-change status lines have already scrolled past by
+			// now, so the surviving statement is the document's status - the difference between "the rail
+			// emptied" and "the rail emptied except for these". A single decision is left to speak for itself:
+			// its own status line names exactly what happened to it, and summarising one change as "1 of 1
+			// changes was not applied" is strictly less informative than the sentence it would replace.
+			this._log.warn('[livingDocs] bulk', verb, 'skipped', skipped.length, 'of', captured.length);
+			const summary = describeBulkSkips(result);
+			for (const docId of touched) {
+				const state = this._docs.get(docId);
+				if (state) { state.status = summary; }
+			}
+		}
+		this._onDidChange.fire();
+		return result;
+	}
+
+	/**
+	 * The bookkeeping for one decision the store LANDED (docs/30 invariant I2).
+	 *
+	 * Reached only from a resolution the store wrote, which is the whole reform: an approval is recorded by
+	 * the code path that mutated the document, carrying the post-state hash, and every other surface - the
+	 * lock's audit, the activity ledger, the transcript, the analytics - is a fold of that one fact rather
+	 * than an independent claim about it.
+	 */
+	private async _recordDecision(change: IProposedChange, status: 'approved' | 'rejected', anchors: readonly IChangeAnchor[], reason?: string): Promise<void> {
 		const state = this._docs.get(change.docId);
 		if (!state) { return; }
-		const block = state.doc.blocks.find(b => b.id === change.blockId);
-		if (change.insert) {
-			// A generative insertion: splice the new Markdown content in as a fresh block after its anchor
-			// (or at the end when the anchor is gone/unset), then persist. The block keeps the full Markdown
-			// (heading + list) verbatim; the renderer shows rich content as rendered Markdown. No claim/lock.
-			const newBlock: ILivingDocBlock = { id: generateUuid(), type: 'paragraph', text: change.newText, binds: extractBindLinks(change.newText) };
-			const anchorIndex = change.afterBlockId ? state.doc.blocks.findIndex(b => b.id === change.afterBlockId) : state.doc.blocks.length - 1;
-			state.doc.blocks.splice(anchorIndex + 1, 0, newBlock);
-			state.recent.add(newBlock.id);
-		} else if (!change.relink) {
-			// A re-link prompt re-anchors the claim to the current best-match prose without rewriting it;
-			// a normal impact change applies its rewrite to the block. `applyBlockEdit` splices at the change's
-			// anchor: a whole-block `oldText` replaces the block (prose), a scoped `oldText` (one list item) is
-			// spliced in place so sibling list items survive (decision-68 data-loss fix, plan 31 iter 1).
-			//
-			// The apply is the ONLY thing that can authorise everything below (docs/30 invariants I1/I2, issue
-			// #329). Both of this branch's failure modes used to fall straight through into the approval
-			// bookkeeping: a missing block skipped the branch entirely (`block &&`), and an anchor that had
-			// moved on came back from `applyBlockEdit` as the block's own unchanged text. Either way the rail
-			// cleared, the audit gained an `approved` row, the transcript counted an approval - over a file that
-			// still said the old thing. Now a failure returns HERE, before a single one of those is written.
-			if (!block) {
-				await this._recordApplyFailure(state, change, 'block-gone');
-				return;
-			}
-			const applied = applyBlockEdit(block.text, change.oldText, change.newText);
-			if (!applied.landed) {
-				await this._recordApplyFailure(state, change, applied.reason);
-				return;
-			}
-			block.text = applied.text; block.binds = extractBindLinks(applied.text); state.recent.add(block.id);
+		this._recordProposalOutcome(change.id, status);
+		if (status === 'rejected') {
+			state.lock.audit.push(this._entry(state, change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model', reason));
+			this._captureProposalResolved('reject', this._inBulkReject);
+			state.status = `Change rejected - ${change.docTitle} left unchanged`;
+			await this._markContextReviewed(state, change.contextReviewed);
+			await this._persistLock(state);
+			await this._recomputeFreshness(state);
+			return;
 		}
+		// The document has already been rewritten by the store, so `state.doc` is the re-parsed new text. The
+		// block the change landed in is the one covering the spliced region, found by arithmetic on the span
+		// the store wrote rather than by matching the text again.
+		const landedBlockId = this._blockIdCovering(state, anchors[0]);
+		if (landedBlockId) { state.recent.add(landedBlockId); }
 		if (change.claimId) {
 			const prior = state.lock.claims[change.claimId];
+			const anchorText = change.relink
+				? (landedBlockId ? state.doc.blocks.find(b => b.id === landedBlockId)?.text ?? prior?.anchor ?? '' : prior?.anchor ?? '')
+				: change.newText;
 			state.lock.claims[change.claimId] = {
-				anchor: change.relink ? (block?.text ?? prior?.anchor ?? '') : change.newText,
+				anchor: anchorText,
 				boundTo: prior?.boundTo ?? change.contextReviewed ?? [],
 				kind: 'meaning',
 				state: 'applied',
 			};
 		}
-		this._pending = this._pending.filter(c => c.id !== changeId);
-		this._recordProposalOutcome(changeId, 'approved');
 		// A tweaked change records `via: 'tweaked'` so the trail shows the human amended the agent's words
 		// (plan 31 iter 3, D31-B); otherwise the change's own provenance (model/heuristic) stands.
 		state.lock.audit.push(this._entry(state, change.blockId, 'approved', change.oldText, change.newText, change.tweaked ? 'tweaked' : (change.via ?? 'model')));
-		// Audit-mirror: one approve resolved this proposal (tweaked = the human amended it first). `bulk` is
-		// false here; the bulk paths (approveAll) pass true to their own resolved emit is not needed because
-		// each underlying approve fires - so bulk resolution is captured as the individual approves it fans to.
 		this._captureProposalResolved(change.tweaked ? 'tweak' : 'approve', this._inBulkApprove);
 		// D26 funnel hooks (no-ops outside a walkthrough): approving the demo's sample proposal is step 5 and
 		// hands off to a real folder; the first approve on the user's own file after that hand-off is the T4 aha.
@@ -6649,60 +6980,66 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._maybeRecordOwnFileApprove();
 		await this._markContextReviewed(state, change.contextReviewed);
 		state.status = `Change approved - applied to ${change.docTitle}`;
-		await this._persist(state);
+		await this._persistLock(state);
 		await this._recomputeFreshness(state);
-		this._onDidChange.fire();
 	}
 
 	/**
 	 * Record an approval that could NOT be applied (docs/30 invariants I1/I2; issue #329).
 	 *
-	 * This is the whole point of the closed result type: the ONE thing this method must never do is anything
-	 * `approve()` does after a successful apply. So it writes the exact inverse of that block -
-	 *
-	 *  - the change STAYS pending, flagged with the named failure. It was never applied, so it is still the
-	 *    reviewer's call; silently dropping it from the rail is how the user came to believe it had landed.
-	 *  - the audit row is `apply-failed`, never `approved`, and carries the reason in plain words, so History
-	 *    and the activity ledger read the failure rather than an approval that never happened.
-	 *  - no transcript outcome, no `proposal_resolved` analytics, no funnel hooks, no claim flipped to
-	 *    `applied`, no reviewed-context clear. Nothing counts a resolution that did not occur.
-	 *
-	 * The persist still runs: the document body is untouched (that is the point), but the lock now carries the
-	 * failure row, and a trail that only survives until the next relaunch is not a trail.
+	 * This is the exact inverse of {@link _recordDecision}: the change STAYS in the queue carrying the store's
+	 * named status, the audit row says `apply-failed` rather than `approved`, and nothing counts a resolution
+	 * that did not occur - no transcript outcome, no `proposal_resolved`, no funnel hook, no claim flipped to
+	 * `applied`, no reviewed-context clear. The lock still persists, because a trail that only survives until
+	 * the next relaunch is not a trail.
 	 */
-	private async _recordApplyFailure(state: IDocState, change: IProposedChange, reason: BlockApplyFailure): Promise<void> {
-		const idx = this._pending.findIndex(c => c.id === change.id);
-		if (idx >= 0) { this._pending[idx] = { ...change, applyFailure: reason }; }
-		this._log.warn('[livingDocs] approve could not be applied', change.id, reason);
-		state.lock.audit.push(this._entry(state, change.blockId, 'apply-failed', change.oldText, change.newText, change.via ?? 'model', describeApplyFailure(reason)));
-		state.status = applyFailureStatus(change.docTitle, reason);
-		await this._persist(state);
-		this._onDidChange.fire();
+	private async _recordUnlandedApprove(change: IProposedChange, resolution?: IChangeResolution): Promise<void> {
+		const state = this._docs.get(change.docId);
+		if (!state) { return; }
+		const failed = resolution?.anchorOutcomes.find(o => !o.landed);
+		const outcome = failed && !failed.landed ? failed.reason : undefined;
+		// A write that RAN and could not be proven is a different fact from a write that was never attempted,
+		// and the reviewer is entitled to be told which. `unverified` and `doc-gone` have no block-level
+		// equivalent - saying "the text has changed" about a document nobody can account for would be a
+		// smaller lie than issue #329's, but the same kind - so those keep the store's own words.
+		const unprovable = outcome === 'unverified' || outcome === 'doc-gone';
+		// Otherwise the shipped block-level wording stands, taken from the refreshed card so that "the part of
+		// the document it was written for is no longer there" is only said when the block really has gone.
+		const failure: BlockApplyFailure = this._pending.find(c => c.id === change.id)?.applyFailure ?? 'anchor-miss';
+		this._log.warn('[livingDocs] approve could not be applied', change.id, resolution?.status ?? 'refused', outcome ?? failure);
+		state.lock.audit.push(this._entry(state, change.blockId, 'apply-failed', change.oldText, change.newText, change.via ?? 'model',
+			unprovable && outcome ? describeAnchorFailure(outcome) : describeApplyFailure(failure)));
+		state.status = unprovable && resolution ? describeChangeStatus(resolution.status) : applyFailureStatus(change.docTitle, failure);
+		await this._persistLock(state);
+		await this._recomputeFreshness(state);
 	}
 
-	// Discard one pending change. `reason` is the reviewer's optional plain-words note (1f frame-3): it lands
-	// on the audit row so the trail carries the rejection AND why. This mirrors approve()'s persistence
-	// contract - the rejected row, the reviewed-context clear, and the reason all write through to the lock
-	// via _persist so they survive relaunch (issue #258: reject() previously mutated in memory only, so
-	// negative judgments and reviewed-context silently evaporated on the next open).
-	async reject(changeId: string, reason?: string): Promise<void> {
-		const change = this._pending.find(c => c.id === changeId);
-		if (!change) { return; }
-		this._pending = this._pending.filter(c => c.id !== changeId);
-		this._recordProposalOutcome(changeId, 'rejected');
-		const state = this._docs.get(change.docId);
-		if (state) {
-			state.lock.audit.push(this._entry(state, change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model', reason));
-			this._captureProposalResolved('reject', this._inBulkReject);
-			state.status = `Change rejected - ${change.docTitle} left unchanged`;
-			// Rejecting still counts as reviewing the changed context, so the flag clears.
-			await this._markContextReviewed(state, change.contextReviewed);
-			// Persist so the rejected row, the reason, and the cleared reviewed-context reach disk like an
-			// approve does (issue #258). Without this the on-disk audit trail was silently approve-only.
-			await this._persist(state);
-			await this._recomputeFreshness(state);
+	/**
+	 * The block of the CURRENT document covering the region a splice wrote, or undefined when the anchor was
+	 * a pure no-op (a re-link, which re-anchors a claim and rewrites nothing).
+	 */
+	private _blockIdCovering(state: IDocState, anchor: IChangeAnchor | undefined): string | undefined {
+		if (!anchor) { return undefined; }
+		const at = anchor.span.start;
+		const chunks = chunkDocBody(this._bodyOf(state));
+		const index = chunks.findIndex(c => at >= c.start && at <= c.end);
+		return index >= 0 ? state.doc.blocks[index]?.id : undefined;
+	}
+
+	/**
+	 * Write the document's lock, and only the lock.
+	 *
+	 * The `.md` is the store's to write; this is the sidecar that carries the audit trail, the claims and the
+	 * snapshots. Deliberately NOT `_persist`, which re-serialises the whole document from its parsed blocks -
+	 * the very path the frontmatter quarantine exists to keep off the decision paths.
+	 */
+	private async _persistLock(state: IDocState): Promise<void> {
+		try {
+			await this._lockStore.write(state.uri, state.lock);
+			state.diskLockText = (await this._files.readFile(lockUriFor(state.uri))).value.toString();
+		} catch (e) {
+			this._log.warn('[livingDocs] lock write failed', e);
 		}
-		this._onDidChange.fire();
 	}
 
 	// --- the ONE bulk path (docs/30 section 5, invariant I4; issues #334 / #305) ---
@@ -6716,113 +7053,22 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * set and the apply re-queried another.
 	 */
 	captureBulkSet(scope: IBulkScope): IBulkSet {
-		return buildBulkSet(scope, this._pending);
+		// The store's own capture, so eligibility is judged against the persisted records rather than against
+		// a projection of them - one policy, stated once (`buildBulkSet`), for the store and the rail alike.
+		return this._changeStore?.captureBulkSet(scope) ?? buildBulkSet(scope, []);
 	}
 
 	/**
-	 * Apply a captured approve set. Every affected document is snapshotted ONCE before the batch (D26-B) so
-	 * the run is restorable, then each id is re-checked and approved individually - each approve re-resolves
-	 * its anchor by stable block id, so insertions stay correctly placed.
+	 * Apply a captured approve set. The store snapshots every affected document once before the batch (D26-B)
+	 * so the run is restorable, journals one intent for the whole set, and re-checks each id as it goes.
 	 */
 	async approveByIds(ids: readonly string[]): Promise<IBulkApplyResult> {
-		return this._applyBulk('approve', ids);
+		return this._resolveThroughStore('approve', ids);
 	}
 
 	/** Apply a captured reject set. Each reject audits the discard and clears it from the rail. */
 	async rejectByIds(ids: readonly string[], reason?: string): Promise<IBulkApplyResult> {
-		return this._applyBulk('reject', ids, reason);
-	}
-
-	/**
-	 * The shrink-only engine behind both by-ids verbs (invariant I4).
-	 *
-	 * The captured ids are the whole input: nothing is re-queried from `_pending` to decide WHAT to act on,
-	 * only to decide whether each captured id is still actionable. That asymmetry is the invariant. An id
-	 * can drop out for exactly three reasons, each recorded rather than swallowed:
-	 *
-	 *  - `decided-elsewhere`: it left the queue between capture and apply (someone approved it in the
-	 *    document while the confirm dialog was open, a restore cleared it, the agent superseded it);
-	 *  - `needs-attention`: it is still queued but no longer eligible - an earlier approve failed to apply
-	 *    and flagged it, so it is a decision the reviewer must make with their eyes open;
-	 *  - `apply-failed`: the approve ran and the edit did not land (invariant I1 / R2). `approve()` leaves
-	 *    such a change in the queue flagged, which is precisely how this loop detects it - no second apply
-	 *    path, no duplicated failure logic, one source of truth for "did it land".
-	 *
-	 * The result is closed: `applied.length + skipped.length === captured`.
-	 */
-	private async _applyBulk(verb: BulkVerb, ids: readonly string[], reason?: string): Promise<IBulkApplyResult> {
-		const captured = [...new Set(ids)];
-		const applied: string[] = [];
-		const skipped: IBulkSkip[] = [];
-		if (!captured.length) { return { verb, captured: 0, applied, skipped }; }
-
-		if (verb === 'approve') {
-			// One pre-batch snapshot per affected document, before anything is written - the reassurance the
-			// confirm sentence makes ("a version snapshot is taken first, so you can restore") is only true if
-			// it happens here rather than per change.
-			const docIds = new Set<string>();
-			for (const id of captured) {
-				const docId = this._pending.find(c => c.id === id)?.docId;
-				if (docId) { docIds.add(docId); }
-			}
-			for (const docId of docIds) {
-				const state = this._docs.get(docId);
-				if (state) {
-					await this.saveSnapshot(state.uri, 'Before bulk approve', 'bulk-approve');
-				}
-			}
-		}
-
-		// Mark the fanned decisions as bulk so each proposal_resolved carries bulk:true (doc 15 section 3.1).
-		if (verb === 'approve') { this._inBulkApprove = true; } else { this._inBulkReject = true; }
-		const touched = new Set<string>();
-		try {
-			for (const id of captured) {
-				const change = this._pending.find(c => c.id === id);
-				if (!change) {
-					skipped.push({ id, label: '', reason: 'decided-elsewhere' });
-					continue;
-				}
-				// Every id we can still put a document to counts as touched, INCLUDING the ineligible ones -
-				// otherwise a bulk whose every captured change had gone needs-attention would report its
-				// shrinkage to nowhere, which is the opposite of the contract below.
-				touched.add(change.docId);
-				if (change.applyFailure !== undefined) {
-					skipped.push({ id, label: bulkChangeLabel(change), reason: 'needs-attention' });
-					continue;
-				}
-				if (verb === 'approve') {
-					await this.approve(id);
-				} else {
-					await this.reject(id, reason);
-				}
-				// The one honest test of whether the decision landed: a change that resolved has left the queue.
-				if (this._pending.some(c => c.id === id)) {
-					skipped.push({ id, label: bulkChangeLabel(change), reason: 'apply-failed' });
-				} else {
-					applied.push(id);
-				}
-			}
-		} finally {
-			if (verb === 'approve') { this._inBulkApprove = false; } else { this._inBulkReject = false; }
-		}
-
-		const result: IBulkApplyResult = { verb, captured: captured.length, applied, skipped };
-		if (skipped.length) {
-			// A bulk verb that shrank must SAY so. The per-change status lines have already scrolled past by
-			// now, so the surviving statement is the document's status - the surfaces read it, and it is the
-			// difference between "the rail emptied" and "the rail emptied except for these". The one case
-			// with nowhere to write is a capture whose every id had ALREADY left the queue: nothing was
-			// touched because nothing of it still existed, and the rail showing them gone is the true report.
-			this._log.warn('[livingDocs] bulk', verb, 'skipped', skipped.length, 'of', captured.length);
-			const report = describeBulkSkips(result);
-			for (const docId of touched) {
-				const state = this._docs.get(docId);
-				if (state) { state.status = report; }
-			}
-			this._onDidChange.fire();
-		}
-		return result;
+		return this._resolveThroughStore('reject', ids, reason);
 	}
 
 	/**
@@ -6835,16 +7081,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * against prose that no longer exists.
 	 */
 	private async _discardQueueForDoc(docId: string): Promise<void> {
-		const ids = this._pending.filter(c => c.docId === docId).map(c => c.id);
+		const ids = this._openChangeIdsFor(docId);
 		if (!ids.length) { return; }
-		this._inBulkReject = true;
-		try {
-			for (const id of ids) {
-				await this.reject(id);
-			}
-		} finally {
-			this._inBulkReject = false;
-		}
+		await this._resolveThroughStore('reject', ids);
 	}
 
 	// Mark each reviewed context source as reviewed-at-current in the lock so its stale flag clears.
@@ -7105,6 +7344,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Persist the document (.md) and its lock together - the pair is one logical unit.
 	private async _persist(state: IDocState): Promise<void> {
+		// The body as it stood before this write, so the store can move the proposals standing over it. Every
+		// path through `_persist` rebuilds the document from its parsed blocks, so from the store's point of
+		// view this is an edit it did not make and cannot account for - identical in kind to someone typing.
+		const previousBody = this._bodyOf(state);
 		try {
 			// External-edit floor (issue #133): before writing, confirm the file on disk is still the one we last
 			// read/wrote. If it changed outside Abstract and the user has not already chosen to keep their version,
@@ -7129,7 +7372,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			await this._captureDiskState(state);
 		} catch (e) {
 			this._log.warn('[livingDocs] persist failed', e);
+			return;
 		}
+		await this._noteHumanEdit(state.uri.toString(), previousBody, this._bodyOf(state));
 	}
 
 	// True when the document's `.md` on disk still matches the BASELINE we last settled (`state.diskHash`) - i.e. no

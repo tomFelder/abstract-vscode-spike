@@ -800,8 +800,9 @@ export class ScreenEditor extends EditorPane {
 			case 'reviewTweakSave':
 				if (message.arg && typeof message.text === 'string') {
 					const id = message.arg;
-					this._livingDocs.amendChange(id, message.text);
-					void this._livingDocs.approve(id);
+					// Sequenced: the amend stacks a revision in the change store and the approve must read it, so
+					// firing both without awaiting would race the approve against its own new text.
+					void this._livingDocs.amendChange(id, message.text).then(() => this._livingDocs.approve(id));
 				}
 				break;
 			// Sticky doc action bar: `Approve all N here` for the current document, through the ONE bulk path.

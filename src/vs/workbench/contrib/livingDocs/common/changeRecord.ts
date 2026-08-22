@@ -6,7 +6,7 @@
 import { StringSHA1 } from '../../../../base/common/hash.js';
 import { localize } from '../../../../nls.js';
 import { BlockApplyFailure } from './applyOutcome.js';
-import { ChangeKind, IBulkCandidate } from './livingDocsModel.js';
+import { ChangeKind, IBulkCandidate, IProposedChange } from './livingDocsModel.js';
 
 // The `Change` record (docs/30 sections 2.1 and 5): the single persisted home for a change's identity,
 // state and count (invariant I5). Today the pending queue lives in `_pending`, a plain in-memory map on
@@ -129,6 +129,115 @@ export interface IAnchorFailed {
 export type AnchorOutcome = IAnchorLanded | IAnchorFailed;
 
 /**
+ * Everything a review surface needs to RENDER a change, and nothing the store reasons about.
+ *
+ * It travels ON the change - rather than in a side map held by whoever queued it - for one reason:
+ * invariant I5 says identity, state and count have exactly one persisted home, and a resumable review that
+ * restored the ids but not the words on the cards would need a second store to put the words back. So the
+ * whole card is journalled with the record and survives a reload byte-for-byte.
+ *
+ * Every field is optional and none is ever read to decide anything: a display value that has drifted makes
+ * a label wrong, never a decision wrong.
+ */
+export interface IChangeDisplay {
+	/** The owning document's title at proposal time, for grouping in the review rail. */
+	readonly docTitle?: string;
+	/** The parsed block id the proposal resolved to. Advisory: block ids are regenerated on every parse. */
+	readonly blockId?: string;
+	/** The human address the card shows ("Commentary"). */
+	readonly blockLabel?: string;
+	readonly rationale?: string;
+	/** 0..1, the proposer's own confidence. */
+	readonly confidence?: number;
+	readonly via?: 'model' | 'heuristic';
+	/** The verbatim source line a fan-out change was derived from, and its REAL line number if known. */
+	readonly sourceQuote?: string;
+	readonly sourceLine?: number;
+	/** The bind keys a figure change reconciles. */
+	readonly sourceCells?: readonly string[];
+	/** The lock claim this edit re-anchors, and the context sources approving it marks reviewed. */
+	readonly claimId?: string;
+	readonly contextReviewed?: readonly string[];
+	/** A loud-failure re-link prompt rather than a rewrite. */
+	readonly relink?: boolean;
+	/** Prepared by a `draft-only` agent: it waits in the rail but is never auto-landed. */
+	readonly draft?: boolean;
+	/** A generative insertion: `newText` is brand-new content and the inline diff renders it all-additions. */
+	readonly insert?: boolean;
+	readonly afterBlockId?: string;
+	/** The reviewer hand-edited the agent's words before approving. */
+	readonly tweaked?: boolean;
+	/**
+	 * The WAS/NOW pair the card shows, when it is not simply the anchor's own texts.
+	 *
+	 * Two changes need this and no others. A RE-LINK contrasts the claim's stale recorded anchor with the
+	 * current paragraph while writing nothing at all, so its WAS is not the text it replaces. An INSERT
+	 * writes a blank line before its new content, so its anchor's NOW carries a leading separator the reader
+	 * has no business seeing. Keeping both on the display side is what stops a rendering need from bending an
+	 * anchor into a lie about the document - the splice always reads the anchor.
+	 */
+	readonly wasText?: string;
+	readonly nowText?: string;
+}
+
+/**
+ * Project a persisted change onto the shape the shipped review surfaces render.
+ *
+ * The rail, the inline widgets, the Home tiles and the cross-document review screen all read
+ * `IProposedChange`, and they keep reading it: the store replaces where a proposal LIVES, not what a card
+ * looks like. So `_pending` becomes a derived view - this function is the derivation - and there is exactly
+ * one persisted home for identity, state and count (invariant I5).
+ *
+ * A multi-anchor change is rendered from its FIRST anchor, which is all the shipped card can express; no
+ * such change can exist yet (cross-document move detection is deferred, docs/30 section 2.1).
+ */
+export function toProposedChange(change: IChange): IProposedChange {
+	const anchor = change.anchors[0];
+	const display = change.display ?? {};
+	return {
+		id: change.id,
+		docId: anchor?.docUri ?? '',
+		docTitle: display.docTitle ?? '',
+		blockId: display.blockId ?? '',
+		blockLabel: display.blockLabel ?? '',
+		oldText: display.wasText ?? anchor?.oldText ?? '',
+		newText: display.nowText ?? anchor?.newText ?? '',
+		kind: change.kind,
+		confidence: display.confidence ?? 0,
+		rationale: display.rationale ?? '',
+		sourceCells: display.sourceCells ?? [],
+		...(display.sourceQuote !== undefined ? { sourceQuote: display.sourceQuote } : {}),
+		...(display.sourceLine !== undefined ? { sourceLine: display.sourceLine } : {}),
+		...(display.claimId !== undefined ? { claimId: display.claimId } : {}),
+		...(display.contextReviewed !== undefined ? { contextReviewed: display.contextReviewed } : {}),
+		...(display.via !== undefined ? { via: display.via } : {}),
+		...(display.relink ? { relink: true } : {}),
+		...(display.draft ? { draft: true } : {}),
+		...(display.insert ? { insert: true } : {}),
+		...(display.afterBlockId !== undefined ? { afterBlockId: display.afterBlockId } : {}),
+		...(display.tweaked ? { tweaked: true } : {}),
+		...(attentionFailure(change) !== undefined ? { applyFailure: attentionFailure(change) } : {}),
+	};
+}
+
+/**
+ * The card-level failure flag for a change that is recorded but not eligible.
+ *
+ * The store carries four non-pending, non-terminal states and a named reason for each; the shipped card has
+ * one boolean-ish `applyFailure` it renders a "needs your attention" treatment from. Mapping DOWN to it here
+ * keeps the surfaces working unchanged while the store keeps the full truth - and the mapping is total, so
+ * no store state can reach a card as though it were an ordinary pending proposal.
+ */
+function attentionFailure(change: IChange): BlockApplyFailure | undefined {
+	if (change.status === 'pending' || isTerminalStatus(change.status)) {
+		return undefined;
+	}
+	// `block-gone` is the card treatment for "the prose this was written for is not there any more", which is
+	// what an invalid anchor is; everything else reads as "the text moved on under it".
+	return change.attentionReason === 'anchor-invalid' ? 'block-gone' : 'anchor-miss';
+}
+
+/**
  * One revision of a change's content. An agent revision answering a comment thread stacks a new version
  * on the SAME id (so the thread and the history survive); it never creates a second card.
  */
@@ -137,6 +246,8 @@ export interface IChangeVersion {
 	readonly revision: number;
 	readonly anchors: readonly IChangeAnchor[];
 	readonly plannerIntent?: string;
+	/** The card as it reads at this revision; absent leaves the previous revision's card standing. */
+	readonly display?: IChangeDisplay;
 	readonly at: number;
 }
 
@@ -171,6 +282,8 @@ export interface IChange {
 	readonly attentionReason?: AttentionReason;
 	/** The planner's own account of why it proposed this. Advisory provenance, never a control signal. */
 	readonly plannerIntent?: string;
+	/** The card the review surfaces render. Carried so a resumed review restores the words, not just the ids. */
+	readonly display?: IChangeDisplay;
 	readonly changeClass: ChangeClass;
 	/** The review class the shipped surfaces already group and label by (figure vs meaning change). */
 	readonly kind: ChangeKind;
@@ -357,6 +470,27 @@ export function rebaseAnchors(
 		rebased.push({ ...anchor, baseRevision: toRevision, span: { start: anchor.span.start + delta, end: anchor.span.end + delta } });
 	}
 	return rebased;
+}
+
+/**
+ * The single contiguous region that differs between two revisions of the same text.
+ *
+ * Exact and total, which is why the human-edit path (invariant I8) can be built on it: trim the common
+ * prefix and the common suffix, and what remains is one span whose replacement turns `before` into `after`
+ * with no searching, no similarity and no guessing. For someone typing it IS the keystrokes; for a paste or
+ * a wholesale rewrite it is the smallest region that provably contains the change.
+ *
+ * The result is deliberately the store's own {@link ISplicePlacement}, so it can be handed straight to the
+ * same rebase arithmetic the store uses over its own writes - one implementation of the rule, not two.
+ */
+export function singleEditBetween(before: string, after: string): ISplicePlacement {
+	const shortest = Math.min(before.length, after.length);
+	let start = 0;
+	while (start < shortest && before[start] === after[start]) { start++; }
+	let tail = 0;
+	while (tail < shortest - start && before[before.length - 1 - tail] === after[after.length - 1 - tail]) { tail++; }
+	const end = before.length - tail;
+	return { span: { start, end }, oldText: before.slice(start, end), newText: after.slice(start, after.length - tail) };
 }
 
 /** Splicing one document failed: nothing was written, and `reason` names why (invariant I1's vocabulary). */

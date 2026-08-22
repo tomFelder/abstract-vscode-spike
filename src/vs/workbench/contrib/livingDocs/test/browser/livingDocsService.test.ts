@@ -1617,7 +1617,8 @@ suite('livingDocs Service', () => {
 		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
 		const change = service.getPendingForDoc(WEEKLY)[0];
 
-		service.amendChange(change.id, 'Growth accelerated sharply this week.');
+		// Awaited: the amendment stacks a revision in the change store, and the approve below reads it.
+		await service.amendChange(change.id, 'Growth accelerated sharply this week.');
 		// The proposal re-renders as still-pending with the amended text (not approved yet).
 		const amended = service.getPendingForDoc(WEEKLY)[0];
 		assert.strictEqual(amended.newText, 'Growth accelerated sharply this week.', 'pending change carries the human amendment');
@@ -1640,7 +1641,7 @@ suite('livingDocs Service', () => {
 		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
 		const change = service.getPendingForDoc(WEEKLY)[0];
 
-		service.amendChange(change.id, 'Growth accelerated sharply this week.');
+		await service.amendChange(change.id, 'Growth accelerated sharply this week.');
 		await service.reject(change.id);
 
 		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 0, 'the change is cleared from the rail');
@@ -1966,7 +1967,12 @@ suite('livingDocs Service', () => {
 				applied: [2],
 				skipped: [
 					{ at: 0, label: '', reason: 'decided-elsewhere' },
-					{ at: 1, label: 'Levers - Growth Levers', reason: 'apply-failed' },
+					// `needs-attention`, not `apply-failed` (R6): the hand-edit above is reported to the change
+					// store as it happens, so the proposal it landed inside was flipped to needs-attention
+					// BEFORE the reviewer pressed Approve. Nothing was attempted against the file, which is the
+					// more honest of the two readings - "the apply did not land" would describe a write that
+					// never ran. The proposal on the untouched item is rebased by exact arithmetic and applies.
+					{ at: 1, label: 'Levers - Growth Levers', reason: 'needs-attention' },
 				],
 				lateArrivalStillPending: true,
 				lateArrivalLanded: false,
