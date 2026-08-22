@@ -746,10 +746,15 @@ export class ReviewRailView extends ViewPane {
 		if (pending.length) {
 			const foot = append(content, $('div.ldr-foot'));
 			const left = append(foot, $('span.ldr-foot-count'));
-			// Literally true of what the rail is showing: a decided change leaves the pending set, so nothing
-			// still on this surface has been decided. The rail keeps no memory of a batch, so the total is the
-			// live count rather than a fabricated "started with N".
-			left.textContent = localize('livingDocs.review.decided', "0 of {0} decided", pending.length);
+			// The real fold of the change store (docs/30 stage 1). Until R6 this said "0 of N decided" because
+			// the rail genuinely had no memory of a batch - the queue was renderer memory that vanished on
+			// reload, so a decided change left no trace to count. It now reads the store's own progress over
+			// the proposal SETS still holding something open, and says so when the review is being resumed
+			// from a previous session rather than started in this one.
+			const progress = this._livingDocs.getReviewProgress();
+			left.textContent = progress.resumed
+				? localize('livingDocs.review.decidedResumed', "Resumed - {0} of {1} decided", progress.decided, progress.total)
+				: localize('livingDocs.review.decided', "{0} of {1} decided", progress.decided, progress.total);
 			append(foot, $('span.ldr-spacer'));
 			const rejectAll = append(foot, $('button.ldr-quiet-btn')) as HTMLButtonElement;
 			rejectAll.textContent = bulkVerbLabel(this._livingDocs.captureBulkSet({ verb: 'reject' }));

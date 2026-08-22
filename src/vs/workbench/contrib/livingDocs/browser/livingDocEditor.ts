@@ -445,8 +445,9 @@ export class LivingDocEditor extends EditorPane {
 				// the pending change then approve it through the one approve path (no parallel apply route).
 				if (typeof message.id === 'string' && typeof message.text === 'string') {
 					const id = message.id;
-					this._livingDocs.amendChange(id, message.text);
-					void this._livingDocs.approve(id);
+					// Sequenced: the amend stacks a revision in the change store and the approve must read it, so
+					// firing both without awaiting would race the approve against its own new text.
+					void this._livingDocs.amendChange(id, message.text).then(() => this._livingDocs.approve(id));
 				}
 				break;
 			case 'approveAllDoc': {

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ChangeClass, deriveChangeClass, ISplicePlacement, spliceDoc } from './changeRecord.js';
-import { chunkDocBody, IBodyChunk, jaccardSimilarity } from './livingDocMarkdown.js';
+import { chunkDocBody, IBodyChunk, jaccardOfTokens, similarityTokens } from './livingDocMarkdown.js';
 import { IPmDiffSegment, wordDiffSegments } from './livingDocPmDecorations.js';
 
 // The local differ (docs/30 section 2.1, stage 1): ONE deterministic block-granularity alignment from
@@ -284,11 +284,31 @@ function alignGap(base: readonly IDiffBlock[], proposed: readonly IDiffBlock[], 
 		return [{ base: [base[b0].ordinal], proposed: [proposed[p0].ordinal], pairing: 'modified' }];
 	}
 
+	// Tokenise each block ONCE. The table below asks for a pair score in up to three ways per cell and reads
+	// `canPair` on top of that, so tokenising inside the comparison re-scans the same prose O(n*m) times -
+	// close to a second of blocking work at the cell cap, and this alignment now runs on the approve path
+	// (the invariant I6 post-check) where a person is waiting. Hoisting the scan out is a contained fix: the
+	// scores are identical, only the number of times each block is read changes.
+	const blockTokens = new Map<IDiffBlock, ReadonlySet<string>>();
+	const tokensOf = (block: IDiffBlock) => {
+		let tokens = blockTokens.get(block);
+		if (!tokens) { tokens = similarityTokens(block.text); blockTokens.set(block, tokens); }
+		return tokens;
+	};
+	// Run token sets (a block plus its successor, read as one piece of prose) are memoised on their first
+	// index, which is what the split/merge steps ask for and nothing else needs.
+	const runTokens = new Map<string, ReadonlySet<string>>();
+	const runTokensOf = (blocks: readonly IDiffBlock[], from: number, key: string) => {
+		let tokens = runTokens.get(key);
+		if (!tokens) { tokens = similarityTokens(runText(blocks, from, from + 2)); runTokens.set(key, tokens); }
+		return tokens;
+	};
+
 	const canPair = (i: number, j: number) =>
-		base[i].kind === proposed[j].kind && jaccardSimilarity(base[i].text, proposed[j].text) >= PAIR_MIN_SIMILARITY;
-	const pairScore = (i: number, j: number) => jaccardSimilarity(base[i].text, proposed[j].text);
-	const splitScore = (i: number, j: number) => jaccardSimilarity(base[i].text, runText(proposed, j, j + 2));
-	const mergeScore = (i: number, j: number) => jaccardSimilarity(runText(base, i, i + 2), proposed[j].text);
+		base[i].kind === proposed[j].kind && jaccardOfTokens(tokensOf(base[i]), tokensOf(proposed[j])) >= PAIR_MIN_SIMILARITY;
+	const pairScore = (i: number, j: number) => jaccardOfTokens(tokensOf(base[i]), tokensOf(proposed[j]));
+	const splitScore = (i: number, j: number) => jaccardOfTokens(tokensOf(base[i]), runTokensOf(proposed, j, `p${j}`));
+	const mergeScore = (i: number, j: number) => jaccardOfTokens(runTokensOf(base, i, `b${i}`), tokensOf(proposed[j]));
 	const splitKindsOk = (i: number, j: number) => base[i].kind === proposed[j].kind && base[i].kind === proposed[j + 1].kind;
 	const mergeKindsOk = (i: number, j: number) => base[i].kind === proposed[j].kind && base[i + 1].kind === proposed[j].kind;
 
@@ -597,4 +617,77 @@ export function diffDocBody(baseBody: string, proposedBody: string): IDocDiff {
 		},
 		changeClass: deriveChangeClass(finalHunks, baseBody.length),
 	};
+}
+
+/** Why a landed write did not read back as the change that was approved. Named, never a bare boolean. */
+export type ChangedRegionFailure =
+	/** The document changed somewhere no approved hunk describes: untouched content was NOT untouched. */
+	| 'unapproved-change'
+	/** An approved hunk describes a region the document does not show as changed at all. */
+	| 'missing-change';
+
+/** The verdict of {@link verifyChangedRegions}. Closed, so "it passed" cannot be confused with "it ran". */
+export type IChangedRegionCheck = { readonly ok: true } | { readonly ok: false; readonly reason: ChangedRegionFailure };
+
+/**
+ * Invariant I6's post-check: re-derive what changed between two bodies and prove it is what was approved.
+ *
+ * This runs AFTER a write has been read back and its hash compared to the expectation the intent declared,
+ * and it is deliberately a SECOND, independently-derived witness rather than a restatement of the first.
+ * The hash check asks "did the bytes I computed reach the disk"; it is answered with arithmetic the splice
+ * itself produced, so it cannot catch a splice that was wrong in the first place. This one asks a different
+ * question - "reading only the two documents, is the difference between them the difference the reviewer
+ * agreed to?" - and it is answered by the same alignment the reviewer's cards were built from, with no
+ * memory of the splice at all. Two witnesses that share no arithmetic is the whole point.
+ *
+ * The test is stated at the differ's own resolution, which is block-grained: an approved anchor may cover
+ * one list item while the hunk that reports it covers the whole list. So the rule is INTERSECTION, not
+ * containment - every changed region must be spoken for by an approved anchor, and every approved anchor
+ * that actually changes something must show up as a changed region. A hunk sitting in prose no anchor names
+ * is the failure this exists to make impossible, and it is exactly what a lossy serialiser in the write
+ * path produces.
+ */
+export function verifyChangedRegions(baseBody: string, observedBody: string, approved: readonly ISplicePlacement[]): IChangedRegionCheck {
+	const hunks = diffDocBody(baseBody, observedBody).hunks;
+	// A no-op anchor (the text it proposes is the text already there) legitimately produces no hunk, so it
+	// is excluded from the coverage half rather than being reported as a change that went missing.
+	const effective = approved.filter(a => a.newText !== a.oldText);
+	/**
+	 * Whether two placements describe the same region of the base.
+	 *
+	 * Overlap is the ordinary case. The other one is a SEAM: an insertion has a zero-width span, and the blank
+	 * line between two blocks is a real interval, so an approve that anchors at the END of one block and an
+	 * alignment that attributes the same insertion to the START of the next are describing one region through
+	 * two equally correct addresses.
+	 *
+	 * The bridge is therefore allowed only when one side is an INSERTION. An earlier version allowed any pair
+	 * separated by whitespace, on the premise that two regions of prose are never whitespace-adjacent - which
+	 * is false for this format, where every pair of neighbouring blocks is separated by exactly one blank
+	 * line. That version returned `ok` for a corrupted write in the block next door: safe, because the
+	 * post-hash comparison catches it regardless, but it threw away the diagnosis, which is the only thing
+	 * this check is here to add. A zero-width span cannot describe a rewrite, so requiring one closes the
+	 * bridge to every case except the one it exists for.
+	 *
+	 * One case remains outside this check's reach and is named rather than papered over: where the alignment
+	 * folds a corrupted block INTO the approved hunk (adjacent changed blocks can compose into one region),
+	 * the corruption is inside a hunk the reviewer did agree to part of, and only the post-hash comparison
+	 * catches it. That is why the hash is not optional: this check adds a diagnosis, never the guarantee.
+	 */
+	const sameRegion = (a: ISplicePlacement, b: ISplicePlacement) => {
+		const [first, second] = a.span.start <= b.span.start ? [a, b] : [b, a];
+		if (second.span.start <= first.span.end) { return true; }
+		const anInsertion = first.span.start === first.span.end || second.span.start === second.span.end;
+		return anInsertion && baseBody.slice(first.span.end, second.span.start).trim() === '';
+	};
+	for (const hunk of hunks) {
+		if (!effective.some(a => sameRegion(hunk, a))) {
+			return { ok: false, reason: 'unapproved-change' };
+		}
+	}
+	for (const anchor of effective) {
+		if (!hunks.some(h => sameRegion(h, anchor))) {
+			return { ok: false, reason: 'missing-change' };
+		}
+	}
+	return { ok: true };
 }

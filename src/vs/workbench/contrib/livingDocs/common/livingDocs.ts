@@ -11,6 +11,7 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { IInlineWidgetReport } from './changePointer.js';
 import { IFanoutFailedDoc } from './fanoutOutcome.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IReviewProgress } from './changeStore.js';
 import { AddedContextKind, AgentPolicy, IAddedContext, IAgentDef, IAgentRun, IAgentTrigger, IAuditEntry, IBulkApplyResult, IBulkScope, IBulkSet, IFreshness, ILivingDoc, ILivingDocLock, IProposedChange, ISkillRunSummary, ISnapshotEntry, SnapshotVia, SourceKind } from './livingDocsModel.js';
 import { ILedgerInputs } from './livingDocLedger.js';
 import { DocAutonomyLevel } from './docPolicy.js';
@@ -1024,6 +1025,25 @@ export interface ILivingDocsService {
 
 	// --- workspace-wide views (the review rail aggregates across documents) ---
 	getAllPending(): readonly IProposedChange[];
+	/**
+	 * How far through the live proposal sets the reviewer is, for the review rail's foot (docs/30 stage 1).
+	 *
+	 * A fold of the persisted change store, scoped to the proposal SETS that still hold something open, so
+	 * the number is about the work in front of the reviewer rather than about the length of the journal.
+	 * `resumed` is true when those proposals were already on disk when this window opened them - the
+	 * difference between "3 of 12 decided" and "Resumed - 41 of 63 decided".
+	 */
+	getReviewProgress(): IReviewProgress & { readonly resumed: boolean };
+	/**
+	 * Resolves once the review queue has been restored from disk, or once it is known there is nothing to
+	 * restore.
+	 *
+	 * Every project-level count is a synchronous fold of a queue that now arrives from a file, and the read
+	 * that fills it starts when the window gets a project rather than when a document is opened. Surfaces that
+	 * re-render on `onDidChange` need nothing; a caller that cannot waits here rather than reading a zero that
+	 * is merely early.
+	 */
+	whenReviewStateRestored(): Promise<void>;
 	getAudit(): readonly IAuditEntry[];
 	/**
 	 * The Agents activity ledger's read-model inputs (plan 49-c A3): the real event streams the History tab and
@@ -1559,9 +1579,13 @@ export interface ILivingDocsService {
 	 * surface re-renders the amended proposal as still-pending; the subsequent {@link approve} records the
 	 * audit `via: 'tweaked'`. A no-op for an unknown id, a `figure` change (figures come from sources and are
 	 * not hand-editable - the affordance hides for them), an empty amendment, or one that matches the current
-	 * text. No new persist path: the amended text lands through the same {@link approve} serialisation.
+	 * text.
+	 *
+	 * The amendment stacks a REVISION on the same change in the store - same id, same thread, new content -
+	 * so the trail shows the agent proposed one thing and a human changed it. Await it before approving: the
+	 * approve reads the revision this call writes.
 	 */
-	amendChange(changeId: string, newText: string): void;
+	amendChange(changeId: string, newText: string): Promise<void>;
 
 	approve(changeId: string): Promise<void>;
 	/** Discard one pending change. `reason` is the reviewer's optional plain-words note, recorded on the audit row. */

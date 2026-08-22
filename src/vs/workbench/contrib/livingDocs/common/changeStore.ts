@@ -7,8 +7,9 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { localize } from '../../../../nls.js';
 import { ChangeJournal, IChangeRebase, IChangeResolution, IChangeStoreFileSystem, IIntentDoc, IJournalError, JournalEntry, JournalFailure, JournalRecord } from './changeJournal.js';
 import { committedDocs, openIntents, reconcileIntent } from './changeReconciler.js';
-import { AnchorFailure, AnchorOutcome, anchorsOverlap, AttentionReason, bulkCandidates, ChangeActor, ChangeStatus, deriveChangeClass, foldAnchorOutcomes, groupAnchorsByDoc, hashContent, hasOpenThread, IChange, IChangeAnchor, IChangeVersion, isOpenChange, isTerminalStatus, orderDocsForWrite, rebaseAnchors, spliceDoc } from './changeRecord.js';
-import { buildBulkSet, BulkVerb, ChangeKind, IBulkScope, IBulkSet } from './livingDocsModel.js';
+import { AnchorFailure, AnchorOutcome, anchorsOverlap, AttentionReason, bulkCandidates, ChangeActor, ChangeStatus, deriveChangeClass, foldAnchorOutcomes, groupAnchorsByDoc, hashContent, hasOpenThread, IChange, IChangeAnchor, IChangeDisplay, IChangeVersion, isOpenChange, isTerminalStatus, ISplicePlacement, orderDocsForWrite, rebaseAnchors, spliceDoc } from './changeRecord.js';
+import { verifyChangedRegions } from './livingDocDiffer.js';
+import { buildBulkSet, BulkSkipReason, BulkVerb, ChangeKind, IBulkScope, IBulkSet } from './livingDocsModel.js';
 
 // The persisted change store (docs/30 section 5). It is the single authority for counts, verbs, receipts and
 // the audit trail, and it exists because today there is no such authority: the pending queue is an in-memory
@@ -62,6 +63,8 @@ export interface INewChange {
 	readonly kind: ChangeKind;
 	/** The planner's own account of why it proposed this. Advisory provenance, never a control signal. */
 	readonly plannerIntent?: string;
+	/** The card the review surfaces render, persisted with the change so a resumed review restores the words. */
+	readonly display?: IChangeDisplay;
 	/** The total character length of the base documents, used to derive `targeted` vs `rewrite`. */
 	readonly baseLength: number;
 	/** Set when this change was split off a revision of another change rather than proposed on its own. */
@@ -161,6 +164,14 @@ export interface IOpenReport {
 	/** How many unreadable trailing journal records were dropped. Zero on a clean shutdown. */
 	readonly truncated: number;
 	/**
+	 * How many records in this journal were written by ANOTHER window (see {@link IChangeStoreFileSystem}).
+	 *
+	 * They are read and folded - they are real decisions and dropping them would be the silent loss this
+	 * store exists to make impossible - but a non-zero count means the single-window assumption the append
+	 * path rests on has already been broken, so it is surfaced rather than absorbed.
+	 */
+	readonly foreign: number;
+	/**
 	 * How many readable records the store could not make sense of - an unrecognised kind, or one naming a
 	 * change that is not in the log. Counted rather than passed over, because a store whose thesis is "no
 	 * silent drops" does not get to make an exception for its own log.
@@ -168,6 +179,31 @@ export interface IOpenReport {
 	readonly quarantined: number;
 	/** The verdicts the startup reconciler reached. Empty when the last session closed every intent. */
 	readonly recovered: readonly IChangeResolution[];
+	readonly failure?: IJournalError;
+}
+
+/**
+ * How far through the review the person is, as a fold of the journal (docs/30 stage 1, "Resumed - 41 of 63
+ * decided").
+ *
+ * Scoped to the proposal SETS that still hold something open, which is what makes the number mean anything:
+ * a project's journal accumulates every change ever proposed, and "41 of 4,812 decided" is a fact about the
+ * log rather than about the work in front of the reviewer. The batches they are still working through are
+ * the batches the count is about.
+ */
+export interface IReviewProgress {
+	/** Changes in the live sets that have reached a terminal status. */
+	readonly decided: number;
+	/** Every change in the live sets, decided or not, excluding superseded ones nobody can see. */
+	readonly total: number;
+}
+
+/** What a human edit did to the changes standing over the document underneath it (invariant I8). */
+export interface IHumanEditReport {
+	/** Changes whose spans were moved by exact arithmetic over the edit; still eligible, still pending. */
+	readonly remapped: readonly string[];
+	/** Changes the edit landed inside: flipped to `needs-attention (human-edit)`, never silently re-aimed. */
+	readonly flagged: readonly string[];
 	readonly failure?: IJournalError;
 }
 
@@ -188,6 +224,31 @@ export function describeSkipReason(reason: ChangeSkipReason): string {
 			return localize('livingDocs.store.skip.stale', "the document has changed since it was written");
 		case 'overlap':
 			return localize('livingDocs.store.skip.overlap', "another change in the same batch rewrites the same text");
+	}
+}
+
+/**
+ * Map a store outcome onto the three reasons the shipped bulk report speaks (`IBulkSkip`).
+ *
+ * The store carries a richer vocabulary than the surfaces do - seven skip reasons and four non-terminal
+ * statuses - and this is the ONE place the two are reconciled, so a surface can never invent a fourth
+ * reading. `status` set means the store tried and the write did not land; a reason with no status means it
+ * refused before touching anything.
+ */
+export function bulkSkipFor(reason: ChangeSkipReason | undefined, status: ChangeStatus | undefined): BulkSkipReason {
+	if (status !== undefined) {
+		// Invariant I1: the approve ran and the edit did not land, so the change is still the reviewer's call.
+		return 'apply-failed';
+	}
+	switch (reason) {
+		case 'unknown-change':
+		case 'already-decided':
+		case 'superseded':
+			return 'decided-elsewhere';
+		default:
+			// `not-pending`, `stale-base`, `overlap`, `in-discussion` and an absent reason all say the same
+			// thing to a reviewer: it is still on the rail, and it needs them to look at it.
+			return 'needs-attention';
 	}
 }
 
@@ -257,6 +318,24 @@ export class ChangeStore {
 	}
 
 	/**
+	 * How far through the live proposal sets the reviewer has got. Read-only and synchronous, like
+	 * {@link captureBulkSet}: it is a fold of what the store holds right now.
+	 */
+	reviewProgress(): IReviewProgress {
+		const liveSets = new Set(this.openChanges().map(c => c.setId));
+		let decided = 0;
+		let total = 0;
+		for (const change of this.allChanges()) {
+			if (!liveSets.has(change.setId) || change.supersededBy !== undefined) {
+				continue;
+			}
+			total++;
+			if (isTerminalStatus(change.status)) { decided++; }
+		}
+		return { decided, total };
+	}
+
+	/**
 	 * Open the store: read the journal, heal a torn tail, fold it, and reconcile every intent the last
 	 * session opened but never closed.
 	 *
@@ -269,7 +348,7 @@ export class ChangeStore {
 		return this._serialised(async () => {
 			const loaded = await this._journal.load();
 			if (!loaded.ok) {
-				return { truncated: 0, quarantined: 0, recovered: [], failure: loaded };
+				return { truncated: 0, foreign: 0, quarantined: 0, recovered: [], failure: loaded };
 			}
 			this._changes.clear();
 			this._records.length = 0;
@@ -282,7 +361,7 @@ export class ChangeStore {
 			}
 			const recovered = await this._reconcile();
 			await this._writeDerivedView();
-			return { truncated: loaded.truncated, quarantined: this._quarantined, recovered };
+			return { truncated: loaded.truncated, foreign: loaded.foreign, quarantined: this._quarantined, recovered };
 		});
 	}
 
@@ -350,8 +429,30 @@ export class ChangeStore {
 	 * something different should see their conversation continue on one card, not a second card appear
 	 * beside the first with no memory of the exchange.
 	 */
-	amend(changeId: string, anchors: readonly IChangeAnchor[], plannerIntent?: string): Promise<StoreWriteResult> {
-		return this._serialised(() => this._amend(changeId, anchors, plannerIntent));
+	amend(changeId: string, anchors: readonly IChangeAnchor[], plannerIntent?: string, display?: IChangeDisplay): Promise<StoreWriteResult> {
+		return this._serialised(() => this._amend(changeId, anchors, plannerIntent, display));
+	}
+
+	/**
+	 * Record that something OTHER THAN THE STORE changed a document underneath the changes standing over it
+	 * (invariant I8) - a person typing, a hand-edited block, a figure the document's own dial auto-applied.
+	 *
+	 * The attention reason it flags with is `human-edit`, which names the overwhelmingly common case and means
+	 * exactly "an edit the store did not make and therefore cannot account for".
+	 *
+	 * The store cannot rebase a human edit on its own - it has no map of what was typed - so the caller hands
+	 * it one: the single contiguous region that differs between the two revisions, which is exact for typing
+	 * and total for everything else (any pair of strings differs over exactly one region once the common
+	 * prefix and suffix are taken off). From there the arithmetic is the same arithmetic the store uses on its
+	 * own writes: a change entirely before or after the edit moves by the length difference and stays
+	 * eligible; a change the edit landed INSIDE cannot be moved honestly and flips to
+	 * `needs-attention (human-edit)` on the same id, keeping its thread and its history.
+	 *
+	 * What it never does is guess. A proposal whose base revision this delta cannot speak for is flagged
+	 * rather than re-aimed, because a silently wrong span is how anchored search/replace earns its defects.
+	 */
+	noteExternalEdit(docUri: string, edit: ISplicePlacement, fromRevision: string, toRevision: string): Promise<IHumanEditReport> {
+		return this._serialised(() => this._noteExternalEdit(docUri, edit, fromRevision, toRevision));
 	}
 
 	/**
@@ -382,9 +483,10 @@ export class ChangeStore {
 				status: attentionReason ? 'needs-attention' : 'pending',
 				attentionReason,
 				plannerIntent: input.plannerIntent,
+				display: input.display,
 				changeClass: deriveChangeClass(input.anchors, input.baseLength),
 				kind: input.kind,
-				versions: [{ revision: 1, anchors: input.anchors, plannerIntent: input.plannerIntent, at: this._now() }],
+				versions: [{ revision: 1, anchors: input.anchors, plannerIntent: input.plannerIntent, display: input.display, at: this._now() }],
 				thread: [],
 				spawnedBy: input.spawnedBy,
 				proposedAt: this._now(),
@@ -427,7 +529,7 @@ export class ChangeStore {
 		return { ok: true };
 	}
 
-	private async _amend(changeId: string, anchors: readonly IChangeAnchor[], plannerIntent?: string): Promise<StoreWriteResult> {
+	private async _amend(changeId: string, anchors: readonly IChangeAnchor[], plannerIntent?: string, display?: IChangeDisplay): Promise<StoreWriteResult> {
 		const change = this._changes.get(changeId);
 		if (!change) {
 			return storeRefusal('unknown-change');
@@ -435,7 +537,7 @@ export class ChangeStore {
 		if (isTerminalStatus(change.status)) {
 			return storeRefusal('already-decided');
 		}
-		const version = { revision: change.versions.length + 1, anchors, plannerIntent, at: this._now() };
+		const version = { revision: change.versions.length + 1, anchors, plannerIntent, display, at: this._now() };
 		const appended = await this._append({ kind: 'amend', changeId, version }, 'pre-mutation');
 		if (appended) {
 			return appended;
@@ -598,8 +700,15 @@ export class ChangeStore {
 				failedDocs.set(docUri, 'doc-gone');
 				continue;
 			}
+			// Invariant I6, asked of the DOCUMENT rather than of the arithmetic: re-derive what changed between
+			// the base and what came back, using the same alignment the reviewer's cards were built from, and
+			// insist the difference is the difference that was approved. It runs first because it is the one
+			// that says WHAT went wrong - "the document changed somewhere no approved hunk describes" is a
+			// diagnosis; a hash mismatch is only a fact. Both are needed: this one reads at block grain and
+			// cannot see a lone space moving inside a seam, and the hash below is total over exactly that.
+			const regions = verifyChangedRegions(target.base, observed, groups.get(docUri)!);
 			const postHash = hashContent(observed);
-			if (postHash !== expected.get(docUri)) {
+			if (!regions.ok || postHash !== expected.get(docUri)) {
 				// No J2. A commit here would tell the reconciler this document landed, and it demonstrably did
 				// not land where the intent declared - so the honest record is the absence of a commit, which
 				// leaves the disk hash matching neither the base nor the expectation: `unverified`, both now and
@@ -734,6 +843,36 @@ export class ChangeStore {
 		return undefined;
 	}
 
+	private async _noteExternalEdit(docUri: string, edit: ISplicePlacement, fromRevision: string, toRevision: string): Promise<IHumanEditReport> {
+		const applied: readonly IChangeAnchor[] = [{ docUri, baseRevision: fromRevision, ...edit }];
+		const moved = new Map<string, readonly IChangeAnchor[]>();
+		const stale: string[] = [];
+		for (const change of this.openChanges()) {
+			if (!change.anchors.some(a => a.docUri === docUri)) {
+				continue;
+			}
+			// A change measured against some OTHER revision of this document is one this delta cannot speak for
+			// at all, so it is flagged rather than moved by arithmetic that does not apply to it.
+			if (change.anchors.some(a => a.docUri === docUri && a.baseRevision !== fromRevision)) {
+				stale.push(change.id);
+				continue;
+			}
+			const next = rebaseAnchors(change.anchors, docUri, applied, fromRevision, toRevision);
+			if (!next) { stale.push(change.id); } else { moved.set(change.id, next); }
+		}
+		if (!moved.size && !stale.length) {
+			return { remapped: [], flagged: [] };
+		}
+		const rebased = [...moved].map(([changeId, anchors]) => ({ changeId, anchors }));
+		const appended = await this._append({ kind: 'rebase', rebased, stale, staleReason: 'human-edit' }, 'pre-mutation');
+		if (appended) {
+			return { remapped: [], flagged: [], failure: appended };
+		}
+		this._foldRebase(rebased, stale, 'human-edit');
+		await this._writeDerivedView();
+		return { remapped: rebased.map(r => r.changeId), flagged: stale };
+	}
+
 	private async _supersede(changeId: string, supersededBy: string): Promise<IJournalError | undefined> {
 		const change = this._changes.get(changeId);
 		if (!change || isTerminalStatus(change.status)) {
@@ -827,7 +966,7 @@ export class ChangeStore {
 				return change !== undefined;
 			}
 			case 'rebase':
-				this._foldRebase(record.rebased, record.stale);
+				this._foldRebase(record.rebased, record.stale, record.staleReason);
 				return [...record.rebased.map(r => r.changeId), ...record.stale].every(id => this._changes.has(id));
 			case 'attention': {
 				const change = this._changes.get(record.changeId);
@@ -856,13 +995,14 @@ export class ChangeStore {
 		this._changes.set(changeId, {
 			...change,
 			anchors: version.anchors,
+			display: version.display ?? change.display,
 			versions: [...change.versions, version],
 			status: 'pending',
 			attentionReason: undefined,
 		});
 	}
 
-	private _foldRebase(rebased: readonly IChangeRebase[], stale: readonly string[]): void {
+	private _foldRebase(rebased: readonly IChangeRebase[], stale: readonly string[], staleReason: AttentionReason = 'stale-base'): void {
 		for (const entry of rebased) {
 			const change = this._changes.get(entry.changeId);
 			if (change && !isTerminalStatus(change.status)) {
@@ -872,7 +1012,7 @@ export class ChangeStore {
 		for (const changeId of stale) {
 			const change = this._changes.get(changeId);
 			if (change && !isTerminalStatus(change.status)) {
-				this._changes.set(change.id, { ...change, status: 'needs-attention', attentionReason: 'stale-base' });
+				this._changes.set(change.id, { ...change, status: 'needs-attention', attentionReason: staleReason });
 			}
 		}
 	}
@@ -904,6 +1044,9 @@ export class ChangeStore {
 	 * drift into being a second source of truth (which is what the per-document lock file became).
 	 */
 	private async _writeDerivedView(): Promise<void> {
+		// Nothing folded is nothing to derive. Skipping the write keeps a project that has never had a proposal
+		// free of store files entirely, which matters now that the store opens on every window with a folder.
+		if (this._changes.size === 0) { return; }
 		await this._journal.writeDerivedView(JSON.stringify({ version: DERIVED_VIEW_VERSION, changes: this.allChanges() }, undefined, '\t'));
 	}
 

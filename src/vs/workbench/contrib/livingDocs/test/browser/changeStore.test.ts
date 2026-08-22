@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { readJournal } from '../../common/changeJournal.js';
-import { hashContent, IChange } from '../../common/changeRecord.js';
+import { describeChangeStatus, hashContent, IChange } from '../../common/changeRecord.js';
 import { ChangeStore } from '../../common/changeStore.js';
 import { anchorAt, FakeChangeDocuments, FakeChangeFileSystem, fakeClock, fakeIds } from './changeStoreFakes.js';
 
@@ -59,6 +59,8 @@ function fold(store: ChangeStore): { readonly open: number; readonly statuses: r
 interface IForgedRecord {
 	readonly seq: number;
 	readonly at: number;
+	/** The writer whose log this record claims to continue; sequences are contiguous per writer. */
+	readonly instance?: string;
 	readonly kind: string;
 	readonly changeId?: string;
 	readonly reason?: string;
@@ -572,6 +574,37 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 		);
 	});
 
+	test('I6: a write that lands the approved hunk AND alters prose nobody approved is unverified, with no approved record', async () => {
+		// The other half of the class above, and the one the differ-backed post-check exists for. Here the
+		// write does everything it was asked to and something else besides - the shape a lossy or stale write
+		// path produces. There is no approved record, the change stays the reviewer's call, and the status it
+		// carries is a sentence rather than a log line.
+		const it = stage([[A, 'Alpha.\n\nBeta.\n\nGamma.\n']]);
+		await it.store.open();
+		it.docs.normaliseOnWrite = text => text.replace('Gamma.', 'Something else entirely.');
+		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
+		const report = await it.store.approveByIds([changeId]);
+		const reopened = reopen(it);
+		await reopened.open();
+
+		assert.deepStrictEqual(
+			{
+				status: report.resolved.map(r => r.status),
+				anchorOutcomes: report.resolved[0].anchorOutcomes,
+				stillOpenAfterAReload: reopened.openChanges().map(c => c.id),
+				noApprovedRecordAnywhere: reopened.allChanges().every(c => c.status !== 'approved'),
+				userVisible: describeChangeStatus(reopened.change(changeId)!.status),
+			},
+			{
+				status: ['unverified'],
+				anchorOutcomes: [{ docUri: A, landed: false, reason: 'unverified' }],
+				stillOpenAfterAReload: [changeId],
+				noApprovedRecordAnywhere: true,
+				userVisible: 'This change cannot be verified - the document does not match what was expected, so nothing was retried',
+			},
+		);
+	});
+
 	test('F4: a retry that lands the frozen record folds it, so no decided change is offered again for the rest of the session', async () => {
 		const it = stage();
 		await it.store.open();
@@ -610,10 +643,13 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 		await it.store.open();
 		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
 		const path = `${HOME}/changes/journal.log`;
+		// The forgeries continue THIS window's log, so they carry its instance: sequences are per writer, and a
+		// record claiming seq 2 under a different identity would be a second window rather than a hand edit.
+		const instance = readJournal(it.fs.files.get(path)!).records[0].instance;
 		it.fs.files.set(path, it.fs.files.get(path)!
-			+ forgedLine({ seq: 2, at: 2, kind: 'invented-by-a-later-version' })
-			+ forgedLine({ seq: 3, at: 3, kind: 'attention', changeId: 'a-change-that-does-not-exist', reason: 'stale-base' })
-			+ forgedLine({ seq: 4, at: 4, kind: 'attention', changeId, reason: 'human-edit' }));
+			+ forgedLine({ seq: 2, at: 2, instance, kind: 'invented-by-a-later-version' })
+			+ forgedLine({ seq: 3, at: 3, instance, kind: 'attention', changeId: 'a-change-that-does-not-exist', reason: 'stale-base' })
+			+ forgedLine({ seq: 4, at: 4, instance, kind: 'attention', changeId, reason: 'human-edit' }));
 		const reopened = reopen(it);
 		const report = await reopened.open();
 
