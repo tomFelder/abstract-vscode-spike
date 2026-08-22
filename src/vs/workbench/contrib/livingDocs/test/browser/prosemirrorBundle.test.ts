@@ -7,11 +7,16 @@ import assert from 'assert';
 import { decodeBase64 } from '../../../../../base/common/buffer.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { PROSEMIRROR_BUNDLE_BASE64 } from '../../browser/prosemirrorBundle.js';
+import { IBlockGutterEntry } from '../../common/livingDocAddress.js';
+import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { buildPmDecorationSpec } from '../../common/livingDocPmDecorations.js';
+import { ILivingDoc, IProposedChange } from '../../common/livingDocsModel.js';
 
 // A minimal handle on the live ProseMirror view - enough to drive edits and read the doc back in a test
 // without pulling PM's own types (the bundle is a base64 artifact, not an importable module).
 interface ILwdpmView {
 	state: { doc: { textContent: string; content: { size: number }; nodeSize: number }; tr: unknown };
+	dom: HTMLElement;
 	dispatch(tr: unknown): void;
 	destroy(): void;
 }
@@ -26,7 +31,18 @@ interface ILwdpmTestSurface {
 	toMarkdown(view: ILwdpmView): string;
 	cmd(view: ILwdpmView, name: string): boolean;
 	setDoc(view: ILwdpmView, markdown: string): void;
+	setDecorations(view: ILwdpmView, spec: IPmDecoTestPayload): void;
 	destroy(view: ILwdpmView): void;
+}
+
+// The decoration payload the host pushes (`livingDocRender.ts`'s `IPmDecoPayload`): the pure spec plus the
+// host-rendered widget HTML per change. Restated here for the same reason the view handle is - the bundle is
+// a base64 artifact, so the test cannot import the shapes it is handed.
+interface IPmDecoTestPayload {
+	readonly edits: readonly { readonly id: string; readonly blockOrdinal?: number; readonly anchorText: string; readonly html: string }[];
+	readonly inserts: readonly unknown[];
+	readonly gutters: readonly unknown[];
+	readonly numbers: readonly IBlockGutterEntry[];
 }
 
 // Decode + evaluate the vendored IIFE once. It assigns `window.LWDPM`; we hand it a plain object as
@@ -190,6 +206,84 @@ suite('ProseMirror vendored bundle (LWDPM)', () => {
 			} finally {
 				lwdpm.destroy(view);
 			}
+		});
+	});
+
+	// --- LivingDoc edit decorations mount by ordinal (docs/30 section 4.3, closes the #300 class) --------
+	//
+	// These mount a real EditorView and push a spec built by the REAL host builder, so what is asserted is
+	// the shipped artifact placing the shipped spec - not a re-implementation of either. The two cases are
+	// exactly the ones text-anchor placement lost silently: a list block (whose rendered `textContent` never
+	// equals the item-scoped anchor the host diffs) and a block retyped after its change was proposed.
+	suite('LivingDoc edit decorations (ordinal placement)', () => {
+		// The host maps the pure spec to the webview payload by attaching each change's widget HTML
+		// (`renderPmDeco`). A marked-up stub stands in for the real card: what is under test is WHERE the
+		// widget lands, and a full card would only make the assertion harder to read.
+		function payloadFor(doc: ILivingDoc, pending: readonly IProposedChange[]): IPmDecoTestPayload {
+			const spec = buildPmDecorationSpec(doc, pending, new Set());
+			return { ...spec, edits: spec.edits.map(e => ({ ...e, html: `<div data-editcard="${e.id}">card</div>` })) };
+		}
+
+		function mountWith(markdown: string, payload: IPmDecoTestPayload): { mountedCards: string[]; gutterNumbers: string[] } {
+			const parent = document.createElement('div');
+			const view = lwdpm.mount(parent, markdown, {});
+			try {
+				lwdpm.setDecorations(view, payload);
+				return {
+					mountedCards: Array.from(view.dom.querySelectorAll('[data-editcard]')).map(el => el.getAttribute('data-editcard') ?? ''),
+					gutterNumbers: Array.from(view.dom.querySelectorAll('[data-lwd-num]')).map(el => el.getAttribute('data-lwd-num') ?? ''),
+				};
+			} finally {
+				lwdpm.destroy(view);
+			}
+		}
+
+		const LIST_MD = [
+			'## Growth levers',
+			'',
+			'- Expand the free trial to thirty days',
+			'- Win back recently churned accounts',
+			'- Launch an annual billing plan',
+		].join('\n') + '\n';
+
+		test('a change to one item of a LIST block mounts its widget over that list', () => {
+			const doc = parseLivingDoc(LIST_MD);
+			const listBlock = doc.blocks.find(b => b.text.startsWith('- Expand'))!;
+			const pending: IProposedChange[] = [{
+				id: 'c-list', docId: 'doc', docTitle: 'Levers', blockId: listBlock.id, blockLabel: 'Growth levers',
+				oldText: listBlock.text, newText: '- Win back recently churned accounts with a targeted campaign',
+				kind: 'meaning', confidence: 0.8, rationale: '', sourceCells: [],
+			}];
+
+			// The widget mounts, the list node it replaced no longer carries a gutter number (the widget owns
+			// that row), and the untouched heading keeps its own - the numbered gutter is unharmed.
+			assert.deepStrictEqual(mountWith(LIST_MD, payloadFor(doc, pending)), { mountedCards: ['c-list'], gutterNumbers: ['1'] });
+		});
+
+		test('a block retyped after the change was proposed still mounts (the anchor no longer matches its own block)', () => {
+			const before = 'Revenue grew fast this week.';
+			const after = 'Revenue collapsed overnight, actually.';
+			const md = `## Highlights\n\n${before}\n`;
+			const drifted = parseLivingDoc(`## Highlights\n\n${after}\n`);
+			const pending: IProposedChange[] = [{
+				id: 'c-drift', docId: 'doc', docTitle: 'Weekly', blockId: drifted.blocks[1].id, blockLabel: 'Highlights',
+				oldText: before, newText: 'Revenue dropped sharply this week.',
+				kind: 'meaning', confidence: 0.8, rationale: '', sourceCells: [],
+			}];
+			const payload = payloadFor(drifted, pending);
+			assert.strictEqual(payload.edits[0].anchorText, before, 'the anchor must be the stale text - that is what made this case fail');
+
+			// Mounted against the DRIFTED document, whose second block no longer reads like the anchor.
+			assert.deepStrictEqual(mountWith(md.replace(before, after), payload), { mountedCards: ['c-drift'], gutterNumbers: ['1'] });
+		});
+
+		test('an edit the host could not address falls back to its text anchor rather than mounting nowhere', () => {
+			const md = 'Revenue grew fast this week.\n';
+			const payload: IPmDecoTestPayload = {
+				edits: [{ id: 'c-legacy', anchorText: 'Revenue grew fast this week.', html: '<div data-editcard="c-legacy">card</div>' }],
+				inserts: [], gutters: [], numbers: [],
+			};
+			assert.deepStrictEqual(mountWith(md, payload), { mountedCards: ['c-legacy'], gutterNumbers: [] });
 		});
 	});
 });

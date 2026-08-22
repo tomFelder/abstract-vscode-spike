@@ -29,7 +29,7 @@ import { IWebviewElement, IWebviewService } from '../../webview/browser/webview.
 import { ILivingDocsService, runBulkVerb } from '../common/livingDocs.js';
 import { HeaderPillKind, IAbstractHeaderService } from '../common/abstractHeader.js';
 import { localize } from '../../../../nls.js';
-import { IBulkScope, nextPendingDocId } from '../common/livingDocsModel.js';
+import { IBulkScope, nextPendingDocId, previousPendingDocId } from '../common/livingDocsModel.js';
 import { buildFigureProvenance } from '../common/livingDocPmDecorations.js';
 import { documentDisplayTitle, parseLivingDoc, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { applyFocusRequest, applyReady, applyRender, applyRevealBlock, applyRevealHeading, EditorWebviewEffect, IEditorWebviewState, initialEditorWebviewState, recordPmBody } from '../common/editorWebviewProtocol.js';
@@ -473,7 +473,11 @@ export class LivingDocEditor extends EditorPane {
 				break;
 			case 'nextDoc':
 				// Editor action bar: step the editor pane to the next document that still has pending changes.
-				this._openNextChangedDoc();
+				this._openChangedDoc('next');
+				break;
+			case 'prevDoc':
+				// The backward half of the same walk (docs/30 section 4.3) - review is not monotonic.
+				this._openChangedDoc('previous');
 				break;
 			case 'openWikilink':
 				// A [[wikilink]] chip was followed. A target that names an existing document opens it; one that
@@ -671,11 +675,14 @@ export class LivingDocEditor extends EditorPane {
 				return data ? { ...data, synced: peek.synced, syncedCount: peek.syncedCount } : undefined;
 			})()
 			: undefined;
-		// The next document (other than this one) with pending changes drives the action bar's "Next
-		// document" button - shown only when there is somewhere to advance to (plan 19 iter 4).
+		// The next / previous document (other than this one) with pending changes drives the review bar's
+		// cross-document walk - each half shown only when there is somewhere to go (plan 19 iter 4; the
+		// backward half is docs/30 section 4.3).
 		const allPending = this._livingDocs.getAllPending();
 		const nextId = nextPendingDocId(allPending, resource.toString());
 		const nextChangedDocTitle = nextId ? allPending.find(c => c.docId === nextId)?.docTitle : undefined;
+		const prevId = previousPendingDocId(allPending, resource.toString());
+		const prevChangedDocTitle = prevId ? allPending.find(c => c.docId === prevId)?.docTitle : undefined;
 		// Per-key provenance for the figure/gutter hover tooltip (plan 29 iter 3): fold this document's lock
 		// bindings + its live staleness set into { source, location, synced, fresh }. Empty when the document
 		// is not living / has no lock, so the tooltip stays silent on a plain Markdown doc.
@@ -696,6 +703,7 @@ export class LivingDocEditor extends EditorPane {
 			syncDiff: this._livingDocs.getLastSyncDiff(resource),
 			sourcePeek,
 			nextChangedDocTitle,
+			prevChangedDocTitle,
 			totalPendingCount: allPending.length,
 			provenance,
 			snapshotCount: this._livingDocs.getSnapshots(resource).length,
@@ -804,14 +812,16 @@ export class LivingDocEditor extends EditorPane {
 		}
 	}
 
-	// Editor action bar "Next document with changes": advance the pane to the next document that still has
-	// pending changes (cycling), so the whole multi-doc review can be driven from the document surface.
-	private _openNextChangedDoc(): void {
+	// The review bar's "Next document" / "Previous document": step the pane one place around the ring of
+	// documents that still have pending changes (cycling), so the whole multi-doc review can be driven from
+	// the document surface - in either direction, because review is not monotonic (docs/30 section 4.3).
+	private _openChangedDoc(direction: 'next' | 'previous'): void {
 		if (!this._resource) { return; }
-		const nextId = nextPendingDocId(this._livingDocs.getAllPending(), this._resource.toString());
+		const step = direction === 'next' ? nextPendingDocId : previousPendingDocId;
+		const targetId = step(this._livingDocs.getAllPending(), this._resource.toString());
 		// Open in this pane's own group so a split layout advances the document the action came from,
 		// rather than falling back to whichever group happens to be active.
-		if (nextId) { void this._editorService.openEditor({ resource: URI.parse(nextId) }, this.group); }
+		if (targetId) { void this._editorService.openEditor({ resource: URI.parse(targetId) }, this.group); }
 	}
 
 	layout(dimension: Dimension): void {

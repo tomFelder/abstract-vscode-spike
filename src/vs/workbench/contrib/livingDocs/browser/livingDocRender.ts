@@ -96,6 +96,12 @@ export interface ILivingDocRenderInput {
 	 * somewhere to advance to. Computed by the editor pane (which sees workspace-wide pending).
 	 */
 	readonly nextChangedDocTitle?: string;
+	/**
+	 * The PREVIOUS document with pending changes, if any (docs/30 section 4.3). Drives the review bar's
+	 * "Previous document" button - the backward half of the cross-document walk, because review is not
+	 * monotonic. Same source as `nextChangedDocTitle`, opposite direction.
+	 */
+	readonly prevChangedDocTitle?: string;
 	/** Total pending changes across EVERY document (plan 19 iter 5) - drives "Approve all everywhere". */
 	readonly totalPendingCount?: number;
 	/**
@@ -1205,6 +1211,7 @@ root.addEventListener('click', e => {
 	if (el = e.target.closest('[data-approve-all-doc]')) { return vscode.postMessage({ type: 'approveAllDoc' }); }
 	if (el = e.target.closest('[data-approve-all-everywhere]')) { return vscode.postMessage({ type: 'approveAllEverywhere' }); }
 	if (el = e.target.closest('[data-next-doc]')) { return vscode.postMessage({ type: 'nextDoc' }); }
+	if (el = e.target.closest('[data-prev-doc]')) { return vscode.postMessage({ type: 'prevDoc' }); }
 	// "Review each" (comp 2b) and a quiet pending marker's own link are the same gesture from two places:
 	// promote a waiting change to the full decision card, in place, and land the reader on it. Both are
 	// purely local - no round trip to the host, because nothing about the document changes by looking at it.
@@ -1438,8 +1445,10 @@ window.addEventListener('message', e => { const m = e.data;
 if (typeof window.__LWD_PM_MD === 'string') { mountPm(window.__LWD_PM_MD, window.__LWD_PM_DECO); }
 vscode.postMessage({ type: 'lwdReady' });`;
 
-// One resolved decoration with its host-rendered widget HTML, ready for the bundle to place by text anchor.
-interface IPmDecoEdit { readonly id: string; readonly anchorText: string; readonly html: string }
+// One resolved decoration with its host-rendered widget HTML, ready for the bundle to place. An edit is
+// placed by `blockOrdinal` (docs/30 section 4.3) with `anchorText` only as the fallback for a block that
+// could not be addressed; an insert is still placed after the node matching `afterText`.
+interface IPmDecoEdit { readonly id: string; readonly blockOrdinal?: number; readonly anchorText: string; readonly html: string }
 interface IPmDecoInsert { readonly id: string; readonly afterText: string | null; readonly html: string }
 /** The decoration payload pushed to the webview: pending diffs/inserts (with widget HTML) + gutter markers. */
 export interface IPmDecoPayload {
@@ -1569,7 +1578,12 @@ function renderPmDeco(doc: ILivingDoc, pending: readonly IProposedChange[], rece
 	// node is hidden), so map the bar anchors onto the edit ids they belong to.
 	const barAnchors = new Set(spec.gutters.filter(g => g.kind === 'bar').map(g => g.anchorText));
 	return {
-		edits: spec.edits.map((e, i) => ({ id: e.id, anchorText: e.anchorText, html: pmEditWidgetHtml(e, barAnchors.has(e.anchorText), provenance, i > 0) })),
+		edits: spec.edits.map((e, i) => ({
+			id: e.id,
+			...(e.blockOrdinal !== undefined ? { blockOrdinal: e.blockOrdinal } : {}),
+			anchorText: e.anchorText,
+			html: pmEditWidgetHtml(e, barAnchors.has(e.anchorText), provenance, i > 0),
+		})),
 		inserts: spec.inserts.map((ins, i) => ({ id: ins.id, afterText: ins.afterText, html: pmInsertWidgetHtml(ins, spec.edits.length > 0 || i > 0) })),
 		gutters: spec.gutters,
 		numbers: spec.numbers,
@@ -1595,14 +1609,23 @@ export interface ILivingDocContent {
 //  - this doc is clear but others still have changes: the all-clear green, a tick, and the way onwards;
 //  - nothing pending anywhere: no bar. Its disappearance IS the "done" signal (plan 19 iter 7) - there is no
 //    persistent status pill anywhere in round 2.
-function docReviewBar(pending: readonly IProposedChange[], totalPendingCount: number, nextChangedDocTitle: string | undefined): string {
+//
+// The cross-document route is BIDIRECTIONAL (docs/30 section 4.3): review is not monotonic, so a reviewer who
+// steps past a document - or who wants to re-read the decision they just made - can walk back. Previous sits
+// immediately left of Next, the same quiet `rv-btn` in the same slot, so the pair reads as one control.
+function docReviewBar(pending: readonly IProposedChange[], totalPendingCount: number, nextChangedDocTitle: string | undefined, prevChangedDocTitle: string | undefined): string {
 	const pendingCount = pending.length;
 	if (totalPendingCount <= 0) {
 		return '';
 	}
 
+	// Drawn only when the ring has somewhere else to go in that direction. With exactly two changed documents
+	// both point at the same one, which is correct: either verb reaches the only other document there is.
+	const prev = prevChangedDocTitle
+		? `<button class="rv-btn" data-prev-doc title="${esc(localize('livingDocs.review.prevDocTitle', "Go to {0}", prevChangedDocTitle))}">&larr; ${esc(localize('livingDocs.review.prevDoc', "Previous document"))}</button>`
+		: '';
 	const next = nextChangedDocTitle
-		? `<button class="rv-btn" data-next-doc title="Go to ${esc(nextChangedDocTitle)}">Next document &rarr;</button>`
+		? `<button class="rv-btn" data-next-doc title="${esc(localize('livingDocs.review.nextDocTitle', "Go to {0}", nextChangedDocTitle))}">${esc(localize('livingDocs.review.nextDoc', "Next document"))} &rarr;</button>`
 		: '';
 	const othersHavePending = totalPendingCount > pendingCount;
 	// A bulk verb across documents is the widest gesture in the product, so it is the quietest control.
@@ -1614,18 +1637,18 @@ function docReviewBar(pending: readonly IProposedChange[], totalPendingCount: nu
 		// This document is clear, but the review is not finished - keep the cycle moving to the next doc.
 		return `<div class="reviewbar clear">`
 			+ `<span class="rv-clear"><span class="rv-tick">&#10003;</span>This document is clear</span>`
-			+ `<span class="rv-spacer"></span>${next}${approveEverywhere}</div>`;
+			+ `<span class="rv-spacer"></span>${prev}${next}${approveEverywhere}</div>`;
 	}
 
 	if (pendingCount === 1) {
 		// No bulk verbs at n=1. With nowhere else to go there is nothing for the bar to say that the card in
 		// the document does not already say better, so it is not drawn at all.
-		if (!next && !approveEverywhere) {
+		if (!prev && !next && !approveEverywhere) {
 			return '';
 		}
 		return `<div class="reviewbar"><span class="rv-dot"></span>`
 			+ `<span class="rv-say"><strong>1 change</strong> waiting in this document - decide it in the document.</span>`
-			+ `<span class="rv-spacer"></span>${next}${approveEverywhere}</div>`;
+			+ `<span class="rv-spacer"></span>${prev}${next}${approveEverywhere}</div>`;
 	}
 
 	// The count sentence names the KINDS, because "1 meaning - 3 figures" is the fact that tells a reader
@@ -1638,7 +1661,7 @@ function docReviewBar(pending: readonly IProposedChange[], totalPendingCount: nu
 	const breakdown = parts.length ? ` - ${parts.join(' &middot; ')}` : '';
 	return `<div class="reviewbar"><span class="rv-dot"></span>`
 		+ `<span class="rv-say"><strong>${pendingCount} changes</strong> waiting in this document${breakdown}</span>`
-		+ `<span class="rv-spacer"></span>${next}`
+		+ `<span class="rv-spacer"></span>${prev}${next}`
 		+ `<button class="rv-btn" data-review-each title="Open the first change in the document">Review each</button>`
 		// The ellipsis is a promise that a dialog follows, so it is drawn only when this exact set would raise
 		// one (docs/30 I4). A small figures-only set here is genuinely one click, and says so.
@@ -1757,7 +1780,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 	// pending changes in this document or another (plan 19 iter 7). It is distinct from the formatting
 	// chrome - it floats under it with a warm tint - so review never lives inside the WYSIWYG header.
 	const reviewBar = (!!doc && isPm)
-		? docReviewBar(pending, input.totalPendingCount ?? pending.length, input.nextChangedDocTitle)
+		? docReviewBar(pending, input.totalPendingCount ?? pending.length, input.nextChangedDocTitle, input.prevChangedDocTitle)
 		: '';
 	// The Properties panel (plan 45 pin 12): the inset panel is a sibling fixed to the card's right edge, and
 	// `props-open` on the content wrapper re-centres the reading column (P12.6). Present only in PM mode where

@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { buildBulkSet, bulkVerbLabel, chordTargetChange, describeBulkSkips, groupDecisions, groupPendingByDoc, IProposedChange, ISkillRunDocResult, nextPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
+import { buildBulkSet, bulkVerbLabel, chordTargetChange, describeBulkSkips, groupDecisions, groupPendingByDoc, IProposedChange, ISkillRunDocResult, nextPendingDocId, previousPendingDocId, reviewConfidence, reviewedDocsFromSeen, reviewFraming, summariseProjectRun, summariseSkillRun } from '../../common/livingDocsModel.js';
 
 function change(docId: string, id: string): IProposedChange {
 	return {
@@ -48,6 +48,41 @@ suite('LivingDoc model - nextPendingDocId', () => {
 
 	test('returns undefined when there are no pending changes at all', () => {
 		assert.strictEqual(nextPendingDocId([], 'a'), undefined);
+	});
+});
+
+// The backward half of the same walk (docs/30 section 4.3). Review is not monotonic: the reviewer has to be
+// able to step back to the document they just left, so `previousPendingDocId` must be the exact inverse of
+// `nextPendingDocId` over the same ring - same order, same wrap, same "a clean document is not in the ring".
+suite('LivingDoc model - previousPendingDocId', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('is the exact inverse of nextPendingDocId at every position, wrap included', () => {
+		const pending = [change('a', '1'), change('b', '2'), change('c', '3')];
+		assert.deepStrictEqual(
+			['a', 'b', 'c'].map(id => ({ from: id, next: nextPendingDocId(pending, id), previous: previousPendingDocId(pending, id) })),
+			[
+				{ from: 'a', next: 'b', previous: 'c' },
+				{ from: 'b', next: 'c', previous: 'a' },
+				{ from: 'c', next: 'a', previous: 'b' },
+			],
+		);
+	});
+
+	test('skips documents with nothing pending, and never offers the current document back', () => {
+		// `b` is clean - it has no pending change, so it is not in the ring at all and both walks pass over it.
+		const pending = [change('a', '1'), change('c', '2'), change('c', '3')];
+		assert.deepStrictEqual(
+			{ fromA: previousPendingDocId(pending, 'a'), fromC: previousPendingDocId(pending, 'c'), fromClean: previousPendingDocId(pending, 'b') },
+			{ fromA: 'c', fromC: 'a', fromClean: 'c' },
+		);
+	});
+
+	test('returns undefined when there is nowhere else to go', () => {
+		assert.deepStrictEqual(
+			{ only: previousPendingDocId([change('a', '1'), change('a', '2')], 'a'), none: previousPendingDocId([], 'a') },
+			{ only: undefined, none: undefined },
+		);
 	});
 });
 

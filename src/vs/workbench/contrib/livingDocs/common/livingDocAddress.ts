@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { chunkDocBody } from './livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange } from './livingDocsModel.js';
 
 // The shared line-address model (spec 43 section 3.1, owner: plan 45 / PR-a; consumers: plans 47, 48, 49).
@@ -62,6 +63,43 @@ export function resolveBlockLine(doc: ILivingDoc, blockId: string): number | und
 /** The human address string ("Line 6") cited by the gutter, proposal widgets, rail cards and the ledger. */
 export function addressLabel(line: number): string {
 	return `Line ${line}`;
+}
+
+/**
+ * The 0-based ORDINAL of the block a change targets - the block's position in document order, which is the
+ * same coordinate the webview counts top-level ProseMirror nodes in (both come from `chunkDocBody`). This is
+ * the address the decoration layer mounts on (docs/30 section 4.3), replacing anchor-text equality: text is
+ * not an address, and a change whose block was edited after it was proposed - or whose block is a list, whose
+ * rendered text never equals the item-scoped anchor - used to fail to mount silently (the #300 class).
+ *
+ * Two ways in, in order of trust:
+ *
+ *  1. `blockId`, when it addresses exactly ONE block. This is the overwhelming case and stays right across
+ *     text drift: a non-heading block's id is its ordinal (`b-3`), so editing its prose does not move it.
+ *  2. the change's `{start, end}` span in the base revision's body, when the id addresses NO block (a heading
+ *     whose text was edited re-slugs, so `h-old-title` is gone) or MORE THAN ONE (two `## Notes` headings both
+ *     slug to `h-notes` - the collision recorded in docs/30 section 1). The span is only consulted when the
+ *     body still chunks to the same number of blocks the document was parsed into, which is the cheap,
+ *     honest test that the two coordinate systems still agree.
+ *
+ * Returns undefined when neither can address a block; callers must treat that as "do not mount", never as 0.
+ */
+export function resolveBlockOrdinal(doc: ILivingDoc, change: Pick<IProposedChange, 'blockId' | 'span'>): number | undefined {
+	let found = -1;
+	let ambiguous = false;
+	for (let i = 0; i < doc.blocks.length; i++) {
+		if (doc.blocks[i].id !== change.blockId) { continue; }
+		if (found >= 0) { ambiguous = true; break; }
+		found = i;
+	}
+	if (found >= 0 && !ambiguous) { return found; }
+
+	const span = change.span;
+	if (!span) { return found >= 0 ? found : undefined; }
+	const chunks = chunkDocBody(doc.body);
+	if (chunks.length !== doc.blocks.length) { return found >= 0 ? found : undefined; }
+	const at = chunks.findIndex(chunk => span.start >= chunk.start && span.start < chunk.end);
+	return at >= 0 ? at : (found >= 0 ? found : undefined);
 }
 
 /**
