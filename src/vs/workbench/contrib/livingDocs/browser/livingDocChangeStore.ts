@@ -55,6 +55,13 @@ export class WorkbenchChangeStoreFileSystem implements IChangeStoreFileSystem {
 	/**
 	 * Append to the journal.
 	 *
+	 * **SINGLE WRITER, and this implementation is why.** The renderer's file service has no append, so this is
+	 * a read-modify-write: two windows appending to one project at the same instant both read the same bytes
+	 * and the second write erases the first record completely. Nothing downstream can detect that - there is
+	 * no gap to find, because the record never reached the file. Sequential interleaving is fine and is
+	 * reported as `foreign` on the open report; concurrent interleaving is a lost decision. A lock, or a
+	 * provider-level atomic append, is what makes multi-window real.
+	 *
 	 * The interface's contract is that this resolves only once the bytes are DURABLE, because the whole
 	 * journal discipline rests on an intent being recoverable before the mutation it authorises happens. The
 	 * renderer's file service does not expose an fsync, so what is honoured here is the strongest thing it

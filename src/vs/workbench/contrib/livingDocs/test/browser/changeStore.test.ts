@@ -59,6 +59,8 @@ function fold(store: ChangeStore): { readonly open: number; readonly statuses: r
 interface IForgedRecord {
 	readonly seq: number;
 	readonly at: number;
+	/** The writer whose log this record claims to continue; sequences are contiguous per writer. */
+	readonly instance?: string;
 	readonly kind: string;
 	readonly changeId?: string;
 	readonly reason?: string;
@@ -641,10 +643,13 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 		await it.store.open();
 		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
 		const path = `${HOME}/changes/journal.log`;
+		// The forgeries continue THIS window's log, so they carry its instance: sequences are per writer, and a
+		// record claiming seq 2 under a different identity would be a second window rather than a hand edit.
+		const instance = readJournal(it.fs.files.get(path)!).records[0].instance;
 		it.fs.files.set(path, it.fs.files.get(path)!
-			+ forgedLine({ seq: 2, at: 2, kind: 'invented-by-a-later-version' })
-			+ forgedLine({ seq: 3, at: 3, kind: 'attention', changeId: 'a-change-that-does-not-exist', reason: 'stale-base' })
-			+ forgedLine({ seq: 4, at: 4, kind: 'attention', changeId, reason: 'human-edit' }));
+			+ forgedLine({ seq: 2, at: 2, instance, kind: 'invented-by-a-later-version' })
+			+ forgedLine({ seq: 3, at: 3, instance, kind: 'attention', changeId: 'a-change-that-does-not-exist', reason: 'stale-base' })
+			+ forgedLine({ seq: 4, at: 4, instance, kind: 'attention', changeId, reason: 'human-edit' }));
 		const reopened = reopen(it);
 		const report = await reopened.open();
 

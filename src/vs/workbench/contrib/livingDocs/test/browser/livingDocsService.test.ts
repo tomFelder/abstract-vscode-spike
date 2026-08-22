@@ -4476,6 +4476,88 @@ suite('livingDocs Service', () => {
 		);
 	});
 
+	test('R6: a restored proposal in a document this window never opened can still be approved', async () => {
+		// The blocker found reviewing #356. Persistence makes this the NORMAL state after a reload: the rail
+		// shows proposals grouped by document, one of which the window auto-opens and the rest of which it has
+		// never touched. The store's read seam returned undefined for an unopened document, the resolve path
+		// read that as "the document moved on", and the reviewer was told "the text it was written for has
+		// changed" about a file nobody had opened - false, and it made every group but one undecidable.
+		const first = createService([], {
+			boardNote: true,
+			modelSequence: [
+				chatReply('Sharpened the weekly.', [
+					{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+				]),
+				chatReply('Sharpened the board note.', [
+					{ heading: 'Note to the board', oldText: 'Momentum is steady this week.', newText: 'Momentum accelerated this week.', rationale: 'r' },
+				]),
+			],
+		});
+		await first.loadDocument(WEEKLY);
+		await first.sendChatMessage(WEEKLY, 'Sharpen the commentary');
+		await first.loadDocument(BOARD);
+		await first.sendChatMessage(BOARD, 'Sharpen the outlook');
+		const disk = lastFiles!;
+		first.dispose();
+
+		// A fresh window. NOTHING is opened - not even the document the proposal belongs to.
+		const second = createService([], { boardNote: true, files: disk, model: chatReply('never asked for') });
+		await second.whenReviewStateRestored();
+		const boardChange = second.getAllPending().find(c => c.docId === BOARD.toString())!;
+
+		await second.approveByIds([boardChange.id]);
+
+		assert.deepStrictEqual(
+			{
+				restored: second.getAllPending().length + 1,
+				// It landed, in a document this window opened only because the approve needed it open.
+				onDisk: disk.get(BOARD.toString())!.includes('Momentum accelerated this week.'),
+				stillPending: second.getAllPending().map(c => c.docId),
+				approvedRows: second.getLock(BOARD)!.audit.filter(e => e.action === 'approved').length,
+				// And no false refusal was recorded on the way.
+				failedRows: second.getLock(BOARD)!.audit.filter(e => e.action === 'apply-failed').length,
+			},
+			{
+				restored: 2,
+				onDisk: true,
+				stillPending: [WEEKLY.toString()],
+				approvedRows: 1,
+				failedRows: 0,
+			},
+		);
+		second.dispose();
+	});
+
+	test('R6: a fresh window knows its pending counts before any document is opened', async () => {
+		const first = createService([], {
+			model: chatReply('Sharpened the commentary.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+			]),
+		});
+		await first.loadDocument(WEEKLY);
+		await first.sendChatMessage(WEEKLY, 'Sharpen the commentary');
+		const disk = lastFiles!;
+		first.dispose();
+
+		// Project Home, the header badge and the tree rail all read these the moment the window has a folder.
+		// The store used to open on the first `loadDocument`, so every one of them showed zero until something
+		// was opened - the exact moment a resumed review is least discoverable and most needed.
+		const second = createService([], { files: disk, model: chatReply('never asked for') });
+		await second.whenReviewStateRestored();
+
+		assert.deepStrictEqual(
+			{
+				pending: second.getAllPending().length,
+				forDoc: second.getPendingForDoc(WEEKLY).length,
+				progress: second.getReviewProgress(),
+				// Nothing was opened to learn any of it.
+				noDocumentLoaded: second.getDoc(WEEKLY) === undefined,
+			},
+			{ pending: 1, forDoc: 1, progress: { decided: 0, total: 1, resumed: true }, noDocumentLoaded: true },
+		);
+		second.dispose();
+	});
+
 	// --- R6: the persisted change store, live (docs/30 section 5, stage 1) ---
 	//
 	// Four facts the store exists to make true, each written from what used to be false. Proposals were

@@ -164,6 +164,14 @@ export interface IOpenReport {
 	/** How many unreadable trailing journal records were dropped. Zero on a clean shutdown. */
 	readonly truncated: number;
 	/**
+	 * How many records in this journal were written by ANOTHER window (see {@link IChangeStoreFileSystem}).
+	 *
+	 * They are read and folded - they are real decisions and dropping them would be the silent loss this
+	 * store exists to make impossible - but a non-zero count means the single-window assumption the append
+	 * path rests on has already been broken, so it is surfaced rather than absorbed.
+	 */
+	readonly foreign: number;
+	/**
 	 * How many readable records the store could not make sense of - an unrecognised kind, or one naming a
 	 * change that is not in the log. Counted rather than passed over, because a store whose thesis is "no
 	 * silent drops" does not get to make an exception for its own log.
@@ -340,7 +348,7 @@ export class ChangeStore {
 		return this._serialised(async () => {
 			const loaded = await this._journal.load();
 			if (!loaded.ok) {
-				return { truncated: 0, quarantined: 0, recovered: [], failure: loaded };
+				return { truncated: 0, foreign: 0, quarantined: 0, recovered: [], failure: loaded };
 			}
 			this._changes.clear();
 			this._records.length = 0;
@@ -353,7 +361,7 @@ export class ChangeStore {
 			}
 			const recovered = await this._reconcile();
 			await this._writeDerivedView();
-			return { truncated: loaded.truncated, quarantined: this._quarantined, recovered };
+			return { truncated: loaded.truncated, foreign: loaded.foreign, quarantined: this._quarantined, recovered };
 		});
 	}
 
@@ -1036,6 +1044,9 @@ export class ChangeStore {
 	 * drift into being a second source of truth (which is what the per-document lock file became).
 	 */
 	private async _writeDerivedView(): Promise<void> {
+		// Nothing folded is nothing to derive. Skipping the write keeps a project that has never had a proposal
+		// free of store files entirely, which matters now that the store opens on every window with a folder.
+		if (this._changes.size === 0) { return; }
 		await this._journal.writeDerivedView(JSON.stringify({ version: DERIVED_VIEW_VERSION, changes: this.allChanges() }, undefined, '\t'));
 	}
 

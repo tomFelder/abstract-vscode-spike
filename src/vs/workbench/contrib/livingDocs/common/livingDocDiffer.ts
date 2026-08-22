@@ -656,15 +656,28 @@ export function verifyChangedRegions(baseBody: string, observedBody: string, app
 	 * Whether two placements describe the same region of the base.
 	 *
 	 * Overlap is the ordinary case. The other one is a SEAM: an insertion has a zero-width span, and the blank
-	 * line between two blocks is a real interval, so an approve that anchors at the end of one block and an
-	 * alignment that attributes the same insertion to the start of the next are describing one region through
-	 * two equally correct addresses. Whitespace is the only thing allowed to sit between them, and two regions
-	 * of PROSE are never separated by whitespace alone - so this cannot quietly bridge a changed paragraph to
-	 * an approved hunk somewhere else in the document, which is the whole thing the check exists to catch.
+	 * line between two blocks is a real interval, so an approve that anchors at the END of one block and an
+	 * alignment that attributes the same insertion to the START of the next are describing one region through
+	 * two equally correct addresses.
+	 *
+	 * The bridge is therefore allowed only when one side is an INSERTION. An earlier version allowed any pair
+	 * separated by whitespace, on the premise that two regions of prose are never whitespace-adjacent - which
+	 * is false for this format, where every pair of neighbouring blocks is separated by exactly one blank
+	 * line. That version returned `ok` for a corrupted write in the block next door: safe, because the
+	 * post-hash comparison catches it regardless, but it threw away the diagnosis, which is the only thing
+	 * this check is here to add. A zero-width span cannot describe a rewrite, so requiring one closes the
+	 * bridge to every case except the one it exists for.
+	 *
+	 * One case remains outside this check's reach and is named rather than papered over: where the alignment
+	 * folds a corrupted block INTO the approved hunk (adjacent changed blocks can compose into one region),
+	 * the corruption is inside a hunk the reviewer did agree to part of, and only the post-hash comparison
+	 * catches it. That is why the hash is not optional: this check adds a diagnosis, never the guarantee.
 	 */
 	const sameRegion = (a: ISplicePlacement, b: ISplicePlacement) => {
 		const [first, second] = a.span.start <= b.span.start ? [a, b] : [b, a];
-		return second.span.start <= first.span.end || baseBody.slice(first.span.end, second.span.start).trim() === '';
+		if (second.span.start <= first.span.end) { return true; }
+		const anInsertion = first.span.start === first.span.end || second.span.start === second.span.end;
+		return anInsertion && baseBody.slice(first.span.end, second.span.start).trim() === '';
 	};
 	for (const hunk of hunks) {
 		if (!effective.some(a => sameRegion(hunk, a))) {

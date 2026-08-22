@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { generateUuid } from '../../../../base/common/uuid.js';
 import { localize } from '../../../../nls.js';
 import { AnchorOutcome, AttentionReason, ChangeActor, ChangeStatus, hashContent, IChange, IChangeAnchor, IChangeThreadEntry, IChangeVersion } from './changeRecord.js';
 import { BulkVerb } from './livingDocsModel.js';
@@ -57,6 +58,14 @@ export interface IChangeStoreFileSystem {
 	/**
 	 * Append `text` to the file, creating it and its parent directories if absent.
 	 *
+	 * **SINGLE WRITER.** The store assumes one window per project journal. A backing implementation that has
+	 * to read the file and write it back - which the renderer's file service does, having no append - loses a
+	 * record outright when two windows append at the same moment: both read the same bytes, both write their
+	 * own record onto them, and the first one to land is overwritten with no trace of it anywhere. Sequential
+	 * interleaving is safe and is NAMED rather than misread ({@link IJournalReadResult.foreign}); concurrent
+	 * interleaving is not safe and cannot be made safe here. Real multi-window support needs a lock or a
+	 * genuinely atomic append at this seam.
+	 *
 	 * MUST resolve only once the bytes are durable on disk - an fsync, or the platform equivalent. The whole
 	 * journal discipline rests on this: an append that has resolved but not reached the platter would let a
 	 * mutation proceed against an intent nobody can recover. Durability is part of the contract rather than a
@@ -70,10 +79,23 @@ export interface IChangeStoreFileSystem {
 	list(dir: string): Promise<readonly string[]>;
 }
 
-/** Fields every journal record carries: its position in the log and when it was written. */
+/** Fields every journal record carries: who wrote it, its position in that writer's log, and when. */
 interface IJournalRecordBase {
-	/** 1-based, contiguous. A gap after recovery is how a truncated tail announces itself. */
+	/**
+	 * 1-based and contiguous WITHIN ONE INSTANCE. A gap is how a truncated tail announces itself.
+	 *
+	 * Per-instance rather than per-file because the file can hold records from more than one window. A single
+	 * global counter meant a second window's perfectly good append collided with a number the first had
+	 * already used, and the contiguity check - correctly, on its own terms - read that as a torn tail and
+	 * threw away everything from the collision on, reporting it as `truncated`. That is a lost decision
+	 * reported as a disk fault, which is precisely the kind of thing this store exists not to do.
+	 */
 	readonly seq: number;
+	/**
+	 * The window that wrote this record. Absent on journals written before instances were stamped, which read
+	 * as one lineage - correct, because nothing else was writing them.
+	 */
+	readonly instance?: string;
 	readonly at: number;
 }
 
@@ -207,13 +229,22 @@ export type JournalRecord =
  * Everything a record needs except its position in the log, which the journal assigns. Distributive, so a
  * caller still gets one exact record shape per `kind` rather than a merged bag of optional fields.
  */
-export type JournalEntry = JournalRecord extends infer T ? T extends JournalRecord ? Omit<T, 'seq' | 'at'> : never : never;
+export type JournalEntry = JournalRecord extends infer T ? T extends JournalRecord ? Omit<T, 'seq' | 'at' | 'instance'> : never : never;
 
 /** What reading a journal file produced, including whether its tail had to be thrown away. */
 export interface IJournalReadResult {
 	readonly records: readonly JournalRecord[];
 	/** How many trailing records were unreadable and dropped. Zero on a clean journal. */
 	readonly truncated: number;
+	/**
+	 * How many records another window wrote into this journal. Zero in the supported single-window case.
+	 *
+	 * Counted and NAMED rather than silently absorbed: the records are read and folded (they are real
+	 * decisions, made by a real person, and dropping them would be the silent loss the whole design refuses),
+	 * but their presence means this journal has had two writers, and the append path cannot promise that no
+	 * record was lost between them - see {@link IChangeStoreFileSystem.append}.
+	 */
+	readonly foreign: number;
 	/** The journal text with the unreadable tail removed. Written back so the next append lands cleanly. */
 	readonly healed: string;
 }
@@ -260,9 +291,13 @@ function parseFramed(line: string): JournalRecord | undefined {
  * a state that never existed. Dropping the tail leaves the store at a real, earlier moment in time - and
  * anything genuinely lost that way reappears as an open crash window for the reconciler to classify.
  */
-export function readJournal(text: string): IJournalReadResult {
+export function readJournal(text: string, instance?: string): IJournalReadResult {
 	const records: JournalRecord[] = [];
 	const kept: string[] = [];
+	// One counter per writer. The log's ORDER is the file's order and stays that way; what is per-instance is
+	// only each writer's own numbering, which is the thing a second window cannot coordinate with.
+	const seqByInstance = new Map<string, number>();
+	let foreign = 0;
 	// A well-formed journal always ends in a newline, so the final split element is an empty string. Dropping
 	// the last element unconditionally therefore discards either that empty string or a record whose write
 	// never finished - and the torn one is discarded even in the rare case where it happens to be complete
@@ -272,14 +307,17 @@ export function readJournal(text: string): IJournalReadResult {
 	let truncated = text.length && !text.endsWith('\n') ? 1 : 0;
 	for (const line of complete) {
 		const record = parseFramed(line);
-		if (!record || record.seq !== records.length + 1) {
+		const writer = record?.instance ?? '';
+		if (!record || record.seq !== (seqByInstance.get(writer) ?? 0) + 1) {
 			truncated += complete.length - kept.length;
 			break;
 		}
+		seqByInstance.set(writer, record.seq);
+		if (instance !== undefined && writer !== '' && writer !== instance) { foreign++; }
 		records.push(record);
 		kept.push(line);
 	}
-	return { records, truncated, healed: kept.length ? `${kept.join('\n')}\n` : '' };
+	return { records, truncated, foreign, healed: kept.length ? `${kept.join('\n')}\n` : '' };
 }
 
 /**
@@ -326,6 +364,8 @@ export interface IJournalLoaded {
 	readonly ok: true;
 	readonly records: readonly JournalRecord[];
 	readonly truncated: number;
+	/** How many of those records another window wrote. See {@link IJournalReadResult.foreign}. */
+	readonly foreign: number;
 }
 
 /**
@@ -384,6 +424,8 @@ export class ChangeJournal {
 		/** The project's `.abstract` home; the store lives in `<home>/changes/`. */
 		private readonly _home: string,
 		private readonly _now: () => number,
+		/** This window's identity in the log. Injected so a test can stage two writers deterministically. */
+		private readonly _instance: string = generateUuid(),
 	) { }
 
 	/** The directory holding the journal and its derived views. */
@@ -422,14 +464,16 @@ export class ChangeJournal {
 				return journalError('journal-missing');
 			}
 			this._seq = 0;
-			return { ok: true, records: [], truncated: 0 };
+			return { ok: true, records: [], truncated: 0, foreign: 0 };
 		}
-		const result = readJournal(text);
+		const result = readJournal(text, this._instance);
 		if (result.truncated > 0) {
 			await this._fs.replace(this.path, result.healed);
 		}
-		this._seq = result.records.length;
-		return { ok: true, records: result.records, truncated: result.truncated };
+		// This window numbers only its OWN records, and on a journal it has not written to before that starts
+		// at zero however many records are already in the file.
+		this._seq = result.records.reduce((highest, r) => (r.instance === this._instance ? Math.max(highest, r.seq) : highest), 0);
+		return { ok: true, records: result.records, truncated: result.truncated, foreign: result.foreign };
 	}
 
 	/**
@@ -445,7 +489,7 @@ export class ChangeJournal {
 			if (this._frozen && phase === 'pre-mutation') {
 				return journalError('frozen');
 			}
-			const record: JournalRecord = { ...entry, seq: this._seq + 1, at: this._now() };
+			const record: JournalRecord = { ...entry, seq: this._seq + 1, instance: this._instance, at: this._now() };
 			try {
 				await this._fs.append(this.path, frameRecord(record));
 			} catch {

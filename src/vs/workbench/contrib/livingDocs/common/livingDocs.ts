@@ -1034,6 +1034,16 @@ export interface ILivingDocsService {
 	 * difference between "3 of 12 decided" and "Resumed - 41 of 63 decided".
 	 */
 	getReviewProgress(): IReviewProgress & { readonly resumed: boolean };
+	/**
+	 * Resolves once the review queue has been restored from disk, or once it is known there is nothing to
+	 * restore.
+	 *
+	 * Every project-level count is a synchronous fold of a queue that now arrives from a file, and the read
+	 * that fills it starts when the window gets a project rather than when a document is opened. Surfaces that
+	 * re-render on `onDidChange` need nothing; a caller that cannot waits here rather than reading a zero that
+	 * is merely early.
+	 */
+	whenReviewStateRestored(): Promise<void>;
 	getAudit(): readonly IAuditEntry[];
 	/**
 	 * The Agents activity ledger's read-model inputs (plan 49-c A3): the real event streams the History tab and

@@ -453,6 +453,18 @@ suite('livingDocs livingDocDiffer (docs/30 section 2.1)', () => {
 		assert.deepStrictEqual(verifyChangedRegions(I6_BASE, I6_BASE, approved), { ok: false, reason: 'missing-change' });
 	});
 
+	test('I6: a corrupted neighbouring block is diagnosed, not excused by the blank line between them', () => {
+		// Markdown separates every pair of blocks by exactly one blank line, so "whitespace between them" is
+		// true of EVERY adjacent pair - an earlier version of the seam rule therefore returned ok for a
+		// corrupted write in the block next door. The post-hash comparison caught it either way, so nothing
+		// was ever unsafe; what was lost was the diagnosis, which is the only thing this check adds.
+		const approved = hunkFor(I6_BASE, I6_BASE.replace('Growth remained steady this week.', 'Growth accelerated this week.'));
+		const corrupted = I6_BASE
+			.replace('Growth remained steady this week.', 'Growth accelerated this week.')
+			.replace('## What to watch', '## Watch list');
+		assert.deepStrictEqual(verifyChangedRegions(I6_BASE, corrupted, approved), { ok: false, reason: 'unapproved-change' });
+	});
+
 	test('I6: an insertion verifies from either end of the seam it sits in', () => {
 		// The approve anchors a new block at the END of the heading it goes after; the alignment attributes
 		// the same insertion to the START of the block that followed. Two correct addresses for one region,

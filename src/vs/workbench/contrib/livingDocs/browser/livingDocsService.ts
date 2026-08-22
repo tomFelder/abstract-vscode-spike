@@ -715,7 +715,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// source-peek drawer shows the workbook hop for an extracted CSV after a reload, without re-parsing
 		// the workbook. Re-run when the open folder changes.
 		void this._loadWorkbookManifests();
-		this._register(this._workspace.onDidChangeWorkspaceFolders(() => { void this._readProjectNameMarker(); void this._loadWorkbookManifests(); }));
+		this._register(this._workspace.onDidChangeWorkspaceFolders(() => {
+			// A different folder is a different project, so its change store is a different journal. Drop the
+			// open one and its derived queue rather than letting one project's proposals be read as another's.
+			this._changeStore = undefined;
+			this._changeStoreReady = undefined;
+			this._refreshPending();
+			void this._ensureChangeStore();
+			void this._readProjectNameMarker();
+			void this._loadWorkbookManifests();
+		}));
+		// Open the change store as soon as the window has a project, NOT on the first document open: the Home
+		// screen, the header badge and the tree rail all read pending counts, and a fresh window used to show
+		// zero of them until something was opened - which is exactly the moment a resumed review is least
+		// discoverable and most needed.
+		void this._ensureChangeStore();
 		// (debt: sample root mount) In the web build the workspace folder's file-system provider (memfs /
 		// vscode-test-web) can register AFTER this service constructs. The startup read above then fails with
 		// no-provider, and because `onDidChangeWorkspaceFolders` never fires for a folder that was already
@@ -1195,7 +1209,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private readonly _storeDocuments: IChangeStoreDocuments = {
 		read: async docUri => {
 			const state = this._docs.get(docUri);
-			return state ? this._bodyOf(state) : undefined;
+			if (state) { return this._bodyOf(state); }
+			// NOT loaded is not the same fact as NOT THERE, and before this fell back to the file the store
+			// could not tell them apart: it read `undefined`, judged the proposal stale, and told the reviewer
+			// "the text it was written for has changed" about a document nobody had even opened. Persistence
+			// made that the normal state after a reload rather than an edge case. The startup reconciler is the
+			// other reader here, and it runs before any document is open by construction.
+			try {
+				return parseLivingDoc((await this._files.readFile(URI.parse(docUri))).value.toString()).body;
+			} catch {
+				return undefined;
+			}
 		},
 		snapshot: async docUri => {
 			const state = this._docs.get(docUri);
@@ -1250,6 +1274,19 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return this._changeStoreReady;
 	}
 
+	/**
+	 * Resolves once the review queue has been restored from disk (or once it is known there is nothing to
+	 * restore).
+	 *
+	 * The counts every project-level surface reads - the Home tiles, the header's badge, the rail's foot - are
+	 * synchronous folds of a queue that now arrives from a file. Opening the store is started at construction
+	 * so a fresh window is right without anyone having opened a document first; this is how a caller that
+	 * cannot re-render on `onDidChange` waits for it rather than reading a zero that is merely early.
+	 */
+	whenReviewStateRestored(): Promise<void> {
+		return this._ensureChangeStore().then(() => undefined);
+	}
+
 	private async _openChangeStore(): Promise<ChangeStore | undefined> {
 		const folder = this._workspace.getWorkspace().folders[0]?.uri;
 		if (!folder) { return undefined; }
@@ -1265,7 +1302,16 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (report.truncated || report.quarantined) {
 			this._log.warn('[livingDocs] change journal healed', report.truncated, 'truncated,', report.quarantined, 'quarantined');
 		}
+		if (report.foreign) {
+			// Another window has written to this project's journal. Its records are read and folded - they are
+			// real decisions - but the append path is a read-modify-write and cannot promise nothing was lost
+			// between the two writers, so the fact is named rather than absorbed.
+			this._log.warn('[livingDocs] change journal has records from another window', report.foreign);
+		}
 		this._refreshPending();
+		// A restored queue changes what every project-level surface should be showing, and nothing asked for
+		// it - the open was started at construction, not by a click - so the surfaces have to be told.
+		if (this._pending.length) { this._onDidChange.fire(); }
 		return store;
 	}
 
@@ -1355,6 +1401,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const chunk = index >= 0 ? chunks[index] : chunks[chunks.length - 1];
 		const at = chunk ? chunk.end : 0;
 		return { docUri: state.uri.toString(), baseRevision: hashContent(body), span: { start: at, end: at }, oldText: '', newText: at > 0 ? `\n\n${newText}` : newText };
+	}
+
+	/** Open every document the given changes are anchored in, so the store's write seam has a state to edit. */
+	private async _loadDocsFor(changeIds: readonly string[], store: ChangeStore): Promise<void> {
+		const docUris = new Set<string>();
+		for (const changeId of changeIds) {
+			for (const anchor of store.change(changeId)?.anchors ?? []) { docUris.add(anchor.docUri); }
+		}
+		for (const docUri of docUris) {
+			if (!this._docs.has(docUri)) { await this.loadDocument(URI.parse(docUri)); }
+		}
 	}
 
 	/** The open change ids in one document, for the paths that supersede or discard a document's queue. */
@@ -6886,6 +6943,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (!store) {
 			return { verb, captured: captured.length, applied: [], skipped: captured.map(id => ({ id, label: '', reason: 'decided-elsewhere' as const })) };
 		}
+		// Every document the captured set touches has to be LOADED before the store resolves anything, because
+		// the write seam edits `IDocState` - it re-parses the document, keeps the in-memory model in step and
+		// runs the external-edit floor - and there is no such thing as writing a document that is not open.
+		// After a reload the review rail shows proposals for documents the window has never opened, so this is
+		// the ordinary case and not a corner: "Approve everywhere" reaches every one of them.
+		await this._loadDocsFor(captured, store);
 		// The cards as they read BEFORE the verb: a decided change leaves the pending view, and the audit row,
 		// the status line and the analytics event all need the words that were on it.
 		const before = new Map(this._pending.map(c => [c.id, c]));

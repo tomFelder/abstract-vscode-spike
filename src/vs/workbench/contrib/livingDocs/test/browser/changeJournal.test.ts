@@ -14,8 +14,8 @@ import { FakeChangeFileSystem, fakeClock } from './changeStoreFakes.js';
 
 const HOME = 'file:///ws/.abstract';
 
-function journal(fs: FakeChangeFileSystem): ChangeJournal {
-	return new ChangeJournal(fs, HOME, fakeClock());
+function journal(fs: FakeChangeFileSystem, instance?: string): ChangeJournal {
+	return new ChangeJournal(fs, HOME, fakeClock(), instance);
 }
 
 suite('livingDocs changeJournal (docs/30 section 5)', () => {
@@ -23,7 +23,7 @@ suite('livingDocs changeJournal (docs/30 section 5)', () => {
 
 	test('recovery truncates a torn tail and the journal stays usable afterwards', async () => {
 		const fs = new FakeChangeFileSystem();
-		const first = journal(fs);
+		const first = journal(fs, 'first-window');
 		await first.load();
 		await first.append({ kind: 'supersede', changeId: 'c1', supersededBy: 'c2' }, 'pre-mutation');
 		await first.append({ kind: 'supersede', changeId: 'c3', supersededBy: 'c4' }, 'pre-mutation');
@@ -32,7 +32,10 @@ suite('livingDocs changeJournal (docs/30 section 5)', () => {
 		const torn = frameRecord({ kind: 'supersede', changeId: 'c5', supersededBy: 'c6', seq: 3, at: 3 }).slice(0, 40);
 		fs.files.set(first.path, fs.files.get(first.path)! + torn);
 
-		const recovered = journal(fs);
+		// The same window, recovering. It numbers its OWN records, so its first append is seq 1 even though
+		// two records are already in the file - sequences are per writer, which is what lets two windows share
+		// journal without one reading the other's appends as damage.
+		const recovered = journal(fs, 'recovered-window');
 		const loaded = await recovered.load();
 		assert.ok(loaded.ok);
 		await recovered.append({ kind: 'supersede', changeId: 'c7', supersededBy: 'c8' }, 'pre-mutation');
@@ -48,7 +51,7 @@ suite('livingDocs changeJournal (docs/30 section 5)', () => {
 			{
 				truncatedOnLoad: 1,
 				keptOnLoad: [1, 2],
-				afterFurtherAppend: [{ seq: 1, kind: 'supersede' }, { seq: 2, kind: 'supersede' }, { seq: 3, kind: 'supersede' }],
+				afterFurtherAppend: [{ seq: 1, kind: 'supersede' }, { seq: 2, kind: 'supersede' }, { seq: 1, kind: 'supersede' }],
 				stillTorn: 0,
 			},
 		);
@@ -132,5 +135,45 @@ suite('livingDocs changeJournal (docs/30 section 5)', () => {
 		const log = journal(fs);
 		fs.files.set(log.snapshotPath, '{"version":1,"changes":[]}');
 		assert.deepStrictEqual(await log.load(), { ok: false, reason: 'journal-missing', message: 'The record of this project\'s changes could not be found.' });
+	});
+
+	test('a second window appending to the same journal is NAMED, not misread as a torn tail', async () => {
+		// Two windows on one project. The sequence number used to be per FILE, so the second window's first
+		// append claimed a place the first had already used; the contiguity check read the collision as damage
+		// and threw away everything from it onward, reporting a real decision as `truncated`. Numbering is per
+		// writer now: both windows' records are kept, in file order, and the fact that there were two of them
+		// is reported so a caller can say so rather than discovering it as data loss.
+		const fs = new FakeChangeFileSystem();
+		const windowA = journal(fs, 'window-a');
+		const windowB = journal(fs, 'window-b');
+		await windowA.load();
+		await windowA.append({ kind: 'supersede', changeId: 'c1', supersededBy: 'c2' }, 'pre-mutation');
+		await windowB.load();
+		await windowB.append({ kind: 'supersede', changeId: 'c3', supersededBy: 'c4' }, 'pre-mutation');
+		await windowA.append({ kind: 'supersede', changeId: 'c5', supersededBy: 'c6' }, 'pre-mutation');
+
+		const reopened = journal(fs, 'window-a');
+		const loaded = await reopened.load();
+
+		assert.deepStrictEqual(
+			loaded.ok
+				? {
+					changeIds: loaded.records.map(r => (r.kind === 'supersede' ? r.changeId : r.kind)),
+					writers: loaded.records.map(r => r.instance),
+					seqs: loaded.records.map(r => r.seq),
+					truncated: loaded.truncated,
+					foreign: loaded.foreign,
+				}
+				: loaded,
+			{
+				// Nothing lost, and the log still reads in the order things happened.
+				changeIds: ['c1', 'c3', 'c5'],
+				writers: ['window-a', 'window-b', 'window-a'],
+				// Per writer: A numbers 1 and 2, B numbers 1. A shared counter is what collided.
+				seqs: [1, 1, 2],
+				truncated: 0,
+				foreign: 1,
+			},
+		);
 	});
 });
