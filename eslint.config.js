@@ -1837,6 +1837,7 @@ export default defineConfig(
 						'vs/workbench/contrib/terminal/terminalContribExports*',
 						'vscode-notebook-renderer', // Type only import
 						'@vscode/tree-sitter-wasm', // type import
+						'@anthropic-ai/sdk', // type only import: the livingDocs agent loop kernel types its wire shapes against the Messages API
 						{
 							'when': 'hasBrowser',
 							'pattern': '@xterm/xterm'
