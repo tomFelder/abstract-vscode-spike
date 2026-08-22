@@ -45,7 +45,7 @@ import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageA
 import { IAnalyticsService } from '../common/analytics.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
-import { buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, chunkDocBody, countBindSlots, documentDisplayTitle, extractBindLinks, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag, withReplacedBody } from '../common/livingDocMarkdown.js';
+import { buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, chunkDocBody, countBindSlots, documentDisplayTitle, extractBindLinks, frontmatterBlock, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { coerceDocPolicy, docPolicyNeverRefusal, docPolicyNeverSkipReason, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
@@ -1216,6 +1216,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 			const next = withReplacedBody(state.rawText, body);
 			await this._files.writeFile(state.uri, VSBuffer.fromString(next));
+			// Invariant I6 over the part of the file the store cannot see. The store proves the BODY landed by
+			// reading it back and hashing it, but its spans are body offsets, so nothing inside it can say a
+			// word about the frontmatter - and the frontmatter is exactly what the old approve path destroyed
+			// (docs/30 section 8.3: `serializeLivingDoc` rebuilds a document from its parsed blocks and emits
+			// six of the ten keys the parser reads). Reading the file back and comparing the block byte for
+			// byte turns "we no longer call the serialiser here" from a claim into a post-condition: if the
+			// block ever changes on this path the write is a failure, and no approval is recorded over it.
+			const readBack = (await this._files.readFile(state.uri)).value.toString();
+			if (frontmatterBlock(readBack) !== frontmatterBlock(state.rawText)) {
+				throw new Error('the document\'s frontmatter did not survive the write');
+			}
 			state.rawText = next;
 			state.doc = parseLivingDoc(next);
 			state.keepMine = undefined;
@@ -1294,11 +1305,15 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * the exact text sitting at it, and the text that replaces it, all measured against a hash of the body
 	 * they were measured in. Everything downstream reads offsets off that record instead of matching strings
 	 * again, which is what ends the three-matchers era the #303 / #329 / #300 families come from.
+	 *
+	 * `setId` groups everything ONE turn proposed. It is the unit a surgical retry replays, the unit the rail
+	 * groups by, and the unit the review's progress is a fraction of - "41 of 63 decided" is a statement about
+	 * a batch, and a store that gave every proposal its own set could only ever say "0 of 1".
 	 */
-	private async _recordProposal(state: IDocState, anchor: IChangeAnchor, kind: ChangeKind, display: IChangeDisplay, source: 'chat' | 'fan-out' | 'agent' | 'hook', supersedes?: string): Promise<string | undefined> {
+	private async _recordProposal(state: IDocState, anchor: IChangeAnchor, kind: ChangeKind, display: IChangeDisplay, source: 'chat' | 'fan-out' | 'agent' | 'hook', setId: string, supersedes?: string): Promise<string | undefined> {
 		const store = await this._ensureChangeStore();
 		if (!store) { return undefined; }
-		const receipts = await store.propose({ changes: [{ anchors: [anchor], kind, display, baseLength: this._bodyOf(state).length, supersedes }] });
+		const receipts = await store.propose({ setId, changes: [{ anchors: [anchor], kind, display, baseLength: this._bodyOf(state).length, supersedes }] });
 		this._refreshPending();
 		const receipt = receipts.receipts[0];
 		if (!receipt) { return undefined; }
@@ -3942,7 +3957,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// until the human approves. De-dupes any earlier pending figure for the same block so a re-refresh does not
 	// stack duplicates.
 	private async _queueFigureForReview(state: IDocState, change: { blockId: string; oldText: string; newText: string }): Promise<void> {
-		await this._queueFigureChange(state, change, false);
+		await this._queueFigureChange(state, change, false, generateUuid());
 	}
 
 	/**
@@ -3952,7 +3967,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * pending view with a `supersededBy` pointer, so a re-refresh does not stack duplicate cards and does not
 	 * quietly destroy the record of what the previous sync had offered either.
 	 */
-	private async _queueFigureChange(state: IDocState, change: { blockId: string; oldText: string; newText: string }, draft: boolean): Promise<void> {
+	private async _queueFigureChange(state: IDocState, change: { blockId: string; oldText: string; newText: string }, draft: boolean, setId: string): Promise<void> {
 		const block = state.doc.blocks.find(b => b.id === change.blockId);
 		const anchor = this._anchorForBlock(state, change.blockId, change.oldText, change.newText);
 		if (!anchor) { return; }
@@ -3966,7 +3981,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			sourceCells: block ? block.binds.map(b => b.key) : [],
 			via: 'heuristic',
 			...(draft ? { draft: true } : {}),
-		}, 'agent', superseded?.id);
+		}, 'agent', setId, superseded?.id);
 	}
 
 	// The verify gate (spec 5, maker != checker): run the document's Skills as graders before apply.
@@ -4062,6 +4077,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		let applied = 0;
 		let queued = 0;
+		// One set for the whole figure run, so the rail groups a sync as one batch.
+		const setId = generateUuid();
 		for (const change of changes) {
 			// The document dial wins over the agent policy: `ask-first` forces a queue even under `auto-figures`.
 			if (policy === 'auto-figures' && docPolicy !== 'ask-first') {
@@ -4071,7 +4088,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 			// ask-before-apply / draft-only: queue for the rail without touching the doc. A policy-driven agent
 			// run prepared this figure update, so its source is 'agent'.
-			await this._queueFigureChange(state, change, policy === 'draft-only');
+			await this._queueFigureChange(state, change, policy === 'draft-only', setId);
 			queued++;
 		}
 		return { applied, queued };
@@ -4857,10 +4874,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// idempotent WITHOUT the old wholesale clear - which deleted proposals from a different pass along with
 		// its own, with no record that they had ever existed (invariant I5: nothing leaves without a trace).
 
+		// One set for the whole impact pass, for the same reason the chat turn has one.
+		const setId = generateUuid();
 		for (const target of this._claimTargets(state)) {
 			if (target.relink) {
 				// Guardrail 2: a low-confidence anchor match fails loudly - ask to re-link, never re-attach.
-				await this._queueRelinkPrompt(state, target, contextFiles);
+				await this._queueRelinkPrompt(state, target, contextFiles, setId);
 				this._notify.info(`This commentary is bound to ${contextFiles.join(', ') || 'a source'} - re-link?`);
 				continue;
 			}
@@ -4890,7 +4909,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					claimId: target.claimId,
 					contextReviewed: contextFiles,
 					via: proposal.via,
-				}, 'agent', superseded?.id);
+				}, 'agent', setId, superseded?.id);
 			}
 		}
 
@@ -4947,7 +4966,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * can ever record it as applied. That is issue #344 - "the re-link arm records approved on a gone block" -
 	 * closed structurally rather than by a guard someone has to remember to write.
 	 */
-	private async _queueRelinkPrompt(state: IDocState, target: { claimId?: string; blockId?: string }, contextFiles: string[]): Promise<void> {
+	private async _queueRelinkPrompt(state: IDocState, target: { claimId?: string; blockId?: string }, contextFiles: string[], setId: string): Promise<void> {
 		const claim = target.claimId ? state.lock.claims[target.claimId] : undefined;
 		const best = target.blockId ? state.doc.blocks.find(b => b.id === target.blockId) : undefined;
 		const anchor = best
@@ -4967,7 +4986,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			contextReviewed: contextFiles,
 			via: 'heuristic',
 			relink: true,
-		}, 'agent');
+		}, 'agent', setId);
 	}
 
 	// --- model access: provider picker + survey (plan 35 iter 4) ---
@@ -6430,14 +6449,17 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// document nothing happened to.
 		const claimed = json.edits.length + json.inserts.length;
 		const drops: ChatDropReason[] = [];
+		// One set id for the whole turn: everything this reply proposed is one batch to retry, to group and to
+		// count progress against.
+		const setId = generateUuid();
 		if (!refused) {
 			for (const edit of json.edits) {
-				const outcome = await this._queueChatEdit(state, edit);
+				const outcome = await this._queueChatEdit(state, edit, setId);
 				if (outcome.queued) { addStep({ label: `Proposed edit: ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
 				else { drops.push(outcome.reason); }
 			}
 			for (const insert of json.inserts) {
-				const outcome = await this._queueChatInsert(state, insert);
+				const outcome = await this._queueChatInsert(state, insert, setId);
 				if (outcome.queued) { addStep({ label: `Proposed new content after ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
 				else { drops.push(outcome.reason); }
 			}
@@ -6534,6 +6556,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// outage over some (or all) batches surfaces as a NAMED failure listing these documents, never a silent
 		// "no changes". Each doc is in exactly one batch, so a failed batch attributes failure to exactly its docs.
 		const failedDocs: IFanoutFailedDoc[] = [];
+		// One set id for the WHOLE fan-out, across every batch: the run is one thing the reviewer asked for,
+		// so it is one batch to group by, to retry surgically, and to count progress against.
+		const fanoutSetId = generateUuid();
 		const publishProgress = (batchIndex: number) => {
 			this._fanoutProgress.set(anchorId, { batchIndex, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id), skippedByPolicyDocIds });
 			this._onDidChange.fire();
@@ -6612,12 +6637,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 					continue;
 				}
 				for (const edit of entry.edits) {
-					const outcome = await this._queueChatEdit(target, edit, sources, 'fan-out');
+					const outcome = await this._queueChatEdit(target, edit, fanoutSetId, sources, 'fan-out');
 					if (outcome.queued) { addStep({ label: `${target.doc.title}: ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
 					else { drops.push(outcome.reason); }
 				}
 				for (const insert of entry.inserts) {
-					const outcome = await this._queueChatInsert(target, insert, sources, 'fan-out');
+					const outcome = await this._queueChatInsert(target, insert, fanoutSetId, sources, 'fan-out');
 					if (outcome.queued) { addStep({ label: `${target.doc.title}: new content after ${outcome.label}`, status: 'queued' }); proposedIds.push(outcome.id); }
 					else { drops.push(outcome.reason); }
 				}
@@ -6672,7 +6697,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// a meaning-class change for it. Bound (figure) blocks and no-op rewrites are skipped. Returns the queued
 	// block label, else a NAMED drop reason - never a bare `undefined`, so the composer can reconcile what the
 	// model claimed against what actually landed and say which claims did not (I3, issue #303).
-	private async _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): Promise<IQueueOutcome> {
+	private async _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, setId: string, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): Promise<IQueueOutcome> {
 		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - no proposal is
 		// ever created for it, in chat or fan-out. The caller names the refusal; here we simply make no change.
 		if (this._policyForState(state) === 'never') { return { queued: false, reason: 'policy' }; }
@@ -6726,7 +6751,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			sourceCells: [],
 			via: 'model',
 			...grounding,
-		}, source);
+		}, source, setId);
 		if (!id) { return { queued: false, reason: 'no-match' }; }
 		return { queued: true, id, label };
 	}
@@ -6749,7 +6774,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// named heading (best fuzzy match; empty/unknown -> end of document). No oldText - the inline diff
 	// renders it all-additions, and approve splices a new block into the document. Like `_queueChatEdit`,
 	// a refusal comes back NAMED so the composer can reconcile the turn's claims against its receipts (I3).
-	private async _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): Promise<IQueueOutcome> {
+	private async _queueChatInsert(state: IDocState, insert: { afterHeading?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, setId: string, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): Promise<IQueueOutcome> {
 		// Policy gate (issue #257): a "Never change this doc" document accepts no generated inserts either.
 		if (this._policyForState(state) === 'never') { return { queued: false, reason: 'policy' }; }
 		const newText = String(insert.newText ?? '').trim();
@@ -6781,7 +6806,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			insert: true,
 			afterBlockId,
 			...this._resolveSourceGrounding(insert.sourceQuote, insert.sourceLine, sourceText),
-		}, source);
+		}, source, setId);
 		if (!id) { return { queued: false, reason: 'no-match' }; }
 		return { queued: true, id, label };
 	}

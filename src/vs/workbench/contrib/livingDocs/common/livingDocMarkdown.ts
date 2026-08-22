@@ -776,6 +776,17 @@ export function withFrontmatterTag(text: string, tag: string, add: boolean): str
 // Markdown, and this re-attaches the original `---` frontmatter so `sources:`/`context:` are never lost.
 // A doc with no frontmatter returns the new body unchanged. The new body is normalized to end in a single
 // trailing newline.
+/**
+ * A document's frontmatter block exactly as authored, `---` fences included, or `''` when it has none.
+ *
+ * Exists so the approve path can PROVE the block survived a write rather than trusting that it did. The
+ * parser reads ten fields and the serialiser emits six (docs/30 section 8.3), so "the frontmatter is
+ * preserved" is a claim about bytes the parsed document cannot make on its own.
+ */
+export function frontmatterBlock(text: string): string {
+	return /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text)?.[0] ?? '';
+}
+
 export function withReplacedBody(text: string, newBody: string): string {
 	const body = newBody.replace(/\s+$/, '') + '\n';
 	const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);

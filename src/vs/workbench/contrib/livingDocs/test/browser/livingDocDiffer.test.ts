@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { deriveChangeClass, spliceDoc } from '../../common/changeRecord.js';
-import { diffDocBody, IDocDiffHunk } from '../../common/livingDocDiffer.js';
+import { diffDocBody, IDocDiffHunk, verifyChangedRegions } from '../../common/livingDocDiffer.js';
 import { chunkDocBody, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // The local differ (docs/30 section 2.1). Two kinds of test live here and they are testing different things.
@@ -408,5 +408,63 @@ suite('livingDocs livingDocDiffer (docs/30 section 2.1)', () => {
 			}
 		}
 		assert.deepStrictEqual({ failures, ranAtLeast: cases >= 1000 }, { failures: [], ranAtLeast: true });
+	});
+
+	// --- invariant I6's post-check (R6) ---------------------------------------------------------------
+	//
+	// `verifyChangedRegions` is the witness the approve path runs against the DOCUMENT rather than against
+	// the arithmetic that wrote it: given the base, what actually came back, and the hunks the reviewer
+	// approved, is the difference between the two documents the difference that was agreed to? Everything
+	// below is written from a way a write can go wrong.
+
+	const I6_BASE = [
+		'## Commentary',
+		'',
+		'Growth remained steady this week.',
+		'',
+		'## What to watch',
+		'',
+		'Activation rate on the new onboarding flow.',
+	].join('\n') + '\n';
+
+	/** The hunk that rewrites one named paragraph, taken from the differ itself so the spans are real. */
+	function hunkFor(base: string, proposed: string): IDocDiffHunk[] {
+		return [...diffDocBody(base, proposed).hunks];
+	}
+
+	test('I6: a write that lands exactly the approved hunk verifies', () => {
+		const proposed = I6_BASE.replace('Growth remained steady this week.', 'Growth accelerated this week.');
+		assert.deepStrictEqual(verifyChangedRegions(I6_BASE, proposed, hunkFor(I6_BASE, proposed)), { ok: true });
+	});
+
+	test('I6: a write that also changes prose no hunk describes is caught', () => {
+		const approved = hunkFor(I6_BASE, I6_BASE.replace('Growth remained steady this week.', 'Growth accelerated this week.'));
+		// The approved rewrite lands AND an untouched paragraph elsewhere is quietly altered - a lossy write
+		// path, a stale in-memory model, a serialiser rebuilding the document. The hunks still splice, the
+		// approved change is still there, and the document is not what anyone agreed to.
+		const corrupted = I6_BASE
+			.replace('Growth remained steady this week.', 'Growth accelerated this week.')
+			.replace('Activation rate on the new onboarding flow.', 'Activation rate.');
+		assert.deepStrictEqual(verifyChangedRegions(I6_BASE, corrupted, approved), { ok: false, reason: 'unapproved-change' });
+	});
+
+	test('I6: a write that did not make the approved change at all is caught', () => {
+		const approved = hunkFor(I6_BASE, I6_BASE.replace('Growth remained steady this week.', 'Growth accelerated this week.'));
+		assert.deepStrictEqual(verifyChangedRegions(I6_BASE, I6_BASE, approved), { ok: false, reason: 'missing-change' });
+	});
+
+	test('I6: an insertion verifies from either end of the seam it sits in', () => {
+		// The approve anchors a new block at the END of the heading it goes after; the alignment attributes
+		// the same insertion to the START of the block that followed. Two correct addresses for one region,
+		// separated by the blank line between them - and nothing else may separate them, which is what stops
+		// this from quietly excusing a change somewhere else.
+		const chunks = chunkDocBody(I6_BASE);
+		const at = chunks[0].end;
+		const anchor = { span: { start: at, end: at }, oldText: '', newText: '\n\nA new opening line.' };
+		const written = spliceDoc(I6_BASE, [anchor]);
+		assert.deepStrictEqual(
+			{ spliced: written.ok, verified: written.ok ? verifyChangedRegions(I6_BASE, written.text, [anchor]) : undefined },
+			{ spliced: true, verified: { ok: true } },
+		);
 	});
 });

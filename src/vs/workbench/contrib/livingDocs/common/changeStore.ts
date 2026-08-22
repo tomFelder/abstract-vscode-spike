@@ -692,24 +692,19 @@ export class ChangeStore {
 				failedDocs.set(docUri, 'doc-gone');
 				continue;
 			}
+			// Invariant I6, asked of the DOCUMENT rather than of the arithmetic: re-derive what changed between
+			// the base and what came back, using the same alignment the reviewer's cards were built from, and
+			// insist the difference is the difference that was approved. It runs first because it is the one
+			// that says WHAT went wrong - "the document changed somewhere no approved hunk describes" is a
+			// diagnosis; a hash mismatch is only a fact. Both are needed: this one reads at block grain and
+			// cannot see a lone space moving inside a seam, and the hash below is total over exactly that.
+			const regions = verifyChangedRegions(target.base, observed, groups.get(docUri)!);
 			const postHash = hashContent(observed);
-			if (postHash !== expected.get(docUri)) {
+			if (!regions.ok || postHash !== expected.get(docUri)) {
 				// No J2. A commit here would tell the reconciler this document landed, and it demonstrably did
 				// not land where the intent declared - so the honest record is the absence of a commit, which
 				// leaves the disk hash matching neither the base nor the expectation: `unverified`, both now and
 				// on any later recovery.
-				failedDocs.set(docUri, 'unverified');
-				continue;
-			}
-			// Invariant I6's second witness, and deliberately a SECOND one. The hash check above proves the
-			// bytes this code computed reached the disk; it is answered with the arithmetic that produced them,
-			// so it cannot notice that those bytes altered prose nobody agreed to. This re-derives what changed
-			// from the two documents alone, using the same alignment the reviewer's cards were built from, and
-			// insists the difference is the difference that was approved.
-			const regions = verifyChangedRegions(target.base, observed, groups.get(docUri)!);
-			if (!regions.ok) {
-				// No J2, for the same reason as above: a commit would tell the reconciler this document landed as
-				// declared, and what is on disk is a change nobody authorised. `unverified`, now and on recovery.
 				failedDocs.set(docUri, 'unverified');
 				continue;
 			}

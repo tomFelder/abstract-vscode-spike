@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { readJournal } from '../../common/changeJournal.js';
-import { hashContent, IChange } from '../../common/changeRecord.js';
+import { describeChangeStatus, hashContent, IChange } from '../../common/changeRecord.js';
 import { ChangeStore } from '../../common/changeStore.js';
 import { anchorAt, FakeChangeDocuments, FakeChangeFileSystem, fakeClock, fakeIds } from './changeStoreFakes.js';
 
@@ -568,6 +568,37 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 				noCommitWasWritten: ['propose', 'intent', 'resolution'],
 				textOnDisk: 'Alpha.\nBETA!\nGamma.',
 				survivesAReload: 'unverified',
+			},
+		);
+	});
+
+	test('I6: a write that lands the approved hunk AND alters prose nobody approved is unverified, with no approved record', async () => {
+		// The other half of the class above, and the one the differ-backed post-check exists for. Here the
+		// write does everything it was asked to and something else besides - the shape a lossy or stale write
+		// path produces. There is no approved record, the change stays the reviewer's call, and the status it
+		// carries is a sentence rather than a log line.
+		const it = stage([[A, 'Alpha.\n\nBeta.\n\nGamma.\n']]);
+		await it.store.open();
+		it.docs.normaliseOnWrite = text => text.replace('Gamma.', 'Something else entirely.');
+		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
+		const report = await it.store.approveByIds([changeId]);
+		const reopened = reopen(it);
+		await reopened.open();
+
+		assert.deepStrictEqual(
+			{
+				status: report.resolved.map(r => r.status),
+				anchorOutcomes: report.resolved[0].anchorOutcomes,
+				stillOpenAfterAReload: reopened.openChanges().map(c => c.id),
+				noApprovedRecordAnywhere: reopened.allChanges().every(c => c.status !== 'approved'),
+				userVisible: describeChangeStatus(reopened.change(changeId)!.status),
+			},
+			{
+				status: ['unverified'],
+				anchorOutcomes: [{ docUri: A, landed: false, reason: 'unverified' }],
+				stillOpenAfterAReload: [changeId],
+				noApprovedRecordAnywhere: true,
+				userVisible: 'This change cannot be verified - the document does not match what was expected, so nothing was retried',
 			},
 		);
 	});

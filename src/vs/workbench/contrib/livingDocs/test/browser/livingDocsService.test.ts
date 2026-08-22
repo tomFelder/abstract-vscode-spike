@@ -250,8 +250,11 @@ suite('livingDocs Service', () => {
 	// notice racing ahead and deduping it.
 	let writeExternalNoWatcher: ((resource: URI, content: string) => void) | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[] } = {}): LivingDocsService {
-		const files = new Map<string, string>();
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[]; files?: Map<string, string> } = {}): LivingDocsService {
+		// `opts.files` hands this service the SAME in-memory disk an earlier one wrote to, which is how a
+		// reload is staged: drop the service, build a second one over the same bytes, and see what it
+		// rehydrates. Nothing else is shared - the second instance rebuilds its state from the files alone.
+		const files = opts.files ?? new Map<string, string>();
 		// Correlated watchers registered per resource (issue #133), so `simulateExternalEdit` can fire the same
 		// change event the real file service delivers for an edit made outside Abstract.
 		const watchers = new Map<string, Emitter<unknown>[]>();
@@ -1114,6 +1117,58 @@ suite('livingDocs Service', () => {
 		assert.ok(pending[0].relink, 'it is a loud re-link prompt, not a silent re-attach');
 		assert.ok(/re-link/i.test(pending[0].rationale), `prompt explains the re-link: ${pending[0].rationale}`);
 		assert.strictEqual(service.getDoc(WEEKLY)!.blocks.map(b => b.text).join('\n'), before, 'no prose was changed');
+	});
+
+	// Issue #344: the re-link arm of approve() used to record `approved` and re-anchor the claim to
+	// `prior?.anchor ?? ''` when the target block was gone - the same quiet claim invariant I1/I2 kills for
+	// text edits, on the one path that skipped the apply entirely. R6 removes the arm rather than guarding
+	// it: a re-link is a change like any other now, and the store's write boundary judges it. Its anchor
+	// describes text the document does not contain, so it is ADMITTED as needs-attention (nothing is
+	// dropped) and no approve can ever move it to approved.
+	test('#344: approving a re-link prompt whose prose is gone records no approval and re-anchors nothing', async () => {
+		const service = createService();
+		seedLock(WEEKLY, {
+			version: 1, bindings: {}, context: {},
+			claims: { 'orphan': { anchor: 'A sentence that does not appear anywhere in this document.', boundTo: ['market-research.md'], kind: 'meaning', state: 'applied' } },
+			pins: [], audit: [],
+		});
+		await service.loadDocument(WEEKLY);
+		lastFiles!.set(URI.file('/ws/market-research.md').toString(), MARKET_MD + '\nA new competitor entered the market.\n');
+		await service.checkSources(WEEKLY);
+		await service.reviewImpact(WEEKLY);
+		const prompt = service.getPendingForDoc(WEEKLY)[0];
+		assert.ok(prompt.relink, 'precondition: a re-link prompt is queued against the paragraph it would re-point to');
+
+		// The reviewer deletes that paragraph before deciding on the prompt. This is the exact shape of #344:
+		// the change's target is gone by the time Approve is pressed, and the old re-link arm sailed past the
+		// `if (!block)` guard - it was inside the branch the arm skipped - to write an `approved` row and set
+		// the claim's anchor to `prior?.anchor ?? ''`.
+		const gutted = lastFiles!.get(WEEKLY.toString())!.replace('\nGrowth remained steady this week.\n', '\n');
+		await service.saveRawText(WEEKLY, gutted);
+
+		await service.approve(prompt.id);
+
+		const lock = service.getLock(WEEKLY)!;
+		assert.deepStrictEqual(
+			{
+				approvedRows: lock.audit.filter(e => e.action === 'approved').length,
+				failedRows: lock.audit.filter(e => e.action === 'apply-failed').length,
+				// The claim keeps the anchor it had. The old path overwrote it.
+				claimAnchor: lock.claims['orphan'].anchor,
+				claimState: lock.claims['orphan'].state,
+				// Still the reviewer's call, and flagged, rather than clearing off the rail.
+				stillPending: service.getPendingForDoc(WEEKLY).length,
+				flagged: service.getPendingForDoc(WEEKLY)[0]?.applyFailure !== undefined,
+			},
+			{
+				approvedRows: 0,
+				failedRows: 1,
+				claimAnchor: 'A sentence that does not appear anywhere in this document.',
+				claimState: 'applied',
+				stillPending: 1,
+				flagged: true,
+			},
+		);
 	});
 
 	test('with no model available, Review impact is a visible heuristic state (not a silent degrade)', async () => {
@@ -4418,6 +4473,213 @@ suite('livingDocs Service', () => {
 		assert.deepStrictEqual(
 			{ consumed: service.consumePendingPanel(), afterConsume: service.consumePendingPanel() },
 			{ consumed: { tab: 'chat', payload: undefined }, afterConsume: undefined },
+		);
+	});
+
+	// --- R6: the persisted change store, live (docs/30 section 5, stage 1) ---
+	//
+	// Four facts the store exists to make true, each written from what used to be false. Proposals were
+	// renderer memory that vanished on reload; every approve re-serialised the whole document and dropped
+	// frontmatter fields the parser reads; a write that landed wrong could still be recorded as approved; and
+	// a person typing under a pending proposal left it pointing at prose that had moved.
+
+	// A document generated FROM a template, carrying every frontmatter key the serialiser drops: the
+	// `template: <name>` provenance string (read back as `fromTemplate`), `name`, `description`, and a key
+	// nothing in the product knows about at all. This is doc 30 section 8.3's data-loss bug as a fixture.
+	const PROVENANCE = URI.file('/ws/Quarterly Pack.md');
+	const PROVENANCE_FM = [
+		'---',
+		'title: Quarterly Pack',
+		'template: Weekly report',
+		'name: Q3 board pack',
+		'description: The quarterly pack the board reads.',
+		'owner: Priya',
+		'sources:',
+		'  - metrics.csv',
+		'---',
+	].join('\n') + '\n';
+	const PROVENANCE_MD = PROVENANCE_FM + [
+		'',
+		'## Commentary',
+		'',
+		'Growth remained steady this week.',
+		'',
+		'## What to watch',
+		'',
+		'Activation rate on the new onboarding flow.',
+	].join('\n') + '\n';
+
+	test('R6: approving a change on a generated document leaves every frontmatter field byte-identical', async () => {
+		const service = createService([], {
+			model: chatReply('Sharpened the commentary.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+			]),
+		});
+		lastFiles!.set(PROVENANCE.toString(), PROVENANCE_MD);
+		await service.loadDocument(PROVENANCE);
+		await service.sendChatMessage(PROVENANCE, 'Sharpen the commentary');
+		const pending = service.getPendingForDoc(PROVENANCE)[0];
+
+		await service.approve(pending.id);
+
+		const onDisk = lastFiles!.get(PROVENANCE.toString())!;
+		assert.deepStrictEqual(
+			{
+				// The whole `---` block, verbatim. Under the old path this came back as four lines: `title`,
+				// `sources` and nothing else - `template`, `name`, `description` and `owner` were gone, silently,
+				// on the first approve any generated document ever received.
+				frontmatter: onDisk.slice(0, onDisk.indexOf('---\n', 4) + 4),
+				commentary: blockText(service, PROVENANCE, 'h-commentary'),
+				// Everything the change did NOT touch is untouched, to the byte.
+				watchUntouched: onDisk.includes('\n## What to watch\n\nActivation rate on the new onboarding flow.\n'),
+				provenanceStillParsed: service.getDoc(PROVENANCE)!.fromTemplate,
+			},
+			{
+				frontmatter: PROVENANCE_FM,
+				commentary: 'Growth accelerated this week.',
+				watchUntouched: true,
+				provenanceStillParsed: 'Weekly report',
+			},
+		);
+	});
+
+	test('R6: pending proposals, their decided counts and their statuses survive a reload', async () => {
+		const first = createService([], {
+			model: modelMessage({
+				reply: 'Sharpened two lines.', edits: [
+					{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'why the commentary' },
+					{ heading: 'What to watch', oldText: 'Activation rate on the new onboarding flow.', newText: 'Activation rate is climbing.', rationale: 'why the watch item' },
+				], inserts: [],
+			}),
+		});
+		await first.loadDocument(WEEKLY);
+		await first.sendChatMessage(WEEKLY, 'Sharpen the commentary and the watch item');
+		const queued = first.getPendingForDoc(WEEKLY);
+		// One of the two is decided before the window closes, so the reload has both halves to restore.
+		await first.approve(queued[0].id);
+		const survivor = first.getPendingForDoc(WEEKLY)[0];
+		const disk = lastFiles!;
+		first.dispose();
+
+		// A second service over the SAME disk and nothing else: no shared memory, no handover.
+		const second = createService([], { files: disk, model: chatReply('never asked for') });
+		await second.loadDocument(WEEKLY);
+
+		const restored = second.getPendingForDoc(WEEKLY);
+		assert.deepStrictEqual(
+			{
+				count: restored.length,
+				card: restored[0] && {
+					id: restored[0].id,
+					blockLabel: restored[0].blockLabel,
+					oldText: restored[0].oldText,
+					newText: restored[0].newText,
+					kind: restored[0].kind,
+					via: restored[0].via,
+					rationale: restored[0].rationale,
+				},
+				progress: second.getReviewProgress(),
+			},
+			{
+				count: 1,
+				// The same change, by id, with the words the card renders - not a re-derivation that happens to
+				// look similar. Before R6 this whole set was gone: the queue was an array on the service.
+				card: {
+					id: survivor.id,
+					blockLabel: 'What to watch',
+					oldText: 'Activation rate on the new onboarding flow.',
+					newText: 'Activation rate is climbing.',
+					kind: 'meaning',
+					via: 'model',
+					rationale: 'why the watch item',
+				},
+				// The real fold, and the reason the rail can say "Resumed - 1 of 2 decided" instead of "0 of 1".
+				progress: { decided: 1, total: 2, resumed: true },
+			},
+		);
+		second.dispose();
+	});
+
+	test('R6: the restored proposal still applies, and to the right prose', async () => {
+		const first = createService([], {
+			model: chatReply('Sharpened the commentary.', [
+				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+			]),
+		});
+		await first.loadDocument(WEEKLY);
+		await first.sendChatMessage(WEEKLY, 'Sharpen the commentary');
+		const disk = lastFiles!;
+		first.dispose();
+
+		const second = createService([], { files: disk, model: chatReply('never asked for') });
+		await second.loadDocument(WEEKLY);
+		const restored = second.getPendingForDoc(WEEKLY)[0];
+		await second.approve(restored.id);
+
+		assert.deepStrictEqual(
+			{
+				commentary: blockText(second, WEEKLY, 'h-commentary'),
+				pendingAfter: second.getPendingForDoc(WEEKLY).length,
+				approved: second.getLock(WEEKLY)!.audit.filter(e => e.action === 'approved').length,
+			},
+			// A restored proposal is a real proposal: its span was persisted against a base revision, and the
+			// document has not moved, so it splices exactly where it was written to.
+			{ commentary: 'Growth accelerated this week.', pendingAfter: 0, approved: 1 },
+		);
+		second.dispose();
+	});
+
+	test('R6/I8: typing under a pending proposal flags the one it lands inside and rebases the rest', async () => {
+		const service = createService([], {
+			model: modelMessage({
+				reply: 'Sharpened both.', edits: [
+					{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
+					{ heading: 'What to watch', oldText: 'Activation rate on the new onboarding flow.', newText: 'Activation rate is climbing.', rationale: 'r' },
+				], inserts: [],
+			}),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.sendChatMessage(WEEKLY, 'Sharpen the commentary and the watch item');
+		const [commentaryChange, watchChange] = service.getPendingForDoc(WEEKLY);
+
+		// The reviewer rewrites the commentary paragraph by hand - the very prose the first proposal was
+		// written for - and, because the paragraph got longer, everything after it moves.
+		const typed = lastFiles!.get(WEEKLY.toString())!.replace(
+			'Growth remained steady this week.',
+			'Growth remained steady this week, and the pipeline is healthy.',
+		);
+		await service.saveRawText(WEEKLY, typed);
+
+		const after = service.getPendingForDoc(WEEKLY);
+		const flagged = after.find(c => c.id === commentaryChange.id);
+		const rebased = after.find(c => c.id === watchChange.id);
+		// The reviewer is TOLD, in the document's own status line, before they go looking for the card.
+		const statusAfterTyping = service.getStatus(WEEKLY);
+		// The untouched one is still decidable, and deciding it lands on the right prose despite the shift.
+		await service.approve(watchChange.id);
+
+		assert.deepStrictEqual(
+			{
+				// Both are still on the rail. Neither was dropped, and neither was silently re-aimed.
+				stillQueued: after.length,
+				// The one the typing landed inside is the reviewer's call again, and says why.
+				flagged: flagged?.applyFailure,
+				rebasedIsClean: rebased?.applyFailure,
+				statusAfterTyping,
+				watch: blockText(service, WEEKLY, 'h-what-to-watch'),
+				// The hand-typed prose is untouched by the approve that followed it.
+				commentary: blockText(service, WEEKLY, 'h-commentary'),
+			},
+			{
+				stillQueued: 2,
+				flagged: 'anchor-miss',
+				rebasedIsClean: undefined,
+				statusAfterTyping: '1 proposed change now needs your attention - you edited the text it was written for.',
+				// The rebase is arithmetic, not a re-match: the watch paragraph moved 28 characters down the
+				// body when the commentary grew, and the approve still splices exactly over it.
+				watch: 'Activation rate is climbing.',
+				commentary: 'Growth remained steady this week, and the pipeline is healthy.',
+			},
 		);
 	});
 });
