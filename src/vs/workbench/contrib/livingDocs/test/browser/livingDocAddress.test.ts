@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { addressLabel, buildBlockGutterEntries, computeBlockAddresses, resolveBlockLine } from '../../common/livingDocAddress.js';
+import { addressLabel, buildBlockGutterEntries, computeBlockAddresses, resolveBlockLine, resolveBlockOrdinal } from '../../common/livingDocAddress.js';
 import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
 import { IProposedChange } from '../../common/livingDocsModel.js';
 
@@ -71,6 +71,48 @@ suite('LivingDoc address model (spec 43 section 3.1)', () => {
 			{ id: doc.blocks[1].id, line: 2, tone: 'idle', keys: [], recent: false },
 			{ id: doc.blocks[2].id, line: 3, tone: 'pending', keys: ['metrics.margin'], recent: true },
 		]);
+	});
+
+	// The address the decoration layer mounts on (docs/30 section 4.3). Text is not an address; the ordinal is.
+	suite('resolveBlockOrdinal', () => {
+		test('resolves a block by id, and survives that block being edited after the change was proposed', () => {
+			const doc = parseLivingDoc(DOC_MD);
+			// The proposal was written against "Revenue grew fast this week."; the block has since been retyped.
+			const drifted = parseLivingDoc(DOC_MD.replace('Revenue grew fast this week.', 'Revenue collapsed overnight, actually.'));
+			assert.deepStrictEqual(
+				{ before: resolveBlockOrdinal(doc, change({ blockId: doc.blocks[1].id })), afterDrift: resolveBlockOrdinal(drifted, change({ blockId: doc.blocks[1].id })) },
+				{ before: 1, afterDrift: 1 },
+			);
+		});
+
+		test('falls back to the span when the id addresses no block (a re-slugged heading)', () => {
+			// A heading's id is its slug, so editing its text destroys the id the proposal was written against.
+			// The span still says where in the body the change sits, and the body still chunks the same way.
+			const doc = parseLivingDoc(DOC_MD);
+			const spanOfThirdBlock = { start: doc.body.indexOf('Margins held'), end: doc.body.length };
+			assert.deepStrictEqual(
+				{
+					withSpan: resolveBlockOrdinal(doc, change({ blockId: 'h-a-heading-that-was-renamed', span: spanOfThirdBlock })),
+					withoutSpan: resolveBlockOrdinal(doc, change({ blockId: 'h-a-heading-that-was-renamed' })),
+				},
+				{ withSpan: 2, withoutSpan: undefined },
+			);
+		});
+
+		test('disambiguates colliding heading ids by the span (two "## Notes" both slug to h-notes)', () => {
+			const md = ['# Report', '', '## Notes', '', 'First note.', '', '## Notes', '', 'Second note.'].join('\n') + '\n';
+			const doc = parseLivingDoc(md);
+			assert.strictEqual(doc.blocks[1].id, doc.blocks[3].id, 'the two headings must actually collide for this test to mean anything');
+			// Without a span the id can only offer the first of the two; with one, the second is addressable.
+			const secondHeading = doc.body.lastIndexOf('## Notes');
+			assert.deepStrictEqual(
+				{
+					second: resolveBlockOrdinal(doc, change({ blockId: doc.blocks[3].id, span: { start: secondHeading, end: secondHeading + '## Notes'.length } })),
+					ambiguous: resolveBlockOrdinal(doc, change({ blockId: doc.blocks[3].id })),
+				},
+				{ second: 3, ambiguous: 1 },
+			);
+		});
 	});
 
 	test('an insert-only pending change tones no block as pending (it targets between blocks, not a block)', () => {

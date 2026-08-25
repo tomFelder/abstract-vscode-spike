@@ -217,6 +217,10 @@ export function toProposedChange(change: IChange): IProposedChange {
 		...(display.afterBlockId !== undefined ? { afterBlockId: display.afterBlockId } : {}),
 		...(display.tweaked ? { tweaked: true } : {}),
 		...(attentionFailure(change) !== undefined ? { applyFailure: attentionFailure(change) } : {}),
+		// The store's own address for this change, carried onto the card so the decoration layer can place the
+		// widget by ordinal instead of by matching text (docs/30 section 4.3). The FIRST anchor only: a
+		// multi-anchor move is decided as one change, but a decoration is mounted in one document.
+		...(anchor !== undefined ? { span: anchor.span } : {}),
 	};
 }
 

@@ -62,6 +62,8 @@ suite('LivingDoc PM decoration mapping', () => {
 		assert.strictEqual(spec.inserts.length, 0);
 		assert.deepStrictEqual(spec.edits[0], {
 			id: 'c1',
+			// The address the widget mounts on and the line it cites are the same fact (docs/30 section 4.3).
+			blockOrdinal: 1,
 			anchorText: 'Revenue grew fast this week.',
 			segments: [
 				{ t: 'eq', text: 'Revenue' },
@@ -330,6 +332,27 @@ suite('LivingDoc PM decoration mapping', () => {
 
 			const spec = buildPmDecorationSpec(doc, pending, new Set());
 			assert.strictEqual(spec.edits[0].anchorText, '- Launch an annual billing plan');
+		});
+
+		// The #300 class, at the spec layer. The item-scoped anchor above is deliberately NOT the list's
+		// rendered text, so an edit addressed by text equality could never find its node. The ordinal is what
+		// makes it findable - and it must also be the "Line N" the widget cites, or the card would claim an
+		// address it is not sitting on.
+		test('a list-item edit carries the list block ordinal, and cites the line that ordinal names', () => {
+			const doc = parseLivingDoc(LIST_MD);
+			const listBlock = doc.blocks.find(b => b.text.startsWith('- Expand'))!;
+			const pending = [change({
+				blockId: listBlock.id,
+				oldText: listBlock.text,
+				newText: '- Win back recently churned accounts with a targeted email campaign',
+			})];
+
+			const spec = buildPmDecorationSpec(doc, pending, new Set());
+
+			assert.deepStrictEqual(
+				{ ordinal: spec.edits[0].blockOrdinal, line: spec.edits[0].addressLine, anchorIsNotTheBlock: spec.edits[0].anchorText !== listBlock.text },
+				{ ordinal: 1, line: 2, anchorIsNotTheBlock: true },
+			);
 		});
 	});
 

@@ -379,6 +379,44 @@ export interface IProposedChange {
 	// never applied, so it is still the reviewer's call - and carries the named reason so the review rail can
 	// say what happened instead of clearing the card as though the edit had landed.
 	readonly applyFailure?: BlockApplyFailure;
+	// The store anchor's half-open `[start, end)` character range in the base revision's body (docs/30
+	// section 4.3). Structurally the store's `IChangeSpan`, restated here rather than imported so the model
+	// stays the leaf of the common layer (`changeRecord.ts` imports THIS file). It is the tie-breaker the
+	// address model falls back to when `blockId` cannot address a block on its own - the id is gone (a
+	// heading whose text was edited re-slugs) or it is ambiguous (two `## Notes` headings both slug to
+	// `h-notes`). Undefined on a change that was never measured against a body.
+	readonly span?: { readonly start: number; readonly end: number };
+}
+
+/**
+ * The distinct documents with pending changes, ordered by where each one's FIRST pending change appears.
+ * The ring both step-through walks travel; a document with nothing pending is simply never in it, which is
+ * what makes "skip the clean documents" a property of the data rather than a filter someone has to remember.
+ */
+function pendingDocOrder(pending: readonly IProposedChange[]): string[] {
+	const order: string[] = [];
+	for (const c of pending) { if (!order.includes(c.docId)) { order.push(c.docId); } }
+	return order;
+}
+
+/**
+ * Step one place around the pending-document ring from `currentDocId`. `step` is +1 forwards, -1 backwards.
+ * Returns undefined when there is nowhere else to go (no other document has pending changes). A current
+ * document that is NOT itself in the ring (it is already clear) enters at the near end for the direction
+ * asked: forwards lands on the first changed document, backwards on the last.
+ */
+function stepPendingDocId(pending: readonly IProposedChange[], currentDocId: string, step: 1 | -1): string | undefined {
+	const order = pendingDocOrder(pending);
+	const others = order.filter(id => id !== currentDocId);
+	if (others.length === 0) { return undefined; }
+	const idx = order.indexOf(currentDocId);
+	if (idx < 0) { return step === 1 ? others[0] : others[others.length - 1]; }
+	const n = order.length;
+	for (let i = 1; i <= n; i++) {
+		const cand = order[((idx + step * i) % n + n) % n];
+		if (cand !== currentDocId) { return cand; }
+	}
+	return undefined;
 }
 
 /**
@@ -389,17 +427,17 @@ export interface IProposedChange {
  * one with pending changes (nowhere else to advance). Pure so it can be unit-tested directly.
  */
 export function nextPendingDocId(pending: readonly IProposedChange[], currentDocId: string): string | undefined {
-	const order: string[] = [];
-	for (const c of pending) { if (!order.includes(c.docId)) { order.push(c.docId); } }
-	const others = order.filter(id => id !== currentDocId);
-	if (others.length === 0) { return undefined; }
-	const idx = order.indexOf(currentDocId);
-	if (idx < 0) { return others[0]; }
-	for (let i = 1; i <= order.length; i++) {
-		const cand = order[(idx + i) % order.length];
-		if (cand !== currentDocId) { return cand; }
-	}
-	return undefined;
+	return stepPendingDocId(pending, currentDocId, 1);
+}
+
+/**
+ * The PREVIOUS document with pending changes - the exact inverse of {@link nextPendingDocId} (docs/30
+ * section 4.3). Review is not monotonic: a reviewer who steps past a document, or who wants to re-read the
+ * decision they just made, has to be able to walk back, and until now the contrib had no backward symbol at
+ * all. Same ring, same wrap, same "clean documents are not in it" rule - only the direction differs.
+ */
+export function previousPendingDocId(pending: readonly IProposedChange[], currentDocId: string): string | undefined {
+	return stepPendingDocId(pending, currentDocId, -1);
 }
 
 /**

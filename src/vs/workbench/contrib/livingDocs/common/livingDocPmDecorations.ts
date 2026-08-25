@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { buildBlockGutterEntries, IBlockGutterEntry, resolveBlockLine } from './livingDocAddress.js';
+import { buildBlockGutterEntries, IBlockGutterEntry, resolveBlockOrdinal } from './livingDocAddress.js';
 import { scopeBlockEdit } from './livingDocMarkdown.js';
 import { ChangeKind, ILivingDoc, ILivingDocLock, IProposedChange, SourceKind } from './livingDocsModel.js';
 import { UNREACHABLE_SOURCE_LINE } from './sourceFreshness.js';
@@ -124,10 +124,18 @@ export interface IPmDiffSegment {
 	readonly text: string;
 }
 
-// A pending meaning-change over an existing block, anchored by the block's current text so the bundle can
-// locate the matching ProseMirror node and render the word diff + accept/reject controls over it.
+// A pending meaning-change over an existing block, addressed by the block's ORDINAL in document order so
+// the bundle can locate the matching ProseMirror node and render the word diff + accept/reject controls
+// over it (docs/30 section 4.3).
 export interface IPmEditDecoration {
 	readonly id: string;
+	// The 0-based position of the target block in document order - the coordinate the bundle zips against
+	// the top-level ProseMirror nodes, exactly as the numbered gutter already does. This is the address;
+	// `anchorText` below is only prose. Absent when the block can no longer be addressed at all, in which
+	// case the bundle falls back to the text anchor rather than mounting on the wrong block.
+	readonly blockOrdinal?: number;
+	// The block's current text, whitespace-collapsed. NOT an address (see `blockOrdinal`): it is the prose
+	// the quiet marker prints as "the paragraph as it stands", and the key the multi-line gutter bar hangs on.
 	readonly anchorText: string;
 	readonly segments: readonly IPmDiffSegment[];
 	readonly added: number;
@@ -183,12 +191,12 @@ function bindToValue(text: string): string {
 	return text.replace(BIND_LINK_RE, '$1');
 }
 
-// The decoration bundle places an inline diff/insert by EXACT match of its anchor against the live
-// ProseMirror node's `textContent`. Source prose is wrapped one-sentence-per-line (house style), but
-// CommonMark renders those soft wraps as single spaces, so the node text is single-spaced. Collapse the
-// anchor's internal whitespace to match - otherwise a wrapped paragraph never decorates and the change
-// shows only in the review rail (the plan-19 baseline bug). Kept here, next to where anchors are built, so
-// the host stays the single source of anchor truth (no offline PM-bundle rebuild needed).
+// The decoration bundle places a generative INSERT after the node whose `textContent` matches its anchor,
+// and falls back to the same match for an edit that could not be addressed by ordinal. Source prose is
+// wrapped one-sentence-per-line (house style), but CommonMark renders those soft wraps as single spaces, so
+// the node text is single-spaced. Collapse the anchor's internal whitespace to match - otherwise a wrapped
+// paragraph never decorates and the change shows only in the review rail (the plan-19 baseline bug). Kept
+// here, next to where anchors are built, so the host stays the single source of anchor truth.
 function anchorNormalize(text: string): string {
 	return text.replace(/\s+/g, ' ').trim();
 }
@@ -267,19 +275,23 @@ export function buildPmDecorationSpec(doc: ILivingDoc, pending: readonly IPropos
 			});
 			continue;
 		}
-		// A meaning-change: anchor on the block's current (resolved) text so the bundle can find the node.
-		// When the change targets one item of a list block, scope the anchor + diff to that single `<li>` so
-		// the widget places over the changed item and the word diff never shows the sibling items being
-		// deleted (decision-68 fix, plan 31 iter 1). A scoped `oldText` (already one item) is returned as-is.
+		// A meaning-change. When the change targets one item of a list block, scope the diff to that single
+		// `<li>` so the word diff never shows the sibling items being deleted (decision-68 fix, plan 31 iter
+		// 1). A scoped `oldText` (already one item) is returned as-is.
 		const newSource = bindToValue(change.newText);
 		const anchorSource = editAnchorSource(change);
 		const anchorText = anchorNormalize(anchorSource);
 		const diff = wordDiffSegments(anchorSource, newSource);
-		// The block's display address (spec 43 section 3.1): resolve the change's durable block id to its current
-		// 1-based line so the widget can cite "Line N". Undefined (block gone) => no address string, no error.
-		const addressLine = resolveBlockLine(doc, change.blockId);
+		// The ONE resolution (docs/30 section 4.3): the block's ordinal in document order. It is both where
+		// the widget MOUNTS (the bundle zips it against the top-level ProseMirror nodes, exactly as the
+		// numbered gutter already does) and the "Line N" the widget CITES, so the address a reviewer reads
+		// and the block the card sits on are the same fact by construction rather than two lookups that can
+		// disagree. Undefined (the block cannot be addressed at all) => no address string, no error.
+		const blockOrdinal = resolveBlockOrdinal(doc, change);
+		const addressLine = blockOrdinal === undefined ? undefined : blockOrdinal + 1;
 		edits.push({
 			id: change.id,
+			...(blockOrdinal !== undefined ? { blockOrdinal } : {}),
 			anchorText,
 			segments: diff.segments,
 			added: diff.added,
