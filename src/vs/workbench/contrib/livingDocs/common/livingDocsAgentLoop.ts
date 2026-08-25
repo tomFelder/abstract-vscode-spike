@@ -78,8 +78,10 @@ export interface IAgentStreamError {
 	readonly message: string;
 	/**
 	 * The `tool_use` block this error belongs to, when the client could attribute it. The broker emits a
-	 * malformed-arguments error immediately after that block's `content_block_stop`, so the SSE adapter
-	 * knows which call it names. An UNATTRIBUTED error is never guessed at - it is terminal.
+	 * malformed-arguments error immediately AFTER that block's `content_block_stop`, so the SSE adapter
+	 * knows which call it names. That ordering is specific to `invalid_tool_arguments`: a truncated body
+	 * emits its `upstream_stream_error` BEFORE the open blocks close, so position alone does not attribute
+	 * it. An UNATTRIBUTED error is never guessed at - it is terminal.
 	 */
 	readonly toolUseId?: string;
 }
@@ -137,6 +139,11 @@ export interface IAgentToolRegistry {
 	 * `rewrite_documents` jobs stream into the store outside the loop. Returns a plain-words description
 	 * while anything is in flight, `undefined` once everything has settled. `finish` is refused while it
 	 * returns a description, so the run cannot be declared complete over unsettled work.
+	 *
+	 * A throw is contained as a terminal `hostProbeFailed` failure, never an escaping rejection: if the
+	 * probe cannot answer, whether work has settled is UNKNOWABLE, and both other paths would be dishonest.
+	 * Finishing anyway would claim a completeness nothing verified; re-asking the model would burn the step
+	 * ceiling on a bug the model cannot fix and then report `stepCeiling`, naming the wrong cause.
 	 */
 	readonly unsettledWork?: () => string | undefined;
 }
@@ -147,6 +154,11 @@ export type AgentFailureReason =
 	| 'maxTokens'
 	/** `stop_reason: tool_use` with zero `tool_use` blocks: malformed upstream, terminal, never re-looped. */
 	| 'toolUseWithoutTools'
+	/** Two `tool_use` blocks in one turn sharing an id - the same family of malformed upstream, and not
+	 * answerable at all: every reply repeats the duplicated id, and omitting one leaves a call unanswered. */
+	| 'duplicateToolUseIds'
+	/** The registry's `unsettledWork` probe threw, so whether dispatched work has settled is unknowable. */
+	| 'hostProbeFailed'
 	/** The model ended its turn without calling `finish`. `finish` is structural, so this is a failure. */
 	| 'stoppedWithoutFinish'
 	/** The step ceiling was reached. Reaching the ceiling is a typed failure, never a silent stop. */
@@ -214,7 +226,14 @@ export interface IAgentLoopOptions {
 	readonly registry: IAgentToolRegistry;
 	/** The step ceiling; defaults to {@link AGENT_DEFAULT_MAX_STEPS}. Floored at 1. */
 	readonly maxSteps?: number;
-	/** Called with every event as it is emitted, so the steps feed renders live rather than at the end. */
+	/**
+	 * Called with every event as it is emitted, so the steps feed renders live rather than at the end.
+	 *
+	 * A throw here is contained and IGNORED - deliberately, and unlike every other host seam. The observer
+	 * is a notification sink: the event is already in the append-only trace and `result.events` carries it
+	 * regardless, so nothing is lost or misreported. A broken steps-feed renderer must not be able to kill
+	 * a run whose proposals have already landed in the change store.
+	 */
 	readonly onEvent?: (event: AgentLoopEvent) => void;
 }
 
@@ -225,6 +244,16 @@ const FINISH_OVER_TURN = 'finish cannot be called in the same turn as other tool
 
 function isToolUse(block: AgentAssistantBlock): block is ToolUseBlockParam {
 	return block.type === 'tool_use';
+}
+
+/** The first `tool_use` id that appears twice in one turn, or `undefined` when every id is distinct. */
+function firstDuplicateId(calls: readonly ToolUseBlockParam[]): string | undefined {
+	const seen = new Set<string>();
+	for (const call of calls) {
+		if (seen.has(call.id)) { return call.id; }
+		seen.add(call.id);
+	}
+	return undefined;
 }
 
 function messageOf(err: unknown): string {
@@ -273,7 +302,12 @@ function streamErrorEvent(step: number, error: IAgentStreamError): IAgentStreamE
  *  - **`stop_reason: max_tokens` is a hard fail** (invariant I7): a truncated turn is never salvaged.
  *  - **`stop_reason: tool_use` with zero tool blocks is TERMINAL**, not a retry. A malformed upstream (the
  *    broker's translation produces exactly this when a door reports tool calls with an unusable array) must
- *    not be able to spin the loop.
+ *    not be able to spin the loop. **Two tool blocks sharing an id** are terminal for the same reason and
+ *    one further one: such a turn has no valid answer at all, so nothing is run.
+ *  - **Every host seam's throw is contained.** An executor that throws becomes an `is_error` result; a
+ *    client that rejects becomes `clientError`; an `unsettledWork` probe that throws becomes a terminal
+ *    `hostProbeFailed`. The single deliberate exception is `onEvent`, a notification sink whose throw is
+ *    ignored because the trace is already recorded. Nothing escapes `runAgentLoop` as a bare rejection.
  *  - **Typed broker `error` events are surfaced, never swallowed** (issue #346). A malformed-arguments error
  *    attributable to one call becomes that call's `is_error` result and the run continues; anything else,
  *    and anything unattributable, is a terminal `streamError`. Retry policy is the caller's, not the
@@ -290,7 +324,12 @@ export async function runAgentLoop(options: IAgentLoopOptions): Promise<IAgentLo
 
 	function emit<T extends AgentLoopEvent>(event: T): T {
 		events.push(event);
-		options.onEvent?.(event);
+		try {
+			options.onEvent?.(event);
+		} catch {
+			// See `onEvent`: the trace is already recorded, so a throwing observer costs nothing and must
+			// not take the run down with it. This is the ONE host seam whose throw is deliberately ignored.
+		}
 		return event;
 	}
 	function done(outcome: IAgentFinishedEvent | IAgentFailedEvent): IAgentLoopResult {
@@ -340,6 +379,15 @@ export async function runAgentLoop(options: IAgentLoopOptions): Promise<IAgentLo
 				? done(emit({ type: 'failed', step, reason: 'toolUseWithoutTools', message: NO_TOOL_BLOCKS }))
 				: done(emit({ type: 'failed', step, reason: 'stoppedWithoutFinish', message: `The model ended its turn (${response.stopReason ?? 'no stop reason'}) without calling ${AGENT_FINISH_TOOL}.` }));
 		}
+		// Duplicate ids are structurally unanswerable, so this is terminal rather than a refusal handed back
+		// to the model: a `tool_result` for each block repeats the duplicated `tool_use_id` and the provider
+		// rejects the next request, while answering only one leaves a `tool_use` block unanswered and it
+		// rejects that too. There is no valid next request to build, so nothing is run and nothing is
+		// appended - exactly the treatment the zero-block `tool_use` turn gets, for the same reason.
+		const duplicate = firstDuplicateId(calls);
+		if (duplicate !== undefined) {
+			return done(emit({ type: 'failed', step, reason: 'duplicateToolUseIds', message: `The model sent more than one tool call with the id ${duplicate}, so this turn cannot be answered. Nothing was run.` }));
+		}
 
 		// The assistant turn is appended verbatim: history is append-only, and the turn must round-trip
 		// exactly or the provider rejects the next request for unanswered tool calls.
@@ -347,6 +395,7 @@ export async function runAgentLoop(options: IAgentLoopOptions): Promise<IAgentLo
 
 		const results: ToolResultBlockParam[] = [];
 		let finished: IAgentFinishedEvent | undefined;
+		let failure: IAgentFailedEvent | undefined;
 		function refuse(call: ToolUseBlockParam, reason: AgentToolFailureReason, message: string): void {
 			emit({ type: 'toolError', step, callId: call.id, name: call.name, reason, message });
 			results.push({ type: 'tool_result', tool_use_id: call.id, content: message, is_error: true });
@@ -363,8 +412,19 @@ export async function runAgentLoop(options: IAgentLoopOptions): Promise<IAgentLo
 
 			if (call.name === AGENT_FINISH_TOOL) {
 				// Unsettled work, both kinds: siblings in this very turn whose results the model has not read,
-				// and host jobs an earlier tool dispatched that are still landing.
-				const unsettled = calls.length > 1 ? FINISH_OVER_TURN : options.registry.unsettledWork?.();
+				// and host jobs an earlier tool dispatched that are still landing. A probe that throws cannot
+				// answer either way, so the run ends named rather than guessing at completeness.
+				let unsettled: string | undefined;
+				if (calls.length > 1) {
+					unsettled = FINISH_OVER_TURN;
+				} else if (options.registry.unsettledWork) {
+					try {
+						unsettled = options.registry.unsettledWork();
+					} catch (err) {
+						failure = { type: 'failed', step, reason: 'hostProbeFailed', message: `Could not tell whether the work already dispatched has finished: ${messageOf(err)}` };
+						break;
+					}
+				}
 				if (unsettled) {
 					refuse(call, 'finishUnsettled', unsettled);
 					continue;
@@ -398,9 +458,14 @@ export async function runAgentLoop(options: IAgentLoopOptions): Promise<IAgentLo
 			results.push({ type: 'tool_result', tool_use_id: call.id, content: result.content });
 		}
 
-		// A successful `finish` is necessarily the only call in its turn, so there is nothing to answer.
+		// A successful `finish` is necessarily the only call in its turn, so there is nothing to answer. On a
+		// mid-turn failure the results of the calls that DID run are still appended: work that happened is
+		// recorded, and the run is over, so there is no next request for the short reply to invalidate.
 		if (results.length) {
 			messages.push({ role: 'user', content: results });
+		}
+		if (failure) {
+			return done(emit(failure));
 		}
 		if (finished) {
 			return done(emit(finished));

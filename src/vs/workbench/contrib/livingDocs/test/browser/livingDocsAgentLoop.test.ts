@@ -346,6 +346,62 @@ suite('livingDocs agent loop kernel (plan 55 B5, doc 30 D4/D5)', () => {
 		]);
 	});
 
+	test('two tool calls sharing an id are terminal - the turn has no valid answer, so nothing is run', async () => {
+		let invocations = 0;
+		const script = [
+			toolTurn(call('dup', 'read_document', { docId: 'a' }), call('dup', 'read_document', { docId: 'b' })),
+			toolTurn(call('tu1', AGENT_FINISH_TOOL, { summary: 'never reached' }))
+		];
+		const { events, result } = await run(script, registry({
+			read_document: async () => { invocations++; return { content: 'body' }; }
+		}));
+
+		assert.deepStrictEqual(events, [
+			{ type: 'stepStarted', step: 1 },
+			{ type: 'failed', step: 1, reason: 'duplicateToolUseIds', message: 'The model sent more than one tool call with the id dup, so this turn cannot be answered. Nothing was run.' }
+		]);
+		assert.strictEqual(invocations, 0, 'no executor runs against a turn that can never be answered');
+		// Nothing was appended either, so no caller can build the invalid next request from this history.
+		assert.deepStrictEqual(result.messages, [{ role: 'user', content: 'update the whole project for the new pricing' }]);
+	});
+
+	test('a throwing unsettledWork probe is contained as a named failure, not an escaping rejection', async () => {
+		const script = [
+			toolTurn(call('tu1', 'propose_segments', { docId: 'a' })),
+			toolTurn(call('tu2', AGENT_FINISH_TOOL, { summary: 'all done' }))
+		];
+		const tools = registry({ propose_segments: says('queued(c1)') }, () => { throw new Error('the rewrite queue was not reachable'); });
+		const { events, result } = await run(script, tools);
+
+		assert.deepStrictEqual(events, [
+			{ type: 'stepStarted', step: 1 },
+			{ type: 'toolCall', step: 1, callId: 'tu1', name: 'propose_segments', input: { docId: 'a' } },
+			{ type: 'toolResult', step: 1, callId: 'tu1', name: 'propose_segments', content: 'queued(c1)' },
+			{ type: 'stepStarted', step: 2 },
+			{ type: 'toolCall', step: 2, callId: 'tu2', name: AGENT_FINISH_TOOL, input: { summary: 'all done' } },
+			{ type: 'failed', step: 2, reason: 'hostProbeFailed', message: 'Could not tell whether the work already dispatched has finished: the rewrite queue was not reachable' }
+		]);
+		// The run is named as failed rather than resolving as finished over work nothing could verify.
+		assert.strictEqual(result.outcome.type, 'failed');
+	});
+
+	test('a throwing onEvent observer cannot take the run down with it', async () => {
+		const client = new ScriptedClient([toolTurn(call('tu1', AGENT_FINISH_TOOL, { summary: 'One change queued.' }))]);
+		const result = await runAgentLoop({
+			task: 'update pricing',
+			system: 'You edit living documents.',
+			client,
+			registry: registry({ propose_segments: says('queued(c1)') }),
+			onEvent: () => { throw new Error('the steps feed blew up'); }
+		});
+		// The trace is complete despite every single delivery throwing: the observer is a sink, not a step.
+		assert.deepStrictEqual(result.events, [
+			{ type: 'stepStarted', step: 1 },
+			{ type: 'toolCall', step: 1, callId: 'tu1', name: AGENT_FINISH_TOOL, input: { summary: 'One change queued.' } },
+			{ type: 'finished', step: 1, summary: 'One change queued.', flags: [] }
+		]);
+	});
+
 	test('a rejecting model client is a named failure, never a lost step', async () => {
 		const { events } = await run([new Error('the model was not available')], registry({ propose_segments: says('queued(c1)') }));
 		assert.deepStrictEqual(events, [
