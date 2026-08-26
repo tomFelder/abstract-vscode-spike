@@ -5,43 +5,53 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { decideReviewRailOpenOnEntry, IReviewRailEntryContext, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, treeRailHiddenOnEntry } from '../../common/railVisibility.js';
+import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, reviewRailVisibilityEffects, treeRailHiddenOnEntry } from '../../common/railVisibility.js';
 
-suite('livingDocs review-rail quiet-shell entry (plan 42 L4)', () => {
+suite('livingDocs review-rail entry (plan 42 L4, issue #363)', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	// A quiet default context: no pending review, no chat history, no manual choice. Each test overrides
-	// only the fact under test, so the precedence rules read as a single snapshot-style assertion each.
-	const ctx = (over: Partial<IReviewRailEntryContext> = {}): IReviewRailEntryContext => ({
-		hasPendingReview: false,
-		hasChatHistory: false,
-		manualChoice: ReviewRailManualChoice.None,
-		...over,
+	// The first-run default and the respect-the-user rule, driven through the REAL production chain: the
+	// per-workspace `livingDocs.v2.rightRailCollapsed` value -> the manual-choice tri-state -> the open
+	// decision. `undefined` is what IStorageService.getBoolean returns when the key has never been written,
+	// i.e. a true first run, and issue #363 says the rail must be OPEN there - it is this product's primary
+	// surface, not something to discover. Everything after that is the user's call: a persisted collapse
+	// keeps it closed across restarts, a persisted open keeps it open.
+	test('the review rail opens on a true first run (nothing persisted) and honours the user\'s choice thereafter (issue #363)', () => {
+		const openForStoredValue = (persistedCollapsed: boolean | undefined): boolean =>
+			decideReviewRailOpenOnEntry({ manualChoice: reviewRailManualChoiceFromPersistedCollapse(persistedCollapsed) });
+		assert.deepStrictEqual(
+			{
+				firstRun: openForStoredValue(undefined),
+				userCollapsed: openForStoredValue(true),
+				userOpened: openForStoredValue(false),
+			},
+			{
+				firstRun: true,       // no persisted state -> the rail opens by default
+				userCollapsed: false, // the user closed it -> it stays closed, across restarts
+				userOpened: true,     // the user opened it -> it stays open
+			});
 	});
 
-	test('a plain doc with nothing to say opens quiet (review rail collapsed)', () => {
-		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx()), false);
-	});
-
-	test('chat history for the doc opens the rail (has something to say)', () => {
-		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasChatHistory: true })), true);
-	});
-
-	test('a pending review opens the rail on first look (no manual choice yet)', () => {
-		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasPendingReview: true })), true);
-	});
-
-	test('a stored manual collapse is respected even with a pending proposal (the badge dot surfaces it - P2.5)', () => {
-		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasPendingReview: true, manualChoice: ReviewRailManualChoice.Collapsed })), false);
-	});
-
-	test('a manual "open" choice wins over the quiet default', () => {
-		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ manualChoice: ReviewRailManualChoice.Open })), true);
-	});
-
-	test('a manual "collapse" choice keeps the rail collapsed even when it has chat history', () => {
-		assert.deepStrictEqual(decideReviewRailOpenOnEntry(ctx({ hasChatHistory: true, manualChoice: ReviewRailManualChoice.Collapsed })), false);
+	// #353's exact repro. The app's one-click AI-door affordance opens the rail through focusPanel(), which
+	// this contribution flags as a PEEK so it is not recorded as a manual choice. That guard used to return
+	// early ahead of the width seed, so the 392px default never landed and stock VS Code sized the rail at
+	// Math.min(300, width / 4) - a ~239px clip box at 1440x900. Seeding and recording are now independent:
+	// EVERY open seeds, only a non-programmatic change records.
+	test('a programmatic open still seeds the default width, and records no manual choice (issue #353)', () => {
+		assert.deepStrictEqual(
+			{
+				programmaticOpen: reviewRailVisibilityEffects(true, true),
+				programmaticClose: reviewRailVisibilityEffects(false, true),
+				userOpen: reviewRailVisibilityEffects(true, false),
+				userClose: reviewRailVisibilityEffects(false, false),
+			},
+			{
+				programmaticOpen: { seedWidth: true, recordCollapsed: undefined },
+				programmaticClose: { seedWidth: false, recordCollapsed: undefined },
+				userOpen: { seedWidth: true, recordCollapsed: false },
+				userClose: { seedWidth: false, recordCollapsed: true },
+			});
 	});
 
 	// The recording rule (plan 42 slice L4, fix-round for defect 1): only an explicit gesture on the rail
@@ -62,7 +72,7 @@ suite('livingDocs review-rail quiet-shell entry (plan 42 L4)', () => {
 
 	// Per-workspace collapse persistence (plan 44-b P2.4, keys `livingDocs.v2.treeRailCollapsed` /
 	// `livingDocs.v2.rightRailCollapsed`). The right rail's stored boolean is the single source of truth for
-	// the user's explicit choice: unset -> the quiet-shell default applies; true/false -> honoured on entry.
+	// the user's explicit choice: unset -> a true first run; true/false -> honoured on entry.
 	test('the persisted right-rail collapse boolean maps onto the review-rail manual choice tri-state', () => {
 		assert.deepStrictEqual(
 			{
@@ -77,7 +87,8 @@ suite('livingDocs review-rail quiet-shell entry (plan 42 L4)', () => {
 			});
 	});
 
-	// The tree rail has no quiet-shell default: it opens on entry unless the user has explicitly collapsed it.
+	// The tree rail opens on entry unless the user has explicitly collapsed it (the same rule the right rail
+	// now follows too, issue #363).
 	test('the tree rail hides on entry only when the persisted collapse flag is true', () => {
 		assert.deepStrictEqual(
 			{

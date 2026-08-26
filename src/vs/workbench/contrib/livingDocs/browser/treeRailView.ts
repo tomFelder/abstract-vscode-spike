@@ -583,9 +583,14 @@ export class TreeRailView extends ViewPane {
 		// Persist the collapse state so expansion survives restart (issue #171 acceptance). Programmatic
 		// reveal-to-active expansions are suppressed so they never overwrite the user's own collapse choices.
 		this._register(tree.onDidChangeCollapseState(e => {
-			if (this._suppressCollapsePersist) { return; }
 			const node = e.node.element;
 			if (!node || node.type !== 'folder') { return; }
+			// The folder row draws its own chevron (issue #363) and the list framework re-renders only the
+			// widget's twistie on a collapse change, so ask the tree to re-render this row: that brings
+			// TreeRailFolderRenderer.renderElement back round with the new `collapsed` and re-points the
+			// chevron. This runs for programmatic expansions too - a reveal must leave the chevron honest.
+			tree.rerender(node);
+			if (this._suppressCollapsePersist) { return; }
 			if (e.node.collapsed) { this._collapsedFolders.add(node.id); } else { this._collapsedFolders.delete(node.id); }
 			this._persistCollapsedFolders();
 		}));
@@ -1295,9 +1300,15 @@ export class TreeRailView extends ViewPane {
 		.living-docs-rail .rail-files-tree .rail-tree-folder{display:flex;align-items:center;height:100%;min-width:0;gap:6px}
 		.living-docs-rail .rail-files-tree .rail-tree-folder-label{font:600 12.5px/1 ${FONT.sans};color:${INK.bodySoft};overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 		.living-docs-rail .rail-files-tree .rail-tree-folder-count{margin-left:auto;flex:none;font:400 10px/1 ${FONT.mono};color:${INK.meta}}
-		/* The chevron (P5.1): the widget's own twistie, restyled to a 9px glyph in meta ink with a 150ms rotation. The widget toggles .collapsed (points right); expanded points down. */
+		/* The disclosure affordance (P5.1, issue #363): the folder row's OWN chevron + folder glyph, so a user's directory can never read as an app-made section. The chevron points down when open and rotates a quarter turn right when collapsed, over the same 150ms the rest of the rail uses. */
+		.living-docs-rail .rail-files-tree .rail-tree-folder-chevron{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;font-size:13px;color:${INK.meta};transition:transform 150ms ease}
+		.living-docs-rail .rail-files-tree .rail-tree-folder-chevron.rail-tree-folder-chevron-collapsed{transform:rotate(-90deg)}
+		.living-docs-rail .rail-files-tree .rail-tree-folder-glyph{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;font-size:13px;color:${INK.meta}}
+		/* The leaf row's leading indent stays the widget's twistie box (14px, no glyph of its own). */
 		.living-docs-rail .rail-files-tree .monaco-tl-twistie{width:14px;transform:none}
 		.living-docs-rail .rail-files-tree .monaco-tl-twistie::before{font-size:9px;color:${INK.meta};transition:transform 150ms ease}
+		/* A folder row's twistie is empty (the row draws its own chevron), so it collapses to nothing; its inline indent padding still carries nesting depth. */
+		.living-docs-rail .rail-files-tree .rail-tree-twistie-empty{width:0;padding-right:0}
 		/* The comp's row (662-677): 13 in body ink, 6px 8px of padding, radius 7. */
 		.living-docs-rail .rail-files-tree .rail-tree-leaf{display:flex;align-items:center;gap:8px;height:100%;min-width:0;font:400 13px/1.3 ${FONT.sans};color:${INK.body}}
 		.living-docs-rail .rail-files-tree .rail-tree-leaf-source .rail-item-label{color:${INK.body};font-family:${FONT.sans};font-size:13px}
