@@ -40,7 +40,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { decideStartupRoute, StartupRouteKind } from '../common/startupRouting.js';
 import { PaletteShadowBookkeeping, shouldShadowPaletteCommand } from '../common/shellCuration.js';
-import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, treeRailHiddenOnEntry } from '../common/railVisibility.js';
+import { decideReviewRailOpenOnEntry, RailGesture, recordedChoiceForRailGesture, reviewRailManualChoiceFromPersistedCollapse, ReviewRailManualChoice, reviewRailVisibilityEffects, treeRailHiddenOnEntry } from '../common/railVisibility.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
@@ -1341,9 +1341,11 @@ registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContri
 // user drags natively, so we never re-pin -- doing so would clobber the user's chosen width on every
 // screen->editor crossing. The part-level minimum widths (170px, stock) keep the rails usable.
 //
-// (plan 42 slice L4 - quiet shell on entry) The LEFT rail (tree-rail) always comes up on the editor
-// surface as above. The RIGHT rail (review rail) is now QUIET on entry: it starts collapsed when it has
-// nothing to say (no pending review, no chat history for the document), and opens only when it does.
+// (issue #363 - open by default on entry) The LEFT rail (tree-rail) always comes up on the editor surface
+// as above. The RIGHT rail (review rail) now comes up too: this is an AI-native product, so its primary
+// surface is present from the first run rather than waiting to be discovered. This RETIRES the plan 42 L4
+// "quiet shell" default (start collapsed unless there is a pending review or chat history) -- the one
+// thing that keeps the rail closed is the user's own explicit collapse, persisted per-workspace.
 // It still expands automatically on first AI invocation and when a review arrives -- those paths run
 // through LivingDocsService.focusPanel() -> IViewsService.openView(), which un-hides the part -- so no
 // extra wiring is needed for auto-expand; this contribution only sets the DEFAULT on entry and records
@@ -1356,10 +1358,8 @@ registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContri
 // guard so the openView-driven visibility change is not mistaken for a deliberate `open`. The sole
 // recorder is the rail's calm collapse control (onDidRequestCollapseReviewRail -> `collapsed`). After the
 // fix, NO UI gesture records `open`; that is intentional -- precedence still honours a stored `collapsed`,
-// and the has-something-to-say default (chat history / pending review) covers the "opens on its own" cases.
-// The decision itself is the pure decideReviewRailOpenOnEntry() (common/railVisibility.ts, unit-tested):
-// a pending proposal ALWAYS forces the rail open (the agent-edit trust grammar is untouchable), then the
-// manual choice, then the has-something-to-say default.
+// and every other case now opens by default. The decisions themselves are the pure
+// decideReviewRailOpenOnEntry() and reviewRailVisibilityEffects() (common/railVisibility.ts, unit-tested).
 class RailVisibilityContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.livingDocs.railVisibility';
 	// Set once the first-run 264 sidebar / 392 review default has been seeded; afterwards the user's
@@ -1369,8 +1369,8 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	static readonly REVIEW_WIDTH_SEEDED_KEY = 'livingDocs.reviewWidthSeeded';
 	// The per-workspace rail collapse state (plan 43 section 3.5, plan 44-b P2.4). WORKSPACE scope /
 	// MACHINE target: this is per-workspace UI state that survives reload but does not roam. Presence
-	// records an EXPLICIT user choice; an unset key means "no choice yet" (the tree rail then defaults
-	// open, the right rail falls back to the quiet-shell has-something-to-say rule). These keys are the
+	// records an EXPLICIT user choice; an unset key means "no choice yet", i.e. a true first run, and BOTH
+	// rails then default open (issue #363 for the right rail). These keys are the
 	// single source of truth for the user's explicit collapse choice, superseding the old profile-scoped
 	// `livingDocs.reviewRailManualChoice` (migrated on first read below).
 	static readonly TREE_RAIL_COLLAPSED_KEY = 'livingDocs.v2.treeRailCollapsed';
@@ -1490,18 +1490,25 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 			}
 			return;
 		}
-		if (partId !== Parts.AUXILIARYBAR_PART || this._programmaticReviewToggle) {
+		if (partId !== Parts.AUXILIARYBAR_PART) {
 			return;
 		}
-		// A genuine user toggle of the review rail while editing (NOT a programmatic sync and NOT a guarded
-		// focusPanel peek): persist it so it wins on the next entry and across reload (a pending review no
-		// longer force-opens; the badge dot surfaces it, P2.5). In the calm shell the only such gesture is
-		// the rail's own collapse control, which records `collapsed` directly; this remains the safety net
-		// for any residual native hide/show gesture.
-		this._storeRightRailCollapsed(!visible);
-		if (visible) {
-			// The user opened the rail: seed its default width if this is the first time it has ever opened.
+		// The two effects of a review-rail visibility change are decided purely (issue #353): seeding the
+		// 392px default width happens on EVERY open path - the one-click AI-door affordance, the first-run
+		// default open, a manual toggle - because a part cannot be sized while hidden; recording a manual
+		// choice happens only when the change was NOT ours. Before the fix the programmatic guard returned
+		// early ahead of the seed, so the app's own affordance opened the rail at the workbench fallback
+		// width and every layout decision was made against a rail the design never intended.
+		const effects = reviewRailVisibilityEffects(visible, this._programmaticReviewToggle);
+		if (effects.seedWidth) {
 			this._seedReviewWidthOnce();
+		}
+		// A genuine user toggle of the review rail while editing: persist it so it wins on the next entry and
+		// across reload (a pending review no longer force-opens; the badge dot surfaces it, P2.5). In the calm
+		// shell the only such gesture is the rail's own collapse control, which records `collapsed` directly;
+		// this remains the safety net for any residual native hide/show gesture.
+		if (effects.recordCollapsed !== undefined) {
+			this._storeRightRailCollapsed(effects.recordCollapsed);
 		}
 	}
 
@@ -1539,17 +1546,15 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 		if (!treeHidden) {
 			void this._viewsService.openView(DOCUMENTS_VIEW_ID, false);
 		}
-		// The right review rail is quiet on entry: open it only when the pure decision says so -- a pending
-		// proposal forces it (trust grammar), else the user's stored manual choice, else has-something-to-say.
-		const activeResource = this._editorService.activeEditor?.resource;
-		const openReview = decideReviewRailOpenOnEntry({
-			hasPendingReview: activeResource ? this._livingDocs.getPendingForDoc(activeResource).length > 0 : this._livingDocs.getAllPending().length > 0,
-			hasChatHistory: activeResource ? this._livingDocs.getChatMessages(activeResource).length > 0 : false,
-			manualChoice: this._reviewRailManualChoice(),
-		});
+		// The right review rail opens by default on the editor surface (issue #363): it is this product's
+		// primary surface, so it must not have to be discovered. The one thing that keeps it closed is the
+		// user's own explicit collapse, persisted per-workspace - that choice wins on every later entry.
+		const openReview = decideReviewRailOpenOnEntry({ manualChoice: this._reviewRailManualChoice() });
 		this._setReviewRailHidden(!openReview);
 		if (openReview) {
-			// Reveal the review rail without stealing focus; seed its width the first time it opens.
+			// Reveal the review rail without stealing focus; seed its width the first time it opens. The seed
+			// also runs off the part-visibility event (#353), so this is belt-and-braces for hosts where that
+			// event lands on a later tick; `_seedReviewWidthOnce` is idempotent.
 			void this._viewsService.openView(REVIEW_RAIL_VIEW_ID, false);
 			this._seedReviewWidthOnce();
 		}

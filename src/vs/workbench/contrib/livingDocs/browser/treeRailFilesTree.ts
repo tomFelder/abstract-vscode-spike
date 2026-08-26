@@ -7,7 +7,9 @@ import { $, append } from '../../../../base/browser/dom.js';
 import { IListVirtualDelegate } from '../../../../base/browser/ui/list/list.js';
 import { IListAccessibilityProvider } from '../../../../base/browser/ui/list/listWidget.js';
 import { ITreeNode, ITreeRenderer } from '../../../../base/browser/ui/tree/tree.js';
+import { Codicon } from '../../../../base/common/codicons.js';
 import { DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
+import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize } from '../../../../nls.js';
 import { IRailDot } from '../common/railStatus.js';
 import { ITreeRailFolderNode, ITreeRailLeafNode, ITreeRailNode, sourceKindGlyph, sourceMeta } from '../common/treeRail.js';
@@ -16,8 +18,10 @@ import { ITreeRailFolderNode, ITreeRailLeafNode, ITreeRailNode, sourceKindGlyph,
 // template, and one renderer per node kind (folder header vs. leaf row). These sit beside the view so the
 // view file stays focused on widget wiring, data flow, and the doc actions (import / use-as-source / menu).
 // Row heights follow the v2 row anatomy (pin 5): folder rows 28px, document/source (leaf) rows 30px. The
-// tree widget supplies twisties, indent, keyboard nav, and a11y for free (issue #171 acceptance: click +
-// keyboard collapse, persisted state, active highlight); the delegate sizes each row kind independently.
+// tree widget supplies indent, keyboard nav, and a11y for free (issue #171 acceptance: click + keyboard
+// collapse, persisted state, active highlight); the delegate sizes each row kind independently. The folder
+// row draws its OWN chevron and folder glyph rather than the widget's faint twistie (issue #363), so a
+// user's directory reads as a directory.
 
 /** Folder (group / directory) row height (P5.1). */
 export const TREE_RAIL_FOLDER_ROW_HEIGHT = 28;
@@ -51,9 +55,16 @@ export class TreeRailDelegate implements IListVirtualDelegate<ITreeRailNode> {
 }
 
 interface IFolderTemplate {
+	/** The disclosure chevron (issue #363): points down when the folder is open, right when it is collapsed. */
+	readonly chevron: HTMLElement;
+	/** The folder glyph (issue #363): the mark that says "this row is a directory", not an app-made section. */
+	readonly glyph: HTMLElement;
 	readonly label: HTMLElement;
 	readonly count: HTMLElement;
 }
+
+/** Set on the chevron while the folder is collapsed; the rail CSS rotates it a quarter turn (issue #363). */
+const FOLDER_CHEVRON_COLLAPSED_CLASS = 'rail-tree-folder-chevron-collapsed';
 
 /** The number of leaf rows (documents / sources) beneath a folder node, for the right-aligned doc-count (P5.1). */
 function countLeaves(node: ITreeRailNode): number {
@@ -69,15 +80,36 @@ export class TreeRailFolderRenderer implements ITreeRenderer<ITreeRailFolderNode
 
 	renderTemplate(container: HTMLElement): IFolderTemplate {
 		container.classList.add('rail-tree-folder');
+		// The disclosure affordance (issue #363). A user's own top-level directory (`outputs/`, say) was
+		// reading as app furniture because the row carried neither a chevron nor a folder glyph. The row now
+		// owns both: the chevron points down when open and rotates a quarter turn right when collapsed, and
+		// the folder glyph makes it unmistakable that the row is a directory of theirs.
+		const chevron = append(container, $(`span.rail-tree-folder-chevron${ThemeIcon.asCSSSelector(Codicon.chevronDown)}`));
+		const glyph = append(container, $(`span.rail-tree-folder-glyph${ThemeIcon.asCSSSelector(Codicon.folder)}`));
 		const label = append(container, $('span.rail-tree-folder-label'));
 		// The right-aligned mono doc-count (P5.1): the number of documents/sources this group holds, in meta ink.
 		const count = append(container, $('span.rail-tree-folder-count'));
-		return { label, count };
+		return { chevron, glyph, label, count };
+	}
+
+	/**
+	 * The row draws its own chevron (see renderTemplate), so the widget's twistie stays empty - returning
+	 * `true` tells the tree "the renderer rendered the twistie", which stops it stamping its own
+	 * `tree-item-expanded` codicon there and leaving the row with two chevrons. The class collapses the
+	 * twistie's box in the rail CSS while its inline indent padding still carries nesting depth.
+	 */
+	renderTwistie(_element: ITreeRailFolderNode, twistieElement: HTMLElement): boolean {
+		twistieElement.classList.add('rail-tree-twistie-empty');
+		return true;
 	}
 
 	renderElement(node: ITreeNode<ITreeRailFolderNode, void>, _index: number, template: IFolderTemplate): void {
 		template.label.textContent = node.element.label;
 		template.count.textContent = `${countLeaves(node.element)}`;
+		// Point the chevron at the tree's own collapse state. The list framework re-renders only the widget's
+		// twistie when a node collapses, so the view re-renders the row itself (treeRailView's
+		// onDidChangeCollapseState -> tree.rerender) to bring this call back round.
+		template.chevron.classList.toggle(FOLDER_CHEVRON_COLLAPSED_CLASS, node.collapsed);
 	}
 
 	disposeTemplate(_template: IFolderTemplate): void { }

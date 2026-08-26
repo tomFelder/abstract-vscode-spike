@@ -9,9 +9,9 @@ import { DisposableStore, IDisposable } from '../../../../../base/common/lifecyc
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILivingDoc } from '../../common/livingDocsModel.js';
-import { TreeRailLeafRenderer } from '../../browser/treeRailFilesTree.js';
+import { TreeRailFolderRenderer, TreeRailLeafRenderer } from '../../browser/treeRailFilesTree.js';
 import { ClickGestureGuard, GestureScheduler } from '../../common/clickGesture.js';
-import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, isMissingSource, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_CAP, RECENT_STRIP_MIN, searchTreeRail, sourceKindGlyph, sourceMeta, touchRecentDoc } from '../../common/treeRail.js';
+import { ASSETS_FOLDER_ID, buildFileTree, ITreeRailItem, buildOutline, buildRecentDocItems, buildTreeRailNodes, buildWorkspaceSourceNodes, classifyWorkspaceExtra, collectAssetsFolderIds, filterTreeRailNodes, isAssetName, isMissingSource, ITreeRailFolderNode, ITreeRailLeafNode, ITreeRailNode, RECENT_STRIP_CAP, RECENT_STRIP_MIN, searchTreeRail, sourceKindGlyph, sourceMeta, touchRecentDoc } from '../../common/treeRail.js';
 
 // Compact projection of a node tree for snapshot-style assertions: folders show label + children, leaves
 // show label + kind. Ids are checked separately where they matter (persistence + identity).
@@ -134,6 +134,46 @@ suite('treeRail', () => {
 			},
 		);
 		disposables.dispose();
+	});
+
+	test('TreeRailFolderRenderer gives a folder row a chevron + folder glyph, and points the chevron at the collapse state (issue #363)', () => {
+		// A user's own top-level directory must read as a directory, never as an app-made section (the founder
+		// read `outputs/` as redundant app furniture). This drives the REAL folder renderer over a folder node
+		// from the real builder, and reads the emitted DOM - both affordances, and the chevron's collapsed
+		// class, which the rail CSS turns into the quarter-turn rotation.
+		const renderer = new TreeRailFolderRenderer();
+		const folder = buildTreeRailNodes([
+			{ title: 'Q3', resource: URI.file('/ws/outputs/Q3.md'), pendingCount: 0, sources: [], folder: 'outputs' },
+		]).find((n): n is ITreeRailFolderNode => n.type === 'folder')!;
+
+		const render = (collapsed: boolean): { label: string; chevron: boolean; glyph: boolean; chevronCollapsed: boolean; twistieEmptied: boolean } => {
+			const container = document.createElement('div');
+			const template = renderer.renderTemplate(container);
+			const twistie = document.createElement('div');
+			const twistieRendered = renderer.renderTwistie(folder, twistie);
+			const node: ITreeNode<ITreeRailFolderNode, void> = {
+				element: folder, children: [], depth: 1, visibleChildrenCount: 1, visibleChildIndex: 0,
+				collapsible: true, collapsed, visible: true, filterData: undefined,
+			};
+			renderer.renderElement(node, 0, template);
+			const chevron = container.querySelector('.rail-tree-folder-chevron');
+			renderer.disposeTemplate(template);
+			return {
+				label: container.querySelector('.rail-tree-folder-label')?.textContent ?? '',
+				chevron: !!chevron?.classList.contains('codicon-chevron-down'),
+				glyph: !!container.querySelector('.rail-tree-folder-glyph')?.classList.contains('codicon-folder'),
+				chevronCollapsed: !!chevron?.classList.contains('rail-tree-folder-chevron-collapsed'),
+				// The row owns the chevron, so the widget's own twistie is emptied - never two chevrons on a row.
+				twistieEmptied: twistieRendered && twistie.classList.contains('rail-tree-twistie-empty'),
+			};
+		};
+
+		assert.deepStrictEqual(
+			{ expanded: render(false), collapsed: render(true) },
+			{
+				expanded: { label: 'outputs', chevron: true, glyph: true, chevronCollapsed: false, twistieEmptied: true },
+				collapsed: { label: 'outputs', chevron: true, glyph: true, chevronCollapsed: true, twistieEmptied: true },
+			});
 	});
 
 	test('sourceKindGlyph maps a source to its mono kind glyph: data/table, transcript/note, reference (P5.6)', () => {
