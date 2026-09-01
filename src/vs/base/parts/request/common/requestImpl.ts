@@ -82,9 +82,14 @@ export async function request(options: IRequestOptions, token: CancellationToken
 function incrementalStream(body: ReadableStream<Uint8Array>, cancellation: IDisposable, timeoutMs: number | undefined): VSBufferReadableStream {
 	const stream = newWriteableBufferStream();
 	const reader = body.getReader();
+	// `reading` keeps the cancel to the CALLER's destroy. `end()` calls destroy internally once the pump has
+	// finished, and cancelling an already-drained body there would be a side effect `end()` never had.
+	let reading = true;
 	const destroy = stream.destroy.bind(stream);
 	stream.destroy = () => {
-		reader.cancel().catch(() => undefined);
+		if (reading) {
+			reader.cancel().catch(() => undefined);
+		}
 		destroy();
 	};
 	(async () => {
@@ -109,6 +114,7 @@ function incrementalStream(body: ReadableStream<Uint8Array>, cancellation: IDisp
 				stream.error(err);
 			}
 		} finally {
+			reading = false;
 			cancellation.dispose();
 			stream.end();
 		}
