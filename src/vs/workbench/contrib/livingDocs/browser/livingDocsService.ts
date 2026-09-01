@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer } from '../../../../base/common/buffer.js';
+import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer, VSBufferReadableStream } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { IntervalTimer, Limiter, timeout } from '../../../../base/common/async.js';
@@ -31,7 +31,7 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { INotificationHandle, INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { toAction } from '../../../../base/common/actions.js';
-import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
+import { asJson, asText, IRequestService, isSuccess, readHeader } from '../../../../platform/request/common/request.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
@@ -54,6 +54,7 @@ import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutB
 import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
 import { ChatDropReason, reconcileTurnReceipt } from '../common/turnReceipts.js';
 import { parseRetryAfterMs, retryDelayMs } from '../common/livingDocRetry.js';
+import { listenStream } from '../../../../base/common/stream.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
@@ -5629,7 +5630,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// A rate limit is a TYPED failure, not just a body that fails to parse: the retry has to know to wait,
 		// and for how long, which is the one thing the response headers can tell it (plan 55 B1).
 		if (context.res.statusCode === 429) {
-			throw new ModelRateLimitedError(parseRetryAfterMs(context.res.headers?.['retry-after'], Date.now()));
+			throw new ModelRateLimitedError(parseRetryAfterMs(readHeader(context.res.headers, 'retry-after'), Date.now()));
 		}
 		const raw = await asText(context);
 		if (!raw) { throw new Error('empty model response'); }
@@ -5644,70 +5645,106 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return text;
 	}
 
-	// Streaming variant of the model call (plan 27, decision D27-A). POSTs with `stream: true` and reads
-	// the proxy's SSE response with a `fetch` + `ReadableStream` reader (the request service does not expose
-	// a stream), accumulating and emitting each `content_block_delta` text as it arrives; resolves with the
-	// full text so the EXISTING end-of-stream parse (parseChatResponse) is unchanged - proposals are only
-	// ever committed from the complete response, never from a partial. On `token` cancellation the fetch is
-	// aborted and a distinguishable CancellationError is thrown so the caller can salvage the streamed prose
-	// (D27-B) rather than treating it as a failure. The credential stays in the proxy (decision 14).
+	// Streaming variant of the model call (plan 27, decision D27-A). POSTs with `stream: true` and reads the
+	// proxy's SSE response chunk by chunk, accumulating and emitting each `content_block_delta` text as it
+	// arrives; resolves with the full text so the EXISTING end-of-stream parse (parseChatResponse) is
+	// unchanged - a change is only ever committed from the complete response, never from a partial.
+	//
+	// This used to reach past the injected request service for the global `fetch`, on the belief that the
+	// request service could not stream. It can: `IRequestContext.stream` is chunk-wise, and asking for an
+	// `incrementalResponse` is what makes each chunk arrive as it lands rather than all at the end. Going
+	// through the service matters beyond tidiness (ticket #375): IRequestService is the SINGLE seam all model
+	// traffic crosses, so a test double answers structurally, instead of the unit suite being silently
+	// answered by whatever live broker happens to be listening on the default port.
+	//
+	// On `token` cancellation the request is aborted and a distinguishable CancellationError is thrown so the
+	// caller can salvage the streamed prose (D27-B) rather than treating it as a failure. The credential stays
+	// in the proxy (decision 14).
 	private async _callModelStream(system: string, user: string, purpose: ModelCallPurpose, onDelta: (text: string) => void, token: CancellationToken): Promise<string> {
-		const controller = new AbortController();
-		const sub = token.onCancellationRequested(() => controller.abort());
 		try {
 			if (token.isCancellationRequested) { throw new CancellationError(); }
 			const modelId = await this._requestModelId();
 			if (token.isCancellationRequested) { throw new CancellationError(); }
-			const body = this._modelRequestBody(modelId, purpose, system, user, true);
-			const response = await fetch(`${this._proxyUrl()}/v1/messages`, {
-				method: 'POST',
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/v1/messages`,
 				headers: { 'content-type': 'application/json' },
-				body,
-				signal: controller.signal,
-			});
+				data: this._modelRequestBody(modelId, purpose, system, user, true),
+				incrementalResponse: true,
+				callSite: 'livingDocs.model.stream',
+			}, token);
 			// Typed so the buffered fallback below inherits the wait rather than re-firing into the same limit.
-			// CLOSE THE BODY FIRST: a `fetch` response whose stream is neither read nor cancelled holds its
-			// connection open until GC gets to it, and this path throws on every rate limit - exactly the
-			// moment a retry storm is about to open more of them. `cancel()` releases it deterministically.
-			if (response.status === 429) {
-				await response.body?.cancel().catch(() => undefined);
-				throw new ModelRateLimitedError(parseRetryAfterMs(response.headers.get('retry-after') ?? undefined, Date.now()));
+			// DROP THE BODY FIRST on either failure: this path throws on every rate limit, which is exactly the
+			// moment a retry storm is about to open more connections, so the one in hand is released here.
+			if (context.res.statusCode === 429) {
+				context.stream.destroy();
+				throw new ModelRateLimitedError(parseRetryAfterMs(readHeader(context.res.headers, 'retry-after'), Date.now()));
 			}
-			if (!response.ok || !response.body) {
-				await response.body?.cancel().catch(() => undefined);
-				throw new Error(`model proxy http ${response.status}`);
+			if (!isSuccess(context)) {
+				context.stream.destroy();
+				throw new Error(`model proxy http ${context.res.statusCode}`);
 			}
-			const reader = response.body.getReader();
+			const { text, paused } = await this._readModelStream(context.stream, onDelta);
+			if (token.isCancellationRequested) { throw new CancellationError(); }
+			// The proxy paused mid-stream because the day's included usage is spent (plan 35 iter 3): the plain-
+			// words cap prose has already streamed to the composer; raise ModelPausedError so nothing parses.
+			if (paused) { throw new ModelPausedError(text.trim() || INCLUDED_USAGE_SPENT_MESSAGE); }
+			if (!text.trim()) { throw new Error('model returned no text'); }
+			return text;
+		} catch (e) {
+			// An aborted request and a cancelled token both mean the user stopped the reply.
+			if (token.isCancellationRequested || isCancellationError(e)) { throw new CancellationError(); }
+			throw e;
+		}
+	}
+
+	// Read one SSE response as it arrives, emitting each text delta the moment its line completes. Only
+	// newline-terminated lines are parsed (parseSseChunk carries the remainder forward), so an event split
+	// across chunks is never mis-parsed; a body that ends without its final newline still yields its last
+	// event. Resolves with the accumulated text plus whether the proxy signalled a pause.
+	private _readModelStream(stream: VSBufferReadableStream, onDelta: (text: string) => void): Promise<{ text: string; paused: boolean }> {
+		return new Promise((resolve, reject) => {
 			const decoder = new TextDecoder();
 			let buffer = '';
-			let full = '';
+			let text = '';
 			let paused = false;
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) { break; }
-				buffer += decoder.decode(value, { stream: true });
+			let settled = false;
+			const take = (chunk: string) => {
+				buffer = chunk;
 				const result = parseSseChunk(buffer);
 				buffer = result.remainder;
 				for (const delta of result.deltas) {
-					full += delta;
+					text += delta;
 					onDelta(delta);
 				}
 				if (result.paused) { paused = true; }
-				if (result.done) { break; }
-			}
-			if (token.isCancellationRequested) { throw new CancellationError(); }
-			// The proxy paused mid-stream because the day's included usage is spent (plan 35 iter 3): the plain-
-			// words cap prose has already streamed to the composer; raise ModelPausedError so no proposals parse.
-			if (paused) { throw new ModelPausedError(full.trim() || INCLUDED_USAGE_SPENT_MESSAGE); }
-			if (!full.trim()) { throw new Error('model returned no text'); }
-			return full;
-		} catch (e) {
-			// An aborted fetch (name 'AbortError') or a cancelled token both mean the user stopped the reply.
-			if (token.isCancellationRequested || (e instanceof Error && e.name === 'AbortError')) { throw new CancellationError(); }
-			throw e;
-		} finally {
-			sub.dispose();
-		}
+				return result.done;
+			};
+			listenStream<VSBuffer>(stream, {
+				onData: data => {
+					if (settled) { return; }
+					if (take(buffer + decoder.decode(data.buffer, { stream: true }))) {
+						settled = true;
+						// The terminating event has landed. Say so, or a proxy that holds the response open leaves
+						// a live reader (and its cancellation listener) behind for every turn.
+						stream.destroy();
+						resolve({ text, paused });
+					}
+				},
+				onError: err => {
+					if (settled) { return; }
+					settled = true;
+					reject(err);
+				},
+				onEnd: () => {
+					if (settled) { return; }
+					// A trailing line with no newline after it is still a whole event once the body has ended.
+					if (buffer.length > 0) { take(buffer + '\n'); }
+					settled = true;
+					resolve({ text, paused });
+				},
+			});
+		});
 	}
 
 	// The chat model-call ladder (plan 27 iter 2): stream first; on a NON-cancel stream failure fall back once
