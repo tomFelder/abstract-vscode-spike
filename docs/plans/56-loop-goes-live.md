@@ -131,4 +131,7 @@ Merged PRs do not close this wave. It closes when the founder runs the #345 smok
 
 ## The RUN prompt
 
-The verbatim prompt to start the overnight run is kept beside this plan in [RUN-56-loop-goes-live.md](RUN-56-loop-goes-live.md).
+Two variants sit beside this plan; both work the same tickets (#375-#389) and both close on the same founder smoke.
+
+- **[RUN-56-adversarial-goal-loop.md](RUN-56-adversarial-goal-loop.md)** - the `implement`-driven variant, and the one to reach for. The implementation step is a real `/mattpocock-skills:implement` session run headless, since that skill carries `disable-model-invocation` and cannot be reached through the Skill tool by any orchestrator or sub-agent. A ticket finishes when a panel of three adversaries **fails to falsify** its acceptance criteria, rather than when a validator approves it. The distinction is not academic: an approval gate is what let five issues be recorded as fixed by an earlier wave without being fixed.
+- **[RUN-56-loop-goes-live.md](RUN-56-loop-goes-live.md)** - the agent-native variant, following the plan-55 implementer/validator protocol with `tdd` and `code-review` called directly by sub-agents. Simpler, no headless sessions, and the fallback if driving the CLI proves awkward.
