@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise } from '../../../../../base/common/async.js';
+import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { bufferToStream, VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -27,6 +29,7 @@ import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AgentPolicy, IAgentDef, IAuditEntry, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
 import { extractBindLinks, parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -167,9 +170,10 @@ const API_AUTH_MD = [
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
 const BOARD = URI.file('/ws/Board Note.md');
 const README = URI.file('/ws/Team Notes.md');
-// A closed loopback port for the model proxy URL: the STREAMING model path (a raw `fetch`) fails fast
-// against it and falls back to the mocked buffered call, so a real proxy on the default port cannot leak
-// into the fan-out tests. The buffered call is matched by the mock via its `/v1/messages` path either way.
+// A closed loopback port for the model proxy URL. Model traffic now ALL crosses the injected request
+// service (ticket #375), which the mock below answers, so nothing here can reach a real proxy whatever the
+// URL says. This stays as belt-and-braces: if a raw network call is ever reintroduced, it dies against a
+// dead port rather than being answered by whatever is listening on the broker's real one.
 const DEAD_PROXY = 'http://127.0.0.1:49999';
 const API = URI.file('/ws/Ecosystem.md');
 const MCP = URI.file('/ws/Pipeline Brief.md');
@@ -200,11 +204,33 @@ const PDF_TEXT = { readable: true, text: 'Board pack: revenue is up week on week
 const PDF_IMAGE_ONLY = { readable: false, text: '', pages: 4, reason: 'This PDF has no selectable text - it looks scanned or image-only.' };
 const PDF_FILE = URI.file('/ws/Board Pack.pdf');
 
+// The broker's SSE rendering of a canned Claude reply, so the STREAMING model path is answered the way the
+// real broker answers it rather than being pushed into its buffered fallback. The text is deliberately split
+// across two `content_block_delta` events, so the reader is exercised on a reply that arrives in pieces, and
+// the run is terminated by `message_stop`. A spent-budget reply carries the `pause` stop reason the proxy
+// signals mid-stream (plan 35 iter 3).
+function asSse(payload: object): string {
+	const message = payload as { content?: { type: string; text?: string }[]; stop_reason?: string };
+	const text = (message.content ?? []).filter(b => b.type === 'text').map(b => b.text ?? '').join('');
+	const half = Math.ceil(text.length / 2);
+	const events: object[] = [];
+	for (const part of [text.slice(0, half), text.slice(half)]) {
+		if (part) { events.push({ type: 'content_block_delta', delta: { type: 'text_delta', text: part } }); }
+	}
+	if (message.stop_reason === 'pause') { events.push({ type: 'message_delta', delta: { stop_reason: 'pause' } }); }
+	events.push({ type: 'message_stop' });
+	return events.map(e => `data: ${JSON.stringify(e)}\n\n`).join('');
+}
+
 // The suite title starts with the grep-stable "livingDocs" token (matching the sibling suites'
 // "livingDocs <topic>" convention) so the standard gate `./scripts/test.sh --grep "livingDocs"`
 // catches it. Previously titled "LivingDocsService", it was silently skipped by that case-sensitive
 // grep, hiding a fan-out failure (issue #203). Keep any new livingDocs suite title lower-case "livingDocs".
 suite('livingDocs Service', () => {
+	// Ticket #375: no test in this suite may reach the network directly. Every attempt at a global network
+	// primitive is recorded at the call and refused, so the only route out is IRequestService - injected,
+	// and doubled below.
+	ensureNoNetworkInTestSuite();
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
@@ -223,6 +249,11 @@ suite('livingDocs Service', () => {
 	// `data/`/`archive/` were made before the move landed.
 	let createdFolders: string[] = [];
 	let lastModelBody: string | undefined;
+	// The cancellation token the service handed the LAST /v1/messages call, so a test can prove the model
+	// request is genuinely wired to the chat's cancellation source. Without this the doubles would ignore the
+	// token and dropping it from the call would leave the whole suite green while cancel stopped aborting the
+	// real HTTP request.
+	let lastModelToken: CancellationToken | undefined;
 	let lastModelCalls = 0;
 	let lastOpenedFolder: URI | undefined;
 	// Plan 29 iter 4: capture what the renderer sent to the proxy's /mcp/resolve + /proxy/fetch routes, so a
@@ -250,7 +281,7 @@ suite('livingDocs Service', () => {
 	// notice racing ahead and deduping it.
 	let writeExternalNoWatcher: ((resource: URI, content: string) => void) | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[]; files?: Map<string, string> } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[]; deferModel?: DeferredPromise<void>; files?: Map<string, string> } = {}): LivingDocsService {
 		// `opts.files` hands this service the SAME in-memory disk an earlier one wrote to, which is how a
 		// reload is staged: drop the service, build a second one over the same bytes, and see what it
 		// rehydrates. Nothing else is shared - the second instance rebuilds its state from the files alone.
@@ -361,12 +392,11 @@ suite('livingDocs Service', () => {
 		// request service) at a dead port, so the streaming call fails fast and falls back to the mocked buffered
 		// call.
 		//
-		// `DEAD_PROXY` is the DEFAULT, not an opt-in. Left unset, the service falls back to its real
-		// `localhost:8090`, and any developer who happens to have the app running - which starts a signed-in
-		// broker on exactly that port - has their unit tests silently answered by a live model. That failure is
-		// maddening to read, because the assertion diff shows real prose where a canned fixture belongs, and it
-		// only reproduces on machines where the app is up. A unit test must not be able to reach the network at
-		// all; a test that genuinely wants a reachable proxy still passes its own `proxyUrl`.
+		// `DEAD_PROXY` is the DEFAULT, not an opt-in. It is the second lock, not the only one: since ticket #375
+		// every model call crosses the injected request service, which is mocked here, so no test can reach the
+		// network whatever URL it is pointed at. The dead port remains because the first lock is only as good as
+		// the next person's diff - see the `test/electron-browser` isolation test, which binds the broker's real
+		// default port and proves the suite still cannot reach it.
 		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? (opts.proxyUrl ?? DEAD_PROXY) : true) } as unknown as IConfigurationService;
 		lastNotifications = [];
 		createdFolders = [];
@@ -378,7 +408,7 @@ suite('livingDocs Service', () => {
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
 		const requestService = {
-			request: async (options: { url?: string; data?: string }) => {
+			request: async (options: { url?: string; data?: string }, token: CancellationToken) => {
 				const url = options.url ?? '';
 				// Issue #131/#245 C2: simulate the measured CORS failure - the broker is UP (so /healthz answers)
 				// but the interop POST dies at the transport (net::ERR_FAILED). The service must diagnose this as
@@ -399,6 +429,8 @@ suite('livingDocs Service', () => {
 				let payload: object = API_PAYLOAD;
 				// Set only by `modelHttpSequence` below; everything else answers 200 as it always has.
 				let modelHttpStatus: { statusCode: number; headers?: Record<string, string> } | undefined;
+				// Whether THIS /v1/messages call asked for a stream, which decides the shape of the reply below.
+				let streamed = false;
 				// The proxy routes (plan 29 iter 4): /mcp/resolve returns the extracted value + raw payload;
 				// /proxy/fetch returns the authenticated api JSON. Both capture the sent body so a test can
 				// assert the renderer only ever names the secret, never carries its value.
@@ -410,11 +442,17 @@ suite('livingDocs Service', () => {
 				else if (opts.model || opts.modelSequence) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
 					else if (url.includes('/v1/messages')) {
+						// `deferModel` parks the model call until the test releases it, which is the only way to
+						// hold a reply genuinely in flight now that every call is answered in-memory: without it a
+						// send can finish before the caller ever observes it as busy.
+						if (opts.deferModel) { await opts.deferModel.p; }
 						// A `modelSequence` returns a DIFFERENT canned reply per call (the Nth /v1/messages call
 						// gets the Nth reply), so a multi-batch fan-out can be given one reply per batch; a single
 						// `model` returns the same reply every call. lastModelCalls counts calls either way.
 						payload = opts.modelSequence ? (opts.modelSequence[lastModelCalls] ?? opts.modelSequence[opts.modelSequence.length - 1]) : opts.model!;
 						lastModelBody = options.data;
+						lastModelToken = token;
+						streamed = (options.data ?? '').includes('"stream":true');
 						// `modelHttpSequence` overrides the HTTP envelope of the Nth /v1/messages call, so a test can
 						// hand the service a real 429 (with its own Retry-After) and watch the backoff, rather than
 						// only ever seeing a 200. Read BEFORE the counter moves so entry 0 is the first call.
@@ -422,9 +460,15 @@ suite('livingDocs Service', () => {
 						lastModelCalls++;
 					}
 				}
+				// A canned error payload has no stream to give: the real broker fails a streamed request at the
+				// envelope, so answer 502 and let the ladder fall back to the buffered call exactly as it does in
+				// the app - which is where the error message the tests assert on is surfaced.
+				if (streamed && (payload as { error?: unknown }).error) {
+					return { res: { statusCode: 502, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))) };
+				}
 				return {
 					res: { statusCode: modelHttpStatus?.statusCode ?? 200, headers: modelHttpStatus?.headers ?? {} },
-					stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))),
+					stream: bufferToStream(VSBuffer.fromString(streamed ? asSse(payload) : JSON.stringify(payload))),
 				};
 			},
 		} as unknown as IRequestService;
@@ -433,6 +477,7 @@ suite('livingDocs Service', () => {
 		const fileDialogService = { showOpenDialog: async () => opts.pickFolder ? [opts.pickFolder] : undefined } as unknown as IFileDialogService;
 		lastOpenedFolder = undefined;
 		lastModelCalls = 0;
+		lastModelToken = undefined;
 		lastMcpBody = undefined;
 		lastProxyFetchBody = undefined;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
@@ -1430,22 +1475,31 @@ suite('livingDocs Service', () => {
 	test('cancelChat stops an in-flight reply: no pending changes, busy cleared, a muted stopped turn (plan 27)', async () => {
 		// A configured model (opts.model) keeps the first-AI-use gate closed (healthy /healthz -> `needsModelChoice`
 		// is false), so this genuine send proceeds to the reply rather than being held - the behaviour under test.
-		const service = createService([], { model: chatReply('should never be applied', [{ heading: 'Commentary', oldText: 'Growth accelerated sharply this week.', newText: 'x', rationale: 'y' }]) });
+		// The model call is PARKED on this gate, so the reply is genuinely in flight when the cancel lands
+		// rather than the send racing to completion before the poll below ever sees it as busy.
+		const deferModel = new DeferredPromise<void>();
+		const service = createService([], { deferModel, model: chatReply('should never be applied', [{ heading: 'Commentary', oldText: 'Growth accelerated sharply this week.', newText: 'x', rationale: 'y' }]) });
 		await service.loadDocument(WEEKLY);
 
 		// The cancellation source is registered once the reply is in flight (after the model-status probe that opens
-		// sendChatMessage resolves). Wait until the reply is busy, then cancel: this aborts the streaming model call
+		// sendChatMessage resolves). Wait until the reply is busy, then cancel: this stops the streaming model call
 		// mid-flight so a partial reply is never committed and the turn is recorded as a muted stop.
 		const inFlight = service.sendChatMessage(WEEKLY, 'Rewrite the commentary');
 		while (!service.isChatBusy(WEEKLY)) { await new Promise(r => setTimeout(r, 0)); }
 		service.cancelChat(WEEKLY);
+		deferModel.complete();
 		await inFlight;
 
 		const msgs = service.getChatMessages(WEEKLY);
 		const last = msgs[msgs.length - 1];
 		assert.deepStrictEqual(
-			{ role: last.role, stopped: last.stopped, busy: service.isChatBusy(WEEKLY), pending: service.getPendingForDoc(WEEKLY).length },
-			{ role: 'assistant', stopped: true, busy: false, pending: 0 },
+			{
+				role: last.role, stopped: last.stopped, busy: service.isChatBusy(WEEKLY), pending: service.getPendingForDoc(WEEKLY).length,
+				// The model REQUEST itself was cancelled, not just the turn around it: the token the service
+				// handed the request service is the chat's own, so the real HTTP call is aborted in the app.
+				modelRequestCancelled: lastModelToken?.isCancellationRequested,
+			},
+			{ role: 'assistant', stopped: true, busy: false, pending: 0, modelRequestCancelled: true },
 		);
 	});
 
@@ -2317,7 +2371,9 @@ suite('livingDocs Service', () => {
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			modelSequence: [
-				// Calls 1..N (the down run + its single silent retry per batch) all error.
+				// Calls 1..N all error: the down run's streaming call, then the buffered fallback and its single
+				// silent retry. Only once the ladder is exhausted does the run record its failed docs.
+				{ error: { message: 'model proxy unreachable' } },
 				{ error: { message: 'model proxy unreachable' } },
 				{ error: { message: 'model proxy unreachable' } },
 				// The retry run (model recovered) returns real edits across the three documents.

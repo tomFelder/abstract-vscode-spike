@@ -51,6 +51,15 @@ export interface IRequestOptions {
 	 */
 	disableCache?: boolean;
 	/**
+	 * Deliver the response body INCREMENTALLY: the returned {@link IRequestContext.stream} emits each
+	 * chunk as it arrives off the wire instead of the whole body landing in one piece once the response
+	 * has been read to the end. Callers that consume a long-lived response as it is produced - a
+	 * server-sent-event stream, say - need this; everyone else should leave it off and keep the simpler
+	 * read-it-all-then-hand-it-over behaviour. This may not be supported in all implementations, which
+	 * are always free to deliver the body in a single chunk.
+	 */
+	incrementalResponse?: boolean;
+	/**
 	 * Identifies the call site making this request, used for telemetry.
 	 * Use "NO_FETCH_TELEMETRY" to opt out of request telemetry.
 	 */

@@ -3,9 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { bufferToStream, VSBuffer } from '../../../common/buffer.js';
+import { bufferToStream, newWriteableBufferStream, VSBuffer, VSBufferReadableStream } from '../../../common/buffer.js';
 import { CancellationToken } from '../../../common/cancellation.js';
 import { canceled } from '../../../common/errors.js';
+import { IDisposable } from '../../../common/lifecycle.js';
 import { IHeaders, IRequestContext, IRequestOptions, OfflineError } from './request.js';
 
 export async function request(options: IRequestOptions, token: CancellationToken, isOnline?: () => boolean): Promise<IRequestContext> {
@@ -20,6 +21,10 @@ export async function request(options: IRequestOptions, token: CancellationToken
 		AbortSignal.timeout(options.timeout),
 	]) : cancellation.signal;
 
+	// An incremental response hands the body to the caller while it is still arriving, so the cancellation
+	// subscription has to outlive this function - it is the thing that aborts a body mid-flight. The pump
+	// disposes it once the body is done.
+	let handedOff = false;
 	try {
 		const fetchInit: RequestInit = {
 			method: options.type || 'GET',
@@ -31,11 +36,18 @@ export async function request(options: IRequestOptions, token: CancellationToken
 			fetchInit.cache = 'no-store';
 		}
 		const res = await fetch(options.url || '', fetchInit);
-		return {
+		const context = {
 			res: {
 				statusCode: res.status,
 				headers: getResponseHeaders(res),
 			},
+		};
+		if (options.incrementalResponse && res.body) {
+			handedOff = true;
+			return { ...context, stream: incrementalStream(res.body, disposable, options.timeout) };
+		}
+		return {
+			...context,
 			stream: bufferToStream(VSBuffer.wrap(new Uint8Array(await res.arrayBuffer()))),
 		};
 	} catch (err) {
@@ -50,8 +62,64 @@ export async function request(options: IRequestOptions, token: CancellationToken
 		}
 		throw err;
 	} finally {
-		disposable.dispose();
+		if (!handedOff) {
+			disposable.dispose();
+		}
 	}
+}
+
+/**
+ * Pumps a `fetch` body into a {@link VSBufferReadableStream} chunk by chunk, so a caller that asked for an
+ * incremental response sees each chunk as it lands rather than the whole body at the end. `cancellation` is
+ * the request's token subscription, held until the body is done so cancelling mid-body still aborts the
+ * underlying fetch; reading to the end is what releases the connection deterministically rather than leaving
+ * it open until GC gets to it.
+ *
+ * A caller that has seen enough - an error envelope it will not read, or the last event of a stream the
+ * server keeps open - says so with `destroy()`, which cancels the body rather than merely dropping the
+ * listeners. Without that, "stop reading" would silently mean "keep the connection and read it all anyway".
+ */
+function incrementalStream(body: ReadableStream<Uint8Array>, cancellation: IDisposable, timeoutMs: number | undefined): VSBufferReadableStream {
+	const stream = newWriteableBufferStream();
+	const reader = body.getReader();
+	// `reading` keeps the cancel to the CALLER's destroy. `end()` calls destroy internally once the pump has
+	// finished, and cancelling an already-drained body there would be a side effect `end()` never had.
+	let reading = true;
+	const destroy = stream.destroy.bind(stream);
+	stream.destroy = () => {
+		if (reading) {
+			reader.cancel().catch(() => undefined);
+		}
+		destroy();
+	};
+	(async () => {
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
+				if (value) {
+					await stream.write(VSBuffer.wrap(value));
+				}
+			}
+		} catch (err) {
+			// The same three outcomes the buffered path reports, told apart the same way: a body cut short by a
+			// timeout is a timeout, not a cancellation the caller asked for.
+			if (err?.name === 'TimeoutError') {
+				stream.error(new Error(`Fetch timeout: ${timeoutMs}ms`));
+			} else if (err?.name === 'AbortError') {
+				stream.error(canceled());
+			} else {
+				stream.error(err);
+			}
+		} finally {
+			reading = false;
+			cancellation.dispose();
+			stream.end();
+		}
+	})();
+	return stream;
 }
 
 function getRequestHeaders(options: IRequestOptions) {
