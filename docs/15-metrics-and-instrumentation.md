@@ -70,8 +70,8 @@ Implementation notes (for the plan that wires this):
 | `app_opened` | version, first_open? |
 | `onboarding_step` | step name (per §2.1 funnel) |
 | `project_opened` | doc_count, has_bindings?, is_first? |
-| `change_created` | source kind (chat / fan-out / agent / hook), change kind (figure / meaning), confidence label |
-| `change_resolved` | resolution (approve / tweak / reject), latency, bulk? |
+| `change_created` | source kind (chat / fan-out / agent / hook), change kind (figure / meaning), confidence label. Emitted as `proposal_created` before #378; readers fold the retired name onto this one, so history in `events.log` still counts |
+| `change_resolved` | resolution (approve / tweak / reject), latency, bulk?. Emitted as `proposal_resolved` before #378; readers fold the retired name onto this one, so history in `events.log` still counts |
 | `run_started` / `run_finished` | scope size, cancelled?, failures, duration |
 | `source_synced` | kind (file / api / mcp), ok?, staleness_age |
 | `provenance_peeked` | hover vs click-through |

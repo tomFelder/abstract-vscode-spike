@@ -2092,7 +2092,9 @@ export class ReviewRailView extends ViewPane {
 		// where a reader decides how much to trust what they are about to set off - and the product keeps it:
 		// every edit an agent produces lands as a pending change in this rail, never in the file.
 		const promise = append(footer, $('div.ldp-composer-promise'));
-		promise.textContent = localize('livingDocs.composer.proposalsOnly', "Edits land as proposals you review - nothing applies silently.");
+		// The KEY renames with the rest of the vocabulary (#378); the string VALUE still says "proposals"
+		// because user-facing copy is #404's scope. The mismatch on this line is deliberate until #404 lands.
+		promise.textContent = localize('livingDocs.composer.changesOnly', "Edits land as proposals you review - nothing applies silently.");
 
 		// Keep the cursor in the composer across the re-render that each message triggers.
 		if (doc && !busy) { input.focus(); }

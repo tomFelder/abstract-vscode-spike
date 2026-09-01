@@ -25,6 +25,35 @@ export interface IAnalyticsEventRecord {
 }
 
 /**
+ * Event names retired by a rename, mapped onto the name that replaced them. `~/.abstract/events.log` is a
+ * single global append-only file - one per machine, not per workspace and not per build - so a log written
+ * before issue #378 renamed the noun still holds `proposal_created` / `proposal_resolved` records
+ * interleaved with the new ones, and no migration rewrites it.
+ *
+ * Folding by exact string alone would not just undercount, it would INVERT the guardrail. On a real log of
+ * 461 pre-rename records the denominator collapses to whatever the post-rename build has written so far, so
+ * a healthy 24% tweak+reject rate reads as `below` - which section 2.4 defines as rubber-stamping, an alarm
+ * asserted from data saying the opposite - while `undo_after_approve`, which never renamed, keeps counting
+ * against the collapsed approvals and pushes the undo rate towards 100%.
+ *
+ * READ-SIDE ONLY, on purpose. The retired names are gone from `ANALYTICS_EVENTS`, so nothing can emit them
+ * again; this map exists solely so history already on disk still folds. Schema versioning and a counter for
+ * genuinely unrecognised events are tracked separately (#407, #410).
+ */
+const RETIRED_EVENT_NAMES: Readonly<Record<string, AnalyticsEventName>> = {
+	proposal_created: 'change_created',
+	proposal_resolved: 'change_resolved',
+};
+
+/**
+ * The current name for a stored event: retired names fold onto their replacement, everything else passes
+ * through untouched (including names this build has never heard of, which are simply ignored downstream).
+ */
+export function canonicalEventName(event: AnalyticsEventName | string): string {
+	return RETIRED_EVENT_NAMES[event] ?? event;
+}
+
+/**
  * The T5 onboarding sub-funnel (doc 15 section 2.1), in order. These are the `step` labels an `onboarding_step`
  * event carries once the onboarding surface exists (issue #127, deferred); the fold is written now so the
  * dashboard lands the moment those events start flowing. Every drop-off between two adjacent steps is a
@@ -65,7 +94,7 @@ export function foldFunnel(
 		usersByStep.set(step, new Set<string>());
 	}
 	for (const record of records) {
-		if (record.event !== 'onboarding_step') {
+		if (canonicalEventName(record.event) !== 'onboarding_step') {
 			continue;
 		}
 		const step = typeof record.step === 'string' ? record.step : undefined;
@@ -135,7 +164,7 @@ export function foldGuardrails(records: readonly IAnalyticsEventRecord[]): IGuar
 	let stalenessEscapes = 0;
 	let undoAfterApprove = 0;
 	for (const record of records) {
-		switch (record.event) {
+		switch (canonicalEventName(record.event)) {
 			case 'change_resolved':
 				if (record.resolution === 'approve') { approvals++; }
 				else if (record.resolution === 'tweak') { tweaks++; }
