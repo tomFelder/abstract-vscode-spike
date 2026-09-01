@@ -162,6 +162,8 @@ Numbers 102-109, 112-119 and 139-149 were reserved while drafting and never used
 | 179 | Obsidian-style wikilinks between documents | **Decided.** [plans/52-cursor-parity-loop.md](plans/52-cursor-parity-loop.md) WP-C. | [0179-obsidian-style-wikilinks-between-documents.md](adr/0179-obsidian-style-wikilinks-between-documents.md) |
 | 180 | The Files rail becomes a pure file tree | **Decided.** [plans/52-cursor-parity-loop.md](plans/52-cursor-parity-loop.md) WP-D + [plans/54-structural-extras-loop.md](plans/54-structural-extras-loop.md) WP-D. | [0180-the-files-rail-becomes-a-pure-file-tree.md](adr/0180-the-files-rail-becomes-a-pure-file-tree.md) |
 | 181 | The strip-back wave on built-in extensions | **Decided.** [plans/53-strip-back-loop.md](plans/53-strip-back-loop.md). | [0181-the-strip-back-wave-on-built-in-extensions.md](adr/0181-the-strip-back-wave-on-built-in-extensions.md) |
+| 182 | Change is the unit of review, not proposal | **Decided.** Canon docs and CONTEXT.md done; source identifiers follow in [plans/56-loop-goes-live.md](plans/56-loop-goes-live.md) P1. | [0182-change-is-the-unit-of-review-not-proposal.md](adr/0182-change-is-the-unit-of-review-not-proposal.md) |
+| 183 | LangGraph is a revisit trigger, not a destination | **Decided.** Amends D5 in [30-editing-architecture.md](30-editing-architecture.md); binds plan 56 and successors. | [0183-langgraph-is-a-revisit-trigger-not-a-destination.md](adr/0183-langgraph-is-a-revisit-trigger-not-a-destination.md) |
 
 ## Decisions still open (tracked in [05-open-questions.md](05-open-questions.md))
 
