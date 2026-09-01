@@ -193,7 +193,7 @@ export interface IRebaseRecord extends IJournalRecordBase {
 	/**
 	 * Why the stale ones need attention. Absent means `stale-base` - the store wrote over them itself.
 	 * A remap over a HUMAN edit records `human-edit` instead, because the two are different facts about the
-	 * document and the reviewer is entitled to be told which one moved their proposal.
+	 * document and the reviewer is entitled to be told which one moved their change.
 	 */
 	readonly staleReason?: AttentionReason;
 }

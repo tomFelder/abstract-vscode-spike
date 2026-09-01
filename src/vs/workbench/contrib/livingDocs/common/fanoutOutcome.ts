@@ -7,7 +7,7 @@
 // working-set fan-out path must NEVER render as a silent "no changes proposed" all-clear: a document the
 // model could not be reached for is a FAILURE, not a document that ran and found nothing. This pure module
 // aggregates the per-document outcomes of a fan-out into an honest, plain-words result: it names the model
-// as unreachable, lists which documents failed, and (on a partial success) reports the proposals that DID
+// as unreachable, lists which documents failed, and (on a partial success) reports the changes that DID
 // land alongside the failures - matching the single-doc rail's named-error standard ("The model was not
 // available ..."). No DOM, no service, no model - deterministic string formatting, unit-tested directly
 // and reused by the service's fan-out composer and the run screen.
@@ -28,13 +28,13 @@ export interface IFanoutRunOutcome {
 	readonly failedDocs: readonly IFanoutFailedDoc[];
 	/** True when at least one document failed: the surface renders a named error, never an all-clear. */
 	readonly isError: boolean;
-	/** True when the run paused on the budget cap: finished proposals stay reviewable, NOT an error/all-clear. */
+	/** True when the run paused on the budget cap: finished changes stay reviewable, NOT an error/all-clear. */
 	readonly isPaused: boolean;
 }
 
 /** The raw tallies a fan-out collects as it runs its batches, before formatting into an honest outcome. */
 export interface IFanoutSummaryInput {
-	/** The number of proposals that landed across all documents (0 when the model was down for every doc). */
+	/** The number of changes that landed across all documents (0 when the model was down for every doc). */
 	readonly proposedCount: number;
 	/** The documents the model could not be reached/errored for, in run order. */
 	readonly failedDocs: readonly IFanoutFailedDoc[];
@@ -65,12 +65,12 @@ function names(failedDocs: readonly IFanoutFailedDoc[]): string {
  * Aggregate a fan-out's tallies into an honest run outcome (F14). Priority, highest first:
  *
  *  1. `pausedMessage` set -> the run paused on the budget cap: the content is the plain-words cap message,
- *     `isPaused` true, NO failed docs, NOT an error. Finished proposals (counted in `proposedCount`) stay
+ *     `isPaused` true, NO failed docs, NOT an error. Finished changes (counted in `proposedCount`) stay
  *     reviewable; the surface must render this as a calm pause, never a failure and never an all-clear.
  *  2. `failedDocs` non-empty -> at least one document could not be reached: a NAMED error listing every
- *     failed document. On a partial success (`proposedCount > 0`) it leads with the proposals that landed,
+ *     failed document. On a partial success (`proposedCount > 0`) it leads with the changes that landed,
  *     then names the failures and points at "Retry failed" to re-run ONLY those. `isError` true.
- *  3. otherwise -> the clean path: the model's `reply` when it gave one, nothing when proposals carry the
+ *  3. otherwise -> the clean path: the model's `reply` when it gave one, nothing when changes carry the
  *     meaning (their cards speak), else the neutral honest "nothing to change" line.
  *
  * Crucially, case 3's all-clear line is reachable ONLY when there were no failures and no pause, so a model

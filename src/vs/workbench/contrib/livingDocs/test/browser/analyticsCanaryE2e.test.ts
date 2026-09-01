@@ -27,7 +27,7 @@ import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 // Plan 36 iter 2 - THE END-TO-END CANARY. A fixture Living Document carries a confidential canary string in
-// its body and its bound source value. We drive the real emitting paths (chat -> proposal -> approve/reject,
+// its body and its bound source value. We drive the real emitting paths (chat -> change -> approve/reject,
 // sync, export, publish) through the real LivingDocsService and assert that NO captured analytics payload
 // contains the canary, and that every captured payload passes the property-linter. This is the executable
 // form of the privacy invariant: content cannot leave the machine as analytics even when it flows through the
@@ -103,7 +103,7 @@ suite('analytics canary E2E (plan 36 iter 2: content never leaves via the live s
 		const configurationService = { getValue: () => true, onDidChangeConfiguration: Event.None } as unknown as IConfigurationService;
 		const notificationService = { info: () => undefined } as unknown as INotificationService;
 		// A model proxy that is "healthy" and returns a chat reply proposing an edit whose new text ALSO carries
-		// the canary - the worst case: even a proposal built from confidential prose must not leak into analytics.
+		// the canary - the worst case: even a change built from confidential prose must not leak into analytics.
 		const modelReply = JSON.stringify({ reply: '', edits: [{ heading: 'Weekly Report', oldText: `Commentary: ${CANARY} drove the quarter, up sharply.`, newText: `Commentary: ${CANARY} held steady this quarter.`, rationale: 'tone' }], inserts: [] });
 		const requestService = {
 			request: async (options: { url?: string }) => {
@@ -131,8 +131,8 @@ suite('analytics canary E2E (plan 36 iter 2: content never leaves via the live s
 		const service = makeService(analytics);
 		await service.loadDocument(DOC);
 
-		// Drive the paths that emit: a chat proposal (proposal_created), sync (source_synced), export/publish
-		// (export_or_publish), a skill (skill_invoked), and resolve the proposal (proposal_resolved) + restore.
+		// Drive the paths that emit: a chat change (change_created), sync (source_synced), export/publish
+		// (export_or_publish), a skill (skill_invoked), and resolve the change (change_resolved) + restore.
 		await service.sendChatMessage(DOC, 'Please refine the commentary.');
 		const pending = service.getPendingForDoc(DOC);
 		await service.syncFromSources(DOC);

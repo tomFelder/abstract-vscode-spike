@@ -389,7 +389,7 @@ export class ScreenEditor extends EditorPane {
 		]);
 		// Rebuild the away feed against the cutoff captured at open (not a fresh now-cursor) so the section stays
 		// stable across in-session refreshes; track the needs-you transition so the all-clear promotion + event
-		// react as proposals land and are cleared (map-D14).
+		// react as changes land and are cleared (map-D14).
 		const awayFeed = this._buildAwayFeed(this._state.awaySinceMs);
 		const needsYou = this._buildHomeNeedsYou(docs, Date.now());
 		// userName is resolved once on open (it does not change within a session) - carry it across refreshes.
@@ -462,7 +462,7 @@ export class ScreenEditor extends EditorPane {
 	// --- the Tidy verb (doc 22 section 5): propose -> review -> apply, model-free -----------------------
 
 	// "Tidy this project": build the deterministic move plan and show it as an approve/skip review surface.
-	// Every proposed move defaults to approved (the plan is a vetted proposal) but is individually skippable,
+	// Every proposed move defaults to approved (the plan is a vetted change) but is individually skippable,
 	// and NOTHING moves until the explicit Apply below - the review-grammar contract (propose, human disposes).
 	private async _startTidy(): Promise<void> {
 		const plan = await this._livingDocs.buildTidyPlan();
@@ -1015,9 +1015,9 @@ export class ScreenEditor extends EditorPane {
 	// the guide stays visible next to the document + Review rail, and advance to the provenance peek (wow one).
 	// "See it work" runs the whole two-wow demo (doc 20 section D26). The calm shell cannot keep the onboarding
 	// SCREEN webview mounted beside an editor, so this launches the demo document as the stage for BOTH wows:
-	// it generates the demo, prompts the one iteration (so a single red/green proposal is already waiting in
+	// it generates the demo, prompts the one iteration (so a single red/green change is already waiting in
 	// Review - wow two), reveals Review, and opens the demo document. The user then peeks a bound figure (wow
-	// one) and approves the proposal - the service records provenance-peek + first-approve-sample on those
+	// one) and approves the change - the service records provenance-peek + first-approve-sample on those
 	// natural actions and hands off to "bring a real folder" via a notification (see LivingDocsService).
 	private async _onbSeeItWork(): Promise<void> {
 		// The funnel entry: recorded here (consent is resolved by the time the user clicks) rather than on open,
@@ -1055,7 +1055,7 @@ export class ScreenEditor extends EditorPane {
 		await this._livingDocs.sendChatMessage(uri, DEMO_ITERATION_PROMPT);
 	}
 
-	// A step completed in the editor (peek seen / proposal approved): record it and step the card forward.
+	// A step completed in the editor (peek seen / change approved): record it and step the card forward.
 	private _onbAdvance(): void {
 		const step = this._state.onboardingStep ?? 'open';
 		this._livingDocs.recordOnboardingStep(step);
@@ -1370,7 +1370,7 @@ export class ScreenEditor extends EditorPane {
 	}
 
 	// Generate a draft from a template (plan 28, iter 3): the service writes the skeleton, opens the new
-	// document, and drives the chat path so the prose lands as insertion proposals. Reveal the review rail
+	// document, and drives the chat path so the prose lands as insertion changes. Reveal the review rail
 	// so the pending draft is where the user expects it (the same rail every generation lands in).
 	private async _generateFromTemplate(templateUri: string, name?: string, note?: string): Promise<void> {
 		const target = await this._livingDocs.generateFromTemplate(URI.parse(templateUri), name ?? '', note ?? '');
@@ -1379,7 +1379,7 @@ export class ScreenEditor extends EditorPane {
 
 	// Draft a document from selected sources (F17): the sheet posts the checked source files as a JSON array.
 	// The service writes the skeleton, opens the new document and drives the chat path so the draft lands as
-	// reviewable proposals. Reveal the review rail so the pending draft is where the user expects it.
+	// reviewable changes. Reveal the review rail so the pending draft is where the user expects it.
 	private async _generateFromSources(picks?: string, name?: string, note?: string): Promise<void> {
 		const sources = this._parsePicks(picks);
 		if (!sources.length) { return; }
@@ -1390,7 +1390,7 @@ export class ScreenEditor extends EditorPane {
 	// Grow a template from examples (F18): the sheet posts the checked example documents as a JSON array. The
 	// service validates the set (refusing <3 or >10 with a plain-words notice), writes the template skeleton
 	// (which joins the + New picker at once) and drives the chat path so the analysis lands as reviewable
-	// proposals. Reveal the review rail so the named commonalities are where the user expects them.
+	// changes. Reveal the review rail so the named commonalities are where the user expects them.
 	private async _generateTemplateFromExamples(picks?: string, name?: string): Promise<void> {
 		const examples = this._parsePicks(picks);
 		const target = await this._livingDocs.generateTemplateFromExamples(examples, name ?? '');

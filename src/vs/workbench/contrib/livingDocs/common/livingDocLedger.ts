@@ -169,7 +169,7 @@ function auditEntry(docId: string, docTitle: string, blockIds: readonly string[]
 	if (e.action === 'auto-applied') {
 		return { at, kind: 'applied', lead: 'Auto-applied a change in ', doc: ref, tail: '', badge: 'auto-applied · reversible', deepLink: false };
 	}
-	// action === 'approved' (a human accepted the agent's proposal, optionally hand-edited).
+	// action === 'approved' (a human accepted the agent's change, optionally hand-edited).
 	const how = e.via === 'tweaked' ? 'Approved a hand-edited change in ' : 'Approved a change in ';
 	return { at, kind: 'applied', lead: how, doc: ref, tail: '', badge: `by ${user}`, deepLink: false };
 }

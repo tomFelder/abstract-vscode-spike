@@ -5,11 +5,11 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { buildChangePointer, buildTurnPointers, describeRestoredProposals, IInlineWidgetReport } from '../../common/changePointer.js';
+import { buildChangePointer, buildTurnPointers, describeRestoredChanges, IInlineWidgetReport } from '../../common/changePointer.js';
 import { parseLivingDoc } from '../../common/livingDocMarkdown.js';
 import { ILivingDoc, IProposedChange } from '../../common/livingDocsModel.js';
 
-// A document with the block shapes a proposal can land on: plain prose, prose carrying a bound figure, a
+// A document with the block shapes a change can land on: plain prose, prose carrying a bound figure, a
 // bullet list and a table.
 const DOC_MD = [
 	'---',
@@ -107,7 +107,7 @@ suite('livingDocs - the chat transcript change pointer (plan 52 WP-A1)', () => {
 		// The report is a snapshot of one decoration pass. A change proposed AFTER it is missing from `mounted`
 		// simply because it did not exist yet, so absence there is not evidence. Only a change the surface was
 		// asked to decorate and did not mount is. Getting this wrong flashed a wrong "REVIEW" marker onto every
-		// brand-new proposal for the moment between the transcript rendering and the document re-decorating.
+		// brand-new change for the moment between the transcript rendering and the document re-decorating.
 		assert.deepStrictEqual({
 			neverReported: buildChangePointer(proseEdit, doc, undefined).route,
 			reportPredatesTheChange: buildChangePointer(proseEdit, doc, report(['older'], ['older'])).route,
@@ -125,7 +125,7 @@ suite('livingDocs - the chat transcript change pointer (plan 52 WP-A1)', () => {
 		const pointer = buildChangePointer(proseEdit, doc, report(['p1'], ['p1']));
 		assert.deepStrictEqual({
 			pointer,
-			// The whole reason the model is structural: nothing on it repeats the proposal's words. A pointer
+			// The whole reason the model is structural: nothing on it repeats the change's words. A pointer
 			// that carried `newText` would be the second copy this package exists to remove.
 			carriesProse: JSON.stringify(pointer).includes('accelerated sharply'),
 		}, {
@@ -181,12 +181,12 @@ suite('livingDocs - the chat transcript change pointer (plan 52 WP-A1)', () => {
 		]);
 	});
 
-	test('a restored turn says what BECAME of its proposals - approved, rejected, or never reviewed', () => {
-		// The defect (#312 fix round 2): every restored proposal printed the same sentence, "changes waiting for
+	test('a restored turn says what BECAME of its changes - approved, rejected, or never reviewed', () => {
+		// The defect (#312 fix round 2): every restored change printed the same sentence, "changes waiting for
 		// review are cleared when the workspace closes". True of a change nobody reviewed; false of one the user
 		// APPROVED, which is on disk and in the History tab. The app knew and said the wrong thing anyway.
 		const say = (proposed: number, approved?: number, rejected?: number) => {
-			const note = describeRestoredProposals(proposed, approved, rejected);
+			const note = describeRestoredChanges(proposed, approved, rejected);
 			return note ? `${note.tag}${note.applied ? '*' : ''} ${note.text}` : undefined;
 		};
 		assert.deepStrictEqual({
@@ -201,7 +201,7 @@ suite('livingDocs - the chat transcript change pointer (plan 52 WP-A1)', () => {
 			// A turn that proposed nothing draws nothing at all - the chip is not a permanent fixture.
 			none: say(0),
 			// Nonsense counts (a hand-edited or future-versioned storage value) are clamped, never spoken: more
-			// outcomes than proposals would print a sentence whose own numbers do not add up.
+			// outcomes than changes would print a sentence whose own numbers do not add up.
 			overClaimed: say(1, 5, 5),
 		}, {
 			// The one outcome that LANDED, and the only one marked as applied.

@@ -83,7 +83,7 @@ suite('AnalyticsService (plan 36: consent + identity + local sink)', () => {
 	test('every captured event goes to the LOCAL sink, never a PostHog capture endpoint', () => {
 		const { service, request } = make();
 		service.setConsent(true);
-		service.capture('proposal_resolved', { resolution: 'approve', bulk: false });
+		service.capture('change_resolved', { resolution: 'approve', bulk: false });
 		service.capture('undo_after_approve', { depth: 1 });
 		const external = request.sent.filter(s => !s.url.endsWith('/event'));
 		assert.deepStrictEqual(external, [], 'no event may leave the machine: every write is to the local /event sink');

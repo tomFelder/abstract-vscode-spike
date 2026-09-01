@@ -232,7 +232,7 @@ export interface IAgentLoopOptions {
 	 * A throw here is contained and IGNORED - deliberately, and unlike every other host seam. The observer
 	 * is a notification sink: the event is already in the append-only trace and `result.events` carries it
 	 * regardless, so nothing is lost or misreported. A broken steps-feed renderer must not be able to kill
-	 * a run whose proposals have already landed in the change store.
+	 * a run whose changes have already landed in the change store.
 	 */
 	readonly onEvent?: (event: AgentLoopEvent) => void;
 }

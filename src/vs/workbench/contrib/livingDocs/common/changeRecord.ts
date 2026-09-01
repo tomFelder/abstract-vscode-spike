@@ -11,7 +11,7 @@ import { ChangeKind, IBulkCandidate, IProposedChange } from './livingDocsModel.j
 // The `Change` record (docs/30 sections 2.1 and 5): the single persisted home for a change's identity,
 // state and count (invariant I5). Today the pending queue lives in `_pending`, a plain in-memory map on
 // the service (`livingDocsService.ts:462`), which is why a count can be re-derived three different ways
-// and why a crash loses every proposal. The record below is what replaces it.
+// and why a crash loses every change. The record below is what replaces it.
 //
 // Two properties carry most of the design:
 //
@@ -56,7 +56,7 @@ export type AttentionReason =
 	| 'human-edit'
 	/** The reviewer approved it and the apply did not land (invariant I1). */
 	| 'apply-failed'
-	/** The change describes text that is not where it says it is - a proposal against a document that never existed. */
+	/** The change describes text that is not where it says it is - a change against a document that never existed. */
 	| 'anchor-invalid';
 
 /**
@@ -140,9 +140,9 @@ export type AnchorOutcome = IAnchorLanded | IAnchorFailed;
  * a label wrong, never a decision wrong.
  */
 export interface IChangeDisplay {
-	/** The owning document's title at proposal time, for grouping in the review rail. */
+	/** The owning document's title at change time, for grouping in the review rail. */
 	readonly docTitle?: string;
-	/** The parsed block id the proposal resolved to. Advisory: block ids are regenerated on every parse. */
+	/** The parsed block id the change resolved to. Advisory: block ids are regenerated on every parse. */
 	readonly blockId?: string;
 	/** The human address the card shows ("Commentary"). */
 	readonly blockLabel?: string;
@@ -184,7 +184,7 @@ export interface IChangeDisplay {
  * Project a persisted change onto the shape the shipped review surfaces render.
  *
  * The rail, the inline widgets, the Home tiles and the cross-document review screen all read
- * `IProposedChange`, and they keep reading it: the store replaces where a proposal LIVES, not what a card
+ * `IProposedChange`, and they keep reading it: the store replaces where a change LIVES, not what a card
  * looks like. So `_pending` becomes a derived view - this function is the derivation - and there is exactly
  * one persisted home for identity, state and count (invariant I5).
  *
@@ -230,7 +230,7 @@ export function toProposedChange(change: IChange): IProposedChange {
  * The store carries four non-pending, non-terminal states and a named reason for each; the shipped card has
  * one boolean-ish `applyFailure` it renders a "needs your attention" treatment from. Mapping DOWN to it here
  * keeps the surfaces working unchanged while the store keeps the full truth - and the mapping is total, so
- * no store state can reach a card as though it were an ordinary pending proposal.
+ * no store state can reach a card as though it were an ordinary pending change.
  */
 function attentionFailure(change: IChange): BlockApplyFailure | undefined {
 	if (change.status === 'pending' || isTerminalStatus(change.status)) {
@@ -271,13 +271,13 @@ export interface IChangeThreadEntry {
  * A persisted change: the unit of decision, and the store's only currency.
  *
  * Identity is decided by provenance, not geometry (docs/30 section 2.1). A human edit underneath never
- * re-diffs a proposal into a new change - it flips this one to `needs-attention` on the same id. An agent
+ * re-diffs a change into a new change - it flips this one to `needs-attention` on the same id. An agent
  * revision stacks a {@link IChangeVersion}. A later turn over the same region sets `supersededBy` rather
  * than versioning, so the superseded change keeps its own audit trail instead of being overwritten.
  */
 export interface IChange {
 	readonly id: string;
-	/** The proposal batch this change arrived in; the unit a surgical retry replays. */
+	/** The change batch this change arrived in; the unit a surgical retry replays. */
 	readonly setId: string;
 	/** Every end of the change. One entry for an ordinary edit; two or more for a move. */
 	readonly anchors: readonly IChangeAnchor[];
@@ -447,7 +447,7 @@ export function anchorsOverlap(a: IChangeAnchor, b: IChangeAnchor): boolean {
  * so the store can record them as needing attention rather than applying them over a decision.
  *
  * Human edits are deliberately NOT rebased by this function: the store has no map of what a person typed,
- * so a proposal underneath one flips to `needs-attention` instead. Guessing there is how anchored
+ * so a change underneath one flips to `needs-attention` instead. Guessing there is how anchored
  * search/replace earns its defect families.
  *
  * Returns the rebased anchors, or `undefined` when the change overlaps the write and cannot be moved.

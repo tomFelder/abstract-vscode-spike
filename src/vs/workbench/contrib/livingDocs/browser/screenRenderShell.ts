@@ -332,7 +332,7 @@ export interface IProjectRunScreenState {
 	/**
 	 * True when the run paused mid-flight on the spent daily budget (map-D15; F14 item 3): the swarm's
 	 * not-yet-run tiles render as honest `skipped` (they never ran) and the heading reads the calm plain-words
-	 * pause - finished proposals stay reviewable, and the run renders as neither a failure nor an all-clear.
+	 * pause - finished changes stay reviewable, and the run renders as neither a failure nor an all-clear.
 	 */
 	readonly paused?: boolean;
 	/**

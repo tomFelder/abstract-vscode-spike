@@ -359,7 +359,7 @@ test('pinned model + signed-out OAuth door -> typed door_unavailable, and the op
 			error: buffered.json.error,
 			// The streamed form carries the SAME typed verdict, plus the plain-words prose in the paused-run
 			// shape the cap and re-auth messages already use - so a person reads an honest sentence and the run
-			// pauses with its proposals intact, rather than a stream that ends having said nothing.
+			// pauses with its changes intact, rather than a stream that ends having said nothing.
 			streamedErrorType: streamedError.error.type,
 			streamedErrorDoor: streamedError.error.door,
 			streamedProse: streamedText(streamed.text),

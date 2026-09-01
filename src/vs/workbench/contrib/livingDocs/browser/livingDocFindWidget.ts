@@ -162,7 +162,7 @@ function findIsOpen(){ return !!(findEl && !findEl.hidden); }
 /** The raw-Markdown source textarea, when the editor is in raw mode; null in the ordinary (ProseMirror) mode. */
 function findRawTextarea(){ return root ? root.querySelector('textarea.raw') : null; }
 // Paint every match, with the current one in its own stronger colour, using the CSS Custom Highlight API.
-// Nothing is inserted into the document DOM, so a pending proposal's inline diff widgets cannot be disturbed.
+// Nothing is inserted into the document DOM, so a pending change's inline diff widgets cannot be disturbed.
 function findPaint(){
 	if (!window.CSS || !CSS.highlights || typeof Highlight !== 'function'){ return; }
 	const all = new Highlight(), cur = new Highlight();
@@ -313,7 +313,7 @@ function findRun(keepCurrent, scroll){
 	findPaint();
 	if (scroll){ findScrollToCurrent(); }
 }
-/** Re-run an OPEN find after the document changed underneath it (a keystroke, a save, an approved proposal). */
+/** Re-run an OPEN find after the document changed underneath it (a keystroke, a save, an approved change). */
 function findRefresh(){ if (findIsOpen()){ findRun(true, false); } }
 function findStep(delta){
 	if (!findHits.length){ return; }
@@ -463,7 +463,7 @@ function openFind(){
 	const wasOpen = findIsOpen();
 	findEl.hidden = false;
 	// Sit the card clear of whatever chrome is sticky at the top (the toolbar, and the review bar when a
-	// proposal is pending), measured rather than guessed so a pending proposal never hides the widget.
+	// change is pending), measured rather than guessed so a pending change never hides the widget.
 	let top = 12;
 	const bars = root ? root.querySelectorAll('.etoolbar, .reviewbar, .rawtop') : [];
 	for (let i = 0; i < bars.length; i++){ const b = bars[i].getBoundingClientRect(); if (b.height){ top = Math.max(top, b.bottom + 10); } }

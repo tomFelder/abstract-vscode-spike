@@ -76,7 +76,7 @@ export const HASHED_MAX_LENGTH = 80;
 export type AnalyticsEventSchema = Readonly<Record<string, AnalyticsPropKind>>;
 
 /**
- * The typed event dictionary (doc 15 §3.1). Every product event is registered here with a schema, whether
+ * The typed event dictionary (doc 15 section 3.1). Every product event is registered here with a schema, whether
  * or not its surface exists yet - registering the name now keeps later plans from drifting the schema when
  * they wire the surface. Events whose surface exists today are emitted (iter 2); the rest are reserved.
  */
@@ -92,8 +92,8 @@ export const ANALYTICS_EVENTS = {
 	model_spend: { provider: 'label', cost_cents: 'count', daily_total_cents: 'count', cap_hit: 'flag' },
 
 	// --- audit-mirror events (emitted once, at the audit layer) ---
-	proposal_created: { source_kind: 'label', change_kind: 'label', confidence: 'label' },
-	proposal_resolved: { resolution: 'label', latency_ms: 'count', bulk: 'flag' },
+	change_created: { source_kind: 'label', change_kind: 'label', confidence: 'label' },
+	change_resolved: { resolution: 'label', latency_ms: 'count', bulk: 'flag' },
 	run_started: { scope_size: 'count' },
 	run_finished: { scope_size: 'count', cancelled: 'flag', failures: 'count', duration_ms: 'count' },
 	source_synced: { kind: 'label', ok: 'flag', staleness_age_ms: 'count' },
@@ -114,6 +114,7 @@ export type AnalyticsEventName = keyof typeof ANALYTICS_EVENTS;
  * U+FF3C) so a path dressed in look-alike separators cannot slip past the ASCII-only guard. Defence in depth:
  * the emitters only ever route bounded enums into label/hashed slots, but a future emitter mistake is caught here.
  */
+// allow-any-unicode-next-line
 const PATH_SEPARATOR = /[/\\⁄∕⧸／＼]/;
 
 /** One property-linter finding: the offending key + a plain-words reason. */

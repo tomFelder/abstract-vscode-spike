@@ -30,7 +30,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { AMBER, FONT, GREEN, HAIRLINE, INDIGO, INK, PAPER, RADIUS, RED, SHADOW, TRACKING, TYPE } from '../common/abstractTokens.js';
 import { applyFailureRailNote } from '../common/applyOutcome.js';
-import { buildTurnPointers, describeRestoredProposals, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
+import { buildTurnPointers, describeRestoredChanges, IChangePointer, inlineWidgetAnswer } from '../common/changePointer.js';
 import { IChatSession, splitTabs, visibleTabCap } from '../common/chatSessions.js';
 import { addressLabel, resolveBlockLine } from '../common/livingDocAddress.js';
 import { CLOSE_CHAT_COMMAND_ID, IChatMessage, IChatStep, ILivingDocsService, IModelOption, ISkillCheck, ModelDoor, ModelProvider, ModelReadiness, ModelTier, runBulkVerb } from '../common/livingDocs.js';
@@ -292,7 +292,7 @@ export class ReviewRailView extends ViewPane {
 		// Chat (and the rail) are available on EVERY open document (decision 48), not just living ones -
 		// "living" is a data-binding badge, not a chat gate. The Skills/checks section stays tied to real
 		// bindings via getSkillReport (which returns nothing for a plain doc), so a plain doc gets the chat
-		// surface + any chat proposals without the source-bound affordances.
+		// surface + any chat changes without the source-bound affordances.
 		const resource = this._editors.activeEditor?.resource;
 		return resource && this._livingDocs.getDoc(resource) ? resource : undefined;
 	}
@@ -749,7 +749,7 @@ export class ReviewRailView extends ViewPane {
 			// The real fold of the change store (docs/30 stage 1). Until R6 this said "0 of N decided" because
 			// the rail genuinely had no memory of a batch - the queue was renderer memory that vanished on
 			// reload, so a decided change left no trace to count. It now reads the store's own progress over
-			// the proposal SETS still holding something open, and says so when the review is being resumed
+			// the change SETS still holding something open, and says so when the review is being resumed
 			// from a previous session rather than started in this one.
 			const progress = this._livingDocs.getReviewProgress();
 			left.textContent = progress.resumed
@@ -992,7 +992,7 @@ export class ReviewRailView extends ViewPane {
 	}
 
 	// Pin 13.5: render a clickable "Line N" address citation that scrolls the editor to the addressed block.
-	// Shared by the Review cards and the chat meaning-change proposal cards so every rail surface speaks the same
+	// Shared by the Review cards and the chat meaning-change cards so every rail surface speaks the same
 	// address vocabulary AND makes it actionable. The label is the address-model string (`addressLabel`); clicking
 	// opens the block's document and reveals the block via the reveal-block seam (navigate-only - never approves,
 	// never re-tabs the rail). The durable block id is resolved to its current ordinal at click time, so a doc that
@@ -1640,7 +1640,7 @@ export class ReviewRailView extends ViewPane {
 
 		// A fan-out with a model outage (F14, issue #123): a NAMED error naming the model as unreachable and
 		// listing every document that failed, plus a "Retry failed" that re-runs ONLY those documents. Distinct
-		// from `failed` (a whole-turn failure): a partial fan-out still queued proposals, so the proposal cards
+		// from `failed` (a whole-turn failure): a partial fan-out still queued changes, so the change cards
 		// are rendered BELOW the error banner - the surface never reads as a silent all-clear.
 		if (m.failedDocs && m.failedDocs.length) {
 			const err = append(col, $('div'));
@@ -1657,13 +1657,13 @@ export class ReviewRailView extends ViewPane {
 			retry.style.cssText = `align-self:flex-start;border:1px solid ${PAPER.control};border-radius:7px;padding:5px 15px;background:${PAPER.card};color:${INK.body};font:600 12.5px/1 ${FONT.sans};cursor:pointer`;
 			retry.textContent = 'Retry failed';
 			this._renderDisposables.add(addDisposableListener(retry, 'click', () => { const d = this._activeDoc(); if (d) { this._livingDocs.retryFailedDocs(d); } }));
-			// Fall through so any proposals this partial run DID land still render as review cards below.
-			this._appendProposalPointers(col, m);
+			// Fall through so any changes this partial run DID land still render as review cards below.
+			this._appendChangePointers(col, m);
 			return;
 		}
 
 		// A genuinely failed turn (plan 27 iter 3): an honest error line + an inline Retry that re-sends the
-		// same user message (the service drops this failed turn and re-runs). No prose / proposals follow.
+		// same user message (the service drops this failed turn and re-runs). No prose / changes follow.
 		if (m.failed) {
 			const err = append(col, $('div'));
 			err.style.cssText = `display:flex;flex-direction:column;gap:9px;font:${TYPE.uiBody};color:${AMBER.label};background:${AMBER.bg};border:1px solid ${AMBER.border};border-radius:${RADIUS.input};padding:9px 11px`;
@@ -1693,8 +1693,8 @@ export class ReviewRailView extends ViewPane {
 			tag.textContent = 'STOPPED';
 		}
 
-		// One compact pointer per proposal this turn produced (plan 52 WP-A1) - the document owns the controls.
-		this._appendProposalPointers(col, m);
+		// One compact pointer per change this turn produced (plan 52 WP-A1) - the document owns the controls.
+		this._appendChangePointers(col, m);
 	}
 
 	/**
@@ -1715,7 +1715,7 @@ export class ReviewRailView extends ViewPane {
 			: localize('livingDocs.chat.clipped', "This answer was shortened when it was saved.");
 	}
 
-	// Plan 52 WP-A1 (issue #301): one POINTER per proposal this turn produced - never a second copy of it.
+	// Plan 52 WP-A1 (issue #301): one POINTER per change this turn produced - never a second copy of it.
 	//
 	// This used to render a full review card: the whole proposed sentence repeated verbatim, under its own
 	// Apply / Reject. The document was already rendering the same change as an inline widget with its own
@@ -1728,19 +1728,19 @@ export class ReviewRailView extends ViewPane {
 	// Read from the LIVE pending set by id, so a pointer disappears the moment its change is approved or
 	// rejected anywhere - the inline widget, the Review tab, Accept all. The transcript stays honest about
 	// what is still open. Shared by the plain assistant turn and the F14 partial-failure turn.
-	private _appendProposalPointers(col: HTMLElement, m: IChatMessage): void {
+	private _appendChangePointers(col: HTMLElement, m: IChatMessage): void {
 		// A turn read back from storage (plan 52 WP-B residuals, issue #312) carries a COUNT of the changes it
 		// proposed, never their ids. Pending changes live in memory only, so a restart clears them and any stored
 		// id would be a pointer that leads nowhere - the one thing a pointer must never be. The count is said
 		// plainly instead, so a restored turn that proposed work still reads as having proposed work.
 		if (m.restored) {
-			// ...and it names what BECAME of them. It used to say one thing about every restored proposal -
+			// ...and it names what BECAME of them. It used to say one thing about every restored change -
 			// "changes waiting for review are cleared when the workspace closes" - which is true of a change nobody
 			// reviewed and false of one the user approved, which is on disk and in the History tab three inches
 			// away (#312 fix round 2). The outcome is recorded as the user acts, so it is read off the record here
-			// rather than assumed. The sentences themselves live in `describeRestoredProposals`, where they are
+			// rather than assumed. The sentences themselves live in `describeRestoredChanges`, where they are
 			// unit-tested; this branch only draws the one it is given.
-			const note = describeRestoredProposals(m.proposedCount, m.approvedCount, m.rejectedCount);
+			const note = describeRestoredChanges(m.proposedCount, m.approvedCount, m.rejectedCount);
 			if (!note) { return; }
 			const gone = append(col, $('div'));
 			gone.style.cssText = `display:flex;align-items:center;gap:7px;border:1px dashed ${note.applied ? GREEN.border : HAIRLINE.strong};border-radius:${RADIUS.input};padding:7px 10px;font:400 11.5px/1.4 ${FONT.sans};color:${INK.meta}`;
@@ -1915,7 +1915,7 @@ export class ReviewRailView extends ViewPane {
 		});
 	}
 
-	// Reject one proposal, first offering an optional plain-words reason (1f frame-3: "the optional reason
+	// Reject one change, first offering an optional plain-words reason (1f frame-3: "the optional reason
 	// becomes context for the next derivation"). Escape or an empty note still rejects - the reason is never
 	// mandatory. The reason rides through reject() onto the audit row, which persists and shows it in History.
 	private async _rejectWithReason(changeId: string): Promise<void> {
@@ -2092,7 +2092,9 @@ export class ReviewRailView extends ViewPane {
 		// where a reader decides how much to trust what they are about to set off - and the product keeps it:
 		// every edit an agent produces lands as a pending change in this rail, never in the file.
 		const promise = append(footer, $('div.ldp-composer-promise'));
-		promise.textContent = localize('livingDocs.composer.proposalsOnly', "Edits land as proposals you review - nothing applies silently.");
+		// The KEY renames with the rest of the vocabulary (#378); the string VALUE still says "proposals"
+		// because user-facing copy is #404's scope. The mismatch on this line is deliberate until #404 lands.
+		promise.textContent = localize('livingDocs.composer.changesOnly', "Edits land as proposals you review - nothing applies silently.");
 
 		// Keep the cursor in the composer across the re-render that each message triggers.
 		if (doc && !busy) { input.focus(); }

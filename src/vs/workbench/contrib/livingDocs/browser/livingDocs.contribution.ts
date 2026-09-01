@@ -490,7 +490,7 @@ registerAction2(class ApproveAllChangesAction extends Action2 {
 		if (!(input instanceof LivingDocEditorInput)) { return; }
 		// The SAME bulk path every button runs (docs/30 invariant I4). A chord is easier to press than a button
 		// is to click, so if either route deserved the confirm it is this one - it is not skipped here on the
-		// excuse that the user asked for speed. Scoped by the proposals' OWN docId (#253) so a URI-form drift
+		// excuse that the user asked for speed. Scoped by the changes' OWN docId (#253) so a URI-form drift
 		// cannot silently capture an empty set.
 		const docId = livingDocs.pendingDocIdFor(input.resource);
 		if (!docId) { return; }
@@ -1285,7 +1285,7 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		// is the active surface (RailVisibilityContribution below). A folder now lands on Project Home (a full-width
 		// screen with neither rail); the rails come up once the user opens a document from it. Because the
 		// walkthrough demo no longer runs on entry, the review rail reflects only real pending work, never
-		// left-over demo proposals.
+		// left-over demo changes.
 	}
 
 	// Execute the cold-start routing decision (map-D2, WP-H, WP-I): the cold start always lands on Project Home.
@@ -1354,7 +1354,7 @@ registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContri
 //
 // The RECORDING RULE (plan 42 slice L4, fix-round for defect 1): a manual choice is recorded ONLY by an
 // explicit gesture on the rail itself. Every focusPanel-driven reveal -- the edge affordance, an AI
-// invocation, the L2 held-prompt, a proposal arriving -- is a PEEK: it fires onDidRequestPanel, which we
+// invocation, the L2 held-prompt, a change arriving -- is a PEEK: it fires onDidRequestPanel, which we
 // guard so the openView-driven visibility change is not mistaken for a deliberate `open`. The sole
 // recorder is the rail's calm collapse control (onDidRequestCollapseReviewRail -> `collapsed`). After the
 // fix, NO UI gesture records `open`; that is intentional -- precedence still honours a stored `collapsed`,
@@ -1392,7 +1392,7 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	// accumulate disposables on the class store).
 	private readonly _deferred = this._register(new MutableDisposable());
 	// (plan 42 slice L4, defect 1) Every reveal driven by ILivingDocsService.focusPanel() -- the AI door
-	// affordance, a chat send, the L2 held-prompt, a proposal arriving -- fires onDidRequestPanel and then
+	// affordance, a chat send, the L2 held-prompt, a change arriving -- fires onDidRequestPanel and then
 	// un-hides the auxiliary bar via IViewsService.openView(). Those reveals are PEEKS, not decisions: only
 	// an explicit collapse/expand gesture on the rail itself records a manual choice. openView un-hides the
 	// part on a LATER microtask, so a synchronous flag would already be cleared; this clears the guard on a

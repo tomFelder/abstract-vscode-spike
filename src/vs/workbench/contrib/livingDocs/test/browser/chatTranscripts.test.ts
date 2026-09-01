@@ -118,7 +118,7 @@ suite('livingDocs - chat transcripts in workspace storage (plan 52 WP-B residual
 
 	test('a restored turn keeps the facts only its first write knew, however many times it is saved again', () => {
 		// D2/D3 of fix round 1 (#312): the writer re-derived both honesty markers from evidence a RESTORED turn
-		// no longer carries - a clipped body is now exactly the cap long (not `>` it), and the live proposal ids
+		// no longer carries - a clipped body is now exactly the cap long (not `>` it), and the live change ids
 		// died with the process that made them. So one ordinary save in an unrelated chat erased the "this was
 		// shortened" warning and the record that the agent had proposed work at all. Two round trips is the
 		// smallest reproduction: the first was always fine, the second was where the truth quietly went.
@@ -134,7 +134,7 @@ suite('livingDocs - chat transcripts in workspace storage (plan 52 WP-B residual
 		]);
 	});
 
-	test('what became of a turn\'s proposals survives every later save, and can never out-count them', () => {
+	test('what became of a turn\'s changes survives every later save, and can never out-count them', () => {
 		// #312 fix round 2: `proposedCount` is honest about HOW MANY and silent about WHAT HAPPENED, so the rail
 		// filled the silence with a guess - it told an APPROVED change it had been thrown away when the workspace
 		// closed. The outcome is recorded on the turn as the user acts, and has to survive the same two round
@@ -154,7 +154,7 @@ suite('livingDocs - chat transcripts in workspace storage (plan 52 WP-B residual
 			untouched: counts(twice(turn())),
 			// A restored turn has no `proposedIds` left, so these counts are all it has - and they must not decay.
 			restoredAgain: counts(twice({ role: 'assistant', content: 'x', restored: true, proposedCount: 2, approvedCount: 2 })),
-			// More outcomes than proposals cannot be stored: the rail builds one sentence out of these numbers and
+			// More outcomes than changes cannot be stored: the rail builds one sentence out of these numbers and
 			// it has to add up. The overflow is clamped away rather than carried.
 			overClaimed: counts(twice({ role: 'assistant', content: 'x', proposedIds: ['c1'], approvedCount: 4, rejectedCount: 4 })),
 		}, {

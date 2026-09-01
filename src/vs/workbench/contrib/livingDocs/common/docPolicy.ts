@@ -105,7 +105,7 @@ export function docPolicyToneHex(tone: DocPolicyTone): string {
 /**
  * The truthful, plain-words refusal a `never` document produces when an agent would otherwise change it
  * (issue #257). Names the document AND the policy that protects it, so the refusal reads as an honoured
- * choice - "you dialled Never for this doc" - not a silent nothing. Used by the chat/fan-out proposal path
+ * choice - "you dialled Never for this doc" - not a silent nothing. Used by the chat/fan-out change path
  * to speak the refusal, so the copy lives in ONE place beside the policy grammar it enforces (P2). This is
  * the enforcement contract wearing words: the human dialled autonomy off, and the agent says so.
  */

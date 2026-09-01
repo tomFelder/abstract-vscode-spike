@@ -19,11 +19,11 @@ import { localize } from '../../../../nls.js';
 // directly and reused by the single-doc chat composer and the fan-out composer.
 
 /**
- * Why one parsed edit or insert never became a queued proposal. Each value is a distinct, explainable
+ * Why one parsed edit or insert never became a queued change. Each value is a distinct, explainable
  * refusal the receipt can NAME, so a shortfall never degrades into "some changes did not apply".
  */
 export type ChatDropReason =
-	/** The document is dialled "Never change this doc", so no proposal is ever created for it. */
+	/** The document is dialled "Never change this doc", so no change is ever created for it. */
 	| 'policy'
 	/** The quoted text matched a heading; chat rewrites prose, never the document's structure. */
 	| 'heading'
@@ -42,7 +42,7 @@ export type ChatDropReason =
 export interface ITurnReceiptInput {
 	/** How many edits + inserts the parsed reply claimed (0 when the model only answered in prose). */
 	readonly claimed: number;
-	/** How many proposals actually landed in the review queue. */
+	/** How many changes actually landed in the review queue. */
 	readonly queued: number;
 	/** One entry per claimed-but-dropped edit, in the order the consumer processed them. */
 	readonly drops: readonly ChatDropReason[];
@@ -110,7 +110,7 @@ function describeDrops(drops: readonly ChatDropReason[]): string {
  *  1. `claimed > 0` and `queued === 0` -> a FAILURE. The model's prose is discarded (it would be success
  *     prose over a document nothing happened to) and the content is the named reconciliation instead:
  *     "I described 2 changes but could not apply any of them: 1 targeted a heading, 1 was blocked ...".
- *  2. `queued > 0` with drops -> a partial. The reply is kept (the proposals that landed are real) and a
+ *  2. `queued > 0` with drops -> a partial. The reply is kept (the changes that landed are real) and a
  *     named shortfall line is appended, so the count the user reads matches the count the rail holds.
  *  3. no drops -> nothing to reconcile: the reply passes through untouched.
  *

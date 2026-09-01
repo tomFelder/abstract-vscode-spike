@@ -9,7 +9,7 @@ import { localize } from '../../../../nls.js';
 //
 // `applyBlockEdit` used to return a bare `string`, and its fail-soft path returned the block's text back
 // UNCHANGED. That is indistinguishable from success by construction: an edit whose anchor had moved on since
-// the proposal was queued returned exactly what a successful whole-block no-op edit returns, so `approve()`
+// the change was queued returned exactly what a successful whole-block no-op edit returns, so `approve()`
 // could not tell the two apart and recorded `approved` for a document it had not touched. The user got a
 // cleared review rail, an approval in the audit trail and History, and a file on disk that still said the old
 // thing - the single worst trust breach in the product, because it is a LIE the system tells confidently.

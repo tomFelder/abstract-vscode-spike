@@ -35,12 +35,12 @@ suite('livingDocs fanoutOutcome (F14, issue #123)', () => {
 		assert.notStrictEqual(outcome.content, FANOUT_NO_CHANGES);
 	});
 
-	test('partial success: leads with the proposals that landed, then names the failures + Retry failed', () => {
+	test('partial success: leads with the changes that landed, then names the failures + Retry failed', () => {
 		const failedDocs = [doc('b', 'Acceptable Use')];
 		const outcome = summarizeFanoutRun({ proposedCount: 2, failedDocs });
 		assert.strictEqual(outcome.isError, true);
 		assert.deepStrictEqual(outcome.failedDocs, failedDocs, 'only the failed doc is offered for retry (surgical)');
-		assert.ok(/2 changes proposed/.test(outcome.content), 'reports the proposals that landed');
+		assert.ok(/2 changes proposed/.test(outcome.content), 'reports the changes that landed');
 		assert.ok(/The model was not available for 1 document: Acceptable Use/.test(outcome.content), 'names the single failure');
 		assert.ok(/Retry failed to re-run just those/.test(outcome.content), 'the retry re-runs just the failed docs');
 		assert.ok(!/no changes|nothing to change/i.test(outcome.content), 'never an all-clear on a partial success');
@@ -55,7 +55,7 @@ suite('livingDocs fanoutOutcome (F14, issue #123)', () => {
 		assert.ok(/^1 change proposed\./.test(oneChange.content), 'singular "1 change"');
 	});
 
-	test('budget-cap pause: the cap message, a pause (not an error, not an all-clear), finished proposals kept', () => {
+	test('budget-cap pause: the cap message, a pause (not an error, not an all-clear), finished changes kept', () => {
 		const outcome = summarizeFanoutRun({ proposedCount: 3, failedDocs: [], pausedMessage: 'You\'ve used today\'s included usage.' });
 		assert.strictEqual(outcome.isPaused, true, 'the run paused');
 		assert.strictEqual(outcome.isError, false, 'a pause is NOT a failure');
@@ -77,9 +77,9 @@ suite('livingDocs fanoutOutcome (F14, issue #123)', () => {
 		assert.strictEqual(outcome.content, 'Tightened the intros.');
 	});
 
-	test('clean run with proposals but no reply carries empty content (the cards speak)', () => {
+	test('clean run with changes but no reply carries empty content (the cards speak)', () => {
 		const outcome = summarizeFanoutRun({ proposedCount: 2, failedDocs: [] });
-		assert.strictEqual(outcome.content, '', 'proposals carry the meaning, so no prose is forced');
+		assert.strictEqual(outcome.content, '', 'changes carry the meaning, so no prose is forced');
 	});
 
 	test('clean run that genuinely proposed nothing reads the neutral no-change line (the ONLY all-clear path)', () => {

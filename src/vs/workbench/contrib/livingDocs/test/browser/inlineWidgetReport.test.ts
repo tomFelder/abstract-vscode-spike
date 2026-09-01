@@ -61,7 +61,7 @@ suite('livingDocs - the inline-widget report has a lifetime (plan 52 WP-A1 fix 2
 		'Growth remained steady this week.',
 	].join('\n') + '\n';
 
-	// The same document AFTER an edit made outside Abstract while it was closed - the anchor the proposal was
+	// The same document AFTER an edit made outside Abstract while it was closed - the anchor the change was
 	// built against is gone, so the surface that reopens it will mount nothing for that change.
 	const WEEKLY_MD_REWRITTEN = [
 		'---',
@@ -128,7 +128,7 @@ suite('livingDocs - the inline-widget report has a lifetime (plan 52 WP-A1 fix 2
 		service.clearInlineWidgets(WEEKLY);
 		seen.push(`closed: ${route(service, WEEKLY, 'c1')}`);
 
-		// Something outside Abstract rewrites the paragraph the proposal was anchored to.
+		// Something outside Abstract rewrites the paragraph the change was anchored to.
 		setOnDisk(WEEKLY, WEEKLY_MD_REWRITTEN);
 
 		// The click reopens the document. The load retires anything remembered, so the click waits for the fresh
@@ -156,7 +156,7 @@ suite('livingDocs - the inline-widget report has a lifetime (plan 52 WP-A1 fix 2
 		// it started with - so "mounted", "asked and bare" and "says nothing" must stay three distinct answers.
 		// Collapsing the third into either of the others is what strands readers: read as "mounted" it keeps them
 		// in a document with nothing on it, and read as "bare" it flashes a wrong REVIEW badge onto every
-		// brand-new proposal.
+		// brand-new change.
 		const report = { requested: new Set(['mounted', 'bare']), mounted: new Set(['mounted']) };
 		const answers = (changeId: string) => ({
 			answer: inlineWidgetAnswer(report, changeId),

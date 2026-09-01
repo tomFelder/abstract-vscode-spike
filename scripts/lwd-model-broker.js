@@ -233,7 +233,7 @@ function proxyError(message) {
 
 // The plain-words body the renderer surfaces when the daily included usage is spent (P5: never "rate
 // limit" or "budget"). Shaped as a normal Anthropic message so the existing parser reads it as prose; the
-// `stop_reason: 'pause'` signals the service to pause the run via D15 and keep proposals reviewable.
+// `stop_reason: 'pause'` signals the service to pause the run via D15 and keep changes reviewable.
 // eslint-disable-next-line local/code-no-unexternalized-strings -- a Node script has no nls; this user-facing string is intentionally double-quoted for its apostrophes.
 const CAP_MESSAGE = "You've used today's included usage - picks up tomorrow, or sign in with ChatGPT for unlimited.";
 function capReached() {
@@ -285,7 +285,7 @@ function writeCapStream(res) {
 }
 
 // Emit the plain-words re-auth message as a paused SSE stream (same shape as writeCapStream). The renderer
-// reads the prose and pauses the run (D15) rather than erroring or parsing proposals from it.
+// reads the prose and pauses the run (D15) rather than erroring or parsing changes from it.
 function writeReauthStream(res) {
 	writeSseHead(res);
 	res.write(sseEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: REAUTH_MESSAGE } }));
@@ -297,7 +297,7 @@ function writeReauthStream(res) {
 // The plain-words body the renderer surfaces when the subscription sign-in has lapsed and a silent refresh
 // could not recover it (plan 35 iter 2; P5: never "OAuth token" or "401"). Shaped like the cap message - a
 // normal Anthropic message the parser reads as prose - with `stop_reason: 'pause'` so the run pauses via D15
-// and keeps proposals, rather than dying. The user's next step is to sign in again (or switch to the included
+// and keeps changes, rather than dying. The user's next step is to sign in again (or switch to the included
 // model); this pause is NOT retryable (a retry just refuses again until they re-auth).
 // eslint-disable-next-line local/code-no-unexternalized-strings -- a Node script has no nls; this user-facing string is intentionally double-quoted for its apostrophes.
 const REAUTH_MESSAGE = "Your ChatGPT sign-in needs a refresh - sign in again to keep going, or switch to the included model.";
@@ -1446,7 +1446,7 @@ function doorUnavailable(model, door) {
 // The streamed form. The typed `error` event carries the machine-readable verdict (the renderer's SSE parser
 // ignores event types it does not know, so this is additive), and the prose that follows uses the SAME
 // paused-run shape as the cap and re-auth messages - so a person sees an honest sentence and the run pauses via
-// D15 with its proposals intact, rather than a stream that ends having said nothing.
+// D15 with its changes intact, rather than a stream that ends having said nothing.
 function writeDoorUnavailableStream(res, model, door) {
 	const message = doorUnavailableMessage(model, door);
 	writeSseHead(res);
@@ -1594,7 +1594,7 @@ async function forwardMessages(req, res) {
 	// identifier, it is the thing the cache is partitioned by, and a broker log is not the place for it.
 	console.log(`[lwd-proxy] /v1/messages backend=${backend.name} requested=${requestedModel === undefined ? 'null' : JSON.stringify(forLog(requestedModel))} resolved=${resolvedModel} purpose=${purpose || 'null'} session=${normaliseSessionId(parsed.session_id) ? 'yes' : 'no'}`);
 	// Budget gate (metered backends only): if the day's included usage is already spent, do NOT call the
-	// model - return the plain-words cap message so the renderer pauses the run via D15 and keeps proposals.
+	// model - return the plain-words cap message so the renderer pauses the run via D15 and keeps changes.
 	if (backend.meters && spendMeter.isOverBudget()) {
 		if (streaming) { writeCapStream(res); }
 		else {
