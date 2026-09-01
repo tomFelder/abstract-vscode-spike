@@ -13,7 +13,7 @@ import { anchorAt, FakeChangeDocuments, FakeChangeFileSystem, fakeClock, fakeIds
 // The change store's adversarial suite (docs/30 section 6, store tier). Every test below is written from a
 // failure the product has actually had or a crash window the architecture must survive:
 //
-//   #329  a document mutated after a proposal must never end up with a standing `approved` record.
+//   #329  a document mutated after a change must never end up with a standing `approved` record.
 //   #334  a bulk verb must act on the ids it confirmed, and never on ones queued while the user was reading.
 //   disk full - an approval that cannot be recorded must change nothing, and say so in words.
 //   the crash window - a machine that dies between the write and the record of it, in every branch.
@@ -127,7 +127,7 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 		);
 	});
 
-	test('#329: a document edited under a proposal flips it to needs-attention - unchanged file, no approved record', async () => {
+	test('#329: a document edited under a change flips it to needs-attention - unchanged file, no approved record', async () => {
 		const it = stage();
 		await it.store.open();
 		const changeId = await proposeEdit(it, A, 'Beta.', 'BETA!');
@@ -228,7 +228,7 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 	});
 
 	test('I8: approving one change rebases the others in that document over the store\'s own write, and flags only the overlapping one', async () => {
-		// The store knows exactly what it wrote, so moving the remaining proposals is arithmetic, not
+		// The store knows exactly what it wrote, so moving the remaining changes is arithmetic, not
 		// searching. Without it, accepting the first of five changes would flag the other four - safe and
 		// useless. A change that overlaps what was just written cannot be moved and is recorded as needing
 		// attention instead, because there is no honest way to apply it over a decision the user has made.
@@ -665,7 +665,7 @@ suite('livingDocs changeStore (docs/30 section 5)', () => {
 	});
 
 	test('every interleaving of propose / edit / verb / reload folds to the same state, and a decided change never resurrects', async () => {
-		// Systematically enumerated rather than sampled: three ways the document can move under a proposal,
+		// Systematically enumerated rather than sampled: three ways the document can move under a change,
 		// both verbs, with and without a restart in the middle. Each row asserts the two reconciliations that
 		// matter - I6 (the document contains exactly the approved hunk and nothing else) and I2 (the status
 		// survives a reload, and re-running the same verb over the same captured ids changes nothing).

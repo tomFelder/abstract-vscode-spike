@@ -25,7 +25,7 @@ export const enum ReviewRailManualChoice {
 
 /**
  * The facts the entry decision reads. After issue #363 the only fact that matters is whether the user has
- * already made an explicit choice for this workspace: everything else - a pending proposal, prior chat
+ * already made an explicit choice for this workspace: everything else - a pending change, prior chat
  * history - no longer changes the answer, because the rail now opens by default either way.
  */
 export interface IReviewRailEntryContext {
@@ -38,7 +38,7 @@ export interface IReviewRailEntryContext {
  * (plan 42 slice L4, revised by plan 44-b P2.5 and again by issue #363):
  *
  * 1. An explicit manual COLLAPSE wins: once the user has closed the rail while editing, it stays closed on
- *    every later entry and across restart. A pending proposal does not yank it back open - the 8px amber
+ *    every later entry and across restart. A pending change does not yank it back open - the 8px amber
  *    badge dot on the right rail toggle surfaces it instead (plan 44-b P2.5).
  * 2. Otherwise the rail is OPEN. That covers both an explicit manual open and the true first run, where
  *    nothing is persisted: the chat/review rail is this product's primary surface and must not have to be
@@ -119,7 +119,7 @@ export function treeRailHiddenOnEntry(persistedCollapsed: boolean | undefined): 
 export const enum RailGesture {
 	/**
 	 * A reveal driven by ILivingDocsService.focusPanel(): the slim edge AI-door affordance, an AI
-	 * invocation, the L2 held-prompt choice, or a proposal arriving. This is a PEEK, not a decision.
+	 * invocation, the L2 held-prompt choice, or a change arriving. This is a PEEK, not a decision.
 	 */
 	Peek = 'peek',
 	/** The rail's own calm collapse control was activated: an explicit user gesture to leave the rail. */

@@ -375,7 +375,7 @@ export interface IProposedChange {
 	// shows a human modified the agent's words - a trust signal, not bookkeeping.
 	readonly tweaked?: boolean;
 	// The reviewer APPROVED this change and the apply could not land (docs/30 invariant I1, issue #329): the
-	// document moved on between the proposal and the approval. The change deliberately STAYS pending - it was
+	// document moved on between the change and the approval. The change deliberately STAYS pending - it was
 	// never applied, so it is still the reviewer's call - and carries the named reason so the review rail can
 	// say what happened instead of clearing the card as though the edit had landed.
 	readonly applyFailure?: BlockApplyFailure;
@@ -622,7 +622,7 @@ export function reviewConfidence(change: Pick<IProposedChange, 'kind' | 'confide
 }
 
 /**
- * The self-explaining framing every review surface renders for one proposal (plan 31 iter 2): the kind tag,
+ * The self-explaining framing every review surface renders for one change (plan 31 iter 2): the kind tag,
  * the truthful confidence chip, the model's rationale (empty when it gave none - surfaces then show nothing,
  * never "AI suggested this" filler), and a source chip. Built once here so the inline widget, the review rail
  * and the cross-document cards read identically for the same change. Confidence follows {@link reviewConfidence}
@@ -664,10 +664,10 @@ export function reviewFraming(change: Pick<IProposedChange, 'kind' | 'confidence
  * A chord has no pointer, so it needs a rule the reader can predict before pressing the key. The rule is
  * "the next one you would reach anyway": the FIRST change still pending for the document, in the order the
  * surfaces already draw them (the inline widgets down the page, the Review cards down the rail). So Accept
- * pressed twice accepts the top two, and the reader never has to guess which of five proposals the key hit.
+ * pressed twice accepts the top two, and the reader never has to guess which of five changes the key hit.
  *
  * Deliberately NOT "the change nearest the caret": the writing surface is a webview and the caret is often
- * nowhere near a proposal (it can be in the chat composer, or absent entirely after a fan-out), which would
+ * nowhere near a change (it can be in the chat composer, or absent entirely after a fan-out), which would
  * make the same key mean different things on different presses. Returns `undefined` for an empty set, which
  * is what makes the chord a safe no-op when there is nothing to accept.
  *
@@ -984,7 +984,7 @@ export interface IAuditEntry {
 	// open and the reviewer chose "Keep my version", so the next persist knowingly overwrote the external edit
 	// (issue #133, the external-edit floor). The decision is on the record like any other applied change.
 	// 'apply-failed' records an approval that could NOT be applied because the document had moved on since the
-	// proposal (docs/30 invariant I1, issue #329). It is the row that used to be written as 'approved' over a
+	// change (docs/30 invariant I1, issue #329). It is the row that used to be written as 'approved' over a
 	// document nothing had happened to; NOTHING was written to the file, and the change is still pending.
 	readonly action: 'auto-applied' | 'approved' | 'rejected' | 'external-overwrite-kept' | 'apply-failed';
 	readonly oldText: string;

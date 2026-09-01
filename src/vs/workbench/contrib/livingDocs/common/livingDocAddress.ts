@@ -10,12 +10,12 @@ import { ILivingDoc, IProposedChange } from './livingDocsModel.js';
 //
 // The contract in one paragraph: one address per Markdown block, following the D1 wrap rule (a block that
 // wraps over several visual rows is still ONE address). Persistent references (chat history, ledger entries,
-// proposal records) carry the block's durable `id` - NEVER a printed number, which is display-only and
+// change records) carry the block's durable `id` - NEVER a printed number, which is display-only and
 // recomputed from the current document every render. `computeBlockAddresses` maps the doc's blocks to their
 // 1-based line numbers in document order; `resolveBlockLine` turns a persisted block id back into its current
 // number, or `undefined` when that block is gone - a deep link to a deleted block degrades to the document
 // (no scroll) and never errors. `addressLabel` renders the human "Line N" string used verbatim by the gutter,
-// the inline proposal widget, the rail cards, Home cards and the Agents activity ledger, so every surface
+// the inline change widget, the rail cards, Home cards and the Agents activity ledger, so every surface
 // speaks one address vocabulary.
 
 /** One block's display address: its durable id plus the 1-based line number shown this render. */
@@ -60,7 +60,7 @@ export function resolveBlockLine(doc: ILivingDoc, blockId: string): number | und
 	return index < 0 ? undefined : index + 1;
 }
 
-/** The human address string ("Line 6") cited by the gutter, proposal widgets, rail cards and the ledger. */
+/** The human address string ("Line 6") cited by the gutter, change widgets, rail cards and the ledger. */
 export function addressLabel(line: number): string {
 	return `Line ${line}`;
 }

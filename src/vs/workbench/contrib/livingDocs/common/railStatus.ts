@@ -33,7 +33,7 @@ export interface IRailDot {
 /**
  * The facts a document's status dot reads (issue #212). All are cheap projections the service already computes
  * for the rail: the pending-review count, the count of agent auto-applies the user has not yet seen (computed by
- * {@link countUnseenAgentEdits}), and the three "needs input" red signals - a relink-flagged proposal, a stale
+ * {@link countUnseenAgentEdits}), and the three "needs input" red signals - a relink-flagged change, a stale
  * binding/context drift, or a fan-out run that failed for this document.
  */
 export interface IDocDotInput {
@@ -41,7 +41,7 @@ export interface IDocDotInput {
 	readonly pendingCount: number;
 	/** Agent auto-applies newer than the user's last-viewed anchor for this doc -> the green band. */
 	readonly unseenAgentEdits: number;
-	/** Relink-flagged proposals for this document (the claim anchor no longer confidently matches) -> red. */
+	/** Relink-flagged changes for this document (the claim anchor no longer confidently matches) -> red. */
 	readonly relinkCount: number;
 	/** True when a binding/context source has drifted since last sync/review (`getFreshness().dirty`) -> red. */
 	readonly stale: boolean;
@@ -52,7 +52,7 @@ export interface IDocDotInput {
 /**
  * Decide a document row's status dot (issue #212). Precedence, strictly red > yellow > green > grey:
  *
- * 1. RED - the document needs the user's input: a relink-flagged proposal, a stale binding/context drift, or a
+ * 1. RED - the document needs the user's input: a relink-flagged change, a stale binding/context drift, or a
  *    fan-out run that failed for it. Red wins even when changes are also waiting for approval (yellow).
  * 2. YELLOW - changes are waiting for approval (`pendingCount > 0`). The user has something to review.
  * 3. GREEN - the agent applied changes since the user last looked (`unseenAgentEdits > 0`). Clears when the user
@@ -63,7 +63,7 @@ export interface IDocDotInput {
  * The tooltip carries the winning band's plain-words reason + count. Counts are localized with `{0}` placeholders.
  */
 export function docRailDot(input: IDocDotInput): IRailDot {
-	// 1. RED: needs input. Relink is the loudest (a proposal the user must re-anchor); stale + fan-out failure
+	// 1. RED: needs input. Relink is the loudest (a change the user must re-anchor); stale + fan-out failure
 	// are the other two "the document needs you" signals. One red band, its tooltip named by the strongest cause.
 	if (input.relinkCount > 0) {
 		return { shape: 'dot', color: 'red', tooltip: relinkTooltip(input.relinkCount) };

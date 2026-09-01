@@ -15,11 +15,11 @@ import { buildBulkSet, BulkSkipReason, BulkVerb, ChangeKind, IBulkScope, IBulkSe
 // the audit trail, and it exists because today there is no such authority: the pending queue is an in-memory
 // map on the service (`livingDocsService.ts:462`), the audit is a per-document lock file written separately,
 // and the activity ledger is a third record. Three homes for one fact is why a count can disagree with
-// itself and why a crash loses every proposal.
+// itself and why a crash loses every change.
 //
 // The API is the invariant carrier, and the shape of it is the point:
 //
-//   propose(batch) -> receipts     every proposal is RECORDED, including the ones that are not eligible.
+//   propose(batch) -> receipts     every change is RECORDED, including the ones that are not eligible.
 //   captureBulkSet(scope)          the only way to address more than one change at once.
 //   approveByIds / rejectByIds     act on an immutable id snapshot; the set can shrink, never grow.
 //   comment / amend                discussion and revision, on the same id, keeping the thread.
@@ -69,11 +69,11 @@ export interface INewChange {
 	readonly baseLength: number;
 	/** Set when this change was split off a revision of another change rather than proposed on its own. */
 	readonly spawnedBy?: string;
-	/** A change this proposal replaces: the old one leaves the pending view with a `supersededBy` pointer. */
+	/** The change this one replaces: the old one leaves the pending view with a `supersededBy` pointer. */
 	readonly supersedes?: string;
 }
 
-/** One proposal batch. The `setId` groups them for surgical retry and for the review rail's change-set view. */
+/** One change batch. The `setId` groups them for surgical retry and for the review rail's change-set view. */
 export interface IProposeBatch {
 	readonly setId?: string;
 	readonly changes: readonly INewChange[];
@@ -81,7 +81,7 @@ export interface IProposeBatch {
 
 /**
  * What became of one proposed change. Every input gets one: an id and a status, never a silent drop. A
- * proposal computed against a revision the document has moved past is RECORDED as `needs-attention`
+ * change computed against a revision the document has moved past is RECORDED as `needs-attention`
  * (invariant I8) rather than discarded, because a silent drop wearing a safety argument is still a silent
  * drop - the user asked for something and is entitled to see what happened to it.
  */
@@ -97,7 +97,7 @@ export interface IChangeReceipt {
  * The result of one propose call.
  *
  * `failure` set with EMPTY receipts means the journal refused and nothing landed. `failure` set alongside
- * receipts means the proposals themselves are recorded and durable, but a follow-on record (a supersession)
+ * receipts means the changes themselves are recorded and durable, but a follow-on record (a supersession)
  * could not be written - so the batch is real and one link in it is not.
  */
 export interface IProposeReceipts {
@@ -186,7 +186,7 @@ export interface IOpenReport {
  * How far through the review the person is, as a fold of the journal (docs/30 stage 1, "Resumed - 41 of 63
  * decided").
  *
- * Scoped to the proposal SETS that still hold something open, which is what makes the number mean anything:
+ * Scoped to the change SETS that still hold something open, which is what makes the number mean anything:
  * a project's journal accumulates every change ever proposed, and "41 of 4,812 decided" is a fact about the
  * log rather than about the work in front of the reviewer. The batches they are still working through are
  * the batches the count is about.
@@ -318,7 +318,7 @@ export class ChangeStore {
 	}
 
 	/**
-	 * How far through the live proposal sets the reviewer has got. Read-only and synchronous, like
+	 * How far through the live change sets the reviewer has got. Read-only and synchronous, like
 	 * {@link captureBulkSet}: it is a fold of what the store holds right now.
 	 */
 	reviewProgress(): IReviewProgress {
@@ -366,9 +366,9 @@ export class ChangeStore {
 	}
 
 	/**
-	 * Record a batch of proposals (docs/30 section 5: `propose(batch) -> receipts`).
+	 * Record a batch of changes (docs/30 section 5: `propose(batch) -> receipts`).
 	 *
-	 * Every change in the batch gets an id and a receipt. A proposal whose base revision no longer matches
+	 * Every change in the batch gets an id and a receipt. A change whose base revision no longer matches
 	 * the document is admitted as `needs-attention (stale-base)`: it is real work the agent did and the user
 	 * must be able to see it, but it may not be written through, because its offsets describe a document
 	 * that no longer exists. The deterministic rebase of non-overlapping staleness over the store's OWN
@@ -448,7 +448,7 @@ export class ChangeStore {
 	 * eligible; a change the edit landed INSIDE cannot be moved honestly and flips to
 	 * `needs-attention (human-edit)` on the same id, keeping its thread and its history.
 	 *
-	 * What it never does is guess. A proposal whose base revision this delta cannot speak for is flagged
+	 * What it never does is guess. A change whose base revision this delta cannot speak for is flagged
 	 * rather than re-aimed, because a silently wrong span is how anchored search/replace earns its defects.
 	 */
 	noteExternalEdit(docUri: string, edit: ISplicePlacement, fromRevision: string, toRevision: string): Promise<IHumanEditReport> {
@@ -754,12 +754,12 @@ export class ChangeStore {
 	/**
 	 * Move the still-open changes in a document the store just wrote onto the new revision (invariant I8).
 	 *
-	 * Without this, approving one change would invalidate every other proposal in the same document: their
+	 * Without this, approving one change would invalidate every other change in the same document: their
 	 * base revision no longer matches, so the store would refuse them all, and a reviewer working through a
 	 * rail of five changes would find four of them flagged after accepting the first. That would be safe and
 	 * useless. The rebase is arithmetic over spans the store itself wrote, so it is exact - and a change that
 	 * OVERLAPS what was just written is not rebased at all but recorded as needing attention, because there
-	 * is no honest way to apply a proposal over text a decision has already replaced.
+	 * is no honest way to apply a change over text a decision has already replaced.
 	 */
 	private async _rebaseOverWrite(
 		intentDocs: readonly IIntentDoc[],
@@ -808,7 +808,7 @@ export class ChangeStore {
 	/**
 	 * Whether a set of anchors may be written through as it stands, and why not when it may not. A hash
 	 * mismatch means the document has moved past the revision the offsets were measured against; a span that
-	 * does not hold the text it claims means the proposal describes a document that never existed.
+	 * does not hold the text it claims means the change describes a document that never existed.
 	 *
 	 * `reads` caches each document's text for the duration of ONE operation, so admission and the splice that
 	 * follows it are judged against the same bytes - and so a ten-change batch does not read the same file
@@ -1044,7 +1044,7 @@ export class ChangeStore {
 	 * drift into being a second source of truth (which is what the per-document lock file became).
 	 */
 	private async _writeDerivedView(): Promise<void> {
-		// Nothing folded is nothing to derive. Skipping the write keeps a project that has never had a proposal
+		// Nothing folded is nothing to derive. Skipping the write keeps a project that has never had a change
 		// free of store files entirely, which matters now that the store opens on every window with a folder.
 		if (this._changes.size === 0) { return; }
 		await this._journal.writeDerivedView(JSON.stringify({ version: DERIVED_VIEW_VERSION, changes: this.allChanges() }, undefined, '\t'));

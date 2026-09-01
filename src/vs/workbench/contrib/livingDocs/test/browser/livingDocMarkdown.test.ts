@@ -578,7 +578,7 @@ suite('LivingDoc bind-link format', () => {
 		assert.deepStrictEqual(parseChatResponse(raw), { reply: 'Updated the intro.', edits: [], inserts: [] });
 	});
 
-	test('parseChatResponse degrades a plain-text (non-JSON) reply to a plain answer with no proposals', () => {
+	test('parseChatResponse degrades a plain-text (non-JSON) reply to a plain answer with no changes', () => {
 		const raw = 'The document already covers that, so no change is needed.';
 		assert.deepStrictEqual(parseChatResponse(raw), { reply: raw, edits: [], inserts: [] });
 	});

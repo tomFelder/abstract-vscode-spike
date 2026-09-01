@@ -99,7 +99,7 @@ function newRefreshPass(): IRefreshPass {
 	return { fileBodies: new Map(), resolutions: new Map() };
 }
 
-// The result of trying to turn one parsed edit/insert into a queued proposal (I3, issue #303). A refusal
+// The result of trying to turn one parsed edit/insert into a queued change (I3, issue #303). A refusal
 // carries the REASON it was refused rather than a bare `undefined`, which is what lets the chat composer
 // reconcile "the model claimed 3 changes" against "1 landed" and name the two that did not.
 type IQueueOutcome =
@@ -137,7 +137,7 @@ interface IDocState {
 	noticeUp?: boolean;
 	// True when the editor holds live-typed prose (`state.rawText`) that a blocked silent save could not write to
 	// disk - i.e. there is in-editor work not yet on disk. Drives the "Reloading will discard..." warning honestly
-	// for typing, alongside the agent-proposal queue (`_pending`). Cleared once a save actually lands on disk.
+	// for typing, alongside the agent-change queue (`_pending`). Cleared once a save actually lands on disk.
 	unsavedRaw?: boolean;
 	// The live handle for the reload/keep notice while it is on screen (issue #133 F4). Kept so a later false->true
 	// transition of the "has unsaved work" state can close the deduped notice and re-raise it WITH the discard line
@@ -224,7 +224,7 @@ const DEFAULT_PROXY_URL = 'http://localhost:8090';
  *
  *  - `chat` - a person is waiting on this reply: the document conversation and the Project Home ask.
  *  - `fanout` - one batch of a whole-project run, carrying many documents' edits in one envelope.
- *  - `rewrite` - one document's Review-impact proposal during a refresh.
+ *  - `rewrite` - one document's Review-impact change during a refresh.
  *  - `grade` - the verify gate's strategy grader, which returns a two-field verdict.
  */
 const MODEL_CALL_PURPOSES = ['chat', 'fanout', 'rewrite', 'grade'] as const;
@@ -256,7 +256,7 @@ const INCLUDED_USAGE_SPENT_MESSAGE = 'You\'ve used today\'s included usage - pic
 
 // A model call that the proxy paused because the day's included usage is spent (stop_reason "pause"). It is
 // NOT a failure: the caller keeps any prose the proxy returned (the plain-words cap message), queues no
-// proposals, and - inside an agent run - pauses the run via D15 with proposals kept, resuming at day rollover.
+// changes, and - inside an agent run - pauses the run via D15 with changes kept, resuming at day rollover.
 class ModelPausedError extends Error {
 	constructor(message: string) {
 		super(message || INCLUDED_USAGE_SPENT_MESSAGE);
@@ -534,7 +534,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _pending: IProposedChange[] = [];
 	private _changeStore: ChangeStore | undefined;
 	private _changeStoreReady: Promise<ChangeStore | undefined> | undefined;
-	// True when the store had open proposals the moment this window opened them - i.e. the review is being
+	// True when the store had open changes the moment this window opened them - i.e. the review is being
 	// RESUMED rather than started. Decided once, at open, so the rail's sentence cannot drift into claiming a
 	// resumption for work done in this session.
 	private _resumedReview = false;
@@ -542,9 +542,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Read once from storage at construction (DOC_LAST_VIEWED_KEY, WORKSPACE), stamped on active-editor change,
 	// and pruned to the current doc set on each write. The Files-rail green dot reads it via _summarize.
 	private readonly _docLastViewed = new Map<string, string>();
-	// True while approveAll fans out, so each approve's proposal_resolved analytics event carries bulk:true.
+	// True while approveAll fans out, so each approve's change_resolved analytics event carries bulk:true.
 	private _inBulkApprove = false;
-	// True while rejectAll fans out, so each reject's proposal_resolved analytics event carries bulk:true.
+	// True while rejectAll fans out, so each reject's change_resolved analytics event carries bulk:true.
 	private _inBulkReject = false;
 	private readonly _lockStore: ILockStore;
 	// The orchestration engine: agent registry + dependency-graph event-bus (+ triggers/policy/verify).
@@ -718,7 +718,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		void this._loadWorkbookManifests();
 		this._register(this._workspace.onDidChangeWorkspaceFolders(() => {
 			// A different folder is a different project, so its change store is a different journal. Drop the
-			// open one and its derived queue rather than letting one project's proposals be read as another's.
+			// open one and its derived queue rather than letting one project's changes be read as another's.
 			this._changeStore = undefined;
 			this._changeStoreReady = undefined;
 			this._refreshPending();
@@ -902,7 +902,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
-		// Match on the canonical string first (the common, cheap case). A proposal can be keyed under a URI-form
+		// Match on the canonical string first (the common, cheap case). A change can be keyed under a URI-form
 		// variant of the same file - a raw `.toString()` compare misses those, but `isEqual` treats them as one
 		// document (path-casing on a case-insensitive filesystem, scheme/authority/fragment normalisation). This
 		// makes the doc-scoped lookup robust to the identity drift the #253 audit caught (a bulk approve that
@@ -913,8 +913,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	/**
 	 * The canonical `docId` string that this document's pending changes are actually keyed under, or
 	 * `undefined` when the document has no pending changes. Bulk-approve callers (the editor action bar,
-	 * #253) MUST route `approveAll` through THIS id - the proposals' own docId - rather than a URI they
-	 * re-derive, so a URI-form drift between the open editor's resource and the queued proposals can never
+	 * #253) MUST route `approveAll` through THIS id - the changes' own docId - rather than a URI they
+	 * re-derive, so a URI-form drift between the open editor's resource and the queued changes can never
 	 * make the apply filter to an empty set (the silent no-op the audit caught).
 	 */
 	pendingDocIdFor(resource: URI): string | undefined {
@@ -967,7 +967,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// `policy:` - the SAME source of truth the Properties dial writes and every load/save reparses - so an external
 	// edit to `policy:` in the file is honoured the moment the state re-reads it (there is no parallel policy store
 	// to go stale). This is the ONE gate the propose/apply pipeline consults, so honesty is a contract enforced at
-	// the service layer, not a per-surface effort (audit root-cause 4). Used by the CHAT/PROPOSAL path, where only
+	// the service layer, not a per-surface effort (audit root-cause 4). Used by the CHAT/CHANGE path, where only
 	// `never` (leave the doc alone) needs enforcement - a meaning edit always queues for review anyway.
 	private _policyForState(state: IDocState): DocAutonomyLevel {
 		return coerceDocPolicy(state.doc.policy);
@@ -1181,7 +1181,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	getAllPending(): readonly IProposedChange[] { return this._pending; }
 
 	/**
-	 * How far through the live proposal sets the reviewer is, for the rail's foot (docs/30 stage 1).
+	 * How far through the live change sets the reviewer is, for the rail's foot (docs/30 stage 1).
 	 *
 	 * `resumed` is the difference between "0 of 12 decided" on a fresh run and "Resumed - 41 of 63 decided"
 	 * after a reload, and it is a fact about this window rather than about the numbers.
@@ -1212,7 +1212,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const state = this._docs.get(docUri);
 			if (state) { return this._bodyOf(state); }
 			// NOT loaded is not the same fact as NOT THERE, and before this fell back to the file the store
-			// could not tell them apart: it read `undefined`, judged the proposal stale, and told the reviewer
+			// could not tell them apart: it read `undefined`, judged the change stale, and told the reviewer
 			// "the text it was written for has changed" about a document nobody had even opened. Persistence
 			// made that the normal state after a reload rather than an edge case. The startup reconciler is the
 			// other reader here, and it runs before any document is open by construction.
@@ -1264,7 +1264,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * The store for the open project, opened once per session and reused.
 	 *
 	 * Opening replays the journal, heals a torn tail and reconciles every intent the last session left open,
-	 * so a crash window is CLASSIFIED before a single proposal is rendered. A window with no folder open has
+	 * so a crash window is CLASSIFIED before a single change is rendered. A window with no folder open has
 	 * nowhere to keep a journal and therefore no store: the queue is empty and every verb is a no-op, which
 	 * is the honest behaviour for a window with no project in it.
 	 */
@@ -1345,7 +1345,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
-	 * Record one proposal in the store and return its id, or a named refusal.
+	 * Record one change in the store and return its id, or a named refusal.
 	 *
 	 * This is the queue-time conversion (docs/30 stage 1): the incoming `{heading, oldText, newText}` shape
 	 * is resolved to a block ONCE, here, and persisted as a base-revision hunk - a span in the document body,
@@ -1355,9 +1355,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 *
 	 * `setId` groups everything ONE turn proposed. It is the unit a surgical retry replays, the unit the rail
 	 * groups by, and the unit the review's progress is a fraction of - "41 of 63 decided" is a statement about
-	 * a batch, and a store that gave every proposal its own set could only ever say "0 of 1".
+	 * a batch, and a store that gave every change its own set could only ever say "0 of 1".
 	 */
-	private async _recordProposal(state: IDocState, anchor: IChangeAnchor, kind: ChangeKind, display: IChangeDisplay, source: 'chat' | 'fan-out' | 'agent' | 'hook', setId: string, supersedes?: string): Promise<string | undefined> {
+	private async _recordChange(state: IDocState, anchor: IChangeAnchor, kind: ChangeKind, display: IChangeDisplay, source: 'chat' | 'fan-out' | 'agent' | 'hook', setId: string, supersedes?: string): Promise<string | undefined> {
 		const store = await this._ensureChangeStore();
 		if (!store) { return undefined; }
 		const receipts = await store.propose({ setId, changes: [{ anchors: [anchor], kind, display, baseLength: this._bodyOf(state).length, supersedes }] });
@@ -1365,7 +1365,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const receipt = receipts.receipts[0];
 		if (!receipt) { return undefined; }
 		const queued = this._pending.find(c => c.id === receipt.changeId);
-		if (queued) { this._captureProposalCreated(queued, source); }
+		if (queued) { this._captureChangeCreated(queued, source); }
 		return receipt.changeId;
 	}
 
@@ -1943,7 +1943,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Use a template (plan 48 T2.4): DUPLICATE the template into the open folder as a new document with its
 	// binds EMPTIED to slots, then open it. Unlike generate-from-template (which drives the model to draft
-	// prose against copied-through binds), Use is a pure duplication - no model call, no review proposals: the
+	// prose against copied-through binds), Use is a pure duplication - no model call, no review changes: the
 	// pattern's structure lands as a plain document that visibly needs a source bound. The new doc records the
 	// template's name as `fromTemplate` provenance and declares no sources, so `_summarize` reports
 	// `needsSourceBinding` (the tree-row "bind sources" nudge) until the user binds a source and it becomes
@@ -2718,7 +2718,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Generate a draft document from a template (plan 28, iter 3): write the static skeleton (headings +
 	// verbatim bind links + `template:` provenance), open it, then drive the SAME chat path every generation
-	// uses so the prose lands as reviewable insertion proposals (decision 17) - no new approve/apply path.
+	// uses so the prose lands as reviewable insertion changes (decision 17) - no new approve/apply path.
 	// With no model reachable the skeleton is still created and a status line explains it needs the model
 	// (honest empty state, never fake prose). Returns the new document's URI.
 	async generateFromTemplate(templateUri: URI, docName: string, note: string): Promise<URI | undefined> {
@@ -2757,7 +2757,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return target;
 		}
 		// Drive the existing generative chat path with the composed brief: the model's output arrives as
-		// insertion proposals in the review rail, exactly like any chat generation. The rail shows plain-words
+		// insertion changes in the review rail, exactly like any chat generation. The rail shows plain-words
 		// progress (F4), never the internal template brief - the full instruction drives the model only.
 		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
 		const trimmedNote = (note ?? '').trim();
@@ -2771,7 +2771,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Draft a new document FROM SELECTED SOURCES (F17, journey 1b's third birth). Mirrors generateFromTemplate:
 	// write a bare skeleton that DECLARES the picked sources (so provenance is honest and figures bind), open
 	// it, then drive the SAME chat path every generation uses so the prose lands as reviewable insertion
-	// proposals - never silently written. csv/json become `sources:` (value bindings); md/txt become `context:`
+	// changes - never silently written. csv/json become `sources:` (value bindings); md/txt become `context:`
 	// (prose knowledge). With no model reachable the skeleton is still created and a status line explains the
 	// draft needs the model (honest empty state, never fake content). Returns the new document's URI.
 	async generateFromSources(sources: readonly string[], docName: string, note: string): Promise<URI | undefined> {
@@ -2816,7 +2816,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Grow a new template FROM EXAMPLE DOCUMENTS (F18, journey 1x). Validate the set (3-10; else a plain-words
 	// refusal), write a real `<name>.template.md` skeleton (skill.md shape) that records the examples under
 	// `context:` so the analysis reads them, open it (it joins the + New picker at once), then drive the SAME
-	// chat path so the agent NAMES the commonalities as reviewable insertion proposals - the review grammar,
+	// chat path so the agent NAMES the commonalities as reviewable insertion changes - the review grammar,
 	// never a silent write. With no model reachable the skeleton is still created and a status line NAMES the
 	// error - never rendered as "no commonalities" (the F14 rule). Returns the new template's URI.
 	async generateTemplateFromExamples(examples: readonly string[], templateName: string): Promise<URI | undefined> {
@@ -3325,7 +3325,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				const audit = loadedLock ? loadedLock.audit : ((await this._lockStore.read(uri))?.audit ?? []);
 				unseenAgentEdits = countUnseenAgentEdits(audit, this._docLastViewed.get(id));
 			}
-			// Red: a relink-flagged pending proposal, a stale binding/context drift (freshness computes on load, so a
+			// Red: a relink-flagged pending change, a stale binding/context drift (freshness computes on load, so a
 			// never-loaded doc reports false - a truthful, partial signal), or a failed whole-project fan-out run.
 			const relinkCount = pendingForDoc.filter(c => c.relink).length;
 			const stale = this._docs.has(id) ? this.getFreshness(uri).dirty : false;
@@ -3653,7 +3653,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// version" leaves the in-editor state and lets the next persist proceed knowingly (recording an audit
 	// entry). If the editor is holding work not yet on disk, the notice says so before offering the reload.
 	private _promptExternalChange(state: IDocState, opts: { readonly source: 'watcher' | 'persist' }): void {
-		// "Unsaved work" is truthful for BOTH surfaces of in-editor work not yet on disk: queued agent proposals
+		// "Unsaved work" is truthful for BOTH surfaces of in-editor work not yet on disk: queued agent changes
 		// (`_pending`) AND live-typed prose held by a blocked silent save (`unsavedRaw`, issue #133 F4).
 		const hasUnsaved = state.unsavedRaw === true || this._pending.some(c => c.docId === state.uri.toString());
 		// Dedupe (issue #133): one notice per outstanding conflict. A run of keystrokes each blocks a silent save and
@@ -3997,7 +3997,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// The document's autonomy dial (issue #257) gates the AUTO-APPLY here just as it gates an agent run: `never`
 	// leaves the prose untouched (the lock still resolves so freshness is honest, but no figure lands and none
 	// queues - the doc is protected); `ask-first` re-resolves the lock but ROUTES each figure change into Review
-	// as a pending proposal instead of silently applying it (the human asked to see figure syncs first); only
+	// as a pending change instead of silently applying it (the human asked to see figure syncs first); only
 	// `auto-apply` lets figures land on their own. So a figure sync obeys the same one dial the chat pipeline does.
 	private async _syncLock(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		await this._resolveIntoLock(state, pass);
@@ -4021,7 +4021,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	/**
 	 * Record one figure reconciliation as a persisted change.
 	 *
-	 * The de-dupe is a SUPERSESSION rather than a deletion: an earlier proposal for the same block leaves the
+	 * The de-dupe is a SUPERSESSION rather than a deletion: an earlier change for the same block leaves the
 	 * pending view with a `supersededBy` pointer, so a re-refresh does not stack duplicate cards and does not
 	 * quietly destroy the record of what the previous sync had offered either.
 	 */
@@ -4030,7 +4030,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const anchor = this._anchorForBlock(state, change.blockId, change.oldText, change.newText);
 		if (!anchor) { return; }
 		const superseded = this._pending.find(c => c.docId === state.uri.toString() && c.blockId === change.blockId);
-		await this._recordProposal(state, anchor, 'figure', {
+		await this._recordChange(state, anchor, 'figure', {
 			docTitle: state.doc.title,
 			blockId: change.blockId,
 			blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
@@ -4237,7 +4237,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
-	 * Tell the store a PERSON changed the document under its open proposals (docs/30 invariant I8).
+	 * Tell the store a PERSON changed the document under its open changes (docs/30 invariant I8).
 	 *
 	 * The store cannot rebase a human edit on its own: it has no map of what was typed, and guessing there is
 	 * how anchored search/replace earns its defect families. So the delta is computed here, where both
@@ -4245,8 +4245,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * common suffix, and what is left is the one contiguous region that differs. For typing that IS the edit,
 	 * exactly; for a paste or a wholesale rewrite it is the smallest region that provably contains it.
 	 *
-	 * What the store then does with it is the honest half: a proposal entirely before or after the edited
-	 * region moves by the exact length difference and stays eligible, and a proposal the edit landed INSIDE
+	 * What the store then does with it is the honest half: a change entirely before or after the edited
+	 * region moves by the exact length difference and stays eligible, and a change the edit landed INSIDE
 	 * flips to `needs-attention (human-edit)` on the same id, keeping its thread and its history. Nothing is
 	 * dropped and nothing is re-aimed at prose it was not written for.
 	 */
@@ -4381,7 +4381,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return;
 		}
 		// Reject any pending changes for this document first - restoring resets the body, so unreviewed
-		// proposals against the old body no longer apply.
+		// changes against the old body no longer apply.
 		await this._discardQueueForDoc(resource.toString());
 		// Write the snapshot body back through the existing persist path (parse -> disk -> lock).
 		state.doc = parseLivingDoc(snapshot.body);
@@ -4929,7 +4929,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const modelAvailable = await this._hasModel();
 
 		// Re-running the pass supersedes this document's earlier impact candidates block by block, so it stays
-		// idempotent WITHOUT the old wholesale clear - which deleted proposals from a different pass along with
+		// idempotent WITHOUT the old wholesale clear - which deleted changes from a different pass along with
 		// its own, with no record that they had ever existed (invariant I5: nothing leaves without a trace).
 
 		// One set for the whole impact pass, for the same reason the chat turn has one.
@@ -4943,30 +4943,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 			const block = state.doc.blocks.find(b => b.id === target.blockId);
 			if (!block) { continue; }
-			const proposal = await this._proposeImpact(diff, contextFiles, block.text, modelAvailable);
-			if (proposal.newText === block.text) { continue; }
-			if (proposal.kind === 'figure') {
+			const change = await this._proposeImpact(diff, contextFiles, block.text, modelAvailable);
+			if (change.newText === block.text) { continue; }
+			if (change.kind === 'figure') {
 				// Confidence-gated routing (guardrail 4): figure-class ripples may auto-stage.
-				state.lock.audit.push(this._entry(state, block.id, 'auto-applied', block.text, proposal.newText, proposal.via));
-				block.text = proposal.newText;
-				block.binds = extractBindLinks(proposal.newText);
+				state.lock.audit.push(this._entry(state, block.id, 'auto-applied', block.text, change.newText, change.via));
+				block.text = change.newText;
+				block.binds = extractBindLinks(change.newText);
 				state.recent.add(block.id);
 			} else {
 				// Meaning/influence changes wait for approval in the review rail (no eager rewrites). The impact
-				// pass is driven by a source change (agent/hook), so this proposal's source is 'agent'.
-				const anchor = this._anchorForBlock(state, block.id, block.text, proposal.newText);
+				// pass is driven by a source change (agent/hook), so this change's source is 'agent'.
+				const anchor = this._anchorForBlock(state, block.id, block.text, change.newText);
 				if (!anchor) { continue; }
 				const superseded = this._pending.find(c => c.docId === id && c.blockId === block.id);
-				await this._recordProposal(state, anchor, proposal.kind, {
+				await this._recordChange(state, anchor, change.kind, {
 					docTitle: state.doc.title,
 					blockId: block.id,
 					blockLabel: this._blockLabel(state.doc, block.id),
-					confidence: proposal.confidence,
-					rationale: proposal.rationale,
+					confidence: change.confidence,
+					rationale: change.rationale,
 					sourceCells: [],
 					claimId: target.claimId,
 					contextReviewed: contextFiles,
-					via: proposal.via,
+					via: change.via,
 				}, 'agent', setId, superseded?.id);
 			}
 		}
@@ -4977,9 +4977,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			: 'No model available - showing heuristic suggestions';
 		await this._persist(state);
 		this._onDidChange.fire();
-		// (plan 44-b P2.5) The old trust-grammar force-open is RETIRED: a proposal arriving no longer yanks
+		// (plan 44-b P2.5) The old trust-grammar force-open is RETIRED: a change arriving no longer yanks
 		// the review rail open. If the rail is already visible we switch it to the Review tab (a courtesy,
-		// not a force-open); if the user has collapsed the rail the proposal is surfaced quietly by the 8px
+		// not a force-open); if the user has collapsed the rail the change is surfaced quietly by the 8px
 		// amber badge dot on the right rail toggle (AbstractHeaderContribution, driven by onDidChange above).
 		if (this._layoutService.isVisible(Parts.AUXILIARYBAR_PART, mainWindow)) {
 			this.focusPanel('review');
@@ -5031,7 +5031,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			? this._anchorForBlock(state, best.id, best.text, best.text)
 			: { docUri: state.uri.toString(), baseRevision: hashContent(this._bodyOf(state)), span: { start: 0, end: (claim?.anchor ?? '').length }, oldText: claim?.anchor ?? '', newText: claim?.anchor ?? '' };
 		if (!anchor) { return; }
-		await this._recordProposal(state, anchor, 'meaning', {
+		await this._recordChange(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: target.blockId ?? '',
 			blockLabel: 'Re-link claim',
@@ -5376,7 +5376,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this.recordOnboardingStep(step);
 	}
 
-	// The demo-doc approve hook (doc 20 section D26 step 5): the first approve of the sample proposal during a
+	// The demo-doc approve hook (doc 20 section D26 step 5): the first approve of the sample change during a
 	// walkthrough is `first-approve-sample`, and it hands off to the user's own folder (step 6) via a gentle,
 	// shell-independent notification (the onboarding screen cannot coexist with the editor here). Fires once.
 	private _maybeRecordSampleApprove(docId: string): void {
@@ -5639,7 +5639,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (json.stop_reason === 'refusal') { throw new Error('model refused the request'); }
 		const text = (json.content ?? []).filter(b => b.type === 'text').map(b => b.text ?? '').join('');
 		// The proxy paused this call because the day's included usage is spent (plan 35 iter 3): surface the
-		// plain-words prose it returned as a ModelPausedError so callers keep it, queue no proposals, and pause.
+		// plain-words prose it returned as a ModelPausedError so callers keep it, queue no changes, and pause.
 		if (json.stop_reason === 'pause') { throw new ModelPausedError(text.trim() || INCLUDED_USAGE_SPENT_MESSAGE); }
 		if (!text.trim()) { throw new Error('model returned no text'); }
 		return text;
@@ -5859,7 +5859,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	/**
 	 * Fill the in-memory conversations from workspace storage, in the SAME breath as the strip - the two are
 	 * halves of one restore, and separating them is what produced three correctly-titled tabs over three empty
-	 * chats (issue #312). This is a read and nothing else: no model is called, no proposal is queued and no
+	 * chats (issue #312). This is a read and nothing else: no model is called, no change is queued and no
 	 * audit row is written, so reopening a workspace replays nothing. A transcript whose session did not
 	 * survive (a chat closed before the app was) is simply dropped on the floor here.
 	 */
@@ -5921,7 +5921,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * is over the in-memory conversations, which the transcript caps hold to a few dozen turns each. `approve`
 	 * and `reject` both early-return for a change that is no longer pending, so no outcome is ever counted twice.
 	 */
-	private _recordProposalOutcome(changeId: string, outcome: 'approved' | 'rejected'): void {
+	private _recordChangeOutcome(changeId: string, outcome: 'approved' | 'rejected'): void {
 		for (const messages of this._chats.values()) {
 			for (let i = 0; i < messages.length; i++) {
 				const message = messages[i];
@@ -6267,7 +6267,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Answer a read-only whole-project question for the Project Home composer (F15 / journey 1w, map-D24). This
 	// reuses the existing model plumbing (`_hasModel`, `_readContext`, `_callModel`, `parseChatResponse`) but is
-	// deliberately SEPARATE from the chat delivery path: it queues no proposal and mutates no document - it only
+	// deliberately SEPARATE from the chat delivery path: it queues no change and mutates no document - it only
 	// reads the project and returns prose + citations. The citations are the REAL files consulted (doc titles +
 	// their sources), intersected with any the model named, so the answer is never grounded in a fabricated ref.
 	async askProjectQuestion(question: string): Promise<IProjectAnswer> {
@@ -6407,7 +6407,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chatStreaming.set(chatKey, streaming);
 		// Accumulate the raw model text but SHOW the human `reply` prose, so the live turn reads as words
 		// rather than the raw `{"reply":"..."}` envelope (plan 27 iter 3). The end-of-stream parse still runs
-		// over the complete raw text (returned by _callModelStream), so the proposal contract is unchanged.
+		// over the complete raw text (returned by _callModelStream), so the change contract is unchanged.
 		let rawStream = '';
 		const onDelta = (delta: string) => { rawStream += delta; streaming.text = extractStreamingReply(rawStream); this._onDidStreamChat.fire(resource); };
 		const onStep = (step: IChatStep) => { streaming.steps.push(step); this._onDidStreamChat.fire(resource); };
@@ -6465,13 +6465,13 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			history.push(reply);
 		} catch (e) {
 			// A cancel is NOT a failure: keep the prose streamed so far as a muted "stopped" turn and queue no
-			// proposals (they are only ever committed from the complete response). Everything else is honest error.
+			// changes (they are only ever committed from the complete response). Everything else is honest error.
 			if (isCancellationError(e)) {
 				const salvage = streaming.text.trim();
 				history.push({ role: 'assistant', via: 'model', content: salvage, stopped: true });
 			} else if (isModelPausedError(e)) {
 				// The day's included usage is spent (plan 35 iter 3): show the plain-words cap message as a calm
-				// turn - NOT a failure, NOT retryable (retrying just pauses again), and queue no proposals. It
+				// turn - NOT a failure, NOT retryable (retrying just pauses again), and queue no changes. It
 				// resumes on its own at day rollover, or immediately once the user signs in with ChatGPT. The
 				// `paused` marker lets the run screen render a paused fan-out honestly (F14 item 3) - never a
 				// failure and never an all-clear.
@@ -6533,7 +6533,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// the final message - so the rail shows the steps appearing rather than all at once at stream end.
 		const addStep = (step: IChatStep) => { steps.push(step); onStep(step); };
 		if (sourceFiles.length) { addStep({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
-		// Policy gate (issue #257): a document dialled "Never change this doc" gets NO proposal - the queue methods
+		// Policy gate (issue #257): a document dialled "Never change this doc" gets NO change - the queue methods
 		// refuse it - but the refusal must be SPOKEN, not silent. The model can still answer a read-only question
 		// about the doc; only when it WANTED to edit (returned any edit/insert) do we surface the named refusal so
 		// the user sees their dial was honoured, naming the doc and its policy. A `never` doc is still read normally.
@@ -6559,7 +6559,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		// What the bubble shows: a NAMED refusal when the doc's policy blocked an edit the model wanted; else the
-		// model's reply when it gave one; nothing when proposals carry the meaning (their cards speak); otherwise a
+		// model's reply when it gave one; nothing when changes carry the meaning (their cards speak); otherwise a
 		// neutral honest line. `parseChatResponse` already routed a non-JSON plain-text answer into `reply`, so a
 		// truthy `reply` is always real prose -- we NEVER surface the raw JSON envelope.
 		const spoken = json.reply || (proposedIds.length ? '' : 'I do not have anything to add on that.');
@@ -6579,7 +6579,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Fan one instruction across the whole working set in a SINGLE model call (plan 18, decision 62). The
 	// model is shown every target document (figures resolved) and asked for a per-document edit map; each
-	// doc's edits/inserts are routed into the existing proposal queue tagged with that doc's id, so the
+	// doc's edits/inserts are routed into the existing change queue tagged with that doc's id, so the
 	// Review rail's per-document grouping + approve/reject loop is reused unchanged. Plain and living docs
 	// flow through the same path (decision 63).
 	private async _chatRespondMulti(active: IDocState, text: string, mentions: string[], workingSet: readonly IWorkingSetDoc[], onDelta: (text: string) => void, onStep: (step: IChatStep) => void, token: CancellationToken): Promise<IChatMessage> {
@@ -6633,7 +6633,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const steps: IChatStep[] = [];
 		const proposedIds: string[] = [];
 		// The turn's receipts (I3, issue #303): how many edits/inserts the batches CLAIMED across the whole run,
-		// and a named reason for every claim that never became a proposal. Reconciled into the run's outcome below
+		// and a named reason for every claim that never became a change. Reconciled into the run's outcome below
 		// so a fan-out cannot report a clean run over changes it silently dropped.
 		let claimed = 0;
 		const drops: ChatDropReason[] = [];
@@ -6671,7 +6671,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 		let anyReply = '';
 		// The plain-words budget-cap message if the run pauses mid-fan-out (spent daily budget). When set, the
-		// loop stops running further batches but keeps every proposal already queued - the run pauses, it does
+		// loop stops running further batches but keeps every change already queued - the run pauses, it does
 		// NOT fail and is NOT an all-clear (F14 item 3; plan 35 iter 3).
 		let pausedMessage: string | undefined;
 		// Run the batches in order. Each doc appears in exactly ONE batch (uniqueness by construction), so the
@@ -6697,12 +6697,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			} catch (e) {
 				// A cancel is the user stopping the whole run - salvage the streamed prose (D27-B), never a failure.
 				if (isCancellationError(e)) { throw e; }
-				// The day's included usage is spent (plan 35 iter 3): keep every proposal queued so far, stop the
+				// The day's included usage is spent (plan 35 iter 3): keep every change queued so far, stop the
 				// fan-out, and surface the plain-words cap message as a calm pause - NOT a failure, NOT an all-clear.
 				if (isModelPausedError(e)) { pausedMessage = e.message; publishProgress(0); break; }
 				// A genuine model outage/error for THIS batch (F14, issue #123): attribute the failure to exactly
 				// this batch's documents, record it for the honest named error + surgical retry, and KEEP GOING so
-				// later batches can still land their proposals (a partial success), instead of aborting the whole run.
+				// later batches can still land their changes (a partial success), instead of aborting the whole run.
 				this._log.info('[livingDocs] fan-out batch failed, recording failed docs', e instanceof Error ? e.message : String(e));
 				for (const d of batch.docs) { failedDocs.push({ id: d.id, title: d.title }); }
 				addStep({ label: `${batch.docs.map(d => d.title).join(', ')}: model unreachable`, status: 'queued' });
@@ -6712,7 +6712,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const json = parseMultiChatResponse(raw);
 			if (json.reply && !anyReply) { anyReply = json.reply; }
 			// Match each returned doc entry to a document IN THIS BATCH by title, then queue its edits/inserts
-			// against that document's own state (so proposals carry the right docId for the rail grouping). The
+			// against that document's own state (so changes carry the right docId for the rail grouping). The
 			// match is restricted to the batch's own documents so a reply that names an out-of-batch doc cannot
 			// route an edit to a document that batch was never shown - keeping "each doc in exactly one batch"
 			// airtight (a document is only ever edited by the one batch that actually contained its body).
@@ -6748,7 +6748,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id), skippedByPolicyDocIds });
 
 		// Aggregate the run honestly (F14, issue #123): a pause shows the cap message; any failed documents show a
-		// named error listing them (with the proposals that DID land, on a partial success) + "Retry failed"; a
+		// named error listing them (with the changes that DID land, on a partial success) + "Retry failed"; a
 		// clean run keeps the existing reply / neutral no-change line. The all-clear is reachable ONLY when there
 		// were no failures and no pause, so a model outage can never render as "no changes proposed".
 		const outcome = summarizeFanoutRun({ proposedCount: proposedIds.length, failedDocs, reply: anyReply, pausedMessage });
@@ -6792,7 +6792,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// block label, else a NAMED drop reason - never a bare `undefined`, so the composer can reconcile what the
 	// model claimed against what actually landed and say which claims did not (I3, issue #303).
 	private async _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, setId: string, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): Promise<IQueueOutcome> {
-		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - no proposal is
+		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - no change is
 		// ever created for it, in chat or fan-out. The caller names the refusal; here we simply make no change.
 		if (this._policyForState(state) === 'never') { return { queued: false, reason: 'policy' }; }
 		const newText = String(edit.newText ?? '').trim();
@@ -6836,7 +6836,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// is, so approving a one-line change to a long list leaves every sibling item byte-identical.
 		const anchor = this._anchorForBlock(state, best.id, scoped.oldText, newText);
 		if (!anchor) { return { queued: false, reason: 'no-match' }; }
-		const id = await this._recordProposal(state, anchor, 'meaning', {
+		const id = await this._recordChange(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: best.id,
 			blockLabel: label,
@@ -6887,7 +6887,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (best) { afterBlockId = best.id; label = best.text; }
 		}
 		const anchor = this._anchorForInsert(state, afterBlockId, newText);
-		const id = await this._recordProposal(state, anchor, 'meaning', {
+		const id = await this._recordChange(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: afterBlockId,
 			blockLabel: label,
@@ -6926,7 +6926,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Tweak (amend-before-approve, plan 31 iter 3, D31-B): replace a pending change's proposed `newText` with
 	// the reviewer's hand-edit and flag it `tweaked`, then fire onDidChange so every surface re-renders the
-	// amended proposal as still-pending. The subsequent approve() reads `tweaked` to record the audit
+	// amended change as still-pending. The subsequent approve() reads `tweaked` to record the audit
 	// `via: 'tweaked'`. Guarded: figures come from sources (not hand-editable), and an empty/no-op amendment
 	// is ignored. No new persist path - the amended text lands through the existing approve() serialisation.
 	async amendChange(changeId: string, newText: string): Promise<void> {
@@ -6936,7 +6936,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (record.kind === 'figure') { return; }
 		const next = String(newText ?? '').trim();
 		if (!next || record.anchors.every(a => a.newText === next)) { return; }
-		// A tweak stacks a REVISION on the same id rather than replacing the proposal, so the card keeps its
+		// A tweak stacks a REVISION on the same id rather than replacing the change, so the card keeps its
 		// thread, its history and its provenance - the trail shows the agent proposed one thing and a human
 		// changed it, which is the trust signal the audit row `via: 'tweaked'` reports.
 		const anchors = record.anchors.map((a, i) => (i === 0 ? { ...a, newText: next } : a));
@@ -6983,7 +6983,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// Every document the captured set touches has to be LOADED before the store resolves anything, because
 		// the write seam edits `IDocState` - it re-parses the document, keeps the in-memory model in step and
 		// runs the external-edit floor - and there is no such thing as writing a document that is not open.
-		// After a reload the review rail shows proposals for documents the window has never opened, so this is
+		// After a reload the review rail shows changes for documents the window has never opened, so this is
 		// the ordinary case and not a corner: "Approve everywhere" reaches every one of them.
 		await this._loadDocsFor(captured, store);
 		// The cards as they read BEFORE the verb: a decided change leaves the pending view, and the audit row,
@@ -7017,7 +7017,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				const skip = report.skipped.find(s => s.changeId === id);
 				skipped.push({ id, label: change ? bulkChangeLabel(change) : '', reason: bulkSkipFor(skip?.reason, resolution?.status) });
 				// The reviewer pressed Approve and it did not happen, so the trail says so - whether the store
-				// refused before touching anything (the document moved under the proposal) or tried and could
+				// refused before touching anything (the document moved under the change) or tried and could
 				// not prove the write. The two cases that get NO row are the ones with nothing to report: a
 				// change someone else had already decided, and one a later turn superseded.
 				const refusalIsSilent = skip?.reason === 'unknown-change' || skip?.reason === 'already-decided' || skip?.reason === 'superseded' || skip?.reason === 'in-discussion';
@@ -7068,10 +7068,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private async _recordDecision(change: IProposedChange, status: 'approved' | 'rejected', anchors: readonly IChangeAnchor[], reason?: string): Promise<void> {
 		const state = this._docs.get(change.docId);
 		if (!state) { return; }
-		this._recordProposalOutcome(change.id, status);
+		this._recordChangeOutcome(change.id, status);
 		if (status === 'rejected') {
 			state.lock.audit.push(this._entry(state, change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model', reason));
-			this._captureProposalResolved('reject', this._inBulkReject);
+			this._captureChangeResolved('reject', this._inBulkReject);
 			state.status = `Change rejected - ${change.docTitle} left unchanged`;
 			await this._markContextReviewed(state, change.contextReviewed);
 			await this._persistLock(state);
@@ -7098,8 +7098,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// A tweaked change records `via: 'tweaked'` so the trail shows the human amended the agent's words
 		// (plan 31 iter 3, D31-B); otherwise the change's own provenance (model/heuristic) stands.
 		state.lock.audit.push(this._entry(state, change.blockId, 'approved', change.oldText, change.newText, change.tweaked ? 'tweaked' : (change.via ?? 'model')));
-		this._captureProposalResolved(change.tweaked ? 'tweak' : 'approve', this._inBulkApprove);
-		// D26 funnel hooks (no-ops outside a walkthrough): approving the demo's sample proposal is step 5 and
+		this._captureChangeResolved(change.tweaked ? 'tweak' : 'approve', this._inBulkApprove);
+		// D26 funnel hooks (no-ops outside a walkthrough): approving the demo's sample change is step 5 and
 		// hands off to a real folder; the first approve on the user's own file after that hand-off is the T4 aha.
 		this._maybeRecordSampleApprove(change.docId);
 		this._maybeRecordOwnFileApprove();
@@ -7114,7 +7114,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 *
 	 * This is the exact inverse of {@link _recordDecision}: the change STAYS in the queue carrying the store's
 	 * named status, the audit row says `apply-failed` rather than `approved`, and nothing counts a resolution
-	 * that did not occur - no transcript outcome, no `proposal_resolved`, no funnel hook, no claim flipped to
+	 * that did not occur - no transcript outcome, no `change_resolved`, no funnel hook, no claim flipped to
 	 * `applied`, no reviewed-context clear. The lock still persists, because a trail that only survives until
 	 * the next relaunch is not a trail.
 	 */
@@ -7200,7 +7200,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * Discard every queued change for one document, eligible or not.
 	 *
 	 * Deliberately NOT a bulk verb and deliberately private: this is the queue half of a document RESET
-	 * (restore an earlier version), where proposals against the replaced body are stale by construction and
+	 * (restore an earlier version), where changes against the replaced body are stale by construction and
 	 * there is no reviewer decision to confirm. The user-facing gesture that reaches it - restoring a
 	 * version - carries its own confirm. Leaving a `needs-attention` change behind here would strand it
 	 * against prose that no longer exists.
@@ -7422,7 +7422,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// only - never document prose or bound figures (the property-linter in the service enforces this before
 	// anything is sent; document ids are hashed opaque). Every call is a no-op unless the user has consented. ---
 
-	/** Map a proposal's 0..1 confidence to a coarse label (never the raw figure, which could be revealing). */
+	/** Map a change's 0..1 confidence to a coarse label (never the raw figure, which could be revealing). */
 	private _confidenceLabel(confidence: number): string {
 		return confidence >= 0.8 ? 'high' : confidence >= 0.5 ? 'medium' : 'low';
 	}
@@ -7439,18 +7439,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return [...kinds];
 	}
 
-	/** Emit `proposal_created` for one queued change (source: chat / fan-out / agent / hook). */
-	private _captureProposalCreated(change: IProposedChange, source: 'chat' | 'fan-out' | 'agent' | 'hook'): void {
-		this._analytics.capture('proposal_created', {
+	/** Emit `change_created` for one queued change (source: chat / fan-out / agent / hook). */
+	private _captureChangeCreated(change: IProposedChange, source: 'chat' | 'fan-out' | 'agent' | 'hook'): void {
+		this._analytics.capture('change_created', {
 			source_kind: source,
 			change_kind: change.kind,
 			confidence: this._confidenceLabel(change.confidence),
 		});
 	}
 
-	/** Emit `proposal_resolved` when a change is approved / tweaked-and-approved / rejected. */
-	private _captureProposalResolved(resolution: 'approve' | 'tweak' | 'reject', bulk: boolean): void {
-		this._analytics.capture('proposal_resolved', { resolution, bulk });
+	/** Emit `change_resolved` when a change is approved / tweaked-and-approved / rejected. */
+	private _captureChangeResolved(resolution: 'approve' | 'tweak' | 'reject', bulk: boolean): void {
+		this._analytics.capture('change_resolved', { resolution, bulk });
 	}
 
 	// Build an audit entry stamped with the OWNING document's title. The entry is always pushed onto
@@ -7469,7 +7469,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Persist the document (.md) and its lock together - the pair is one logical unit.
 	private async _persist(state: IDocState): Promise<void> {
-		// The body as it stood before this write, so the store can move the proposals standing over it. Every
+		// The body as it stood before this write, so the store can move the changes standing over it. Every
 		// path through `_persist` rebuilds the document from its parsed blocks, so from the store's point of
 		// view this is an edit it did not make and cannot account for - identical in kind to someone typing.
 		const previousBody = this._bodyOf(state);

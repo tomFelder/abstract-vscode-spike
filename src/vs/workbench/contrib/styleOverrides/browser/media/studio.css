@@ -347,7 +347,7 @@
 	outline-offset: -1px;
 }
 
-/* The 8px amber badge dot on the right toggle (P2.5): a pending proposal while the rail is collapsed.
+/* The 8px amber badge dot on the right toggle (P2.5): a pending change while the rail is collapsed.
  * Amber is the one hue that means "waiting on you", so the dot needs no words. */
 .style-override .abstract-header-badge {
 	position: absolute;

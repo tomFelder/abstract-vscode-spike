@@ -151,7 +151,7 @@ export interface IPmEditDecoration {
 	readonly newText: string;
 	readonly sourceLine?: number;
 	// The block's display address line (spec 43 section 3.1 / pin 11): the widget's mono tag row cites "Line N" so
-	// the proposal, the gutter and the rail all speak one address. Absent when the target block is gone.
+	// the change, the gutter and the rail all speak one address. Absent when the target block is gone.
 	readonly addressLine?: number;
 }
 
@@ -250,7 +250,7 @@ export function wordDiffSegments(oldText: string, newText: string): { segments: 
 	return { segments, added, removed };
 }
 
-/** Map the pending proposals + document into a serializable ProseMirror decoration spec. */
+/** Map the pending changes + document into a serializable ProseMirror decoration spec. */
 export function buildPmDecorationSpec(doc: ILivingDoc, pending: readonly IProposedChange[], recent: ReadonlySet<string>): IPmDecorationSpec {
 	const source = doc.sources.concat(doc.context).join(', ');
 	const edits: IPmEditDecoration[] = [];

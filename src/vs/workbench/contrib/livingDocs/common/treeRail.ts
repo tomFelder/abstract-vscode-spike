@@ -103,7 +103,7 @@ export interface ITreeRailDocInput {
 	// the doc's leading dot from these via `docRailDot`. All default to 0/false (grey) when the caller omits them. ---
 	/** Agent auto-applies newer than the doc's last-viewed anchor (the ACTIVE doc reports 0) -> green band. */
 	readonly unseenAgentEdits?: number;
-	/** Relink-flagged pending proposals for this document -> red band. */
+	/** Relink-flagged pending changes for this document -> red band. */
 	readonly relinkCount?: number;
 	/** True when a binding/context source has drifted since last sync/review -> red band. */
 	readonly stale?: boolean;

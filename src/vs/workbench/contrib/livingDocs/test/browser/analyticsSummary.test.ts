@@ -24,7 +24,7 @@ suite('analyticsSummary folds (plan 36: funnel + guardrails as code)', () => {
 		return { event: 'onboarding_step', distinct_id, step: name };
 	}
 	function resolved(resolution: string): IAnalyticsEventRecord {
-		return { event: 'proposal_resolved', resolution, bulk: false };
+		return { event: 'change_resolved', resolution, bulk: false };
 	}
 
 	test('foldFunnel counts distinct users per ordered step with non-negative drop-off', () => {
@@ -89,7 +89,7 @@ suite('analyticsSummary folds (plan 36: funnel + guardrails as code)', () => {
 		const g = foldGuardrails(records);
 		assert.deepStrictEqual(
 			{
-				resolved: g.proposalsResolved, approvals: g.approvals, tweaks: g.tweaks, rejects: g.rejects,
+				resolved: g.changesResolved, approvals: g.approvals, tweaks: g.tweaks, rejects: g.rejects,
 				rate: g.tweakRejectRate, band: g.tweakRejectBand,
 				staleness: g.stalenessEscapes, undo: g.undoAfterApprove, undoRate: g.undoAfterApproveRate,
 			},
@@ -106,7 +106,7 @@ suite('analyticsSummary folds (plan 36: funnel + guardrails as code)', () => {
 		assert.deepStrictEqual({ rate: rubberStamp.tweakRejectRate, band: rubberStamp.tweakRejectBand }, { rate: 0, band: 'below' });
 		const empty = foldGuardrails([]);
 		assert.deepStrictEqual(
-			{ resolved: empty.proposalsResolved, rate: empty.tweakRejectRate, band: empty.tweakRejectBand, undoRate: empty.undoAfterApproveRate },
+			{ resolved: empty.changesResolved, rate: empty.tweakRejectRate, band: empty.tweakRejectBand, undoRate: empty.undoAfterApproveRate },
 			{ resolved: 0, rate: undefined, band: 'no-data', undoRate: undefined });
 	});
 

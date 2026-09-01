@@ -154,7 +154,7 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 		]);
 	});
 
-	test('the inline proposal widget cites the gutter address (pin 11 / P11.1): "Line N" in the mono tag row', () => {
+	test('the inline change widget cites the gutter address (pin 11 / P11.1): "Line N" in the mono tag row', () => {
 		const md = ['## Highlights', '', 'Revenue grew fast this week.'].join('\n') + '\n';
 		const parsed = parseLivingDoc(md);
 		const target = parsed.blocks.find(b => b.text.startsWith('Revenue'))!; // block index 1 => Line 2

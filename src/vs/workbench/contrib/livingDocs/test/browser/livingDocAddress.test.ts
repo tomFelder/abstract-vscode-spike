@@ -77,7 +77,7 @@ suite('LivingDoc address model (spec 43 section 3.1)', () => {
 	suite('resolveBlockOrdinal', () => {
 		test('resolves a block by id, and survives that block being edited after the change was proposed', () => {
 			const doc = parseLivingDoc(DOC_MD);
-			// The proposal was written against "Revenue grew fast this week."; the block has since been retyped.
+			// The change was written against "Revenue grew fast this week."; the block has since been retyped.
 			const drifted = parseLivingDoc(DOC_MD.replace('Revenue grew fast this week.', 'Revenue collapsed overnight, actually.'));
 			assert.deepStrictEqual(
 				{ before: resolveBlockOrdinal(doc, change({ blockId: doc.blocks[1].id })), afterDrift: resolveBlockOrdinal(drifted, change({ blockId: doc.blocks[1].id })) },
@@ -86,7 +86,7 @@ suite('LivingDoc address model (spec 43 section 3.1)', () => {
 		});
 
 		test('falls back to the span when the id addresses no block (a re-slugged heading)', () => {
-			// A heading's id is its slug, so editing its text destroys the id the proposal was written against.
+			// A heading's id is its slug, so editing its text destroys the id the change was written against.
 			// The span still says where in the body the change sits, and the body still chunks the same way.
 			const doc = parseLivingDoc(DOC_MD);
 			const spanOfThirdBlock = { start: doc.body.indexOf('Margins held'), end: doc.body.length };

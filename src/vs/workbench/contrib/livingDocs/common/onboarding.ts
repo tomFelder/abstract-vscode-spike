@@ -103,7 +103,7 @@ export const DEMO_DOC_NAME = 'Demo Report';
  * The bundled demo dataset: two weeks of a tiny metrics table so previous/current/delta all resolve. The last
  * two rows drive the bound figures the onboarding peek + iterate on (MRR $48.6k, +18%; signups 427, +37%),
  * matching the deterministic CSV resolver's formatting so a sync leaves the demo figures reconciled (fresh, no
- * spurious proposal). Read-only demo data (doc 20 section D26 merge semantics).
+ * spurious change). Read-only demo data (doc 20 section D26 merge semantics).
  */
 export const DEMO_CSV = [
 	'week,date,mrr,signups,churn,active',

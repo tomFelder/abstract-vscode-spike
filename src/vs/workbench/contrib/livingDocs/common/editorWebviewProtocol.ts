@@ -72,7 +72,7 @@ export interface IEditorWebviewStep {
 }
 
 // Whether a fresh PM body differs from the one the live surface holds. A model-driven change (an accepted
-// proposal) differs and resets the surface; the user's own typing was recorded into `pmBody` when it was
+// change) differs and resets the surface; the user's own typing was recorded into `pmBody` when it was
 // saved, so it never triggers a reset. Trimmed so a trailing-newline-only difference is not a reset.
 function pmBodyChanged(pmBody: string | undefined, pmMd: string): boolean {
 	return pmBody !== undefined && pmMd.trim() !== pmBody.trim();

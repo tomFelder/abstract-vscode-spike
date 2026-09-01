@@ -56,7 +56,7 @@ suite('livingDocs review-rail entry (plan 42 L4, issue #363)', () => {
 
 	// The recording rule (plan 42 slice L4, fix-round for defect 1): only an explicit gesture on the rail
 	// records a manual choice; every focusPanel-driven reveal (AI door affordance, AI invocation, held
-	// prompt, proposal arrival) is a peek and records nothing. The sole recorder is the calm collapse
+	// prompt, change arrival) is a peek and records nothing. The sole recorder is the calm collapse
 	// control, which records `collapsed`; after the fix NO gesture records `open`.
 	test('the recording rule: a focusPanel peek records nothing, the collapse control records "collapsed"', () => {
 		assert.deepStrictEqual(

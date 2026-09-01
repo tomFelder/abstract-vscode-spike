@@ -93,12 +93,12 @@ export type GuardrailBand = 'no-data' | 'below' | 'healthy' | 'above';
 
 /** The trust guardrails (doc 15 section 2.4) folded from an event stream - the honest interim for dashboard 4. */
 export interface IGuardrailSummary {
-	/** Total `proposal_resolved` events seen (the denominator for the band). */
-	readonly proposalsResolved: number;
+	/** Total `change_resolved` events seen (the denominator for the band). */
+	readonly changesResolved: number;
 	readonly approvals: number;
 	readonly tweaks: number;
 	readonly rejects: number;
-	/** (tweaks + rejects) / proposalsResolved, or undefined when nothing has been resolved yet. */
+	/** (tweaks + rejects) / changesResolved, or undefined when nothing has been resolved yet. */
 	readonly tweakRejectRate: number | undefined;
 	/** Where {@link tweakRejectRate} sits against {@link TWEAK_REJECT_BAND} (5-25%). */
 	readonly tweakRejectBand: GuardrailBand;
@@ -136,7 +136,7 @@ export function foldGuardrails(records: readonly IAnalyticsEventRecord[]): IGuar
 	let undoAfterApprove = 0;
 	for (const record of records) {
 		switch (record.event) {
-			case 'proposal_resolved':
+			case 'change_resolved':
 				if (record.resolution === 'approve') { approvals++; }
 				else if (record.resolution === 'tweak') { tweaks++; }
 				else if (record.resolution === 'reject') { rejects++; }
@@ -151,11 +151,11 @@ export function foldGuardrails(records: readonly IAnalyticsEventRecord[]): IGuar
 				break;
 		}
 	}
-	const proposalsResolved = approvals + tweaks + rejects;
-	const tweakRejectRate = proposalsResolved > 0 ? (tweaks + rejects) / proposalsResolved : undefined;
+	const changesResolved = approvals + tweaks + rejects;
+	const tweakRejectRate = changesResolved > 0 ? (tweaks + rejects) / changesResolved : undefined;
 	const undoAfterApproveRate = approvals > 0 ? undoAfterApprove / approvals : undefined;
 	return {
-		proposalsResolved,
+		changesResolved,
 		approvals,
 		tweaks,
 		rejects,
