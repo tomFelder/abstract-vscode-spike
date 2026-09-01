@@ -17,3 +17,17 @@ This file provides instructions for AI coding agents working with the VS Code co
 > 5. If a PR is ever opened against `microsoft/vscode`: immediately run `gh pr close <n> --repo microsoft/vscode`, scan the diff for secrets and rotate any that were exposed, delete the head branch, and tell the owner to file a GitHub Support request to purge the PR/diff. Support is the only way to fully remove it.
 
 For detailed project overview, architecture, coding guidelines, and validation steps, see the [Copilot Instructions](.github/copilot-instructions.md).
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues on `tomFelder/abstract-vscode-spike` (never upstream). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels are used as-is (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.

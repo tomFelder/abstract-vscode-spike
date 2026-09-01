@@ -3,6 +3,8 @@
 The corpus runs on several ID systems and a private vocabulary. This page maps every term and ID
 to its home doc so nobody has to hold them in their head. Update it when a new ID system is born.
 
+> **Banner (1 Sep 2026):** vocabulary authority now lives in the root [`CONTEXT.md`](../CONTEXT.md), the canonical glossary, seeded from the table below plus the doc-30 editing vocabulary. This doc remains the home of the ID systems and the per-term home-doc links; on any wording conflict, `CONTEXT.md` wins.
+
 ## Vocabulary
 
 | Term | Meaning | Home |
@@ -11,7 +13,7 @@ to its home doc so nobody has to hold them in their head. Update it when a new I
 | **Lock (`.lock.json`)** | The generated sidecar beside each doc: bindings, provenance, audit, snapshots. Rebuildable, travels with the file | [08](08-living-documents-format-spec.md) |
 | **Binding / bind-link** | `[18%](bind:metrics.mrr.delta)` - a value in prose anchored to a source cell | [08](08-living-documents-format-spec.md) §3 |
 | **Source** | `file` (CSV) / `api` / `mcp` - where bound values come from; listed in Knowledge | [08](08-living-documents-format-spec.md), plan 29 |
-| **Proposal** | An agent-suggested change: red/green diff in place + card (kind, confidence label, rationale). Approve = the commit | [20](20-journey-specs-aha-path.md) §1e/§1f |
+| **Change** | The unit of review, authored by an agent or a human: red/green diff in place + card (kind, confidence label, rationale). Approve = the commit | [20](20-journey-specs-aha-path.md) §1e/§1f |
 | **Review grammar** | The one path every change takes: propose → diff → approve/tweak/reject → receipt. Humans and agents alike | [16](16-principles.md) P3 |
 | **Figure vs meaning** | The central mechanic: low-risk figure changes may auto-apply (dialled); meaning changes always wait | [20](20-journey-specs-aha-path.md) §1g |
 | **Provenance peek** | Hover/click a bound figure → source, exact row, freshness, "then vs now". The wedge in one gesture | [20](20-journey-specs-aha-path.md) §1p |
@@ -46,15 +48,15 @@ to its home doc so nobody has to hold them in their head. Update it when a new I
 | **P (priority)** | P0-P3 | Priority tiers in the beta build order. **Context disambiguates**: "principle P5" vs "P1 work" | [21](21-beta-v1-prioritization.md) §4 |
 | **Q** | Q1-Q3 | The spike's open questions (format / editor depth / fork-vs-greenfield) - Q1, Q3 resolved; Q2 = T1 | [05](05-open-questions.md) |
 | **D26 (flow)** | - | Shorthand for the onboarding flow, from map-D26. Same thing; "D26 onboarding" = map-D26 | [20](20-journey-specs-aha-path.md) final section |
-| **Issues** | #120-#133 | The operational tracking layer for the beta build | [21](21-beta-v1-prioritization.md) §7 |
-| **Plans** | 00-38 | Handoff prompts / loop specs, kept verbatim; ≠ doc numbers (plan 20 ≠ doc 20) | [plans/README.md](plans/README.md) |
+| **Issues** | #120-#365+ | The operational tracking layer: beta build order (#120-#133), plan-52 defect backlog (#297-#335), editing-loop follow-ups (#341-#365) | [21](21-beta-v1-prioritization.md) §7 |
+| **Plans** | 00-55 | Handoff prompts / loop specs, kept verbatim; ≠ doc numbers (plan 20 ≠ doc 20) | [plans/README.md](plans/README.md) |
 
 ## Journey quick reference (grade as of the plan-34 walk, 9-10 Jul 2026)
 
 **Group A - first contact:** 1a open a folder (FRAGILE) · 1b new document (FRAGILE) · 1c switch
 projects (WALKABLE) · 1d organise files (MISSING) · 1w Project Home (MISSING) · 1x template from
 examples (MISSING).
-**Group B - the core loop:** 1e chat-rail iterate (FRAGILE, X1) · 1f judge a proposal (FRAGILE) ·
+**Group B - the core loop:** 1e chat-rail iterate (FRAGILE, X1) · 1f judge a change (FRAGILE) ·
 1g autonomy dial (FRAGILE) · 1h undo/history (FRAGILE, X1).
 **Group C - across documents:** 1i one chat three docs (WALKABLE) · 1j fan-out swarm (WALKABLE) ·
 1k cross-doc review (WALKABLE) · 1l rail tabs (MISSING).

@@ -292,7 +292,7 @@ map-D4 (the template-creator wizard: N example docs → agent finds commonalitie
 The full card is four frames (drop examples, commonalities found, propose skill.md, joins the ＋ New picker). The minimal v1 is the **end-to-end wizard on real files**, because the wizard is the entire subject of 1x:
 
 1. Frame 1: a "New template - from examples" entry that accepts 3-10 past documents (.md at the floor; .docx deferred with the T3 migration story).
-2. Frame 2: the agent analyses and **names what repeats** - shared structure, recurring figures worth binding, tone - through the review grammar (a proposal the user can adjust), never a black box.
+2. Frame 2: the agent analyses and **names what repeats** - shared structure, recurring figures worth binding, tone - through the review grammar (a change the user can adjust), never a black box.
 3. Frame 3: it proposes a **skill.md** (description + rules + tone notes + success examples) as a plain, portable file in the project.
 4. Frame 4: saved, it joins the ＋ New picker (1b).
 
@@ -315,7 +315,7 @@ The proposed skill.md is written as a real file (X1 fix applies); the template j
 
 ### Analytics events
 
-`skill_invoked` (the analysis is a skill run); the resulting proposal reuses `proposal_created`. Template creation could register `template_created` (from: examples / blank) with plan 36.
+`skill_invoked` (the analysis is a skill run); the resulting change reuses `proposal_created`. Template creation could register `template_created` (from: examples / blank) with plan 36.
 
 ### Acceptance criteria
 
@@ -336,23 +336,23 @@ The proposed skill.md is written as a real file (X1 fix applies); the template j
 
 ### Governing decisions
 
-map-D7 (proposals stack like unstaged changes; approve = the commit; a newer proposal may supersede a pending one on the same span; no approval needed before re-prompting), map-D8 (editing text inside a pending proposal folds the edit into the proposal - no rebase, no invalidation), map-D22 (the user can always edit a doc while a chat/run is in flight; keystrokes and pending proposals coexist; spec the merge so it never becomes a data-loss bug). Everything routes through review ([16](16) P3).
+map-D7 (changes stack like unstaged edits in git; approve = the commit; a newer change may supersede a pending one on the same span; no approval needed before re-prompting), map-D8 (editing text inside a pending change folds the edit into it - no rebase, no invalidation), map-D22 (the user can always edit a doc while a chat/run is in flight; keystrokes and pending changes coexist; spec the merge so it never becomes a data-loss bug). Everything routes through review ([16](16) P3).
 
 ### The golden path (card frames 1-4)
 
 1. Ask in the rail; a scope chip states what the agent may touch (here, just this doc).
 2. The agent narrates its steps while the red/green diff streams into the exact paragraph.
-3. The proposal card sits **in the document**, with change kind, one-line rationale - never a preview pane.
+3. The change card sits **in the document**, with change kind, one-line rationale - never a preview pane.
 4. Approved → clean text, a gutter dot for the receipt, the chat logs the version; loop again.
 
-The walk confirmed this golden path works end to end with a live model (walk 1e): scope chip, @source mentions, streaming diff-in-place, proposal card, rail mirror.
+The walk confirmed this golden path works end to end with a live model (walk 1e): scope chip, @source mentions, streaming diff-in-place, change card, rail mirror.
 
 ### States
 
 - **Empty:** an empty document or empty working set behaves as single-doc chat; no crash.
 - **Loading / streaming:** the turn streams with a Stop control (couples to plan 27).
 - **Error (model unreachable):** the rail returns the real, named error already observed (walk 1e): "The agent model is not reachable. Start the local proxy…". No silent hang, no "the agent errored", no data loss. **This is the reference standard** the fan-out path (1s) must match. On beta model access, this becomes the map-D15 pause-and-resume message when the OpenRouter cap is hit ([18](18) §2.1) - never a fatal error.
-- **Paused (budget cap):** the run pauses safely, finished proposals stay reviewable, the composer says so in plain words, and it resumes on rollover ([18](18) §2.1).
+- **Paused (budget cap):** the run pauses safely, finished changes stay reviewable, the composer says so in plain words, and it resumes on rollover ([18](18) §2.1).
 
 ### Off-path behaviours to resolve
 
@@ -361,9 +361,9 @@ The walk confirmed this golden path works end to end with a live model (walk 1e)
 
 ### Merge / persistence semantics (the load-bearing spec)
 
-- **map-D7 stacking:** re-prompting before approving is allowed; proposals stack; a newer proposal on the same span supersedes the pending one; approve is the commit.
-- **map-D8 fold-in:** if the user edits text inside a pending proposal, the edit folds into the proposal - no rebase, no invalidation.
-- **map-D22 coexistence:** the user may type while a run is in flight; keystrokes and pending proposals coexist; edits fold in per map-D8. This merge must be specified and tested so it never becomes a data-loss bug (the decision-68 lesson, [16](16) §3 "spec the merge").
+- **map-D7 stacking:** re-prompting before approving is allowed; changes stack; a newer change on the same span supersedes the pending one; approve is the commit.
+- **map-D8 fold-in:** if the user edits text inside a pending change, the edit folds into it - no rebase, no invalidation.
+- **map-D22 coexistence:** the user may type while a run is in flight; keystrokes and pending changes coexist; edits fold in per map-D8. This merge must be specified and tested so it never becomes a data-loss bug (the decision-68 lesson, [16](16) §3 "spec the merge").
 - **Persistence contract (the X1 cure):** approve writes the applied text to the document **on disk**, and records the version in the lock, atomically; a reload re-reads the persisted document and the real History. In-memory-only writes are a bug, not a build limitation, for anything the user approved.
 
 ### Analytics events
@@ -375,15 +375,15 @@ The walk confirmed this golden path works end to end with a live model (walk 1e)
 - [ ] The chat rail proposes, streams a diff in place, and lands a card in the document - never a preview pane (golden path).
 - [ ] An approved change **survives a page reload** in both the web and desktop builds under test - the on-disk document and the real History both reflect it (cures X1).
 - [ ] A model-unreachable state returns a named, plain-words error with no data loss (the reference standard for 1s).
-- [ ] Re-prompting before approving stacks proposals; a newer proposal on the same span supersedes the pending one; approve commits (map-D7).
-- [ ] Editing inside a pending proposal folds the edit into the proposal - no invalidation (map-D8).
-- [ ] The user can type while a run is in flight; keystrokes and pending proposals coexist and merge without data loss (map-D22).
+- [ ] Re-prompting before approving stacks changes; a newer change on the same span supersedes the pending one; approve commits (map-D7).
+- [ ] Editing inside a pending change folds the edit into it - no invalidation (map-D8).
+- [ ] The user can type while a run is in flight; keystrokes and pending changes coexist and merge without data loss (map-D22).
 - [ ] The only reachable "Chat" surface is the Abstract rail; the stock Copilot chat is removed or re-routed (cures X4).
 - [ ] `proposal_created` and `proposal_resolved` fire with their properties.
 
 ---
 
-## 1f - Judge one proposal: approve · tweak · reject
+## 1f - Judge one change: approve · tweak · reject
 
 ### The job
 
@@ -396,26 +396,26 @@ map-D7 (approve = the commit), decision 131 (Tweak = amend-before-approve, verif
 ### The golden path (card frames 1-3)
 
 1. Card anatomy: change kind, honest confidence label (● pulled directly / ◐ inferred - needs your eyes), old/new, source + freshness, one-line why.
-2. **Tweak** = edit the proposal inline, then apply - not navigation, not a veto; the edit is audited as "approved with edits".
+2. **Tweak** = edit the change inline, then apply - not navigation, not a veto; the edit is audited as "approved with edits".
 3. **Reject** reverts cleanly; the optional reason becomes context for the next derivation.
 
 The walk (1f re-verify) confirmed Approve works, Tweak is real (decision 131: pencil → in-place editor → Save & Approve / Cancel through the one approve path), and the chip is honest.
 
 ### States
 
-- **Empty:** no pending proposal - the card region is absent, not a stale empty card.
-- **Loading:** a proposal still streaming shows its streaming state before the Approve/Tweak/Reject controls settle.
-- **Error:** approving a proposal whose apply fails must not half-apply (atomicity, [16](16) §3); a named error, the proposal stays pending.
+- **Empty:** no pending change - the card region is absent, not a stale empty card.
+- **Loading:** a change still streaming shows its streaming state before the Approve/Tweak/Reject controls settle.
+- **Error:** approving a change whose apply fails must not half-apply (atomicity, [16](16) §3); a named error, the change stays pending.
 
 ### Off-path behaviours to resolve
 
 - **X1 persistence** (walk 1f): the approve itself is sound but does not survive reload; cured by the 1e persistence contract.
-- **Confidence sub-line is a fixed 85%** (walk 1f re-verify): every generated proposal showed "85% confidence" as a fixed number in the sub-line. The headline label is honest, but a fixed percentage is exactly the "fake percentage" the card warns against; it must either reflect a real signal or be replaced by the label alone.
+- **Confidence sub-line is a fixed 85%** (walk 1f re-verify): every generated change showed "85% confidence" as a fixed number in the sub-line. The headline label is honest, but a fixed percentage is exactly the "fake percentage" the card warns against; it must either reflect a real signal or be replaced by the label alone.
 - **Reject reason → audit** (walk 1f): the clean-revert + optional-reason-to-audit flow was confirmed present but not fully exercised; the spec requires the reason to land in the audit as next-derivation context.
 
 ### Merge / persistence semantics
 
-Tweak folds the human edit into the approved commit (map-D8 shape, applied at approve time); approve is atomic (whole proposal applies or none of it). Reject reverts with no residue.
+Tweak folds the human edit into the approved commit (map-D8 shape, applied at approve time); approve is atomic (the whole change applies or none of it). Reject reverts with no residue.
 
 ### Analytics events
 
@@ -426,7 +426,7 @@ Tweak folds the human edit into the approved commit (map-D8 shape, applied at ap
 - [ ] The card shows change kind, an honest confidence **label** (not a fabricated percentage), old/new, source + freshness, and a one-line why.
 - [ ] Tweak opens an in-place editor and applies through the one approve path, audited as "approved with edits" (decision 131).
 - [ ] Reject reverts cleanly; the optional reason lands in the audit as next-derivation context.
-- [ ] Approve/Tweak are atomic - a failed apply never half-applies and leaves the proposal pending with a named error.
+- [ ] Approve/Tweak are atomic - a failed apply never half-applies and leaves the change pending with a named error.
 - [ ] Approved (and tweaked) results survive reload (via the 1e persistence contract).
 - [ ] `proposal_resolved` fires with resolution and latency, feeding the tweak+reject guardrail.
 
@@ -594,7 +594,7 @@ map-D26 (onboarding drives to the provenance peek via a demo CSV: chat generates
 2. **Demo report generated:** chat generates a report from a bundled **demo CSV** - no folder to open, no setup (this composes 1e's golden path on seeded data).
 3. **Provenance peek hovered/clicked:** the user hovers/clicks a bound figure and sees the source drawer (this composes 1p) - wow moment one.
 4. **First diff seen:** onboarding prompts **one iteration** ("try tightening this paragraph"); a single inline red/green diff streams into the exact paragraph (this composes 1e frame 2) - wow moment two.
-5. **First approve (sample):** the user approves the single proposal (1f); it applies and logs a version (1h).
+5. **First approve (sample):** the user approves the single change (1f); it applies and logs a version (1h).
 6. **First folder opened → first approve (own file):** onboarding hands off to "bring a real folder" (1a); the aha (T4) is the first approved agent change on their **own** file.
 
 ### States
@@ -624,7 +624,7 @@ The sample approve (step 5) exercises the 1e persistence contract on seeded data
 - [ ] A bundled demo CSV generates a report via chat with no folder open and no setup.
 - [ ] The user reaches the provenance peek (wow moment one) - `provenance_peeked` fires.
 - [ ] Onboarding prompts one iteration producing a single inline diff (wow moment two).
-- [ ] The user approves the single sample proposal; it applies, logs a version, and survives reload (X1 cure).
+- [ ] The user approves the single sample change; it applies, logs a version, and survives reload (X1 cure).
 - [ ] Onboarding reaches a working model through the beta doors (Sign in with ChatGPT / included fallback / heuristic), never dead-ending on model access.
 - [ ] A model error or budget cap during onboarding names itself and pauses gracefully (map-D15), never fatal.
 - [ ] The onboarding survey (daily-driver model, owned subscriptions, weekly output) is captured to `model_configured`.

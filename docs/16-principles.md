@@ -8,7 +8,7 @@ One document for the rules that outrank any individual plan. Product principles 
 
 - **P1 - Progressive disclosure.** Surface a capability only when the user's situation calls for it. Depth is earned, never dumped.
 - **P2 - No duplicate pathways.** If a job already has a clean route, don't build a second one for v1 (e.g. D20: templates already cover recurring creation).
-- **P3 - Everything routes through review.** Chat, fan-out, agents, hooks, thinking skills - one proposal grammar, no second-class writes.
+- **P3 - Everything routes through review.** Chat, fan-out, agents, hooks, thinking skills - one review grammar, no second-class writes.
 - **P4 - No hidden context.** What the agent sees is always inspectable before it acts (task context in the tab, doc sources in the rail).
 - **P5 - Plain words.** "While I'm away…", not cron; "heavy context", not token counts. Git-shaped mechanics stay internal (D7's commit is a metaphor, never UI copy).
 - **P6 - Files are the truth.** Plain, portable, rebuildable - the user can always walk away with their folder. The escape hatch is the sales pitch.
@@ -25,7 +25,7 @@ Consolidated from doc 12 §2, doc 06 and decisions 19-42; binding since the rede
 
 - **Calm by construction.** One document surface, no splits ever; IDE optionality removed at the source, not hidden by settings. Layout is a product decision, not a user choice.
 - **One editor.** ProseMirror is the single surface for every `.md`, plain or living. "Living" is a badge, not a gate.
-- **One review grammar everywhere.** The proposal card (change kind, confidence label, old/new, source + freshness, one-line why, Approve/Tweak/Reject) is the same in chat edits, fan-outs, agent runs, hooks and - later - human suggestions. Nothing new to learn per surface.
+- **One review grammar everywhere.** The change card (change kind, confidence label, old/new, source + freshness, one-line why, Approve/Tweak/Reject) is the same in chat edits, fan-outs, agent runs, hooks and - later - human suggestions. Nothing new to learn per surface.
 - **Colour only ever means something.** Green = applied/ok, amber = waiting/stale, red = failed/rejected; decoration is never ornamental.
 - **Real data only.** No fabricated counts, no fake versions, no dead buttons without a "Soon" label. The demo is the product.
 - **Design the feeling, not just the screen.** The morning all-clear feels like inbox-zero; the provenance peek feels like x-ray vision; delight is relief, not fireworks.
@@ -34,7 +34,7 @@ Consolidated from doc 12 §2, doc 06 and decisions 19-42; binding since the rede
 ## 3. Engineering principles
 
 - **Journey-completeness over feature-count.** *(New, 9 Jul 2026 - the broken-alpha lesson.)* Plans 26-33 all merged, yet the app breaks one step off the golden path; plan-completion is not journey-completion. The unit of "done" is a **walkable journey**: empty states, error states, off-path recovery and unhappy paths included, validated against the journey's acceptance criteria (Journey Map task ②). A feature that only works when driven correctly is not shipped; it is staged.
-- **Everything routes through the review engine.** The engineering mirror of P3: one proposal model, one approve path, one audit trail. No component writes to a document around it.
+- **Everything routes through the review engine.** The engineering mirror of P3: one change model, one approve path, one audit trail. No component writes to a document around it.
 - **Build at the product layer, portable by default.** Features (undo, history, snapshots, review API) are built on our own surfaces (PM history + lock + audit), not deep VS Code internals, so they survive the local → cloud rebuild (chapter 2 in doc 14). D23's portable approve-act is the template.
 - **Honest engineering economics.** Core patches are counted, one-line, fail-soft, and logged in the merge-tax ledger (plans/03). The ledger stays live for as long as the fork does.
 - **Atomicity is engine truth, not UI copy.** "Never half-applied" (1s), "a starved run pauses and resumes, never dies" (D15) - these are invariants the engine enforces, with the UI merely reporting them.

@@ -121,7 +121,7 @@ readable only by you (owner-only permissions). **None of these ever contain your
 - **A usage log** - one line per included-model call recording the cost, the running daily total,
   and whether the daily cap was hit. It records **money and counts, never words**.
 - **A product-events log** - your answers to the three onboarding questions and, **if you have said
-  yes to analytics**, a line for each action you take (a proposal approved, a source synced, a
+  yes to analytics**, a line for each action you take (a change approved, a source synced, a
   document exported - the count and kind, never the words). If you declined, this file gains no
   such lines. Today it **stays on your computer**; nothing forwards it anywhere yet.
 

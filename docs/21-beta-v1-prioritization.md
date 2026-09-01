@@ -41,7 +41,7 @@ The aha path is the priority subset specified with acceptance criteria in
 | **1w** Project Home | "Open and know in 5 seconds what needs me" | MISSING | Minimal v1: land on Home, while-you-were-away, all-clear, whole-project composer, empty-folder front door (F15) |
 | **1x** Template from examples | "Learn the pattern from six past docs" | MISSING | Minimal v1: 3-10 docs → named commonalities → skill.md → joins ＋ New (F18) |
 | **1e** Chat-rail iterate | THE foundational loop - talk to the doc, see the diff | FRAGILE | **X1 persistence contract on web (F1)**, kill the stock Copilot chat tab (F2/X4) |
-| **1f** Judge a proposal | "Decide in 5 seconds; edit, don't just veto" | FRAGILE | Kill the fabricated "85% confidence" (F5) |
+| **1f** Judge a change | "Decide in 5 seconds; edit, don't just veto" | FRAGILE | Kill the fabricated "85% confidence" (F5) |
 | **1g** Autonomy dial | "What may the agent do without asking" | FRAGILE | Three-position dial in the doc header, reusing the Agents policy control (F11) |
 | **1h** Undo / history | "Get me back" - highest-leverage journey | FRAGILE | X1 (F1), Cmd+Z across approves (F6), History rehydrates from the on-disk lock (F19) |
 | **1p** Provenance peek | The wedge: hover a number, see its source | WALKABLE | Hover peek + "then vs now", freshness consistency (F12/F13) |
@@ -61,7 +61,7 @@ Two kinds, deliberately distinct:
 1. **The provenance peek** (1p): hover a figure in the demo report → source, cell, freshness.
    "X-ray vision." Demos in 5 seconds.
 2. **The single inline diff** (1e): one prompted iteration → red/green streams into the exact
-   paragraph, proposal card in the document, approve → receipt in the gutter.
+   paragraph, change card in the document, approve → receipt in the gutter.
 
 **The aha itself (T4, their data):** the first approved agent change **on the user's own file** -
 which is only reachable if 1a survives their real folder (hierarchy, titles, sources, docx visible

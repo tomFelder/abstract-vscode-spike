@@ -32,7 +32,7 @@ zero data-loss incidents, no staleness escapes.
 | **Activation** | % onboarded reaching T4 within 48h unaided (after cohort 1's assisted sessions) | ≥ 60% | < 30% after the plan-37 fixes have landed |
 | **Value repeat** | % activated with a *second* approved change on a *different* day in week 1 | ≥ 70% | < 40% |
 | **Habit (the raise bar)** | % activated who re-run/re-derive the **same document** in ≥ 3 of their first 4 weeks (VP3) | ≥ 40% | < 15% |
-| **Depth** | median approved proposals per active user per week (the north star) | ≥ 5 | < 2 |
+| **Depth** | median approved changes per active user per week (the north star) | ≥ 5 | < 2 |
 | **Trust** | `undo_after_approve` + "this was wrong" reports per 100 approvals | ≤ 3, all read + answered | a single unexplained data-loss report = stop-ship |
 | **WTP** | % of week-4+ actives converting to the charged API tier (§4) within 30 days of it existing | ≥ 25% | 0 conversions from ≥ 10 offered |
 | **Growth pull** | % of actives who *unprompted* ask for an invite for someone else, or intro one | ≥ 30% | ≈ 0 and no organic waitlist movement |

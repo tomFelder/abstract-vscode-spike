@@ -4,9 +4,9 @@ Decided in the founder planning session of 9 Jul 2026. Today the product tracks 
 
 ## 1. The north star
 
-> **Approved agent proposals per user per week.**
+> **Approved agent changes per user per week.**
 
-Trust throughput. It is the product's whole thesis in one number: it only grows if documents are genuinely bound (liveness), the agent's work is genuinely good (quality), and the human genuinely trusts the review loop (the wedge). Thinking sessions count too - a thinking skill's edits land as proposals through the same review engine, so the ITE layer feeds the same number rather than needing its own.
+Trust throughput. It is the product's whole thesis in one number: it only grows if documents are genuinely bound (liveness), the agent's work is genuinely good (quality), and the human genuinely trusts the review loop (the wedge). Thinking sessions count too - a thinking skill's edits land as changes through the same review engine, so the ITE layer feeds the same number rather than needing its own.
 
 Why not the alternatives:
 
@@ -34,7 +34,7 @@ This is killer flow ① instrumented. Secondary habit signals: thinking-skill se
 
 ### 2.3 Retention - the proof
 
-> **Week-4 retention of weekly-active reviewers** (users who had ≥1 approved proposal in a week and are still doing so four weeks later).
+> **Week-4 retention of weekly-active reviewers** (users who had ≥1 approved change in a week and are still doing so four weeks later).
 
 This is the number that validates T4, per its own mandate. For a friends-cohort beta the absolute numbers will be tiny; read them as case studies, not statistics - the instrumentation exists so the *shape* of usage is visible per user.
 
@@ -60,7 +60,7 @@ Why PostHog over Mixpanel/Amplitude:
 Implementation notes (for the plan that wires this):
 
 - Ship with an explicit, plain-words consent moment in onboarding - a trust-first product must not track silently. Replay masks document text by default; **document content never leaves the machine as analytics**. Event properties carry counts, kinds and durations, never prose or figures.
-- Most events derive naturally from the audit trail the product already writes (every proposal, approval, rejection and sync is already logged locally) - the analytics layer is largely a mirror of the lock/audit events plus UI funnel events, not new plumbing.
+- Most events derive naturally from the audit trail the product already writes (every change, approval, rejection and sync is already logged locally) - the analytics layer is largely a mirror of the lock/audit events plus UI funnel events, not new plumbing.
 - Identify users by a stable anonymous ID at first run; tie to email at waitlist-redemption so cohort membership is known.
 
 ### 3.1 Core event dictionary (v1)
@@ -85,7 +85,7 @@ Implementation notes (for the plan that wires this):
 
 ### 3.2 Dashboards (one per tree layer)
 
-1. **North star**: approved proposals per user per week, trended; split by proposal source kind.
+1. **North star**: approved changes per user per week, trended; split by change source kind.
 2. **Activation funnel**: the §2.1 onboarding funnel with drop-off; median time-to-aha.
 3. **Habit & retention**: weekly all-clear completions; W1-W4 retention curves of weekly-active reviewers.
 4. **Guardrails**: tweak+reject rate against the 5-25% band; staleness escapes (target 0); "this was wrong" count; undo-after-approve rate.
