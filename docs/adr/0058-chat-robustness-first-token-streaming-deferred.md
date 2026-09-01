@@ -1,0 +1,12 @@
+---
+number: 58
+status: "**Done (plan 16 iter 5, branch `calm-surface-5`, PR → `calm-surface-4`).** Tier: **our-surface, 0 core patches** (`parseChatResponse` in `livingDocMarkdown.ts`; retry in `livingDocsService._callModel`; indicator CSS + DOM in `reviewRailView.ts`). **TDD (pure logic):** 4 `parseChatResponse` tests (clean JSON; prose-wrapped JSON; plain-text degrade; truncated-JSON degrade); 91 LivingDoc tests pass. Verified live (code-web + OpenRouter): a question returned a real prose answer (no raw JSON); HOLD F-spine green (reads sources, figure `49800` + toolbar intact). _The animated indicator is wired but the test model replies too fast to reliably capture mid-flight._"
+provenance: "plan 16"
+source: docs/07-decision-log.md
+---
+
+# Chat robustness first, token-streaming deferred
+
+**Chat robustness first (tolerant parse + retry-once + an alive "Thinking" indicator); defer true token-streaming because the "ONLY JSON" reply format makes it surface raw JSON**
+
+Iter 5's goal is a chat that never feels broken. Four parts, three landed: (a) **Tolerant parse** — `_chatRespond` did a bare `JSON.parse(raw.slice(indexOf('{')…))` that THREW on any non-JSON / truncated / prose-wrapped reply and surfaced as a flat "the agent model errored". Extracted a pure, unit-tested `parseChatResponse(raw)` that extracts the JSON object when present and otherwise degrades to a plain-text answer (no proposals), never throwing; and the bubble NEVER shows the raw JSON envelope (a parsed-but-empty `reply` now degrades to a neutral line, caught live when gpt-4o-mini returned `{"reply":"",…}`). (b) **Retry-once** — `_callModel` wraps a single silent retry around transient failures (empty/errored body), since OpenRouter intermittently flaked on larger follow-ups; a refusal is not retried. (c) **Alive indicator** — the static "Working…" became a pulsing agent avatar + an animated ellipsis ("Thinking…"), pure CSS, so the wait reads as thinking not a frozen hang. (d) **Streaming — DEFERRED, logged:** the model is asked for "ONLY a JSON object", and the proxy is a buffered round-trip; token-streaming that JSON would surface `{"reply":"…` to the user. Real streaming needs a response-format redesign (a prose stream + a structured edits tail) + proxy SSE passthrough + a webview progressive-render path — a larger, riskier change than fits an unattended iteration. Scoped as a follow-up; the robustness trio removes the *felt* pain (false errors, dead hang) without it.

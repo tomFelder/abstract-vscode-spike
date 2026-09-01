@@ -1,0 +1,12 @@
+---
+number: 153
+status: "**Done (plan 32, iter 4).** Branch `32-orch-second-half`."
+provenance: "plan 32 iter 4"
+source: docs/07-decision-log.md
+---
+
+# The export gate becomes visible and audited
+
+**The before-export gate and the on-publish pins become visible, explainable and override-audited: the Present/export modal SHOWS a failed grader's one-line reason with "Export anyway" (audited `via:override`) + "Fix first" (jumps to the flagged block), and a published document surfaces its pins in History (the SNAPSHOT row names the real pin count) and in source-peek ("pinned at v <hash> of <date>")**
+
+Settled to the plan's iteration-4 recommendation: no silent blocks, no silent overrides. `exportDocument`/`exportMarkdown`/`publishDocument` gain a `force` parameter; without it a failed gate still blocks (existing behaviour), and with it ("Export anyway"/"Publish anyway") the operation proceeds and records an `override`-via audit entry (a new `IAuditEntry.via` value) so the trail shows a human chose to proceed. `previewExportGate(resource)` exposes the gate verdict so the editor computes it as the modal opens and the modal renders the grader reason + the two-choice action row (replacing the single export CTA) rather than the old silent `_notify.info` block; "Fix first" closes the modal and opens the in-surface source-peek on the flagged bound block's keys - the reconciliation UI, not a dead scroll. On publish, the snapshot records a real `pinnedSources` count (History renders "pinned N source versions" beside the SNAPSHOT badge, or "no sources to pin" for a 0-pin publish - never a fabricated number), and `getSourcePeek` adds a `pinnedLabel` ("pinned at v <short-hash> of <date>", dated from the newest publish snapshot) shown on a published document's source drawer. **Tier: our-surface, 0 core patches.** Verified: 6 service tests (previewExportGate surfaces the failure; a forced export writes the file AND audits `via:override` while the unforced export stays blocked; a forced publish audits the override; the publish snapshot carries the true pin count; source-peek shows the pinned line on a published doc; the pre-existing unforced block tests still pass) + 2 render-harness tests on the present modal (a failed gate shows the reason + Export-anyway + Fix-first buttons; a passing gate shows the normal single CTA and no override) + 2 History tests (a publish names the real pin count; a 0-pin publish reads "no sources to pin").

@@ -1,0 +1,12 @@
+---
+number: 57
+status: "**Done (plan 16 iter 4, branch `calm-surface-4`, PR → `calm-surface-3`).** Tier: **our-surface + additive-contribution, 0 core patches** (`files.exclude` default in `livingDocs.contribution.ts`; `frontmatterTitle` in `livingDocsModel.ts`/`livingDocMarkdown.ts`). **TDD (pure logic, red→green):** 3 new tests in `livingDocMarkdown.test.ts` — plain doc round-trips byte-clean, a plain doc + inserted block stays plain (no injected `title:`, `isLiving` false), and a plain doc with an authored title keeps it; all 87 LivingDoc tests pass. **Desktop disk smoke (decision 38, fresh folder):** created a plain `Untitled.md` (\"Launch Plan\"), chat-inserted an intro paragraph, **Approved** — re-read from real disk: clean plain Markdown, **0 `title:` lines, 0 `---` blocks**, the insertion present; `agents.json` + `Untitled.lock.json` both present on disk but **absent from the Explorer**. HOLD green (chat → inline diff → accept → persist; crumb stays \"Markdown\")."
+provenance: "plan 16"
+source: docs/07-decision-log.md
+---
+
+# Hide internal artefacts, emit byte-clean Markdown
+
+**Hide internal artifacts from the Explorer via `files.exclude`; serialize a plain doc to byte-clean Markdown by emitting only the AUTHORED frontmatter title**
+
+Iter 4 stops two leaks of internals into the user's document space. (a) **Sidecars out of view.** `.lock.json` (provenance/claim sidecars) and `agents.json` (the agent registry) showed in the native Explorer. Added them to a `files.exclude` product default (object-valued config defaults MERGE in VS Code, so this ADDS to the built-in `.git`/`.DS_Store` excludes, not replaces). The files stay on disk; they just leave the document list. The custom tree-rail's Files tab already lists only `.md` (via `_isDocFile`), so no rail change was needed. (b) **No injected frontmatter.** `parseLivingDoc` derives `doc.title` to the first H1 or `'Untitled'` when the file has no frontmatter title, and `serializeLivingDoc` emitted `title: ${doc.title}` unconditionally — so accepting a chat edit on a plain notes file wrote `---\ntitle: Untitled\n---` into it (observed in the plan-15 iter-6 smoke). Fix: added `frontmatterTitle` (the AUTHORED `title:`, `''` if none) to `ILivingDoc`; `serializeLivingDoc` now emits `title:` only from `frontmatterTitle` (never the derived `doc.title`) and emits **no `---` block at all** when there is no authored frontmatter (title/subtitle/sources/context) — so a plain doc round-trips byte-clean while a living doc (or a plain doc with an authored title) is unchanged.

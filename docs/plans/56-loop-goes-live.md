@@ -3,6 +3,7 @@
 **Status:** authored 1 Sep 2026, from a grilling session that settled the wave end to end. This plan turns doc 30's stage-3 first tranche into PR-sized work packages, pairs them with the content-integrity defects that stand between a stranger and the aha, and carries the RUN prompt for an autonomous overnight loop.
 **Spec of record:** [30-editing-architecture.md](../30-editing-architecture.md). Where this plan and doc 30 disagree, doc 30 wins. Stages 0-2 merged in plan 55; this is the first tranche of stage 3.
 **Absorbs:** plan 53's WP-C (issue hygiene) into B1. The rest of [plan 53](53-strip-back-loop.md) and all of [plan 54](54-structural-extras-loop.md) stay parked and unrun.
+**Spec issue:** [#374](https://github.com/tomFelder/abstract-vscode-spike/issues/374) - the same wave as a spec, with the user stories and the testing decisions. The per-ticket contracts the overnight loop consumes hang off it.
 **Repo facts:** PRs go to `origin` = `tomFelder/abstract-vscode-spike` only, base `main`. The remote `microsoft-vscode-readonly` is never pushed to and never receives PRs, under any circumstances.
 
 ## Goal
@@ -19,6 +20,19 @@ Defect *identification* is a first-class output, not a side effect. A healthy UX
 - **No agent framework.** Doc 30 D5 stands: the kernel is hand-rolled in `common/`, typed against `@anthropic-ai/sdk` types only. LangGraph is a recorded revisit trigger, not a destination - see ADR 0183. Do not introduce LangChain, LangGraph, the Vercel AI SDK or the SDK `toolRunner` in this wave.
 - **Founder rulings from doc 30 §9 continue to bind**: the $1/day cap stays with the OAuth door as the relief valve (9.1); `anthropic/claude-sonnet-5` serves both planner and rewrite-author roles on the included tier (9.3); reads outside scope are permitted but ledgered (9.4); a proposed deletion is never bulk-approvable (9.5); web serving is out of v1.0 (9.6).
 - **Vocabulary.** The unit of review is a **change**; "proposal" is retired as a noun. The verb "propose" stays. See the root [CONTEXT.md](../../CONTEXT.md), which is the glossary of record.
+
+## The seams
+
+The whole wave tests at **four seams, all of which already exist**. No new seam is introduced. Each work package below also names its seam concretely; those per-package lines are instances of these four, not twenty independent boundaries. An Implementer must work at the seam its package names and must not invent others - that is what satisfies the `tdd` skill's confirm-the-seams rule with nobody awake to confirm them.
+
+| | Seam | Where it applies |
+|---|---|---|
+| **S1** | `IRequestService` - the single injection point for model traffic. One raw `fetch` bypasses it today, which is the whole of #318. | P0, and it is what makes S2's fake client honest |
+| **S2** | `IAgentModelClient` + `IAgentToolRegistry` - already exported from `common/livingDocsAgentLoop.ts` and injected into the kernel, so the loop is drivable by a scripted fake client with no network and no DOM. | A1, A2, A3, A4 |
+| **S3** | `ChangeStore` + `IChangeStoreDocuments` - the store's write boundary, already carrying typed receipts (`IProposeReceipts`, `ChangeSkipReason`, `IStoreRefusal`, `StoreWriteResult`) and taking read/snapshot/write by injection, so persistence and recovery are testable without a real disk. | A1's receipts, B1, B2, B3, B4 |
+| **S4** | The workbench service-level harness (`test/browser/`, 50+ existing suites) - only for defects reachable solely through the assembled service and its DOM. | B5, B6, B7 |
+
+Pure logic joins the established `common/` family (`turnReceipts.ts`, `applyOutcome.ts`, `changeJournal.ts`, `changeReconciler.ts`, `livingDocDiffer.ts`) rather than inventing a seam; A3's segment-expansion function lands there.
 
 ## The barrier
 

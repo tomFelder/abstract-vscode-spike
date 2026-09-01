@@ -1,0 +1,12 @@
+---
+number: 128
+status: "**Done (plan 29 iter 3).** 0 core patches; branch `29-provenance-mcp`."
+provenance: "plan 29, iter 3, D29-hover"
+source: docs/07-decision-log.md
+---
+
+# A bound figure answers where from on hover
+
+**A bound figure + its provenance gutter dot answer "where from, how fresh" on a quiet hover tooltip, built purely from the lock - no PM-bundle rebuild**
+
+Settled to the plan's recommendation. The `bound_figure` atom already renders `data-key` (the bind key), so NO offline PM-bundle rebuild was needed - the RUNTIME reads that key. A pure `buildFigureProvenance(lock, staleKeys, now)` in `common/livingDocPmDecorations.ts` folds each lock binding into `IPmProvenance { key, source, location, synced, fresh }` (source/location split on the lock `source`'s `#`; `synced` via a shared `relativeSyncedLabel` mirroring the Knowledge screen's wording; `fresh` = the key is not in the document's `staleBindings`). The editor pane builds this from `getLock` + `getFreshness().staleBindings` and threads it through the render input into the PM decoration payload (`IPmDecoPayload.provenance`, `[]` for a plain doc). The webview RUNTIME keeps a per-key map refreshed from every payload and, on `mouseover` of a `span.bound[data-key]` or a `.pm-gutter` dot, floats a `position:fixed` + `pointer-events:none` card - `metrics.csv` / `mrr · Synced 2 h ago` (+ an amber "Source changed since last sync" line when `!fresh`) - that never shifts layout and never intercepts the click (which still opens the source drawer, unchanged). The gutter's hover was moved from opening the drawer to showing the tooltip; a new gutter CLICK opens the drawer, so hover=tooltip / click=drawer is consistent for figure and dot. **Real data only:** an unsynced entry reads "Not yet synced"; times come straight from the lock. **Tier: our-surface** (common helper + render/editor; 0 core patches). Verified: 4 new `livingDocPmDecorations` unit tests (fresh projection, `fresh:false` amber path, empty-location/never-synced, `relativeSyncedLabel` buckets) + a required live web pass on `:8080` (Playwright, sample folder mounted) captured at `docs/plans/29-verify/iter3-01-figure-hover-tooltip.png` - hovering `+18%` (`bind:metrics.mrr.delta`) shows `metrics.csv / mrr · Synced just now`. The amber stale line is unit-verified (the live mount re-syncs on open, so an external source edit reconciles to fresh before the tooltip reads it - honest gap noted in `iter3-hover-provenance.md`).

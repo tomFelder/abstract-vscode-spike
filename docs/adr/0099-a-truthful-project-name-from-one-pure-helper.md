@@ -1,0 +1,12 @@
+---
+number: 99
+status: "**Settled (default, unattended) + built (plan 33 iter 2).** 0 core patches; branch `33-shell-identity`."
+provenance: "plan 33 iter 2, L5"
+source: docs/07-decision-log.md
+---
+
+# A truthful project name from one pure helper
+
+**A truthful project name via one pure `projectDisplayName` helper in `common/`; the web/memfs "mount" stub is overridden ONLY by a real `.abstract-name` marker the sample ships**
+
+The web build greeted "mount - N documents" because `@vscode/test-web` mounts the served sample into memfs and the workbench labels the workspace folder "mount" (a mount-point artefact, not a project name). Plan iter-2's recommendation: one pure helper, adopted verbatim. New `common/projectDisplayName.ts` resolves a name from three signals (`folderName`, `basename`, `markerContent`): (1) if the folder name is a known mount stub (`mount`/`static`/`sample-folder`, case-insensitive) AND the folder ships a non-empty `.abstract-name` marker, use the marker's first non-empty non-comment line; (2) else the folder display name; (3) else the basename; (4) else undefined. **Honesty guardrail (the never-fabricate rule):** a marker ONLY overrides a mount stub, never a genuinely-named folder, and a stub WITHOUT a marker keeps showing its real name "mount" - the helper never invents. The samples ship the marker (`living-docs-sample/.abstract-name` = "Living Docs Sample"; `.../brief/.abstract-name` = "Project Brief"); the marker is added to the `files.exclude` config-default so it stays invisible plumbing like the lock sidecars. Wired into `LivingDocsService.getProjectDisplayName()` (new interface method), which reads the marker once at startup + on `onDidChangeWorkspaceFolders` into a cache so the getter stays synchronous for the renderer; `ScreenEditor._render` now uses it for the user-facing `folderName` (Home greeting, topbar crumb, project-run + review-project crumbs, the ALL PROJECTS current-folder tile). Recent-folder tiles were already basename-resolving + stub-filtering (`_fetchRecentFolders`), consistent with the helper's non-open-folder path, so left as-is. Helper is fully unit-tested (11 cases: workspace name, basename, mount+marker, static+marker, mount-without-marker, arbitrary-"mount"-no-marker, real-folder-not-overridden, first-line/comment/whitespace marker parsing, case-insensitive stub, empty). **Tier: our-surface (a pure `common/` helper + a service getter + one render call + sample markers). 0 core patches.**

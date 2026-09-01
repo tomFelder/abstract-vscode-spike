@@ -49,7 +49,7 @@ The wave took **exactly 2** core seams against the decision-169 budget of 2. `ch
 
 ## 4. Docs hygiene (DoD item 4) - verified, no fixes needed
 
-- **Decision log 167-174:** all 8 stand in `docs/07-decision-log.md` (lines 221-228), none struck-through or reverted.
+- **Decision log 167-174:** all 8 stand, none struck-through or reverted. Each is now its own record under `docs/adr/`, indexed from `docs/07-decision-log.md`: [167](../../../adr/0167-abstract-editor-v2-is-the-pixel-spec-of-record.md) the pixel spec of record · [168](../../../adr/0168-a-numbered-gutter-replaces-the-dot-gutter.md) the numbered gutter · [169](../../../adr/0169-the-elevation-models-two-seam-budget.md) the two-seam budget · [170](../../../adr/0170-one-48px-header-from-the-titlebar-part.md) the 48px header · [171](../../../adr/0171-abstracts-own-product-tab-strip.md) the product tab strip · [172](../../../adr/0172-the-properties-panel-is-the-frontmatter-front-door.md) the Properties panel · [173](../../../adr/0173-the-tree-rail-is-three-tabs-with-folded-search.md) the three-tab tree rail · [174](../../../adr/0174-the-wave-orchestration-protocol.md) the wave orchestration protocol.
 - **Plan 20 delta banner:** present at `docs/plans/20-abstract-ui-redesign-handoff.md:3` - the top blockquote names the v2 wave (plan 43) and the §C2 gutter supersession (decision 168).
 - **`docs/README.md`:** indexes the wave `43`-`49` (lines 47-48).
 - **`docs/plans/README.md`:** indexes plans 43-49 individually (lines 72-78) plus the RUN prompt.

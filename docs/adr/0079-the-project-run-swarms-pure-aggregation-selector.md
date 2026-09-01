@@ -1,0 +1,12 @@
+---
+number: 79
+status: "**Settled + built (plan 23 iter 1).** Branch `redesign-23-1-isms-sample`."
+provenance: "D23-A · plan 23, iter 1"
+source: docs/07-decision-log.md
+---
+
+# The project-run swarm's pure aggregation selector
+
+**The project-run swarm is driven by the live orchestrator run PLUS a pure per-document aggregation of the service's pending changes; iter 1 adds only the pure selector, since the orchestrator does NOT yet expose per-document status or decisions-with-source-lines.**
+
+Audited the real code. The whole-project fan-out is the **chat working set** path, not `agentOrchestrator.runAgent`: `livingDocsService.addFolderToWorkingSet` (adds every folder `.md`) + `sendChatMessage` → `_chatRespondMulti` (`livingDocsService.ts:1576`) asks the model ONCE for a per-doc edit map (decision 62) and routes each doc's edits/inserts into the shared pending queue tagged with that doc's `docId` (`_queueChatEdit` at `:1641`, `_queueChatInsert` at `:1673`). What the service **already exposes** for the tiles + totals: `getAllPending()` (`:320`) returns `IProposedChange[]`, each carrying `docId`, `docTitle`, `blockLabel`, `oldText`/`newText`, `kind`, `confidence`, `rationale`, and `sourceCells` (`livingDocsModel.ts:201`); `getPendingForDoc(resource)` (`livingDocs.ts:186`) is the per-doc slice; `listDocuments()` (`:193`) gives the full project doc set (title + `pendingCount`) so untouched docs still render as tiles. **Gaps found (for iters 3-4):** (1) the orchestrator's `IAgentRun` (`livingDocsModel.ts:186`) has only `applied`/`queued` counts, no per-document status — the live spinner/`working` state will have to be tracked in the screen while `isChatBusy()` (`livingDocs.ts:276`) is true; (2) there is NO "decision + transcript source line" concept — chat edits set `sourceCells: []` (`:1666`, `:1703`) and carry only a free-text `rationale`; the transcript line a decision came from is not captured anywhere today. So the C4 "decisions understood · transcript · line N" column will need a small model-output extension in iter 4 (ask for a `sourceLine`/quote per edit), logged here rather than guessed. Iter 1's minimal addition: a pure, TDD'd `summariseProjectRun(docs, pending)` in `livingDocsModel.ts` that groups `getAllPending()` by `docId` into `changed`/`no-change` tiles (with `changeCount`) + `{ totalChanges, changedDocs, unchangedDocs }` for the bottom bar; `working` is a status the caller layers on live. 2 tests green (`livingDocsModel.test.ts`). Our-surface (a model helper inside `livingDocs/common`), **0 core patches.**
