@@ -29,6 +29,7 @@ import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AgentPolicy, IAgentDef, IAuditEntry, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
 import { extractBindLinks, parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -226,6 +227,10 @@ function asSse(payload: object): string {
 // catches it. Previously titled "LivingDocsService", it was silently skipped by that case-sensitive
 // grep, hiding a fan-out failure (issue #203). Keep any new livingDocs suite title lower-case "livingDocs".
 suite('livingDocs Service', () => {
+	// Ticket #375: no test in this suite may reach the network directly. Every attempt at a global network
+	// primitive is recorded at the call and refused, so the only route out is IRequestService - injected,
+	// and doubled below.
+	ensureNoNetworkInTestSuite();
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }

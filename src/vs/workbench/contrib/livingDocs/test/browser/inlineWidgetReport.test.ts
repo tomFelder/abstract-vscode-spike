@@ -25,6 +25,7 @@ import { IViewsService } from '../../../../services/views/common/viewsService.js
 import { NullAnalyticsService } from '../../common/analytics.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { changePointerRoute, inlineWidgetAnswer } from '../../common/changePointer.js';
+import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 // Plan 52 WP-A1 fix 2 (issue #301): the rule that a document's inline-widget report is an OBSERVATION with a
 // lifetime, not a fact that is true forever.
@@ -41,6 +42,10 @@ import { changePointerRoute, inlineWidgetAnswer } from '../../common/changePoint
 // the report described). Retiring is one-sided: it can only move a route back to `unknown`, which makes the next
 // click ask the live surface instead of trusting a memory.
 suite('livingDocs - the inline-widget report has a lifetime (plan 52 WP-A1 fix 2, #301)', () => {
+	// Ticket #375: no test in this suite may reach the network directly. Every attempt at a global network
+	// primitive is recorded at the call and refused, so the only route out is IRequestService - injected,
+	// and doubled below.
+	ensureNoNetworkInTestSuite();
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const WEEKLY = URI.file('/ws/weekly.md');

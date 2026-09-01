@@ -25,12 +25,17 @@ import { NullAnalyticsService } from '../../common/analytics.js';
 import { modelDoorWords, modelHealthDotColour, modelStateWords } from '../../browser/reviewRailView.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AMBER, GREEN, PAPER, RED } from '../../common/abstractTokens.js';
+import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 // Plan 47 bundle 47-b (issue #236): the composer model selector. These pin the two behaviours the loop's
 // validator cares about but a live broker can only demonstrate flakily: the honest health-state settling that
 // kills the "Model unavailable" flash on surface crossings (#211-4 / P14.5), and the per-workspace persistence
 // of the model choice under the `livingDocs.v2.model` key (P14.4). Deterministic, no live broker, no DOM.
 suite('livingDocs model selector (plan 47 47-b, issue #236)', () => {
+	// Ticket #375: no test in this suite may reach the network directly. Every attempt at a global network
+	// primitive is recorded at the call and refused, so the only route out is IRequestService - injected,
+	// and doubled below.
+	ensureNoNetworkInTestSuite();
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	// A /models catalogue with two included models so persistence + validation have something to switch between.

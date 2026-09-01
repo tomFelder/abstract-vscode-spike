@@ -24,6 +24,7 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { AnalyticsEventName, AnalyticsProps, IAnalyticsService, lintEventProps } from '../../common/analytics.js';
 import { LivingDocsService } from '../../browser/livingDocsService.js';
+import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 // Plan 36 iter 2 - THE END-TO-END CANARY. A fixture Living Document carries a confidential canary string in
 // its body and its bound source value. We drive the real emitting paths (chat -> proposal -> approve/reject,
@@ -32,6 +33,10 @@ import { LivingDocsService } from '../../browser/livingDocsService.js';
 // form of the privacy invariant: content cannot leave the machine as analytics even when it flows through the
 // live service, not just the linter in isolation.
 suite('analytics canary E2E (plan 36 iter 2: content never leaves via the live service)', () => {
+	// Ticket #375: no test in this suite may reach the network directly. Every attempt at a global network
+	// primitive is recorded at the call and refused, so the only route out is IRequestService - injected,
+	// and doubled below.
+	ensureNoNetworkInTestSuite();
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	// The canary appears in the document prose, a heading, and the bound figure value.

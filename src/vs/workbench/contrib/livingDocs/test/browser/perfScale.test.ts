@@ -28,6 +28,7 @@ import { IViewsService } from '../../../../services/views/common/viewsService.js
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { IClock } from '../../browser/clock.js';
 import { makeScaleFixture } from './scaleFixture.js';
+import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 // Plan 30 performance + scale harness (tracks 1 + 2). The suite proves the incremental, shared-source,
 // bounded-concurrency refresh path with DETERMINISTIC counts (source reads, model calls, in-flight fetches)
@@ -95,6 +96,10 @@ class FakeClock implements IClock {
 }
 
 suite('LivingDocs perf + scale (plan 30, tracks 1 + 2)', () => {
+	// Ticket #375: no test in this suite may reach the network directly. Every attempt at a global network
+	// primitive is recorded at the call and refused, so the only route out is IRequestService - injected,
+	// and doubled below.
+	ensureNoNetworkInTestSuite();
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const WS = URI.file('/ws');
