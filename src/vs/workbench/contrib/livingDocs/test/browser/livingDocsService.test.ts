@@ -2538,6 +2538,40 @@ suite('livingDocs Service', () => {
 		assert.deepStrictEqual(turn.steps?.map(s => s.status), ['done', 'skipped']);
 	});
 
+	test('#382: a finish that claims success over a loop that queued zero renders the reconciliation, never the model prose (I3, #303/#415)', async () => {
+		// The adversarial case at the real service seam (doc 30 section 6). The segment list is one block out,
+		// so the host rejects it and NOTHING queues - and then the model's finish narration claims the work
+		// was done. The reply renderer reconciles the claim against the receipts BEFORE it renders: the success
+		// prose is discarded, the bubble is a failure, and the honest reconciliation takes the lead.
+		const service = createService([], {
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'read_document', input: { docId: WEEKLY.toString() } }),
+				toolUseMessage({
+					id: 'c2', name: 'propose_segments', input: {
+						docId: WEEKLY.toString(),
+						segments: [{ keep: 'B1-B2' }, { replace: 'B4', echo: ['## Commentary'], content: '## Commentary and outlook' }, { keep: 'B3' }, { keep: 'B5-B6' }],
+					}
+				}),
+				toolUseMessage({ id: 'c3', name: 'finish', input: { summary: 'Done - I renamed Commentary and rewrote the line.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+
+		await service.sendChatMessage(WEEKLY, 'rename Commentary');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.deepStrictEqual({
+			queuedNothing: service.getAllPending().length === 0,
+			diskUntouched: lastFiles?.get(WEEKLY.toString()) === WEEKLY_MD,
+			failed: turn.failed === true,
+			via: turn.via,
+			leaksSuccessProse: turn.content.includes('I renamed Commentary'),
+			rendersReconciliation: turn.content.includes('could not apply') && turn.content.includes('rejected before it reached your review queue'),
+		}, { queuedNothing: true, diskUntouched: true, failed: true, via: 'fallback', leaksSuccessProse: false, rendersReconciliation: true });
+	});
+
 	test('#380: an ask with NO attachments still takes the existing single-shot path, loop enabled or not', async () => {
 		// The loop is ON (the product default) and the ask carries no chips, so the single-shot path answers -
 		// and proves it by queueing an edit, which the read-only loop has no verb to do.

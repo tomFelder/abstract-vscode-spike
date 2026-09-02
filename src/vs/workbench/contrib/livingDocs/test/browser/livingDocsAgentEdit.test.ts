@@ -12,7 +12,8 @@ import { AgentAssistantBlock, IAgentModelClient, IAgentModelRequest, IAgentModel
 import {
 	AGENT_EDITING_TOOL_DEFINITIONS, AGENT_PROPOSE_SEGMENTS_TOOL, AGENT_READ_DOCUMENT_TOOL,
 	AGENT_READ_ONLY_TOOL_DEFINITIONS, agentStepLabel, composeAgentEditLedger, composeAgentTask,
-	createEditingAgentTools, describeAgentRunFailure, IAgentEditTarget, IAgentScopeDoc, IAgentToolHost
+	createEditingAgentTools, describeAgentRunFailure, IAgentEditTarget, IAgentRunReceipts, IAgentScopeDoc,
+	IAgentSegmentReceipt, IAgentToolHost, reconcileAgentReply
 } from '../../common/livingDocsAgentTools.js';
 import { frontmatterBlock, parseLivingDoc, withReplacedBody } from '../../common/livingDocMarkdown.js';
 import { FakeChangeFileSystem, fakeClock, fakeIds } from './changeStoreFakes.js';
@@ -455,5 +456,99 @@ suite('livingDocs agent edit loop (issue #381, doc 30 2.4)', () => {
 		assert.ok(said.includes('2 changes did reach your review queue'), said);
 		// The read-only default is unchanged: a run with nothing queued still says so.
 		assert.ok(describeAgentRunFailure('stoppedWithoutFinish', 20).includes('Nothing was changed'));
+	});
+
+	// --- the reply reconciles the finish narration against the receipts (issue #382, #303, #415; I3) -----
+	//
+	// The loop used to render `${finish.summary}\n\n${ledger}` - the model's narration verbatim as the lead
+	// prose, the host ledger appended, and no step reconciling the two (issue #415). `reconcileAgentReply` is
+	// that step: it takes the finish narration AND the run's store receipts (the receipt is a required
+	// argument, so prose cannot reach the bubble without one) and applies the same claimed-versus-queued
+	// discipline the single-shot path uses. Its ground truth is the per-segment receipts from #381: what the
+	// model proposed (segment receipts + whole lists rejected as invalid) against what actually queued (the
+	// segments carrying a store change id).
+
+	/** A run's receipts with the given segment receipts; everything else empty unless overridden. */
+	function receiptsWith(segmentReceipts: readonly IAgentSegmentReceipt[], extra: Partial<IAgentRunReceipts> = {}): IAgentRunReceipts {
+		return {
+			scope: SCOPE, declared: undefined, rationale: '', reads: [],
+			scopeWidenRefused: false, segmentReceipts, invalidSegmentLists: 0, ...extra,
+		};
+	}
+	const queuedReceipt = (segmentIndex: number, label: string, changeId: string): IAgentSegmentReceipt =>
+		({ segmentIndex, label, changeId, docId: PRICING, title: 'Pricing' });
+	const droppedReceipt = (segmentIndex: number, label: string, reason: IAgentSegmentReceipt['reason']): IAgentSegmentReceipt =>
+		({ segmentIndex, label, reason, docId: PRICING, title: 'Pricing' });
+
+	test('claimed changes with zero queued is a FAILURE: the success prose is discarded, the reconciliation renders', () => {
+		const reconciled = reconcileAgentReply('Done - I renamed the Notes heading and softened the billing line.', receiptsWith([
+			droppedReceipt(1, 'B3', 'policy'),
+			droppedReceipt(2, 'B4', 'policy'),
+		]));
+		assert.deepStrictEqual({
+			isError: reconciled.isError,
+			leaksSuccessProse: reconciled.content.includes('I renamed the Notes heading'),
+			rendersReconciliation: reconciled.content.includes('could not apply') && reconciled.content.includes('set never to change'),
+		}, { isError: true, leaksSuccessProse: false, rendersReconciliation: true });
+	});
+
+	test('a whole list rejected as invalid, with nothing queued, is also a FAILURE', () => {
+		const reconciled = reconcileAgentReply('I updated the pricing across the document.', receiptsWith([], { invalidSegmentLists: 1 }));
+		assert.deepStrictEqual({
+			isError: reconciled.isError,
+			leaksSuccessProse: reconciled.content.includes('I updated the pricing'),
+			rendersReconciliation: reconciled.content.includes('rejected before it reached your review queue'),
+		}, { isError: true, leaksSuccessProse: false, rendersReconciliation: true });
+	});
+
+	test('when real changes queued, the narration stands and the ledger sits beside it - reply, rail and receipt count the one number', () => {
+		const reconciled = reconcileAgentReply('I proposed two changes to Pricing.', receiptsWith([
+			queuedReceipt(1, 'B3', 'chg-1'),
+			queuedReceipt(2, 'B4', 'chg-2'),
+		]));
+		assert.deepStrictEqual({
+			isError: reconciled.isError,
+			narrationLeads: reconciled.content.startsWith('I proposed two changes to Pricing.'),
+			// The count the ledger reports is the count the review rail holds: two queued segments, two open changes.
+			ledgerCountsTheQueued: reconciled.content.includes('In Pricing: 2 changes are waiting for your review'),
+		}, { isError: false, narrationLeads: true, ledgerCountsTheQueued: true });
+	});
+
+	test('a run that proposed nothing is never a failure - a read-only answer keeps its prose', () => {
+		const reconciled = reconcileAgentReply('The document charges $10 per seat per month.', receiptsWith([], {
+			reads: [{ kind: 'document', id: PRICING, title: 'Pricing', inScope: true, reads: 1, blocks: 5 }],
+		}));
+		assert.deepStrictEqual({
+			isError: reconciled.isError,
+			narrationLeads: reconciled.content.startsWith('The document charges $10 per seat per month.'),
+		}, { isError: false, narrationLeads: true });
+	});
+
+	test('doc 30 section 6 (I3 adversarial): a finish that claims changes over a run that queued zero renders the reconciliation, never the success prose', async () => {
+		const it = await stage();
+		// Every segment the model proposes will be refused (the document is dialled "never change"), so the
+		// run queues zero - while the model narrates success in its finish summary. The exact #303 failure.
+		it.project.locked.add(PRICING);
+		const surface = createEditingAgentTools({ host: it.host, scope: SCOPE });
+		const result = await runAgentLoop({
+			task: composeAgentTask('Rename the Notes heading and soften the billing line.', SCOPE),
+			system: surface.systemPrompt,
+			client: new ScriptedClient([
+				toolTurn(call('c1', AGENT_READ_DOCUMENT_TOOL, { docId: PRICING })),
+				toolTurn(call('c2', AGENT_PROPOSE_SEGMENTS_TOOL, { docId: PRICING, segments: GOOD_SEGMENTS })),
+				toolTurn(call('c3', 'finish', { summary: 'Done - I renamed the Notes heading and softened the billing line.' })),
+			]),
+			registry: surface.registry,
+		});
+
+		const receipts = surface.receipts();
+		const reconciled = reconcileAgentReply(result.outcome.type === 'finished' ? result.outcome.summary : '', receipts);
+		assert.deepStrictEqual({
+			finished: result.outcome.type === 'finished',
+			queuedNothing: it.store.openChanges().length === 0,
+			isError: reconciled.isError,
+			leaksSuccessProse: reconciled.content.includes('I renamed the Notes heading'),
+			rendersReconciliation: reconciled.content.includes('set never to change'),
+		}, { finished: true, queuedNothing: true, isError: true, leaksSuccessProse: false, rendersReconciliation: true });
 	});
 });

@@ -58,7 +58,7 @@ import { parseRetryAfterMs, retryDelayMs } from '../common/livingDocRetry.js';
 import { listenStream } from '../../../../base/common/stream.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { AGENT_DEFAULT_MAX_STEPS, AgentAssistantBlock, IAgentModelClient, IAgentModelRequest, IAgentModelResponse, runAgentLoop } from '../common/livingDocsAgentLoop.js';
-import { agentStepLabel, chooseChatRoute, composeAgentEditLedger, composeAgentTask, createEditingAgentTools, describeAgentRunFailure, IAgentDocumentRow, IAgentScopeDoc, IAgentToolHost } from '../common/livingDocsAgentTools.js';
+import { agentStepLabel, chooseChatRoute, composeAgentEditLedger, composeAgentTask, countQueuedChanges, createEditingAgentTools, describeAgentRunFailure, IAgentDocumentRow, IAgentScopeDoc, IAgentToolHost, reconcileAgentReply } from '../common/livingDocsAgentTools.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
 import { IFileRef, rewriteLockSources, scanDependents } from '../common/fileOps.js';
@@ -7102,22 +7102,28 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (client.pausedMessage) { throw new ModelPausedError(client.pausedMessage); }
 
 		const receipts = surface.receipts();
-		const ledger = composeAgentEditLedger(receipts);
 		if (result.outcome.type === 'finished') {
+			// Reconcile the model's finish narration against the store's receipts BEFORE it renders (I3, issues
+			// #303 / #415 / #382). A run that claimed changes and queued NONE renders the reconciliation as a
+			// failure - the model's success prose never reaches the bubble; anything that queued keeps the
+			// narration with the host-composed ledger beside it. The receipt is a required argument, so prose
+			// structurally cannot render without one.
+			const reconciled = reconcileAgentReply(result.outcome.summary, receipts);
 			return {
-				role: 'assistant', via: 'model',
-				content: `${result.outcome.summary.trim()}\n\n${ledger}`,
+				role: 'assistant', via: reconciled.isError ? 'fallback' : 'model',
+				content: reconciled.content,
 				steps: steps.length ? steps : undefined,
+				failed: reconciled.isError || undefined,
 			};
 		}
+		const ledger = composeAgentEditLedger(receipts);
 		this._log.info(`[livingDocs] agent loop ended without finish (${result.outcome.reason})`, result.outcome.message);
 		const said = narration.trim();
 		// The failure sentence is told what actually landed, so a run that queued three changes and then hit
 		// the step ceiling cannot report that nothing was changed over three cards sitting in the rail.
-		const queued = receipts.segmentReceipts.filter(receipt => receipt.changeId !== undefined).length;
 		return {
 			role: 'assistant', via: 'fallback', failed: true,
-			content: `${said ? `${said}\n\n` : ''}${describeAgentRunFailure(result.outcome.reason, maxSteps, { changesQueued: queued })}\n\n${ledger}`,
+			content: `${said ? `${said}\n\n` : ''}${describeAgentRunFailure(result.outcome.reason, maxSteps, { changesQueued: countQueuedChanges(receipts) })}\n\n${ledger}`,
 			steps: steps.length ? steps : undefined,
 		};
 	}

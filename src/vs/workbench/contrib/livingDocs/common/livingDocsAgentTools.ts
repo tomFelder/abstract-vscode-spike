@@ -10,6 +10,7 @@ import {
 	expandSegments, ISegmentHunk, ISegmentReceipt, parseSegments, screenSegmentHunks,
 	SEGMENT_LIST_SCHEMA, segmentLabel, SegmentDropReason, summariseSegmentReceipts
 } from './livingDocSegments.js';
+import { ITurnReceiptOutcome, reconcileTurnReceipt } from './turnReceipts.js';
 
 // The tool surface for stage 3 (issues #380 and #381; docs/30-editing-architecture.md section 2.4 "the
 // eight-verb tool surface", section 4 "the UX specification"). Doc 30 names eight verbs; this module
@@ -643,6 +644,46 @@ export function composeAgentEditLedger(receipts: IAgentRunReceipts): string {
 		parts.push(localize('livingDocs.agentLedger.pending', "Nothing has been written to your documents yet; every change above is waiting on your review."));
 	}
 	return parts.join(' ');
+}
+
+/**
+ * Reconcile the loop's finish narration against the run's store receipts before the reply renders (doc 30
+ * invariant I3; issues #303, #415, #382). The loop path used to render `${finish.summary}\n\n${ledger}` -
+ * the model's narration verbatim as the lead prose, the host ledger appended, and NO step reconciling the
+ * two. A model that narrated "I updated the pricing" over a run that queued nothing had that false claim as
+ * the most prominent line of the bubble - the exact #303 failure the single-shot path was hardened against.
+ *
+ * This is that step, and it carries the invariant by the same discipline the single-shot path uses via
+ * `reconcileTurnReceipt`: the receipt is a REQUIRED argument, so prose cannot reach the bubble without it,
+ * and what the model CLAIMED (every mutating segment it proposed, plus every whole list rejected as invalid)
+ * is reconciled against what actually QUEUED (the segments carrying a store change id). Claimed > 0 with
+ * queued === 0 discards the narrative and renders the reconciliation as a failure; anything that queued keeps
+ * the narrative with the ledger beside it. The host ledger is the authoritative half either way, and it is
+ * the count the review rail holds, so reply, rail and receipt report the one number.
+ */
+export function reconcileAgentReply(finishSummary: string, receipts: IAgentRunReceipts): ITurnReceiptOutcome {
+	const ledger = composeAgentEditLedger(receipts);
+	const summary = finishSummary.trim();
+	// What the model claimed it would change: every mutating segment it proposed, plus every whole list the
+	// host rejected before a segment could even be screened (a claim that queued nothing all the same).
+	const claimed = receipts.segmentReceipts.length + receipts.invalidSegmentLists;
+	// The I3 decision, made by the single-shot path's own machinery. The loop's per-document ledger already
+	// NAMES each drop, so no `drops` are handed over here - the reconciler is used for its claimed-versus-
+	// queued verdict and, on a failure, its honest lead sentence; the ledger carries the reasons.
+	const reconciled = reconcileTurnReceipt({ claimed, queued: countQueuedChanges(receipts), drops: [], reply: summary });
+	// On a failure the model's narrative is discarded (I3) and the reconciler's lead sentence takes its place;
+	// otherwise the narrative leads. The authoritative ledger is appended in both cases.
+	const lead = reconciled.isError ? reconciled.content : summary;
+	return { content: lead ? `${lead}\n\n${ledger}` : ledger, isError: reconciled.isError };
+}
+
+/**
+ * How many of a run's segments actually became reviewable changes: the segments carrying a store change id.
+ * This is the ONE definition of "queued" - the reply, the run ledger and the review rail are all folds over
+ * it, so a run can never be counted two ways (AC3; the same guarantee the read half makes in `readParagraphs`).
+ */
+export function countQueuedChanges(receipts: IAgentRunReceipts): number {
+	return receipts.segmentReceipts.filter(receipt => receipt.changeId !== undefined).length;
 }
 
 /** The read half of the ledger, shared by both composers so one run cannot be counted two ways. */
