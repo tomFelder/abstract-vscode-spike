@@ -63,7 +63,8 @@ import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
 import { TreeRailView } from './treeRailView.js';
 import { ScreenEditor } from './screenEditor.js';
-import { ScreenEditorInput } from './screenEditorInput.js';
+import { ScreenEditorInput, openScreenEditor } from './screenEditorInput.js';
+import { EmptyEditorLandingContribution } from './emptyEditorLanding.js';
 import { ScreenLauncherView } from './screenLauncherView.js';
 import { EditorNavLauncherView, openEditorNavTarget } from './editorNavLauncherView.js';
 import { openDocQuickSwitch } from './docQuickSwitch.js';
@@ -1314,13 +1315,9 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		if (route.kind === StartupRouteKind.OpenHome) {
 			// Project Home: with a folder, the project's front door (what ran, what's stale, recent files; the
 			// empty-project front door when the folder has no documents yet); with no folder, Home's "Open a folder
-			// to start working." front door. The editor is one click deeper, via a file / opening a folder.
-			const input = this._instantiationService.createInstance(ScreenEditorInput, 'home');
-			const pane = await this._editorService.openEditor(input, { pinned: true });
-			// Singleton input: if the service adopted a different instance (or none), dispose ours to avoid a leak.
-			if (pane?.input !== input) {
-				input.dispose();
-			}
+			// to start working." front door. The editor is one click deeper, via a file / opening a folder. The
+			// runtime empty-editor landing (EmptyEditorLandingContribution) shares this open-and-dispose helper.
+			await openScreenEditor(this._editorService, this._instantiationService, 'home');
 		}
 	}
 
@@ -1335,6 +1332,10 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 	}
 }
 registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContribution, WorkbenchPhase.AfterRestored);
+
+// The runtime twin of the cold-start landing above (issue #299 / #388): when the last tab is closed and the editor
+// area would otherwise fall through to a blank pane, land the writer back on Project Home - a defined surface.
+registerWorkbenchContribution2(EmptyEditorLandingContribution.ID, EmptyEditorLandingContribution, WorkbenchPhase.AfterRestored);
 
 // --- rails are editor companions (Part C1 / shell) ---
 // The tree-rail (SIDEBAR_PART, 264px: Files / Context / Outline / Search) and the review rail
