@@ -58,7 +58,7 @@ import { parseRetryAfterMs, retryDelayMs } from '../common/livingDocRetry.js';
 import { listenStream } from '../../../../base/common/stream.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
 import { AGENT_DEFAULT_MAX_STEPS, AgentAssistantBlock, IAgentModelClient, IAgentModelRequest, IAgentModelResponse, runAgentLoop } from '../common/livingDocsAgentLoop.js';
-import { AGENT_READ_ONLY_SYSTEM_PROMPT, agentStepLabel, chooseChatRoute, composeAgentReadLedger, composeAgentTask, createReadOnlyAgentTools, describeAgentRunFailure, IAgentDocumentRow, IAgentScopeDoc, IAgentToolHost } from '../common/livingDocsAgentTools.js';
+import { agentStepLabel, chooseChatRoute, composeAgentEditLedger, composeAgentTask, createEditingAgentTools, describeAgentRunFailure, IAgentDocumentRow, IAgentScopeDoc, IAgentToolHost } from '../common/livingDocsAgentTools.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
 import { IFileRef, rewriteLockSources, scanDependents } from '../common/fileOps.js';
@@ -6866,9 +6866,11 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
-	 * The loop's window onto the running product (the S2 seam's host half). Everything here is a read: this
-	 * tranche ships no mutating verb, so there is nothing for it to write through. A lookup that cannot answer
-	 * returns `undefined`, which the pure tool turns into words for the model rather than a thrown step.
+	 * The loop's window onto the running product (the S2 seam's host half). Most of it is reads; the last two
+	 * ports are the write path `propose_segments` runs on (issue #381), and they are the S3 seam - the base a
+	 * segment list expands against, and the change store the expanded hunks are recorded in. A lookup that
+	 * cannot answer returns `undefined`, which the pure tool turns into words for the model rather than a
+	 * thrown step.
 	 */
 	private _agentToolHost(scope: readonly IWorkingSetDoc[]): IAgentToolHost {
 		return {
@@ -6922,6 +6924,74 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				}
 				return undefined;
 			},
+			/**
+			 * The base one `propose_segments` call expands against. It hands over the RAW body - frontmatter
+			 * stripped by `_bodyOf`, so the `---` block never enters the coordinate space the hunks are
+			 * measured in - alongside the RESOLVED block texts the model was actually shown by
+			 * `read_document`, which is what its echoes have to be checked against.
+			 */
+			editTarget: async docId => {
+				let uri: URI;
+				try { uri = URI.parse(docId); } catch { return undefined; }
+				if (!this._docs.get(docId)) {
+					try { await this.loadDocument(uri); } catch { return undefined; }
+				}
+				const state = this._docs.get(docId);
+				if (!state) { return undefined; }
+				const resolve = this._bindResolver(state);
+				return {
+					docId,
+					title: state.doc.title,
+					body: this._bodyOf(state),
+					blockViews: state.doc.blocks.map(block => block.type === 'heading' ? `${'#'.repeat(block.level ?? 1)} ${resolve(block.text)}` : resolve(block.text)),
+					policy: this._policyForState(state),
+				};
+			},
+			/**
+			 * The S3 write boundary. Every hunk of one call lands in ONE `propose` batch under one setId, so
+			 * the rail groups them as the single change the person asked for and a surgical retry replays
+			 * exactly that set. The ids come back in hunk order, which is what lets the tool turn them into
+			 * per-segment receipts without a second lookup that could disagree.
+			 */
+			recordSegmentChanges: async (target, hunks, intent) => {
+				const state = this._docs.get(target.docId);
+				const store = await this._ensureChangeStore();
+				if (!state || !store) { return undefined; }
+				const body = this._bodyOf(state);
+				const baseRevision = hashContent(body);
+				const setId = generateUuid();
+				const rationale = intent.trim() || localize('livingDocs.segments.defaultIntent', "Proposed by the Chat agent.");
+				const proposeResult = await store.propose({
+					setId,
+					changes: hunks.map(hunk => {
+						const block = state.doc.blocks[hunk.blockOrdinal];
+						return {
+							anchors: [{ docUri: target.docId, baseRevision, span: hunk.span, oldText: hunk.oldText, newText: hunk.newText }],
+							kind: 'meaning' as const,
+							baseLength: body.length,
+							plannerIntent: rationale,
+							display: {
+								docTitle: target.title,
+								...(block ? { blockId: block.id, blockLabel: this._blockLabel(state.doc, block.id) } : {}),
+								rationale,
+								confidence: 0.85,
+								sourceCells: [],
+								via: 'model' as const,
+								// An insertion writes a blank line before its content; the card shows the content
+								// itself, exactly as the shipped generative-insert path does.
+								...(hunk.op === 'insert' ? { insert: true, nowText: hunk.newText.trim(), ...(block ? { afterBlockId: block.id } : {}) } : {}),
+							},
+						};
+					}),
+				});
+				this._refreshPending();
+				if (proposeResult.receipts.length !== hunks.length) { return undefined; }
+				for (const receipt of proposeResult.receipts) {
+					const queued = this._pending.find(c => c.id === receipt.changeId);
+					if (queued) { this._captureChangeCreated(queued, 'chat'); }
+				}
+				return proposeResult.receipts.map(receipt => receipt.changeId);
+			},
 		};
 	}
 
@@ -6966,19 +7036,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
-	 * Answer an explicit-scope ask by running the agent loop (issue #380). Read-only: the registry carries no
-	 * mutating verb, so this queues nothing and can change nothing, and the reply says so in the host-composed
-	 * ledger rather than leaving the person to infer it.
+	 * Answer an explicit-scope ask by running the agent loop (issues #380, #381).
+	 *
+	 * The loop now carries doc 30's one in-loop mutating verb, so an ask for a change becomes a reviewable
+	 * diff rather than a sentence explaining that this run could only read. Nothing is written to a document
+	 * here: `propose_segments` records changes in the change store, and the person's approve is still the only
+	 * thing that touches the file.
 	 *
 	 * Three outcomes leave here, and only three. A `finish` becomes the model's narration followed by the
-	 * ledger. A pause or a cancel is re-thrown so the caller's existing honest turns handle it exactly as they
-	 * do for the single-shot path. Anything else is a NAMED failure turn carrying the ledger of what did get
-	 * read, because a bounded run is a partial run and the reads it managed are still worth showing.
+	 * host-composed ledger of what was read and what was proposed. A pause or a cancel is re-thrown so the
+	 * caller's existing honest turns handle it exactly as they do for the single-shot path. Anything else is a
+	 * NAMED failure turn carrying that same ledger - a bounded run is a partial run, and the changes it did
+	 * queue are real and sitting in the rail, so the failure sentence is told how many there were rather than
+	 * asserting there were none.
 	 */
 	private async _chatRespondViaLoop(text: string, workingSet: readonly IWorkingSetDoc[], onNarration: (text: string) => void, onStep: (step: IChatStep) => void, token: CancellationToken): Promise<IChatMessage> {
 		const scope: IAgentScopeDoc[] = workingSet.map(doc => ({ docId: doc.resource.toString(), title: doc.title }));
 		const titleOf = (docId: string) => this._docs.get(docId)?.doc.title ?? scope.find(doc => doc.docId === docId)?.title;
-		const surface = createReadOnlyAgentTools({ host: this._agentToolHost(workingSet), scope });
+		const surface = createEditingAgentTools({ host: this._agentToolHost(workingSet), scope });
 		const client = new BrokerAgentModelClient(request => this._agentModelStep(request, token));
 		const maxSteps = this._agentMaxSteps();
 
@@ -6995,7 +7070,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		};
 		const result = await runAgentLoop({
 			task: composeAgentTask(text, scope),
-			system: AGENT_READ_ONLY_SYSTEM_PROMPT,
+			system: surface.systemPrompt,
 			client,
 			registry: surface.registry,
 			maxSteps,
@@ -7026,7 +7101,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (token.isCancellationRequested) { throw new CancellationError(); }
 		if (client.pausedMessage) { throw new ModelPausedError(client.pausedMessage); }
 
-		const ledger = composeAgentReadLedger(surface.receipts());
+		const receipts = surface.receipts();
+		const ledger = composeAgentEditLedger(receipts);
 		if (result.outcome.type === 'finished') {
 			return {
 				role: 'assistant', via: 'model',
@@ -7036,9 +7112,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		}
 		this._log.info(`[livingDocs] agent loop ended without finish (${result.outcome.reason})`, result.outcome.message);
 		const said = narration.trim();
+		// The failure sentence is told what actually landed, so a run that queued three changes and then hit
+		// the step ceiling cannot report that nothing was changed over three cards sitting in the rail.
+		const queued = receipts.segmentReceipts.filter(receipt => receipt.changeId !== undefined).length;
 		return {
 			role: 'assistant', via: 'fallback', failed: true,
-			content: `${said ? `${said}\n\n` : ''}${describeAgentRunFailure(result.outcome.reason, maxSteps)}\n\n${ledger}`,
+			content: `${said ? `${said}\n\n` : ''}${describeAgentRunFailure(result.outcome.reason, maxSteps, { changesQueued: queued })}\n\n${ledger}`,
 			steps: steps.length ? steps : undefined,
 		};
 	}
