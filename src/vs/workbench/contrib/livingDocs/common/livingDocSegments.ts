@@ -180,7 +180,14 @@ export type SegmentDropReason =
 	 */
 	| 'stale-ordinal'
 	/** The replacement is byte-identical to what is already there. */
-	| 'no-op';
+	| 'no-op'
+	/**
+	 * The host could not turn the change into a reviewable change - the document could not be opened, or the
+	 * write to the review queue failed. Never a silent nothing: a host-side failure to record is still a NAMED
+	 * outcome the receipt carries, so the reply reconciles it as a failure rather than reading back the model's
+	 * success prose over a change that never landed (invariant I1/I3; issue #425).
+	 */
+	| 'not-recorded';
 
 /** One screened hunk: queue it, or drop it for a named reason. */
 export interface ISegmentScreening {
@@ -648,11 +655,13 @@ export function describeSegmentDrop(reason: SegmentDropReason): string {
 			return localize('livingDocs.segments.drop.staleOrdinal', "the part of the document it named had moved on");
 		case 'no-op':
 			return localize('livingDocs.segments.drop.noOp', "it would have changed nothing");
+		case 'not-recorded':
+			return localize('livingDocs.segments.drop.notRecorded', "it could not be saved to your review queue");
 	}
 }
 
 // Reported in a fixed order rather than first-seen order, so the same shortfall always reads the same way.
-const DROP_ORDER: readonly SegmentDropReason[] = ['policy', 'out-of-scope', 'bind-guard', 'stale-ordinal', 'no-op'];
+const DROP_ORDER: readonly SegmentDropReason[] = ['policy', 'out-of-scope', 'bind-guard', 'stale-ordinal', 'no-op', 'not-recorded'];
 
 /**
  * The one-line summary of what a set of receipts did, for the run ledger - invariant I3's input, and exactly

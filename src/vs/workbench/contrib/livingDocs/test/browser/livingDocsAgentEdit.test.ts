@@ -472,7 +472,7 @@ suite('livingDocs agent edit loop (issue #381, doc 30 2.4)', () => {
 	function receiptsWith(segmentReceipts: readonly IAgentSegmentReceipt[], extra: Partial<IAgentRunReceipts> = {}): IAgentRunReceipts {
 		return {
 			scope: SCOPE, declared: undefined, rationale: '', reads: [],
-			scopeWidenRefused: false, segmentReceipts, invalidSegmentLists: 0, ...extra,
+			scopeWidenRefused: false, segmentReceipts, invalidSegmentLists: 0, mutatingCalls: segmentReceipts.length, ...extra,
 		};
 	}
 	const queuedReceipt = (segmentIndex: number, label: string, changeId: string): IAgentSegmentReceipt =>
@@ -550,5 +550,88 @@ suite('livingDocs agent edit loop (issue #381, doc 30 2.4)', () => {
 			leaksSuccessProse: reconciled.content.includes('I renamed the Notes heading'),
 			rendersReconciliation: reconciled.content.includes('set never to change'),
 		}, { finished: true, queuedNothing: true, isError: true, leaksSuccessProse: false, rendersReconciliation: true });
+	});
+
+	test('a partial keeps the narration but qualifies it with the honest shortfall, at parity with the single-shot path (#426)', () => {
+		// Two changes queued, one dropped: the model's summary may overclaim, so the reconciler's own "1 change
+		// could not be applied" leads before the reader reaches the per-document ledger detail - the loop no
+		// longer lets the raw summary stand alone the way it did in cycle 1.
+		const reconciled = reconcileAgentReply('I revised the commentary and two other sections.', receiptsWith([
+			queuedReceipt(1, 'B3', 'chg-1'),
+			queuedReceipt(2, 'B4', 'chg-2'),
+			droppedReceipt(3, 'B5', 'no-op'),
+		]));
+		assert.deepStrictEqual({
+			isError: reconciled.isError,
+			narrationLeads: reconciled.content.startsWith('I revised the commentary and two other sections.'),
+			qualifiesTheClaim: reconciled.content.includes('1 change could not be applied'),
+			ledgerDetail: reconciled.content.includes('1 was not made: 1 because it would have changed nothing'),
+		}, { isError: false, narrationLeads: true, qualifiesTheClaim: true, ledgerDetail: true });
+	});
+
+	test('#425 backstop: an attempted mutation that left no receipt still fails closed, never a silent success', () => {
+		// The structural guarantee: mutatingCalls is counted before any early return in the executor, so even a
+		// hypothetical future error path that queued nothing AND left no per-segment receipt still reconciles as
+		// a failure - the model's success prose is discarded rather than read back over a change that never landed.
+		const reconciled = reconcileAgentReply('Done - I rewrote the pricing.', receiptsWith([], { mutatingCalls: 1 }));
+		assert.deepStrictEqual({
+			isError: reconciled.isError,
+			leaksSuccessProse: reconciled.content.includes('I rewrote the pricing'),
+		}, { isError: true, leaksSuccessProse: false });
+	});
+
+	test('#425: a failed store write reconciles as a FAILURE and the ledger names it, never "proposed no changes"', async () => {
+		const it = await stage();
+		// The write to the review queue fails: recordSegmentChanges hands nothing back, so nothing is queued -
+		// and the model narrates success anyway. Before #425 this path left no receipt and no invalid-list bump,
+		// so claimed collapsed to 0 and the success prose passed through as a non-failed reply.
+		const host: IAgentToolHost = { ...it.host, recordSegmentChanges: async () => undefined };
+		const surface = createEditingAgentTools({ host, scope: SCOPE });
+		const result = await runAgentLoop({
+			task: composeAgentTask('Rename the Notes heading and soften the billing line.', SCOPE),
+			system: surface.systemPrompt,
+			client: new ScriptedClient([
+				toolTurn(call('c1', AGENT_READ_DOCUMENT_TOOL, { docId: PRICING })),
+				toolTurn(call('c2', AGENT_PROPOSE_SEGMENTS_TOOL, { docId: PRICING, segments: GOOD_SEGMENTS })),
+				toolTurn(call('c3', 'finish', { summary: 'Done - I renamed the Notes heading and softened the billing line.' })),
+			]),
+			registry: surface.registry,
+		});
+		const receipts = surface.receipts();
+		const reconciled = reconcileAgentReply(result.outcome.type === 'finished' ? result.outcome.summary : '', receipts);
+		assert.deepStrictEqual({
+			queuedNothing: it.store.openChanges().length === 0,
+			isError: reconciled.isError,
+			leaksSuccessProse: reconciled.content.includes('I renamed the Notes heading'),
+			namesWriteFailure: reconciled.content.includes('could not be saved to your review queue'),
+			claimsProposedNothing: reconciled.content.includes('proposed no changes'),
+		}, { queuedNothing: true, isError: true, leaksSuccessProse: false, namesWriteFailure: true, claimsProposedNothing: false });
+	});
+
+	test('#425 twin: an in-scope document that cannot be opened reconciles as a FAILURE, not a silent pass', async () => {
+		const it = await stage();
+		// editTarget yields nothing for an attached, in-scope document (deleted or failed to load mid-run). The
+		// change cannot be carried out, so the reply must fail rather than read back the model's success prose.
+		const host: IAgentToolHost = { ...it.host, editTarget: async () => undefined };
+		const surface = createEditingAgentTools({ host, scope: SCOPE });
+		const result = await runAgentLoop({
+			task: composeAgentTask('Rename the Notes heading and soften the billing line.', SCOPE),
+			system: surface.systemPrompt,
+			client: new ScriptedClient([
+				toolTurn(call('c1', AGENT_READ_DOCUMENT_TOOL, { docId: PRICING })),
+				toolTurn(call('c2', AGENT_PROPOSE_SEGMENTS_TOOL, { docId: PRICING, segments: GOOD_SEGMENTS })),
+				toolTurn(call('c3', 'finish', { summary: 'Done - I renamed the Notes heading and softened the billing line.' })),
+			]),
+			registry: surface.registry,
+		});
+		const receipts = surface.receipts();
+		const reconciled = reconcileAgentReply(result.outcome.type === 'finished' ? result.outcome.summary : '', receipts);
+		assert.deepStrictEqual({
+			queuedNothing: it.store.openChanges().length === 0,
+			isError: reconciled.isError,
+			leaksSuccessProse: reconciled.content.includes('I renamed the Notes heading'),
+			namesFailure: reconciled.content.includes('could not be saved to your review queue'),
+			claimsProposedNothing: reconciled.content.includes('proposed no changes'),
+		}, { queuedNothing: true, isError: true, leaksSuccessProse: false, namesFailure: true, claimsProposedNothing: false });
 	});
 });

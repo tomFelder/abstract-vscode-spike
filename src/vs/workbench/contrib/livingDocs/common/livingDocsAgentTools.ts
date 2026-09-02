@@ -194,6 +194,12 @@ export interface IAgentRunReceipts {
 	readonly segmentReceipts: readonly IAgentSegmentReceipt[];
 	/** How many `propose_segments` calls were rejected whole for failing validation (invariant I7). */
 	readonly invalidSegmentLists: number;
+	/**
+	 * How many times the model invoked `propose_segments`, counted before any early return inside it. The
+	 * reconciler's backstop (issue #425): an attempted mutation that queued nothing is a claim of change even
+	 * when no per-segment receipt was left for it, so `mutatingCalls > 0` with zero queued fails closed.
+	 */
+	readonly mutatingCalls: number;
 }
 
 /** A tool surface, plus the receipts the host composes its ledger from. */
@@ -423,6 +429,11 @@ function createAgentTools(options: { readonly host: IAgentToolHost; readonly sco
 	let rationale = '';
 	let scopeWidenRefused = false;
 	let invalidSegmentLists = 0;
+	// How many times the model invoked the mutating verb, counted before ANY early return inside it so no
+	// refusal or error path can fail to record the attempt. It is the reconciler's backstop (issue #425): an
+	// attempted mutation that queued nothing is a claim of change even if some future error path forgot to
+	// leave a per-segment receipt, so the reply fails closed rather than reading back the model's success prose.
+	let mutatingCalls = 0;
 
 	/** Record one read against the ledger, merging repeats so a re-read is a count, not a duplicate line. */
 	function record(kind: 'document' | 'source', id: string, title: string, blocks: number): void {
@@ -509,8 +520,16 @@ function createAgentTools(options: { readonly host: IAgentToolHost; readonly sco
 	 * mistakes the model can correct by trying again.
 	 */
 	const proposeSegments: AgentToolExecutor = async input => {
+		// Counted first: every invocation of the mutating verb is an attempt to change a document, and the
+		// reconciler must be able to see it however this call returns (issue #425).
+		mutatingCalls++;
 		const docId = readString(input, 'docId');
-		if (!docId) { return errorResult('propose_segments needs a docId. Take one from the task or from list_documents.'); }
+		if (!docId) {
+			// A propose call with no document named it still an attempted change that queued nothing; recorded
+			// as a rejected list so the reply reconciles it as a failure rather than "proposed no changes".
+			invalidSegmentLists++;
+			return errorResult('propose_segments needs a docId. Take one from the task or from list_documents.');
+		}
 		const parsed = parseSegments((input as Record<string, unknown> | undefined)?.segments);
 		if (!parsed.ok) {
 			invalidSegmentLists++;
@@ -530,7 +549,13 @@ function createAgentTools(options: { readonly host: IAgentToolHost; readonly sco
 			return refuseAll('out-of-scope', docId, `${AGENT_OUT_OF_SCOPE_ERROR}: this run may only change the documents the person attached, so nothing was changed in ${docId}. The attached documents are: ${attached}.${declared && inScope.has(docId) ? ' You narrowed the scope yourself with plan_scope; call it again to include this document.' : ''}`);
 		}
 		const target = await options.host.editTarget!(docId);
-		if (!target) { return errorResult(`There is no document with the id ${docId}. Call list_documents to see what this project holds.`); }
+		if (!target) {
+			// An in-scope document that cannot be opened is a host-side failure to carry out the change, not a
+			// silent nothing (#425 twin). Record it against every segment that asked for a change so the reply
+			// reconciles it as a failure and the ledger names it, rather than reading back the model's prose.
+			const title = scope.find(doc => doc.docId === docId)?.title ?? docId;
+			return refuseAll('not-recorded', title, `There is no document with the id ${docId}. Call list_documents to see what this project holds.`);
+		}
 		if (target.policy === 'never') {
 			return refuseAll('policy', target.title, `"${target.title}" is set never to change, so nothing was changed in it. Tell the person that; only they can change that setting.`);
 		}
@@ -546,8 +571,15 @@ function createAgentTools(options: { readonly host: IAgentToolHost; readonly sco
 		if (queueable.length) {
 			const recorded = await options.host.recordSegmentChanges!(target, queueable, readString(input, 'intent') ?? '');
 			// One id per hunk or nothing: a short list would mean some hunk landed without a receipt, and a
-			// receipt is the only thing standing between the person and a claim nothing verified (I3).
+			// receipt is the only thing standing between the person and a claim nothing verified (I3). When the
+			// write fails, the whole batch queued nothing - so record a receipt for EVERY screened segment (the
+			// screener's own drops keep their reason, the would-have-queued hunks become 'not-recorded') rather
+			// than returning silently, which used to collapse the claim to zero and pass the model's success
+			// prose through unreconciled (issue #425).
 			if (!recorded || recorded.length !== queueable.length) {
+				for (const entry of screened) {
+					segmentReceipts.push({ segmentIndex: entry.hunk.segmentIndex, label: entry.hunk.label, docId, title: target.title, reason: entry.drop ?? 'not-recorded' });
+				}
 				return errorResult(`Nothing could be recorded for "${target.title}", so nothing was changed. Tell the person this run could not write to their review queue.`);
 			}
 			ids = recorded;
@@ -584,7 +616,7 @@ function createAgentTools(options: { readonly host: IAgentToolHost; readonly sco
 	return {
 		registry,
 		systemPrompt: options.editing ? AGENT_EDITING_SYSTEM_PROMPT : AGENT_READ_ONLY_SYSTEM_PROMPT,
-		receipts: () => ({ scope, declared, rationale, reads: reads.slice(), scopeWidenRefused, segmentReceipts: segmentReceipts.slice(), invalidSegmentLists }),
+		receipts: () => ({ scope, declared, rationale, reads: reads.slice(), scopeWidenRefused, segmentReceipts: segmentReceipts.slice(), invalidSegmentLists, mutatingCalls }),
 	};
 }
 
@@ -638,10 +670,16 @@ export function composeAgentEditLedger(receipts: IAgentRunReceipts): string {
 			? localize('livingDocs.agentLedger.invalid.one', "One set of changes was rejected before it reached your review queue because it did not line up with the document.")
 			: localize('livingDocs.agentLedger.invalid.many', "{0} sets of changes were rejected before they reached your review queue because they did not line up with the document.", receipts.invalidSegmentLists));
 	}
-	if (!byDoc.size && !receipts.invalidSegmentLists) {
+	// The closing line is a fold over what actually queued, so it can never contradict the per-document lines
+	// above it (issue #425): a change waiting for review only when one truly landed; "proposed no changes" only
+	// when the model proposed none; and, when it proposed changes that ALL dropped or failed to record, the
+	// honest "nothing could be made" rather than the old "waiting on your review" over an empty rail.
+	if (countQueuedChanges(receipts) > 0) {
+		parts.push(localize('livingDocs.agentLedger.pending', "Nothing has been written to your documents yet; every change above is waiting on your review."));
+	} else if (!byDoc.size && !receipts.invalidSegmentLists) {
 		parts.push(localize('livingDocs.agentLedger.noChanges', "Nothing was changed - this run proposed no changes."));
 	} else {
-		parts.push(localize('livingDocs.agentLedger.pending', "Nothing has been written to your documents yet; every change above is waiting on your review."));
+		parts.push(localize('livingDocs.agentLedger.noneMade', "Nothing was changed - none of the proposed changes could be made."));
 	}
 	return parts.join(' ');
 }
@@ -664,17 +702,24 @@ export function composeAgentEditLedger(receipts: IAgentRunReceipts): string {
 export function reconcileAgentReply(finishSummary: string, receipts: IAgentRunReceipts): ITurnReceiptOutcome {
 	const ledger = composeAgentEditLedger(receipts);
 	const summary = finishSummary.trim();
+	const queued = countQueuedChanges(receipts);
 	// What the model claimed it would change: every mutating segment it proposed, plus every whole list the
 	// host rejected before a segment could even be screened (a claim that queued nothing all the same).
-	const claimed = receipts.segmentReceipts.length + receipts.invalidSegmentLists;
+	let claimed = receipts.segmentReceipts.length + receipts.invalidSegmentLists;
+	// Backstop (issue #425, defence in depth): a propose_segments call that queued nothing is a claim of
+	// change even if some executor error path left no receipt for it. `mutatingCalls` is counted before any
+	// early return in the executor, so it cannot be skipped - no attempted mutation can pass as a non-failure.
+	if (queued === 0 && receipts.mutatingCalls > 0) { claimed = Math.max(claimed, 1); }
 	// The I3 decision, made by the single-shot path's own machinery. The loop's per-document ledger already
 	// NAMES each drop, so no `drops` are handed over here - the reconciler is used for its claimed-versus-
-	// queued verdict and, on a failure, its honest lead sentence; the ledger carries the reasons.
-	const reconciled = reconcileTurnReceipt({ claimed, queued: countQueuedChanges(receipts), drops: [], reply: summary });
-	// On a failure the model's narrative is discarded (I3) and the reconciler's lead sentence takes its place;
-	// otherwise the narrative leads. The authoritative ledger is appended in both cases.
-	const lead = reconciled.isError ? reconciled.content : summary;
-	return { content: lead ? `${lead}\n\n${ledger}` : ledger, isError: reconciled.isError };
+	// queued verdict and its honest lead sentence; the ledger carries the reasons.
+	const reconciled = reconcileTurnReceipt({ claimed, queued, drops: [], reply: summary });
+	// The reconciler's content leads in EVERY case, at parity with the single-shot path: on a failure it is the
+	// honest "could not apply" sentence (the model's success prose discarded, I3); on a shortfall it is the
+	// summary followed by the reconciler's own "N changes could not be applied", so an inflated claim is
+	// qualified before the reader reaches the detail; on a clean run it is the summary unchanged. The
+	// authoritative ledger is appended in every case.
+	return { content: reconciled.content ? `${reconciled.content}\n\n${ledger}` : ledger, isError: reconciled.isError };
 }
 
 /**
