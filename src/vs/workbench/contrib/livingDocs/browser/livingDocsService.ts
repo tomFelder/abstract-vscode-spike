@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type Anthropic from '@anthropic-ai/sdk';
 import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer, VSBufferReadableStream } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
@@ -56,6 +57,8 @@ import { ChatDropReason, reconcileTurnReceipt } from '../common/turnReceipts.js'
 import { parseRetryAfterMs, retryDelayMs } from '../common/livingDocRetry.js';
 import { listenStream } from '../../../../base/common/stream.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
+import { AGENT_DEFAULT_MAX_STEPS, AgentAssistantBlock, IAgentModelClient, IAgentModelRequest, IAgentModelResponse, runAgentLoop } from '../common/livingDocsAgentLoop.js';
+import { AGENT_READ_ONLY_SYSTEM_PROMPT, agentStepLabel, chooseChatRoute, composeAgentReadLedger, composeAgentTask, createReadOnlyAgentTools, describeAgentRunFailure, IAgentDocumentRow, IAgentScopeDoc, IAgentToolHost } from '../common/livingDocsAgentTools.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
 import { IFileRef, rewriteLockSources, scanDependents } from '../common/fileOps.js';
@@ -282,6 +285,53 @@ class ModelRateLimitedError extends Error {
 }
 function isModelRateLimitedError(e: unknown): e is ModelRateLimitedError {
 	return e instanceof ModelRateLimitedError;
+}
+
+/**
+ * The agent loop's model seam over the broker (issue #380; the S2 seam's model half). It exists to do ONE
+ * translation - the broker's Anthropic-shaped JSON message into the kernel's `IAgentModelResponse` - and to
+ * make three distinctions the kernel is deliberately unable to make for itself:
+ *
+ *  - A typed broker `error` body becomes a typed `errors` entry, so the kernel ends the run NAMING the
+ *    upstream fault rather than the service guessing whether half a turn is safe to act on.
+ *  - A `stop_reason: "pause"` is a RUN-level state (doc 30 D15), not a loop state, so it is never handed to
+ *    the kernel at all: it is recorded here and thrown, and the caller renders the existing honest pause.
+ *  - Anything else is the turn, verbatim, including `tool_use` blocks, which pass through untouched because
+ *    the kernel appends the assistant turn to its history byte for byte.
+ */
+class BrokerAgentModelClient implements IAgentModelClient {
+	/** The plain-words cap message, set when the broker paused mid-run. Read by the caller after the run. */
+	pausedMessage: string | undefined;
+
+	constructor(private readonly _post: (request: IAgentModelRequest) => Promise<string>) { }
+
+	async send(request: IAgentModelRequest): Promise<IAgentModelResponse> {
+		const raw = await this._post(request);
+		const json = JSON.parse(raw) as { stop_reason?: string; content?: unknown; error?: { type?: string; message?: string } };
+		if (json.error) {
+			return {
+				content: [], stopReason: null,
+				errors: [{ errorType: json.error.type ?? 'proxy_error', message: json.error.message ?? 'model proxy error' }],
+			};
+		}
+		const blocks = Array.isArray(json.content) ? json.content : [];
+		const content: AgentAssistantBlock[] = [];
+		for (const block of blocks) {
+			if (!block || typeof block !== 'object') { continue; }
+			const typed = block as { type?: string; text?: string; id?: string; name?: string; input?: unknown };
+			if (typed.type === 'text' && typeof typed.text === 'string') {
+				content.push({ type: 'text', text: typed.text });
+			} else if (typed.type === 'tool_use' && typeof typed.id === 'string' && typeof typed.name === 'string') {
+				content.push({ type: 'tool_use', id: typed.id, name: typed.name, input: typed.input ?? {} });
+			}
+		}
+		if (json.stop_reason === 'pause') {
+			const prose = content.map(block => block.type === 'text' ? block.text : '').join('').trim();
+			this.pausedMessage = prose || INCLUDED_USAGE_SPENT_MESSAGE;
+			throw new ModelPausedError(this.pausedMessage);
+		}
+		return { content, stopReason: (json.stop_reason ?? null) as Anthropic.Messages.StopReason | null };
+	}
 }
 // How long a model-availability probe result is trusted before re-checking (so starting the proxy
 // mid-session is picked up without re-probing on every render).
@@ -6459,9 +6509,20 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				history.push({ role: 'assistant', via: 'fallback', content: MODEL_UNAVAILABLE_MESSAGE });
 				return;
 			}
-			const reply = workingSet.length
-				? await this._chatRespondMulti(state, trimmed, mentions, workingSet, onDelta, onStep, cts.token)
-				: await this._chatRespond(state, trimmed, mentions, onDelta, onStep, cts.token);
+			// THE BRANCH POINT (issue #380; doc 30 section 7, stage 3). A turn whose scope the person stated -
+			// attachment chips present - runs the agent loop, which reads through tools and answers over its
+			// own receipts. Every other ask keeps the pipeline it has always taken, and `chooseChatRoute` is
+			// the only place that choice is made, so the no-regression rule is one readable predicate rather
+			// than a condition spread across this method.
+			//
+			// The loop's prose is narration between tool calls, not a JSON envelope, so it bypasses the
+			// `extractStreamingReply` unwrapping the single-shot paths need and sets the live turn directly.
+			const route = chooseChatRoute({ attachedCount: workingSet.length, loopEnabled: this._agentLoopEnabled() });
+			const reply = route === 'loop'
+				? await this._chatRespondViaLoop(trimmed, workingSet, narration => { streaming.text = narration; this._onDidStreamChat.fire(resource); }, onStep, cts.token)
+				: workingSet.length
+					? await this._chatRespondMulti(state, trimmed, mentions, workingSet, onDelta, onStep, cts.token)
+					: await this._chatRespond(state, trimmed, mentions, onDelta, onStep, cts.token);
 			history.push(reply);
 		} catch (e) {
 			// A cancel is NOT a failure: keep the prose streamed so far as a muted "stopped" turn and queue no
@@ -6778,6 +6839,207 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return typeof raw === 'number' && Number.isFinite(raw) && raw >= 2000 ? raw : 24000;
 	}
 
+	// --- the agent loop, for explicit-scope asks (issue #380; doc 30 section 7, stage 3, first tranche) ---
+
+	/** Whether the loop is live for this workspace. Off restores the single-shot path for EVERY ask. */
+	private _agentLoopEnabled(): boolean {
+		return this._config.getValue<boolean>('livingDocs.agentLoop') !== false;
+	}
+
+	/** The step ceiling (`livingDocs.agentMaxSteps`, doc 30 D4). Floored at 1; a mis-set value falls back. */
+	private _agentMaxSteps(): number {
+		const raw = this._config.getValue<number>('livingDocs.agentMaxSteps');
+		return typeof raw === 'number' && Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : AGENT_DEFAULT_MAX_STEPS;
+	}
+
+	/**
+	 * The bind-link resolver for one document: `[label](bind:key)` renders as the live figure, so what the
+	 * model reads is what the person sees. Shared by the single-shot serialiser and the loop's `read_document`
+	 * so the two can never disagree about what a document says.
+	 */
+	private _bindResolver(state: IDocState): (text: string) => string {
+		const resolved = this.getResolved(state.uri);
+		return (text: string) => text.replace(/\[([^\]]*)\]\(bind:([^)]+)\)/g, (_m, label: string, key: string) => resolved.get(key) ?? label);
+	}
+
+	/**
+	 * The loop's window onto the running product (the S2 seam's host half). Everything here is a read: this
+	 * tranche ships no mutating verb, so there is nothing for it to write through. A lookup that cannot answer
+	 * returns `undefined`, which the pure tool turns into words for the model rather than a thrown step.
+	 */
+	private _agentToolHost(scope: readonly IWorkingSetDoc[]): IAgentToolHost {
+		return {
+			listDocuments: async () => {
+				const summaries = await this.listDocuments();
+				const rows: IAgentDocumentRow[] = [];
+				for (const summary of summaries) {
+					// The catalogue must be cheap, so it reports what is already loaded and does not open the
+					// project to fill in headings. A document the model wants the shape of is one `read_document`
+					// away, and paying for that read deliberately beats paying for every document silently.
+					const state = this._docs.get(summary.resource.toString());
+					rows.push({
+						docId: summary.resource.toString(),
+						title: summary.title,
+						status: state?.doc.status ?? '',
+						policy: await this._enforcedPolicyForUri(summary.resource),
+						approxTokens: state ? estimateTokens(state.doc.body) : 0,
+						headings: state ? state.doc.blocks.filter(b => b.type === 'heading').map(b => b.text) : [],
+					});
+				}
+				return rows;
+			},
+			readDocument: async docId => {
+				let uri: URI;
+				try { uri = URI.parse(docId); } catch { return undefined; }
+				if (!this._docs.get(docId)) {
+					try { await this.loadDocument(uri); } catch { return undefined; }
+				}
+				const state = this._docs.get(docId);
+				if (!state) { return undefined; }
+				const resolve = this._bindResolver(state);
+				return {
+					docId,
+					title: state.doc.title,
+					blocks: state.doc.blocks.map(block => block.level === undefined
+						? { type: block.type, text: resolve(block.text) }
+						: { type: block.type, text: resolve(block.text), level: block.level }),
+				};
+			},
+			readSource: async name => {
+				// A source is reachable through any document in scope that declares it (or has it as a folder
+				// sibling). An unknown name is `undefined` so the tool says so, rather than serving the empty
+				// string a miss would otherwise look exactly like.
+				for (const doc of scope) {
+					const state = this._docs.get(doc.resource.toString());
+					if (!state) { continue; }
+					const known = new Set<string>([...state.doc.sources, ...state.doc.context, ...state.folderFiles]);
+					if (!known.has(name)) { continue; }
+					const text = await this._readContext(state, [name]);
+					if (text.trim()) { return text; }
+				}
+				return undefined;
+			},
+		};
+	}
+
+	/**
+	 * One loop step over the broker. Buffered on purpose: the broker's non-streaming `/v1/messages` already
+	 * returns a whole Anthropic message - `content` blocks including `tool_use`, plus a `stop_reason` - so one
+	 * JSON parse is the entire adapter and this tranche needs no tool-aware SSE reader. It shares the `chat`
+	 * lane's limiter with the single-shot path, so a loop cannot outrun the concurrency bound.
+	 */
+	private _agentModelStep(request: IAgentModelRequest, token: CancellationToken): Promise<string> {
+		return this._modelLimiter('chat').queue(async () => {
+			if (token.isCancellationRequested) { throw new CancellationError(); }
+			const modelId = await this._requestModelId();
+			const sessionId = this._conversationId();
+			const body = JSON.stringify({
+				...(modelId ? { model: modelId } : {}),
+				...(sessionId ? { session_id: sessionId } : {}),
+				max_tokens: MODEL_MAX_TOKENS.chat,
+				thinking: { type: 'adaptive' },
+				output_config: { effort: 'low' },
+				// The cache breakpoint sits on the system prompt for the same reason as everywhere else: it is
+				// the one prefix that does not move between steps (doc 30 section 2.6). Here it finally has
+				// something to hold, because the tool definitions and the transcript after it are append-only.
+				system: [{ type: 'text', text: request.system, cache_control: { type: 'ephemeral' } }],
+				messages: request.messages,
+				tools: request.tools,
+			});
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/v1/messages`,
+				headers: { 'content-type': 'application/json' },
+				data: body,
+				callSite: 'livingDocs.agentLoop',
+			}, token);
+			if (context.res.statusCode === 429) {
+				throw new ModelRateLimitedError(parseRetryAfterMs(readHeader(context.res.headers, 'retry-after'), Date.now()));
+			}
+			const raw = await asText(context);
+			if (!raw) { throw new Error('empty model response'); }
+			return raw;
+		});
+	}
+
+	/**
+	 * Answer an explicit-scope ask by running the agent loop (issue #380). Read-only: the registry carries no
+	 * mutating verb, so this queues nothing and can change nothing, and the reply says so in the host-composed
+	 * ledger rather than leaving the person to infer it.
+	 *
+	 * Three outcomes leave here, and only three. A `finish` becomes the model's narration followed by the
+	 * ledger. A pause or a cancel is re-thrown so the caller's existing honest turns handle it exactly as they
+	 * do for the single-shot path. Anything else is a NAMED failure turn carrying the ledger of what did get
+	 * read, because a bounded run is a partial run and the reads it managed are still worth showing.
+	 */
+	private async _chatRespondViaLoop(text: string, workingSet: readonly IWorkingSetDoc[], onNarration: (text: string) => void, onStep: (step: IChatStep) => void, token: CancellationToken): Promise<IChatMessage> {
+		const scope: IAgentScopeDoc[] = workingSet.map(doc => ({ docId: doc.resource.toString(), title: doc.title }));
+		const titleOf = (docId: string) => this._docs.get(docId)?.doc.title ?? scope.find(doc => doc.docId === docId)?.title;
+		const surface = createReadOnlyAgentTools({ host: this._agentToolHost(workingSet), scope });
+		const client = new BrokerAgentModelClient(request => this._agentModelStep(request, token));
+		const maxSteps = this._agentMaxSteps();
+
+		const steps: IChatStep[] = [];
+		// What each call ASKED for, so a settled step can be labelled with the document it names. Kept here
+		// rather than looked up in the trace because the trace is only handed back when the run is over, and
+		// this feed has to render while it is still going.
+		const asked = new Map<string, unknown>();
+		let narration = '';
+		const addStep = (label: string, status: IChatStep['status']) => {
+			const step: IChatStep = { label, status };
+			steps.push(step);
+			onStep(step);
+		};
+		const result = await runAgentLoop({
+			task: composeAgentTask(text, scope),
+			system: AGENT_READ_ONLY_SYSTEM_PROMPT,
+			client,
+			registry: surface.registry,
+			maxSteps,
+			onEvent: event => {
+				switch (event.type) {
+					case 'modelText':
+						narration = narration ? `${narration}\n${event.text}` : event.text;
+						onNarration(narration);
+						break;
+					case 'toolCall':
+						asked.set(event.callId, event.input);
+						break;
+					// The steps feed shows work as it SETTLES, so a step appearing means it happened.
+					case 'toolResult':
+						addStep(agentStepLabel(event.name, asked.get(event.callId), titleOf), 'done');
+						break;
+					// A refused call is shown as `skipped`, never as done: the feed must not claim a read the
+					// tool turned away.
+					case 'toolError':
+						addStep(event.message, 'skipped');
+						break;
+				}
+			}
+		});
+
+		// A pause and a cancel are RUN-level states, not loop states (doc 30 D15 / D27-B): hand them back to
+		// the caller's existing turns, which already say the right thing for both.
+		if (token.isCancellationRequested) { throw new CancellationError(); }
+		if (client.pausedMessage) { throw new ModelPausedError(client.pausedMessage); }
+
+		const ledger = composeAgentReadLedger(surface.receipts());
+		if (result.outcome.type === 'finished') {
+			return {
+				role: 'assistant', via: 'model',
+				content: `${result.outcome.summary.trim()}\n\n${ledger}`,
+				steps: steps.length ? steps : undefined,
+			};
+		}
+		this._log.info(`[livingDocs] agent loop ended without finish (${result.outcome.reason})`, result.outcome.message);
+		const said = narration.trim();
+		return {
+			role: 'assistant', via: 'fallback', failed: true,
+			content: `${said ? `${said}\n\n` : ''}${describeAgentRunFailure(result.outcome.reason, maxSteps)}\n\n${ledger}`,
+			steps: steps.length ? steps : undefined,
+		};
+	}
+
 	// Render the last few turns for the model so a follow-up ("change a couple of them") resolves against
 	// what was already said. The caller has already pushed the current user turn, so drop the last entry.
 	private _chatTranscript(resource: URI): string {
@@ -6913,8 +7175,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// The document as clean prose for the model: title + headings + paragraphs with bind links resolved
 	// to their live values (so the agent reasons over the figures the reader sees, not the raw markup).
 	private _serializeDocForChat(state: IDocState): string {
-		const resolved = this.getResolved(state.uri);
-		const resolve = (s: string) => s.replace(/\[([^\]]*)\]\(bind:([^)]+)\)/g, (_m, label: string, key: string) => resolved.get(key) ?? label);
+		const resolve = this._bindResolver(state);
 		const lines: string[] = [];
 		for (const block of state.doc.blocks) {
 			lines.push(block.type === 'heading' ? `${'#'.repeat(block.level ?? 1)} ${resolve(block.text)}` : resolve(block.text));
