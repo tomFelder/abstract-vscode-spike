@@ -131,6 +131,17 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			default: 'http://localhost:8090',
 			description: localize('livingDocs.modelProxyUrl', "Base URL of the local model broker the app calls for model-backed features. The app starts and supervises the broker automatically; it holds the model credential server-side and translates to the configured backend, so no credential is ever embedded in the app."),
 		},
+		'livingDocs.agentLoop': {
+			type: 'boolean',
+			default: true,
+			description: localize('livingDocs.agentLoop', "When you attach documents to a chat, let the agent read them through its own tools over several steps and tell you what it read, instead of answering from a single pre-packed prompt. Turn this off to go back to the single-shot reply for every question."),
+		},
+		'livingDocs.agentMaxSteps': {
+			type: 'number',
+			default: 20,
+			minimum: 1,
+			description: localize('livingDocs.agentMaxSteps', "How many steps one agent run may take before it stops. Reaching the ceiling ends the run and says so; it never stops silently."),
+		},
 		'livingDocs.fanoutContextBudget': {
 			type: 'number',
 			default: 24000,

@@ -281,7 +281,7 @@ suite('livingDocs Service', () => {
 	// notice racing ahead and deduping it.
 	let writeExternalNoWatcher: ((resource: URI, content: string) => void) | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[]; deferModel?: DeferredPromise<void>; files?: Map<string, string> } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; agentLoop?: boolean; agentMaxSteps?: number; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[]; deferModel?: DeferredPromise<void>; files?: Map<string, string> } = {}): LivingDocsService {
 		// `opts.files` hands this service the SAME in-memory disk an earlier one wrote to, which is how a
 		// reload is staged: drop the service, build a second one over the same bytes, and see what it
 		// rehydrates. Nothing else is shared - the second instance rebuilds its state from the files alone.
@@ -397,7 +397,18 @@ suite('livingDocs Service', () => {
 		// network whatever URL it is pointed at. The dead port remains because the first lock is only as good as
 		// the next person's diff - see the `test/electron-browser` isolation test, which binds the broker's real
 		// default port and proves the suite still cannot reach it.
-		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? (opts.proxyUrl ?? DEAD_PROXY) : true) } as unknown as IConfigurationService;
+		//
+		// `livingDocs.agentLoop` is the stage-3 branch point (issue #380): with it on - the product default -
+		// an ask carrying attachment chips runs the READ-ONLY agent loop instead of the single-shot fan-out.
+		// A test that exercises the single-shot fan-out itself passes `agentLoop: false` to name the route it
+		// is pinning, rather than depending on which route happens to be the default that week.
+		const configurationService = {
+			getValue: (key?: string) => key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget
+				: key === 'livingDocs.modelProxyUrl' ? (opts.proxyUrl ?? DEAD_PROXY)
+					: key === 'livingDocs.agentLoop' ? (opts.agentLoop ?? true)
+						: key === 'livingDocs.agentMaxSteps' ? (opts.agentMaxSteps ?? 20)
+							: true
+		} as unknown as IConfigurationService;
 		lastNotifications = [];
 		createdFolders = [];
 		const notificationService = {
@@ -2221,6 +2232,125 @@ suite('livingDocs Service', () => {
 		);
 	});
 
+	// --- the stage-3 branch point (issue #380): chips present run the READ-ONLY agent loop ---
+
+	/** One assistant turn asking for tools, exactly as the broker closes a tool-calling turn. */
+	function toolUseMessage(...calls: { id: string; name: string; input: object }[]): object {
+		return { content: calls.map(c => ({ type: 'tool_use', id: c.id, name: c.name, input: c.input })), stop_reason: 'tool_use' };
+	}
+
+	test('#380: attaching documents and asking a question runs the LOOP to its terminal, reads through tools, and changes nothing', async () => {
+		// A full multi-step run over the real service seam: the model reads both attached documents through
+		// `read_document`, reads one document it was NOT given (permitted, and ledgered), then finishes.
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'plan_scope', input: { docIds: [WEEKLY.toString(), BOARD.toString()], rationale: 'Both were attached.' } }),
+				toolUseMessage(
+					{ id: 'c2', name: 'read_document', input: { docId: WEEKLY.toString() } },
+					{ id: 'c3', name: 'read_document', input: { docId: BOARD.toString() } },
+				),
+				toolUseMessage({ id: 'c4', name: 'read_document', input: { docId: README.toString() } }),
+				toolUseMessage({ id: 'c5', name: 'finish', input: { summary: 'Both documents describe steady growth this week.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'what do these two say about growth?');
+
+		// The loop ran: one model call PER STEP, not the single-shot pipeline's one call for the whole turn.
+		assert.strictEqual(lastModelCalls, 4, 'the loop took one model call per step, through to finish');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.strictEqual(turn.role, 'assistant');
+		assert.strictEqual(turn.via, 'model');
+		assert.ok(!turn.failed, 'the run reached its terminal, so the turn is not a failure');
+		// The model narrated; the HOST composed the ledger from its own receipts.
+		assert.ok(turn.content.startsWith('Both documents describe steady growth this week.'), turn.content);
+		assert.ok(turn.content.includes('Read 2 of the 2 attached documents'), turn.content);
+		// A read outside the declared scope is permitted AND disclosed (doc 30 founder ruling 9.4).
+		assert.ok(turn.content.includes('Also read 1 other project document for context'), turn.content);
+		assert.ok(turn.content.includes('Nothing was changed - this run could only read.'), turn.content);
+		// Read-only means read-only: the registry ships no mutating verb, so nothing can have been queued.
+		assert.deepStrictEqual(service.getAllPending(), []);
+		// The steps feed reads as work, never as tool names.
+		assert.deepStrictEqual(turn.steps?.map(s => s.label), [
+			'Recorded what this run is about', 'Read Weekly Operating Summary', 'Read Board Note', 'Read Team Notes',
+		]);
+		// The tools the model was offered are the non-mutating subset - no mutating verb, no retrieval verb.
+		const sent = JSON.parse(lastModelBody!) as { tools: { name: string }[] };
+		assert.deepStrictEqual(sent.tools.map(t => t.name), ['list_documents', 'read_document', 'read_source', 'plan_scope', 'finish']);
+	});
+
+	test('#380: an ask with NO attachments still takes the existing single-shot path, loop enabled or not', async () => {
+		// The loop is ON (the product default) and the ask carries no chips, so the single-shot path answers -
+		// and proves it by queueing an edit, which the read-only loop has no verb to do.
+		const service = createService([], {
+			model: modelMessage({ reply: 'Tightened it.', edits: [{ heading: 'Highlights', oldText: 'Growth remained steady this week.', newText: 'Growth held steady.', rationale: 'r' }] }),
+		});
+		await service.loadDocument(WEEKLY);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'tighten the highlights');
+
+		assert.strictEqual(lastModelCalls, 1, 'the single-shot path answers in ONE call');
+		assert.strictEqual(service.getAllPending().length, 1, 'the single-shot path still queues its edit');
+		// The single-shot wire is unchanged: no tool definitions travel on a non-explicit-scope ask.
+		assert.ok(!(JSON.parse(lastModelBody!) as { tools?: unknown }).tools, 'no tool surface on the single-shot path');
+	});
+
+	test('#380: the step ceiling ends an explicit-scope run HONESTLY, naming what it hit and what it read', async () => {
+		// The model never calls finish, so the ceiling is what stops it. The turn must SAY so.
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			agentMaxSteps: 3,
+			model: toolUseMessage({ id: 'c1', name: 'read_document', input: { docId: WEEKLY.toString() } }),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'read this until you are done');
+
+		assert.strictEqual(lastModelCalls, 3, 'the ceiling bound the run to three steps');
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.strictEqual(turn.failed, true, 'a run that never finished is an honest failure, never a silent stop');
+		assert.ok(turn.content.includes('I stopped after 3 steps without finishing my answer'), turn.content);
+		// What it DID read is still ledgered: a bounded run is a partial run, never a lost one.
+		assert.ok(turn.content.includes('Weekly Operating Summary'), turn.content);
+		assert.deepStrictEqual(service.getAllPending(), []);
+	});
+
+	test('#380: plan_scope cannot widen past the attachments, and the model is told so in words', async () => {
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'plan_scope', input: { docIds: [WEEKLY.toString(), BOARD.toString()] } }),
+				toolUseMessage({ id: 'c2', name: 'finish', input: { summary: 'I stayed inside the attached set.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		// ONLY the Weekly is attached, so naming the Board is a widening.
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'what does this say?');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(!turn.failed, 'a refused widening is a recovery, not a terminal');
+		// The refusal is typed, reaches the model, and is shown to the person as a step that did NOT happen.
+		const refusal = turn.steps?.find(step => step.status === 'skipped');
+		assert.ok(refusal, 'the refused call is shown as a step that did not happen');
+		assert.ok(refusal.label.startsWith('scope_locked:'), refusal.label);
+		assert.ok(refusal.label.includes(BOARD.toString()), 'the refusal names what it refused');
+		assert.ok(turn.content.includes('The scope stayed as you attached it'), turn.content);
+	});
+
 	// --- multi-document fan-out (plan 18 iter 3): one instruction edits the whole working set (D-C) ---
 
 	// One model reply carrying the per-document edit map for the working set.
@@ -2230,6 +2360,9 @@ suite('livingDocs Service', () => {
 
 	test('with a working set, one chat instruction fans out edits to every document via a single model call (D-C)', async () => {
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			model: multiReply('Changed blue to red across all three.', [
@@ -2267,6 +2400,9 @@ suite('livingDocs Service', () => {
 		const weeklyBig = WEEKLY_MD.replace('Growth remained steady this week.', `Growth remained steady this week.\n\n${padBlocks}`);
 		const boardBig = BOARD_MD.replace('Momentum is steady this week.', `Momentum is steady this week.\n\n${padBlocks}`);
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			fanoutBudget: 2000,
@@ -2309,6 +2445,9 @@ suite('livingDocs Service', () => {
 		// is set aside as oversize. The Weekly still fits and is edited. The oversize doc is reported honestly.
 		const bigBody = `---\ntitle: Team Notes\n---\n\n## Team Notes\n\n${'padding sentence to blow the budget. '.repeat(400)}\n`;
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			fanoutBudget: 2000,
 			proxyUrl: DEAD_PROXY,
 			modelSequence: [
@@ -2337,7 +2476,7 @@ suite('livingDocs Service', () => {
 		// /healthz is healthy (model probes available) but every /v1/messages errors (the outage): the fan-out
 		// must record each target document as failed, surface a NAMED unreachable error listing them, queue NO
 		// changes, and never read as a silent "no changes proposed". The run screen sees the same failed set.
-		const service = createService([], { boardNote: true, proxyUrl: DEAD_PROXY, model: { error: { message: 'model proxy unreachable' } } });
+		const service = createService([], { agentLoop: false, boardNote: true, proxyUrl: DEAD_PROXY, model: { error: { message: 'model proxy unreachable' } } });
 		await service.loadDocument(WEEKLY);
 		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
 
@@ -2368,6 +2507,9 @@ suite('livingDocs Service', () => {
 		// surgical retry re-runs ONLY the failed docs - proven by the retry's single model call carrying just the
 		// failed documents' bodies, and by changes now landing for them.
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			modelSequence: [
@@ -2518,6 +2660,9 @@ suite('livingDocs Service', () => {
 
 	test('#257 fan-out: a "never" document in the project is SKIPPED with a truthful skip reason, others still change', async () => {
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			model: multiReply('Applied across the project.', [
@@ -2725,6 +2870,9 @@ suite('livingDocs Service', () => {
 
 	test('I3 fan-out: edits for a document that was NOT in the run render as a failure naming the title miss', async () => {
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			model: multiReply('Updated the quarterly plan.', [
@@ -2753,6 +2901,9 @@ suite('livingDocs Service', () => {
 		// The receipt must still say the human's dial refused it - blaming the model for naming an unknown
 		// document would misreport a choice the user made.
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			model: multiReply('Tightened the board note.', [
