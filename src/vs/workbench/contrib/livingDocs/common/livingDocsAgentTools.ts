@@ -144,6 +144,24 @@ export interface IAgentToolHost {
 	readonly unsettledWork?: () => string | undefined;
 }
 
+/**
+ * A 1-based inclusive range of a source's lines - rows, for a spreadsheet extract - as one read took it. Row 1
+ * is the source's first physical line (the header, on a spreadsheet extract that has one), so the number the
+ * ledger discloses is exactly the number the model asked for and exactly what was served.
+ */
+export interface IAgentSourceRange {
+	readonly unit: 'row' | 'line';
+	readonly start: number;
+	readonly end: number;
+}
+
+/**
+ * One extent a `read_source` call took: an {@link IAgentSourceRange}, or `'whole'` when the model read the
+ * source with no range. The ledger discloses one of these per read, so a person sees not just WHICH source was
+ * read but how much of it.
+ */
+export type IAgentSourceExtent = IAgentSourceRange | 'whole';
+
 /** One line of the host-composed ledger: what was read, how much of it, and whether it was in scope. */
 export interface IAgentReadLedgerEntry {
 	readonly kind: 'document' | 'source';
@@ -156,6 +174,11 @@ export interface IAgentReadLedgerEntry {
 	readonly reads: number;
 	/** Blocks served across those reads (0 for a source, which has no block structure). */
 	readonly blocks: number;
+	/**
+	 * For a SOURCE, what each of those reads took, in read order: a line/row range, or `'whole'`. Absent on a
+	 * document entry, and absent on a source only in the impossible case of a recorded read with no extent.
+	 */
+	readonly extents?: readonly IAgentSourceExtent[];
 }
 
 /** The declared scope: the attachments, plus whatever narrowing `plan_scope` recorded. */
@@ -271,11 +294,12 @@ const READ_DOCUMENT_DEFINITION: Tool = {
 
 const READ_SOURCE_DEFINITION: Tool = {
 	name: AGENT_READ_SOURCE_TOOL,
-	description: 'Read an attached source file (a spreadsheet extract, a note, a PDF extraction) by name.',
+	description: 'Read an attached source file (a spreadsheet extract, a note, a PDF extraction) by name. Pass a range like "1-20" to read only those lines - rows, for a spreadsheet extract - or a single line like "5". Line and row numbers are 1-based and the range is inclusive; omit the range to read the whole source, which also tells you how many lines it has so you can read the rest in ranges.',
 	input_schema: {
 		type: 'object',
 		properties: {
-			name: { type: 'string', description: 'The source file name as it appears on the document.' }
+			name: { type: 'string', description: 'The source file name as it appears on the document.' },
+			range: { type: 'string', description: 'Optional: a 1-based inclusive line range like "1-20", or a single line like "5". For a spreadsheet extract these are rows. Omit to read the whole source.' }
 		},
 		required: ['name']
 	}
@@ -387,6 +411,38 @@ function readString(input: unknown, key: string): string | undefined {
 	return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+/** A 1-based inclusive line range, as `read_source`'s `range` argument names one. */
+interface ILineRange {
+	readonly start: number;
+	readonly end: number;
+}
+
+/**
+ * Parse `read_source`'s `range` argument: "N" for a single line, "N-M" for an inclusive span, both 1-based.
+ * Anything else - words, a zero, a reversed span - is `undefined`, so the tool NAMES the malformed input
+ * rather than silently reading the whole source, which is the silent-widening failure class doc 30 exists to
+ * kill (the same reason `sliceHeadingSection` refuses an unmatched heading rather than serving everything).
+ */
+function parseLineRange(raw: string): ILineRange | undefined {
+	const single = /^(?<only>\d+)$/.exec(raw.trim());
+	if (single) {
+		const only = Number(single.groups!.only);
+		return only >= 1 ? { start: only, end: only } : undefined;
+	}
+	const span = /^(?<start>\d+)\s*-\s*(?<end>\d+)$/.exec(raw.trim());
+	if (span) {
+		const start = Number(span.groups!.start);
+		const end = Number(span.groups!.end);
+		return start >= 1 && end >= start ? { start, end } : undefined;
+	}
+	return undefined;
+}
+
+/** The unit a source's lines are named in: rows for a spreadsheet extract, lines for everything else. */
+function sourceRangeUnit(name: string): 'row' | 'line' {
+	return name.toLowerCase().endsWith('.csv') ? 'row' : 'line';
+}
+
 /**
  * Build the read-only tool surface for one run over an EXPLICIT scope (the attachment chips).
  *
@@ -423,15 +479,24 @@ function createAgentTools(options: { readonly host: IAgentToolHost; readonly sco
 	let scopeWidenRefused = false;
 	let invalidSegmentLists = 0;
 
-	/** Record one read against the ledger, merging repeats so a re-read is a count, not a duplicate line. */
-	function record(kind: 'document' | 'source', id: string, title: string, blocks: number): void {
+	/**
+	 * Record one read against the ledger, merging repeats so a re-read is a count, not a duplicate line. A
+	 * source read carries the `extent` it took (a range, or `'whole'`); the extents accumulate in read order so
+	 * the ledger can disclose every one, and a re-read of the same source stays one line with two extents.
+	 */
+	function record(kind: 'document' | 'source', id: string, title: string, blocks: number, extent?: IAgentSourceExtent): void {
 		const existing = reads.findIndex(entry => entry.kind === kind && entry.id === id);
 		if (existing >= 0) {
 			const previous = reads[existing];
-			reads[existing] = { ...previous, reads: previous.reads + 1, blocks: previous.blocks + blocks };
+			reads[existing] = {
+				...previous,
+				reads: previous.reads + 1,
+				blocks: previous.blocks + blocks,
+				...(extent ? { extents: [...(previous.extents ?? []), extent] } : {}),
+			};
 			return;
 		}
-		reads.push({ kind, id, title, inScope: kind === 'source' || inScope.has(id), reads: 1, blocks });
+		reads.push({ kind, id, title, inScope: kind === 'source' || inScope.has(id), reads: 1, blocks, ...(extent ? { extents: [extent] } : {}) });
 	}
 
 	const listDocuments: AgentToolExecutor = async () => {
@@ -470,10 +535,36 @@ function createAgentTools(options: { readonly host: IAgentToolHost; readonly sco
 	const readSource: AgentToolExecutor = async input => {
 		const name = readString(input, 'name');
 		if (!name) { return errorResult('read_source needs a source name.'); }
+		const rangeArg = readString(input, 'range');
+		let requested: ILineRange | undefined;
+		if (rangeArg !== undefined) {
+			requested = parseLineRange(rangeArg);
+			if (!requested) {
+				return errorResult(`read_source could not read the range "${rangeArg}". Give a 1-based inclusive line range like "1-20", a single line like "5", or omit the range to read the whole source.`);
+			}
+		}
 		const text = await options.host.readSource(name);
 		if (text === undefined) { return errorResult(`There is no source called ${name} on the documents in this run.`); }
-		record('source', name, name, 0);
-		return { content: `Source ${name}:\n"""${text}"""` };
+		const unit = sourceRangeUnit(name);
+		const lines = text.split('\n');
+		if (!requested) {
+			// A whole read still discloses how long the source is, so the model can come back for the rest of a
+			// large source in ranges rather than re-reading all of it.
+			record('source', name, name, 0, 'whole');
+			return { content: `Source ${name} (${lines.length} ${unit}${lines.length === 1 ? '' : 's'}):\n"""${text}"""` };
+		}
+		if (requested.start > lines.length) {
+			return errorResult(`Source ${name} has only ${lines.length} ${unit}${lines.length === 1 ? '' : 's'}, so ${unit} ${requested.start} is past its end. Read it without a range to see all of it.`);
+		}
+		// A range that overshoots the end clamps to the last line rather than erroring - the model asked for
+		// "from here on" and got exactly that - and the disclosed extent is what was ACTUALLY served, not what
+		// was asked for, so the ledger can never claim a read of lines that do not exist.
+		const start = requested.start;
+		const end = Math.min(requested.end, lines.length);
+		const slice = lines.slice(start - 1, end).join('\n');
+		record('source', name, name, 0, { unit, start, end });
+		const span = start === end ? `${unit} ${start}` : `${unit}s ${start}-${end}`;
+		return { content: `Source ${name}, ${span} of ${lines.length}:\n"""${slice}"""` };
 	};
 
 	const planScope: AgentToolExecutor = async input => {
@@ -645,6 +736,35 @@ export function composeAgentEditLedger(receipts: IAgentRunReceipts): string {
 	return parts.join(' ');
 }
 
+/**
+ * The plain-words phrase for one source range, in its own unit: "rows 2-3", "line 5". Shared by the ledger and
+ * the live steps feed, so its localize keys sit under a neutral `sourceRange` prefix rather than either one's.
+ */
+function describeSourceRange(range: IAgentSourceRange): string {
+	if (range.unit === 'row') {
+		return range.start === range.end
+			? localize('livingDocs.sourceRange.rows.one', "row {0}", range.start)
+			: localize('livingDocs.sourceRange.rows.many', "rows {0}-{1}", range.start, range.end);
+	}
+	return range.start === range.end
+		? localize('livingDocs.sourceRange.lines.one', "line {0}", range.start)
+		: localize('livingDocs.sourceRange.lines.many', "lines {0}-{1}", range.start, range.end);
+}
+
+/**
+ * How one source reads in the ledger. A source read only ever WHOLE reads as its bare name (the common case,
+ * kept clean); once any read took a range, every extent is spelled out in read order - "metrics.csv (rows
+ * 2-3, whole)" - so a person is never told the agent saw less of a source than it did.
+ */
+function describeSource(entry: IAgentReadLedgerEntry): string {
+	const extents = entry.extents ?? [];
+	if (!extents.some(extent => extent !== 'whole')) { return entry.title; }
+	const spans = extents.map(extent => extent === 'whole'
+		? localize('livingDocs.agentLedger.sourceWhole', "whole")
+		: describeSourceRange(extent));
+	return localize('livingDocs.agentLedger.sourceRanged', "{0} ({1})", entry.title, spans.join(', '));
+}
+
 /** The read half of the ledger, shared by both composers so one run cannot be counted two ways. */
 function readParagraphs(receipts: IAgentRunReceipts): string[] {
 	const documents = receipts.reads.filter(entry => entry.kind === 'document');
@@ -677,7 +797,7 @@ function readParagraphs(receipts: IAgentRunReceipts): string[] {
 		parts.push(localize(
 			'livingDocs.agentLedger.sources',
 			"Read {0} source{1}: {2}.",
-			sources.length, plural(sources.length), sources.map(entry => entry.title).join(', ')
+			sources.length, plural(sources.length), sources.map(describeSource).join(', ')
 		));
 	}
 	if (unopened.length) {
@@ -709,8 +829,14 @@ export function agentStepLabel(name: string, input: unknown, titleOf: (docId: st
 				? localize('livingDocs.agentStep.readSection', "Read {0}, under {1}", title, heading)
 				: localize('livingDocs.agentStep.readDocument', "Read {0}", title);
 		}
-		case AGENT_READ_SOURCE_TOOL:
-			return localize('livingDocs.agentStep.readSource', "Read {0}", readString(input, 'name') ?? localize('livingDocs.agentStep.aSource', "a source"));
+		case AGENT_READ_SOURCE_TOOL: {
+			const name = readString(input, 'name') ?? localize('livingDocs.agentStep.aSource', "a source");
+			const rangeArg = readString(input, 'range');
+			const range = rangeArg ? parseLineRange(rangeArg) : undefined;
+			return range
+				? localize('livingDocs.agentStep.readSourceRange', "Read {0}, {1}", name, describeSourceRange({ unit: sourceRangeUnit(name), start: range.start, end: range.end }))
+				: localize('livingDocs.agentStep.readSource', "Read {0}", name);
+		}
 		case AGENT_PLAN_SCOPE_TOOL:
 			return localize('livingDocs.agentStep.planScope', "Recorded what this run is about");
 		case AGENT_PROPOSE_SEGMENTS_TOOL: {

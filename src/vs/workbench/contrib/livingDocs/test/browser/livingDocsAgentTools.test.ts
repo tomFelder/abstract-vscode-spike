@@ -419,6 +419,60 @@ suite('livingDocs read-only agent tools (issue #380, doc 30 2.4)', () => {
 		assert.strictEqual(documents[0].blocks, 6, '4 blocks whole, then 2 in the section');
 	});
 
+	// --- ranged source reads (issue #383; doc 30 2.4 "read_source(name, range?) - attached source text, ranged") ---
+
+	const METRICS = ['month,seats,revenue', 'jan,100,1000', 'feb,110,1100', 'mar,120,1200', 'apr,130,1300'].join('\n');
+
+	test('read_source reads a ranged slice and the whole source, and the ledger discloses each (issue #383)', async () => {
+		const surface = tools({ host: host({ readSource: async name => name === 'metrics.csv' ? METRICS : undefined }) });
+		const { result } = await run([
+			// A ranged read: rows 2-3 only, so the model reads part of a large source rather than all of it.
+			toolTurn(call('t1', AGENT_READ_SOURCE_TOOL, { name: 'metrics.csv', range: '2-3' })),
+			// The same source, whole.
+			toolTurn(call('t2', AGENT_READ_SOURCE_TOOL, { name: 'metrics.csv' })),
+			toolTurn(call('t3', AGENT_FINISH_TOOL, { summary: 'January and February revenue were 1000 and 1100.' })),
+		], surface);
+
+		assert.strictEqual(result.outcome.type, 'finished');
+		// The ranged read returned EXACTLY rows 2-3 (jan and feb) and says how far the source runs - never the
+		// header row or the later months, so the model's answer is grounded in exactly what it asked for.
+		assert.strictEqual(
+			toolResultAt(result.events, 1).content,
+			'Source metrics.csv, rows 2-3 of 5:\n"""jan,100,1000\nfeb,110,1100"""'
+		);
+		// The ledger discloses BOTH reads of the one source, in read order, on a single line: the ranged read
+		// names its rows and the whole read is named as whole, so the person sees exactly what was looked at.
+		assert.strictEqual(
+			composeAgentReadLedger(surface.receipts()),
+			'Read 1 source: metrics.csv (rows 2-3, whole). Did not open Pricing, Plans. Nothing was changed - this run could only read.'
+		);
+	});
+
+	test('read_source refuses a malformed range, clamps an overshoot, and names a note in lines not rows (issue #383)', async () => {
+		const NOTE = ['alpha', 'bravo', 'charlie'].join('\n');
+		const surface = tools({ host: host({ readSource: async name => name === 'notes.txt' ? NOTE : undefined }) });
+		const { result } = await run([
+			// A malformed range is refused in words and the run continues - a bad argument is a recovery, and it
+			// records nothing, so it never reaches the ledger.
+			toolTurn(call('t1', AGENT_READ_SOURCE_TOOL, { name: 'notes.txt', range: 'the top bit' })),
+			// A range that runs past the end clamps to the last line rather than erroring, and says how far it ran.
+			toolTurn(call('t2', AGENT_READ_SOURCE_TOOL, { name: 'notes.txt', range: '2-99' })),
+			toolTurn(call('t3', AGENT_FINISH_TOOL, { summary: 'Read the note from its second line on.' })),
+		], surface);
+
+		assert.strictEqual(toolErrorAt(result.events, 1).reason, 'executorFailed', 'a malformed range is a recoverable refusal');
+		// The overshoot clamps to the last line, serves only the in-range lines, and says how far it ran (2-3 of 3).
+		assert.strictEqual(
+			toolResultAt(result.events, 2).content,
+			'Source notes.txt, lines 2-3 of 3:\n"""bravo\ncharlie"""'
+		);
+		// A .txt note is disclosed in LINES, not rows - the unit matches what the source naturally is.
+		assert.strictEqual(
+			composeAgentReadLedger(surface.receipts()),
+			'Read 1 source: notes.txt (lines 2-3). Did not open Pricing, Plans. Nothing was changed - this run could only read.'
+		);
+	});
+
 	test('a run that ends without finish says so in words, naming the ceiling it hit', () => {
 		// The step ceiling is the one bound a person actually meets, so it names the number AND what to do.
 		const ceiling = describeAgentRunFailure('stepCeiling', 20);
@@ -444,6 +498,10 @@ suite('livingDocs read-only agent tools (issue #380, doc 30 2.4)', () => {
 		// A document the run never attached still labels honestly - by its id, never by a guessed title.
 		assert.strictEqual(agentStepLabel(AGENT_READ_DOCUMENT_TOOL, { docId: OLD_FAQ.docId }, titleOf), `Read ${OLD_FAQ.docId}`);
 		assert.strictEqual(agentStepLabel(AGENT_READ_SOURCE_TOOL, { name: 'metrics.csv' }, titleOf), 'Read metrics.csv');
+		// A ranged source read shows the range live, in the source's own unit (rows for a spreadsheet extract).
+		assert.strictEqual(agentStepLabel(AGENT_READ_SOURCE_TOOL, { name: 'metrics.csv', range: '2-3' }, titleOf), 'Read metrics.csv, rows 2-3');
+		// A malformed range never lands as a read, so the feed falls back to the plain label rather than echoing junk.
+		assert.strictEqual(agentStepLabel(AGENT_READ_SOURCE_TOOL, { name: 'metrics.csv', range: 'nonsense' }, titleOf), 'Read metrics.csv');
 		assert.strictEqual(agentStepLabel(AGENT_PLAN_SCOPE_TOOL, {}, titleOf), 'Recorded what this run is about');
 	});
 
