@@ -304,8 +304,9 @@ suite('livingDocs segment expansion (issue #381, doc 30 2.1)', () => {
 			says: 'in the middle of the range',
 		},
 		{
+			// B7 is the unique list block, so the collision - not the duplicate-heading guard - is what fires.
 			name: 'an insertion positioned exactly where a deletion begins',
-			segments: [{ keep: 'B1-B3' }, { insertAfter: 'B3', content: 'new' }, { replace: 'B4', echo: ['Billing runs'], content: '' }, { keep: 'B5-B8' }],
+			segments: [{ keep: 'B1-B7' }, { insertAfter: 'B7', content: 'new' }, { replace: 'B8', echo: ['Contact sales'], content: '' }],
 			violation: 'overlapping-range',
 			says: 'not decidable',
 		},
@@ -473,6 +474,86 @@ suite('livingDocs segment expansion (issue #381, doc 30 2.1)', () => {
 		]);
 		assert.ok(result.ok, `expected success, got ${(result as ISegmentViolation).violation}: ${(result as ISegmentViolation).message}`);
 		assert.strictEqual((result as ISegmentExpansion).hunks[0].oldText, 'We charge extra for support.');
+	});
+
+	// --- discrimination excludes blocks that are themselves on their way out (issue #381 cycle 3, R1/R2/R3) --
+	//
+	// A block being REPLACED is not a target to protect: there is no survivor to misapply onto. The guard must
+	// only refuse an echo that is ambiguous against a block that SURVIVES (a keep). Otherwise an ordinary
+	// "rewrite this section" - a heading and the body it opens, in one range - is impossible to express,
+	// because the heading's whole text is a prefix of its own body and no echo of it could ever be unique.
+
+	test('R1: a replace range spanning a heading and the body it opens succeeds and lands byte-exact', () => {
+		const base = '# Report\n\n## Summary\n\nSummary of the quarter follows here.\n\n## Details\n\nDetails are below.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1' },
+			{ replace: 'B2-B3', echo: ['## Summary', 'Summary of the quarter'], content: '## Summary\n\nRevised summary text.' },
+			{ keep: 'B4-B5' },
+		]);
+		assert.ok(result.ok, `expected success, got ${(result as ISegmentViolation).violation}: ${(result as ISegmentViolation).message}`);
+		assert.strictEqual((result as ISegmentExpansion).body, base.replace('## Summary\n\nSummary of the quarter follows here.', '## Summary\n\nRevised summary text.'));
+	});
+
+	test('R2: adjacent byte-identical blocks jointly claimed by ONE replace range succeed', () => {
+		const base = '# Doc\n\nTODO: fill this in.\n\nTODO: fill this in.\n\nDone.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1' },
+			{ replace: 'B2-B3', echo: ['TODO: fill this in.', 'TODO: fill this in.'], content: 'First real paragraph.\n\nSecond real paragraph.' },
+			{ keep: 'B4' },
+		]);
+		assert.ok(result.ok, `expected success, got ${(result as ISegmentViolation).violation}: ${(result as ISegmentViolation).message}`);
+		assert.ok((result as ISegmentExpansion).body.includes('First real paragraph.\n\nSecond real paragraph.'));
+		assert.ok(!(result as ISegmentExpansion).body.includes('TODO'));
+	});
+
+	test('R3: two non-adjacent identical blocks, each labelled and each replaced, both succeed', () => {
+		const base = '# Doc\n\n## Notes\n\nAlpha.\n\n## Notes\n\nBravo.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1' },
+			{ replace: 'B2', echo: ['## Notes'], content: '## Overview' },
+			{ keep: 'B3' },
+			{ replace: 'B4', echo: ['## Notes'], content: '## Appendix' },
+			{ keep: 'B5' },
+		]);
+		assert.ok(result.ok, `expected success, got ${(result as ISegmentViolation).violation}: ${(result as ISegmentViolation).message}`);
+		assert.ok((result as ISegmentExpansion).body.includes('## Overview\n\nAlpha.\n\n## Appendix'));
+	});
+
+	test('the surviving-twin case still REJECTS: replace one duplicate heading while the other is kept', () => {
+		// The round-1 misapply, and it must still be caught: B4 survives, so an echo that fits it too cannot
+		// prove the model did not mean B4 when it wrote B2.
+		const base = '# Doc\n\n## Notes\n\nAlpha.\n\n## Notes\n\nBravo.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1' },
+			{ replace: 'B2', echo: ['## Notes'], content: '## Overview' },
+			{ keep: 'B3-B5' },
+		]);
+		assert.ok(!result.ok, 'a replace ambiguous against a SURVIVING twin must still be rejected');
+		assert.strictEqual((result as ISegmentViolation).violation, 'ambiguous-echo');
+	});
+
+	test('insertAfter into a duplicate-heading document is rejected - "after B2" cannot say which section (#420)', () => {
+		const base = '# Doc\n\n## Notes\n\nAlpha.\n\n## Notes\n\nBravo.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1-B2' },
+			// B2 and B4 are both `## Notes`; "after B2" is silently off-by-one-prone, so reject rather than guess.
+			{ insertAfter: 'B2', content: 'A new paragraph for the Notes section.' },
+			{ keep: 'B3-B5' },
+		]);
+		assert.ok(!result.ok, 'an insertAfter into an ambiguous section must be rejected');
+		assert.strictEqual((result as ISegmentViolation).violation, 'ambiguous-echo');
+		assert.strictEqual((result as { hunks?: unknown }).hunks, undefined, 'nothing may be expanded from an ambiguous insert');
+	});
+
+	test('insertAfter a UNIQUE block still succeeds - the guard does not refuse an unambiguous insert (#420)', () => {
+		const base = '# Doc\n\n## Notes\n\nAlpha.\n\n## Details\n\nBravo.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1-B2' },
+			{ insertAfter: 'B2', content: 'A new paragraph for the Notes section.' },
+			{ keep: 'B3-B5' },
+		]);
+		assert.ok(result.ok, `expected success, got ${(result as ISegmentViolation).violation}: ${(result as ISegmentViolation).message}`);
+		assert.ok((result as ISegmentExpansion).body.includes('## Notes\n\nA new paragraph for the Notes section.'));
 	});
 
 	// --- the invariant, fuzzed --------------------------------------------------------------------------

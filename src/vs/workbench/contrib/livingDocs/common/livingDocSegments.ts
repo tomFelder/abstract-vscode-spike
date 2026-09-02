@@ -432,13 +432,36 @@ export function expandSegments(baseBody: string, segments: readonly DocSegment[]
 	}
 
 	// The echo must DISAMBIGUATE, not merely touch (issue #381 cycle 2). Run after the structural checks so a
-	// list that is also malformed some other way reports that first; run over the whole document so an echo
-	// that fits a KEPT block as well as its own is caught too.
+	// list that is also malformed some other way reports that first. It guards SURVIVORS only: a block that is
+	// itself being replaced is on its way out, so it is no target to be misapplied onto and must not count as
+	// an ambiguity candidate (issue #381 cycle 3). Without this, an ordinary "rewrite this section" - a heading
+	// and the body it opens, in one range - is impossible, because the heading's whole text is a prefix of its
+	// body and no echo of it could ever be unique.
+	const isReplaced = new Array<boolean>(chunks.length).fill(false);
 	for (let index = 0; index < segments.length; index++) {
 		const segment = segments[index];
 		if (!isReplace(segment)) { continue; }
-		const ambiguous = checkEchoUnique(segment, ranges.get(index)!, index, normViews);
+		const range = ranges.get(index)!;
+		for (let ordinal = range.from; ordinal <= range.to; ordinal++) { isReplaced[ordinal] = true; }
+	}
+	for (let index = 0; index < segments.length; index++) {
+		const segment = segments[index];
+		if (!isReplace(segment)) { continue; }
+		const ambiguous = checkEchoUnique(segment, ranges.get(index)!, index, normViews, isReplaced);
 		if (ambiguous) { return ambiguous; }
+	}
+
+	// The same off-by-one class, for insertions (issue #420). `insertAfter B7` names a block by ordinal alone;
+	// if another SURVIVING block is word-for-word the same, "after B7" does not say which of them, and the new
+	// content would land in a section the model may not have meant - silently, since an insert has no echo to
+	// check. Reject loudly instead. Only byte-identical survivors are ambiguous here: a block a mere prefix
+	// apart is still distinguishable by its own full text, and rejecting those would refuse the ordinary
+	// insert-after-a-heading whose text opens the paragraph below it.
+	for (const [ordinal, insert] of inserts) {
+		for (let other = 0; other < normViews.length; other++) {
+			if (other === ordinal || isReplaced[other] || normViews[other] !== normViews[ordinal]) { continue; }
+			return violation('ambiguous-echo', `Segment ${insert.segmentIndex + 1} (insertAfter B${ordinal + 1}): B${ordinal + 1} and B${other + 1} are word for word the same, so "after B${ordinal + 1}" does not say which one you mean and nothing was inserted. Only the person can say which section they mean.`, insert.segmentIndex);
+		}
 	}
 
 	const paragraphBreak = baseBody.includes('\r\n') ? '\r\n\r\n' : '\n\n';
@@ -542,15 +565,20 @@ function checkEcho(segment: IReplaceSegment, range: IRange, index: number, viewO
  * Two shapes of ambiguity, and the model is told which. When another block is word-for-word identical no echo
  * can ever tell them apart, so the model is asked to defer to the person. Otherwise the echo was simply too
  * short, and the model is asked to echo enough of the block to be unique.
+ *
+ * `isReplaced` marks every block claimed by a replace segment. Such blocks are excluded from the scan: they
+ * are all changing, so confusing one for another cannot leave a survivor wrongly clobbered - and requiring an
+ * echo to distinguish two blocks that are both on their way out is a demand that is often impossible to meet
+ * (issue #381 cycle 3). Only a surviving block - a keep - can be a wrong target worth protecting.
  */
-function checkEchoUnique(segment: IReplaceSegment, range: IRange, index: number, normViews: readonly string[]): ISegmentViolation | undefined {
+function checkEchoUnique(segment: IReplaceSegment, range: IRange, index: number, normViews: readonly string[], isReplaced: readonly boolean[]): ISegmentViolation | undefined {
 	for (let offset = 0; offset < segment.echo.length; offset++) {
 		const ordinal = range.from + offset;
 		const echo = normaliseEcho(segment.echo[offset]);
 		let twin = -1;
 		let sharesPrefix = -1;
 		for (let other = 0; other < normViews.length; other++) {
-			if (other === ordinal || !normViews[other].startsWith(echo)) { continue; }
+			if (other === ordinal || isReplaced[other] || !normViews[other].startsWith(echo)) { continue; }
 			if (normViews[other] === normViews[ordinal]) { twin = other; } else if (sharesPrefix < 0) { sharesPrefix = other; }
 		}
 		if (twin >= 0) {
