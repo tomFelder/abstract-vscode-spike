@@ -462,8 +462,10 @@ suite('livingDocs render (PM default - renderLivingDocHtml)', () => {
 			barsNotInsideWrap: !h.slice(wrapAt).includes('class="etoolbar"'),
 			// The centred prose column keeps its 720px max-width and now reserves a 70px numbered-gutter lane (its
 			// own inset, not the harness's). The translateX(-18px) pulls the reading group left by half the 40px
-			// the wider lane added, so the prose TEXT never shifts from the 30px-lane baseline (P9.1).
-			proseCentred: shell.includes('.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:70px;padding-right:0;box-sizing:content-box;position:relative;transform:translateX(-18px)}'),
+			// the wider lane added, so the prose TEXT never shifts from the 30px-lane baseline (P9.1). The column
+			// GROWS into that lane (flex-grow 1, #320): sized from its content it collapsed to 0px on an empty
+			// document, which is a document that cannot be typed into - see test/browser/blankDocTyping.test.ts.
+			proseCentred: shell.includes('.pmwrap .prose{flex:1 1 auto;max-width:720px;margin:0;padding-left:70px;padding-right:0;box-sizing:content-box;position:relative;transform:translateX(-18px)}'),
 		}, {
 			bodyPaddingReset: true,
 			noTopBar: true,

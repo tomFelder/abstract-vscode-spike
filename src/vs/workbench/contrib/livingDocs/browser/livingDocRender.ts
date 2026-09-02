@@ -485,7 +485,14 @@ table.kpi td:first-child{text-align:left;font-weight:600}
  * html,body rule above resets the webview harness's body padding (0 20px) - without that reset the harness
  * inset survives and pushes every bar ~20px off each rail. */
 .pmwrap{display:flex;justify-content:center;padding:32px 40px 90px}
-.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:70px;padding-right:0;box-sizing:content-box;position:relative;transform:translateX(-18px)}
+/* THE READING COLUMN IS A LANE, NOT A SHRINK-WRAP (#320). It is a flex item, so flex:0 1 auto sized it
+ * from its CONTENT: a brand-new blank document has none, so the column - and the .ProseMirror mount inside
+ * it - computed to 0px wide, leaving nothing to click into and nowhere for a caret to go. A flex-grow of 1
+ * makes the column claim the lane it is designed to be (max-width 720px of reading text beside the 70px
+ * gutter) whether the document holds a chapter, one word, or nothing at all; flex-shrink keeps it giving
+ * way on a narrow pane. The measure is therefore a property of the surface, not of what has been typed
+ * into it, which is also why the first line of a new document lands exactly where every later line will. */
+.pmwrap .prose{flex:1 1 auto;max-width:720px;margin:0;padding-left:70px;padding-right:0;box-sizing:content-box;position:relative;transform:translateX(-18px)}
 .pmwrap .ProseMirror{outline:none;min-height:60vh;white-space:pre-wrap;word-wrap:break-word;-webkit-font-smoothing:antialiased}
 .pmwrap .ProseMirror:focus{outline:none}
 .pmwrap .ProseMirror p.is-editor-empty:first-child::before{color:${INK.meta};content:attr(data-placeholder);float:left;pointer-events:none;height:0}
