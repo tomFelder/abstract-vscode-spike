@@ -46,7 +46,7 @@ import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageA
 import { IAnalyticsService } from '../common/analytics.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
-import { buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, chunkDocBody, countBindSlots, documentDisplayTitle, extractBindLinks, frontmatterBlock, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag, withReplacedBody } from '../common/livingDocMarkdown.js';
+import { buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, chunkDocBody, countBindSlots, documentDisplayTitle, extractBindLinks, frontmatterBlock, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag, withMergedFrontmatter, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { coerceDocPolicy, docPolicyNeverRefusal, docPolicyNeverSkipReason, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
@@ -4841,7 +4841,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// leaves no version. `saveSnapshot` reads `state.rawText`, so capture here.
 		const beforeBody = state.rawText;
 		const changes = await this._syncLockWithDiff(state, pass);
-		const afterBody = serializeLivingDoc(state.doc);
+		// Compare against what `_persist` will actually write (`_rebuildRawText`), not `serializeLivingDoc`,
+		// whose re-authored frontmatter would differ from `state.rawText` on every template-derived document
+		// and force a spurious snapshot.
+		const afterBody = this._rebuildRawText(state);
 		if (changes.length && beforeBody !== afterBody) {
 			await this.saveSnapshot(state.uri, 'Before refresh', 'refresh', beforeBody);
 		}
@@ -7728,6 +7731,21 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return entry;
 	}
 
+	/**
+	 * Rebuild a document's on-disk text after a block-level change (the frontmatter quarantine, docs/30
+	 * section 8.3, issue #357). This is the ONE re-attachment point every non-approve persist shares (figure
+	 * sync, hand edits, skill fixes). `withMergedFrontmatter` carries the original `---` block through
+	 * byte-exact - so the `template`/`name`/`description`/`fromTemplate` provenance, every unknown user key,
+	 * nested maps, comments and CR/LF endings survive - and surgically updates only a modelled SCALAR whose
+	 * value actually moved on this path (a figure sync advances `subtitle: Week N` via `_resolveSubtitle`).
+	 * Calling `serializeLivingDoc` here would drop the unmodelled keys; freezing the whole block would revert
+	 * the subtitle. The approve path re-attaches the store's own byte-precise body the same way
+	 * (`_storeDocuments.write`), so parse and emit cannot diverge again.
+	 */
+	private _rebuildRawText(state: IDocState): string {
+		return withMergedFrontmatter(state.rawText, state.doc);
+	}
+
 	// Persist the document (.md) and its lock together - the pair is one logical unit.
 	private async _persist(state: IDocState): Promise<void> {
 		// The body as it stood before this write, so the store can move the changes standing over it. Every
@@ -7745,7 +7763,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				return;
 			}
 			const overrodeExternal = state.keepMine === true;
-			const serialized = serializeLivingDoc(state.doc);
+			// Rebuild by merging the frontmatter onto the original block (the #357 quarantine), never through
+			// `serializeLivingDoc` - see `_rebuildRawText`.
+			const serialized = this._rebuildRawText(state);
 			state.rawText = serialized;
 			// After an explicit "Keep my version", record the knowing overwrite on the lock's audit trail before it
 			// is written, so the decision is auditable (the external edit we chose to overwrite is named in newText).

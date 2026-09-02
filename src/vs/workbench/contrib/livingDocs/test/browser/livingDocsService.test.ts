@@ -28,7 +28,7 @@ import { IViewsService } from '../../../../services/views/common/viewsService.js
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AgentPolicy, IAgentDef, IAuditEntry, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
-import { extractBindLinks, parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, frontmatterBlock, parseLivingDoc } from '../../common/livingDocMarkdown.js';
 import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 const METRICS_CSV = [
@@ -136,6 +136,89 @@ const WEEKLY_TEMPLATE_MD = [
 	'Revenue is [pending](bind:metrics.mrr) MRR.',
 ].join('\n') + '\n';
 
+// A template-DERIVED living document (issue #357 / ticket #385): born from the "Weekly report" template, so
+// its frontmatter carries `template: <name>` provenance (read back as `fromTemplate`) plus the template's
+// `name`/`description` metadata, AND an unknown user-authored key (`owner`) the parser never stores. None of
+// these are emitted by `serializeLivingDoc`, so any persist that rebuilds the file from parsed blocks used to
+// silently drop them. It is bound to metrics.csv (authored at the week-23 cache) so a figure sync is a real
+// non-approve persist that re-derives and writes the file.
+const TEMPLATE_DERIVED_MD = [
+	'---',
+	'title: Q3 Board Update',
+	'template: Weekly report',
+	'name: Q3 Board Update',
+	'description: Grown from the weekly template.',
+	'owner: growth-pod',
+	'sources:',
+	'  - metrics.csv',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'Revenue grew [12%](bind:metrics.mrr.delta) to [$41.2k](bind:metrics.mrr) MRR.',
+].join('\n') + '\n';
+
+// Same template-derived document, but authored with a `subtitle: Week N` that a figure sync advances
+// (`_resolveSubtitle`): the regression the adversarial panel found (#385 round 2). A modelled frontmatter
+// field that legitimately changes on a non-approve path MUST reach disk, while the unmodelled provenance
+// (`template`/`name`/`description`) and the unknown `owner:` key still survive byte-exact.
+const SUBTITLE_DERIVED_MD = [
+	'---',
+	'title: Q3 Board Update',
+	'subtitle: Week 23',
+	'template: Weekly report',
+	'name: Q3 Board Update',
+	'description: Grown from the weekly template.',
+	'owner: growth-pod',
+	'sources:',
+	'  - metrics.csv',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'Revenue grew [12%](bind:metrics.mrr.delta) to [$41.2k](bind:metrics.mrr) MRR.',
+].join('\n') + '\n';
+
+// #385 round-3 refutation A2-1: a modelled LIST (`sources:`) with a COMMENT between its items. Re-emitting
+// the list on persist duplicated the items after the interruption; the frontmatter must instead be carried
+// through byte-exact (only the changed `subtitle` scalar is touched).
+const LISTCOMMENT_MD = [
+	'---',
+	'title: Q3 Board Update',
+	'subtitle: Week 23',
+	'template: Weekly report',
+	'sources:',
+	'  - metrics.csv',
+	'  # the primary feed',
+	'  - extra.csv',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'Revenue grew [12%](bind:metrics.mrr.delta) to [$41.2k](bind:metrics.mrr) MRR.',
+].join('\n') + '\n';
+
+// #385 round-3 refutations A1-1/A1-2: a NESTED map (`owner:`) whose child keys collide with modelled keys
+// (`status`, `title`). A flat, indentation-blind re-emit hoisted the children to top level and destroyed the
+// real top-level `title`. The nested map (indentation and all) must survive byte-exact.
+const NESTED_MD = [
+	'---',
+	'title: Q3 Board Update',
+	'subtitle: Week 23',
+	'template: Weekly report',
+	'owner:',
+	'  name: Growth Pod',
+	'  status: active',
+	'  title: Team Lead',
+	'sources:',
+	'  - metrics.csv',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'Revenue grew [12%](bind:metrics.mrr.delta) to [$41.2k](bind:metrics.mrr) MRR.',
+].join('\n') + '\n';
+
 const API_PAYLOAD = { stargazers_count: 12345, open_issues_count: 678, full_name: 'microsoft/vscode' };
 // The canned proxy /mcp/resolve response (plan 29, iter 4): the extracted field value + the raw MCP payload.
 const MCP_RESOLVE_RESPONSE = { value: '128,000', raw: JSON.stringify({ period: '2026-W24', total: 128000, won: 47 }) };
@@ -180,6 +263,10 @@ const MCP = URI.file('/ws/Pipeline Brief.md');
 const APIAUTH = URI.file('/ws/Revenue Signal.md');
 const BADBIND = URI.file('/ws/Ratio Doc.md');
 const TEMPLATE = URI.file('/ws/templates/Weekly report.template.md');
+const DERIVED = URI.file('/ws/Q3 Board Update.md');
+const SUBDOC = URI.file('/ws/Q3 Subtitle Update.md');
+const LISTCOMMENT = URI.file('/ws/Q3 List Comment.md');
+const NESTED = URI.file('/ws/Q3 Nested Owner.md');
 
 // Spreadsheets-as-CSV-sources fixtures (issue #131). The workbook file bytes are irrelevant here (the
 // proxy /sources/xlsx route is mocked), so any content stands in. The report binds the EXTRACTED CSV path,
@@ -640,6 +727,90 @@ suite('livingDocs Service', () => {
 		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
 		assert.ok(onDisk.includes('[$48.6k](bind:metrics.mrr)'), `persisted resolved value: ${onDisk}`);
 		assert.ok(service.getAudit().some(e => e.action === 'auto-applied'), 'figure auto-apply audited');
+	});
+
+	// Issue #357 / ticket #385: the serialiser reads ten frontmatter keys but emits six, so any persist that
+	// rebuilds the file from parsed blocks drops `template`/`name`/`description`/`fromTemplate` and every
+	// unknown user key. Plan 55 R6 quarantined the APPROVE path (it splices the body and re-attaches the
+	// frontmatter byte-exact); this proves a NON-approve persist - a figure sync through `_persist` - keeps
+	// the whole frontmatter too, so a template-derived document does not lose its provenance the first time
+	// its figures reconcile.
+	test('a template-derived document keeps its full frontmatter through a non-approve persist (figure sync)', async () => {
+		const service = createService();
+		lastFiles!.set(DERIVED.toString(), TEMPLATE_DERIVED_MD);
+		await service.loadDocument(DERIVED);
+
+		await service.refreshFromSources(DERIVED);
+
+		const onDisk = lastFiles!.get(DERIVED.toString()) ?? '';
+		// The frontmatter block survives byte-exact (every at-risk key AND the unknown `owner:` key), and the
+		// write genuinely happened (the bound figure reconciled to the week-24 source value).
+		assert.deepStrictEqual({
+			frontmatter: frontmatterBlock(onDisk),
+			figureSynced: onDisk.includes('[$48.6k](bind:metrics.mrr)'),
+		}, {
+			frontmatter: frontmatterBlock(TEMPLATE_DERIVED_MD),
+			figureSynced: true,
+		});
+	});
+
+	// Ticket #385 round 2 (the adversarial-panel regression): the frontmatter is not frozen wholesale. A
+	// modelled field that legitimately changes on a non-approve path - here `subtitle`, which a figure sync
+	// advances through `_resolveSubtitle` - must reach disk, while the unmodelled provenance keys and an
+	// unknown user key are still carried through byte-exact. Preserving the static keys must not revert the
+	// dynamic one.
+	test('a non-approve persist advances a modelled frontmatter field (subtitle) while carrying unmodelled keys byte-exact', async () => {
+		const service = createService();
+		lastFiles!.set(SUBDOC.toString(), SUBTITLE_DERIVED_MD);
+		await service.loadDocument(SUBDOC);
+		// A new source week arrives, so the sync advances the subtitle past its authored "Week 23".
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+
+		await service.refreshFromSources(SUBDOC);
+
+		// The whole frontmatter on disk equals the authored block with ONLY the subtitle advanced: the
+		// modelled field tracked the source, and every unmodelled/unknown key survived byte-exact.
+		assert.strictEqual(
+			frontmatterBlock(lastFiles!.get(SUBDOC.toString()) ?? ''),
+			frontmatterBlock(SUBTITLE_DERIVED_MD.replace('subtitle: Week 23', 'subtitle: Week 25')),
+		);
+	});
+
+	// Ticket #385 round 3 (refutation A2-1): a modelled LIST with a comment BETWEEN items must not be
+	// re-emitted on a non-approve persist - the list is carried through byte-exact, so the item after the
+	// comment is not duplicated. Only the changed `subtitle` scalar is touched.
+	test('a non-approve persist does not duplicate a sources list that has a comment between items', async () => {
+		const service = createService();
+		lastFiles!.set(LISTCOMMENT.toString(), LISTCOMMENT_MD);
+		lastFiles!.set(URI.file('/ws/extra.csv').toString(), 'week,value\n25,7\n');
+		await service.loadDocument(LISTCOMMENT);
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+
+		await service.refreshFromSources(LISTCOMMENT);
+
+		// Byte-exact block with only the subtitle advanced: the comment and both list items survive, no item
+		// is duplicated (the round-2 re-emit produced three `- ` entries here).
+		assert.strictEqual(
+			frontmatterBlock(lastFiles!.get(LISTCOMMENT.toString()) ?? ''),
+			frontmatterBlock(LISTCOMMENT_MD.replace('subtitle: Week 23', 'subtitle: Week 25')),
+		);
+	});
+
+	// Ticket #385 round 3 (refutations A1-1/A1-2): a nested `owner:` map whose children collide with modelled
+	// keys (`status`, `title`) survives byte-exact on a non-approve persist - no child is hoisted to top level
+	// and the real top-level `title` is not destroyed. Only the changed `subtitle` scalar is touched.
+	test('a non-approve persist preserves a nested map with colliding child keys byte-exact', async () => {
+		const service = createService();
+		lastFiles!.set(NESTED.toString(), NESTED_MD);
+		await service.loadDocument(NESTED);
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+
+		await service.refreshFromSources(NESTED);
+
+		assert.strictEqual(
+			frontmatterBlock(lastFiles!.get(NESTED.toString()) ?? ''),
+			frontmatterBlock(NESTED_MD.replace('subtitle: Week 23', 'subtitle: Week 25')),
+		);
 	});
 
 	// --- external-edit floor (issue #133, doc 21 §6): detect an outside edit, offer reload/keep, never clobber ---

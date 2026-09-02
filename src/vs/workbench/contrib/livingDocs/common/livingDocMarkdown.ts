@@ -878,8 +878,13 @@ export function applyBlockEdit(blockText: string, oldText: string, newText: stri
 	return blockApplyFailed('anchor-miss');
 }
 
+/** Serialise ONLY a document's body (its blocks re-emitted, joined by blank lines) - never its frontmatter. */
+export function serializeLivingDocBody(doc: ILivingDoc): string {
+	return doc.blocks.map(serializeBlock).join('\n\n');
+}
+
 export function serializeLivingDoc(doc: ILivingDoc): string {
-	const body = doc.blocks.map(serializeBlock).join('\n\n');
+	const body = serializeLivingDocBody(doc);
 
 	// Only emit the frontmatter the file actually authored. The `title:` line comes from
 	// `frontmatterTitle` (the authored value), NEVER the derived `doc.title` (H1/'Untitled' fallback) -- so
@@ -912,6 +917,71 @@ export function serializeLivingDoc(doc: ILivingDoc): string {
 		return `${body}\n`;
 	}
 	return `---\n${fmLines.join('\n')}\n---\n\n${body}\n`;
+}
+
+// The modelled SCALAR frontmatter fields, paired with the value the parsed document holds for each. These
+// are the only frontmatter a NON-approve persist can legitimately change (a figure sync advances `subtitle`;
+// see `_resolveSubtitle`). The list keys (sources/context/tags) are NEVER mutated on that path - list edits
+// go through `saveRawText` - so they are carried through byte-exact rather than re-emitted; re-emitting a
+// list was the #385 round-2 corruption (a comment between items duplicated them). Used by
+// {@link withMergedFrontmatter} to update only a scalar whose value actually moved.
+const MODELLED_FRONTMATTER_SCALARS: readonly { readonly key: 'title' | 'subtitle' | 'status' | 'policy'; readonly read: (doc: ILivingDoc) => string }[] = [
+	{ key: 'title', read: doc => doc.frontmatterTitle ?? '' },
+	{ key: 'subtitle', read: doc => doc.subtitle ?? '' },
+	{ key: 'status', read: doc => doc.status ?? '' },
+	{ key: 'policy', read: doc => doc.policy ?? '' },
+];
+
+/**
+ * Replace the value of a TOP-LEVEL scalar frontmatter key IN PLACE, leaving every other byte untouched.
+ *
+ * Unlike {@link withFrontmatterScalar} (which the Properties panel uses to AUTHOR a field, and which re-orders
+ * the key to the front and rebuilds the block), this rewrites ONLY the matching line's value: key order, list
+ * items, nested maps, comments, blank lines and CR/LF endings are all left exactly as they were. It matches a
+ * top-level key only (the key at column 0), so a nested `  <key>:` child of another map is never mistaken for
+ * the field (the #385 round-2 hoisting bug). A no-op (key absent, or value already equal) returns the text
+ * unchanged. Pure.
+ */
+function withReplacedFrontmatterScalar(text: string, key: 'title' | 'subtitle' | 'status' | 'policy', value: string): string {
+	const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);
+	if (!match) { return text; }
+	const block = match[0];
+	// The top-level `key:` line: the key at column 0, its colon and trailing spacing, then the value up to
+	// (but not including) the line ending, so the original `\n` or `\r\n` is preserved by the splice below.
+	const lineRe = new RegExp(`^(${key}:[ \\t]*)([^\\r\\n]*)`, 'm');
+	const m = lineRe.exec(block);
+	if (!m || m[2] === value) { return text; }
+	const nextBlock = block.slice(0, m.index) + m[1] + value + block.slice(m.index + m[0].length);
+	return nextBlock + text.slice(block.length);
+}
+
+/**
+ * Re-serialise a document for a NON-approve persist (figure sync, hand edits, skill fixes) while preserving
+ * its frontmatter, making BOTH #357 properties true at once (docs/30 section 8.3):
+ *
+ *  - UNMODELLED frontmatter survives BYTE-EXACT. The `---` block is carried through verbatim by
+ *    {@link withReplacedBody}, so the `template`/`name`/`description`/`fromTemplate` provenance, every unknown
+ *    user key, nested maps, comments, blank lines, list formatting and CR/LF endings are exactly as authored.
+ *    This is round 1's proven behaviour.
+ *  - A MODELLED SCALAR that legitimately changed on this path still reaches disk. A figure sync advances
+ *    `subtitle: Week N` (`_resolveSubtitle`); that one line is updated surgically in place
+ *    ({@link withReplacedFrontmatterScalar}), and ONLY when its value actually moved, so an unchanged field is
+ *    never touched and the block does not churn. Lists are not re-emitted (re-emitting them was the round-2
+ *    corruption), because no persist path mutates them.
+ *
+ * The body is always the block-derived body, normalised to a single trailing newline. Pure (text + doc in,
+ * text out), so it round-trips on disk and is unit-testable.
+ */
+export function withMergedFrontmatter(originalText: string, doc: ILivingDoc): string {
+	let text = withReplacedBody(originalText, serializeLivingDocBody(doc));
+	const original = parseLivingDoc(originalText);
+	for (const scalar of MODELLED_FRONTMATTER_SCALARS) {
+		const next = scalar.read(doc);
+		if (next !== scalar.read(original)) {
+			text = withReplacedFrontmatterScalar(text, scalar.key, next);
+		}
+	}
+	return text;
 }
 
 // The chat model is asked for "ONLY a JSON object" of {reply, edits, inserts}, but a real model
