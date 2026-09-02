@@ -2240,6 +2240,9 @@ suite('livingDocs Service', () => {
 	}
 
 	test('#380: attaching documents and asking a question runs the LOOP to its terminal, reads through tools, and changes nothing', async () => {
+		// The loop now CARRIES a mutating verb (issue #381); this run simply never calls it, which is the
+		// honest shape of a question - the ledger reports what was proposed (nothing) rather than asserting
+		// the run had no way to propose anything.
 		// A full multi-step run over the real service seam: the model reads both attached documents through
 		// `read_document`, reads one document it was NOT given (permitted, and ledgered), then finishes.
 		const service = createService([], {
@@ -2273,16 +2276,95 @@ suite('livingDocs Service', () => {
 		assert.ok(turn.content.includes('Read 2 of the 2 attached documents'), turn.content);
 		// A read outside the declared scope is permitted AND disclosed (doc 30 founder ruling 9.4).
 		assert.ok(turn.content.includes('Also read 1 other project document for context'), turn.content);
-		assert.ok(turn.content.includes('Nothing was changed - this run could only read.'), turn.content);
-		// Read-only means read-only: the registry ships no mutating verb, so nothing can have been queued.
+		assert.ok(turn.content.includes('Nothing was changed - this run proposed no changes.'), turn.content);
+		// A question is a question: the model called no mutating verb, so nothing reached the review queue.
 		assert.deepStrictEqual(service.getAllPending(), []);
 		// The steps feed reads as work, never as tool names.
 		assert.deepStrictEqual(turn.steps?.map(s => s.label), [
 			'Recorded what this run is about', 'Read Weekly Operating Summary', 'Read Board Note', 'Read Team Notes',
 		]);
-		// The tools the model was offered are the non-mutating subset - no mutating verb, no retrieval verb.
+		// The tools the model was offered are the four readers plus doc 30's ONE in-loop mutating verb. The
+		// later tranches stay absent, so the model cannot half-use a verb it was never told about.
 		const sent = JSON.parse(lastModelBody!) as { tools: { name: string }[] };
-		assert.deepStrictEqual(sent.tools.map(t => t.name), ['list_documents', 'read_document', 'read_source', 'plan_scope', 'finish']);
+		assert.deepStrictEqual(sent.tools.map(t => t.name), ['list_documents', 'read_document', 'read_source', 'plan_scope', 'propose_segments', 'finish']);
+	});
+
+	test('#381: asking for a change through the loop lands a reviewable diff in place, heading rename and all', async () => {
+		// The acceptance, at the real service seam: model -> segment list -> host expands, diffs, writes ->
+		// a Change the shipped review surfaces already render. Nothing is written to the document: the
+		// person's approve is still the only thing that touches the file.
+		const service = createService([], {
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'read_document', input: { docId: WEEKLY.toString() } }),
+				toolUseMessage({
+					id: 'c2', name: 'propose_segments', input: {
+						docId: WEEKLY.toString(),
+						intent: 'Rename the section and say what steady means.',
+						segments: [
+							// B1 `## Highlights`, B2 the BOUND revenue line, B3 `## Commentary`, B4 the prose,
+							// B5 `## What to watch`, B6 the activation line.
+							{ keep: 'B1-B2' },
+							{ replace: 'B3', echo: ['## Commentary'], content: '## Commentary and outlook' },
+							{ replace: 'B4', echo: ['Growth remained steady'], content: 'Growth remained steady this week, in line with plan.' },
+							{ keep: 'B5-B6' },
+						],
+					}
+				}),
+				toolUseMessage({ id: 'c3', name: 'finish', input: { summary: 'I have proposed a rename and a clearer commentary line.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+
+		await service.sendChatMessage(WEEKLY, 'rename Commentary and say what steady means');
+
+		// A reviewable diff in place: two changes, in the document, waiting on the person.
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.deepStrictEqual(pending.map(c => c.oldText), ['## Commentary', 'Growth remained steady this week.']);
+		assert.deepStrictEqual(pending.map(c => c.newText), ['## Commentary and outlook', 'Growth remained steady this week, in line with plan.']);
+		// The heading rename is the instruction that used to evaporate silently at queue time (#303 family).
+		assert.ok(pending.some(c => c.oldText === '## Commentary'), 'a heading rename must now be expressible');
+		// Nothing has been written yet - the file on disk is untouched until the person approves.
+		assert.strictEqual(lastFiles?.get(WEEKLY.toString()), WEEKLY_MD);
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(!turn.failed, turn.content);
+		assert.ok(turn.content.startsWith('I have proposed a rename and a clearer commentary line.'), turn.content);
+		// The host composed the count, not the model.
+		assert.ok(turn.content.includes('In Weekly Operating Summary: 2 changes are waiting for your review'), turn.content);
+		assert.ok(turn.content.includes('Nothing has been written to your documents yet'), turn.content);
+		assert.deepStrictEqual(turn.steps?.map(s => s.label), [
+			'Read Weekly Operating Summary', 'Proposed changes to Weekly Operating Summary',
+		]);
+	});
+
+	test('#381: an off-by-one range is rejected into review rather than misapplied, and queues nothing', async () => {
+		const service = createService([], {
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'read_document', input: { docId: WEEKLY.toString() } }),
+				toolUseMessage({
+					id: 'c2', name: 'propose_segments', input: {
+						docId: WEEKLY.toString(),
+						// It means B3 and writes B4: syntactically perfect, one block out, and the echo catches it.
+						segments: [{ keep: 'B1-B2' }, { replace: 'B4', echo: ['## Commentary'], content: '## Commentary and outlook' }, { keep: 'B3' }, { keep: 'B5-B6' }],
+					}
+				}),
+				toolUseMessage({ id: 'c3', name: 'finish', input: { summary: 'My labels were off, so I changed nothing.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+
+		await service.sendChatMessage(WEEKLY, 'rename Commentary');
+
+		assert.deepStrictEqual(service.getAllPending(), [], 'an off-by-one list must not queue anything at all');
+		assert.strictEqual(lastFiles?.get(WEEKLY.toString()), WEEKLY_MD);
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(turn.content.includes('rejected before it reached your review queue'), turn.content);
+		// The refusal is shown as work that did NOT happen, never as a completed step.
+		assert.deepStrictEqual(turn.steps?.map(s => s.status), ['done', 'skipped']);
 	});
 
 	test('#380: an ask with NO attachments still takes the existing single-shot path, loop enabled or not', async () => {
