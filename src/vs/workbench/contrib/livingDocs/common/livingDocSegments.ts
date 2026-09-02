@@ -94,6 +94,14 @@ export type SegmentViolation =
 	| 'uncovered-block'
 	/** A `replace` echo did not match the block at that ordinal - the off-by-one guard firing. */
 	| 'echo-mismatch'
+	/**
+	 * A `replace` echo matched the named block but ALSO another one, so it does not identify a single block:
+	 * duplicate headings, two paragraphs that open the same way, or a heading whose text opens the paragraph
+	 * beneath it. A prefix that fits two blocks cannot prove the range is not off by one, which is the whole
+	 * point of the echo (issue #381 cycle 2; the #300/#303/#329 family). Rejected whole rather than applied to
+	 * one of the blocks the model may not have meant.
+	 */
+	| 'ambiguous-echo'
 	/** An `insertAfter` carried nothing to insert. */
 	| 'empty-content'
 	/**
@@ -363,6 +371,9 @@ export function expandSegments(baseBody: string, segments: readonly DocSegment[]
 	}
 	const views = options?.blockViews?.length === chunks.length ? options.blockViews : undefined;
 	const viewOf = (ordinal: number) => views ? views[ordinal] : chunks[ordinal].text;
+	// The normalised text of every block, computed once, so the echo can be checked for UNIQUENESS and not
+	// just for a prefix touch: an echo that fits two blocks proves nothing about which one the range means.
+	const normViews = chunks.map((_chunk, ordinal) => normaliseEcho(viewOf(ordinal)));
 
 	// Which segment claims each base block, so coverage and overlap are decided by counting rather than by
 	// comparing ranges pairwise - and so the emission pass below can ask one array which fate a block has.
@@ -418,6 +429,16 @@ export function expandSegments(baseBody: string, segments: readonly DocSegment[]
 		if (ordinal !== range.to) {
 			return violation('overlapping-range', `Segment ${insert.segmentIndex + 1} inserts after B${ordinal + 1}, which is in the middle of the range segment ${claim[ordinal] + 1} claims. Insert after the last block of that range instead, or put the new text in its content.`, insert.segmentIndex);
 		}
+	}
+
+	// The echo must DISAMBIGUATE, not merely touch (issue #381 cycle 2). Run after the structural checks so a
+	// list that is also malformed some other way reports that first; run over the whole document so an echo
+	// that fits a KEPT block as well as its own is caught too.
+	for (let index = 0; index < segments.length; index++) {
+		const segment = segments[index];
+		if (!isReplace(segment)) { continue; }
+		const ambiguous = checkEchoUnique(segment, ranges.get(index)!, index, normViews);
+		if (ambiguous) { return ambiguous; }
 	}
 
 	const paragraphBreak = baseBody.includes('\r\n') ? '\r\n\r\n' : '\n\n';
@@ -505,6 +526,38 @@ function checkEcho(segment: IReplaceSegment, range: IRange, index: number, viewO
 		}
 		if (!normaliseEcho(viewOf(ordinal)).startsWith(echo)) {
 			return violation('echo-mismatch', `Segment ${index + 1} (replace ${segment.replace}): B${ordinal + 1} does not start with "${segment.echo[offset].trim()}" - it starts with "${openingWords(viewOf(ordinal))}". Your range is off, so nothing was changed. Read the document again and use the labels it gives you.`, index);
+		}
+	}
+	return undefined;
+}
+
+/**
+ * The DISAMBIGUATION half of the echo guard (issue #381 cycle 2). {@link checkEcho} proves the echo fits the
+ * NAMED block; this proves it fits ONLY that block. A `startsWith` on a few normalised words is satisfied by
+ * any sibling that opens the same way - two `## Notes` headings, two paragraphs that both begin "We charge",
+ * a `## Summary` heading whose text also opens the paragraph beneath it - so without this an off-by-one range
+ * passes the basic check and lands on a block the model may not have meant. That is the #300/#303/#329 defect
+ * family, and it is why the whole list is rejected here rather than one of the candidates silently chosen.
+ *
+ * Two shapes of ambiguity, and the model is told which. When another block is word-for-word identical no echo
+ * can ever tell them apart, so the model is asked to defer to the person. Otherwise the echo was simply too
+ * short, and the model is asked to echo enough of the block to be unique.
+ */
+function checkEchoUnique(segment: IReplaceSegment, range: IRange, index: number, normViews: readonly string[]): ISegmentViolation | undefined {
+	for (let offset = 0; offset < segment.echo.length; offset++) {
+		const ordinal = range.from + offset;
+		const echo = normaliseEcho(segment.echo[offset]);
+		let twin = -1;
+		let sharesPrefix = -1;
+		for (let other = 0; other < normViews.length; other++) {
+			if (other === ordinal || !normViews[other].startsWith(echo)) { continue; }
+			if (normViews[other] === normViews[ordinal]) { twin = other; } else if (sharesPrefix < 0) { sharesPrefix = other; }
+		}
+		if (twin >= 0) {
+			return violation('ambiguous-echo', `Segment ${index + 1} (replace ${segment.replace}): B${ordinal + 1} and B${twin + 1} are word for word the same, so no echo can tell them apart and nothing was changed. Only the person can say which one they mean.`, index);
+		}
+		if (sharesPrefix >= 0) {
+			return violation('ambiguous-echo', `Segment ${index + 1} (replace ${segment.replace}): the echo "${segment.echo[offset].trim()}" fits B${ordinal + 1} and B${sharesPrefix + 1} both, so it does not say which block you mean and nothing was changed. Echo enough of B${ordinal + 1} to tell it apart from every other block.`, index);
 		}
 	}
 	return undefined;

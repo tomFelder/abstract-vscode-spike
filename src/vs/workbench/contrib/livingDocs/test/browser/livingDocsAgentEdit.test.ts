@@ -233,10 +233,10 @@ suite('livingDocs agent edit loop (issue #381, doc 30 2.4)', () => {
 		assert.deepStrictEqual(open.map(change => change.status), ['pending', 'pending']);
 
 		// The tool told the model exactly what happened, in its own labels.
-		const proposal = results.find(event => event.name === AGENT_PROPOSE_SEGMENTS_TOOL)!;
-		assert.ok(proposal.content.includes('2 changes queued for review, 0 dropped, 3 blocks kept unchanged'));
-		assert.ok(proposal.content.includes(`segment 2 (B3): queued as change ${open[0].id}`));
-		assert.ok(proposal.content.includes(`segment 3 (B4): queued as change ${open[1].id}`));
+		const proposeResult = results.find(event => event.name === AGENT_PROPOSE_SEGMENTS_TOOL)!;
+		assert.ok(proposeResult.content.includes('2 changes queued for review, 0 dropped, 3 blocks kept unchanged'));
+		assert.ok(proposeResult.content.includes(`segment 2 (B3): queued as change ${open[0].id}`));
+		assert.ok(proposeResult.content.includes(`segment 3 (B4): queued as change ${open[1].id}`));
 
 		// The receipts are per segment and carry the store's own ids - the record #382 will reconcile against.
 		assert.deepStrictEqual(receipts.segmentReceipts.map(p => ({ segmentIndex: p.segmentIndex, label: p.label, changeId: p.changeId, reason: p.reason })), [
@@ -302,6 +302,26 @@ suite('livingDocs agent edit loop (issue #381, doc 30 2.4)', () => {
 		assert.ok(ledger.includes('rejected before it reached your review queue'));
 	});
 
+	test('duplicate headings cannot be told apart by an echo, so the call is rejected and nothing is queued', async () => {
+		// The refuted case (issue #381 cycle 2): two `## Notes` sections. No echo can distinguish byte-identical
+		// blocks, so the whole call is rejected loudly rather than landing on one the reviewer cannot tell is
+		// wrong - and nothing reaches the store.
+		const it = await stage();
+		it.project.raw.set(PRICING, ['---', 'title: Pricing', '---', '', '# Pricing', '', '## Notes', '', 'Alpha.', '', '## Notes', '', 'Bravo.', ''].join('\n'));
+		const { errors, receipts } = await run(it, readThenPropose([
+			{ keep: 'B1' },
+			{ replace: 'B2', echo: ['## Notes'], content: '## Overview' },
+			{ keep: 'B3-B5' },
+		]));
+
+		assert.strictEqual(it.store.openChanges().length, 0, 'an ambiguous list must not queue anything');
+		assert.deepStrictEqual(it.recorded, [], 'the store must not even be asked to record an ambiguous list');
+		assert.ok(errors[0].startsWith('invalid_segments:'), errors[0]);
+		assert.ok(errors[0].includes('word for word the same'), errors[0]);
+		assert.strictEqual(receipts.invalidSegmentLists, 1);
+		assert.deepStrictEqual(receipts.segmentReceipts, []);
+	});
+
 	test('a document dialled "never change" refuses the whole call, by name, per segment', async () => {
 		const it = await stage();
 		it.project.locked.add(PRICING);
@@ -351,8 +371,8 @@ suite('livingDocs agent edit loop (issue #381, doc 30 2.4)', () => {
 		assert.strictEqual(it.store.openChanges().length, 1);
 		assert.deepStrictEqual(it.recorded, [['B3']], 'only the surviving hunk may reach the store');
 		assert.deepStrictEqual(receipts.segmentReceipts.map(p => [p.label, p.reason ?? 'queued']), [['B2', 'bind-guard'], ['B3', 'queued']]);
-		const proposal = results.find(event => event.name === AGENT_PROPOSE_SEGMENTS_TOOL)!;
-		assert.ok(proposal.content.includes('segment 2 (B2): dropped (bind-guard)'), proposal.content);
+		const proposeResult = results.find(event => event.name === AGENT_PROPOSE_SEGMENTS_TOOL)!;
+		assert.ok(proposeResult.content.includes('segment 2 (B2): dropped (bind-guard)'), proposeResult.content);
 		assert.ok(ledger.includes('replaced a live figure with plain text'));
 	});
 

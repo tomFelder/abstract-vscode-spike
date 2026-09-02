@@ -116,31 +116,30 @@ suite('livingDocs segment expansion (issue #381, doc 30 2.1)', () => {
 		assert.strictEqual(result.keptBlocks, BLOCKS);
 	});
 
-	test('a heading rename works - the instruction that used to evaporate', () => {
+	test('a heading rename works - the instruction that used to evaporate - when the heading is unique', () => {
+		// B1 `# Pricing` is the one heading in the fixture with no twin, so an echo can prove which block it is.
 		const result = expanded([
-			{ keep: 'B1-B2' },
-			{ replace: 'B3', echo: ['## Notes'], content: '## Billing notes' },
-			{ keep: 'B4-B8' },
+			{ replace: 'B1', echo: ['# Pricing'], content: '# Prices' },
+			{ keep: 'B2-B8' },
 		]);
-		assert.strictEqual(result.body, BASE.replace('## Notes\n\nBilling', '## Billing notes\n\nBilling'));
+		assert.strictEqual(result.body, BASE.replace('# Pricing', '# Prices'));
 		assert.strictEqual(result.hunks.length, 1);
 		assert.strictEqual(result.hunks[0].op, 'replace');
-		assert.strictEqual(result.hunks[0].blockOrdinal, 2);
-		assert.strictEqual(result.hunks[0].oldText, '## Notes');
+		assert.strictEqual(result.hunks[0].blockOrdinal, 0);
+		assert.strictEqual(result.hunks[0].oldText, '# Pricing');
 		assert.strictEqual(result.keptBlocks, 7);
 	});
 
-	test('duplicate headings are addressed by ordinal, so the SECOND one is the one that changes', () => {
-		const result = expanded([
+	test('duplicate headings cannot be told apart by an echo, so the list is rejected rather than guessed', () => {
+		// B3 and B6 are both `## Notes`; no echo can distinguish byte-identical blocks, so a replace of either
+		// is rejected loudly rather than silently applied to one of them (issue #381 cycle 2; the #300 family).
+		const result = rejected([
 			{ keep: 'B1-B5' },
-			{ replace: 'B6', echo: ['Notes'], content: '## Seats' },
+			{ replace: 'B6', echo: ['## Notes'], content: '## Seats' },
 			{ keep: 'B7-B8' },
 		]);
-		// The first `## Notes` is still there, at exactly the offset it started at.
-		assert.strictEqual(result.body.indexOf('## Notes'), BASE.indexOf('## Notes'));
-		assert.strictEqual(result.body.indexOf('## Notes', BASE.indexOf('## Notes') + 1), -1);
-		assert.ok(result.body.includes('## Seats\n\n- Seats are per person'));
-		assert.strictEqual(result.hunks[0].blockOrdinal, 5);
+		assert.strictEqual(result.violation, 'ambiguous-echo', result.message);
+		assert.ok(result.message.includes('word for word the same'), result.message);
 	});
 
 	test('a fenced code block is one block, and replacing it leaves its neighbours untouched', () => {
@@ -420,6 +419,62 @@ suite('livingDocs segment expansion (issue #381, doc 30 2.1)', () => {
 		assert.ok(said.includes('changed nothing'), said);
 	});
 
+	// --- the echo must DISAMBIGUATE, not merely touch (issue #381 cycle 2, the #300/#303/#329 family) ------
+	//
+	// A startsWith on a few normalised words is satisfied by any sibling that opens the same way, so an echo
+	// that "matches" is not proof the range is not off by one. Each row below is a list that the OLD prefix
+	// check accepted and that landed on a block the model may not have meant; each must now be rejected whole,
+	// with nothing expanded. The positive control proves a legitimate replace on a uniquely-identifiable block
+	// still succeeds, so the guard has not been turned into a blanket refusal.
+
+	test('shared-prefix paragraphs: an echo that fits two of them is rejected, not applied to the first', () => {
+		const base = '# Doc\n\nWe charge $10 per seat.\n\nWe charge extra for support.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1' },
+			// "We charge" opens B2 AND B3; the model may have meant either, so this must not silently hit B2.
+			{ replace: 'B2', echo: ['We charge'], content: 'We charge $12 per seat.' },
+			{ keep: 'B3' },
+		]);
+		assert.ok(!result.ok, 'a shared-prefix echo must be rejected');
+		assert.strictEqual((result as ISegmentViolation).violation, 'ambiguous-echo');
+		assert.strictEqual((result as { hunks?: unknown }).hunks, undefined, 'nothing may be expanded from an ambiguous list');
+	});
+
+	test('duplicate headings: no echo can distinguish byte-identical blocks, so the list is rejected loudly', () => {
+		const base = '# Doc\n\n## Notes\n\nAlpha.\n\n## Notes\n\nBravo.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1' },
+			{ replace: 'B2', echo: ['## Notes'], content: '## Overview' },
+			{ keep: 'B3-B5' },
+		]);
+		assert.ok(!result.ok);
+		assert.strictEqual((result as ISegmentViolation).violation, 'ambiguous-echo');
+		assert.ok((result as ISegmentViolation).message.includes('word for word the same'), (result as ISegmentViolation).message);
+	});
+
+	test('a heading whose text opens the paragraph beneath it is ambiguous, and rejected', () => {
+		const base = '# Doc\n\n## Summary\n\nSummary of the quarter follows.\n';
+		const result = expandSegments(base, [
+			{ keep: 'B1' },
+			// "Summary" is B2's whole text AND the opening of B3, so it cannot say which block is meant.
+			{ replace: 'B2', echo: ['Summary'], content: '## Overview' },
+			{ keep: 'B3' },
+		]);
+		assert.ok(!result.ok);
+		assert.strictEqual((result as ISegmentViolation).violation, 'ambiguous-echo');
+	});
+
+	test('the positive control: a replace on a block whose echo is unique still succeeds', () => {
+		const base = '# Doc\n\nWe charge $10 per seat.\n\nWe charge extra for support.\n';
+		// "We charge extra" opens only B3, so a short echo is enough - the guard does not over-reject.
+		const result = expandSegments(base, [
+			{ keep: 'B1-B2' },
+			{ replace: 'B3', echo: ['We charge extra'], content: 'We charge extra for premium support.' },
+		]);
+		assert.ok(result.ok, `expected success, got ${(result as ISegmentViolation).violation}: ${(result as ISegmentViolation).message}`);
+		assert.strictEqual((result as ISegmentExpansion).hunks[0].oldText, 'We charge extra for support.');
+	});
+
 	// --- the invariant, fuzzed --------------------------------------------------------------------------
 
 	test('fuzz: whatever a valid list says, every byte it did not claim survives byte-for-byte', () => {
@@ -432,12 +487,17 @@ suite('livingDocs segment expansion (issue #381, doc 30 2.1)', () => {
 		};
 		const pick = <T>(values: readonly T[]) => values[Math.floor(next() * values.length)];
 
+		// Every block carries a UNIQUE, fixed-width, prefix-free tag, so no block's text is a prefix of another
+		// and the full-text echoes below always identify exactly one block. The ambiguity cases (duplicate and
+		// shared-prefix blocks) are pinned by their own rows above; the fuzz is about byte-exact expansion, so
+		// it stays inside the grammar the discrimination guard admits.
+		const tag = (n: number) => `b${String(n).padStart(5, '0')}`;
 		const shapes: readonly ((n: number) => string)[] = [
-			n => `Paragraph ${n} carries a sentence and then some more of one.`,
-			n => `${'#'.repeat(1 + (n % 3))} Heading ${n % 4}`,
-			n => `- item ${n} one\n- item ${n} two\n- item ${n} three`,
-			n => `\`\`\`ts\nconst v${n} = ${n};\n\nexport { v${n} };\n\`\`\``,
-			n => `| a | b |\n| --- | --- |\n| ${n} | ${n * 2} |`,
+			n => `Para ${tag(n)} carries a sentence and then some more of one.`,
+			n => `${'#'.repeat(1 + (n % 3))} Section ${tag(n)}`,
+			n => `- ${tag(n)} item one\n- ${tag(n)} item two\n- ${tag(n)} item three`,
+			n => `\`\`\`ts\nconst ${tag(n)} = 1;\n\nexport { ${tag(n)} };\n\`\`\``,
+			n => `| ${tag(n)} | ${tag(n)}z |\n| --- | --- |\n| x | y |`,
 		];
 
 		for (let round = 0; round < 400; round++) {
@@ -470,12 +530,12 @@ suite('livingDocs segment expansion (issue #381, doc 30 2.1)', () => {
 					if (next() < 0.2) { pendingInsertAfter.push(to); }
 				} else if (roll < 0.85 || !canDelete) {
 					const echo = [];
-					for (let i = from; i <= to; i++) { echo.push(chunks[i].text.slice(0, 12)); }
+					for (let i = from; i <= to; i++) { echo.push(chunks[i].text); }
 					segments.push({ replace: label, echo, content: `Rewritten ${from}-${to} for round ${round}.` });
 					previousWasDelete = false;
 				} else {
 					const echo = [];
-					for (let i = from; i <= to; i++) { echo.push(chunks[i].text.slice(0, 12)); }
+					for (let i = from; i <= to; i++) { echo.push(chunks[i].text); }
 					segments.push({ replace: label, echo, content: '' });
 					previousWasDelete = true;
 				}
