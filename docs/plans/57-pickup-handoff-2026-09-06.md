@@ -24,8 +24,9 @@ skill configuration all live only on PR [#390](https://github.com/tomFelder/abst
 which is open and now conflicted. Every agent instruction in the wave says "read `CONTEXT.md` first",
 and on `main` that file does not exist.
 
-Four things the machine switch cost us are listed in section 4. One of them - the ProseMirror bundle
-build directory - currently survives in exactly one place.
+Four things the machine switch cost are listed in section 4; one of them turned out to be recoverable
+in ten minutes and is now closed out. Of the rest, the ProseMirror bundle
+build directory currently survives in exactly one place.
 
 ---
 
@@ -163,26 +164,43 @@ externalised through `vs/nls`, never `npm run compile`. Whatever else was in tha
 
 `.agents/skills/launch-abstract/` is tracked and survived, so the desktop launch skill is intact.
 
-### Blocker 4 - the Matt Pocock skills are not installed here, and the RUN prompt assumes a local Mac
+### Blocker 4 (resolved 6 Sep) - the Matt Pocock skills, and where the run can execute
 
 The engineering skills (`implement`, `tdd`, `code-review`, `triage`, `to-tickets`, `grill-with-docs`,
-`wayfinder`, ...) are a plugin - `mattpocock/skills`, installed via `claude plugins install
-mattpocock-skills` or `/plugin install mattpocock-skills`. They are **not installed in this cloud
-session** and are not in the org plugin catalogue; only the built-in Anthropic skills are present.
+`wayfinder`, ...) are a plugin - `mattpocock/skills` - and they are **not** preinstalled in a cloud
+session, nor are they in the org plugin catalogue. They install cleanly, though. Verified 6 Sep in a
+cloud container:
 
-The RUN-56 adversarial prompt additionally hardcodes `/Users/tommy/Sites/abstract-vscode-spike` and
-drives implementation by shelling out to `claude -p "/mattpocock-skills:implement ..." --session-id
-<uuid> --permission-mode bypassPermissions`. That headless-CLI pattern was designed for, and verified
-on, the founder's local machine. It does not transfer to a cloud session unchanged.
+```
+claude plugin marketplace add mattpocock/skills
+claude plugin install mattpocock-skills@mattpocock
+```
 
-The prompt itself explains why the headless call exists: `implement` carries
+Two things follow, and the second is the one that matters.
+
+**The install does not survive the container.** A cloud session's container is ephemeral, and the
+plugin lands in `~/.claude/settings.json` inside it. Every new cloud session must re-run those two
+commands. That belongs in a `SessionStart` hook rather than in anyone's memory.
+
+**A plugin installed mid-session is not visible to that session.** The skill registry is built at
+startup, so `Skill("mattpocock-skills:triage")` fails in the session that installed it. A *new*
+session sees them.
+
+**The headless pattern works in the cloud.** This was the real open question, because the
+[`implement`-driven RUN variant](RUN-56-adversarial-goal-loop.md) drives implementation by shelling
+out to `claude -p "/mattpocock-skills:implement ..."`, and that was designed for and verified on the
+founder's Mac. It was tested here on 6 Sep against `ask-matt` in a cloud container and the skill
+loaded and produced its routing output - the same check the RUN prompt itself records, repeated in the
+new environment.
+
+So the constraint is not the environment, it is the paths: the RUN prompt hardcodes
+`/Users/tommy/Sites/abstract-vscode-spike`, which needs to become the session's working directory. The
+prompt's own reasoning for the headless call still holds - `implement` carries
 `disable-model-invocation: true`, so no orchestrator and no sub-agent can reach it through the Skill
-tool. Occupying the human turn in a headless session is the only way to run the real skill.
+tool, and occupying the human turn in a headless session is the only way to run the real skill.
 
-**Practical read:** the `implement`-driven variant of the run needs the local machine. The
-[agent-native variant](RUN-56-loop-goes-live.md) - implementer/validator pairs calling `tdd` and
-`code-review` directly - was written as exactly this fallback, and does not need the headless CLI,
-though it still wants the plugin installed for those two skills.
+The [agent-native variant](RUN-56-loop-goes-live.md) remains available as the simpler fallback, but it
+is no longer the *only* option in a cloud session.
 
 ---
 
@@ -191,7 +209,11 @@ though it still wants the plugin installed for those two skills.
 Sequenced so that each step makes the next one cheaper, and so that nothing irreplaceable stays
 single-copy for longer than it has to.
 
-**Step 0 - rescue the single-copy asset.** Merge `wip/mac-migration-2026-09`'s build directory to
+**Step 0a - make the skills reproducible.** Add a `SessionStart` hook that runs the two plugin
+install commands from blocker 4, and update the RUN-56 prompt's hardcoded `/Users/tommy/Sites/...`
+path to the session working directory. Without this, every future session rediscovers blocker 4.
+
+**Step 0b - rescue the single-copy asset.** Merge `wip/mac-migration-2026-09`'s build directory to
 `main` (or cherry-pick `15812492`), and file the `.a3-380-screenshots/` files under
 `docs/plans/56-verify/380/`. Update `docs/lwd-pm-bundle-build.md` to point at the in-repo path instead
 of `/Users/tommy/Sites/.lwd-pm-build`, and drop or clearly date-stamp the drifted inline listing.
@@ -225,9 +247,10 @@ only thing that exercises esbuild's loader map, and that has bitten this project
 
 ## 6. Decisions the founder needs to make
 
-1. **Where does the wave run from now on?** The `implement`-driven RUN variant needs the local machine
-   and the plugin. The agent-native variant runs anywhere. Picking one determines whether the next
-   session is a cloud session or a local overnight run.
+1. **Where does the wave run from now on?** Both RUN variants now work in a cloud session (blocker 4),
+   so this is a preference rather than a constraint. The trade is cost and supervision: an overnight
+   local run is the pattern the prompt was written for and the founder can watch it; a cloud run needs
+   the session-start hook and the path fix first, but does not tie up the machine.
 2. **Does `.claude/CLAUDE.md` get rebuilt and tracked?** It is currently gitignored by inheritance from
    upstream. If agents are expected to follow it, it cannot be machine-local - that is what just cost
    us the file.
