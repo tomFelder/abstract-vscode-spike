@@ -108,6 +108,37 @@ top-level scalars) and **#422** (properties-panel field writers destroy a nested
 Both are content-integrity defects in the same area #385 just fixed, which suggests #385 closed one
 door in a room with several.
 
+### 3.4 `main`'s CI is red, and the wave merged through it
+
+Found on 6 Sep while checking this handoff's own PR. Run
+[33645396547](https://github.com/tomFelder/abstract-vscode-spike/actions/runs/33645396547) on #427 -
+the PR that merged as `1daad75d` and *is* the current head of `main` - concluded `failure`, and was
+merged anyway. Failing there: `Linux / Remote` and `Linux / Electron` at integration tests,
+`Linux / Browser` at integration tests, `Linux / Electron-Smoke` at smoke tests, and all four macOS
+jobs dying about two seconds in, before any test body.
+
+The ten Linux failures are in upstream `extensions/vscode-api-tests/`:
+
+- `chat - browser tools` / `open_browser_page` - expects `"Page ID:"`, gets the
+  `workbench.browser.enableChatTools`-disabled message
+- `vscode API - window` / `Tabs - vscode.open & vscode.diff` - `6 !== 5`
+- `vscode API - window` / `Tabs - ensure active tab is correct` -
+  `assert.ok(!getActiveTabInActiveGroup())` evaluates falsy
+
+Two of those three are **tab-identity** assertions, and the head of `main` is the commit that changed
+where closing the last tab lands (#388, `EmptyEditorLandingContribution`). That is suggestive, not
+established - it has not been bisected, and it may equally be upstream drift from a sync. It wants a
+ticket either way.
+
+The macOS jobs are runner provisioning, not code.
+
+**Why this matters beyond the red X.** Plan 56 already decided that merged PRs do not close the wave -
+only the founder smoke does. This is the same lesson arriving from the other direction: the wave's
+adversarial panels were rigorous about the ticket in front of them and nobody was watching the suite
+underneath. A CI signal that is red on every PR is a signal nobody can read, and it is exactly the
+condition under which #253, #255 and the other claimed-fixed issues went unnoticed. Getting `main`
+green is worth doing before the next wave adds twelve more merges to the pile.
+
 ---
 
 ## 4. What the machine switch broke
@@ -238,6 +269,11 @@ fresh adversarial panel, PR, merge. This unblocks the #303 half of #379.
 **Step 5 - #383, then #379, then #386 and #389.** In that order: #383 is already implemented and only
 needs its adversarial round; #379 turns the tracker honest; #386 and #389 are fresh builds.
 
+**Step 5b - get `main` green, or ticket it.** Bisect the three Linux integration failures (§3.4) and
+either fix or file them, and find out whether `macos-14-xlarge` is still a runner this repo can get.
+This can run in parallel with the ticket work, but it should not stay unowned - the whole falsification
+protocol assumes a suite whose red means something.
+
 **Step 6 - the gate.** Plan 56 does not close on merged PRs. It closes when the founder runs the #345
 smoke checklist on a **packaged desktop build** against a **real folder**, drives an explicit-scope
 agentic edit end to end, and confirms the receipt matches what is on disk. Note that packaging is the
@@ -254,7 +290,10 @@ only thing that exercises esbuild's loader map, and that has bitten this project
 2. **Does `.claude/CLAUDE.md` get rebuilt and tracked?** It is currently gitignored by inheritance from
    upstream. If agents are expected to follow it, it cannot be machine-local - that is what just cost
    us the file.
-3. **Do #421 and #422 pull into the running wave?** Plan 56's own rule is that anything gate-blocking
+3. **Is a red `main` acceptable for the rest of the wave?** Eight PRs merged through it. Either the
+   failing upstream API tests get fixed, or they get explicitly quarantined with a recorded reason and
+   a ticket - but "everyone knows those are red" is how the last batch of false fixes survived.
+4. **Do #421 and #422 pull into the running wave?** Plan 56's own rule is that anything gate-blocking
    found mid-wave gets pulled in and everything else waits. These are frontmatter data-loss defects in
    the area #385 just touched, so the rule plausibly applies.
 
