@@ -139,6 +139,35 @@ underneath. A CI signal that is red on every PR is a signal nobody can read, and
 condition under which #253, #255 and the other claimed-fixed issues went unnoticed. Getting `main`
 green is worth doing before the next wave adds twelve more merges to the pile.
 
+### 3.5 The engineering-system gate is broken by inheritance
+
+Found on 6 Sep while landing the ProseMirror rescue (#430). The workflow
+`.github/workflows/no-engineering-system-changes.yml` fires on any PR touching
+`^.github/workflows/`, `^build/`, or anything ending `package.json`. On this fork it then **fails at
+step 8**, where `octokit/request-action` calls:
+
+```
+GET /repos/microsoft/vscode/collaborators/<user>/permission
+```
+
+The fork's `GITHUB_TOKEN` has no access to upstream, so the call errors and the job dies there. Steps
+9 and 10 - `Set control output variable` and `Check for engineering system changes`, which hold the
+actual enforcement - are skipped. **The check never reaches a verdict.** It fails for any PR in this
+repo touching those paths, whoever opens it and whatever they change; it would equally fail to *block*
+a change that genuinely should be blocked, because the enforcement step never runs.
+
+So it is not a policy gate at present. It is a red X that means nothing, which is the same category of
+problem as §3.4: a signal nobody can read.
+
+The fix is one line - ask `${{ github.repository }}` instead of `microsoft/vscode`, so it checks
+collaborator permission on the fork, where the founder is an admin and would pass. It is deliberately
+not bundled into #430: changing a security-sensitive workflow belongs in its own PR in front of a
+human.
+
+Note also the regex's last alternative, `package\.json$`, is unanchored, so it matches *any* nested
+`package.json`, not just the root one. Worth tightening to `(^|/)package\.json$` at the same time if
+the intent is the repo's own manifests.
+
 ---
 
 ## 4. What the machine switch broke
@@ -277,6 +306,10 @@ fresh adversarial panel, PR, merge. This unblocks the #303 half of #379.
 
 **Step 5 - #383, then #379, then #386 and #389.** In that order: #383 is already implemented and only
 needs its adversarial round; #379 turns the tracker honest; #386 and #389 are fresh builds.
+
+**Step 5a - fix the engineering-system gate (§3.5).** One line, and until it lands every PR touching
+`build/`, `.github/workflows/` or any `package.json` carries a meaningless red X. Needs a human,
+because it is a workflow change.
 
 **Step 5b - get `main` green, or ticket it.** Bisect the three Linux integration failures (§3.4) and
 either fix or file them, and find out whether `macos-14-xlarge` is still a runner this repo can get.
