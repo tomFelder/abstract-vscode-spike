@@ -67,3 +67,9 @@ src/vs/base/common/signals-core/**
 # without editing generated code. It stays on `.eslint-allowed-javascript-files` because the
 # hygiene task reads that list to decide which `.js` files may exist at all.
 docs/design/**/support.js
+
+# Offline build sources for the vendored ProseMirror bundle. Not fork source; see
+# tools/lwd-pm-build/README.md. The three .js/.mjs files are also on
+# `.eslint-allowed-javascript-files`, which the hygiene task reads separately to decide
+# which JavaScript files may exist at all - an .eslint-ignore entry alone does not satisfy it.
+tools/lwd-pm-build/**
