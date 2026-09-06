@@ -15,6 +15,16 @@ build/azure-pipelines/github-check-run.js
 build/builtin/browser-main.js
 build/builtin/main.js
 build/codex/generate-protocol.mjs
+
+# Offline build for the vendored ProseMirror bundle (build/lwd-pm-build/README.md).
+# Not fork source and not part of the fork's build: it is the esbuild pipeline that
+# produces prosemirrorBundle.ts, and it must be JavaScript because that is what it
+# feeds to esbuild. These lived outside the repo until 6 Sep 2026 precisely to avoid
+# this list, and that is how they came to survive on one machine only.
+build/lwd-pm-build/build.mjs
+build/lwd-pm-build/bundle.iife.js
+build/lwd-pm-build/lwdpm-entry.js
+
 docs/design/abstract-editor-v2/support.js
 eslint.config.js
 extensions/copilot/.mocha-multi-reporters.js

@@ -1,0 +1,19 @@
+{
+  "name": "lwd-pm-build",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Offline build for the vendored ProseMirror bundle used by Living Docs (decision 43/46). Not part of the VS Code fork build.",
+  "dependencies": {
+    "esbuild": "^0.28.1",
+    "markdown-it": "^14.2.0",
+    "prosemirror-commands": "^1.7.1",
+    "prosemirror-history": "^1.5.0",
+    "prosemirror-keymap": "^1.2.3",
+    "prosemirror-markdown": "^1.13.4",
+    "prosemirror-model": "^1.25.9",
+    "prosemirror-schema-list": "^1.5.1",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.41.9"
+  }
+}
