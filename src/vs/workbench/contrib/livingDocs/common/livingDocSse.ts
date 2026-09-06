@@ -45,7 +45,7 @@ export interface ISseParseResult {
 	/**
 	 * True once a `message_delta` carrying `stop_reason: "pause"` has been seen. The proxy emits this when
 	 * the day's included usage is spent (plan 35 iter 3): the caller keeps the streamed prose (the plain-words
-	 * cap message) but pauses the run via D15 rather than parsing proposals from it.
+	 * cap message) but pauses the run via D15 rather than parsing changes from it.
 	 */
 	readonly paused: boolean;
 	/** The trailing bytes AFTER the last newline (a partially-received line) to prepend to the next chunk. */

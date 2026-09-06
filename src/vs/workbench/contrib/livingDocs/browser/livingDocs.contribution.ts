@@ -63,7 +63,8 @@ import { LivingDocsService } from './livingDocsService.js';
 import { ReviewRailView } from './reviewRailView.js';
 import { TreeRailView } from './treeRailView.js';
 import { ScreenEditor } from './screenEditor.js';
-import { ScreenEditorInput } from './screenEditorInput.js';
+import { ScreenEditorInput, openScreenEditor } from './screenEditorInput.js';
+import { EmptyEditorLandingContribution } from './emptyEditorLanding.js';
 import { ScreenLauncherView } from './screenLauncherView.js';
 import { EditorNavLauncherView, openEditorNavTarget } from './editorNavLauncherView.js';
 import { openDocQuickSwitch } from './docQuickSwitch.js';
@@ -130,6 +131,17 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			type: 'string',
 			default: 'http://localhost:8090',
 			description: localize('livingDocs.modelProxyUrl', "Base URL of the local model broker the app calls for model-backed features. The app starts and supervises the broker automatically; it holds the model credential server-side and translates to the configured backend, so no credential is ever embedded in the app."),
+		},
+		'livingDocs.agentLoop': {
+			type: 'boolean',
+			default: true,
+			description: localize('livingDocs.agentLoop', "When you attach documents to a chat, let the agent read them through its own tools over several steps and tell you what it read, instead of answering from a single pre-packed prompt. Turn this off to go back to the single-shot reply for every question."),
+		},
+		'livingDocs.agentMaxSteps': {
+			type: 'number',
+			default: 20,
+			minimum: 1,
+			description: localize('livingDocs.agentMaxSteps', "How many steps one agent run may take before it stops. Reaching the ceiling ends the run and says so; it never stops silently."),
 		},
 		'livingDocs.fanoutContextBudget': {
 			type: 'number',
@@ -490,7 +502,7 @@ registerAction2(class ApproveAllChangesAction extends Action2 {
 		if (!(input instanceof LivingDocEditorInput)) { return; }
 		// The SAME bulk path every button runs (docs/30 invariant I4). A chord is easier to press than a button
 		// is to click, so if either route deserved the confirm it is this one - it is not skipped here on the
-		// excuse that the user asked for speed. Scoped by the proposals' OWN docId (#253) so a URI-form drift
+		// excuse that the user asked for speed. Scoped by the changes' OWN docId (#253) so a URI-form drift
 		// cannot silently capture an empty set.
 		const docId = livingDocs.pendingDocIdFor(input.resource);
 		if (!docId) { return; }
@@ -1285,7 +1297,7 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		// is the active surface (RailVisibilityContribution below). A folder now lands on Project Home (a full-width
 		// screen with neither rail); the rails come up once the user opens a document from it. Because the
 		// walkthrough demo no longer runs on entry, the review rail reflects only real pending work, never
-		// left-over demo proposals.
+		// left-over demo changes.
 	}
 
 	// Execute the cold-start routing decision (map-D2, WP-H, WP-I): the cold start always lands on Project Home.
@@ -1303,13 +1315,9 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 		if (route.kind === StartupRouteKind.OpenHome) {
 			// Project Home: with a folder, the project's front door (what ran, what's stale, recent files; the
 			// empty-project front door when the folder has no documents yet); with no folder, Home's "Open a folder
-			// to start working." front door. The editor is one click deeper, via a file / opening a folder.
-			const input = this._instantiationService.createInstance(ScreenEditorInput, 'home');
-			const pane = await this._editorService.openEditor(input, { pinned: true });
-			// Singleton input: if the service adopted a different instance (or none), dispose ours to avoid a leak.
-			if (pane?.input !== input) {
-				input.dispose();
-			}
+			// to start working." front door. The editor is one click deeper, via a file / opening a folder. The
+			// runtime empty-editor landing (EmptyEditorLandingContribution) shares this open-and-dispose helper.
+			await openScreenEditor(this._editorService, this._instantiationService, 'home');
 		}
 	}
 
@@ -1324,6 +1332,10 @@ class StudioStartupContribution extends Disposable implements IWorkbenchContribu
 	}
 }
 registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContribution, WorkbenchPhase.AfterRestored);
+
+// The runtime twin of the cold-start landing above (issue #299 / #388): when the last tab is closed and the editor
+// area would otherwise fall through to a blank pane, land the writer back on Project Home - a defined surface.
+registerWorkbenchContribution2(EmptyEditorLandingContribution.ID, EmptyEditorLandingContribution, WorkbenchPhase.AfterRestored);
 
 // --- rails are editor companions (Part C1 / shell) ---
 // The tree-rail (SIDEBAR_PART, 264px: Files / Context / Outline / Search) and the review rail
@@ -1354,7 +1366,7 @@ registerWorkbenchContribution2(StudioStartupContribution.ID, StudioStartupContri
 //
 // The RECORDING RULE (plan 42 slice L4, fix-round for defect 1): a manual choice is recorded ONLY by an
 // explicit gesture on the rail itself. Every focusPanel-driven reveal -- the edge affordance, an AI
-// invocation, the L2 held-prompt, a proposal arriving -- is a PEEK: it fires onDidRequestPanel, which we
+// invocation, the L2 held-prompt, a change arriving -- is a PEEK: it fires onDidRequestPanel, which we
 // guard so the openView-driven visibility change is not mistaken for a deliberate `open`. The sole
 // recorder is the rail's calm collapse control (onDidRequestCollapseReviewRail -> `collapsed`). After the
 // fix, NO UI gesture records `open`; that is intentional -- precedence still honours a stored `collapsed`,
@@ -1392,7 +1404,7 @@ class RailVisibilityContribution extends Disposable implements IWorkbenchContrib
 	// accumulate disposables on the class store).
 	private readonly _deferred = this._register(new MutableDisposable());
 	// (plan 42 slice L4, defect 1) Every reveal driven by ILivingDocsService.focusPanel() -- the AI door
-	// affordance, a chat send, the L2 held-prompt, a proposal arriving -- fires onDidRequestPanel and then
+	// affordance, a chat send, the L2 held-prompt, a change arriving -- fires onDidRequestPanel and then
 	// un-hides the auxiliary bar via IViewsService.openView(). Those reveals are PEEKS, not decisions: only
 	// an explicit collapse/expand gesture on the rail itself records a manual choice. openView un-hides the
 	// part on a LATER microtask, so a synchronous flag would already be cleared; this clears the guard on a

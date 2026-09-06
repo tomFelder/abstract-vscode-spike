@@ -51,7 +51,7 @@ suite('LivingDoc PM decoration mapping', () => {
 		});
 	});
 
-	test('a meaning-change proposal maps to one edit decoration anchored on the block text', () => {
+	test('a meaning-kind change maps to one edit decoration anchored on the block text', () => {
 		const doc = parseLivingDoc(DOC_MD);
 		const block = doc.blocks.find(b => b.text.startsWith('Revenue'))!;
 		const pending = [change({ blockId: block.id, oldText: block.text, newText: 'Revenue dropped sharply this week.' })];

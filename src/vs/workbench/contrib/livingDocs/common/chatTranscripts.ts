@@ -29,14 +29,14 @@ import { IChatMessage } from './livingDocs.js';
 // Whatever the rules drop is COUNTED, per chat, and the count round-trips through storage - so a restored
 // chat can open with an honest "N earlier messages were not kept" line instead of pretending it is complete.
 //
-// Restoring is a READ and nothing else. Nothing here calls a model, queues a proposal or writes an audit
+// Restoring is a READ and nothing else. Nothing here calls a model, queues a change or writes an audit
 // row: a restored transcript is a record of what happened, never a replay of it. That is also why a stored
 // assistant turn carries `proposedCount` (how many changes it proposed) rather than the live `proposedIds`
 // it had at the time - pending changes are in-memory only and do not survive a restart, so persisting their
 // ids would guarantee a pointer that leads nowhere. A count can be spoken honestly; a dead id cannot.
 //
 // A count alone, though, is honest about HOW MANY and silent about WHAT HAPPENED - and a record that is
-// silent about what happened ends up guessing. It guessed, and it guessed wrong: every restored proposal was
+// silent about what happened ends up guessing. It guessed, and it guessed wrong: every restored change was
 // told it had been "cleared when the workspace closed", including one the user had APPROVED, which was on
 // disk and in the History tab at the time (#312 fix round 2). So the outcome is stored beside the count, and
 // it is written the moment the user acts, because that is the only moment it exists.
@@ -115,11 +115,11 @@ function persistMessage(message: IChatMessage): IPersistedMessage {
 	const full = String(message.content ?? '');
 	const clipped = message.clipped === true || full.length > TRANSCRIPT_CONTENT_CAP;
 	const content = full.length > TRANSCRIPT_CONTENT_CAP ? full.slice(0, TRANSCRIPT_CONTENT_CAP) : full;
-	// A live turn knows its proposals by id; a restored one knows only how many there were. Take whichever is
+	// A live turn knows its changes by id; a restored one knows only how many there were. Take whichever is
 	// larger so neither reading can silently zero the other out.
 	const proposed = Math.max(message.proposedIds?.length ?? 0, message.proposedCount ?? 0);
 	// What became of them. Both counts are written onto the turn as the user acts and are clamped here rather
-	// than trusted, so a stored turn can never claim more outcomes than it had proposals - the sentence the rail
+	// than trusted, so a stored turn can never claim more outcomes than it had changes - the sentence the rail
 	// builds from them ("N approved, M rejected, the rest never reviewed") has to add up whatever it is handed.
 	const approved = Math.min(proposed, Math.max(0, Math.floor(message.approvedCount ?? 0)));
 	const rejected = Math.min(proposed - approved, Math.max(0, Math.floor(message.rejectedCount ?? 0)));
@@ -192,7 +192,7 @@ export function serialiseTranscripts(entries: readonly ITranscriptInput[]): { ra
  * corrupt storage value costs the user their history, never their ability to open the workspace.
  *
  * Every restored turn is marked `restored`, which is what lets the rail tell a record from a live reply: it
- * prints an honest line where a restored turn's proposals used to be, instead of a pointer that leads nowhere.
+ * prints an honest line where a restored turn's changes used to be, instead of a pointer that leads nowhere.
  */
 export function deserialiseTranscripts(raw: string | undefined): ITranscriptStore {
 	const store: ITranscriptStore = { transcripts: new Map<string, IChatMessage[]>(), dropped: new Map<string, number>() };

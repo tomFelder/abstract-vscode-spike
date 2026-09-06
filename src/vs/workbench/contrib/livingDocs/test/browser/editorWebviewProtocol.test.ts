@@ -50,7 +50,7 @@ suite('livingDocs editorWebviewProtocol (plan 30, track 4)', () => {
 		let s = applyRender(initialEditorWebviewState(), content('<shell/>', 'the original body')).state;
 		s = applyReady(s).state;
 
-		// A render whose body changed (an accepted proposal landed) resets the live PM surface to disk truth.
+		// A render whose body changed (an approved change landed) resets the live PM surface to disk truth.
 		const changed = applyRender(s, content('<updated/>', 'the rewritten body'));
 		const c = changed.effects[0];
 		assert.ok(c.kind === 'postRender' && c.pmReset === 'the rewritten body', 'a model-driven body change resets the surface');

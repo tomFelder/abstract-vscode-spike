@@ -260,7 +260,7 @@ export interface ILivingDocSummary {
 	// --- Files-rail status dot inputs (issue #212): the cheap change signals the rail's dot reads. ---
 	/** Agent auto-applies newer than this doc's last-viewed anchor; the ACTIVE doc always reports 0 -> green band. */
 	readonly unseenAgentEdits: number;
-	/** Relink-flagged pending proposals for this document (the claim anchor no longer matches) -> red band. */
+	/** Relink-flagged pending changes for this document (the claim anchor no longer matches) -> red band. */
 	readonly relinkCount: number;
 	/** True when a binding/context source has drifted since last sync/review (freshness dirty) -> red band. A
 	 * never-loaded document reports false (freshness only computes on load) - a truthful, partial signal (#212). */
@@ -420,7 +420,7 @@ export interface IWorkingSetDoc {
 
 /**
  * The result of a read-only whole-project question from the Project Home composer (F15 / journey 1w). The
- * `answer` is plain-words prose (never JSON, never a proposal); `citations` are the real project document /
+ * `answer` is plain-words prose (never JSON, never a change); `citations` are the real project document /
  * source names actually consulted, so the answer is auditable and never grounded in a fabricated reference.
  * `via` is `model` for a real model answer, `fallback` for the honest no-model / no-document guidance turn.
  */
@@ -583,7 +583,7 @@ export interface IPdfContextResult {
  */
 export interface IChatStep {
 	readonly label: string;
-	/** `done` = completed read/step, `queued` = a proposal awaiting review, `skipped` = left untouched on purpose
+	/** `done` = completed read/step, `queued` = a change awaiting review, `skipped` = left untouched on purpose
 	 * (e.g. a "Never change this doc" document a fan-out honoured by NOT editing it - issue #257). */
 	readonly status: 'done' | 'queued' | 'skipped';
 }
@@ -604,11 +604,11 @@ export interface IChatMessage {
 	readonly steps?: readonly IChatStep[];
 	readonly via?: 'model' | 'fallback';
 	// Ids of the pending changes this assistant turn proposed (edits and/or insertions), so the Chat
-	// rail can render a Copilot/Cursor-style review card per proposal tied to the turn. The card reads
+	// rail can render a Copilot/Cursor-style review card per change tied to the turn. The card reads
 	// the live pending change by id, so it disappears once approved/rejected.
 	readonly proposedIds?: readonly string[];
 	// True when the user cancelled this reply mid-stream (plan 27, decision D27-B): the prose streamed so
-	// far is kept as an honest, muted "stopped" turn and any proposal JSON is discarded (never queued).
+	// far is kept as an honest, muted "stopped" turn and any change JSON is discarded (never queued).
 	readonly stopped?: boolean;
 	// True when the model call genuinely failed (not a cancel): the rail renders an honest error turn with
 	// an inline Retry that re-sends the same user message (plan 27 iter 3). Distinct from the no-model /
@@ -616,12 +616,12 @@ export interface IChatMessage {
 	readonly failed?: boolean;
 	// The documents a whole-project / working-set fan-out could not reach the model for (F14, issue #123).
 	// When present, the rail renders a NAMED error listing these documents (never a silent "no changes") plus
-	// a "Retry failed" affordance that re-runs ONLY these documents via `retryFailedDocs`. Proposals that DID
+	// a "Retry failed" affordance that re-runs ONLY these documents via `retryFailedDocs`. Changes that DID
 	// land in the same run are still rendered alongside the error (a partial success), so this coexists with
-	// `proposedIds` and is distinct from `failed` (which is a whole-turn failure with no proposals).
+	// `proposedIds` and is distinct from `failed` (which is a whole-turn failure with no changes).
 	readonly failedDocs?: readonly IFanoutFailedDoc[];
 	// True when a fan-out paused mid-run on the spent daily budget (map-D15; doc 18 section 2.1): the content
-	// is the plain-words cap message, proposals already queued stay reviewable, and the run screen marks the
+	// is the plain-words cap message, changes already queued stay reviewable, and the run screen marks the
 	// not-yet-run documents skipped (they never ran) - NOT failed, and NOT a "no change" all-clear (F14 item 3).
 	readonly paused?: boolean;
 	// --- read back from workspace storage on a relaunch (plan 52 WP-B residuals, issue #312) ---
@@ -632,7 +632,7 @@ export interface IChatMessage {
 	// clears them and their ids would be dead pointers - the count is stored instead, and the rail prints an
 	// honest line in the pointers' place (see `chatTranscripts.ts`).
 	readonly proposedCount?: number;
-	// How many of this turn's proposals the user APPROVED / REJECTED. Written onto the turn the moment the user
+	// How many of this turn's changes the user APPROVED / REJECTED. Written onto the turn the moment the user
 	// acts, because that is the only moment the fact exists: the change leaves the pending set immediately, and
 	// a restart takes what is left of it. Without these a restored turn could only say that changes had been
 	// proposed - so it told an APPROVED change, sitting on disk and in the History tab, that it had been thrown
@@ -1002,8 +1002,8 @@ export interface ILivingDocsService {
 	getPendingForDoc(resource: URI): readonly IProposedChange[];
 	/**
 	 * The canonical `docId` this document's pending changes are keyed under (or `undefined` when it has
-	 * none). Bulk-approve callers route `approveAll` through this - the proposals' own id - so a URI-form
-	 * drift between the open editor's resource and the queued proposals can never silently no-op (#253).
+	 * none). Bulk-approve callers route `approveAll` through this - the changes' own id - so a URI-form
+	 * drift between the open editor's resource and the queued changes can never silently no-op (#253).
 	 */
 	pendingDocIdFor(resource: URI): string | undefined;
 
@@ -1026,11 +1026,11 @@ export interface ILivingDocsService {
 	// --- workspace-wide views (the review rail aggregates across documents) ---
 	getAllPending(): readonly IProposedChange[];
 	/**
-	 * How far through the live proposal sets the reviewer is, for the review rail's foot (docs/30 stage 1).
+	 * How far through the live change sets the reviewer is, for the review rail's foot (docs/30 stage 1).
 	 *
-	 * A fold of the persisted change store, scoped to the proposal SETS that still hold something open, so
+	 * A fold of the persisted change store, scoped to the change SETS that still hold something open, so
 	 * the number is about the work in front of the reviewer rather than about the length of the journal.
-	 * `resumed` is true when those proposals were already on disk when this window opened them - the
+	 * `resumed` is true when those changes were already on disk when this window opened them - the
 	 * difference between "3 of 12 decided" and "Resumed - 41 of 63 decided".
 	 */
 	getReviewProgress(): IReviewProgress & { readonly resumed: boolean };
@@ -1137,7 +1137,7 @@ export interface ILivingDocsService {
 
 	/**
 	 * Use a template (plan 48 T2.4): DUPLICATE it into the open folder as a new document with its binds emptied
-	 * to `{{slot}}` placeholders, then open it. A pure duplication (no model call, no review proposals): the
+	 * to `{{slot}}` placeholders, then open it. A pure duplication (no model call, no review changes): the
 	 * pattern's structure lands as a plain document recording `template: <name>` provenance and declaring no
 	 * sources, so it reports `needsSourceBinding` (the tree-row "bind sources" nudge) until a source is bound.
 	 * Returns the new resource, or undefined when no folder is open / the template is unreadable.
@@ -1156,7 +1156,7 @@ export interface ILivingDocsService {
 	 * Generate a draft document from a template (plan 28, iter 3). Writes `<docName>.md` as the template's
 	 * static skeleton (headings + verbatim bind links; the H1 becomes the document name; slots stripped),
 	 * records `template: <name>` provenance, opens it, then drives the EXISTING chat path with a composed
-	 * instruction so the prose arrives as reviewable insertion proposals - never written directly. With no
+	 * instruction so the prose arrives as reviewable insertion changes - never written directly. With no
 	 * model reachable the skeleton is still created and a status line explains the draft needs the model.
 	 * Returns the new resource, or undefined when no folder is open / the template is unreadable.
 	 */
@@ -1166,7 +1166,7 @@ export interface ILivingDocsService {
 	 * Draft a new document FROM SELECTED SOURCES (F17, journey 1b's third birth). Writes `<docName>.md` as a
 	 * bare skeleton that declares the picked sources (csv/json under `sources:` so figures bind, md/txt under
 	 * `context:` as knowledge), opens it, then drives the EXISTING chat path so the draft arrives as reviewable
-	 * insertion proposals with provenance - never silently written prose. With no model reachable the skeleton
+	 * insertion changes with provenance - never silently written prose. With no model reachable the skeleton
 	 * is still created and a status line explains the draft needs the model (honest, never fake content).
 	 * Returns the new resource, or undefined when no folder is open.
 	 */
@@ -1535,7 +1535,7 @@ export interface ILivingDocsService {
 	/**
 	 * Answer a READ-ONLY, whole-project question for the Project Home composer (F15 / journey 1w, map-D24:
 	 * "asking a question answers read-only with citations"). Reads every project document (figures resolved)
-	 * plus their sources and asks the model for a plain-words answer - it NEVER queues a proposal or mutates a
+	 * plus their sources and asks the model for a plain-words answer - it NEVER queues a change or mutates a
 	 * document. `citations` are the real document/source names actually consulted (never fabricated); with no
 	 * model reachable it returns an honest fallback answer and no citations. A change request routes to the
 	 * run/task surface instead of here (the caller classifies the intent).
@@ -1543,7 +1543,7 @@ export interface ILivingDocsService {
 	askProjectQuestion(question: string): Promise<IProjectAnswer>;
 	/**
 	 * Cancel the in-flight chat reply for a document (plan 27). Aborts the streaming model call; the prose
-	 * streamed so far is kept as a muted "stopped" turn and any proposal JSON is discarded (decision D27-B).
+	 * streamed so far is kept as a muted "stopped" turn and any change JSON is discarded (decision D27-B).
 	 * A no-op when no reply is in flight.
 	 */
 	cancelChat(resource: URI): void;
@@ -1576,7 +1576,7 @@ export interface ILivingDocsService {
 	/**
 	 * Tweak (amend-before-approve, plan 31 iter 3, D31-B): mutate a pending change's proposed `newText` in
 	 * place so the reviewer can hand-edit the agent's words before approving. Fires `onDidChange` so every
-	 * surface re-renders the amended proposal as still-pending; the subsequent {@link approve} records the
+	 * surface re-renders the amended change as still-pending; the subsequent {@link approve} records the
 	 * audit `via: 'tweaked'`. A no-op for an unknown id, a `figure` change (figures come from sources and are
 	 * not hand-editable - the affordance hides for them), an empty amendment, or one that matches the current
 	 * text.

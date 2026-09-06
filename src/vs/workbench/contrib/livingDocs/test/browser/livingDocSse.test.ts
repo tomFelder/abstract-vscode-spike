@@ -58,7 +58,7 @@ suite('livingDocSse - parseSseChunk', () => {
 
 	test('flags paused when the proxy streams a stop_reason "pause" (spent daily budget, plan 35 iter 3)', () => {
 		// The plain-words cap prose still streams as normal text; the pause marker rides alongside so the
-		// service keeps the prose but pauses the run rather than parsing proposals from it.
+		// service keeps the prose but pauses the run rather than parsing changes from it.
 		const result = drive([delta('You\'ve used today\'s included usage'), PAUSE, STOP]);
 		assert.deepStrictEqual(result, { text: 'You\'ve used today\'s included usage', done: true, paused: true });
 	});

@@ -244,7 +244,7 @@ export function buildTemplateFromDocument(doc: Pick<ILivingDoc, 'body' | 'source
 
 // Compose the instruction the generate flow sends through the EXISTING chat path (plan 28, iter 3): the
 // template body is the brief (its instruction prose + slot hints), the document is already named, and the
-// user's optional note is appended. The model answers with insertion proposals that land in the review
+// user's optional note is appended. The model answers with insertion changes that land in the review
 // rail - generation never writes prose directly (decision 17). Deterministic, so it is snapshot-testable.
 export function composeTemplateInstruction(templateName: string, body: string, docName: string, note: string): string {
 	const name = docName.trim() || templateName.trim();
@@ -267,7 +267,7 @@ export function composeTemplateInstruction(templateName: string, body: string, d
 
 // ---- "From sources..." birth (F17, journey 1b): the third new-document birth. The user picks one or more
 // project source files (csv/json bind sources + md/txt knowledge) and the document is DRAFTED FROM THEM
-// through the review engine - the draft arrives as reviewable proposals, never silently written prose. The
+// through the review engine - the draft arrives as reviewable changes, never silently written prose. The
 // two helpers below are the pure, self-contained pieces (skeleton + model brief); the service writes the
 // skeleton, opens it, and drives the SAME chat path every generation uses so provenance is honest: the
 // picked sources are declared in the skeleton frontmatter (`sources:` for value data, `context:` for prose
@@ -298,7 +298,7 @@ function sourceStem(source: string | undefined): string {
 // document is already named and its sources are already declared (and so read by the chat path); this asks
 // the model to DRAFT the document from those sources, and - matching the template path's born-bound stance -
 // to represent any figure taken from a data source as a `bind:` link rather than a baked-in number, so
-// provenance survives. The model answers with insertion proposals that land in the review rail; generation
+// provenance survives. The model answers with insertion changes that land in the review rail; generation
 // never writes prose directly (decision 17). Deterministic, so it is snapshot-testable.
 export function composeSourcesInstruction(docName: string, valueSources: readonly string[], contextSources: readonly string[], note: string): string {
 	const name = docName.trim() || 'this document';
@@ -375,7 +375,7 @@ export function buildExamplesTemplateSkeleton(templateName: string, examples: re
 // Compose the instruction the from-examples wizard sends through the EXISTING chat path (F18). The examples
 // are already declared as `context:` on the new template (and so read by the chat path); this asks the model
 // to NAME what repeats across them and fill each section of the template. The model answers with insertion
-// proposals that land in the review rail - the analysis is reviewable, never a silent write, and a model
+// changes that land in the review rail - the analysis is reviewable, never a silent write, and a model
 // outage becomes an honest error turn, never "no commonalities". Deterministic, so it is snapshot-testable.
 export function composeExamplesInstruction(templateName: string, examples: readonly string[]): string {
 	return [
@@ -862,7 +862,7 @@ export function scopeBlockEdit(blockText: string, quote: string): { oldText: str
  * that range, so every sibling line stays byte-identical.
  *
  * Fail-soft AND fail-LOUD (docs/30 invariant I1, issue #329): if a scoped `oldText` is no longer present (the
- * block changed since the proposal was queued) nothing is written - sibling content is never destroyed by a
+ * block changed since the change was queued) nothing is written - sibling content is never destroyed by a
  * whole-block replace - and the caller is handed `{landed: false, reason: 'anchor-miss'}`. The old `string`
  * return handed back the block UNCHANGED on that path, which is byte-for-byte what a successful no-op edit
  * returns, so the caller could not tell "applied" from "did nothing" and recorded an approval either way.
@@ -878,8 +878,13 @@ export function applyBlockEdit(blockText: string, oldText: string, newText: stri
 	return blockApplyFailed('anchor-miss');
 }
 
+/** Serialise ONLY a document's body (its blocks re-emitted, joined by blank lines) - never its frontmatter. */
+export function serializeLivingDocBody(doc: ILivingDoc): string {
+	return doc.blocks.map(serializeBlock).join('\n\n');
+}
+
 export function serializeLivingDoc(doc: ILivingDoc): string {
-	const body = doc.blocks.map(serializeBlock).join('\n\n');
+	const body = serializeLivingDocBody(doc);
 
 	// Only emit the frontmatter the file actually authored. The `title:` line comes from
 	// `frontmatterTitle` (the authored value), NEVER the derived `doc.title` (H1/'Untitled' fallback) -- so
@@ -914,12 +919,77 @@ export function serializeLivingDoc(doc: ILivingDoc): string {
 	return `---\n${fmLines.join('\n')}\n---\n\n${body}\n`;
 }
 
+// The modelled SCALAR frontmatter fields, paired with the value the parsed document holds for each. These
+// are the only frontmatter a NON-approve persist can legitimately change (a figure sync advances `subtitle`;
+// see `_resolveSubtitle`). The list keys (sources/context/tags) are NEVER mutated on that path - list edits
+// go through `saveRawText` - so they are carried through byte-exact rather than re-emitted; re-emitting a
+// list was the #385 round-2 corruption (a comment between items duplicated them). Used by
+// {@link withMergedFrontmatter} to update only a scalar whose value actually moved.
+const MODELLED_FRONTMATTER_SCALARS: readonly { readonly key: 'title' | 'subtitle' | 'status' | 'policy'; readonly read: (doc: ILivingDoc) => string }[] = [
+	{ key: 'title', read: doc => doc.frontmatterTitle ?? '' },
+	{ key: 'subtitle', read: doc => doc.subtitle ?? '' },
+	{ key: 'status', read: doc => doc.status ?? '' },
+	{ key: 'policy', read: doc => doc.policy ?? '' },
+];
+
+/**
+ * Replace the value of a TOP-LEVEL scalar frontmatter key IN PLACE, leaving every other byte untouched.
+ *
+ * Unlike {@link withFrontmatterScalar} (which the Properties panel uses to AUTHOR a field, and which re-orders
+ * the key to the front and rebuilds the block), this rewrites ONLY the matching line's value: key order, list
+ * items, nested maps, comments, blank lines and CR/LF endings are all left exactly as they were. It matches a
+ * top-level key only (the key at column 0), so a nested `  <key>:` child of another map is never mistaken for
+ * the field (the #385 round-2 hoisting bug). A no-op (key absent, or value already equal) returns the text
+ * unchanged. Pure.
+ */
+function withReplacedFrontmatterScalar(text: string, key: 'title' | 'subtitle' | 'status' | 'policy', value: string): string {
+	const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);
+	if (!match) { return text; }
+	const block = match[0];
+	// The top-level `key:` line: the key at column 0, its colon and trailing spacing, then the value up to
+	// (but not including) the line ending, so the original `\n` or `\r\n` is preserved by the splice below.
+	const lineRe = new RegExp(`^(${key}:[ \\t]*)([^\\r\\n]*)`, 'm');
+	const m = lineRe.exec(block);
+	if (!m || m[2] === value) { return text; }
+	const nextBlock = block.slice(0, m.index) + m[1] + value + block.slice(m.index + m[0].length);
+	return nextBlock + text.slice(block.length);
+}
+
+/**
+ * Re-serialise a document for a NON-approve persist (figure sync, hand edits, skill fixes) while preserving
+ * its frontmatter, making BOTH #357 properties true at once (docs/30 section 8.3):
+ *
+ *  - UNMODELLED frontmatter survives BYTE-EXACT. The `---` block is carried through verbatim by
+ *    {@link withReplacedBody}, so the `template`/`name`/`description`/`fromTemplate` provenance, every unknown
+ *    user key, nested maps, comments, blank lines, list formatting and CR/LF endings are exactly as authored.
+ *    This is round 1's proven behaviour.
+ *  - A MODELLED SCALAR that legitimately changed on this path still reaches disk. A figure sync advances
+ *    `subtitle: Week N` (`_resolveSubtitle`); that one line is updated surgically in place
+ *    ({@link withReplacedFrontmatterScalar}), and ONLY when its value actually moved, so an unchanged field is
+ *    never touched and the block does not churn. Lists are not re-emitted (re-emitting them was the round-2
+ *    corruption), because no persist path mutates them.
+ *
+ * The body is always the block-derived body, normalised to a single trailing newline. Pure (text + doc in,
+ * text out), so it round-trips on disk and is unit-testable.
+ */
+export function withMergedFrontmatter(originalText: string, doc: ILivingDoc): string {
+	let text = withReplacedBody(originalText, serializeLivingDocBody(doc));
+	const original = parseLivingDoc(originalText);
+	for (const scalar of MODELLED_FRONTMATTER_SCALARS) {
+		const next = scalar.read(doc);
+		if (next !== scalar.read(original)) {
+			text = withReplacedFrontmatterScalar(text, scalar.key, next);
+		}
+	}
+	return text;
+}
+
 // The chat model is asked for "ONLY a JSON object" of {reply, edits, inserts}, but a real model
 // intermittently wraps it in prose, truncates it, or answers in plain text. The old call-site did a bare
 // `JSON.parse(raw.slice(indexOf('{'), lastIndexOf('}')+1))`, which THREW on any of those and surfaced as a
 // flat "the agent model errored". This pure parser is tolerant (plan 16 iter 5, decision 58): it extracts
 // the JSON object when present, and otherwise degrades to treating the whole reply as a plain chat answer
-// (no proposals) -- never a crash. Unit-tested independently of the model.
+// (no changes) -- never a crash. Unit-tested independently of the model.
 export interface IParsedChatResponse {
 	readonly reply: string;
 	readonly edits: { heading?: string; oldText?: string; newText?: string; rationale?: string }[];
@@ -1007,7 +1077,7 @@ export function parseChatResponse(raw: string): IParsedChatResponse {
 			inserts?: unknown;
 		};
 		return {
-			// A parsed object with no `reply` leaves reply empty -- the queued proposal cards carry the meaning.
+			// A parsed object with no `reply` leaves reply empty -- the queued change cards carry the meaning.
 			reply: typeof json.reply === 'string' ? json.reply.trim() : '',
 			edits: Array.isArray(json.edits) ? json.edits : [],
 			inserts: Array.isArray(json.inserts) ? json.inserts : [],
@@ -1020,7 +1090,7 @@ export function parseChatResponse(raw: string): IParsedChatResponse {
 // The multi-document chat contract (plan 18, decision 62): one model call over the whole working set
 // returns a reply plus a per-document map of edits/inserts, each entry keyed by the document it targets.
 // Tolerant in the same way as parseChatResponse: a non-JSON / truncated reply degrades to a plain answer
-// with no per-doc proposals (never throws). The `doc` key is matched to a working-set document by title
+// with no per-doc changes (never throws). The `doc` key is matched to a working-set document by title
 // at the call site.
 // Each proposed edit/insert may carry a SOURCE GROUNDING (plan 23.4, decision #77): a short verbatim
 // `sourceQuote` from the attached source (the transcript) plus, where the model can determine it, a

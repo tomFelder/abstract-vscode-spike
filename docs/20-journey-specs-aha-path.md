@@ -115,7 +115,7 @@ The created file is written to disk on birth (X1 fix); a new document is v0/"Sav
 
 ### Analytics events
 
-`project_opened` is not this; birth is not yet a named event in [15](15) §3.1. Register a `document_created` (birth kind: blank / template / from-sources) with plan 36 rather than inventing an emitter now. The first-draft generation reuses `proposal_created` / `run_started`.
+`project_opened` is not this; birth is not yet a named event in [15](15) §3.1. Register a `document_created` (birth kind: blank / template / from-sources) with plan 36 rather than inventing an emitter now. The first-draft generation reuses `change_created` / `run_started`.
 
 ### Acceptance criteria
 
@@ -262,7 +262,7 @@ The while-you-were-away feed is read from the run log / audit (real data only); 
 
 ### Analytics events
 
-`project_opened`; `all_clear_reached` (items cleared, time_to_clear) when the feed is driven to zero; the whole-project chat reuses `proposal_created` (source kind: chat) for change requests.
+`project_opened`; `all_clear_reached` (items cleared, time_to_clear) when the feed is driven to zero; the whole-project chat reuses `change_created` (source kind: chat) for change requests.
 
 ### Acceptance criteria
 
@@ -315,7 +315,7 @@ The proposed skill.md is written as a real file (X1 fix applies); the template j
 
 ### Analytics events
 
-`skill_invoked` (the analysis is a skill run); the resulting change reuses `proposal_created`. Template creation could register `template_created` (from: examples / blank) with plan 36.
+`skill_invoked` (the analysis is a skill run); the resulting change reuses `change_created`. Template creation could register `template_created` (from: examples / blank) with plan 36.
 
 ### Acceptance criteria
 
@@ -368,7 +368,7 @@ The walk confirmed this golden path works end to end with a live model (walk 1e)
 
 ### Analytics events
 
-`proposal_created` (source kind: chat, change kind, confidence label); `proposal_resolved` (resolution: approve/tweak/reject, latency, bulk?); `run_started`/`run_finished` for the turn; `undo_after_approve` if the way-back is used.
+`change_created` (source kind: chat, change kind, confidence label); `change_resolved` (resolution: approve/tweak/reject, latency, bulk?); `run_started`/`run_finished` for the turn; `undo_after_approve` if the way-back is used.
 
 ### Acceptance criteria
 
@@ -379,7 +379,7 @@ The walk confirmed this golden path works end to end with a live model (walk 1e)
 - [ ] Editing inside a pending change folds the edit into it - no invalidation (map-D8).
 - [ ] The user can type while a run is in flight; keystrokes and pending changes coexist and merge without data loss (map-D22).
 - [ ] The only reachable "Chat" surface is the Abstract rail; the stock Copilot chat is removed or re-routed (cures X4).
-- [ ] `proposal_created` and `proposal_resolved` fire with their properties.
+- [ ] `change_created` and `change_resolved` fire with their properties.
 
 ---
 
@@ -419,7 +419,7 @@ Tweak folds the human edit into the approved commit (map-D8 shape, applied at ap
 
 ### Analytics events
 
-`proposal_resolved` (resolution: approve/tweak/reject, latency, bulk?) - the tweak+reject rate feeds the guardrail band (5-25%, [15](15) §2.4).
+`change_resolved` (resolution: approve/tweak/reject, latency, bulk?) - the tweak+reject rate feeds the guardrail band (5-25%, [15](15) §2.4).
 
 ### Acceptance criteria
 
@@ -428,7 +428,7 @@ Tweak folds the human edit into the approved commit (map-D8 shape, applied at ap
 - [ ] Reject reverts cleanly; the optional reason lands in the audit as next-derivation context.
 - [ ] Approve/Tweak are atomic - a failed apply never half-applies and leaves the change pending with a named error.
 - [ ] Approved (and tweaked) results survive reload (via the 1e persistence contract).
-- [ ] `proposal_resolved` fires with resolution and latency, feeding the tweak+reject guardrail.
+- [ ] `change_resolved` fires with resolution and latency, feeding the tweak+reject guardrail.
 
 ---
 
@@ -464,7 +464,7 @@ The per-doc policy is stored on the document (in the lock), persists across relo
 
 ### Analytics events
 
-No dedicated event in [15](15) §3.1; the policy setting affects `proposal_created` (figures auto-applied vs meaning queued) which already carries change kind. Defer a `policy_changed` event to plan 36 if the guardrails want it.
+No dedicated event in [15](15) §3.1; the policy setting affects `change_created` (figures auto-applied vs meaning queued) which already carries change kind. Defer a `policy_changed` event to plan 36 if the guardrails want it.
 
 ### Acceptance criteria
 
@@ -616,7 +616,7 @@ The sample approve (step 5) exercises the 1e persistence contract on seeded data
 
 ### Analytics events
 
-`onboarding_step` (step name per the §2.1 funnel: open → demo report generated → provenance peek hovered → first diff seen → first approve sample → first folder opened → first approve own file); `provenance_peeked`; `proposal_created` / `proposal_resolved`; `model_configured` (provider + survey answers). Every drop-off step is a design task ([15](15) §2.1).
+`onboarding_step` (step name per the §2.1 funnel: open → demo report generated → provenance peek hovered → first diff seen → first approve sample → first folder opened → first approve own file); `provenance_peeked`; `change_created` / `change_resolved`; `model_configured` (provider + survey answers). Every drop-off step is a design task ([15](15) §2.1).
 
 ### Acceptance criteria
 

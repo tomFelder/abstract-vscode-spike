@@ -10,7 +10,7 @@ import { ILivingDoc, IProposedChange } from './livingDocsModel.js';
 
 // The chat transcript's CHANGE POINTER (plan 52 WP-A1, issue #301).
 //
-// The problem this model exists to solve: one pending proposal used to be rendered twice, with two competing
+// The problem this model exists to solve: one pending change used to be rendered twice, with two competing
 // live controls. The document mounted the full inline widget - kind chip, confidence, rationale, the red/green
 // diff, the "Line N" address and Edit / Approve changes / Reject - and the chat rail simultaneously repeated
 // the whole proposed sentence verbatim underneath its own Apply / Reject. Two live controls for one change is
@@ -27,7 +27,7 @@ import { ILivingDoc, IProposedChange } from './livingDocsModel.js';
  * - `document`: the document's live surface has REPORTED an inline widget for this change, so the pointer
  *   scrolls to it and flashes it. The widget is then the single place the change is read and approved.
  * - `review`: the surface reported and this change was NOT among the widgets it mounted (issue #300 - a
- *   proposal whose target block is a list, a table cell, a heading or any block whose Markdown carries
+ *   change whose target block is a list, a table cell, a heading or any block whose Markdown carries
  *   syntax mounts nothing at all). Sending the reader to a block that shows them nothing would trade a
  *   trust problem for a correctness one, so the pointer reveals the change in the Review tab instead,
  *   which renders the full red/green diff and Approve & apply / Reject.
@@ -47,7 +47,7 @@ export type ChangePointerRoute = 'document' | 'review' | 'unknown';
  * a vendored ProseMirror bundle, so the only honest answer comes from asking the surface what it did.
  *
  * Both halves are needed, and this is the subtle part. A change id missing from `mounted` alone proves
- * nothing: the report is a snapshot, and a proposal that arrived after it was taken is missing simply because
+ * nothing: the report is a snapshot, and a change that arrived after it was taken is missing simply because
  * it did not exist yet. Only a change the surface was ASKED to decorate and did not is evidence of anything.
  */
 export interface IInlineWidgetReport {
@@ -95,7 +95,7 @@ export function changePointerRoute(report: IInlineWidgetReport | undefined, chan
 	if (answer === undefined) {
 		// No report, one that predates this change (it was proposed after the last decoration pass), or one that
 		// has been retired because the surface stopped watching. Nobody has looked at it, and saying "review" here
-		// would flash a wrong badge onto every brand-new proposal.
+		// would flash a wrong badge onto every brand-new change.
 		return 'unknown';
 	}
 	// Asked for and not mounted: the surface tried and there is nothing there. This is the #300 case.
@@ -162,8 +162,8 @@ export function buildTurnPointers(proposedIds: readonly string[], pending: reado
 	return pending.filter(change => wanted.has(change.id)).map(change => buildChangePointer(change, docFor(change.docId), reportFor(change.docId)));
 }
 
-/** What a RESTORED turn's proposals became: the chip's short marker, and one sentence naming the outcome. */
-export interface IRestoredProposalNote {
+/** What a RESTORED turn's changes became: the chip's short marker, and one sentence naming the outcome. */
+export interface IRestoredChangeNote {
 	/** The short marker: the outcome itself when the whole turn shares one, otherwise the neutral record mark. */
 	readonly tag: string;
 	/** One complete sentence. Never assembled from fragments - word order is not the same in every language. */
@@ -176,7 +176,7 @@ export interface IRestoredProposalNote {
  * What a RESTORED assistant turn should say about the changes it proposed (#312 fix round 2).
  *
  * A restored turn has no live pointers - pending changes die with the process - so this is the whole of what
- * the reader gets. The first cut printed ONE sentence for every restored proposal: *"Changes waiting for
+ * the reader gets. The first cut printed ONE sentence for every restored change: *"Changes waiting for
  * review are cleared when the workspace closes, so it is not open any more."* That sentence is true of a
  * change nobody reviewed and FALSE of one the user approved - which is on disk, and in the History tab three
  * inches away. Telling someone their approved edit evaporated is worse than saying nothing: a reader
@@ -189,7 +189,7 @@ export interface IRestoredProposalNote {
  * Pure and DOM-free, like everything else in this module, so every one of these sentences is unit-tested
  * rather than read off a screenshot.
  */
-export function describeRestoredProposals(proposed: number | undefined, approved: number | undefined, rejected: number | undefined): IRestoredProposalNote | undefined {
+export function describeRestoredChanges(proposed: number | undefined, approved: number | undefined, rejected: number | undefined): IRestoredChangeNote | undefined {
 	const total = Math.max(0, Math.floor(proposed ?? 0));
 	if (!total) { return undefined; }
 	const yes = Math.min(total, Math.max(0, Math.floor(approved ?? 0)));

@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer } from '../../../../base/common/buffer.js';
+import type Anthropic from '@anthropic-ai/sdk';
+import { decodeBase64, encodeBase64, streamToBuffer, VSBuffer, VSBufferReadableStream } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { IntervalTimer, Limiter, timeout } from '../../../../base/common/async.js';
@@ -31,7 +32,7 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { INotificationHandle, INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { toAction } from '../../../../base/common/actions.js';
-import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
+import { asJson, asText, IRequestService, isSuccess, readHeader } from '../../../../platform/request/common/request.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
@@ -45,7 +46,7 @@ import { dedupeAssetName, imageMimeForName, matchMarkdownImageAt, sanitizeImageA
 import { IAnalyticsService } from '../common/analytics.js';
 import { resolveBlockLine } from '../common/livingDocAddress.js';
 import { ILedgerAuditInput, ILedgerInputs, ILedgerRunInput, ILedgerWaitingInput } from '../common/livingDocLedger.js';
-import { buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, chunkDocBody, countBindSlots, documentDisplayTitle, extractBindLinks, frontmatterBlock, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag, withReplacedBody } from '../common/livingDocMarkdown.js';
+import { buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, chunkDocBody, countBindSlots, documentDisplayTitle, extractBindLinks, frontmatterBlock, extractStreamingReply, findQuoteLine, jaccardSimilarity, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, templateSkeletonRows, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterTag, withMergedFrontmatter, withReplacedBody } from '../common/livingDocMarkdown.js';
 import { coerceDocPolicy, docPolicyNeverRefusal, docPolicyNeverSkipReason, DocAutonomyLevel } from '../common/docPolicy.js';
 import { AnalyticsService } from './analyticsService.js';
 import { LivingDocSourceInput } from './livingDocSourceInput.js';
@@ -54,7 +55,10 @@ import { estimateTokens, IFanoutDoc, planFanoutBatches } from '../common/fanoutB
 import { IFanoutFailedDoc, summarizeFanoutRun } from '../common/fanoutOutcome.js';
 import { ChatDropReason, reconcileTurnReceipt } from '../common/turnReceipts.js';
 import { parseRetryAfterMs, retryDelayMs } from '../common/livingDocRetry.js';
+import { listenStream } from '../../../../base/common/stream.js';
 import { parseSseChunk } from '../common/livingDocSse.js';
+import { AGENT_DEFAULT_MAX_STEPS, AgentAssistantBlock, IAgentModelClient, IAgentModelRequest, IAgentModelResponse, runAgentLoop } from '../common/livingDocsAgentLoop.js';
+import { agentStepLabel, chooseChatRoute, composeAgentEditLedger, composeAgentTask, createEditingAgentTools, describeAgentRunFailure, IAgentDocumentRow, IAgentScopeDoc, IAgentToolHost } from '../common/livingDocsAgentTools.js';
 import { renderExportHtml, renderExportMarkdown } from './livingDocRender.js';
 import { ILockStore, lockUriFor, SidecarLockStore } from './livingDocLockStore.js';
 import { IFileRef, rewriteLockSources, scanDependents } from '../common/fileOps.js';
@@ -98,7 +102,7 @@ function newRefreshPass(): IRefreshPass {
 	return { fileBodies: new Map(), resolutions: new Map() };
 }
 
-// The result of trying to turn one parsed edit/insert into a queued proposal (I3, issue #303). A refusal
+// The result of trying to turn one parsed edit/insert into a queued change (I3, issue #303). A refusal
 // carries the REASON it was refused rather than a bare `undefined`, which is what lets the chat composer
 // reconcile "the model claimed 3 changes" against "1 landed" and name the two that did not.
 type IQueueOutcome =
@@ -136,7 +140,7 @@ interface IDocState {
 	noticeUp?: boolean;
 	// True when the editor holds live-typed prose (`state.rawText`) that a blocked silent save could not write to
 	// disk - i.e. there is in-editor work not yet on disk. Drives the "Reloading will discard..." warning honestly
-	// for typing, alongside the agent-proposal queue (`_pending`). Cleared once a save actually lands on disk.
+	// for typing, alongside the agent-change queue (`_pending`). Cleared once a save actually lands on disk.
 	unsavedRaw?: boolean;
 	// The live handle for the reload/keep notice while it is on screen (issue #133 F4). Kept so a later false->true
 	// transition of the "has unsaved work" state can close the deduped notice and re-raise it WITH the discard line
@@ -223,7 +227,7 @@ const DEFAULT_PROXY_URL = 'http://localhost:8090';
  *
  *  - `chat` - a person is waiting on this reply: the document conversation and the Project Home ask.
  *  - `fanout` - one batch of a whole-project run, carrying many documents' edits in one envelope.
- *  - `rewrite` - one document's Review-impact proposal during a refresh.
+ *  - `rewrite` - one document's Review-impact change during a refresh.
  *  - `grade` - the verify gate's strategy grader, which returns a two-field verdict.
  */
 const MODEL_CALL_PURPOSES = ['chat', 'fanout', 'rewrite', 'grade'] as const;
@@ -255,7 +259,7 @@ const INCLUDED_USAGE_SPENT_MESSAGE = 'You\'ve used today\'s included usage - pic
 
 // A model call that the proxy paused because the day's included usage is spent (stop_reason "pause"). It is
 // NOT a failure: the caller keeps any prose the proxy returned (the plain-words cap message), queues no
-// proposals, and - inside an agent run - pauses the run via D15 with proposals kept, resuming at day rollover.
+// changes, and - inside an agent run - pauses the run via D15 with changes kept, resuming at day rollover.
 class ModelPausedError extends Error {
 	constructor(message: string) {
 		super(message || INCLUDED_USAGE_SPENT_MESSAGE);
@@ -281,6 +285,53 @@ class ModelRateLimitedError extends Error {
 }
 function isModelRateLimitedError(e: unknown): e is ModelRateLimitedError {
 	return e instanceof ModelRateLimitedError;
+}
+
+/**
+ * The agent loop's model seam over the broker (issue #380; the S2 seam's model half). It exists to do ONE
+ * translation - the broker's Anthropic-shaped JSON message into the kernel's `IAgentModelResponse` - and to
+ * make three distinctions the kernel is deliberately unable to make for itself:
+ *
+ *  - A typed broker `error` body becomes a typed `errors` entry, so the kernel ends the run NAMING the
+ *    upstream fault rather than the service guessing whether half a turn is safe to act on.
+ *  - A `stop_reason: "pause"` is a RUN-level state (doc 30 D15), not a loop state, so it is never handed to
+ *    the kernel at all: it is recorded here and thrown, and the caller renders the existing honest pause.
+ *  - Anything else is the turn, verbatim, including `tool_use` blocks, which pass through untouched because
+ *    the kernel appends the assistant turn to its history byte for byte.
+ */
+class BrokerAgentModelClient implements IAgentModelClient {
+	/** The plain-words cap message, set when the broker paused mid-run. Read by the caller after the run. */
+	pausedMessage: string | undefined;
+
+	constructor(private readonly _post: (request: IAgentModelRequest) => Promise<string>) { }
+
+	async send(request: IAgentModelRequest): Promise<IAgentModelResponse> {
+		const raw = await this._post(request);
+		const json = JSON.parse(raw) as { stop_reason?: string; content?: unknown; error?: { type?: string; message?: string } };
+		if (json.error) {
+			return {
+				content: [], stopReason: null,
+				errors: [{ errorType: json.error.type ?? 'proxy_error', message: json.error.message ?? 'model proxy error' }],
+			};
+		}
+		const blocks = Array.isArray(json.content) ? json.content : [];
+		const content: AgentAssistantBlock[] = [];
+		for (const block of blocks) {
+			if (!block || typeof block !== 'object') { continue; }
+			const typed = block as { type?: string; text?: string; id?: string; name?: string; input?: unknown };
+			if (typed.type === 'text' && typeof typed.text === 'string') {
+				content.push({ type: 'text', text: typed.text });
+			} else if (typed.type === 'tool_use' && typeof typed.id === 'string' && typeof typed.name === 'string') {
+				content.push({ type: 'tool_use', id: typed.id, name: typed.name, input: typed.input ?? {} });
+			}
+		}
+		if (json.stop_reason === 'pause') {
+			const prose = content.map(block => block.type === 'text' ? block.text : '').join('').trim();
+			this.pausedMessage = prose || INCLUDED_USAGE_SPENT_MESSAGE;
+			throw new ModelPausedError(this.pausedMessage);
+		}
+		return { content, stopReason: (json.stop_reason ?? null) as Anthropic.Messages.StopReason | null };
+	}
 }
 // How long a model-availability probe result is trusted before re-checking (so starting the proxy
 // mid-session is picked up without re-probing on every render).
@@ -533,7 +584,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private _pending: IProposedChange[] = [];
 	private _changeStore: ChangeStore | undefined;
 	private _changeStoreReady: Promise<ChangeStore | undefined> | undefined;
-	// True when the store had open proposals the moment this window opened them - i.e. the review is being
+	// True when the store had open changes the moment this window opened them - i.e. the review is being
 	// RESUMED rather than started. Decided once, at open, so the rail's sentence cannot drift into claiming a
 	// resumption for work done in this session.
 	private _resumedReview = false;
@@ -541,9 +592,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Read once from storage at construction (DOC_LAST_VIEWED_KEY, WORKSPACE), stamped on active-editor change,
 	// and pruned to the current doc set on each write. The Files-rail green dot reads it via _summarize.
 	private readonly _docLastViewed = new Map<string, string>();
-	// True while approveAll fans out, so each approve's proposal_resolved analytics event carries bulk:true.
+	// True while approveAll fans out, so each approve's change_resolved analytics event carries bulk:true.
 	private _inBulkApprove = false;
-	// True while rejectAll fans out, so each reject's proposal_resolved analytics event carries bulk:true.
+	// True while rejectAll fans out, so each reject's change_resolved analytics event carries bulk:true.
 	private _inBulkReject = false;
 	private readonly _lockStore: ILockStore;
 	// The orchestration engine: agent registry + dependency-graph event-bus (+ triggers/policy/verify).
@@ -717,7 +768,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		void this._loadWorkbookManifests();
 		this._register(this._workspace.onDidChangeWorkspaceFolders(() => {
 			// A different folder is a different project, so its change store is a different journal. Drop the
-			// open one and its derived queue rather than letting one project's proposals be read as another's.
+			// open one and its derived queue rather than letting one project's changes be read as another's.
 			this._changeStore = undefined;
 			this._changeStoreReady = undefined;
 			this._refreshPending();
@@ -901,7 +952,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 	getPendingForDoc(resource: URI): readonly IProposedChange[] {
 		const id = resource.toString();
-		// Match on the canonical string first (the common, cheap case). A proposal can be keyed under a URI-form
+		// Match on the canonical string first (the common, cheap case). A change can be keyed under a URI-form
 		// variant of the same file - a raw `.toString()` compare misses those, but `isEqual` treats them as one
 		// document (path-casing on a case-insensitive filesystem, scheme/authority/fragment normalisation). This
 		// makes the doc-scoped lookup robust to the identity drift the #253 audit caught (a bulk approve that
@@ -912,8 +963,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	/**
 	 * The canonical `docId` string that this document's pending changes are actually keyed under, or
 	 * `undefined` when the document has no pending changes. Bulk-approve callers (the editor action bar,
-	 * #253) MUST route `approveAll` through THIS id - the proposals' own docId - rather than a URI they
-	 * re-derive, so a URI-form drift between the open editor's resource and the queued proposals can never
+	 * #253) MUST route `approveAll` through THIS id - the changes' own docId - rather than a URI they
+	 * re-derive, so a URI-form drift between the open editor's resource and the queued changes can never
 	 * make the apply filter to an empty set (the silent no-op the audit caught).
 	 */
 	pendingDocIdFor(resource: URI): string | undefined {
@@ -966,7 +1017,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// `policy:` - the SAME source of truth the Properties dial writes and every load/save reparses - so an external
 	// edit to `policy:` in the file is honoured the moment the state re-reads it (there is no parallel policy store
 	// to go stale). This is the ONE gate the propose/apply pipeline consults, so honesty is a contract enforced at
-	// the service layer, not a per-surface effort (audit root-cause 4). Used by the CHAT/PROPOSAL path, where only
+	// the service layer, not a per-surface effort (audit root-cause 4). Used by the CHAT/CHANGE path, where only
 	// `never` (leave the doc alone) needs enforcement - a meaning edit always queues for review anyway.
 	private _policyForState(state: IDocState): DocAutonomyLevel {
 		return coerceDocPolicy(state.doc.policy);
@@ -1180,7 +1231,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	getAllPending(): readonly IProposedChange[] { return this._pending; }
 
 	/**
-	 * How far through the live proposal sets the reviewer is, for the rail's foot (docs/30 stage 1).
+	 * How far through the live change sets the reviewer is, for the rail's foot (docs/30 stage 1).
 	 *
 	 * `resumed` is the difference between "0 of 12 decided" on a fresh run and "Resumed - 41 of 63 decided"
 	 * after a reload, and it is a fact about this window rather than about the numbers.
@@ -1211,7 +1262,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const state = this._docs.get(docUri);
 			if (state) { return this._bodyOf(state); }
 			// NOT loaded is not the same fact as NOT THERE, and before this fell back to the file the store
-			// could not tell them apart: it read `undefined`, judged the proposal stale, and told the reviewer
+			// could not tell them apart: it read `undefined`, judged the change stale, and told the reviewer
 			// "the text it was written for has changed" about a document nobody had even opened. Persistence
 			// made that the normal state after a reload rather than an edge case. The startup reconciler is the
 			// other reader here, and it runs before any document is open by construction.
@@ -1263,7 +1314,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * The store for the open project, opened once per session and reused.
 	 *
 	 * Opening replays the journal, heals a torn tail and reconciles every intent the last session left open,
-	 * so a crash window is CLASSIFIED before a single proposal is rendered. A window with no folder open has
+	 * so a crash window is CLASSIFIED before a single change is rendered. A window with no folder open has
 	 * nowhere to keep a journal and therefore no store: the queue is empty and every verb is a no-op, which
 	 * is the honest behaviour for a window with no project in it.
 	 */
@@ -1344,7 +1395,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
-	 * Record one proposal in the store and return its id, or a named refusal.
+	 * Record one change in the store and return its id, or a named refusal.
 	 *
 	 * This is the queue-time conversion (docs/30 stage 1): the incoming `{heading, oldText, newText}` shape
 	 * is resolved to a block ONCE, here, and persisted as a base-revision hunk - a span in the document body,
@@ -1354,9 +1405,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 *
 	 * `setId` groups everything ONE turn proposed. It is the unit a surgical retry replays, the unit the rail
 	 * groups by, and the unit the review's progress is a fraction of - "41 of 63 decided" is a statement about
-	 * a batch, and a store that gave every proposal its own set could only ever say "0 of 1".
+	 * a batch, and a store that gave every change its own set could only ever say "0 of 1".
 	 */
-	private async _recordProposal(state: IDocState, anchor: IChangeAnchor, kind: ChangeKind, display: IChangeDisplay, source: 'chat' | 'fan-out' | 'agent' | 'hook', setId: string, supersedes?: string): Promise<string | undefined> {
+	private async _recordChange(state: IDocState, anchor: IChangeAnchor, kind: ChangeKind, display: IChangeDisplay, source: 'chat' | 'fan-out' | 'agent' | 'hook', setId: string, supersedes?: string): Promise<string | undefined> {
 		const store = await this._ensureChangeStore();
 		if (!store) { return undefined; }
 		const receipts = await store.propose({ setId, changes: [{ anchors: [anchor], kind, display, baseLength: this._bodyOf(state).length, supersedes }] });
@@ -1364,7 +1415,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const receipt = receipts.receipts[0];
 		if (!receipt) { return undefined; }
 		const queued = this._pending.find(c => c.id === receipt.changeId);
-		if (queued) { this._captureProposalCreated(queued, source); }
+		if (queued) { this._captureChangeCreated(queued, source); }
 		return receipt.changeId;
 	}
 
@@ -1942,7 +1993,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Use a template (plan 48 T2.4): DUPLICATE the template into the open folder as a new document with its
 	// binds EMPTIED to slots, then open it. Unlike generate-from-template (which drives the model to draft
-	// prose against copied-through binds), Use is a pure duplication - no model call, no review proposals: the
+	// prose against copied-through binds), Use is a pure duplication - no model call, no review changes: the
 	// pattern's structure lands as a plain document that visibly needs a source bound. The new doc records the
 	// template's name as `fromTemplate` provenance and declares no sources, so `_summarize` reports
 	// `needsSourceBinding` (the tree-row "bind sources" nudge) until the user binds a source and it becomes
@@ -2717,7 +2768,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Generate a draft document from a template (plan 28, iter 3): write the static skeleton (headings +
 	// verbatim bind links + `template:` provenance), open it, then drive the SAME chat path every generation
-	// uses so the prose lands as reviewable insertion proposals (decision 17) - no new approve/apply path.
+	// uses so the prose lands as reviewable insertion changes (decision 17) - no new approve/apply path.
 	// With no model reachable the skeleton is still created and a status line explains it needs the model
 	// (honest empty state, never fake prose). Returns the new document's URI.
 	async generateFromTemplate(templateUri: URI, docName: string, note: string): Promise<URI | undefined> {
@@ -2756,7 +2807,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return target;
 		}
 		// Drive the existing generative chat path with the composed brief: the model's output arrives as
-		// insertion proposals in the review rail, exactly like any chat generation. The rail shows plain-words
+		// insertion changes in the review rail, exactly like any chat generation. The rail shows plain-words
 		// progress (F4), never the internal template brief - the full instruction drives the model only.
 		const instruction = composeTemplateInstruction(templateName, template.body, requested, note ?? '');
 		const trimmedNote = (note ?? '').trim();
@@ -2770,7 +2821,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Draft a new document FROM SELECTED SOURCES (F17, journey 1b's third birth). Mirrors generateFromTemplate:
 	// write a bare skeleton that DECLARES the picked sources (so provenance is honest and figures bind), open
 	// it, then drive the SAME chat path every generation uses so the prose lands as reviewable insertion
-	// proposals - never silently written. csv/json become `sources:` (value bindings); md/txt become `context:`
+	// changes - never silently written. csv/json become `sources:` (value bindings); md/txt become `context:`
 	// (prose knowledge). With no model reachable the skeleton is still created and a status line explains the
 	// draft needs the model (honest empty state, never fake content). Returns the new document's URI.
 	async generateFromSources(sources: readonly string[], docName: string, note: string): Promise<URI | undefined> {
@@ -2815,7 +2866,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// Grow a new template FROM EXAMPLE DOCUMENTS (F18, journey 1x). Validate the set (3-10; else a plain-words
 	// refusal), write a real `<name>.template.md` skeleton (skill.md shape) that records the examples under
 	// `context:` so the analysis reads them, open it (it joins the + New picker at once), then drive the SAME
-	// chat path so the agent NAMES the commonalities as reviewable insertion proposals - the review grammar,
+	// chat path so the agent NAMES the commonalities as reviewable insertion changes - the review grammar,
 	// never a silent write. With no model reachable the skeleton is still created and a status line NAMES the
 	// error - never rendered as "no commonalities" (the F14 rule). Returns the new template's URI.
 	async generateTemplateFromExamples(examples: readonly string[], templateName: string): Promise<URI | undefined> {
@@ -3324,7 +3375,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				const audit = loadedLock ? loadedLock.audit : ((await this._lockStore.read(uri))?.audit ?? []);
 				unseenAgentEdits = countUnseenAgentEdits(audit, this._docLastViewed.get(id));
 			}
-			// Red: a relink-flagged pending proposal, a stale binding/context drift (freshness computes on load, so a
+			// Red: a relink-flagged pending change, a stale binding/context drift (freshness computes on load, so a
 			// never-loaded doc reports false - a truthful, partial signal), or a failed whole-project fan-out run.
 			const relinkCount = pendingForDoc.filter(c => c.relink).length;
 			const stale = this._docs.has(id) ? this.getFreshness(uri).dirty : false;
@@ -3652,7 +3703,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// version" leaves the in-editor state and lets the next persist proceed knowingly (recording an audit
 	// entry). If the editor is holding work not yet on disk, the notice says so before offering the reload.
 	private _promptExternalChange(state: IDocState, opts: { readonly source: 'watcher' | 'persist' }): void {
-		// "Unsaved work" is truthful for BOTH surfaces of in-editor work not yet on disk: queued agent proposals
+		// "Unsaved work" is truthful for BOTH surfaces of in-editor work not yet on disk: queued agent changes
 		// (`_pending`) AND live-typed prose held by a blocked silent save (`unsavedRaw`, issue #133 F4).
 		const hasUnsaved = state.unsavedRaw === true || this._pending.some(c => c.docId === state.uri.toString());
 		// Dedupe (issue #133): one notice per outstanding conflict. A run of keystrokes each blocks a silent save and
@@ -3996,7 +4047,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// The document's autonomy dial (issue #257) gates the AUTO-APPLY here just as it gates an agent run: `never`
 	// leaves the prose untouched (the lock still resolves so freshness is honest, but no figure lands and none
 	// queues - the doc is protected); `ask-first` re-resolves the lock but ROUTES each figure change into Review
-	// as a pending proposal instead of silently applying it (the human asked to see figure syncs first); only
+	// as a pending change instead of silently applying it (the human asked to see figure syncs first); only
 	// `auto-apply` lets figures land on their own. So a figure sync obeys the same one dial the chat pipeline does.
 	private async _syncLock(state: IDocState, pass?: IRefreshPass): Promise<void> {
 		await this._resolveIntoLock(state, pass);
@@ -4020,7 +4071,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	/**
 	 * Record one figure reconciliation as a persisted change.
 	 *
-	 * The de-dupe is a SUPERSESSION rather than a deletion: an earlier proposal for the same block leaves the
+	 * The de-dupe is a SUPERSESSION rather than a deletion: an earlier change for the same block leaves the
 	 * pending view with a `supersededBy` pointer, so a re-refresh does not stack duplicate cards and does not
 	 * quietly destroy the record of what the previous sync had offered either.
 	 */
@@ -4029,7 +4080,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const anchor = this._anchorForBlock(state, change.blockId, change.oldText, change.newText);
 		if (!anchor) { return; }
 		const superseded = this._pending.find(c => c.docId === state.uri.toString() && c.blockId === change.blockId);
-		await this._recordProposal(state, anchor, 'figure', {
+		await this._recordChange(state, anchor, 'figure', {
 			docTitle: state.doc.title,
 			blockId: change.blockId,
 			blockLabel: block ? this._blockLabel(state.doc, change.blockId) : change.blockId,
@@ -4236,7 +4287,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	}
 
 	/**
-	 * Tell the store a PERSON changed the document under its open proposals (docs/30 invariant I8).
+	 * Tell the store a PERSON changed the document under its open changes (docs/30 invariant I8).
 	 *
 	 * The store cannot rebase a human edit on its own: it has no map of what was typed, and guessing there is
 	 * how anchored search/replace earns its defect families. So the delta is computed here, where both
@@ -4244,8 +4295,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * common suffix, and what is left is the one contiguous region that differs. For typing that IS the edit,
 	 * exactly; for a paste or a wholesale rewrite it is the smallest region that provably contains it.
 	 *
-	 * What the store then does with it is the honest half: a proposal entirely before or after the edited
-	 * region moves by the exact length difference and stays eligible, and a proposal the edit landed INSIDE
+	 * What the store then does with it is the honest half: a change entirely before or after the edited
+	 * region moves by the exact length difference and stays eligible, and a change the edit landed INSIDE
 	 * flips to `needs-attention (human-edit)` on the same id, keeping its thread and its history. Nothing is
 	 * dropped and nothing is re-aimed at prose it was not written for.
 	 */
@@ -4380,7 +4431,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			return;
 		}
 		// Reject any pending changes for this document first - restoring resets the body, so unreviewed
-		// proposals against the old body no longer apply.
+		// changes against the old body no longer apply.
 		await this._discardQueueForDoc(resource.toString());
 		// Write the snapshot body back through the existing persist path (parse -> disk -> lock).
 		state.doc = parseLivingDoc(snapshot.body);
@@ -4790,7 +4841,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// leaves no version. `saveSnapshot` reads `state.rawText`, so capture here.
 		const beforeBody = state.rawText;
 		const changes = await this._syncLockWithDiff(state, pass);
-		const afterBody = serializeLivingDoc(state.doc);
+		// Compare against what `_persist` will actually write (`_rebuildRawText`), not `serializeLivingDoc`,
+		// whose re-authored frontmatter would differ from `state.rawText` on every template-derived document
+		// and force a spurious snapshot.
+		const afterBody = this._rebuildRawText(state);
 		if (changes.length && beforeBody !== afterBody) {
 			await this.saveSnapshot(state.uri, 'Before refresh', 'refresh', beforeBody);
 		}
@@ -4928,7 +4982,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const modelAvailable = await this._hasModel();
 
 		// Re-running the pass supersedes this document's earlier impact candidates block by block, so it stays
-		// idempotent WITHOUT the old wholesale clear - which deleted proposals from a different pass along with
+		// idempotent WITHOUT the old wholesale clear - which deleted changes from a different pass along with
 		// its own, with no record that they had ever existed (invariant I5: nothing leaves without a trace).
 
 		// One set for the whole impact pass, for the same reason the chat turn has one.
@@ -4942,30 +4996,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 			const block = state.doc.blocks.find(b => b.id === target.blockId);
 			if (!block) { continue; }
-			const proposal = await this._proposeImpact(diff, contextFiles, block.text, modelAvailable);
-			if (proposal.newText === block.text) { continue; }
-			if (proposal.kind === 'figure') {
+			const change = await this._proposeImpact(diff, contextFiles, block.text, modelAvailable);
+			if (change.newText === block.text) { continue; }
+			if (change.kind === 'figure') {
 				// Confidence-gated routing (guardrail 4): figure-class ripples may auto-stage.
-				state.lock.audit.push(this._entry(state, block.id, 'auto-applied', block.text, proposal.newText, proposal.via));
-				block.text = proposal.newText;
-				block.binds = extractBindLinks(proposal.newText);
+				state.lock.audit.push(this._entry(state, block.id, 'auto-applied', block.text, change.newText, change.via));
+				block.text = change.newText;
+				block.binds = extractBindLinks(change.newText);
 				state.recent.add(block.id);
 			} else {
 				// Meaning/influence changes wait for approval in the review rail (no eager rewrites). The impact
-				// pass is driven by a source change (agent/hook), so this proposal's source is 'agent'.
-				const anchor = this._anchorForBlock(state, block.id, block.text, proposal.newText);
+				// pass is driven by a source change (agent/hook), so this change's source is 'agent'.
+				const anchor = this._anchorForBlock(state, block.id, block.text, change.newText);
 				if (!anchor) { continue; }
 				const superseded = this._pending.find(c => c.docId === id && c.blockId === block.id);
-				await this._recordProposal(state, anchor, proposal.kind, {
+				await this._recordChange(state, anchor, change.kind, {
 					docTitle: state.doc.title,
 					blockId: block.id,
 					blockLabel: this._blockLabel(state.doc, block.id),
-					confidence: proposal.confidence,
-					rationale: proposal.rationale,
+					confidence: change.confidence,
+					rationale: change.rationale,
 					sourceCells: [],
 					claimId: target.claimId,
 					contextReviewed: contextFiles,
-					via: proposal.via,
+					via: change.via,
 				}, 'agent', setId, superseded?.id);
 			}
 		}
@@ -4976,9 +5030,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			: 'No model available - showing heuristic suggestions';
 		await this._persist(state);
 		this._onDidChange.fire();
-		// (plan 44-b P2.5) The old trust-grammar force-open is RETIRED: a proposal arriving no longer yanks
+		// (plan 44-b P2.5) The old trust-grammar force-open is RETIRED: a change arriving no longer yanks
 		// the review rail open. If the rail is already visible we switch it to the Review tab (a courtesy,
-		// not a force-open); if the user has collapsed the rail the proposal is surfaced quietly by the 8px
+		// not a force-open); if the user has collapsed the rail the change is surfaced quietly by the 8px
 		// amber badge dot on the right rail toggle (AbstractHeaderContribution, driven by onDidChange above).
 		if (this._layoutService.isVisible(Parts.AUXILIARYBAR_PART, mainWindow)) {
 			this.focusPanel('review');
@@ -5030,7 +5084,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			? this._anchorForBlock(state, best.id, best.text, best.text)
 			: { docUri: state.uri.toString(), baseRevision: hashContent(this._bodyOf(state)), span: { start: 0, end: (claim?.anchor ?? '').length }, oldText: claim?.anchor ?? '', newText: claim?.anchor ?? '' };
 		if (!anchor) { return; }
-		await this._recordProposal(state, anchor, 'meaning', {
+		await this._recordChange(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: target.blockId ?? '',
 			blockLabel: 'Re-link claim',
@@ -5375,7 +5429,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this.recordOnboardingStep(step);
 	}
 
-	// The demo-doc approve hook (doc 20 section D26 step 5): the first approve of the sample proposal during a
+	// The demo-doc approve hook (doc 20 section D26 step 5): the first approve of the sample change during a
 	// walkthrough is `first-approve-sample`, and it hands off to the user's own folder (step 6) via a gentle,
 	// shell-independent notification (the onboarding screen cannot coexist with the editor here). Fires once.
 	private _maybeRecordSampleApprove(docId: string): void {
@@ -5629,7 +5683,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// A rate limit is a TYPED failure, not just a body that fails to parse: the retry has to know to wait,
 		// and for how long, which is the one thing the response headers can tell it (plan 55 B1).
 		if (context.res.statusCode === 429) {
-			throw new ModelRateLimitedError(parseRetryAfterMs(context.res.headers?.['retry-after'], Date.now()));
+			throw new ModelRateLimitedError(parseRetryAfterMs(readHeader(context.res.headers, 'retry-after'), Date.now()));
 		}
 		const raw = await asText(context);
 		if (!raw) { throw new Error('empty model response'); }
@@ -5638,76 +5692,112 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (json.stop_reason === 'refusal') { throw new Error('model refused the request'); }
 		const text = (json.content ?? []).filter(b => b.type === 'text').map(b => b.text ?? '').join('');
 		// The proxy paused this call because the day's included usage is spent (plan 35 iter 3): surface the
-		// plain-words prose it returned as a ModelPausedError so callers keep it, queue no proposals, and pause.
+		// plain-words prose it returned as a ModelPausedError so callers keep it, queue no changes, and pause.
 		if (json.stop_reason === 'pause') { throw new ModelPausedError(text.trim() || INCLUDED_USAGE_SPENT_MESSAGE); }
 		if (!text.trim()) { throw new Error('model returned no text'); }
 		return text;
 	}
 
-	// Streaming variant of the model call (plan 27, decision D27-A). POSTs with `stream: true` and reads
-	// the proxy's SSE response with a `fetch` + `ReadableStream` reader (the request service does not expose
-	// a stream), accumulating and emitting each `content_block_delta` text as it arrives; resolves with the
-	// full text so the EXISTING end-of-stream parse (parseChatResponse) is unchanged - proposals are only
-	// ever committed from the complete response, never from a partial. On `token` cancellation the fetch is
-	// aborted and a distinguishable CancellationError is thrown so the caller can salvage the streamed prose
-	// (D27-B) rather than treating it as a failure. The credential stays in the proxy (decision 14).
+	// Streaming variant of the model call (plan 27, decision D27-A). POSTs with `stream: true` and reads the
+	// proxy's SSE response chunk by chunk, accumulating and emitting each `content_block_delta` text as it
+	// arrives; resolves with the full text so the EXISTING end-of-stream parse (parseChatResponse) is
+	// unchanged - a change is only ever committed from the complete response, never from a partial.
+	//
+	// This used to reach past the injected request service for the global `fetch`, on the belief that the
+	// request service could not stream. It can: `IRequestContext.stream` is chunk-wise, and asking for an
+	// `incrementalResponse` is what makes each chunk arrive as it lands rather than all at the end. Going
+	// through the service matters beyond tidiness (ticket #375): IRequestService is the SINGLE seam all model
+	// traffic crosses, so a test double answers structurally, instead of the unit suite being silently
+	// answered by whatever live broker happens to be listening on the default port.
+	//
+	// On `token` cancellation the request is aborted and a distinguishable CancellationError is thrown so the
+	// caller can salvage the streamed prose (D27-B) rather than treating it as a failure. The credential stays
+	// in the proxy (decision 14).
 	private async _callModelStream(system: string, user: string, purpose: ModelCallPurpose, onDelta: (text: string) => void, token: CancellationToken): Promise<string> {
-		const controller = new AbortController();
-		const sub = token.onCancellationRequested(() => controller.abort());
 		try {
 			if (token.isCancellationRequested) { throw new CancellationError(); }
 			const modelId = await this._requestModelId();
 			if (token.isCancellationRequested) { throw new CancellationError(); }
-			const body = this._modelRequestBody(modelId, purpose, system, user, true);
-			const response = await fetch(`${this._proxyUrl()}/v1/messages`, {
-				method: 'POST',
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/v1/messages`,
 				headers: { 'content-type': 'application/json' },
-				body,
-				signal: controller.signal,
-			});
+				data: this._modelRequestBody(modelId, purpose, system, user, true),
+				incrementalResponse: true,
+				callSite: 'livingDocs.model.stream',
+			}, token);
 			// Typed so the buffered fallback below inherits the wait rather than re-firing into the same limit.
-			// CLOSE THE BODY FIRST: a `fetch` response whose stream is neither read nor cancelled holds its
-			// connection open until GC gets to it, and this path throws on every rate limit - exactly the
-			// moment a retry storm is about to open more of them. `cancel()` releases it deterministically.
-			if (response.status === 429) {
-				await response.body?.cancel().catch(() => undefined);
-				throw new ModelRateLimitedError(parseRetryAfterMs(response.headers.get('retry-after') ?? undefined, Date.now()));
+			// DROP THE BODY FIRST on either failure: this path throws on every rate limit, which is exactly the
+			// moment a retry storm is about to open more connections, so the one in hand is released here.
+			if (context.res.statusCode === 429) {
+				context.stream.destroy();
+				throw new ModelRateLimitedError(parseRetryAfterMs(readHeader(context.res.headers, 'retry-after'), Date.now()));
 			}
-			if (!response.ok || !response.body) {
-				await response.body?.cancel().catch(() => undefined);
-				throw new Error(`model proxy http ${response.status}`);
+			if (!isSuccess(context)) {
+				context.stream.destroy();
+				throw new Error(`model proxy http ${context.res.statusCode}`);
 			}
-			const reader = response.body.getReader();
+			const { text, paused } = await this._readModelStream(context.stream, onDelta);
+			if (token.isCancellationRequested) { throw new CancellationError(); }
+			// The proxy paused mid-stream because the day's included usage is spent (plan 35 iter 3): the plain-
+			// words cap prose has already streamed to the composer; raise ModelPausedError so nothing parses.
+			if (paused) { throw new ModelPausedError(text.trim() || INCLUDED_USAGE_SPENT_MESSAGE); }
+			if (!text.trim()) { throw new Error('model returned no text'); }
+			return text;
+		} catch (e) {
+			// An aborted request and a cancelled token both mean the user stopped the reply.
+			if (token.isCancellationRequested || isCancellationError(e)) { throw new CancellationError(); }
+			throw e;
+		}
+	}
+
+	// Read one SSE response as it arrives, emitting each text delta the moment its line completes. Only
+	// newline-terminated lines are parsed (parseSseChunk carries the remainder forward), so an event split
+	// across chunks is never mis-parsed; a body that ends without its final newline still yields its last
+	// event. Resolves with the accumulated text plus whether the proxy signalled a pause.
+	private _readModelStream(stream: VSBufferReadableStream, onDelta: (text: string) => void): Promise<{ text: string; paused: boolean }> {
+		return new Promise((resolve, reject) => {
 			const decoder = new TextDecoder();
 			let buffer = '';
-			let full = '';
+			let text = '';
 			let paused = false;
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) { break; }
-				buffer += decoder.decode(value, { stream: true });
+			let settled = false;
+			const take = (chunk: string) => {
+				buffer = chunk;
 				const result = parseSseChunk(buffer);
 				buffer = result.remainder;
 				for (const delta of result.deltas) {
-					full += delta;
+					text += delta;
 					onDelta(delta);
 				}
 				if (result.paused) { paused = true; }
-				if (result.done) { break; }
-			}
-			if (token.isCancellationRequested) { throw new CancellationError(); }
-			// The proxy paused mid-stream because the day's included usage is spent (plan 35 iter 3): the plain-
-			// words cap prose has already streamed to the composer; raise ModelPausedError so no proposals parse.
-			if (paused) { throw new ModelPausedError(full.trim() || INCLUDED_USAGE_SPENT_MESSAGE); }
-			if (!full.trim()) { throw new Error('model returned no text'); }
-			return full;
-		} catch (e) {
-			// An aborted fetch (name 'AbortError') or a cancelled token both mean the user stopped the reply.
-			if (token.isCancellationRequested || (e instanceof Error && e.name === 'AbortError')) { throw new CancellationError(); }
-			throw e;
-		} finally {
-			sub.dispose();
-		}
+				return result.done;
+			};
+			listenStream<VSBuffer>(stream, {
+				onData: data => {
+					if (settled) { return; }
+					if (take(buffer + decoder.decode(data.buffer, { stream: true }))) {
+						settled = true;
+						// The terminating event has landed. Say so, or a proxy that holds the response open leaves
+						// a live reader (and its cancellation listener) behind for every turn.
+						stream.destroy();
+						resolve({ text, paused });
+					}
+				},
+				onError: err => {
+					if (settled) { return; }
+					settled = true;
+					reject(err);
+				},
+				onEnd: () => {
+					if (settled) { return; }
+					// A trailing line with no newline after it is still a whole event once the body has ended.
+					if (buffer.length > 0) { take(buffer + '\n'); }
+					settled = true;
+					resolve({ text, paused });
+				},
+			});
+		});
 	}
 
 	// The chat model-call ladder (plan 27 iter 2): stream first; on a NON-cancel stream failure fall back once
@@ -5822,7 +5912,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	/**
 	 * Fill the in-memory conversations from workspace storage, in the SAME breath as the strip - the two are
 	 * halves of one restore, and separating them is what produced three correctly-titled tabs over three empty
-	 * chats (issue #312). This is a read and nothing else: no model is called, no proposal is queued and no
+	 * chats (issue #312). This is a read and nothing else: no model is called, no change is queued and no
 	 * audit row is written, so reopening a workspace replays nothing. A transcript whose session did not
 	 * survive (a chat closed before the app was) is simply dropped on the floor here.
 	 */
@@ -5884,7 +5974,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * is over the in-memory conversations, which the transcript caps hold to a few dozen turns each. `approve`
 	 * and `reject` both early-return for a change that is no longer pending, so no outcome is ever counted twice.
 	 */
-	private _recordProposalOutcome(changeId: string, outcome: 'approved' | 'rejected'): void {
+	private _recordChangeOutcome(changeId: string, outcome: 'approved' | 'rejected'): void {
 		for (const messages of this._chats.values()) {
 			for (let i = 0; i < messages.length; i++) {
 				const message = messages[i];
@@ -6230,7 +6320,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Answer a read-only whole-project question for the Project Home composer (F15 / journey 1w, map-D24). This
 	// reuses the existing model plumbing (`_hasModel`, `_readContext`, `_callModel`, `parseChatResponse`) but is
-	// deliberately SEPARATE from the chat delivery path: it queues no proposal and mutates no document - it only
+	// deliberately SEPARATE from the chat delivery path: it queues no change and mutates no document - it only
 	// reads the project and returns prose + citations. The citations are the REAL files consulted (doc titles +
 	// their sources), intersected with any the model named, so the answer is never grounded in a fabricated ref.
 	async askProjectQuestion(question: string): Promise<IProjectAnswer> {
@@ -6370,7 +6460,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._chatStreaming.set(chatKey, streaming);
 		// Accumulate the raw model text but SHOW the human `reply` prose, so the live turn reads as words
 		// rather than the raw `{"reply":"..."}` envelope (plan 27 iter 3). The end-of-stream parse still runs
-		// over the complete raw text (returned by _callModelStream), so the proposal contract is unchanged.
+		// over the complete raw text (returned by _callModelStream), so the change contract is unchanged.
 		let rawStream = '';
 		const onDelta = (delta: string) => { rawStream += delta; streaming.text = extractStreamingReply(rawStream); this._onDidStreamChat.fire(resource); };
 		const onStep = (step: IChatStep) => { streaming.steps.push(step); this._onDidStreamChat.fire(resource); };
@@ -6422,19 +6512,30 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				history.push({ role: 'assistant', via: 'fallback', content: MODEL_UNAVAILABLE_MESSAGE });
 				return;
 			}
-			const reply = workingSet.length
-				? await this._chatRespondMulti(state, trimmed, mentions, workingSet, onDelta, onStep, cts.token)
-				: await this._chatRespond(state, trimmed, mentions, onDelta, onStep, cts.token);
+			// THE BRANCH POINT (issue #380; doc 30 section 7, stage 3). A turn whose scope the person stated -
+			// attachment chips present - runs the agent loop, which reads through tools and answers over its
+			// own receipts. Every other ask keeps the pipeline it has always taken, and `chooseChatRoute` is
+			// the only place that choice is made, so the no-regression rule is one readable predicate rather
+			// than a condition spread across this method.
+			//
+			// The loop's prose is narration between tool calls, not a JSON envelope, so it bypasses the
+			// `extractStreamingReply` unwrapping the single-shot paths need and sets the live turn directly.
+			const route = chooseChatRoute({ attachedCount: workingSet.length, loopEnabled: this._agentLoopEnabled() });
+			const reply = route === 'loop'
+				? await this._chatRespondViaLoop(trimmed, workingSet, narration => { streaming.text = narration; this._onDidStreamChat.fire(resource); }, onStep, cts.token)
+				: workingSet.length
+					? await this._chatRespondMulti(state, trimmed, mentions, workingSet, onDelta, onStep, cts.token)
+					: await this._chatRespond(state, trimmed, mentions, onDelta, onStep, cts.token);
 			history.push(reply);
 		} catch (e) {
 			// A cancel is NOT a failure: keep the prose streamed so far as a muted "stopped" turn and queue no
-			// proposals (they are only ever committed from the complete response). Everything else is honest error.
+			// changes (they are only ever committed from the complete response). Everything else is honest error.
 			if (isCancellationError(e)) {
 				const salvage = streaming.text.trim();
 				history.push({ role: 'assistant', via: 'model', content: salvage, stopped: true });
 			} else if (isModelPausedError(e)) {
 				// The day's included usage is spent (plan 35 iter 3): show the plain-words cap message as a calm
-				// turn - NOT a failure, NOT retryable (retrying just pauses again), and queue no proposals. It
+				// turn - NOT a failure, NOT retryable (retrying just pauses again), and queue no changes. It
 				// resumes on its own at day rollover, or immediately once the user signs in with ChatGPT. The
 				// `paused` marker lets the run screen render a paused fan-out honestly (F14 item 3) - never a
 				// failure and never an all-clear.
@@ -6496,7 +6597,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// the final message - so the rail shows the steps appearing rather than all at once at stream end.
 		const addStep = (step: IChatStep) => { steps.push(step); onStep(step); };
 		if (sourceFiles.length) { addStep({ label: `Read ${sourceFiles.join(', ')}`, status: 'done' }); }
-		// Policy gate (issue #257): a document dialled "Never change this doc" gets NO proposal - the queue methods
+		// Policy gate (issue #257): a document dialled "Never change this doc" gets NO change - the queue methods
 		// refuse it - but the refusal must be SPOKEN, not silent. The model can still answer a read-only question
 		// about the doc; only when it WANTED to edit (returned any edit/insert) do we surface the named refusal so
 		// the user sees their dial was honoured, naming the doc and its policy. A `never` doc is still read normally.
@@ -6522,7 +6623,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			}
 		}
 		// What the bubble shows: a NAMED refusal when the doc's policy blocked an edit the model wanted; else the
-		// model's reply when it gave one; nothing when proposals carry the meaning (their cards speak); otherwise a
+		// model's reply when it gave one; nothing when changes carry the meaning (their cards speak); otherwise a
 		// neutral honest line. `parseChatResponse` already routed a non-JSON plain-text answer into `reply`, so a
 		// truthy `reply` is always real prose -- we NEVER surface the raw JSON envelope.
 		const spoken = json.reply || (proposedIds.length ? '' : 'I do not have anything to add on that.');
@@ -6542,7 +6643,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Fan one instruction across the whole working set in a SINGLE model call (plan 18, decision 62). The
 	// model is shown every target document (figures resolved) and asked for a per-document edit map; each
-	// doc's edits/inserts are routed into the existing proposal queue tagged with that doc's id, so the
+	// doc's edits/inserts are routed into the existing change queue tagged with that doc's id, so the
 	// Review rail's per-document grouping + approve/reject loop is reused unchanged. Plain and living docs
 	// flow through the same path (decision 63).
 	private async _chatRespondMulti(active: IDocState, text: string, mentions: string[], workingSet: readonly IWorkingSetDoc[], onDelta: (text: string) => void, onStep: (step: IChatStep) => void, token: CancellationToken): Promise<IChatMessage> {
@@ -6596,7 +6697,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		const steps: IChatStep[] = [];
 		const proposedIds: string[] = [];
 		// The turn's receipts (I3, issue #303): how many edits/inserts the batches CLAIMED across the whole run,
-		// and a named reason for every claim that never became a proposal. Reconciled into the run's outcome below
+		// and a named reason for every claim that never became a change. Reconciled into the run's outcome below
 		// so a fan-out cannot report a clean run over changes it silently dropped.
 		let claimed = 0;
 		const drops: ChatDropReason[] = [];
@@ -6634,7 +6735,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 		let anyReply = '';
 		// The plain-words budget-cap message if the run pauses mid-fan-out (spent daily budget). When set, the
-		// loop stops running further batches but keeps every proposal already queued - the run pauses, it does
+		// loop stops running further batches but keeps every change already queued - the run pauses, it does
 		// NOT fail and is NOT an all-clear (F14 item 3; plan 35 iter 3).
 		let pausedMessage: string | undefined;
 		// Run the batches in order. Each doc appears in exactly ONE batch (uniqueness by construction), so the
@@ -6660,12 +6761,12 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			} catch (e) {
 				// A cancel is the user stopping the whole run - salvage the streamed prose (D27-B), never a failure.
 				if (isCancellationError(e)) { throw e; }
-				// The day's included usage is spent (plan 35 iter 3): keep every proposal queued so far, stop the
+				// The day's included usage is spent (plan 35 iter 3): keep every change queued so far, stop the
 				// fan-out, and surface the plain-words cap message as a calm pause - NOT a failure, NOT an all-clear.
 				if (isModelPausedError(e)) { pausedMessage = e.message; publishProgress(0); break; }
 				// A genuine model outage/error for THIS batch (F14, issue #123): attribute the failure to exactly
 				// this batch's documents, record it for the honest named error + surgical retry, and KEEP GOING so
-				// later batches can still land their proposals (a partial success), instead of aborting the whole run.
+				// later batches can still land their changes (a partial success), instead of aborting the whole run.
 				this._log.info('[livingDocs] fan-out batch failed, recording failed docs', e instanceof Error ? e.message : String(e));
 				for (const d of batch.docs) { failedDocs.push({ id: d.id, title: d.title }); }
 				addStep({ label: `${batch.docs.map(d => d.title).join(', ')}: model unreachable`, status: 'queued' });
@@ -6675,7 +6776,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			const json = parseMultiChatResponse(raw);
 			if (json.reply && !anyReply) { anyReply = json.reply; }
 			// Match each returned doc entry to a document IN THIS BATCH by title, then queue its edits/inserts
-			// against that document's own state (so proposals carry the right docId for the rail grouping). The
+			// against that document's own state (so changes carry the right docId for the rail grouping). The
 			// match is restricted to the batch's own documents so a reply that names an out-of-batch doc cannot
 			// route an edit to a document that batch was never shown - keeping "each doc in exactly one batch"
 			// airtight (a document is only ever edited by the one batch that actually contained its body).
@@ -6711,7 +6812,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		this._fanoutProgress.set(anchorId, { batchIndex: 0, batchCount: plan.batchCount, oversizeDocIds, failedDocIds: failedDocs.map(d => d.id), skippedByPolicyDocIds });
 
 		// Aggregate the run honestly (F14, issue #123): a pause shows the cap message; any failed documents show a
-		// named error listing them (with the proposals that DID land, on a partial success) + "Retry failed"; a
+		// named error listing them (with the changes that DID land, on a partial success) + "Retry failed"; a
 		// clean run keeps the existing reply / neutral no-change line. The all-clear is reachable ONLY when there
 		// were no failures and no pause, so a model outage can never render as "no changes proposed".
 		const outcome = summarizeFanoutRun({ proposedCount: proposedIds.length, failedDocs, reply: anyReply, pausedMessage });
@@ -6741,6 +6842,286 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return typeof raw === 'number' && Number.isFinite(raw) && raw >= 2000 ? raw : 24000;
 	}
 
+	// --- the agent loop, for explicit-scope asks (issue #380; doc 30 section 7, stage 3, first tranche) ---
+
+	/** Whether the loop is live for this workspace. Off restores the single-shot path for EVERY ask. */
+	private _agentLoopEnabled(): boolean {
+		return this._config.getValue<boolean>('livingDocs.agentLoop') !== false;
+	}
+
+	/** The step ceiling (`livingDocs.agentMaxSteps`, doc 30 D4). Floored at 1; a mis-set value falls back. */
+	private _agentMaxSteps(): number {
+		const raw = this._config.getValue<number>('livingDocs.agentMaxSteps');
+		return typeof raw === 'number' && Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : AGENT_DEFAULT_MAX_STEPS;
+	}
+
+	/**
+	 * The bind-link resolver for one document: `[label](bind:key)` renders as the live figure, so what the
+	 * model reads is what the person sees. Shared by the single-shot serialiser and the loop's `read_document`
+	 * so the two can never disagree about what a document says.
+	 */
+	private _bindResolver(state: IDocState): (text: string) => string {
+		const resolved = this.getResolved(state.uri);
+		return (text: string) => text.replace(/\[([^\]]*)\]\(bind:([^)]+)\)/g, (_m, label: string, key: string) => resolved.get(key) ?? label);
+	}
+
+	/**
+	 * The loop's window onto the running product (the S2 seam's host half). Most of it is reads; the last two
+	 * ports are the write path `propose_segments` runs on (issue #381), and they are the S3 seam - the base a
+	 * segment list expands against, and the change store the expanded hunks are recorded in. A lookup that
+	 * cannot answer returns `undefined`, which the pure tool turns into words for the model rather than a
+	 * thrown step.
+	 */
+	private _agentToolHost(scope: readonly IWorkingSetDoc[]): IAgentToolHost {
+		return {
+			listDocuments: async () => {
+				const summaries = await this.listDocuments();
+				const rows: IAgentDocumentRow[] = [];
+				for (const summary of summaries) {
+					// The catalogue must be cheap, so it reports what is already loaded and does not open the
+					// project to fill in headings. A document the model wants the shape of is one `read_document`
+					// away, and paying for that read deliberately beats paying for every document silently.
+					const state = this._docs.get(summary.resource.toString());
+					rows.push({
+						docId: summary.resource.toString(),
+						title: summary.title,
+						status: state?.doc.status ?? '',
+						policy: await this._enforcedPolicyForUri(summary.resource),
+						approxTokens: state ? estimateTokens(state.doc.body) : 0,
+						headings: state ? state.doc.blocks.filter(b => b.type === 'heading').map(b => b.text) : [],
+					});
+				}
+				return rows;
+			},
+			readDocument: async docId => {
+				let uri: URI;
+				try { uri = URI.parse(docId); } catch { return undefined; }
+				if (!this._docs.get(docId)) {
+					try { await this.loadDocument(uri); } catch { return undefined; }
+				}
+				const state = this._docs.get(docId);
+				if (!state) { return undefined; }
+				const resolve = this._bindResolver(state);
+				return {
+					docId,
+					title: state.doc.title,
+					blocks: state.doc.blocks.map(block => block.level === undefined
+						? { type: block.type, text: resolve(block.text) }
+						: { type: block.type, text: resolve(block.text), level: block.level }),
+				};
+			},
+			readSource: async name => {
+				// A source is reachable through any document in scope that declares it (or has it as a folder
+				// sibling). An unknown name is `undefined` so the tool says so, rather than serving the empty
+				// string a miss would otherwise look exactly like.
+				for (const doc of scope) {
+					const state = this._docs.get(doc.resource.toString());
+					if (!state) { continue; }
+					const known = new Set<string>([...state.doc.sources, ...state.doc.context, ...state.folderFiles]);
+					if (!known.has(name)) { continue; }
+					const text = await this._readContext(state, [name]);
+					if (text.trim()) { return text; }
+				}
+				return undefined;
+			},
+			/**
+			 * The base one `propose_segments` call expands against. It hands over the RAW body - frontmatter
+			 * stripped by `_bodyOf`, so the `---` block never enters the coordinate space the hunks are
+			 * measured in - alongside the RESOLVED block texts the model was actually shown by
+			 * `read_document`, which is what its echoes have to be checked against.
+			 */
+			editTarget: async docId => {
+				let uri: URI;
+				try { uri = URI.parse(docId); } catch { return undefined; }
+				if (!this._docs.get(docId)) {
+					try { await this.loadDocument(uri); } catch { return undefined; }
+				}
+				const state = this._docs.get(docId);
+				if (!state) { return undefined; }
+				const resolve = this._bindResolver(state);
+				return {
+					docId,
+					title: state.doc.title,
+					body: this._bodyOf(state),
+					blockViews: state.doc.blocks.map(block => block.type === 'heading' ? `${'#'.repeat(block.level ?? 1)} ${resolve(block.text)}` : resolve(block.text)),
+					policy: this._policyForState(state),
+				};
+			},
+			/**
+			 * The S3 write boundary. Every hunk of one call lands in ONE `propose` batch under one setId, so
+			 * the rail groups them as the single change the person asked for and a surgical retry replays
+			 * exactly that set. The ids come back in hunk order, which is what lets the tool turn them into
+			 * per-segment receipts without a second lookup that could disagree.
+			 */
+			recordSegmentChanges: async (target, hunks, intent) => {
+				const state = this._docs.get(target.docId);
+				const store = await this._ensureChangeStore();
+				if (!state || !store) { return undefined; }
+				const body = this._bodyOf(state);
+				const baseRevision = hashContent(body);
+				const setId = generateUuid();
+				const rationale = intent.trim() || localize('livingDocs.segments.defaultIntent', "Proposed by the Chat agent.");
+				const proposeResult = await store.propose({
+					setId,
+					changes: hunks.map(hunk => {
+						const block = state.doc.blocks[hunk.blockOrdinal];
+						return {
+							anchors: [{ docUri: target.docId, baseRevision, span: hunk.span, oldText: hunk.oldText, newText: hunk.newText }],
+							kind: 'meaning' as const,
+							baseLength: body.length,
+							plannerIntent: rationale,
+							display: {
+								docTitle: target.title,
+								...(block ? { blockId: block.id, blockLabel: this._blockLabel(state.doc, block.id) } : {}),
+								rationale,
+								confidence: 0.85,
+								sourceCells: [],
+								via: 'model' as const,
+								// An insertion writes a blank line before its content; the card shows the content
+								// itself, exactly as the shipped generative-insert path does.
+								...(hunk.op === 'insert' ? { insert: true, nowText: hunk.newText.trim(), ...(block ? { afterBlockId: block.id } : {}) } : {}),
+							},
+						};
+					}),
+				});
+				this._refreshPending();
+				if (proposeResult.receipts.length !== hunks.length) { return undefined; }
+				for (const receipt of proposeResult.receipts) {
+					const queued = this._pending.find(c => c.id === receipt.changeId);
+					if (queued) { this._captureChangeCreated(queued, 'chat'); }
+				}
+				return proposeResult.receipts.map(receipt => receipt.changeId);
+			},
+		};
+	}
+
+	/**
+	 * One loop step over the broker. Buffered on purpose: the broker's non-streaming `/v1/messages` already
+	 * returns a whole Anthropic message - `content` blocks including `tool_use`, plus a `stop_reason` - so one
+	 * JSON parse is the entire adapter and this tranche needs no tool-aware SSE reader. It shares the `chat`
+	 * lane's limiter with the single-shot path, so a loop cannot outrun the concurrency bound.
+	 */
+	private _agentModelStep(request: IAgentModelRequest, token: CancellationToken): Promise<string> {
+		return this._modelLimiter('chat').queue(async () => {
+			if (token.isCancellationRequested) { throw new CancellationError(); }
+			const modelId = await this._requestModelId();
+			const sessionId = this._conversationId();
+			const body = JSON.stringify({
+				...(modelId ? { model: modelId } : {}),
+				...(sessionId ? { session_id: sessionId } : {}),
+				max_tokens: MODEL_MAX_TOKENS.chat,
+				thinking: { type: 'adaptive' },
+				output_config: { effort: 'low' },
+				// The cache breakpoint sits on the system prompt for the same reason as everywhere else: it is
+				// the one prefix that does not move between steps (doc 30 section 2.6). Here it finally has
+				// something to hold, because the tool definitions and the transcript after it are append-only.
+				system: [{ type: 'text', text: request.system, cache_control: { type: 'ephemeral' } }],
+				messages: request.messages,
+				tools: request.tools,
+			});
+			const context = await this._request.request({
+				type: 'POST',
+				url: `${this._proxyUrl()}/v1/messages`,
+				headers: { 'content-type': 'application/json' },
+				data: body,
+				callSite: 'livingDocs.agentLoop',
+			}, token);
+			if (context.res.statusCode === 429) {
+				throw new ModelRateLimitedError(parseRetryAfterMs(readHeader(context.res.headers, 'retry-after'), Date.now()));
+			}
+			const raw = await asText(context);
+			if (!raw) { throw new Error('empty model response'); }
+			return raw;
+		});
+	}
+
+	/**
+	 * Answer an explicit-scope ask by running the agent loop (issues #380, #381).
+	 *
+	 * The loop now carries doc 30's one in-loop mutating verb, so an ask for a change becomes a reviewable
+	 * diff rather than a sentence explaining that this run could only read. Nothing is written to a document
+	 * here: `propose_segments` records changes in the change store, and the person's approve is still the only
+	 * thing that touches the file.
+	 *
+	 * Three outcomes leave here, and only three. A `finish` becomes the model's narration followed by the
+	 * host-composed ledger of what was read and what was proposed. A pause or a cancel is re-thrown so the
+	 * caller's existing honest turns handle it exactly as they do for the single-shot path. Anything else is a
+	 * NAMED failure turn carrying that same ledger - a bounded run is a partial run, and the changes it did
+	 * queue are real and sitting in the rail, so the failure sentence is told how many there were rather than
+	 * asserting there were none.
+	 */
+	private async _chatRespondViaLoop(text: string, workingSet: readonly IWorkingSetDoc[], onNarration: (text: string) => void, onStep: (step: IChatStep) => void, token: CancellationToken): Promise<IChatMessage> {
+		const scope: IAgentScopeDoc[] = workingSet.map(doc => ({ docId: doc.resource.toString(), title: doc.title }));
+		const titleOf = (docId: string) => this._docs.get(docId)?.doc.title ?? scope.find(doc => doc.docId === docId)?.title;
+		const surface = createEditingAgentTools({ host: this._agentToolHost(workingSet), scope });
+		const client = new BrokerAgentModelClient(request => this._agentModelStep(request, token));
+		const maxSteps = this._agentMaxSteps();
+
+		const steps: IChatStep[] = [];
+		// What each call ASKED for, so a settled step can be labelled with the document it names. Kept here
+		// rather than looked up in the trace because the trace is only handed back when the run is over, and
+		// this feed has to render while it is still going.
+		const asked = new Map<string, unknown>();
+		let narration = '';
+		const addStep = (label: string, status: IChatStep['status']) => {
+			const step: IChatStep = { label, status };
+			steps.push(step);
+			onStep(step);
+		};
+		const result = await runAgentLoop({
+			task: composeAgentTask(text, scope),
+			system: surface.systemPrompt,
+			client,
+			registry: surface.registry,
+			maxSteps,
+			onEvent: event => {
+				switch (event.type) {
+					case 'modelText':
+						narration = narration ? `${narration}\n${event.text}` : event.text;
+						onNarration(narration);
+						break;
+					case 'toolCall':
+						asked.set(event.callId, event.input);
+						break;
+					// The steps feed shows work as it SETTLES, so a step appearing means it happened.
+					case 'toolResult':
+						addStep(agentStepLabel(event.name, asked.get(event.callId), titleOf), 'done');
+						break;
+					// A refused call is shown as `skipped`, never as done: the feed must not claim a read the
+					// tool turned away.
+					case 'toolError':
+						addStep(event.message, 'skipped');
+						break;
+				}
+			}
+		});
+
+		// A pause and a cancel are RUN-level states, not loop states (doc 30 D15 / D27-B): hand them back to
+		// the caller's existing turns, which already say the right thing for both.
+		if (token.isCancellationRequested) { throw new CancellationError(); }
+		if (client.pausedMessage) { throw new ModelPausedError(client.pausedMessage); }
+
+		const receipts = surface.receipts();
+		const ledger = composeAgentEditLedger(receipts);
+		if (result.outcome.type === 'finished') {
+			return {
+				role: 'assistant', via: 'model',
+				content: `${result.outcome.summary.trim()}\n\n${ledger}`,
+				steps: steps.length ? steps : undefined,
+			};
+		}
+		this._log.info(`[livingDocs] agent loop ended without finish (${result.outcome.reason})`, result.outcome.message);
+		const said = narration.trim();
+		// The failure sentence is told what actually landed, so a run that queued three changes and then hit
+		// the step ceiling cannot report that nothing was changed over three cards sitting in the rail.
+		const queued = receipts.segmentReceipts.filter(receipt => receipt.changeId !== undefined).length;
+		return {
+			role: 'assistant', via: 'fallback', failed: true,
+			content: `${said ? `${said}\n\n` : ''}${describeAgentRunFailure(result.outcome.reason, maxSteps, { changesQueued: queued })}\n\n${ledger}`,
+			steps: steps.length ? steps : undefined,
+		};
+	}
+
 	// Render the last few turns for the model so a follow-up ("change a couple of them") resolves against
 	// what was already said. The caller has already pushed the current user turn, so drop the last entry.
 	private _chatTranscript(resource: URI): string {
@@ -6755,7 +7136,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// block label, else a NAMED drop reason - never a bare `undefined`, so the composer can reconcile what the
 	// model claimed against what actually landed and say which claims did not (I3, issue #303).
 	private async _queueChatEdit(state: IDocState, edit: { heading?: string; oldText?: string; newText?: string; rationale?: string; sourceQuote?: string; sourceLine?: number }, setId: string, sourceText?: string, source: 'chat' | 'fan-out' = 'chat'): Promise<IQueueOutcome> {
-		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - no proposal is
+		// Policy gate (issue #257): a document dialled "Never change this doc" is left ALONE - no change is
 		// ever created for it, in chat or fan-out. The caller names the refusal; here we simply make no change.
 		if (this._policyForState(state) === 'never') { return { queued: false, reason: 'policy' }; }
 		const newText = String(edit.newText ?? '').trim();
@@ -6799,7 +7180,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// is, so approving a one-line change to a long list leaves every sibling item byte-identical.
 		const anchor = this._anchorForBlock(state, best.id, scoped.oldText, newText);
 		if (!anchor) { return { queued: false, reason: 'no-match' }; }
-		const id = await this._recordProposal(state, anchor, 'meaning', {
+		const id = await this._recordChange(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: best.id,
 			blockLabel: label,
@@ -6850,7 +7231,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 			if (best) { afterBlockId = best.id; label = best.text; }
 		}
 		const anchor = this._anchorForInsert(state, afterBlockId, newText);
-		const id = await this._recordProposal(state, anchor, 'meaning', {
+		const id = await this._recordChange(state, anchor, 'meaning', {
 			docTitle: state.doc.title,
 			blockId: afterBlockId,
 			blockLabel: label,
@@ -6876,8 +7257,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// The document as clean prose for the model: title + headings + paragraphs with bind links resolved
 	// to their live values (so the agent reasons over the figures the reader sees, not the raw markup).
 	private _serializeDocForChat(state: IDocState): string {
-		const resolved = this.getResolved(state.uri);
-		const resolve = (s: string) => s.replace(/\[([^\]]*)\]\(bind:([^)]+)\)/g, (_m, label: string, key: string) => resolved.get(key) ?? label);
+		const resolve = this._bindResolver(state);
 		const lines: string[] = [];
 		for (const block of state.doc.blocks) {
 			lines.push(block.type === 'heading' ? `${'#'.repeat(block.level ?? 1)} ${resolve(block.text)}` : resolve(block.text));
@@ -6889,7 +7269,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 
 	// Tweak (amend-before-approve, plan 31 iter 3, D31-B): replace a pending change's proposed `newText` with
 	// the reviewer's hand-edit and flag it `tweaked`, then fire onDidChange so every surface re-renders the
-	// amended proposal as still-pending. The subsequent approve() reads `tweaked` to record the audit
+	// amended change as still-pending. The subsequent approve() reads `tweaked` to record the audit
 	// `via: 'tweaked'`. Guarded: figures come from sources (not hand-editable), and an empty/no-op amendment
 	// is ignored. No new persist path - the amended text lands through the existing approve() serialisation.
 	async amendChange(changeId: string, newText: string): Promise<void> {
@@ -6899,7 +7279,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		if (record.kind === 'figure') { return; }
 		const next = String(newText ?? '').trim();
 		if (!next || record.anchors.every(a => a.newText === next)) { return; }
-		// A tweak stacks a REVISION on the same id rather than replacing the proposal, so the card keeps its
+		// A tweak stacks a REVISION on the same id rather than replacing the change, so the card keeps its
 		// thread, its history and its provenance - the trail shows the agent proposed one thing and a human
 		// changed it, which is the trust signal the audit row `via: 'tweaked'` reports.
 		const anchors = record.anchors.map((a, i) => (i === 0 ? { ...a, newText: next } : a));
@@ -6946,7 +7326,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// Every document the captured set touches has to be LOADED before the store resolves anything, because
 		// the write seam edits `IDocState` - it re-parses the document, keeps the in-memory model in step and
 		// runs the external-edit floor - and there is no such thing as writing a document that is not open.
-		// After a reload the review rail shows proposals for documents the window has never opened, so this is
+		// After a reload the review rail shows changes for documents the window has never opened, so this is
 		// the ordinary case and not a corner: "Approve everywhere" reaches every one of them.
 		await this._loadDocsFor(captured, store);
 		// The cards as they read BEFORE the verb: a decided change leaves the pending view, and the audit row,
@@ -6980,7 +7360,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				const skip = report.skipped.find(s => s.changeId === id);
 				skipped.push({ id, label: change ? bulkChangeLabel(change) : '', reason: bulkSkipFor(skip?.reason, resolution?.status) });
 				// The reviewer pressed Approve and it did not happen, so the trail says so - whether the store
-				// refused before touching anything (the document moved under the proposal) or tried and could
+				// refused before touching anything (the document moved under the change) or tried and could
 				// not prove the write. The two cases that get NO row are the ones with nothing to report: a
 				// change someone else had already decided, and one a later turn superseded.
 				const refusalIsSilent = skip?.reason === 'unknown-change' || skip?.reason === 'already-decided' || skip?.reason === 'superseded' || skip?.reason === 'in-discussion';
@@ -7031,10 +7411,10 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	private async _recordDecision(change: IProposedChange, status: 'approved' | 'rejected', anchors: readonly IChangeAnchor[], reason?: string): Promise<void> {
 		const state = this._docs.get(change.docId);
 		if (!state) { return; }
-		this._recordProposalOutcome(change.id, status);
+		this._recordChangeOutcome(change.id, status);
 		if (status === 'rejected') {
 			state.lock.audit.push(this._entry(state, change.blockId, 'rejected', change.oldText, change.newText, change.via ?? 'model', reason));
-			this._captureProposalResolved('reject', this._inBulkReject);
+			this._captureChangeResolved('reject', this._inBulkReject);
 			state.status = `Change rejected - ${change.docTitle} left unchanged`;
 			await this._markContextReviewed(state, change.contextReviewed);
 			await this._persistLock(state);
@@ -7061,8 +7441,8 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		// A tweaked change records `via: 'tweaked'` so the trail shows the human amended the agent's words
 		// (plan 31 iter 3, D31-B); otherwise the change's own provenance (model/heuristic) stands.
 		state.lock.audit.push(this._entry(state, change.blockId, 'approved', change.oldText, change.newText, change.tweaked ? 'tweaked' : (change.via ?? 'model')));
-		this._captureProposalResolved(change.tweaked ? 'tweak' : 'approve', this._inBulkApprove);
-		// D26 funnel hooks (no-ops outside a walkthrough): approving the demo's sample proposal is step 5 and
+		this._captureChangeResolved(change.tweaked ? 'tweak' : 'approve', this._inBulkApprove);
+		// D26 funnel hooks (no-ops outside a walkthrough): approving the demo's sample change is step 5 and
 		// hands off to a real folder; the first approve on the user's own file after that hand-off is the T4 aha.
 		this._maybeRecordSampleApprove(change.docId);
 		this._maybeRecordOwnFileApprove();
@@ -7077,7 +7457,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 *
 	 * This is the exact inverse of {@link _recordDecision}: the change STAYS in the queue carrying the store's
 	 * named status, the audit row says `apply-failed` rather than `approved`, and nothing counts a resolution
-	 * that did not occur - no transcript outcome, no `proposal_resolved`, no funnel hook, no claim flipped to
+	 * that did not occur - no transcript outcome, no `change_resolved`, no funnel hook, no claim flipped to
 	 * `applied`, no reviewed-context clear. The lock still persists, because a trail that only survives until
 	 * the next relaunch is not a trail.
 	 */
@@ -7163,7 +7543,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	 * Discard every queued change for one document, eligible or not.
 	 *
 	 * Deliberately NOT a bulk verb and deliberately private: this is the queue half of a document RESET
-	 * (restore an earlier version), where proposals against the replaced body are stale by construction and
+	 * (restore an earlier version), where changes against the replaced body are stale by construction and
 	 * there is no reviewer decision to confirm. The user-facing gesture that reaches it - restoring a
 	 * version - carries its own confirm. Leaving a `needs-attention` change behind here would strand it
 	 * against prose that no longer exists.
@@ -7385,7 +7765,7 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 	// only - never document prose or bound figures (the property-linter in the service enforces this before
 	// anything is sent; document ids are hashed opaque). Every call is a no-op unless the user has consented. ---
 
-	/** Map a proposal's 0..1 confidence to a coarse label (never the raw figure, which could be revealing). */
+	/** Map a change's 0..1 confidence to a coarse label (never the raw figure, which could be revealing). */
 	private _confidenceLabel(confidence: number): string {
 		return confidence >= 0.8 ? 'high' : confidence >= 0.5 ? 'medium' : 'low';
 	}
@@ -7402,18 +7782,18 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return [...kinds];
 	}
 
-	/** Emit `proposal_created` for one queued change (source: chat / fan-out / agent / hook). */
-	private _captureProposalCreated(change: IProposedChange, source: 'chat' | 'fan-out' | 'agent' | 'hook'): void {
-		this._analytics.capture('proposal_created', {
+	/** Emit `change_created` for one queued change (source: chat / fan-out / agent / hook). */
+	private _captureChangeCreated(change: IProposedChange, source: 'chat' | 'fan-out' | 'agent' | 'hook'): void {
+		this._analytics.capture('change_created', {
 			source_kind: source,
 			change_kind: change.kind,
 			confidence: this._confidenceLabel(change.confidence),
 		});
 	}
 
-	/** Emit `proposal_resolved` when a change is approved / tweaked-and-approved / rejected. */
-	private _captureProposalResolved(resolution: 'approve' | 'tweak' | 'reject', bulk: boolean): void {
-		this._analytics.capture('proposal_resolved', { resolution, bulk });
+	/** Emit `change_resolved` when a change is approved / tweaked-and-approved / rejected. */
+	private _captureChangeResolved(resolution: 'approve' | 'tweak' | 'reject', bulk: boolean): void {
+		this._analytics.capture('change_resolved', { resolution, bulk });
 	}
 
 	// Build an audit entry stamped with the OWNING document's title. The entry is always pushed onto
@@ -7430,9 +7810,24 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 		return entry;
 	}
 
+	/**
+	 * Rebuild a document's on-disk text after a block-level change (the frontmatter quarantine, docs/30
+	 * section 8.3, issue #357). This is the ONE re-attachment point every non-approve persist shares (figure
+	 * sync, hand edits, skill fixes). `withMergedFrontmatter` carries the original `---` block through
+	 * byte-exact - so the `template`/`name`/`description`/`fromTemplate` provenance, every unknown user key,
+	 * nested maps, comments and CR/LF endings survive - and surgically updates only a modelled SCALAR whose
+	 * value actually moved on this path (a figure sync advances `subtitle: Week N` via `_resolveSubtitle`).
+	 * Calling `serializeLivingDoc` here would drop the unmodelled keys; freezing the whole block would revert
+	 * the subtitle. The approve path re-attaches the store's own byte-precise body the same way
+	 * (`_storeDocuments.write`), so parse and emit cannot diverge again.
+	 */
+	private _rebuildRawText(state: IDocState): string {
+		return withMergedFrontmatter(state.rawText, state.doc);
+	}
+
 	// Persist the document (.md) and its lock together - the pair is one logical unit.
 	private async _persist(state: IDocState): Promise<void> {
-		// The body as it stood before this write, so the store can move the proposals standing over it. Every
+		// The body as it stood before this write, so the store can move the changes standing over it. Every
 		// path through `_persist` rebuilds the document from its parsed blocks, so from the store's point of
 		// view this is an edit it did not make and cannot account for - identical in kind to someone typing.
 		const previousBody = this._bodyOf(state);
@@ -7447,7 +7842,9 @@ export class LivingDocsService extends Disposable implements ILivingDocsService 
 				return;
 			}
 			const overrodeExternal = state.keepMine === true;
-			const serialized = serializeLivingDoc(state.doc);
+			// Rebuild by merging the frontmatter onto the original block (the #357 quarantine), never through
+			// `serializeLivingDoc` - see `_rebuildRawText`.
+			const serialized = this._rebuildRawText(state);
 			state.rawText = serialized;
 			// After an explicit "Keep my version", record the knowing overwrite on the lock's audit trail before it
 			// is written, so the decision is auditable (the external edit we chose to overwrite is named in newText).

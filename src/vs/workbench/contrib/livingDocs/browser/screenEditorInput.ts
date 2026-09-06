@@ -5,8 +5,10 @@
 
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { EditorInputCapabilities, IUntypedEditorInput } from '../../../common/editor.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ScreenId } from './screenRender.js';
 
 export const SCREEN_EDITOR_ID = 'workbench.editor.livingDocs.screen';
@@ -52,5 +54,20 @@ export class ScreenEditorInput extends EditorInput {
 			return true;
 		}
 		return other instanceof ScreenEditorInput && other.screen === this.screen;
+	}
+}
+
+/**
+ * Open a full-width Abstract screen (Home / Templates / ...) as a pinned singleton editor. Because
+ * {@link ScreenEditorInput} is a singleton, the editor service may adopt an existing instance for the same screen
+ * rather than the one created here; the freshly created input is disposed in that case so it does not leak. Shared
+ * by every landing that routes to a screen - the cold-start landing (`StudioStartupContribution`) and the runtime
+ * empty-editor landing (`EmptyEditorLandingContribution`) - so the open-and-dispose contract lives in one place.
+ */
+export async function openScreenEditor(editorService: IEditorService, instantiationService: IInstantiationService, screen: ScreenId): Promise<void> {
+	const input = instantiationService.createInstance(ScreenEditorInput, screen);
+	const pane = await editorService.openEditor(input, { pinned: true });
+	if (pane?.input !== input) {
+		input.dispose();
 	}
 }

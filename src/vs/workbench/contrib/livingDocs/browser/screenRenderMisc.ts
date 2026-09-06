@@ -587,7 +587,7 @@ function swarmPane(summary: IProjectRunSummary, working: ReadonlySet<string>, st
 	// A stopped run reports honestly (plan 27 iter 4): how many settled with a change vs were skipped, not
 	// "every document read" (which never happened). A live run and a fully-completed run keep their headings.
 	// A PAUSED run (spent daily budget, map-D15 / F14 item 3) reads the calm plain-words pause - finished
-	// proposals stay reviewable, not-yet-run docs are skipped, and it is neither a failure nor an all-clear.
+	// changes stay reviewable, not-yet-run docs are skipped, and it is neither a failure nor an all-clear.
 	// A settled run where the model was unreachable for some documents (F14, issue #123) must NOT read
 	// "every document read across the project" (a false all-clear); it names the outage honestly instead.
 	const failedCount = summary.failedDocs;

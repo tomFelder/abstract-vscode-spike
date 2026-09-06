@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise } from '../../../../../base/common/async.js';
+import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { bufferToStream, VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -26,7 +28,8 @@ import { IViewsService } from '../../../../services/views/common/viewsService.js
 import { LivingDocsService } from '../../browser/livingDocsService.js';
 import { AgentPolicy, IAgentDef, IAuditEntry, IFreshness, ILivingDoc } from '../../common/livingDocsModel.js';
 import { buildContextGroups } from '../../common/contextGroups.js';
-import { extractBindLinks, parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { extractBindLinks, frontmatterBlock, parseLivingDoc } from '../../common/livingDocMarkdown.js';
+import { ensureNoNetworkInTestSuite } from '../common/networkSentinel.js';
 
 const METRICS_CSV = [
 	'week,date,mrr,signups,churn,active',
@@ -133,6 +136,89 @@ const WEEKLY_TEMPLATE_MD = [
 	'Revenue is [pending](bind:metrics.mrr) MRR.',
 ].join('\n') + '\n';
 
+// A template-DERIVED living document (issue #357 / ticket #385): born from the "Weekly report" template, so
+// its frontmatter carries `template: <name>` provenance (read back as `fromTemplate`) plus the template's
+// `name`/`description` metadata, AND an unknown user-authored key (`owner`) the parser never stores. None of
+// these are emitted by `serializeLivingDoc`, so any persist that rebuilds the file from parsed blocks used to
+// silently drop them. It is bound to metrics.csv (authored at the week-23 cache) so a figure sync is a real
+// non-approve persist that re-derives and writes the file.
+const TEMPLATE_DERIVED_MD = [
+	'---',
+	'title: Q3 Board Update',
+	'template: Weekly report',
+	'name: Q3 Board Update',
+	'description: Grown from the weekly template.',
+	'owner: growth-pod',
+	'sources:',
+	'  - metrics.csv',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'Revenue grew [12%](bind:metrics.mrr.delta) to [$41.2k](bind:metrics.mrr) MRR.',
+].join('\n') + '\n';
+
+// Same template-derived document, but authored with a `subtitle: Week N` that a figure sync advances
+// (`_resolveSubtitle`): the regression the adversarial panel found (#385 round 2). A modelled frontmatter
+// field that legitimately changes on a non-approve path MUST reach disk, while the unmodelled provenance
+// (`template`/`name`/`description`) and the unknown `owner:` key still survive byte-exact.
+const SUBTITLE_DERIVED_MD = [
+	'---',
+	'title: Q3 Board Update',
+	'subtitle: Week 23',
+	'template: Weekly report',
+	'name: Q3 Board Update',
+	'description: Grown from the weekly template.',
+	'owner: growth-pod',
+	'sources:',
+	'  - metrics.csv',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'Revenue grew [12%](bind:metrics.mrr.delta) to [$41.2k](bind:metrics.mrr) MRR.',
+].join('\n') + '\n';
+
+// #385 round-3 refutation A2-1: a modelled LIST (`sources:`) with a COMMENT between its items. Re-emitting
+// the list on persist duplicated the items after the interruption; the frontmatter must instead be carried
+// through byte-exact (only the changed `subtitle` scalar is touched).
+const LISTCOMMENT_MD = [
+	'---',
+	'title: Q3 Board Update',
+	'subtitle: Week 23',
+	'template: Weekly report',
+	'sources:',
+	'  - metrics.csv',
+	'  # the primary feed',
+	'  - extra.csv',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'Revenue grew [12%](bind:metrics.mrr.delta) to [$41.2k](bind:metrics.mrr) MRR.',
+].join('\n') + '\n';
+
+// #385 round-3 refutations A1-1/A1-2: a NESTED map (`owner:`) whose child keys collide with modelled keys
+// (`status`, `title`). A flat, indentation-blind re-emit hoisted the children to top level and destroyed the
+// real top-level `title`. The nested map (indentation and all) must survive byte-exact.
+const NESTED_MD = [
+	'---',
+	'title: Q3 Board Update',
+	'subtitle: Week 23',
+	'template: Weekly report',
+	'owner:',
+	'  name: Growth Pod',
+	'  status: active',
+	'  title: Team Lead',
+	'sources:',
+	'  - metrics.csv',
+	'---',
+	'',
+	'## Highlights',
+	'',
+	'Revenue grew [12%](bind:metrics.mrr.delta) to [$41.2k](bind:metrics.mrr) MRR.',
+].join('\n') + '\n';
+
 const API_PAYLOAD = { stargazers_count: 12345, open_issues_count: 678, full_name: 'microsoft/vscode' };
 // The canned proxy /mcp/resolve response (plan 29, iter 4): the extracted field value + the raw MCP payload.
 const MCP_RESOLVE_RESPONSE = { value: '128,000', raw: JSON.stringify({ period: '2026-W24', total: 128000, won: 47 }) };
@@ -167,15 +253,20 @@ const API_AUTH_MD = [
 const WEEKLY = URI.file('/ws/Weekly Summary.md');
 const BOARD = URI.file('/ws/Board Note.md');
 const README = URI.file('/ws/Team Notes.md');
-// A closed loopback port for the model proxy URL: the STREAMING model path (a raw `fetch`) fails fast
-// against it and falls back to the mocked buffered call, so a real proxy on the default port cannot leak
-// into the fan-out tests. The buffered call is matched by the mock via its `/v1/messages` path either way.
+// A closed loopback port for the model proxy URL. Model traffic now ALL crosses the injected request
+// service (ticket #375), which the mock below answers, so nothing here can reach a real proxy whatever the
+// URL says. This stays as belt-and-braces: if a raw network call is ever reintroduced, it dies against a
+// dead port rather than being answered by whatever is listening on the broker's real one.
 const DEAD_PROXY = 'http://127.0.0.1:49999';
 const API = URI.file('/ws/Ecosystem.md');
 const MCP = URI.file('/ws/Pipeline Brief.md');
 const APIAUTH = URI.file('/ws/Revenue Signal.md');
 const BADBIND = URI.file('/ws/Ratio Doc.md');
 const TEMPLATE = URI.file('/ws/templates/Weekly report.template.md');
+const DERIVED = URI.file('/ws/Q3 Board Update.md');
+const SUBDOC = URI.file('/ws/Q3 Subtitle Update.md');
+const LISTCOMMENT = URI.file('/ws/Q3 List Comment.md');
+const NESTED = URI.file('/ws/Q3 Nested Owner.md');
 
 // Spreadsheets-as-CSV-sources fixtures (issue #131). The workbook file bytes are irrelevant here (the
 // proxy /sources/xlsx route is mocked), so any content stands in. The report binds the EXTRACTED CSV path,
@@ -200,11 +291,33 @@ const PDF_TEXT = { readable: true, text: 'Board pack: revenue is up week on week
 const PDF_IMAGE_ONLY = { readable: false, text: '', pages: 4, reason: 'This PDF has no selectable text - it looks scanned or image-only.' };
 const PDF_FILE = URI.file('/ws/Board Pack.pdf');
 
+// The broker's SSE rendering of a canned Claude reply, so the STREAMING model path is answered the way the
+// real broker answers it rather than being pushed into its buffered fallback. The text is deliberately split
+// across two `content_block_delta` events, so the reader is exercised on a reply that arrives in pieces, and
+// the run is terminated by `message_stop`. A spent-budget reply carries the `pause` stop reason the proxy
+// signals mid-stream (plan 35 iter 3).
+function asSse(payload: object): string {
+	const message = payload as { content?: { type: string; text?: string }[]; stop_reason?: string };
+	const text = (message.content ?? []).filter(b => b.type === 'text').map(b => b.text ?? '').join('');
+	const half = Math.ceil(text.length / 2);
+	const events: object[] = [];
+	for (const part of [text.slice(0, half), text.slice(half)]) {
+		if (part) { events.push({ type: 'content_block_delta', delta: { type: 'text_delta', text: part } }); }
+	}
+	if (message.stop_reason === 'pause') { events.push({ type: 'message_delta', delta: { stop_reason: 'pause' } }); }
+	events.push({ type: 'message_stop' });
+	return events.map(e => `data: ${JSON.stringify(e)}\n\n`).join('');
+}
+
 // The suite title starts with the grep-stable "livingDocs" token (matching the sibling suites'
 // "livingDocs <topic>" convention) so the standard gate `./scripts/test.sh --grep "livingDocs"`
 // catches it. Previously titled "LivingDocsService", it was silently skipped by that case-sensitive
 // grep, hiding a fan-out failure (issue #203). Keep any new livingDocs suite title lower-case "livingDocs".
 suite('livingDocs Service', () => {
+	// Ticket #375: no test in this suite may reach the network directly. Every attempt at a global network
+	// primitive is recorded at the call and refused, so the only route out is IRequestService - injected,
+	// and doubled below.
+	ensureNoNetworkInTestSuite();
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	interface IOpenedEditor { resource?: URI; options?: { selection?: { startLineNumber: number } } }
@@ -223,6 +336,11 @@ suite('livingDocs Service', () => {
 	// `data/`/`archive/` were made before the move landed.
 	let createdFolders: string[] = [];
 	let lastModelBody: string | undefined;
+	// The cancellation token the service handed the LAST /v1/messages call, so a test can prove the model
+	// request is genuinely wired to the chat's cancellation source. Without this the doubles would ignore the
+	// token and dropping it from the call would leave the whole suite green while cancel stopped aborting the
+	// real HTTP request.
+	let lastModelToken: CancellationToken | undefined;
 	let lastModelCalls = 0;
 	let lastOpenedFolder: URI | undefined;
 	// Plan 29 iter 4: capture what the renderer sent to the proxy's /mcp/resolve + /proxy/fetch routes, so a
@@ -250,7 +368,7 @@ suite('livingDocs Service', () => {
 	// notice racing ahead and deduping it.
 	let writeExternalNoWatcher: ((resource: URI, content: string) => void) | undefined;
 
-	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[]; files?: Map<string, string> } = {}): LivingDocsService {
+	function createService(opened: IOpenedEditor[] = [], opts: { boardNote?: boolean; api?: boolean; mcp?: boolean; mcpResponse?: object; apiAuth?: boolean; badBind?: boolean; template?: boolean; agents?: IAgentDef[]; model?: object; modelSequence?: object[]; fanoutBudget?: number; proxyUrl?: string; pickFolder?: URI; noFolder?: boolean; failLockDelete?: boolean; failLockMove?: boolean; workbook?: boolean; xlsxReport?: boolean; xlsx?: object; pdf?: object; failInterop?: boolean; storage?: InMemoryStorageService; agentLoop?: boolean; agentMaxSteps?: number; modelHttpSequence?: { statusCode: number; headers?: Record<string, string> }[]; deferModel?: DeferredPromise<void>; files?: Map<string, string> } = {}): LivingDocsService {
 		// `opts.files` hands this service the SAME in-memory disk an earlier one wrote to, which is how a
 		// reload is staged: drop the service, build a second one over the same bytes, and see what it
 		// rehydrates. Nothing else is shared - the second instance rebuilds its state from the files alone.
@@ -361,13 +479,23 @@ suite('livingDocs Service', () => {
 		// request service) at a dead port, so the streaming call fails fast and falls back to the mocked buffered
 		// call.
 		//
-		// `DEAD_PROXY` is the DEFAULT, not an opt-in. Left unset, the service falls back to its real
-		// `localhost:8090`, and any developer who happens to have the app running - which starts a signed-in
-		// broker on exactly that port - has their unit tests silently answered by a live model. That failure is
-		// maddening to read, because the assertion diff shows real prose where a canned fixture belongs, and it
-		// only reproduces on machines where the app is up. A unit test must not be able to reach the network at
-		// all; a test that genuinely wants a reachable proxy still passes its own `proxyUrl`.
-		const configurationService = { getValue: (key?: string) => (key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget : key === 'livingDocs.modelProxyUrl' ? (opts.proxyUrl ?? DEAD_PROXY) : true) } as unknown as IConfigurationService;
+		// `DEAD_PROXY` is the DEFAULT, not an opt-in. It is the second lock, not the only one: since ticket #375
+		// every model call crosses the injected request service, which is mocked here, so no test can reach the
+		// network whatever URL it is pointed at. The dead port remains because the first lock is only as good as
+		// the next person's diff - see the `test/electron-browser` isolation test, which binds the broker's real
+		// default port and proves the suite still cannot reach it.
+		//
+		// `livingDocs.agentLoop` is the stage-3 branch point (issue #380): with it on - the product default -
+		// an ask carrying attachment chips runs the READ-ONLY agent loop instead of the single-shot fan-out.
+		// A test that exercises the single-shot fan-out itself passes `agentLoop: false` to name the route it
+		// is pinning, rather than depending on which route happens to be the default that week.
+		const configurationService = {
+			getValue: (key?: string) => key === 'livingDocs.fanoutContextBudget' ? opts.fanoutBudget
+				: key === 'livingDocs.modelProxyUrl' ? (opts.proxyUrl ?? DEAD_PROXY)
+					: key === 'livingDocs.agentLoop' ? (opts.agentLoop ?? true)
+						: key === 'livingDocs.agentMaxSteps' ? (opts.agentMaxSteps ?? 20)
+							: true
+		} as unknown as IConfigurationService;
 		lastNotifications = [];
 		createdFolders = [];
 		const notificationService = {
@@ -378,7 +506,7 @@ suite('livingDocs Service', () => {
 		// Routes the renderer's HTTP calls: when a model proxy response is configured, /healthz reports
 		// healthy and /v1/messages returns the canned Claude response; everything else is the api source.
 		const requestService = {
-			request: async (options: { url?: string; data?: string }) => {
+			request: async (options: { url?: string; data?: string }, token: CancellationToken) => {
 				const url = options.url ?? '';
 				// Issue #131/#245 C2: simulate the measured CORS failure - the broker is UP (so /healthz answers)
 				// but the interop POST dies at the transport (net::ERR_FAILED). The service must diagnose this as
@@ -399,6 +527,8 @@ suite('livingDocs Service', () => {
 				let payload: object = API_PAYLOAD;
 				// Set only by `modelHttpSequence` below; everything else answers 200 as it always has.
 				let modelHttpStatus: { statusCode: number; headers?: Record<string, string> } | undefined;
+				// Whether THIS /v1/messages call asked for a stream, which decides the shape of the reply below.
+				let streamed = false;
 				// The proxy routes (plan 29 iter 4): /mcp/resolve returns the extracted value + raw payload;
 				// /proxy/fetch returns the authenticated api JSON. Both capture the sent body so a test can
 				// assert the renderer only ever names the secret, never carries its value.
@@ -410,11 +540,17 @@ suite('livingDocs Service', () => {
 				else if (opts.model || opts.modelSequence) {
 					if (url.includes('/healthz')) { payload = { ok: true }; }
 					else if (url.includes('/v1/messages')) {
+						// `deferModel` parks the model call until the test releases it, which is the only way to
+						// hold a reply genuinely in flight now that every call is answered in-memory: without it a
+						// send can finish before the caller ever observes it as busy.
+						if (opts.deferModel) { await opts.deferModel.p; }
 						// A `modelSequence` returns a DIFFERENT canned reply per call (the Nth /v1/messages call
 						// gets the Nth reply), so a multi-batch fan-out can be given one reply per batch; a single
 						// `model` returns the same reply every call. lastModelCalls counts calls either way.
 						payload = opts.modelSequence ? (opts.modelSequence[lastModelCalls] ?? opts.modelSequence[opts.modelSequence.length - 1]) : opts.model!;
 						lastModelBody = options.data;
+						lastModelToken = token;
+						streamed = (options.data ?? '').includes('"stream":true');
 						// `modelHttpSequence` overrides the HTTP envelope of the Nth /v1/messages call, so a test can
 						// hand the service a real 429 (with its own Retry-After) and watch the backoff, rather than
 						// only ever seeing a 200. Read BEFORE the counter moves so entry 0 is the first call.
@@ -422,9 +558,15 @@ suite('livingDocs Service', () => {
 						lastModelCalls++;
 					}
 				}
+				// A canned error payload has no stream to give: the real broker fails a streamed request at the
+				// envelope, so answer 502 and let the ladder fall back to the buffered call exactly as it does in
+				// the app - which is where the error message the tests assert on is surfaced.
+				if (streamed && (payload as { error?: unknown }).error) {
+					return { res: { statusCode: 502, headers: {} }, stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))) };
+				}
 				return {
 					res: { statusCode: modelHttpStatus?.statusCode ?? 200, headers: modelHttpStatus?.headers ?? {} },
-					stream: bufferToStream(VSBuffer.fromString(JSON.stringify(payload))),
+					stream: bufferToStream(VSBuffer.fromString(streamed ? asSse(payload) : JSON.stringify(payload))),
 				};
 			},
 		} as unknown as IRequestService;
@@ -433,6 +575,7 @@ suite('livingDocs Service', () => {
 		const fileDialogService = { showOpenDialog: async () => opts.pickFolder ? [opts.pickFolder] : undefined } as unknown as IFileDialogService;
 		lastOpenedFolder = undefined;
 		lastModelCalls = 0;
+		lastModelToken = undefined;
 		lastMcpBody = undefined;
 		lastProxyFetchBody = undefined;
 		const hostService = { openWindow: async (toOpen: { folderUri?: URI }[]) => { lastOpenedFolder = toOpen?.[0]?.folderUri; } } as unknown as IHostService;
@@ -584,6 +727,90 @@ suite('livingDocs Service', () => {
 		const onDisk = lastFiles!.get(WEEKLY.toString()) ?? '';
 		assert.ok(onDisk.includes('[$48.6k](bind:metrics.mrr)'), `persisted resolved value: ${onDisk}`);
 		assert.ok(service.getAudit().some(e => e.action === 'auto-applied'), 'figure auto-apply audited');
+	});
+
+	// Issue #357 / ticket #385: the serialiser reads ten frontmatter keys but emits six, so any persist that
+	// rebuilds the file from parsed blocks drops `template`/`name`/`description`/`fromTemplate` and every
+	// unknown user key. Plan 55 R6 quarantined the APPROVE path (it splices the body and re-attaches the
+	// frontmatter byte-exact); this proves a NON-approve persist - a figure sync through `_persist` - keeps
+	// the whole frontmatter too, so a template-derived document does not lose its provenance the first time
+	// its figures reconcile.
+	test('a template-derived document keeps its full frontmatter through a non-approve persist (figure sync)', async () => {
+		const service = createService();
+		lastFiles!.set(DERIVED.toString(), TEMPLATE_DERIVED_MD);
+		await service.loadDocument(DERIVED);
+
+		await service.refreshFromSources(DERIVED);
+
+		const onDisk = lastFiles!.get(DERIVED.toString()) ?? '';
+		// The frontmatter block survives byte-exact (every at-risk key AND the unknown `owner:` key), and the
+		// write genuinely happened (the bound figure reconciled to the week-24 source value).
+		assert.deepStrictEqual({
+			frontmatter: frontmatterBlock(onDisk),
+			figureSynced: onDisk.includes('[$48.6k](bind:metrics.mrr)'),
+		}, {
+			frontmatter: frontmatterBlock(TEMPLATE_DERIVED_MD),
+			figureSynced: true,
+		});
+	});
+
+	// Ticket #385 round 2 (the adversarial-panel regression): the frontmatter is not frozen wholesale. A
+	// modelled field that legitimately changes on a non-approve path - here `subtitle`, which a figure sync
+	// advances through `_resolveSubtitle` - must reach disk, while the unmodelled provenance keys and an
+	// unknown user key are still carried through byte-exact. Preserving the static keys must not revert the
+	// dynamic one.
+	test('a non-approve persist advances a modelled frontmatter field (subtitle) while carrying unmodelled keys byte-exact', async () => {
+		const service = createService();
+		lastFiles!.set(SUBDOC.toString(), SUBTITLE_DERIVED_MD);
+		await service.loadDocument(SUBDOC);
+		// A new source week arrives, so the sync advances the subtitle past its authored "Week 23".
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+
+		await service.refreshFromSources(SUBDOC);
+
+		// The whole frontmatter on disk equals the authored block with ONLY the subtitle advanced: the
+		// modelled field tracked the source, and every unmodelled/unknown key survived byte-exact.
+		assert.strictEqual(
+			frontmatterBlock(lastFiles!.get(SUBDOC.toString()) ?? ''),
+			frontmatterBlock(SUBTITLE_DERIVED_MD.replace('subtitle: Week 23', 'subtitle: Week 25')),
+		);
+	});
+
+	// Ticket #385 round 3 (refutation A2-1): a modelled LIST with a comment BETWEEN items must not be
+	// re-emitted on a non-approve persist - the list is carried through byte-exact, so the item after the
+	// comment is not duplicated. Only the changed `subtitle` scalar is touched.
+	test('a non-approve persist does not duplicate a sources list that has a comment between items', async () => {
+		const service = createService();
+		lastFiles!.set(LISTCOMMENT.toString(), LISTCOMMENT_MD);
+		lastFiles!.set(URI.file('/ws/extra.csv').toString(), 'week,value\n25,7\n');
+		await service.loadDocument(LISTCOMMENT);
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+
+		await service.refreshFromSources(LISTCOMMENT);
+
+		// Byte-exact block with only the subtitle advanced: the comment and both list items survive, no item
+		// is duplicated (the round-2 re-emit produced three `- ` entries here).
+		assert.strictEqual(
+			frontmatterBlock(lastFiles!.get(LISTCOMMENT.toString()) ?? ''),
+			frontmatterBlock(LISTCOMMENT_MD.replace('subtitle: Week 23', 'subtitle: Week 25')),
+		);
+	});
+
+	// Ticket #385 round 3 (refutations A1-1/A1-2): a nested `owner:` map whose children collide with modelled
+	// keys (`status`, `title`) survives byte-exact on a non-approve persist - no child is hoisted to top level
+	// and the real top-level `title` is not destroyed. Only the changed `subtitle` scalar is touched.
+	test('a non-approve persist preserves a nested map with colliding child keys byte-exact', async () => {
+		const service = createService();
+		lastFiles!.set(NESTED.toString(), NESTED_MD);
+		await service.loadDocument(NESTED);
+		lastFiles!.set(URI.file('/ws/metrics.csv').toString(), METRICS_CSV + '\n25,Jun 26,52000,470,2.2,210');
+
+		await service.refreshFromSources(NESTED);
+
+		assert.strictEqual(
+			frontmatterBlock(lastFiles!.get(NESTED.toString()) ?? ''),
+			frontmatterBlock(NESTED_MD.replace('subtitle: Week 23', 'subtitle: Week 25')),
+		);
 	});
 
 	// --- external-edit floor (issue #133, doc 21 §6): detect an outside edit, offer reload/keep, never clobber ---
@@ -1291,7 +1518,7 @@ suite('livingDocs Service', () => {
 			// The strip and the conversation are restored together, from one load.
 			tabs: after.getChatSessions().map(s => s.title),
 			callsWhileRestoring: lastModelCalls,
-			proposalsQueuedByRestoring: after.getAllPending().length,
+			changesQueuedByRestoring: after.getAllPending().length,
 			droppedMessages: after.getDroppedChatMessages(),
 		}, {
 			callsWhileChatting: 1,
@@ -1301,7 +1528,7 @@ suite('livingDocs Service', () => {
 			],
 			tabs: ['Headings @metrics.csv'],
 			callsWhileRestoring: 0,
-			proposalsQueuedByRestoring: 0,
+			changesQueuedByRestoring: 0,
 			droppedMessages: 0,
 		});
 	});
@@ -1430,22 +1657,31 @@ suite('livingDocs Service', () => {
 	test('cancelChat stops an in-flight reply: no pending changes, busy cleared, a muted stopped turn (plan 27)', async () => {
 		// A configured model (opts.model) keeps the first-AI-use gate closed (healthy /healthz -> `needsModelChoice`
 		// is false), so this genuine send proceeds to the reply rather than being held - the behaviour under test.
-		const service = createService([], { model: chatReply('should never be applied', [{ heading: 'Commentary', oldText: 'Growth accelerated sharply this week.', newText: 'x', rationale: 'y' }]) });
+		// The model call is PARKED on this gate, so the reply is genuinely in flight when the cancel lands
+		// rather than the send racing to completion before the poll below ever sees it as busy.
+		const deferModel = new DeferredPromise<void>();
+		const service = createService([], { deferModel, model: chatReply('should never be applied', [{ heading: 'Commentary', oldText: 'Growth accelerated sharply this week.', newText: 'x', rationale: 'y' }]) });
 		await service.loadDocument(WEEKLY);
 
 		// The cancellation source is registered once the reply is in flight (after the model-status probe that opens
-		// sendChatMessage resolves). Wait until the reply is busy, then cancel: this aborts the streaming model call
+		// sendChatMessage resolves). Wait until the reply is busy, then cancel: this stops the streaming model call
 		// mid-flight so a partial reply is never committed and the turn is recorded as a muted stop.
 		const inFlight = service.sendChatMessage(WEEKLY, 'Rewrite the commentary');
 		while (!service.isChatBusy(WEEKLY)) { await new Promise(r => setTimeout(r, 0)); }
 		service.cancelChat(WEEKLY);
+		deferModel.complete();
 		await inFlight;
 
 		const msgs = service.getChatMessages(WEEKLY);
 		const last = msgs[msgs.length - 1];
 		assert.deepStrictEqual(
-			{ role: last.role, stopped: last.stopped, busy: service.isChatBusy(WEEKLY), pending: service.getPendingForDoc(WEEKLY).length },
-			{ role: 'assistant', stopped: true, busy: false, pending: 0 },
+			{
+				role: last.role, stopped: last.stopped, busy: service.isChatBusy(WEEKLY), pending: service.getPendingForDoc(WEEKLY).length,
+				// The model REQUEST itself was cancelled, not just the turn around it: the token the service
+				// handed the request service is the chat's own, so the real HTTP call is aborted in the app.
+				modelRequestCancelled: lastModelToken?.isCancellationRequested,
+			},
+			{ role: 'assistant', stopped: true, busy: false, pending: 0, modelRequestCancelled: true },
 		);
 	});
 
@@ -1621,11 +1857,11 @@ suite('livingDocs Service', () => {
 	});
 
 	// #253: the editor action bar's "Approve all in this doc" must apply EVERY pending change for the open
-	// document, addressing them through the proposals' OWN docId (pendingDocIdFor + approveAll) - the path the
+	// document, addressing them through the changes' OWN docId (pendingDocIdFor + approveAll) - the path the
 	// editor pane now takes. The audit caught it silently no-opping: routing the apply through a re-derived
 	// `this._resource` filtered to an empty set. This pins the fixed path end to end, after a tab switch (a
 	// second document loaded in between) mirrors the exact audit repro, so a regression can never re-hide it.
-	test('#253: the editor-bar "Approve all in this doc" applies every pending change via the proposals own docId, after a tab switch', async () => {
+	test('#253: the editor-bar "Approve all in this doc" applies every pending change via the changes\' own docId, after a tab switch', async () => {
 		const commentary = 'Growth accelerated this week.';
 		const watch = 'Activation rate is climbing on the new onboarding flow.';
 		const service = createService([], {
@@ -1641,7 +1877,7 @@ suite('livingDocs Service', () => {
 		// repro opened Board Note after the Appendix. The pending changes still belong to WEEKLY.
 		await service.loadDocument(BOARD);
 
-		// The editor action bar's approveAllDoc handler: resolve the proposals' own docId, capture the set,
+		// The editor action bar's approveAllDoc handler: resolve the changes' own docId, capture the set,
 		// then apply exactly the captured ids (docs/30 invariant I4 - no re-derivation at apply time).
 		const pendingBefore = service.getPendingForDoc(WEEKLY);
 		const docId = service.pendingDocIdFor(WEEKLY);
@@ -1674,7 +1910,7 @@ suite('livingDocs Service', () => {
 
 		// Awaited: the amendment stacks a revision in the change store, and the approve below reads it.
 		await service.amendChange(change.id, 'Growth accelerated sharply this week.');
-		// The proposal re-renders as still-pending with the amended text (not approved yet).
+		// The change re-renders as still-pending with the amended text (not approved yet).
 		const amended = service.getPendingForDoc(WEEKLY)[0];
 		assert.strictEqual(amended.newText, 'Growth accelerated sharply this week.', 'pending change carries the human amendment');
 		assert.strictEqual(amended.tweaked, true, 'flagged tweaked');
@@ -1746,7 +1982,7 @@ suite('livingDocs Service', () => {
 
 		const pending = service.getPendingForDoc(LIST);
 		assert.strictEqual(pending.length, 1, 'the list-item edit is queued');
-		// The proposal is anchored at the single <li>, not the whole list block (pre-fix it was best.text).
+		// The change is anchored at the single <li>, not the whole list block (pre-fix it was best.text).
 		assert.strictEqual(pending[0].oldText, '- Increase revenue next quarter', 'oldText scoped to the targeted item');
 
 		await service.approve(pending[0].id);
@@ -2023,10 +2259,10 @@ suite('livingDocs Service', () => {
 				skipped: [
 					{ at: 0, label: '', reason: 'decided-elsewhere' },
 					// `needs-attention`, not `apply-failed` (R6): the hand-edit above is reported to the change
-					// store as it happens, so the proposal it landed inside was flipped to needs-attention
+					// store as it happens, so the change it landed inside was flipped to needs-attention
 					// BEFORE the reviewer pressed Approve. Nothing was attempted against the file, which is the
 					// more honest of the two readings - "the apply did not land" would describe a write that
-					// never ran. The proposal on the untouched item is rebased by exact arithmetic and applies.
+					// never ran. The change on the untouched item is rebased by exact arithmetic and applies.
 					{ at: 1, label: 'Levers - Growth Levers', reason: 'needs-attention' },
 				],
 				lateArrivalStillPending: true,
@@ -2167,6 +2403,207 @@ suite('livingDocs Service', () => {
 		);
 	});
 
+	// --- the stage-3 branch point (issue #380): chips present run the READ-ONLY agent loop ---
+
+	/** One assistant turn asking for tools, exactly as the broker closes a tool-calling turn. */
+	function toolUseMessage(...calls: { id: string; name: string; input: object }[]): object {
+		return { content: calls.map(c => ({ type: 'tool_use', id: c.id, name: c.name, input: c.input })), stop_reason: 'tool_use' };
+	}
+
+	test('#380: attaching documents and asking a question runs the LOOP to its terminal, reads through tools, and changes nothing', async () => {
+		// The loop now CARRIES a mutating verb (issue #381); this run simply never calls it, which is the
+		// honest shape of a question - the ledger reports what was proposed (nothing) rather than asserting
+		// the run had no way to propose anything.
+		// A full multi-step run over the real service seam: the model reads both attached documents through
+		// `read_document`, reads one document it was NOT given (permitted, and ledgered), then finishes.
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'plan_scope', input: { docIds: [WEEKLY.toString(), BOARD.toString()], rationale: 'Both were attached.' } }),
+				toolUseMessage(
+					{ id: 'c2', name: 'read_document', input: { docId: WEEKLY.toString() } },
+					{ id: 'c3', name: 'read_document', input: { docId: BOARD.toString() } },
+				),
+				toolUseMessage({ id: 'c4', name: 'read_document', input: { docId: README.toString() } }),
+				toolUseMessage({ id: 'c5', name: 'finish', input: { summary: 'Both documents describe steady growth this week.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'what do these two say about growth?');
+
+		// The loop ran: one model call PER STEP, not the single-shot pipeline's one call for the whole turn.
+		assert.strictEqual(lastModelCalls, 4, 'the loop took one model call per step, through to finish');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.strictEqual(turn.role, 'assistant');
+		assert.strictEqual(turn.via, 'model');
+		assert.ok(!turn.failed, 'the run reached its terminal, so the turn is not a failure');
+		// The model narrated; the HOST composed the ledger from its own receipts.
+		assert.ok(turn.content.startsWith('Both documents describe steady growth this week.'), turn.content);
+		assert.ok(turn.content.includes('Read 2 of the 2 attached documents'), turn.content);
+		// A read outside the declared scope is permitted AND disclosed (doc 30 founder ruling 9.4).
+		assert.ok(turn.content.includes('Also read 1 other project document for context'), turn.content);
+		assert.ok(turn.content.includes('Nothing was changed - this run proposed no changes.'), turn.content);
+		// A question is a question: the model called no mutating verb, so nothing reached the review queue.
+		assert.deepStrictEqual(service.getAllPending(), []);
+		// The steps feed reads as work, never as tool names.
+		assert.deepStrictEqual(turn.steps?.map(s => s.label), [
+			'Recorded what this run is about', 'Read Weekly Operating Summary', 'Read Board Note', 'Read Team Notes',
+		]);
+		// The tools the model was offered are the four readers plus doc 30's ONE in-loop mutating verb. The
+		// later tranches stay absent, so the model cannot half-use a verb it was never told about.
+		const sent = JSON.parse(lastModelBody!) as { tools: { name: string }[] };
+		assert.deepStrictEqual(sent.tools.map(t => t.name), ['list_documents', 'read_document', 'read_source', 'plan_scope', 'propose_segments', 'finish']);
+	});
+
+	test('#381: asking for a change through the loop lands a reviewable diff in place, heading rename and all', async () => {
+		// The acceptance, at the real service seam: model -> segment list -> host expands, diffs, writes ->
+		// a Change the shipped review surfaces already render. Nothing is written to the document: the
+		// person's approve is still the only thing that touches the file.
+		const service = createService([], {
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'read_document', input: { docId: WEEKLY.toString() } }),
+				toolUseMessage({
+					id: 'c2', name: 'propose_segments', input: {
+						docId: WEEKLY.toString(),
+						intent: 'Rename the section and say what steady means.',
+						segments: [
+							// B1 `## Highlights`, B2 the BOUND revenue line, B3 `## Commentary`, B4 the prose,
+							// B5 `## What to watch`, B6 the activation line.
+							{ keep: 'B1-B2' },
+							{ replace: 'B3', echo: ['## Commentary'], content: '## Commentary and outlook' },
+							{ replace: 'B4', echo: ['Growth remained steady'], content: 'Growth remained steady this week, in line with plan.' },
+							{ keep: 'B5-B6' },
+						],
+					}
+				}),
+				toolUseMessage({ id: 'c3', name: 'finish', input: { summary: 'I have proposed a rename and a clearer commentary line.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+
+		await service.sendChatMessage(WEEKLY, 'rename Commentary and say what steady means');
+
+		// A reviewable diff in place: two changes, in the document, waiting on the person.
+		const pending = service.getPendingForDoc(WEEKLY);
+		assert.deepStrictEqual(pending.map(c => c.oldText), ['## Commentary', 'Growth remained steady this week.']);
+		assert.deepStrictEqual(pending.map(c => c.newText), ['## Commentary and outlook', 'Growth remained steady this week, in line with plan.']);
+		// The heading rename is the instruction that used to evaporate silently at queue time (#303 family).
+		assert.ok(pending.some(c => c.oldText === '## Commentary'), 'a heading rename must now be expressible');
+		// Nothing has been written yet - the file on disk is untouched until the person approves.
+		assert.strictEqual(lastFiles?.get(WEEKLY.toString()), WEEKLY_MD);
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(!turn.failed, turn.content);
+		assert.ok(turn.content.startsWith('I have proposed a rename and a clearer commentary line.'), turn.content);
+		// The host composed the count, not the model.
+		assert.ok(turn.content.includes('In Weekly Operating Summary: 2 changes are waiting for your review'), turn.content);
+		assert.ok(turn.content.includes('Nothing has been written to your documents yet'), turn.content);
+		assert.deepStrictEqual(turn.steps?.map(s => s.label), [
+			'Read Weekly Operating Summary', 'Proposed changes to Weekly Operating Summary',
+		]);
+	});
+
+	test('#381: an off-by-one range is rejected into review rather than misapplied, and queues nothing', async () => {
+		const service = createService([], {
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'read_document', input: { docId: WEEKLY.toString() } }),
+				toolUseMessage({
+					id: 'c2', name: 'propose_segments', input: {
+						docId: WEEKLY.toString(),
+						// It means B3 and writes B4: syntactically perfect, one block out, and the echo catches it.
+						segments: [{ keep: 'B1-B2' }, { replace: 'B4', echo: ['## Commentary'], content: '## Commentary and outlook' }, { keep: 'B3' }, { keep: 'B5-B6' }],
+					}
+				}),
+				toolUseMessage({ id: 'c3', name: 'finish', input: { summary: 'My labels were off, so I changed nothing.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+
+		await service.sendChatMessage(WEEKLY, 'rename Commentary');
+
+		assert.deepStrictEqual(service.getAllPending(), [], 'an off-by-one list must not queue anything at all');
+		assert.strictEqual(lastFiles?.get(WEEKLY.toString()), WEEKLY_MD);
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(turn.content.includes('rejected before it reached your review queue'), turn.content);
+		// The refusal is shown as work that did NOT happen, never as a completed step.
+		assert.deepStrictEqual(turn.steps?.map(s => s.status), ['done', 'skipped']);
+	});
+
+	test('#380: an ask with NO attachments still takes the existing single-shot path, loop enabled or not', async () => {
+		// The loop is ON (the product default) and the ask carries no chips, so the single-shot path answers -
+		// and proves it by queueing an edit, which the read-only loop has no verb to do.
+		const service = createService([], {
+			model: modelMessage({ reply: 'Tightened it.', edits: [{ heading: 'Highlights', oldText: 'Growth remained steady this week.', newText: 'Growth held steady.', rationale: 'r' }] }),
+		});
+		await service.loadDocument(WEEKLY);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'tighten the highlights');
+
+		assert.strictEqual(lastModelCalls, 1, 'the single-shot path answers in ONE call');
+		assert.strictEqual(service.getAllPending().length, 1, 'the single-shot path still queues its edit');
+		// The single-shot wire is unchanged: no tool definitions travel on a non-explicit-scope ask.
+		assert.ok(!(JSON.parse(lastModelBody!) as { tools?: unknown }).tools, 'no tool surface on the single-shot path');
+	});
+
+	test('#380: the step ceiling ends an explicit-scope run HONESTLY, naming what it hit and what it read', async () => {
+		// The model never calls finish, so the ceiling is what stops it. The turn must SAY so.
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			agentMaxSteps: 3,
+			model: toolUseMessage({ id: 'c1', name: 'read_document', input: { docId: WEEKLY.toString() } }),
+		});
+		await service.loadDocument(WEEKLY);
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'read this until you are done');
+
+		assert.strictEqual(lastModelCalls, 3, 'the ceiling bound the run to three steps');
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.strictEqual(turn.failed, true, 'a run that never finished is an honest failure, never a silent stop');
+		assert.ok(turn.content.includes('I stopped after 3 steps without finishing my answer'), turn.content);
+		// What it DID read is still ledgered: a bounded run is a partial run, never a lost one.
+		assert.ok(turn.content.includes('Weekly Operating Summary'), turn.content);
+		assert.deepStrictEqual(service.getAllPending(), []);
+	});
+
+	test('#380: plan_scope cannot widen past the attachments, and the model is told so in words', async () => {
+		const service = createService([], {
+			boardNote: true,
+			proxyUrl: DEAD_PROXY,
+			modelSequence: [
+				toolUseMessage({ id: 'c1', name: 'plan_scope', input: { docIds: [WEEKLY.toString(), BOARD.toString()] } }),
+				toolUseMessage({ id: 'c2', name: 'finish', input: { summary: 'I stayed inside the attached set.' } }),
+			],
+		});
+		await service.loadDocument(WEEKLY);
+		// ONLY the Weekly is attached, so naming the Board is a widening.
+		await service.addToWorkingSet(WEEKLY, [WEEKLY]);
+		lastModelCalls = 0;
+
+		await service.sendChatMessage(WEEKLY, 'what does this say?');
+
+		const turn = service.getChatMessages(WEEKLY).at(-1)!;
+		assert.ok(!turn.failed, 'a refused widening is a recovery, not a terminal');
+		// The refusal is typed, reaches the model, and is shown to the person as a step that did NOT happen.
+		const refusal = turn.steps?.find(step => step.status === 'skipped');
+		assert.ok(refusal, 'the refused call is shown as a step that did not happen');
+		assert.ok(refusal.label.startsWith('scope_locked:'), refusal.label);
+		assert.ok(refusal.label.includes(BOARD.toString()), 'the refusal names what it refused');
+		assert.ok(turn.content.includes('The scope stayed as you attached it'), turn.content);
+	});
+
 	// --- multi-document fan-out (plan 18 iter 3): one instruction edits the whole working set (D-C) ---
 
 	// One model reply carrying the per-document edit map for the working set.
@@ -2176,6 +2613,9 @@ suite('livingDocs Service', () => {
 
 	test('with a working set, one chat instruction fans out edits to every document via a single model call (D-C)', async () => {
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			model: multiReply('Changed blue to red across all three.', [
@@ -2195,7 +2635,7 @@ suite('livingDocs Service', () => {
 		assert.deepStrictEqual(
 			[...docIds].sort(),
 			[BOARD.toString(), README.toString(), WEEKLY.toString()].sort(),
-			'proposals are queued across all three working-set documents',
+			'changes are queued across all three working-set documents',
 		);
 	});
 
@@ -2213,6 +2653,9 @@ suite('livingDocs Service', () => {
 		const weeklyBig = WEEKLY_MD.replace('Growth remained steady this week.', `Growth remained steady this week.\n\n${padBlocks}`);
 		const boardBig = BOARD_MD.replace('Momentum is steady this week.', `Momentum is steady this week.\n\n${padBlocks}`);
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			fanoutBudget: 2000,
@@ -2238,8 +2681,8 @@ suite('livingDocs Service', () => {
 			'each batch\'s edit is merged against its own document (no drop, no double-count)',
 		);
 		// Exactly one pending change per document - the merge did not double-queue across batches.
-		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 1, 'the Weekly has exactly its own one proposal');
-		assert.strictEqual(service.getPendingForDoc(BOARD).length, 1, 'the Board has exactly its own one proposal');
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 1, 'the Weekly has exactly its own one change');
+		assert.strictEqual(service.getPendingForDoc(BOARD).length, 1, 'the Board has exactly its own one change');
 		// The fan-out progress records the two-batch run for the run screen's "batch K of M" chip (no oversize).
 		const progress = service.getFanoutProgress(WEEKLY);
 		assert.strictEqual(progress?.batchCount, 2, 'the run screen sees a two-batch fan-out');
@@ -2255,6 +2698,9 @@ suite('livingDocs Service', () => {
 		// is set aside as oversize. The Weekly still fits and is edited. The oversize doc is reported honestly.
 		const bigBody = `---\ntitle: Team Notes\n---\n\n## Team Notes\n\n${'padding sentence to blow the budget. '.repeat(400)}\n`;
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			fanoutBudget: 2000,
 			proxyUrl: DEAD_PROXY,
 			modelSequence: [
@@ -2268,7 +2714,7 @@ suite('livingDocs Service', () => {
 
 		await service.sendChatMessage(WEEKLY, 'change the primary colour from blue to red');
 
-		// Only the fitting document is edited; the oversize document produced no proposal and was never sent.
+		// Only the fitting document is edited; the oversize document produced no change and was never sent.
 		const docIds = new Set(service.getAllPending().map(c => c.docId));
 		assert.deepStrictEqual([...docIds], [WEEKLY.toString()], 'only the fitting document is edited');
 		const progress = service.getFanoutProgress(WEEKLY);
@@ -2282,8 +2728,8 @@ suite('livingDocs Service', () => {
 	test('a fan-out with the model down names EVERY failed doc + carries them for surgical retry, never an all-clear (F14)', async () => {
 		// /healthz is healthy (model probes available) but every /v1/messages errors (the outage): the fan-out
 		// must record each target document as failed, surface a NAMED unreachable error listing them, queue NO
-		// proposals, and never read as a silent "no changes proposed". The run screen sees the same failed set.
-		const service = createService([], { boardNote: true, proxyUrl: DEAD_PROXY, model: { error: { message: 'model proxy unreachable' } } });
+		// changes, and never read as a silent "no changes proposed". The run screen sees the same failed set.
+		const service = createService([], { agentLoop: false, boardNote: true, proxyUrl: DEAD_PROXY, model: { error: { message: 'model proxy unreachable' } } });
 		await service.loadDocument(WEEKLY);
 		await service.addToWorkingSet(WEEKLY, [WEEKLY, BOARD, README]);
 
@@ -2312,12 +2758,17 @@ suite('livingDocs Service', () => {
 	test('retryFailedDocs re-runs ONLY the failed documents (surgical retry, F14)', async () => {
 		// First run: the model is down for the fan-out, so all three docs fail. Then the model recovers and the
 		// surgical retry re-runs ONLY the failed docs - proven by the retry's single model call carrying just the
-		// failed documents' bodies, and by proposals now landing for them.
+		// failed documents' bodies, and by changes now landing for them.
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			modelSequence: [
-				// Calls 1..N (the down run + its single silent retry per batch) all error.
+				// Calls 1..N all error: the down run's streaming call, then the buffered fallback and its single
+				// silent retry. Only once the ladder is exhausted does the run record its failed docs.
+				{ error: { message: 'model proxy unreachable' } },
 				{ error: { message: 'model proxy unreachable' } },
 				{ error: { message: 'model proxy unreachable' } },
 				// The retry run (model recovered) returns real edits across the three documents.
@@ -2342,8 +2793,8 @@ suite('livingDocs Service', () => {
 		// The retry sends a single fan-out call whose body contains only the failed documents (all three here).
 		assert.ok((lastModelBody ?? '').includes('Weekly Operating Summary'), 'the retry re-runs the failed Weekly');
 		assert.ok((lastModelBody ?? '').includes('Board Note'), 'the retry re-runs the failed Board');
-		// Proposals now land for the recovered documents, and the last turn is no longer a failure.
-		assert.ok(service.getAllPending().length >= 1, 'the recovered retry lands proposals');
+		// Changes now land for the recovered documents, and the last turn is no longer a failure.
+		assert.ok(service.getAllPending().length >= 1, 'the recovered retry lands changes');
 		assert.ok(!service.getChatMessages(WEEKLY).at(-1)!.failedDocs, 'the retry turn is not a failure once recovered');
 	});
 
@@ -2369,7 +2820,7 @@ suite('livingDocs Service', () => {
 		return WEEKLY_MD.replace('subtitle: Week 23', `subtitle: Week 23\npolicy: ${policy}`);
 	}
 
-	test('#257 "never": a chat edit request creates NO proposal and the reply names the doc + policy (no silent nothing)', async () => {
+	test('#257 "never": a chat edit request creates NO change and the reply names the doc + policy (no silent nothing)', async () => {
 		const service = createService([], {
 			model: chatReply('Here is a sharper commentary line.', [
 				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
@@ -2462,6 +2913,9 @@ suite('livingDocs Service', () => {
 
 	test('#257 fan-out: a "never" document in the project is SKIPPED with a truthful skip reason, others still change', async () => {
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			model: multiReply('Applied across the project.', [
@@ -2498,16 +2952,16 @@ suite('livingDocs Service', () => {
 		);
 	});
 
-	test('#257 external frontmatter edit is HONOURED: flipping policy to never on disk stops the next chat proposal, no dial touched', async () => {
+	test('#257 external frontmatter edit is HONOURED: flipping policy to never on disk stops the next chat change, no dial touched', async () => {
 		const service = createService([], {
 			model: chatReply('Sharpened it.', [
 				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated.', rationale: 'r' },
 			]),
 		});
 		await service.loadDocument(WEEKLY);
-		// First send with the default policy: a proposal queues as normal.
+		// First send with the default policy: a change queues as normal.
 		await service.sendChatMessage(WEEKLY, 'Tighten the commentary');
-		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 1, 'precondition: a normal doc queues a chat proposal');
+		assert.strictEqual(service.getPendingForDoc(WEEKLY).length, 1, 'precondition: a normal doc queues a chat change');
 		await service.reject(service.getPendingForDoc(WEEKLY)[0].id);
 
 		// Someone edits the file's frontmatter OUTSIDE Abstract, dialling policy to never (no setDocPolicy call).
@@ -2669,6 +3123,9 @@ suite('livingDocs Service', () => {
 
 	test('I3 fan-out: edits for a document that was NOT in the run render as a failure naming the title miss', async () => {
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			model: multiReply('Updated the quarterly plan.', [
@@ -2697,6 +3154,9 @@ suite('livingDocs Service', () => {
 		// The receipt must still say the human's dial refused it - blaming the model for naming an unknown
 		// document would misreport a choice the user made.
 		const service = createService([], {
+			// This test pins the SINGLE-SHOT fan-out, which stays live for every ask that is not routed to
+			// the agent loop (issue #380). Naming the route here keeps it testing the pipeline it means to.
+			agentLoop: false,
 			boardNote: true,
 			proxyUrl: DEAD_PROXY,
 			model: multiReply('Tightened the board note.', [
@@ -2721,7 +3181,7 @@ suite('livingDocs Service', () => {
 		);
 	});
 
-	test('I3: a PARTIAL turn keeps the reply and the proposals, and appends the named shortfall', async () => {
+	test('I3: a PARTIAL turn keeps the reply and the changes, and appends the named shortfall', async () => {
 		// Two claims, one lands: the prose is real (a change genuinely was proposed), so it stays - but the count
 		// the user reads must reconcile with the count the rail holds, so the shortfall is named alongside it.
 		const service = createService([], {
@@ -2742,7 +3202,7 @@ suite('livingDocs Service', () => {
 				via: 'model',
 				pending: 1,
 			},
-			'a partial keeps its reply and its proposal, and says plainly what did not land',
+			'a partial keeps its reply and its change, and says plainly what did not land',
 		);
 	});
 
@@ -2764,7 +3224,7 @@ suite('livingDocs Service', () => {
 	});
 
 	// --- Closed apply results (docs/30 invariant I1; kills issue #329): an approval the apply could not land
-	// must NOT be recorded as an approval. The document moves on between a proposal being queued and the
+	// must NOT be recorded as an approval. The document moves on between a change being queued and the
 	// reviewer clicking Approve - they hand-edit the paragraph, or delete the section outright - and both of
 	// approve()'s failure paths used to fall straight through into the approval bookkeeping. The rail cleared,
 	// the audit gained an `approved` row, the transcript counted an approval, and the file on disk still said
@@ -2800,7 +3260,7 @@ suite('livingDocs Service', () => {
 		};
 	}
 
-	test('I1: approving an edit whose block was hand-edited since the proposal records NO approval and leaves the file alone', async () => {
+	test('I1: approving an edit whose block was hand-edited since the change records NO approval and leaves the file alone', async () => {
 		const service = createService([], {
 			model: chatReply('Sharpened the second lever.', [
 				{ heading: 'Growth Levers', oldText: '- Increase revenue next quarter', newText: '- Increase revenue substantially next quarter', rationale: 'r' },
@@ -2810,9 +3270,9 @@ suite('livingDocs Service', () => {
 		await service.loadDocument(LEVERS);
 		await service.sendChatMessage(LEVERS, 'Sharpen the second lever');
 		const pending = service.getPendingForDoc(LEVERS)[0];
-		assert.strictEqual(pending.oldText, '- Increase revenue next quarter', 'precondition: the proposal is anchored on the one item');
+		assert.strictEqual(pending.oldText, '- Increase revenue next quarter', 'precondition: the change is anchored on the one item');
 
-		// The reviewer reads the proposal, then edits that very item by hand before deciding on it. This is the
+		// The reviewer reads the change, then edits that very item by hand before deciding on it. This is the
 		// ordinary case, not a contrived one: the rail and the document are open side by side.
 		const listBlock = service.getDoc(LEVERS)!.blocks.find(b => b.text.includes('Increase revenue'))!;
 		await service.editBlock(LEVERS, listBlock.id, [
@@ -2837,7 +3297,7 @@ suite('livingDocs Service', () => {
 		});
 	});
 
-	test('I1: approving an edit whose block was DELETED since the proposal records NO approval either', async () => {
+	test('I1: approving an edit whose block was DELETED since the change records NO approval either', async () => {
 		const service = createService([], {
 			model: chatReply('Sharpened the second lever.', [
 				{ heading: 'Growth Levers', oldText: '- Increase revenue next quarter', newText: '- Increase revenue substantially next quarter', rationale: 'r' },
@@ -3175,7 +3635,7 @@ suite('livingDocs Service', () => {
 	});
 
 	// --- plan 48 T2.4: Use a template = duplicate into the folder with binds emptied to slots ---
-	// Use is a pure duplication (no model call, no review proposals): the new doc carries the pattern with its
+	// Use is a pure duplication (no model call, no review changes): the new doc carries the pattern with its
 	// binds emptied to {{slot}} placeholders, records `template: <name>` provenance, declares no sources, and
 	// is opened. So it reports `needsSourceBinding` (the tree-row nudge) until a source is bound.
 	test('useTemplate duplicates the template into the folder with binds emptied to slots, opens it, and it needs binding', async () => {
@@ -3191,7 +3651,7 @@ suite('livingDocs Service', () => {
 		assert.strictEqual(extractBindLinks(doc.body).length, 0, 'every bind is emptied to a slot');
 		assert.ok(/\{\{slot:/.test(raw), 'the emptied binds survive as {{slot}} placeholders');
 		assert.deepStrictEqual(opened[opened.length - 1]?.resource?.toString(), uri!.toString(), 'the new document is opened');
-		assert.strictEqual(service.getPendingForDoc(uri!).length, 0, 'Use is a pure duplication - no review proposals queued');
+		assert.strictEqual(service.getPendingForDoc(uri!).length, 0, 'Use is a pure duplication - no review changes queued');
 
 		// The queryable "needs binding" state (T2.4): the duplicate reports needsSourceBinding until a source binds.
 		const summary = (await service.listDocuments()).find(d => d.resource.toString() === uri!.toString());
@@ -3361,7 +3821,7 @@ suite('livingDocs Service', () => {
 	});
 
 	// Plan 28, iter 3: generate a draft from a template. With a model reachable the prose arrives as
-	// insertion proposals through the EXISTING chat path (review engine), the skeleton is born bound to the
+	// insertion changes through the EXISTING chat path (review engine), the skeleton is born bound to the
 	// template's source, and the frontmatter records `template:` provenance. No new approve/apply path.
 	test('generateFromTemplate writes a bound skeleton with provenance and drafts through the review engine', async () => {
 		const opened: IOpenedEditor[] = [];
@@ -3383,10 +3843,10 @@ suite('livingDocs Service', () => {
 		assert.ok(raw.includes('[pending](bind:metrics.mrr)'), 'the bind link is copied through verbatim');
 		assert.ok(!/\{\{/.test(raw), 'no slots survive into the generated document');
 
-		// The prose arrived as a reviewable insertion proposal (not written directly): it is in the pending set.
+		// The prose arrived as a reviewable insertion change (not written directly): it is in the pending set.
 		const pending = service.getPendingForDoc(uri!);
-		assert.strictEqual(pending.length, 1, 'the model draft landed as one insertion proposal in the review rail');
-		assert.strictEqual(pending[0].newText, 'MRR grew steadily this week.', 'the proposal carries the generated prose');
+		assert.strictEqual(pending.length, 1, 'the model draft landed as one insertion change in the review rail');
+		assert.strictEqual(pending[0].newText, 'MRR grew steadily this week.', 'the change carries the generated prose');
 		assert.strictEqual(pending[0].oldText, '', 'an insertion has no old text (all-additions inline diff)');
 
 		// The composed brief was actually sent to the model (the existing chat path, not a bespoke one).
@@ -3409,7 +3869,7 @@ suite('livingDocs Service', () => {
 	// --- F17 "From sources..." birth (journey 1b): draft a document FROM selected sources through review ---
 	// The skeleton DECLARES the picked sources (provenance) and the document is opened, then the draft is driven
 	// through the SAME chat path every generation uses (like generateFromTemplate): the prose arrives as a
-	// reviewable insertion proposal in the Review rail, never written to disk directly (decision 17).
+	// reviewable insertion change in the Review rail, never written to disk directly (decision 17).
 	test('generateFromSources writes a source-declared skeleton (provenance) and drafts through the review engine', async () => {
 		const opened: IOpenedEditor[] = [];
 		const service = createService(opened, {
@@ -3425,10 +3885,10 @@ suite('livingDocs Service', () => {
 		assert.deepStrictEqual(doc.sources, ['metrics.csv'], 'the csv is a value source (so its figures can bind)');
 		assert.deepStrictEqual(doc.context, ['market-research.md'], 'the document/knowledge source is context');
 		assert.ok(raw.includes('# Board note - March'), 'the H1 is the document name');
-		// The prose arrived as a reviewable insertion proposal (not written directly): it is in the pending set.
+		// The prose arrived as a reviewable insertion change (not written directly): it is in the pending set.
 		const pending = service.getPendingForDoc(uri!);
-		assert.strictEqual(pending.length, 1, 'the model draft landed as one insertion proposal in the review rail');
-		assert.strictEqual(pending[0].newText, 'MRR grew steadily this week.', 'the proposal carries the drafted prose');
+		assert.strictEqual(pending.length, 1, 'the model draft landed as one insertion change in the review rail');
+		assert.strictEqual(pending[0].newText, 'MRR grew steadily this week.', 'the change carries the drafted prose');
 		assert.strictEqual(pending[0].oldText, '', 'an insertion has no old text (all-additions inline diff)');
 		// The composed from-sources brief actually drove the model call (the existing chat path, not a bespoke one).
 		assert.ok((lastModelBody ?? '').includes('Draft the first version of'), 'the composed from-sources brief drove the model call');
@@ -3460,7 +3920,7 @@ suite('livingDocs Service', () => {
 
 	// The template file is a real, discoverable `*.template.md` that records the examples it was grown from and
 	// carries the skill.md scaffold; the analysis then runs through the SAME chat path (like generateFromTemplate),
-	// so the named commonalities arrive as reviewable insertion proposals - the review grammar, never a silent write.
+	// so the named commonalities arrive as reviewable insertion changes - the review grammar, never a silent write.
 	test('generateTemplateFromExamples writes a real, discoverable template and analyses the examples through the review engine', async () => {
 		const opened: IOpenedEditor[] = [];
 		const service = createService(opened, {
@@ -3482,10 +3942,10 @@ suite('livingDocs Service', () => {
 		// It joins the Templates library at once (before any approval - the file exists on disk).
 		assert.ok((await service.listTemplates()).some(t => t.name === 'Board note'), 'the new template appears in listTemplates');
 
-		// The analysis named the commonality as a reviewable insertion proposal (the review grammar), not a silent write.
+		// The analysis named the commonality as a reviewable insertion change (the review grammar), not a silent write.
 		const pending = service.getPendingForDoc(uri!);
-		assert.strictEqual(pending.length, 1, 'the analysis landed as one insertion proposal in the review rail');
-		assert.strictEqual(pending[0].newText, 'Title, summary, then the numbers.', 'the proposal carries the named commonality');
+		assert.strictEqual(pending.length, 1, 'the analysis landed as one insertion change in the review rail');
+		assert.strictEqual(pending[0].newText, 'Title, summary, then the numbers.', 'the change carries the named commonality');
 		assert.ok((lastModelBody ?? '').includes('Study the 3 attached example documents'), 'the composed analysis brief drove the model call');
 	});
 
@@ -4476,9 +4936,9 @@ suite('livingDocs Service', () => {
 		);
 	});
 
-	test('R6: a restored proposal in a document this window never opened can still be approved', async () => {
+	test('R6: a restored change in a document this window never opened can still be approved', async () => {
 		// The blocker found reviewing #356. Persistence makes this the NORMAL state after a reload: the rail
-		// shows proposals grouped by document, one of which the window auto-opens and the rest of which it has
+		// shows changes grouped by document, one of which the window auto-opens and the rest of which it has
 		// never touched. The store's read seam returned undefined for an unopened document, the resolve path
 		// read that as "the document moved on", and the reviewer was told "the text it was written for has
 		// changed" about a file nobody had opened - false, and it made every group but one undecidable.
@@ -4500,7 +4960,7 @@ suite('livingDocs Service', () => {
 		const disk = lastFiles!;
 		first.dispose();
 
-		// A fresh window. NOTHING is opened - not even the document the proposal belongs to.
+		// A fresh window. NOTHING is opened - not even the document the change belongs to.
 		const second = createService([], { boardNote: true, files: disk, model: chatReply('never asked for') });
 		await second.whenReviewStateRestored();
 		const boardChange = second.getAllPending().find(c => c.docId === BOARD.toString())!;
@@ -4560,10 +5020,10 @@ suite('livingDocs Service', () => {
 
 	// --- R6: the persisted change store, live (docs/30 section 5, stage 1) ---
 	//
-	// Four facts the store exists to make true, each written from what used to be false. Proposals were
+	// Four facts the store exists to make true, each written from what used to be false. Changes were
 	// renderer memory that vanished on reload; every approve re-serialised the whole document and dropped
 	// frontmatter fields the parser reads; a write that landed wrong could still be recorded as approved; and
-	// a person typing under a pending proposal left it pointing at prose that had moved.
+	// a person typing under a pending change left it pointing at prose that had moved.
 
 	// A document generated FROM a template, carrying every frontmatter key the serialiser drops: the
 	// `template: <name>` provenance string (read back as `fromTemplate`), `name`, `description`, and a key
@@ -4625,7 +5085,7 @@ suite('livingDocs Service', () => {
 		);
 	});
 
-	test('R6: pending proposals, their decided counts and their statuses survive a reload', async () => {
+	test('R6: pending changes, their decided counts and their statuses survive a reload', async () => {
 		const first = createService([], {
 			model: modelMessage({
 				reply: 'Sharpened two lines.', edits: [
@@ -4682,7 +5142,7 @@ suite('livingDocs Service', () => {
 		second.dispose();
 	});
 
-	test('R6: the restored proposal still applies, and to the right prose', async () => {
+	test('R6: the restored change still applies, and to the right prose', async () => {
 		const first = createService([], {
 			model: chatReply('Sharpened the commentary.', [
 				{ heading: 'Commentary', oldText: 'Growth remained steady this week.', newText: 'Growth accelerated this week.', rationale: 'r' },
@@ -4704,14 +5164,14 @@ suite('livingDocs Service', () => {
 				pendingAfter: second.getPendingForDoc(WEEKLY).length,
 				approved: second.getLock(WEEKLY)!.audit.filter(e => e.action === 'approved').length,
 			},
-			// A restored proposal is a real proposal: its span was persisted against a base revision, and the
+			// A restored change is a real change: its span was persisted against a base revision, and the
 			// document has not moved, so it splices exactly where it was written to.
 			{ commentary: 'Growth accelerated this week.', pendingAfter: 0, approved: 1 },
 		);
 		second.dispose();
 	});
 
-	test('R6/I8: typing under a pending proposal flags the one it lands inside and rebases the rest', async () => {
+	test('R6/I8: typing under a pending change flags the one it lands inside and rebases the rest', async () => {
 		const service = createService([], {
 			model: modelMessage({
 				reply: 'Sharpened both.', edits: [
@@ -4724,7 +5184,7 @@ suite('livingDocs Service', () => {
 		await service.sendChatMessage(WEEKLY, 'Sharpen the commentary and the watch item');
 		const [commentaryChange, watchChange] = service.getPendingForDoc(WEEKLY);
 
-		// The reviewer rewrites the commentary paragraph by hand - the very prose the first proposal was
+		// The reviewer rewrites the commentary paragraph by hand - the very prose the first change was
 		// written for - and, because the paragraph got longer, everything after it moves.
 		const typed = lastFiles!.get(WEEKLY.toString())!.replace(
 			'Growth remained steady this week.',

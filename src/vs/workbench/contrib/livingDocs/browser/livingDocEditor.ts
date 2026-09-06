@@ -298,7 +298,7 @@ export class LivingDocEditor extends EditorPane {
 
 	// The resource whose pending changes the doc-scoped bulk actions operate on (#253). Prefer this pane's
 	// own `_resource`, but fall back to the group's active-editor resource when `_resource` has no pending
-	// changes of its own - the chat rail queues proposals against the group's active-editor resource, so on
+	// changes of its own - the chat rail queues changes against the group's active-editor resource, so on
 	// the rare occasion those two identities drift the active editor is the authoritative one and must not be
 	// stranded. Returns undefined only when neither identity is available.
 	private _resourceForPending(): URI | undefined {
@@ -452,8 +452,8 @@ export class LivingDocEditor extends EditorPane {
 				break;
 			case 'approveAllDoc': {
 				// Editor action bar: accept every pending change in THIS document at once (plan 19 iter 4).
-				// Scope the capture by the proposals' OWN docId (#253) - never a re-derived
-				// `this._resource.toString()`. `_resource` can drift from the docId the proposals were queued
+				// Scope the capture by the changes' OWN docId (#253) - never a re-derived
+				// `this._resource.toString()`. `_resource` can drift from the docId the changes were queued
 				// under (the chat rail queues them against the GROUP's active-editor resource, which is not
 				// guaranteed to be the same URI instance this pane last set), which used to make the bulk verb
 				// filter to an empty set and silently no-op - no dialog, no apply. `_resourceForPending` falls
@@ -757,7 +757,7 @@ export class LivingDocEditor extends EditorPane {
 
 	// (plan 44-b PH.2/PH.3) Publish this document's content to the one global Abstract header (the repurposed
 	// title bar): the breadcrumb tail is the document title with its file name suffix; the sync pill reads
-	// "All sources synced" for a living document (a pending proposal is surfaced by the right-toggle badge,
+	// "All sources synced" for a living document (a pending change is surfaced by the right-toggle badge,
 	// not here); the action is Present; the editor surface shows both rail toggles. The pill is omitted for a
 	// plain Markdown doc (no sources to be synced) - the shell stays truthful before the first source use.
 	private _publishHeader(input: ILivingDocRenderInput): void {

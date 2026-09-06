@@ -194,7 +194,7 @@ html,body{margin:0;padding:0;height:100%;background:${PAPER.page};color:${INK.he
  * header (the repurposed title bar) carries the breadcrumb, the sync pill and the Present action. The
  * formatting toolbar (.etoolbar) now sticks at the top of the webview; the raw-mode exit lives in .rawtop. */
 .rawtop{position:sticky;top:0;height:46px;z-index:5;flex:none;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid ${HAIRLINE.medium};background:${PAPER.page}}
-/* The PM proposal widgets (inline diff / insert) sit full-width in a .pcell column. */
+/* The PM change widgets (inline diff / insert) sit full-width in a .pcell column. */
 .pcell{min-width:0}
 /* THE BOUND FIGURE (doc 28; comp 2a/4d). Round 1 drew it as a tinted, bolded, dotted-underlined chip. Round 2
  * makes it an UNDERLINE and nothing else: a fill behind running text is reserved for "this span is changing"
@@ -485,7 +485,14 @@ table.kpi td:first-child{text-align:left;font-weight:600}
  * html,body rule above resets the webview harness's body padding (0 20px) - without that reset the harness
  * inset survives and pushes every bar ~20px off each rail. */
 .pmwrap{display:flex;justify-content:center;padding:32px 40px 90px}
-.pmwrap .prose{flex:0 1 auto;max-width:720px;margin:0;padding-left:70px;padding-right:0;box-sizing:content-box;position:relative;transform:translateX(-18px)}
+/* THE READING COLUMN IS A LANE, NOT A SHRINK-WRAP (#320). It is a flex item, so flex:0 1 auto sized it
+ * from its CONTENT: a brand-new blank document has none, so the column - and the .ProseMirror mount inside
+ * it - computed to 0px wide, leaving nothing to click into and nowhere for a caret to go. A flex-grow of 1
+ * makes the column claim the lane it is designed to be (max-width 720px of reading text beside the 70px
+ * gutter) whether the document holds a chapter, one word, or nothing at all; flex-shrink keeps it giving
+ * way on a narrow pane. The measure is therefore a property of the surface, not of what has been typed
+ * into it, which is also why the first line of a new document lands exactly where every later line will. */
+.pmwrap .prose{flex:1 1 auto;max-width:720px;margin:0;padding-left:70px;padding-right:0;box-sizing:content-box;position:relative;transform:translateX(-18px)}
 .pmwrap .ProseMirror{outline:none;min-height:60vh;white-space:pre-wrap;word-wrap:break-word;-webkit-font-smoothing:antialiased}
 .pmwrap .ProseMirror:focus{outline:none}
 .pmwrap .ProseMirror p.is-editor-empty:first-child::before{color:${INK.meta};content:attr(data-placeholder);float:left;pointer-events:none;height:0}
@@ -762,7 +769,7 @@ function specChangeIds(spec){ const ids = []; if (spec) { const lists = [spec.ed
 // literally the same question, asked of the same element. Scoped to pmView.dom so the review bar's own
 // cards (which live in the surrounding chrome and carry the same attribute) are never counted.
 //
-// The requested list rides along because "absent from mounted" on its own is not evidence: a proposal made
+// The requested list rides along because "absent from mounted" on its own is not evidence: a change made
 // after this pass simply was not asked for yet, and the host must tell those two states apart.
 // Deferred a tick so a decoration pass that renders its widgets during the view update has finished, and
 // wrapped so a torn-down view can never break a render.
@@ -1164,8 +1171,8 @@ function mountPm(md, spec){ const r = root.querySelector('#pm-root'); if (r && w
 // never steal the caret. Fail-soft: a focus that throws (view torn down) is ignored.
 function focusPm(){ try { if (pmView && pmView.focus) { setTimeout(function(){ try { pmView && pmView.focus(); } catch (e) {} }, 0); } } catch (e) {} }
 // Re-render the body from a message. The live ProseMirror node is detached, the body HTML is swapped, and
-// the same node re-attached (PM is never remounted). A model-driven body change (an accepted proposal)
-// arrives as pmReset and resets the live doc to disk truth; pending proposals + the gutter are decorations.
+// the same node re-attached (PM is never remounted). A model-driven body change (an approved change)
+// arrives as pmReset and resets the live doc to disk truth; pending changes + the gutter are decorations.
 function applyUpdate(htmlStr, pmMd, spec, pmReset){
 	const live = (pmView && pmMd !== null) ? pmView.dom : null;
 	if (live && live.parentNode) { live.parentNode.removeChild(live); }
@@ -1499,7 +1506,7 @@ function provenanceAtomHtml(source: string, provenance: readonly IPmProvenance[]
 // `data-approve` anchor and the host's widget census (`reportWidgets`) and the rail's `focusChange` deep
 // link both keep working unchanged; opening the marker just un-hides what is already there.
 function pmEditWidgetHtml(e: IPmEditDecoration, bar: boolean, provenance: readonly IPmProvenance[], quiet: boolean): string {
-	// The gutter address (spec 43 section 3.1 / pin 11): the widget's mono tag row cites "Line N" so the proposal,
+	// The gutter address (spec 43 section 3.1 / pin 11): the widget's mono tag row cites "Line N" so the change,
 	// the gutter number and the rail card all speak one address vocabulary. Omitted when the block is gone.
 	const addr = typeof e.addressLine === 'number' ? `<span class="src pm-addr">${esc(addressLabel(e.addressLine))}</span>` : '';
 	// A multi-line edited paragraph carries the `attention` provenance bar (C2): it hangs a 3px bar in the
@@ -1743,7 +1750,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		: '';
 
 	// PM is the single writing surface for every document (plan 15 iter 5): the document IS the editor.
-	// Bound figures render as non-editable atom nodes; pending proposals + the provenance gutter are PM
+	// Bound figures render as non-editable atom nodes; pending changes + the provenance gutter are PM
 	// decorations (plan 15 iter 4); the source-peek opens as the SAME bottom drawer over the full-width doc
 	// (G1 - never a split editor), driven by the existing reveal/sync messages. Raw mode is the one
 	// alternative - a plain Markdown textarea for hand-editing source.
@@ -1772,7 +1779,7 @@ export function renderLivingDocContent(input: ILivingDocRenderInput): ILivingDoc
 		+ `<button class="hint-raw" data-to-raw>Edit raw Markdown</button></div>`
 		: '';
 	// ProseMirror is fed from the FRESH body (parsed from the raw text on disk): a model-driven change
-	// (an accepted proposal) mutates blocks + persists but leaves the cached doc.body stale, so the live
+	// (an approved change) mutates blocks + persists but leaves the cached doc.body stale, so the live
 	// surface must reset to the reparsed body, not the stale cache.
 	const pmMd = pmSurface && doc ? parseLivingDoc(rawText).body : null;
 	const pmDeco = pmSurface && doc ? renderPmDeco(doc, pending, recent, input.provenance ?? []) : null;
@@ -1799,7 +1806,7 @@ export function renderLivingDocHtml(input: ILivingDocRenderInput): string {
 	const bundle = proseMirrorBundle().replace(/<\/script/gi, '<\\/script');
 	// Seed the initial mount Markdown AND the initial decoration spec as globals (the `<` is escaped so they
 	// can't break out of the script); the RUNTIME reads them once on load (so a default-PM living doc shows
-	// its proposals/gutter without waiting for the first message).
+	// its changes/gutter without waiting for the first message).
 	const decoLiteral = content.pmDeco === null ? 'null' : JSON.stringify(content.pmDeco).replace(/</g, '\\u003c');
 	const docsLiteral = JSON.stringify(input.docNames ?? []).replace(/</g, '\\u003c');
 	const pmInit = `<script>window.__LWD_PM_MD=${content.pmMd === null ? 'null' : escapeForScript(content.pmMd)};`

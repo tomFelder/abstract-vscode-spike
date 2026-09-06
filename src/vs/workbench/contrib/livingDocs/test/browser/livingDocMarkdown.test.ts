@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, countTemplateSlots, documentDisplayTitle, emptyBindsToSlots, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterSource, withFrontmatterTag, withReplacedBody } from '../../common/livingDocMarkdown.js';
+import { applyBlockEdit, buildDocumentFromTemplate, buildExamplesTemplateSkeleton, buildSourcesSkeleton, buildTemplateFromDocument, buildTemplateSkeleton, composeExamplesInstruction, composeSourcesInstruction, composeTemplateInstruction, countBindSlots, countTemplateSlots, documentDisplayTitle, emptyBindsToSlots, extractBindLinks, extractStreamingReply, findQuoteLine, listItems, parseChatResponse, parseLivingDoc, parseMultiChatResponse, reconcileBindLinks, scopeBlockEdit, serializeLivingDoc, templateSkeletonRows, templateSlotHints, validateExampleSet, withFrontmatterList, withFrontmatterScalar, withFrontmatterSource, withFrontmatterTag, withMergedFrontmatter, withReplacedBody } from '../../common/livingDocMarkdown.js';
 
 // A clean-file Living Document: pure Markdown + frontmatter dependency lists + inline bind links.
 const WEEKLY_MD = [
@@ -562,6 +562,22 @@ suite('LivingDoc bind-link format', () => {
 		assert.strictEqual(withReplacedBody('# Title\n\nold body\n', 'new body').trim(), 'new body');
 	});
 
+	// Issue #357 / ticket #385 round 3: the non-approve re-attachment carries the frontmatter through
+	// byte-exact and updates ONLY a modelled scalar whose value moved. A CRLF-authored file keeps its CRLF
+	// endings on every unmodelled provenance key (the harness fixtures are LF, so this is a pure unit test),
+	// and a nested map whose child key collides with a modelled key is not hoisted or destroyed.
+	test('withMergedFrontmatter advances a changed scalar while carrying unmodelled keys byte-exact (CRLF + nested map)', () => {
+		const crlf = ['---', 'title: Q3 Board Update', 'subtitle: Week 23', 'template: Weekly report', 'owner:', '  title: Team Lead', '  status: active', '---', '', '## Highlights', '', 'Body text.'].join('\r\n') + '\r\n';
+		const advanced = { ...parseLivingDoc(crlf), subtitle: 'Week 25' };
+		const out = withMergedFrontmatter(crlf, advanced);
+		assert.deepStrictEqual({
+			subtitleAdvanced: out.includes('subtitle: Week 25\r\n'),
+			provenanceKeepsCRLF: out.includes('template: Weekly report\r\n'),
+			nestedMapIntact: out.includes('owner:\r\n  title: Team Lead\r\n  status: active\r\n'),
+			topLevelTitleIntact: out.includes('title: Q3 Board Update\r\n'),
+		}, { subtitleAdvanced: true, provenanceKeepsCRLF: true, nestedMapIntact: true, topLevelTitleIntact: true });
+	});
+
 	// plan 16 iter 5: the chat-response parser must be tolerant -- a non-JSON / truncated / prose-wrapped
 	// reply degrades to a plain answer instead of throwing (which used to surface as "the agent model errored").
 	test('parseChatResponse extracts a clean JSON object with reply + edits + inserts', () => {
@@ -578,7 +594,7 @@ suite('LivingDoc bind-link format', () => {
 		assert.deepStrictEqual(parseChatResponse(raw), { reply: 'Updated the intro.', edits: [], inserts: [] });
 	});
 
-	test('parseChatResponse degrades a plain-text (non-JSON) reply to a plain answer with no proposals', () => {
+	test('parseChatResponse degrades a plain-text (non-JSON) reply to a plain answer with no changes', () => {
 		const raw = 'The document already covers that, so no change is needed.';
 		assert.deepStrictEqual(parseChatResponse(raw), { reply: raw, edits: [], inserts: [] });
 	});

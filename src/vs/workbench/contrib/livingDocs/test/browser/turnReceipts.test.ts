@@ -73,7 +73,7 @@ suite('livingDocs turnReceipts (I3, issue #303)', () => {
 				content: 'Sharpened the sections.\n\n2 changes could not be applied: 1 targeted a heading, 1 was blocked by the document\'s policy.',
 				isError: false,
 			},
-			'proposals landed, so the turn is not a failure - but the shortfall is still spoken',
+			'changes landed, so the turn is not a failure - but the shortfall is still spoken',
 		);
 	});
 

@@ -82,7 +82,7 @@ suite('analytics privacy canary + property-linter (plan 36 iter 2)', () => {
 	test('valid typed payloads pass cleanly (the linter is not simply rejecting everything)', () => {
 		const cases: [AnalyticsEventName, AnalyticsProps][] = [
 			['app_opened', { version: '1.2.3', first_open: true }],
-			['proposal_resolved', { resolution: 'approve', latency_ms: 1200, bulk: false }],
+			['change_resolved', { resolution: 'approve', latency_ms: 1200, bulk: false }],
 			['source_synced', { kind: 'file', ok: true, staleness_age_ms: 0 }],
 			['this_was_wrong_reported', { ref_id: 'd3f8a1c0' }],
 			['export_or_publish', { format: 'html', provenance_mode: 'footnoted', stale_sources_present: false }],

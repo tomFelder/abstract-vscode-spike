@@ -63,7 +63,7 @@ function railGlyph(side: 'left' | 'right'): SVGElement {
  *
  * The breadcrumb / pill / action come from IAbstractHeaderService (each surface publishes its own via
  * setContent). The rail toggles are only shown when the active surface has rails (the editor); the badge
- * dot on the right toggle rides pending proposals (P2.5, replacing the old force-open).
+ * dot on the right toggle rides pending changes (P2.5, replacing the old force-open).
  *
  * Everything the header states is a fact the active surface published: the project name falls back to the
  * folder name, the mono chip carries a real file name, and where no state is published nothing is drawn.
@@ -240,9 +240,9 @@ export class AbstractHeaderContribution extends Disposable implements IWorkbench
 		}
 	}
 
-	// (P2.5) With the right rail collapsed and >=1 pending proposal, an 8px amber dot rides the right
+	// (P2.5) With the right rail collapsed and >=1 pending change, an 8px amber dot rides the right
 	// toggle; it clears when the rail opens. This replaces the old trust-grammar force-open of the rail:
-	// the pending proposal is surfaced quietly on the toggle instead of yanking the rail open.
+	// the pending change is surfaced quietly on the toggle instead of yanking the rail open.
 	private _updateBadge(): void {
 		if (!this._rightBadge) {
 			return;
