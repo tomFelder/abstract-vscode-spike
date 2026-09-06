@@ -21,7 +21,7 @@ An agent is not a new kind of thing; it is a skill given autonomy. This keeps th
 
 The interaction rule that keeps it safe:
 
-> Whatever invokes a skill - a human in chat, a schedule, a hook, a fan-out - its writes land as **proposals through the one review engine** (P3), gated by the policy dial (P9).
+> Whatever invokes a skill - a human in chat, a schedule, a hook, a fan-out - its writes land as **changes through the one review engine** (P3), gated by the policy dial (P9).
 
 ## 2. User-facing vocabulary (decided)
 
@@ -74,8 +74,8 @@ Concrete candidates for the default catalogue, added 9 Jul 2026 at the founder's
 
 | Skill | What it does |
 |---|---|
-| `/interview-me` | Interviews the author one question at a time, with a recommendation attached to each, until the idea's who/why/success/constraints are sharp - then writes the confirmed intent into the document as proposals. (The process that produced this doc set.) |
-| `/brainstorm` | Diverges first (options, angles, analogies drawn from the project's own corpus), then converges to a ranked shortlist with rationale; appends as a proposal, never overwrites. |
+| `/interview-me` | Interviews the author one question at a time, with a recommendation attached to each, until the idea's who/why/success/constraints are sharp - then writes the confirmed intent into the document as changes. (The process that produced this doc set.) |
+| `/brainstorm` | Diverges first (options, angles, analogies drawn from the project's own corpus), then converges to a ranked shortlist with rationale; appends as a change, never overwrites. |
 | `/stress-test` | Adversarially attacks the document's argument: hidden assumptions, missing counter-cases, the strongest opposing view - each finding anchored to the paragraph it challenges. |
 | `/summarise-my-thinking` | Reads a set of notes/drafts (the working set) and proposes the one-page synthesis: what you believe, what changed, what is still open. |
 | `/devils-advocate` | Argues the opposite of the document's central claim as persuasively as the corpus allows, so the author meets the best version of the other side. |
@@ -87,9 +87,9 @@ Concrete candidates for the default catalogue, added 9 Jul 2026 at the founder's
 |---|---|
 | `/numbers-audit` | Deterministically recomputes every derived figure (percentages, deltas, sums) from bound raw values and flags arithmetic drift (doc 12 §3.1). |
 | `/fact-check` | Grades each quantitative claim as source-backed / inferred / unbound; proposes bindings where a source exists. |
-| `/consistency-check` | Cross-document: finds claims that disagree across the working set (dates, figures, decisions) and raises each as a conflict proposal with both provenances. |
+| `/consistency-check` | Cross-document: finds claims that disagree across the working set (dates, figures, decisions) and raises each as a conflict change with both provenances. |
 | `/tighten` | Prose economy pass - shorter, plainer, same meaning; every change a reviewable diff. |
-| `/tone` | Rewrites toward the project's (later: org library's) tone rules, with the rule cited in each proposal's rationale. |
+| `/tone` | Rewrites toward the project's (later: org library's) tone rules, with the rule cited in each change's rationale. |
 | `/executive-summary` | Derives the summary section from the document body with line-level provenance, so the summary is a living block, not a stale copy. |
 
 ### 6.3 Starter agents (skills given triggers)
@@ -104,7 +104,7 @@ Concrete candidates for the default catalogue, added 9 Jul 2026 at the founder's
 
 ### 6.4 Model tools (what skills and agents may call)
 
-The tool surface skills/agents compose from, all mediated by the review engine for writes: `read_document`, `read_source` (with freshness), `peek_binding` (value + provenance for a bound atom), `list_dependents` (the graph's reverse lookup), `search_project` (the 2c ask-the-project substrate), `propose_edit` (the ONE write path - every mutation goes through it), `query_audit` (read-only over lock audit + snapshots, the D18 later layer), `save_snapshot`, and `run_skill` (composition - a skill invoking a skill). No tool writes a document directly; `propose_edit` emitting proposals is what makes P3 structurally true rather than a convention.
+The tool surface skills/agents compose from, all mediated by the review engine for writes: `read_document`, `read_source` (with freshness), `peek_binding` (value + provenance for a bound atom), `list_dependents` (the graph's reverse lookup), `search_project` (the 2c ask-the-project substrate), `propose_edit` (the ONE write path - every mutation goes through it), `query_audit` (read-only over lock audit + snapshots, the D18 later layer), `save_snapshot`, and `run_skill` (composition - a skill invoking a skill). No tool writes a document directly; `propose_edit` emitting changes is what makes P3 structurally true rather than a convention.
 
 ## 7. Principles applied to this layer
 

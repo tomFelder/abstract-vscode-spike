@@ -1,0 +1,12 @@
+---
+number: 54
+status: "**Done (plan 16 iter 1, branch `calm-surface-1`, PR → main).** `livingDocs.contribution.ts`: a `registerDefaultConfigurations` call beside the existing `registerConfiguration`. Tier: **additive-contribution, 0 core patches.** Verified live web (code-web + OpenRouter) **and desktop** (`code.sh`, `TMPDIR=/tmp`): both show no status bar, no activity bar, no tab strip, no breadcrumb — just the calm document surface + tree-rail + Review rail. HOLD re-verified live: the living doc opens in PM with the calm toolbar + bound figure `49800` (U1/U2/G2/G5); a chat turn read `metrics.csv`/`forecast.csv` and rendered an inline insertion in the PM doc with Approve/Reject + a synced rail card (F1/F3/F4/F5/U3). _Carries forward: the desktop launch still shows the Restricted-Mode banner + Sign-In + welcome walkthroughs — iteration 2's targets._"
+provenance: "plan 16"
+source: docs/07-decision-log.md
+---
+
+# Strip the shell via product config defaults
+
+**Strip the workbench shell by registering product config-default overrides, not core patches; the activity-bar icon-nav is retired in favour of Home + the tree-rail**
+
+Iter 1's headline is Tom's "it's still an IDE in a trench coat... the footer" critique. The four IDE tells — the status-bar footer, the activity-bar icon column, the editor tab strip, and the breadcrumb — are all controlled by real, user-overridable settings (`workbench.statusBar.visible`, `workbench.activityBar.location`, `workbench.editor.showTabs`, `breadcrumbs.enabled`). Two routes: (a) `IWorkbenchLayoutService.setPartHidden` from a startup contribution (imperative, a core-ish coupling that fights the user's own settings); (b) register these as **product defaults** via `IConfigurationRegistry.registerDefaultConfigurations` at module load. Chose **(b)** — lowest-tax, supported, reversible (a user can flip any back), read as the effective default on the layout's first startup pass, and a pure additive contribution (**0 core patches**), so the merge-tax target holds even though the plan *permits* core patches here. Consequence flagged for Tom: hiding the activity bar (`location: 'hidden'`) also retires the labelled Home/Templates/Knowledge/Agents icon-nav from v3; those screens stay reachable as editor screens via the Home dashboard (the startup screen) + the command palette (`livingDocs.open.*`, all `f1:true`), and the single sidebar is the Workspace tree-rail / native Explorer. The desktop **title bar** (OS window controls) is intentionally untouched.

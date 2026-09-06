@@ -82,7 +82,7 @@ The defensible wedge remains **provenance + diff + approval trail** (doc 00) - a
 - **Model routing as margin and as product**: skills and agents are packaged with the model tier their purpose needs - a cheap model for mechanical formatting, a frontier model for strategic work - and Abstract varies this invisibly. The user buys outcomes, not tokens; the routing is part of "Abstract abstracts it away".
 - **Later tiers**: a power/upper tier and a **teams tier** aligned with the cloud chapter (below).
 
-Explicitly rejected: **usage-based pricing as the primary axis.** It would put the north-star metric (more approved proposals) directly at war with the customer's bill. Also rejected for beta: paste-your-own-API-key - the target user might obtain a key but will not credit an API account; subscription is the only mental model they own.
+Explicitly rejected: **usage-based pricing as the primary axis.** It would put the north-star metric (more approved changes) directly at war with the customer's bill. Also rejected for beta: paste-your-own-API-key - the target user might obtain a key but will not credit an API account; subscription is the only mental model they own.
 
 The public FAQ currently says "per-seat with usage on top" - close, but it should be reframed to the bundled-allowance model (see [19-website-feedback.md](19-website-feedback.md)).
 

@@ -34,7 +34,7 @@ These emerged over decisions 1-68 and the redesign; new work must not regress th
 - **Calm by construction.** One document surface, no splits ever (G1, decisions 19/20/35). Layout is a product decision, not a user choice (decision 27). Colour only ever means something (Part B of [plans/20](plans/20-abstract-ui-redesign-handoff.md)).
 - **One editor.** ProseMirror is the single surface for every `.md`, plain or living (decisions 49/53). "Living" is a badge, not a gate (decision 48).
 - **The folder is the project** (decision 39). Files on disk, clean Markdown, a rebuildable lock sidecar ([08-living-documents-format-spec.md](08-living-documents-format-spec.md)). The user can always walk away with their documents.
-- **Everything routes through the review engine** (decisions 17/45/52). Chat, skills, agents, fan-outs - one proposal model, one approve path, one audit trail. No second-class writes.
+- **Everything routes through the review engine** (decisions 17/45/52). Chat, skills, agents, fan-outs - one change model, one approve path, one audit trail. No second-class writes.
 - **Real data only.** No fabricated counts, no fake versions, no dead buttons without a "Soon" label (plan 17's rule). The demo is the product.
 - **Honest engineering economics.** Core patches are counted and fail-soft ([plans/03](plans/03-merge-tax-ledger.md)); features are built our-surface so they survive fork-vs-greenfield either way.
 
@@ -57,7 +57,7 @@ Effort keys: S = days, M = 1-2 weeks, L = multi-week.
 - **The inbox model / notifications (M).** Home's NEEDS YOU is the seed of an inbox. Add a cross-project attention queue, badge counts on the nav, and (desktop) OS notifications on heartbeat findings: "Week-28 data landed; Weekly Summary has 2 meaning changes waiting."
 - **Chat over the audit trail (S).** A model tool that reads lock audit + snapshots so chat can answer "what changed in this doc last week and who approved it?" - the trust data becoming conversational.
 - **Watch-mode agents on external events (M).** Webhook trigger kind (doc 09 taxonomy) so a CRM stage change or a form submission wakes the graph, not just file saves and cron.
-- **Cross-source reconciliation (L).** When two bound sources disagree (the CRM says 412 customers, the billing export says 407), the agent raises a *conflict* proposal type with both provenances, instead of silently choosing one.
+- **Cross-source reconciliation (L).** When two bound sources disagree (the CRM says 412 customers, the billing export says 407), the agent raises a *conflict* change type with both provenances, instead of silently choosing one.
 - **Drafting from meetings (M).** Bind a transcript folder as a source kind; the weekly report's "decisions" section derives from this week's transcripts with line-level provenance (the plan-23 decisions column already proves the UI grammar for this).
 
 ### 3.3 Deepening the word processor (the surface)
@@ -67,7 +67,7 @@ Effort keys: S = days, M = 1-2 weeks, L = multi-week.
 > Republish) — the update flagged in [13](13-journey-map-ratification.md) §5 C1, applied here.
 > The Word/Docs export item below is now **P1 beta work** (doc [22](22-file-interop-and-project-layout.md) §3, issue #130), not post-beta roadmap.
 
-- **Comments and suggestions from people (L).** The review engine treats human collaborators as first-class proposal authors: a colleague's suggestion is a pending change with provenance "Sam, 3:12pm", reviewed in the same rail as agent changes. One review grammar for humans and agents is a genuine differentiator over Docs + a bolted-on AI.
+- **Comments and suggestions from people (L).** The review engine treats human collaborators as first-class change authors: a colleague's suggestion is a pending change with provenance "Sam, 3:12pm", reviewed in the same rail as agent changes. One review grammar for humans and agents is a genuine differentiator over Docs + a bolted-on AI.
 - **Real-time co-editing (L).** The format spec's identity-keyed design is CRDT-ready (doc 08 §3.7). Sequence after comments; multiplayer without the review grammar would just be Docs again.
 - **Tables as first-class living blocks (M).** GFM tables render today (plan 17); make table cells bindable (`[42k](bind:metrics.mrr)` in a cell), and let a whole table derive from a source query. The beachhead documents are full of tables.
 - **Images and figures (M).** The PM bundle already carries a `bound_figure` atom; add image nodes with source-bound charts (a chart spec + bound data = a living chart, re-rendered on sync).
@@ -79,7 +79,7 @@ Effort keys: S = days, M = 1-2 weeks, L = multi-week.
 
 - **Template + skill sharing (M).** Templates and skills as files in the folder (consistent with folder-is-the-project), shareable as a directory; later, an org library in Knowledge.
 - **A connector catalogue (L).** MCP makes every connector "someone else's server"; the product work is the catalogue UX, auth flows (plan 29's secret store), and per-connector provenance renderers (a CRM record peek looks different from a CSV row peek).
-- **Abstract as an MCP server (M).** Expose documents, bindings and audit as MCP tools so *other* agents (Claude Code, a company's internal agents) can read/propose against Abstract documents - proposals landing, as ever, in the review rail.
+- **Abstract as an MCP server (M).** Expose documents, bindings and audit as MCP tools so *other* agents (Claude Code, a company's internal agents) can read/propose against Abstract documents - changes landing, as ever, in the review rail.
 - **Headless/CI mode (M).** `abstract verify <folder>` runs the graders and freshness checks in CI for teams who treat reports as build artefacts. The verify gate (doc 09 §5) already defines the semantics.
 
 ### 3.5 Sequencing sketch

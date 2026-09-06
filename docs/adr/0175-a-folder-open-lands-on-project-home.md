@@ -1,0 +1,12 @@
+---
+number: 175
+status: "**Done (WP-H, #261).** PR #268. Strike-note on plan 42 L1: the editor-first LANDING is superseded by map-D2; L1's walkthrough-gate removal stands."
+provenance: "WP-H, audit fix wave, issue #261"
+source: docs/07-decision-log.md
+---
+
+# A folder open lands on Project Home
+
+**map-D2 is IMPLEMENTED, not re-decided: a folder open (a project) lands on Project Home - empty OR populated - never the editor; only the no-folder case keeps plan 42 L1's blank untitled document. This reconciles the apparent map-D2 vs L1 conflict rather than overriding either.**
+
+The 2026-07-24 UX audit (S2.8) found the front doors disagreeing: an empty folder landed on a bare blank editor and a populated project landed in the editor, both skipping the Project Home built in the light-path wave. map-D2 (ratified in [13](../13-journey-map-ratification.md) §C2 "D2/D3 win"; acceptance criteria in [20](../20-journey-specs-aha-path.md) §1w) says opening a project lands on Project Home - what ran, what's stale, recent files - with the editor one click deeper via a file. Plan 42 slice L1 had made cold start land in the editor, but its ACTUAL target was killing the Welcome WALKTHROUGH gate, not rejecting Project Home; the built Project Home already carries the demoted walkthrough as a dismissible "See a 90-second demo" banner, so landing there is no longer landing on a wizard, and L1's real wins (no walkthrough gate, editor never forced, review-rail mount decoupled from onboarding) all survive. The pure `decideStartupRoute()` now returns `OpenHome` whenever a folder is open (Home itself picks the empty-project front door vs the populated dashboard from the live document set) and `NewUntitledDocument` only when no folder is open. WP-H also unified the four new-document doors onto ONE rich dialog, revising decision 173's "name-first ＋": the tree-rail Workspace "+" now opens Project Home's New-document sheet (Blank + templates + "From sources...") - the same dialog the Home tile opens - instead of a poor name-only quick input; the populated-Home "Ask this project" composer (map-D21/D24) landed in WP-A (#265) and is kept. Verified live on desktop (empty folder → front door; populated sample → Project Home; tree-rail "+" → the rich dialog; composer present on populated Home); evidence in [qa/2026-07-24-ux-audit/fixes/wp-h/](../qa/2026-07-24-ux-audit/fixes/wp-h/). Zero core patches (all Abstract/fork-owned files: `common/startupRouting.ts`, `livingDocs.contribution.ts`, `screenEditor.ts`, `treeRailView.ts`).

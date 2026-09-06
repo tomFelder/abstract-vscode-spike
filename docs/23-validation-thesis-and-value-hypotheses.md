@@ -22,7 +22,7 @@ can kill or confirm them.
   the beta, being single-player, does **not** test this (§5 Q7).
 - **The long-horizon north star:** realtime feedback - stream in writing and thought, coach and
   suggest back out; an assisted flow state. Out of beta scope; recorded so the interaction grammar
-  (proposals, review, provenance) is checked against "could this run live" when designed.
+  (changes, review, provenance) is checked against "could this run live" when designed.
 - **The self-awareness that motivates this doc:** the founder is a technical early adopter and
   knows it - "I can't build the product for me." The beta market is **tech-savvy, non-technical,
   document-heavy, frontier-AI-frustrated** (doc 14 §2.1). Every priority call must be re-derived
@@ -88,7 +88,7 @@ Ordered by how directly the beta can test them.
 
 **VP1 - "It edits my document, it doesn't regenerate it."**
 Precise, reviewable diffs into a persistent doc - the anti-regeneration-roulette.
-*Test:* proposal approve/tweak rate (guardrail band 5-25% tweak+reject), repeat 1e sessions per
+*Test:* change approve/tweak rate (guardrail band 5-25% tweak+reject), repeat 1e sessions per
 user. *Kill signal:* users copy text back out to ChatGPT to iterate.
 
 **VP2 - "I never ship a stale number."**

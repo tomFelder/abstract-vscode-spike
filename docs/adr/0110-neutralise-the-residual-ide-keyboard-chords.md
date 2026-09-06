@@ -1,0 +1,12 @@
+---
+number: 110
+status: "**Settled (default, unattended) + built (plan 33 iter 3).** 0 core patches; branch `33-shell-audit`."
+provenance: "plan 33 iter 3, L3/L6/L7"
+source: docs/07-decision-log.md
+---
+
+# Neutralise the residual IDE keyboard chords
+
+**The residual IDE keyboard chords are neutralised with an ADDITIVE `noop`-shadow keybinding contribution (no core patch); `Cmd+B` is deliberately kept; context menus on our webview surfaces carry no IDE items**
+
+Numbered from 110 per the work-unit brief (98-99 were iters 1-2; 100-101/120-122 belong to plans 26/31/27). Settled to the plan's cheapest-tier recommendation. A source-anchored audit (`docs/plans/33-verify/keyboard-audit.md`) walked every default chord and classified each keep / neutralise / already-dead. Eight leaking IDE chords are neutralised by shadowing each with the built-in `noop` command via `KeybindingsRegistry.registerKeybindingRule({ id:'noop', weight:1000, when:undefined })` in `livingDocs.contribution.ts` (`NEUTRALISED_IDE_CHORDS`): `Cmd+J` (togglePanel - no panel in the calm shell), `Ctrl+`` `` ` (integrated terminal - an IDE tell, not a kept escape hatch), `Cmd+Alt+B` (Secondary Side Bar - the L3 tooltip chord; the review rail is a contextual editor companion per decision 94), and `Cmd+Shift+E/F/G/X/M` (the Explorer/Search/SCM/Extensions/Problems view-container switches, all DEREGISTERED per decision D25-C). Weight 1000 sits above `ExternalExtension` (400) so the swallow always wins the chord resolution. **This is an additive contribution, not a decision-30-style core edit** - `KeybindingsRegistry` is a public registry called from our own module - so the plan's "extend decision-30 if a chord is core-registered" branch was not needed and the 3-patch cap is untouched (0 used). **`Cmd+B` (toggleSidebarVisibility) is KEPT deliberately:** the left tree-rail is a first-class product surface and `Cmd+B` doubles as Bold inside the ProseMirror writing surface. **L7:** our screen/editor surfaces are webviews (minimal browser context menu, no IDE items); the rails' context menus are scoped to our view ids with the IDE containers deregistered; the only residue is desktop-only native title-bar OS chrome, recorded as accepted rather than spending the capped title-bar core patch. **Tier: additive contribution + docs. 0 core patches.** Verified: `typecheck-client` + `valid-layers-check` clean; the neutralisation is guarded by `scripts/check-seams.sh` seam 8; live pass on `:8084` confirms the chords no longer fire and Bold/tree-rail toggle still work.

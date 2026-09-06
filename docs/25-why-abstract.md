@@ -67,7 +67,7 @@ tools they already expense (~$20-40/seat, workbench-not-tokens, [14](14-product-
 
 ## What winning looks like
 
-North star: **approved agent proposals per user per week** ([15](15-metrics-and-instrumentation.md)).
+North star: **approved agent changes per user per week** ([15](15-metrics-and-instrumentation.md)).
 Near term: the beta clears [24-beta-success-memo.md](24-beta-success-memo.md) - activation, the
 weekly habit, real WTP, organic pull - which funds chapter 2: the cloud-first greenfield rebuild
 (collaborative, agents that run while your laptop is closed), then the floor widens to

@@ -1,0 +1,12 @@
+---
+number: 90
+status: "**Done (plan 25 iter 2).** 0 new core patches (5 total unchanged); branch `redesign-25-2-nav-chip`."
+provenance: "plan 25, iter 2, C1"
+source: docs/07-decision-log.md
+---
+
+# The active-nav chip follows the active editor
+
+**The active-nav white chip is driven by the ACTIVE EDITOR, not the activity bar's `.checked` state — via a small additive contribution, 0 new core patches**
+
+The comp marks the current surface with a white chip (`accent-hover` #4650B8 glyph + e1). The obvious CSS hook — the activity bar's own `.checked` class — is the WRONG signal here: the five living-docs nav items are slim launchers that open a screen/document in the editor and then bounce the sidebar back to the Workspace tree-rail (tree-rail-persistence, prior decision), so `.checked` is always "Workspace" (now a hidden icon) and never lands on a visible nav item. The right signal is the active EDITOR. New `ActiveNavChipContribution` (`livingDocs.contribution.ts`, `WorkbenchPhase.AfterRestored`) listens to `IEditorService.onDidActiveEditorChange`, maps the active input to a nav id (`ScreenEditorInput.screen`, or `'editor'` for any `LivingDocEditorInput`), and toggles an `lwd-nav-active` class on that item's `.action-item`; `studio.css` paints the chip off that class. **Tier: our-surface, 0 new core patches** — it only reads a service + toggles a class on existing DOM; it does not modify `browser/parts/activitybar/`. Two implementation notes logged: (a) it reaches the DOM via `IWorkbenchLayoutService.getContainer(mainWindow, Parts.ACTIVITYBAR_PART)` then walks descendants via `element.children` (matching `classList.contains('codicon-living-docs-<id>')` + `.closest('.action-item')`) because the activity bar exposes no per-item API — this stays clear of the banned query APIs (`querySelector`/`getElementsByClassName`/`getElementsByTagName`) so hygiene is clean; re-pin if the icon ids move; (b) the chip's glyph colour needed a compound `.style-override-studio.monaco-workbench …` selector with a doubled label class to beat the inline theme foreground the composite bar sets (`.style-override-studio` IS the `.monaco-workbench` element, so a descendant combinator silently failed — the trap that cost the most time this iter). Verified live at 1440x900: the chip tracks correctly clicking Home→Editor (glyph `rgb(70,80,184)`=#4650B8, white bg, e1 shadow), and the tree-rail + document open normally underneath.
