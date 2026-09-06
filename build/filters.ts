@@ -169,9 +169,6 @@ export const indentationFilter = Object.freeze<string[]>([
 	'!extensions/ipynb/notebook-out/**',
 	'!extensions/notebook-renderers/renderer-out/*.js',
 	'!extensions/simple-browser/media/*.js',
-
-	// offline build sources for the vendored ProseMirror bundle - not fork source
-	'!build/lwd-pm-build/**',
 ]);
 
 export const copyrightFilter = Object.freeze<string[]>([
@@ -230,9 +227,6 @@ export const copyrightFilter = Object.freeze<string[]>([
 
 	// extensions/copilot has its own code style
 	'!extensions/copilot/**',
-
-	// offline build sources for the vendored ProseMirror bundle - not fork source
-	'!build/lwd-pm-build/**',
 ]);
 
 export const tsFormattingFilter = Object.freeze<string[]>([

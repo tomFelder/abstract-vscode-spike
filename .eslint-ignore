@@ -69,7 +69,7 @@ src/vs/base/common/signals-core/**
 docs/design/**/support.js
 
 # Offline build sources for the vendored ProseMirror bundle. Not fork source; see
-# build/lwd-pm-build/README.md. The three .js/.mjs files are also on
+# tools/lwd-pm-build/README.md. The three .js/.mjs files are also on
 # `.eslint-allowed-javascript-files`, which the hygiene task reads separately to decide
 # which JavaScript files may exist at all - an .eslint-ignore entry alone does not satisfy it.
-build/lwd-pm-build/**
+tools/lwd-pm-build/**

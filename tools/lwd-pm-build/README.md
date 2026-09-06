@@ -23,7 +23,7 @@ ships.
 ## Rebuilding
 
 ```sh
-cd build/lwd-pm-build
+cd tools/lwd-pm-build
 npm install          # esbuild + the prosemirror-* packages pinned in package.json
 node build.mjs
 ```
@@ -54,12 +54,24 @@ and `livingDocWordPaste.test.ts`.
 
 These are third-party-shaped build sources, not fork source: they carry no Microsoft copyright header,
 they are JavaScript rather than TypeScript, and their indentation is whatever their tooling produced.
-Keeping them outside the repo used to be how that was avoided; the cost of that was losing them. They
-are now excluded explicitly instead, in three places:
+Keeping them outside the repo used to be how that was avoided; the cost of that was losing them.
+
+## Why `tools/` and not `build/`
+
+`build/` is the fork's own gulp build, and this is emphatically not part of it - a reader who finds an
+esbuild pipeline in `build/` reasonably assumes otherwise. `tools/` is also outside the reach of
+hygiene's `all` glob (`*`, `build/**`, `extensions/**`, `scripts/**`, `src/**`, `test/**`), so the
+directory needs no `indentationFilter` or `copyrightFilter` exclusions at all - the same effect that
+living outside the repo used to have, now with the files versioned. A new top-level directory also
+carries close to zero upstream-merge risk, since upstream has nothing at that path.
+
+Two exclusions are still required, because both are repo-wide rather than glob-scoped:
 
 - `.eslint-ignore` - which also feeds hygiene's `eslintFilter`, so one entry covers both eslint passes
-- `indentationFilter` in `build/filters.ts`
-- `copyrightFilter` in `build/filters.ts`
+- `.eslint-allowed-javascript-files`, for `build.mjs`, `bundle.iife.js` and `lwdpm-entry.js`. Hygiene's
+  `checkNoNewJavaScriptFiles` runs `git ls-files "*.js"` and requires every tracked JavaScript file to
+  be listed; by design it also covers files excluded via `.eslint-ignore`, so the ignore entry alone
+  does not satisfy it.
 
 Do not remove those exclusions without moving the directory back out of the tree, and do not treat
 this directory as a precedent for new JavaScript in the fork.

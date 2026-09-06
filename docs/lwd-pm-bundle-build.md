@@ -6,16 +6,17 @@ sources), the editor is shipped as a **prebuilt, minified, ASCII IIFE, base64-en
 `src/vs/workbench/contrib/livingDocs/browser/prosemirrorBundle.ts`. `livingDocRender.ts` decodes it once
 and inlines it; it defines `window.LWDPM`.
 
-The bundle is built from **[`build/lwd-pm-build/`](../build/lwd-pm-build/)**, which is in the
+The bundle is built from **[`tools/lwd-pm-build/`](../tools/lwd-pm-build/)**, which is in the
 repository and is the canonical source. See its
-[README](../build/lwd-pm-build/README.md) for how to rebuild.
+[README](../tools/lwd-pm-build/README.md) for how to rebuild.
 
 > **Changed 6 Sep 2026.** Until then this build lived at `/Users/tommy/Sites/.lwd-pm-build`, outside
 > the repo, on one machine - originally so its `.js`/`.mjs` never hit the no-new-JavaScript gate. That
 > cost more than it saved: when the machine was retired the directory survived only on an unmerged WIP
 > branch, and the listing reproduced further down this document had already drifted away from it. The
-> directory is now in-tree, with explicit exclusions in `.eslint-ignore` and in `indentationFilter` and
-> `copyrightFilter` in `build/filters.ts` doing the job that living outside the repo used to do.
+> directory is now in-tree at `tools/lwd-pm-build/`, which sits outside hygiene's `all` glob and so
+> needs no filter changes; two repo-wide exclusions in `.eslint-ignore` and
+> `.eslint-allowed-javascript-files` do the rest of the job that living outside the repo used to do.
 
 ## What the bundle exposes
 
@@ -32,7 +33,7 @@ repository and is the canonical source. See its
 
 > **The reproduced sources below are a stale snapshot. Do not build from them.** They are kept as an
 > explanation of the bundle's shape, not as the current file. The live sources are in
-> [`build/lwd-pm-build/`](../build/lwd-pm-build/); the listing here is missing the decorations plugin,
+> [`tools/lwd-pm-build/`](../tools/lwd-pm-build/); the listing here is missing the decorations plugin,
 > the `table_block` atom and the `wikilink` atom, all of which the real `lwdpm-entry.js` carries.
 
 ### Wikilinks (decision 179, plan 52 WP-C)
@@ -70,7 +71,7 @@ markdown-it core rule folds the `bind:` link's `link_open / text / link_close` r
 ## Rebuild
 
 ```bash
-cd build/lwd-pm-build
+cd tools/lwd-pm-build
 npm install --no-audit --no-fund \
   prosemirror-model@1 prosemirror-state@1 prosemirror-view@1 prosemirror-markdown@1 \
   prosemirror-schema-list@1 prosemirror-keymap@1 prosemirror-commands@1 prosemirror-history@1 \
