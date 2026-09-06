@@ -244,14 +244,23 @@ single-copy for longer than it has to.
 install commands from blocker 4, and update the RUN-56 prompt's hardcoded `/Users/tommy/Sites/...`
 path to the session working directory. Without this, every future session rediscovers blocker 4.
 
-**Step 0b - rescue the single-copy asset.** Merge `wip/mac-migration-2026-09`'s build directory to
-`main` (or cherry-pick `15812492`), and file the `.a3-380-screenshots/` files under
-`docs/plans/56-verify/380/`. Update `docs/lwd-pm-bundle-build.md` to point at the in-repo path instead
-of `/Users/tommy/Sites/.lwd-pm-build`, and drop or clearly date-stamp the drifted inline listing.
-Small, mechanical, removes a real risk of permanent loss.
+**Step 0b - rescue the single-copy asset.** *(Done - [#430](https://github.com/tomFelder/abstract-vscode-spike/pull/430).)*
+Bring `wip/mac-migration-2026-09`'s build directory into `main`, file the screenshots under
+`docs/plans/56-verify/380/`, and repoint `docs/lwd-pm-bundle-build.md` at the in-tree path.
 
-**Step 1 - land PR #390.** Rebase or merge `main` into `docs/vocabulary-and-adr-migration`, resolve,
-merge. Nothing downstream is trustworthy until `CONTEXT.md` and `docs/adr/` are on `main`, because
+**This is not mechanical, and an earlier draft of this document was wrong to say so.** The directory
+lived outside the repo *because* its `.js`/`.mjs` sources would otherwise trip the fork's gates, so
+moving it in-tree means telling three of them about it: `.eslint-ignore` (which also feeds hygiene's
+`eslintFilter`), `indentationFilter` and `copyrightFilter` in `build/filters.ts`, and -
+unavoidably - `.eslint-allowed-javascript-files`, whose header reads `DO NOT ADD NEW ENTRIES`.
+That last one is required because hygiene's `checkNoNewJavaScriptFiles` greps `git ls-files "*.js"`
+and, by design, also covers files excluded via `.eslint-ignore`. It is a real judgement call and
+#430 puts it to the founder rather than burying it.
+
+**Step 1 - land PR #390.** *(Conflict resolved 6 Sep; the PR is mergeable and awaiting the founder.)*
+Merge `main` into `docs/vocabulary-and-adr-migration`, resolve, merge. The single conflict was one
+line in `docs/20`, where each side had renamed one half of the same sentence - this branch the prose
+noun, `main`'s #378 the event key. Taking both is what ADR 0182 and plan 56's P1 each require. Nothing downstream is trustworthy until `CONTEXT.md` and `docs/adr/` are on `main`, because
 every agent prompt in the wave opens by reading them. The `resolving-merge-conflicts` skill is built
 for this shape of conflict.
 
